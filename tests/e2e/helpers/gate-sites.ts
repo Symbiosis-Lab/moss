@@ -2265,3 +2265,124 @@ footer: true
     ".moss/theme/style.css": null,
   },
 };
+
+// ── Places explorer ───────────────────────────────────────────────────────
+// Twelve located works spread across three countries, including one
+// coincident pair (two real points in the same small area, ~1km apart) that
+// can never separate by zooming — the ring gate's own subject. Dates are
+// strictly descending so the cards gate can assert row order without a tie.
+// Served by playwright/places-explorer-{boot,camera,ring,cards}.config.ts.
+const PLACES_EXPLORER_COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="140" viewBox="0 0 200 140"><rect width="200" height="140" fill="#6a8caf"/></svg>
+`;
+
+function placesExplorerWork(uid: string, title: string, location: string, date: string): string {
+  return `---
+title: ${title}
+uid: "${uid}"
+location: "${location}"
+date: ${date}
+byline: "Field notes"
+description: "A short note from ${title}."
+cover: cover.svg
+---
+
+# ${title}
+
+A short note from ${title}.
+`;
+}
+
+export const PLACES_EXPLORER_GATE: ScratchSiteSpec = {
+  name: "places-explorer-gate",
+  files: {
+    "cover.svg": PLACES_EXPLORER_COVER_SVG,
+    "places/index.md": `---
+title: Places
+---
+
+Every work this site locates, gathered on one map.
+`,
+    "lisbon-walk.md": placesExplorerWork("pex001aa", "Lisbon Walk", "Lisbon", "2024-06-10"),
+    "lisbon-harbor-light.md": placesExplorerWork("pex002bb", "Lisbon Harbor Light", "Lisbon Harbor", "2024-06-05"),
+    "porto-steps.md": placesExplorerWork("pex003cc", "Porto Steps", "Porto", "2024-05-20"),
+    "coimbra-library.md": placesExplorerWork("pex004dd", "Coimbra Library", "Coimbra", "2024-05-01"),
+    "kyoto-garden.md": placesExplorerWork("pex005ee", "Kyoto Garden", "Kyoto", "2024-04-15"),
+    "osaka-market.md": placesExplorerWork("pex006ff", "Osaka Market", "Osaka", "2024-04-01"),
+    "tokyo-crossing.md": placesExplorerWork("pex007gg", "Tokyo Crossing", "Tokyo", "2024-03-10"),
+    "nara-deer-park.md": placesExplorerWork("pex008hh", "Nara Deer Park", "Nara", "2024-02-20"),
+    "lima-coastline.md": placesExplorerWork("pex009ii", "Lima Coastline", "Lima", "2024-01-15"),
+    "cusco-terraces.md": placesExplorerWork("pex010jj", "Cusco Terraces", "Cusco", "2023-12-01"),
+    "arequipa-volcano.md": placesExplorerWork("pex011kk", "Arequipa Volcano", "Arequipa", "2023-11-10"),
+    "iquitos-river.md": placesExplorerWork("pex012ll", "Iquitos River", "Iquitos", "2023-10-01"),
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+`,
+    ".moss/places.toml": `["Lisbon"]
+lat = 38.722
+lng = -9.139
+precision = "exact"
+
+["Lisbon Harbor"]
+lat = 38.715
+lng = -9.145
+precision = "exact"
+
+["Porto"]
+lat = 41.1579
+lng = -8.6291
+precision = "city"
+
+["Coimbra"]
+lat = 40.2033
+lng = -8.4103
+precision = "city"
+
+["Kyoto"]
+lat = 35.0116
+lng = 135.7681
+precision = "city"
+
+["Osaka"]
+lat = 34.6937
+lng = 135.5023
+precision = "city"
+
+["Tokyo"]
+lat = 35.6762
+lng = 139.6503
+precision = "city"
+
+["Nara"]
+lat = 34.6851
+lng = 135.8048
+precision = "city"
+
+["Lima"]
+lat = -12.0464
+lng = -77.0428
+precision = "city"
+
+["Cusco"]
+lat = -13.5319
+lng = -71.9675
+precision = "city"
+
+["Arequipa"]
+lat = -16.4090
+lng = -71.5375
+precision = "city"
+
+["Iquitos"]
+lat = -3.7437
+lng = -73.2516
+precision = "city"
+`,
+    ".moss/theme/style.css": null,
+  },
+};

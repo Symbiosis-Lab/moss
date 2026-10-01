@@ -17,8 +17,8 @@
 //! `<g data-map-layer="marker">` group `render_svg` always emits is present
 //! but empty here, the same contract a page's own map gives it.
 
-use super::geometry::{tile_x, tile_y, world_viewbox_width, Frame, FrameTier, ProjectedPoint};
-use super::svg::{render_svg, Ids, Writer, SVG_WIDTH};
+use super::geometry::{tile_x, tile_y, world_viewbox_width, Frame, FrameTier, ProjectedPoint, Projection};
+use super::svg::{render_svg, Ids, Writer, SVG_HEIGHT};
 use super::{Pack, PlaceMapContext, PlaceMapTarget};
 use crate::vault::places::Gazetteer;
 
@@ -42,14 +42,20 @@ fn world_frame() -> Frame {
 /// The frame centred on tile `(x, y)`'s own 10x10 degree cell — the same
 /// grid `TileSelection` buckets the pack's fine-tier features into
 /// (`geometry::tile_x`/`tile_y`, `Pack::tiles`). `x` runs 0..=35 west to
-/// east from -180 degrees, `y` 0..=17 south to north from -90.
+/// east from -180 degrees, `y` 0..=17 south to north from -90. `tier` is
+/// `Tile`, not `Local`: a regional tile draws in the SAME Patterson
+/// projection as the world map, at `TILE_K` times its scale
+/// (`geometry::PattersonProjection::for_tile`) — not the equirectangular
+/// `FlatProjection` a per-page local map uses — so a tile overlays the
+/// world exactly instead of showing a different crop of a different
+/// projection at the same screen position.
 fn tile_frame(x: i16, y: i16) -> Frame {
     Frame {
         center_longitude: f64::from(x) * 10.0 - 175.0,
         center_latitude: f64::from(y) * 10.0 - 85.0,
         longitude_span: 10.0,
         latitude_span: 10.0,
-        tier: FrameTier::Local,
+        tier: FrameTier::Tile,
     }
 }
 
@@ -67,24 +73,33 @@ pub fn emit_world_svg(context: &PlaceMapContext) -> String {
         route: false,
     };
     let ids = Ids::for_seed("world");
-    let mut writer = Writer::for_explorer_asset(&ids, world_viewbox_width(), true);
+    let mut writer = Writer::for_explorer_asset(&ids, world_viewbox_width(), f64::from(SVG_HEIGHT), true);
     render_svg(&mut writer, context, &target, false);
     writer.output
 }
 
-/// Emit one regional detail tile. Local tier, so it keeps the same fine-tier
-/// detail a place-term page's own local map does — the world map's
-/// rank/layer thinning never applies to a 10-degree frame. No globe inset,
-/// no markers, same reasons as `emit_world_svg`.
+/// Emit one regional detail tile: the same fine-tier detail a place-term
+/// page's own local map draws (the world map's rank/layer thinning never
+/// applies to a `Tile` frame — see `render_svg`'s own `wide` guard), but in
+/// the world's own Patterson projection at `TILE_K` times its scale rather
+/// than a separately-cropped equirectangular frame, so the tile overlays
+/// the world exactly wherever the runtime places it. The viewBox is the
+/// cell's own Patterson rectangle scaled by `TILE_K`
+/// (`Projection::canvas_size`, backed by `PattersonProjection::for_tile`) —
+/// computed from the SAME projection `render_svg` draws through below, so
+/// the two can never disagree about the tile's own canvas size. No globe
+/// inset, no markers, same reasons as `emit_world_svg`.
 pub fn emit_tile_svg(context: &PlaceMapContext, x: i16, y: i16) -> String {
+    let frame = tile_frame(x, y);
+    let (canvas_width, canvas_height) = Projection::new(&frame).canvas_size();
     let target = PlaceMapTarget {
         places: Vec::new(),
-        frame: Some(tile_frame(x, y)),
+        frame: Some(frame),
         aggregate_name: None,
         route: false,
     };
     let ids = Ids::for_seed(&format!("tile-{x}-{y}"));
-    let mut writer = Writer::for_explorer_asset(&ids, f64::from(SVG_WIDTH), false);
+    let mut writer = Writer::for_explorer_asset(&ids, canvas_width, canvas_height, false);
     render_svg(&mut writer, context, &target, false);
     writer.output
 }
@@ -147,7 +162,7 @@ pub fn relevant_tiles(gazetteer: &Gazetteer, pack: &Pack) -> Vec<(i16, i16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::place_map::geometry::{world_viewbox_width, TileSelection, VIEWBOX_HEIGHT};
+    use crate::build::place_map::geometry::{world_viewbox_width, TileSelection, TILE_BLEED, TILE_K, VIEWBOX_HEIGHT};
     use crate::build::place_map::{ProjectedPoint, Projection};
 
     /// Step 1 of the task: a `FrameTier::World` target already draws the
@@ -316,46 +331,123 @@ mod tests {
         assert!(relevant_tiles(&gaz, &pack).is_empty());
     }
 
-    /// How "meets at the shared edge" is measured: adjacent same-row tiles
-    /// (x, y) and (x+1, y) share a `center_latitude`, and a 10x10-degree
-    /// frame's `FlatProjection` always ends up height-bound on the 720x480
-    /// (3:2) viewBox (the height-bound scale, `VIEWBOX_HEIGHT /
-    /// latitude_span_radians`, is smaller than the width-bound one at every
-    /// latitude, since `cos(latitude) <= 1`) — so both tiles derive a
-    /// point's y from the identical formula, and the SAME (longitude,
-    /// latitude) point at the boundary meridian must project to the same y
-    /// in both (exact, not approximate) and to x values one closed-form
-    /// pixel step apart: `scale * longitude_span_radians *
-    /// cos(center_latitude)`. This renders the boundary point through each
-    /// tile's own `Projection` — the same `project` call a coastline vertex
-    /// on the boundary goes through inside `render_svg` — and checks both
-    /// predictions hold to within a pixel, at three rows spanning the
-    /// pack's latitude range.
+    /// Where the runtime's own `translate(cellX - TILE_BLEED, cellY -
+    /// TILE_BLEED)` places a tile's local `(0, 0)` (`tiles.ts`'s
+    /// `tileOverlayTransform`): the cell's own world-unit corner (`map.ts`'s
+    /// `tileCellBounds`, `(minX, minY)`) — re-derived here from the
+    /// full-extent world projection directly, the same cross-check
+    /// `projection.ts`'s own module doc describes for the TS side, rather
+    /// than reaching into `PattersonProjection::for_tile`'s private fields —
+    /// pulled back by `TILE_BLEED` once, here, rather than at every call
+    /// site below.
+    fn tile_anchor_world(full: &Projection, x: i16, y: i16) -> (f64, f64) {
+        let west = f64::from(x) * 10.0 - 180.0;
+        let north = f64::from(y) * 10.0 - 90.0 + 10.0;
+        let (min_x, _) = full.project(ProjectedPoint::new(west, 0.0).unwrap()).unwrap();
+        let (_, min_y) = full.project(ProjectedPoint::new(0.0, north).unwrap()).unwrap();
+        (min_x - TILE_BLEED, min_y - TILE_BLEED)
+    }
+
+    /// A tile's own viewBox is its cell's Patterson rectangle (in world
+    /// units, from the full-extent projection), padded by `TILE_BLEED` on
+    /// every edge, scaled by `TILE_K` — the contract `explorer::
+    /// emit_tile_svg` builds its `Writer` from (`Projection::canvas_size`)
+    /// and the one the runtime's own `tiles.json` `k`/`bleed` fields let it
+    /// reconstruct without recomputing this projection a third way. This is
+    /// the test that would catch a bleed regression at its source: if
+    /// `for_tile` stopped padding the box, this canvas would shrink back to
+    /// exactly the nominal cell and the assertions below would fail.
+    ///
+    /// Width is derived from `world_viewbox_width()` rather than by
+    /// projecting the cell's own west/east edges: Patterson's x term is
+    /// exactly linear in longitude, so every 10-degree cell is the same
+    /// width regardless of column, and a column at the antimeridian
+    /// (`x == 35`, east edge at longitude 180) would otherwise collide with
+    /// `ProjectedPoint::new`'s own half-open normalisation (180 folds to
+    /// -180, `longitude_normalisation_is_half_open`) the way
+    /// `emit_world_svg_carries_the_full_patterson_extent_with_no_crop`
+    /// already dodges with its own `180.0 - 1e-9`.
     #[test]
-    fn adjacent_tiles_meet_at_their_shared_edge_within_a_pixel() {
+    fn tile_viewbox_equals_its_cell_rectangle_padded_by_bleed_times_k() {
+        let full = Projection::new_world_full_extent();
+        let expected_width = (world_viewbox_width() / 360.0 * 10.0 + 2.0 * TILE_BLEED) * TILE_K;
+        for (x, y) in [(10i16, 9i16), (0, 0), (35, 17), (20, 14)] {
+            let frame = tile_frame(x, y);
+            let north = f64::from(y) * 10.0 - 90.0 + 10.0;
+            let south = f64::from(y) * 10.0 - 90.0;
+            let (_, min_y) = full.project(ProjectedPoint::new(0.0, north).unwrap()).unwrap();
+            let (_, max_y) = full.project(ProjectedPoint::new(0.0, south).unwrap()).unwrap();
+            let expected_height = (max_y - min_y + 2.0 * TILE_BLEED) * TILE_K;
+
+            let (canvas_width, canvas_height) = Projection::new(&frame).canvas_size();
+            assert!(
+                (canvas_width - expected_width).abs() < 1e-6,
+                "({x},{y}): canvas_width {canvas_width}, expected {expected_width}"
+            );
+            assert!(
+                (canvas_height - expected_height).abs() < 1e-6,
+                "({x},{y}): canvas_height {canvas_height}, expected {expected_height}"
+            );
+        }
+    }
+
+    /// Two adjacent same-row tiles must place the SAME boundary-meridian
+    /// point at the SAME world-space position once each one's own render is
+    /// inverted by the runtime's own transform (`world = (cellOrigin -
+    /// bleed) + tilePixel / K`, `translate(cellX - bleed, cellY - bleed)
+    /// scale(1/K)` in `tiles.ts`'s `tileOverlayTransform`) — this is "meets
+    /// at the shared edge" restated as the actual contract the runtime
+    /// relies on, rather than a FlatProjection-specific pixel step that no
+    /// longer applies now both tiles share the world's own Patterson
+    /// projection. `TILE_BLEED` cancels out of this reconstruction by
+    /// construction (padding the projection box symmetrically moves its own
+    /// local origin by exactly `bleed`, and the runtime's anchor subtracts
+    /// that same `bleed` back out) — it is the TILE's own rendered edge,
+    /// not this reconstructed point, that moves; `tileOverlayTransform`'s
+    /// own vitest suite covers that overlap directly.
+    #[test]
+    fn adjacent_tiles_meet_at_their_shared_edge_after_dividing_by_k() {
+        let full = Projection::new_world_full_extent();
         for y in [0i16, 9, 16] {
             let (x_a, x_b) = (10i16, 11i16);
             let frame_a = tile_frame(x_a, y);
             let frame_b = tile_frame(x_b, y);
-            assert_eq!(frame_a.center_latitude, frame_b.center_latitude, "same-row tiles share a center latitude");
             let projection_a = Projection::new(&frame_a);
             let projection_b = Projection::new(&frame_b);
+            let (origin_a_x, origin_a_y) = tile_anchor_world(&full, x_a, y);
+            let (origin_b_x, origin_b_y) = tile_anchor_world(&full, x_b, y);
 
             let boundary_longitude = f64::from(x_b) * 10.0 - 180.0;
             let boundary_point = ProjectedPoint::new(boundary_longitude, frame_a.center_latitude).unwrap();
-            let (x_a_edge, y_a_edge) = projection_a.project(boundary_point).unwrap();
-            let (x_b_edge, y_b_edge) = projection_b.project(boundary_point).unwrap();
-            assert!((y_a_edge - y_b_edge).abs() < 1.0, "row {y}: y disagrees by {}", (y_a_edge - y_b_edge).abs());
+            let (px_a, py_a) = projection_a.project(boundary_point).unwrap();
+            let (px_b, py_b) = projection_b.project(boundary_point).unwrap();
+            let world_a = (origin_a_x + px_a / TILE_K, origin_a_y + py_a / TILE_K);
+            let world_b = (origin_b_x + px_b / TILE_K, origin_b_y + py_b / TILE_K);
 
-            // Height-bound scale, in viewBox px per radian: the only scale
-            // a 10x10-degree frame can reach on this viewBox (see doc).
-            let scale = f64::from(VIEWBOX_HEIGHT) / frame_a.latitude_span.to_radians();
-            let step = scale * frame_a.longitude_span.to_radians() * frame_a.center_latitude.to_radians().cos();
-            assert!(
-                (x_b_edge - (x_a_edge - step)).abs() < 1.0,
-                "row {y}: x_a={x_a_edge} x_b={x_b_edge} expected step={step}, got {}",
-                x_a_edge - x_b_edge
-            );
+            assert!((world_a.0 - world_b.0).abs() < 0.5, "row {y}: x disagrees by {} world units", (world_a.0 - world_b.0).abs());
+            assert!((world_a.1 - world_b.1).abs() < 0.5, "row {y}: y disagrees by {} world units", (world_a.1 - world_b.1).abs());
+        }
+    }
+
+    /// A tile and the world itself must agree, to float precision, on where
+    /// a known point lands once the tile's own render is inverted by the
+    /// runtime's transform — not merely two neighbouring tiles agreeing
+    /// with EACH OTHER (the test above), which alone could not catch both
+    /// drifting the same way off the world's own projection.
+    #[test]
+    fn world_and_a_tile_agree_on_a_known_points_position_after_the_runtimes_transform() {
+        let full = Projection::new_world_full_extent();
+        for (x, y, longitude, latitude) in [(20i16, 12i16, 35.5, 33.89), (0, 0, -179.0, -89.0), (17, 9, 4.9, -0.1)] {
+            let frame = tile_frame(x, y);
+            let projection = Projection::new(&frame);
+            let (origin_x, origin_y) = tile_anchor_world(&full, x, y);
+            let point = ProjectedPoint::new(longitude, latitude).unwrap();
+
+            let (px, py) = projection.project(point).unwrap();
+            let world = (origin_x + px / TILE_K, origin_y + py / TILE_K);
+            let world_full = full.project(point).unwrap();
+            assert!((world.0 - world_full.0).abs() < 1e-6, "({x},{y}) {longitude},{latitude}: x={}, expected {}", world.0, world_full.0);
+            assert!((world.1 - world_full.1).abs() < 1e-6, "({x},{y}) {longitude},{latitude}: y={}, expected {}", world.1, world_full.1);
         }
     }
 

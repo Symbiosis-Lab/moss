@@ -20,6 +20,24 @@
 import { WORLD_WIDTH, WORLD_HEIGHT } from "./projection";
 import type { Camera, Point, Viewport } from "./types";
 
+/** Where `point` (world-space) lands on screen, in CSS px from the viewport's own top-left — the one formula every layer that positions something against the live camera (markers, the ring, tile placement) shares, rather than re-deriving it. */
+export function worldToScreen(point: Point, camera: Camera, viewport: Viewport): Point {
+  const scale = screenScale(camera, viewport);
+  return {
+    x: viewport.width / 2 + (point.x - camera.x) * scale,
+    y: viewport.height / 2 + (point.y - camera.y) * scale,
+  };
+}
+
+/** Inverse of `worldToScreen` — a screen point (a click, a drag delta anchor) back to world-space, at the same camera/viewport. */
+export function screenToWorld(point: Point, camera: Camera, viewport: Viewport): Point {
+  const scale = screenScale(camera, viewport);
+  return {
+    x: camera.x + (point.x - viewport.width / 2) / scale,
+    y: camera.y + (point.y - viewport.height / 2) / scale,
+  };
+}
+
 export const MIN_ZOOM = 1;
 /**
  * The prototype tuned this ceiling (7.21) against its own 1000x560 world
@@ -62,6 +80,27 @@ export function detailMaxZoom(viewport: Viewport): number {
   return DETAIL_MAX_SCALE / coverScale(viewport);
 }
 
+/**
+ * The screen scale at which a regional tile is shown at native, 1:1
+ * resolution: `k` times the world map's own ceiling, since a tile is drawn
+ * in the SAME Patterson projection as the world map at `k` times its scale
+ * and clipped to its own cell (`PattersonProjection::for_tile` in
+ * `crates/moss-build/src/build/place_map/geometry.rs`) — past this, the
+ * explorer would be upscaling a tile past its own detail, the same "don't
+ * render past what the geometry actually resolves" reasoning
+ * `DETAIL_MAX_SCALE` applies to the world map. `k` is read from
+ * `tiles.json` (the build's own `TILE_K`), never hardcoded here, so the
+ * two can never drift apart — see that file's own module doc.
+ */
+export function tileDetailMaxScale(k: number): number {
+  return DETAIL_MAX_SCALE * k;
+}
+
+/** The zoom multiplier at which `screenScale` reaches `tileDetailMaxScale(k)` for this viewport — the raised ceiling once the camera has tiles to show. */
+export function tileDetailMaxZoom(viewport: Viewport, k: number): number {
+  return tileDetailMaxScale(k) / coverScale(viewport);
+}
+
 /** How far, in world units, the camera centre may sit from the world's own centre on one axis before an empty band would show, at the given scale. */
 function overflow(worldSpan: number, viewportSpan: number, scale: number): number {
   return Math.max(0, (worldSpan - viewportSpan / scale) / 2);
@@ -69,12 +108,13 @@ function overflow(worldSpan: number, viewportSpan: number, scale: number): numbe
 
 /**
  * Clamp a camera to this viewport: zoom never below the cover floor nor past
- * the detail ceiling, and the centre never panned far enough to open an
- * empty band on either axis. Keeps `x`/`y` unchanged whenever they are
- * already within bounds — the geographic centre survives a viewport resize
- * (or a zoom-only change) with no special-case rescale.
+ * `maxZoom` (the world ceiling by default; a caller with tiles in view
+ * passes `tileDetailMaxZoom` instead), and the centre never panned far
+ * enough to open an empty band on either axis. Keeps `x`/`y` unchanged
+ * whenever they are already within bounds — the geographic centre survives
+ * a viewport resize (or a zoom-only change) with no special-case rescale.
  */
-export function clampCamera(camera: Camera, viewport: Viewport): Camera {
+export function clampCamera(camera: Camera, viewport: Viewport, maxZoom: number = detailMaxZoom(viewport)): Camera {
   // A container with no laid-out size yet (e.g. before its first
   // ResizeObserver callback) reports a 0x0 (or one-axis-zero) viewport.
   // `coverScale` would divide by that zero further down (`overflow`'s
@@ -84,7 +124,7 @@ export function clampCamera(camera: Camera, viewport: Viewport): Camera {
   if (viewport.width <= 0 || viewport.height <= 0) {
     return { x: camera.x, y: camera.y, zoom: MIN_ZOOM };
   }
-  const zoom = clamp(camera.zoom, MIN_ZOOM, detailMaxZoom(viewport));
+  const zoom = clamp(camera.zoom, MIN_ZOOM, maxZoom);
   const scale = zoom * coverScale(viewport);
   const overflowX = overflow(WORLD_WIDTH, viewport.width, scale);
   const overflowY = overflow(WORLD_HEIGHT, viewport.height, scale);
@@ -147,7 +187,7 @@ export function coverCamera(points: Point[], viewport: Viewport): Camera {
  * function's: `fitPoints` only has to land every point inside the frame,
  * not guarantee each one reads as its own marker.
  */
-export function fitPoints(points: Point[], viewport: Viewport): Camera {
+export function fitPoints(points: Point[], viewport: Viewport, maxZoom: number = detailMaxZoom(viewport)): Camera {
   if (points.length === 0) return coverCamera(points, viewport);
   const scale = coverScale(viewport);
   const screenXs = points.map((point) => point.x * scale);
@@ -162,5 +202,5 @@ export function fitPoints(points: Point[], viewport: Viewport): Camera {
   const fitZoom = Math.min((viewport.width - pad * 2) / dx, (viewport.height - pad * 2) / dy);
   const centerX = (minX + maxX) / 2 / scale;
   const centerY = (minY + maxY) / 2 / scale;
-  return clampCamera({ x: centerX, y: centerY, zoom: fitZoom }, viewport);
+  return clampCamera({ x: centerX, y: centerY, zoom: fitZoom }, viewport, maxZoom);
 }

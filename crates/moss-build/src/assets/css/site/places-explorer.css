@@ -1,22 +1,628 @@
 /* ============================================================================
-   Places explorer — interactive layer over a place namespace root's static
-   map figure.
+   Places explorer — the interactive pan/zoom layer `places-explorer.js`
+   builds in place of a place-typed namespace root's static map figure.
 
    Gated partial: ships only when `places-explorer.js` does too, both behind
    `SiteAssets.places_explorer`. Registered in `build/emit/stylesheet.rs`'s
    CSS_PARTIALS.
 
-   This landing's bundle is a stub (see `js-src/site/places-explorer/index.ts`'s
-   own doc) with nothing visual yet, so there is nothing to style — only a
-   custom property, which declares no selector core could already own and
-   does not change how `.moss-place-map` paints. The interactive layer's own
-   rules land with it.
+   The runtime creates every selector below (`js-src/site/places-explorer/`);
+   none of it is emitted by Rust, so there is nothing here for the snapshot
+   suite to check beyond this file's own bytes. Every class is registered in
+   moss-core's component contract (`contract/components.rs`), which is what
+   `css_selectors_match_components_table` actually enforces.
+
+   No [data-theme="dark"] branch anywhere in this file on purpose: every
+   colour below is a `--moss-color-*`/`--moss-place-*` token, and both
+   already carry their own light/dark values — this file only has to read
+   them once.
    ========================================================================= */
 
 @layer shortcodes {
 
 [data-moss-places-explorer] {
   --moss-places-explorer: 1;
+}
+
+/* ---------------------------------------------------------------------------
+   Design decision 7: "the map is the page". `[data-moss-places-explorer]`
+   is set ONLY on the places namespace root's own figure
+   (`context.rs`'s `with_explorer_handshake`, spliced in only for
+   `key == self.namespace`), so every rule below is already scoped to that
+   one figure and needs no further `:root`/page-type qualifier — a site
+   with the explorer off never emits the attribute at all, and every OTHER
+   place page's own static figure keeps the fixed 3:2 box this replaces.
+
+   Width: the same content-width escape site.css's own
+   `article.container > [data-width="screen"]` gives a hand-authored
+   full-width embed — `100cqi` (`main`'s own container-query inline size,
+   set by site.css's `main { container-type: inline-size; }`), centred with
+   equal negative inline margins — but applied unconditionally at every
+   width, never collapsed back to the text column the way that rule's own
+   `@media (max-width: 48rem)` branch collapses a hand-authored one. This
+   file owns the figure's layout outright, so it reimplements the same two
+   declarations directly (`100cqi`, not the `--moss-escape` indirection
+   site.css's rule uses to pick between `wide`/`page`/`screen` — this
+   figure is never anything but the widest of the three) rather than
+   requiring the renderer to also emit `data-width="screen"` on a figure
+   that already carries its own handshake attributes.
+
+   Height: `100svh` floored at 480px, not `100svh` minus the header's own
+   rendered height — CSS has no way to subtract one flex sibling's height
+   from another's without either a fixed magic number (wrong the moment a
+   site's nav wraps to a second or third row, which this gate's own fixture
+   does) or a JS measurement this stylesheet doesn't have. Since the figure
+   sits in normal flow BELOW the header, giving it a full `100svh` of its
+   own means its bottom edge lands at `headerHeight + 100svh` down the
+   page — at or past the viewport's own bottom edge on first load either
+   way, which is what "reaches the viewport bottom" asks for; the cost is a
+   header's worth of extra page height before the footer, not a shortfall. */
+article.container > figure[data-moss-places-explorer] {
+  inline-size: 100cqi;
+  max-inline-size: none;
+  margin-inline: calc((100% - 100cqi) / 2);
+  block-size: max(480px, 100svh);
+}
+
+/* The header rule a hand-authored full-width hero already removes when it
+   sits directly after `<header>` (`header:has(+ .moss-hero) .nav-content`,
+   site.css) — this figure sits deeper, inside `<main>`, so the `:has()`
+   argument reaches through that extra descendant combinator instead of a
+   plain `+`. */
+header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-content {
+  border-block-end: none;
+}
+
+/* ---------------------------------------------------------------------------
+   The map as background, filling the figure's box
+   --------------------------------------------------------------------------- */
+
+/* The viewport fills its figure's own box — design decision 7 above sets
+   that figure's height, and `mountPlacesMap` only ever mounts this element
+   inside the explorer root figure, so there is no other context to size
+   for. The water colour is the SAME token the inlined world SVG's own
+   `<rect>` paints, so the box reads correctly even for the one frame before
+   that SVG's layout settles — first paint, in both themes, from the
+   token. */
+.moss-places-viewport {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  border-radius: 8px;
+  background: var(--moss-place-water, #e9eff2);
+  block-size: 100%;
+}
+.moss-places-viewport[data-dragging] {
+  cursor: grabbing;
+}
+.moss-places-viewport:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: -2px;
+}
+
+/* ---------------------------------------------------------------------------
+   World + tiles: the layer the camera's CSS transform actually moves.
+   --------------------------------------------------------------------------- */
+
+/* Sized and transformed from JS (map.ts's applyCamera): width/height are the
+   cover-scale box in CSS px, transform is translate+scale from the live
+   camera. will-change is added only for the span of an active gesture
+   (data-gesture, below) — permanently compositing this layer is what left a
+   zoomed-out-then-back-in map looking soft, resampling a texture rasterised
+   for a different scale instead of repainting fresh at rest. */
+.moss-places-world {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center;
+}
+.moss-places-world[data-gesture] {
+  will-change: transform;
+}
+
+/* Opacity is the cross-fade `tiles.ts`'s `TileLayer.render` drives through
+   this one custom property (`tileFadeOpacity`) — 0 below the fade band
+   short of the world layer's own detail ceiling, where `render` also
+   removes every tile element outright, so the property reaching 0 and the
+   layer having nothing in it to fade happen together. The transition only
+   has to smooth the RISE through the band (the fall is already silent: by
+   the time `render` clears the DOM, opacity has already ramped to 0), but
+   guarding it is still correct for the reduced-motion reader regardless of
+   direction — the same reasoning the relief/lighting fade below applies. */
+.moss-places-tiles {
+  position: absolute;
+  inset: 0;
+  opacity: var(--moss-place-tile-opacity, 0);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-tiles {
+    transition: opacity 150ms ease-out;
+  }
+}
+
+/* site.css's own `.moss-place-map svg { inline-size: 100%; block-size: auto;
+   aspect-ratio: 3 / 2; }` is right for the world SVG and every per-page
+   static figure (both share that one fixed 3:2 canvas) but wrong for a
+   regional tile: a tile's intrinsic size IS the exact rectangle `tiles.ts`'s
+   `TileLayer` positions it at (`PattersonProjection::for_tile`'s own
+   canvas_width/canvas_height — a different aspect ratio per cell, shorter
+   toward the poles), scaled only by its own `transform`. Stretching it to
+   100% of `.moss-places-tiles` (the whole world layer's own box) and
+   forcing 3:2 is what let a tile balloon to many times the viewport before
+   this rule, same specificity as the generic one but keyed on
+   `[data-moss-places-explorer]` so it always wins regardless of source
+   order. */
+[data-moss-places-explorer] .moss-places-tiles > svg {
+  inline-size: auto;
+  block-size: auto;
+  aspect-ratio: auto;
+}
+
+/* Relief fades toward a floor past the detail ceiling (set on `figure` by
+   applyCamera), and rivers keep a constant ON-SCREEN width as the camera
+   zooms the world layer — both via the two custom properties applyCamera
+   writes, which `--river-w` (copied once per path from its own baked
+   stroke-width, map.ts's `prepareRiverWidths`) lets the second one scale
+   without flattening each river's own rank taper. `[data-map-layer]` is the
+   world/tile SVG's own emitter contract (`place_map/svg.rs`), not a class
+   this stylesheet owns — see that module's doc for the group shapes these
+   selectors read. */
+[data-moss-places-explorer] [data-map-layer="relief"],
+[data-moss-places-explorer] [data-map-layer="lighting"] {
+  opacity: var(--moss-place-relief-strength, 1);
+}
+[data-moss-places-explorer] [data-map-layer="rivers"] path {
+  stroke-width: calc(var(--river-w, 1) * var(--moss-place-river-scale, 1));
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-moss-places-explorer] [data-map-layer="relief"],
+  [data-moss-places-explorer] [data-map-layer="lighting"] {
+    transition: opacity 150ms ease-out;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Markers + the coincident-cluster ring.
+   --------------------------------------------------------------------------- */
+
+/* Positioned (not transformed) by JS on every settle — markers stay a
+   constant on-screen size regardless of the world layer's own zoom, so this
+   layer is never itself scaled; `pointer-events: none` lets a drag that
+   starts over empty water still pan the map, and each marker/dot opts back
+   into `auto` below. */
+.moss-places-markers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.moss-places-marker {
+  position: absolute;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+/* The visible mark: a small casing+dot for exact/city precision (the same
+   fixed on-screen size the static map's own `marker_radius()` uses), a
+   softer, larger fade for region/country — privacy carried by the mark's
+   own shape, never by how far the map happens to be zoomed. */
+.moss-places-marker::before {
+  content: "";
+  position: absolute;
+  inset: 17px;
+  border-radius: 50%;
+  background: var(--moss-place-marker, #2d5a2d);
+  border: 2px solid var(--moss-place-marker-casing, #fff);
+}
+.moss-places-marker[data-precision="region"]::before,
+.moss-places-marker[data-precision="country"]::before {
+  inset: 2px;
+  border: 0;
+  background: radial-gradient(circle, color-mix(in srgb, var(--moss-place-marker, #2d5a2d) 55%, transparent) 0%, transparent 72%);
+}
+.moss-places-marker[data-selected="true"]::before {
+  inset: 14px;
+  border-width: 3px;
+}
+/* The ring's own anchor: shrinks to a small place dot once every member has
+   its own ring-dot button — no halo (redundant with the ring) and no count
+   (the N dots already say that). */
+.moss-places-marker[data-ring-anchor]::before {
+  inset: 19px;
+  border-width: 1px;
+}
+/* Count badge: `::after` reads `data-count` directly, so a single-work
+   marker (no attribute) never generates the pseudo-element at all — never
+   an empty circle sitting on top of the dot. */
+.moss-places-marker[data-count]::after {
+  content: attr(data-count);
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-width: 20px;
+  min-height: 20px;
+  padding-inline: 4px;
+  border-radius: 999px;
+  background: var(--moss-place-marker, #2d5a2d);
+  color: var(--moss-place-marker-casing, #fff);
+  border: 2px solid var(--moss-place-marker-casing, #fff);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* Every marker not part of the open ring steps back — full opacity
+   underneath, so a pan/zoom that re-clusters them away from the ring (and
+   so clears it) never has to fade anything back in from a different state. */
+.moss-places-marker[data-dimmed] {
+  opacity: 0.35;
+  z-index: 0;
+}
+.moss-places-marker:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-marker {
+    transition: opacity 200ms ease-out;
+  }
+}
+
+/* Hairline from the ring's anchor to each of its own dots — left/top/width
+   set by JS at the anchor point, rotated to the dot's own angle;
+   transform-origin at the LEFT edge is what makes that rotation pivot on
+   the anchor rather than the leg's own centre. */
+.moss-places-ring-leg {
+  position: absolute;
+  z-index: 1;
+  height: 1px;
+  background: var(--moss-place-marker, #2d5a2d);
+  opacity: 0.5;
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+
+.moss-places-ring-dot {
+  position: absolute;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+.moss-places-ring-dot::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: var(--moss-place-marker, #2d5a2d);
+  border: 2px solid var(--moss-place-marker-casing, #fff);
+}
+.moss-places-ring-dot[data-selected="true"]::before {
+  inset: 5px;
+  border-width: 3px;
+}
+.moss-places-ring-dot:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+/* ---------------------------------------------------------------------------
+   Controls: the glass zoom capsule and the reset circle.
+
+   Material is a translucent surface tint plus a blur+saturate filter (never
+   applied under prefers-reduced-transparency, which a reduced-transparency
+   reader has already opted into for exactly this reason) and a 0.5px
+   top/bottom rim that reads as a specular highlight/shadow pair, the same
+   recipe a prototype of this map settled on. Each control's own 36px
+   visible circle carries a 44px hit area through an inset `::after`
+   pseudo-element wider than the paint, so the hit area never changes the
+   capsule's own rhythm.
+   --------------------------------------------------------------------------- */
+
+.moss-places-controls {
+  position: absolute;
+  z-index: 4;
+  inset-block-start: 12px;
+  inset-inline-end: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.moss-places-control,
+.moss-places-capsule {
+  position: relative;
+  margin: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--moss-color-surface) 72%, transparent);
+  box-shadow:
+    var(--moss-elevation-1),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -0.5px 0 rgba(0, 0, 0, 0.08);
+  color: var(--moss-color-text);
+}
+@media not (prefers-reduced-transparency: reduce) {
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .moss-places-control,
+    .moss-places-capsule {
+      backdrop-filter: blur(16px) saturate(180%);
+      -webkit-backdrop-filter: blur(16px) saturate(180%);
+    }
+  }
+}
+
+.moss-places-control {
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  font: inherit;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.moss-places-control::before {
+  content: "";
+  font-size: 20px;
+  line-height: 1;
+}
+.moss-places-control[data-control="zoom-in"]::before {
+  content: "+";
+}
+.moss-places-control[data-control="zoom-out"]::before {
+  content: "\2212"; /* minus sign, not a hyphen */
+}
+.moss-places-control[data-control="reset"]::before {
+  width: 13px;
+  height: 13px;
+  border: 1.75px solid currentColor;
+  border-radius: 50%;
+}
+/* The invisible hit area: grows past the painted circle's own edge without
+   changing the capsule's rhythm, and the capsule group below never clips
+   with overflow, so this can safely extend past the visible cell. */
+.moss-places-control::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.moss-places-control:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* The capsule carries the material/radius/shadow; its own two cells are
+   transparent so that background shows through, divided by one hairline.
+   Each cell's own corners inherit the capsule's radius at its two OUTER
+   logical corners only — `border-radius: 0` on a flat cell would paint a
+   square hover/pressed fill poking past the capsule's own rounded ends. */
+.moss-places-capsule {
+  display: flex;
+  flex-direction: column;
+  width: 36px;
+  border-radius: 18px;
+}
+.moss-places-capsule .moss-places-control {
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-radius: 0;
+}
+.moss-places-capsule .moss-places-control:first-child {
+  border-start-start-radius: inherit;
+  border-start-end-radius: inherit;
+}
+.moss-places-capsule .moss-places-control:last-child {
+  border-end-start-radius: inherit;
+  border-end-end-radius: inherit;
+}
+.moss-places-capsule .moss-places-control + .moss-places-control {
+  border-block-start: 1px solid color-mix(in srgb, var(--moss-color-text) 14%, transparent);
+}
+
+@media (hover: hover) {
+  .moss-places-control:hover {
+    background: color-mix(in srgb, var(--moss-color-surface) 90%, transparent);
+  }
+}
+.moss-places-control:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-control {
+    transition: background 150ms ease-out, transform 150ms ease-out;
+  }
+  .moss-places-control:active {
+    transform: scale(0.94);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Cards: the works row, floating along the bottom.
+   --------------------------------------------------------------------------- */
+
+.moss-places-cards {
+  position: absolute;
+  z-index: 3;
+  inset-inline: 12px;
+  inset-block-end: 12px;
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: visible;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  padding-block-end: 2px;
+  scrollbar-width: thin;
+}
+.moss-places-cards:empty {
+  display: none;
+}
+
+/* Each card is a two-row grid: the always-visible select row, then the
+   detail region collapsed to a `0fr` track. Expanding to `1fr` (on
+   `aria-current`, the selected card) is the whole animation — no height
+   measured or set from JS. `overflow: hidden` on both the card and the
+   detail element itself keeps the collapsed track's content from ever
+   painting outside a zero-height row. */
+.moss-places-cards .moss-card {
+  flex: 0 0 auto;
+  inline-size: 240px;
+  max-inline-size: 80vw;
+  scroll-snap-align: start;
+  display: grid;
+  grid-template-rows: auto 0fr;
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--moss-color-surface) 94%, transparent);
+  box-shadow: var(--moss-elevation-1);
+}
+.moss-places-cards .moss-card[aria-current="true"] {
+  grid-template-rows: auto 1fr;
+  inline-size: 320px;
+  max-inline-size: 86vw;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-cards .moss-card {
+    transition: grid-template-rows 220ms ease-out, inline-size 220ms ease-out;
+  }
+}
+
+/* `display: flex; flex-direction: column` (not `block`) is load-bearing: a
+   `<button>`'s content is centred vertically by the browser's own internal
+   button layout even when the author sets `display: block`, which this
+   stylesheet cannot reach past with an author-level override on any OTHER
+   property. Taking the button's layout mode over explicitly (column flex,
+   one child) replaces that centring with ordinary top alignment (the
+   default `justify-content: flex-start`) and keeps the row's own full-width
+   fill (the default cross-axis `align-items: stretch`) — so a card stretched
+   taller than its own content (`.moss-places-cards`' own `align-items:
+   stretch`, matching every card to its tallest sibling) leaves the slack
+   below the row instead of splitting it above and below, which is what
+   carried the cover to a different height on every card. */
+.moss-places-card-select {
+  display: flex;
+  flex-direction: column;
+  inline-size: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.moss-places-card-select .moss-card-row {
+  padding: 10px;
+}
+.moss-places-card-select .moss-card-cover {
+  inline-size: 64px;
+  flex: 0 0 64px;
+  align-self: flex-start;
+  border-radius: 8px;
+}
+.moss-places-card-select:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: -2px;
+}
+
+.moss-places-card-detail {
+  min-block-size: 0;
+  overflow: hidden;
+}
+.moss-places-card-detail > * {
+  padding-inline: 10px;
+  margin: 0 0 0.5em;
+}
+.moss-places-card-detail > :first-child {
+  margin-block-start: 0;
+}
+.moss-places-card-detail > :last-child {
+  margin-block-end: 0;
+  padding-block-end: 10px;
+}
+.moss-places-card-detail p {
+  font-size: var(--moss-size-xs);
+  color: var(--moss-color-text-secondary);
+}
+.moss-places-card-detail ul {
+  list-style: none;
+  padding-inline-start: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em 0.8em;
+}
+.moss-places-card-detail ul a {
+  font-size: var(--moss-size-xs);
+  color: var(--moss-color-text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.moss-places-card-detail ul a:hover {
+  color: var(--moss-color-accent);
+}
+.moss-places-card-read {
+  display: inline-block;
+  font-size: var(--moss-size-xs);
+  font-weight: 600;
+  color: var(--moss-color-accent);
+  text-decoration: none;
+}
+.moss-places-card-read:hover {
+  text-decoration: underline;
+}
+.moss-places-card-read:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   The live region: announces scope/selection changes, never pan or zoom,
+   and is never itself visible.
+   --------------------------------------------------------------------------- */
+
+.moss-places-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 }

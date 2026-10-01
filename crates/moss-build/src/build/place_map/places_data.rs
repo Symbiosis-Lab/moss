@@ -101,13 +101,22 @@ fn page_url(url_path: &str) -> String {
 /// produces for it — never the full-size original. `None` given no cover.
 ///
 /// Image covers resolve to the deployed WebP re-encode
-/// (`moss_core::asset_paths::to_webp`): the build always produces this
-/// file for every raster cover regardless of its dimensions, unlike a
-/// specific responsive rung (`w800`/`w1600`), which `ladder_rungs` omits
-/// entirely once a cover's deployed width is at or under that rung's
-/// width — and this pure emitter never sees a cover's natural dimensions
-/// to know whether a given rung was ever produced. Guessing one would risk
-/// a 404; the deployed base never does. Video covers resolve to their
+/// (`moss_core::asset_paths::to_webp`) ONLY for a raster source — one of
+/// the extensions `moss_core::asset_paths::is_ladder_source_ext` gates
+/// (png/jpg/jpeg/webp), the build always produces this file for every one
+/// of those regardless of dimensions, unlike a specific responsive rung
+/// (`w800`/`w1600`), which `ladder_rungs` omits entirely once a cover's
+/// deployed width is at or under that rung's width — and this pure emitter
+/// never sees a cover's natural dimensions to know whether a given rung
+/// was ever produced. Guessing one would risk a 404; the deployed base
+/// never does. A non-raster image source (svg, gif, avif, ...) gets no
+/// webp at all: `moss-core/src/render/image.rs`'s `is_raster_original`
+/// gates the canonical in-page `<picture>` conversion by the exact same
+/// extension set and serves a non-raster original's own raw path for
+/// every source outside it, and this emitter follows the same rule rather
+/// than inventing a second one — an svg cover used to resolve to a
+/// `.svg.webp` path the media pipeline's own `SkipReason::Svg` guarantees
+/// never exists, a 404 on every card. Video covers resolve to their
 /// poster JPEG (`moss_core::asset_paths::to_thumb`), produced for every
 /// video cover. Iframe covers have no processed image asset at all.
 ///
@@ -130,7 +139,12 @@ fn resolve_cover(cover: Option<&str>, cover_type_override: Option<&str>) -> Opti
     match detect_cover_type(&resolved, cover_type_override) {
         CoverType::Video => Some(moss_core::asset_paths::to_thumb(&resolved)),
         CoverType::Iframe => None,
-        CoverType::Image => Some(moss_core::asset_paths::to_webp(&resolved)),
+        CoverType::Image => {
+            let is_raster = resolved
+                .rsplit_once('.')
+                .is_some_and(|(_, ext)| moss_core::asset_paths::is_ladder_source_ext(ext));
+            Some(if is_raster { moss_core::asset_paths::to_webp(&resolved) } else { resolved })
+        }
     }
 }
 
@@ -338,6 +352,36 @@ mod tests {
 
     use super::*;
     use moss_core::PageKind;
+
+    /// A raster cover (png/jpg/jpeg/webp) still resolves to its deployed
+    /// webp re-encode — the one path the media pipeline guarantees exists
+    /// for every one of those, regardless of the source's own dimensions.
+    #[test]
+    fn resolve_cover_sends_a_raster_source_to_its_webp_re_encode() {
+        assert_eq!(resolve_cover(Some("cover.jpg"), None).as_deref(), Some("/cover.webp"));
+        assert_eq!(resolve_cover(Some("cover.PNG"), None).as_deref(), Some("/cover.webp"));
+    }
+
+    /// An SVG cover must serve its own raw path, never a `.svg.webp` —
+    /// `moss-core/src/render/image.rs`'s canonical `is_raster_original`
+    /// rule, which this emitter now follows: the media pipeline's own
+    /// `SkipReason::Svg` guarantees no webp re-encode of an SVG source is
+    /// ever produced, so the old `to_webp` call resolved to a path that
+    /// could never exist — every SVG-covered card in the fixture showed a
+    /// blank box.
+    #[test]
+    fn resolve_cover_serves_an_svg_sources_own_raw_path() {
+        assert_eq!(resolve_cover(Some("cover.svg"), None).as_deref(), Some("/cover.svg"));
+    }
+
+    /// `cover_type_override`/the file extension still route video and
+    /// iframe covers the way they always did — this test only pins that
+    /// the SVG fix above didn't fold Image's non-raster branch into those.
+    #[test]
+    fn resolve_cover_still_routes_video_and_iframe_covers() {
+        assert_eq!(resolve_cover(Some("clip.mp4"), None).as_deref(), Some("/clip.thumb.jpg"));
+        assert_eq!(resolve_cover(Some("embed.html"), None), None);
+    }
 
     fn gazetteer() -> Gazetteer {
         let table: toml::value::Table = toml::from_str(

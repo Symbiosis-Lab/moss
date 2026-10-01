@@ -30,9 +30,14 @@
 //! every time, the same reasoning `media::remote_cover`'s module doc gives —
 //! runs on every build.
 //!
-//! `tiles.json` lists the emitted regional tiles' `[x, y]` pairs, so the
-//! explorer (a later task) knows which cells exist without probing for a
-//! 404 per candidate.
+//! `tiles.json` lists the emitted regional tiles' `[x, y]` pairs plus `k`,
+//! the factor a tile is drawn at over the world's own scale
+//! (`place_map::geometry::TILE_K`), so the explorer knows which cells exist
+//! without probing for a 404 per candidate, and derives its own tile
+//! detail ceiling and placement transform from the SAME `k` this build
+//! rendered the tiles at — never a separately-maintained copy that could
+//! drift from it (`js-src/site/places-explorer/camera.ts`'s
+//! `tileDetailMaxZoom`, `tiles.ts`'s `TileLayer`).
 
 use std::path::Path;
 
@@ -41,14 +46,36 @@ use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, Transform
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::place_map;
+use crate::build::place_map::{TILE_BLEED, TILE_K};
 use crate::build::served_path::ServedPath;
 use crate::moss_paths::MossPaths;
 use crate::vault::places::Gazetteer;
 
+/// `tiles.json`'s own shape: `k` and `bleed` alongside the emitted cells, so
+/// the runtime never has to hardcode or re-derive the factor a tile was
+/// rendered at, or the margin its own canvas was padded by beyond its
+/// nominal cell (see this module's own doc, and `geometry::TILE_BLEED`).
+#[derive(serde::Serialize)]
+struct TileIndex<'a> {
+    k: f64,
+    bleed: f64,
+    cells: &'a [(i16, i16)],
+}
+
 /// Bumped whenever `place_map::emit_world_svg`/`emit_tile_svg` changes in a
 /// way that must invalidate every cached SVG even though the embedded pack
 /// bytes did not — a new layer, a paint-order fix, a projection change.
-pub const GENERATOR_VERSION: u32 = 1;
+/// 2: `emit_tile_svg` now draws a tile in the world's own Patterson
+/// projection at `TILE_K` times its scale, clipped to the cell's own
+/// rectangle, instead of a separately-cropped `FlatProjection` — a
+/// pre-existing site's own cached/staged tiles (and the directory name
+/// itself, since `assets_hash` folds this constant in) must not survive the
+/// upgrade unrendered.
+/// 3: a tile's own canvas now bleeds `TILE_BLEED` past its nominal cell on
+/// every edge, so its declared size (and `tiles.json`'s new `bleed` field)
+/// both changed — a pre-existing site's cached tiles were rendered one
+/// `TILE_BLEED` narrower and must not survive the upgrade unrendered.
+pub const GENERATOR_VERSION: u32 = 3;
 
 /// The hash naming this build's `_moss/map.<hash>/` directory: the pack's
 /// own fingerprint (its source manifest digest, from the embedded
@@ -261,7 +288,8 @@ pub fn emit(
     // caching on its own.
     let index_sp = ServedPath::for_place_map_asset(&hash, "tiles.json")
         .map_err(|e| format!("Invalid place-map tile index path: {e}"))?;
-    let index_json = serde_json::to_vec(&regional_tiles).map_err(|e| format!("Failed to serialize tiles.json: {e}"))?;
+    let index_json = serde_json::to_vec(&TileIndex { k: TILE_K, bleed: TILE_BLEED, cells: &regional_tiles })
+        .map_err(|e| format!("Failed to serialize tiles.json: {e}"))?;
     BuildContext::for_render(output_dir, pending)
         .emit(&index_sp, &index_json, HashBucket::Files)
         .map_err(|e| format!("Failed to emit place-map tile index: {e}"))?;
@@ -458,8 +486,16 @@ mod tests {
         assert_eq!(dirs.len(), 1);
         let dir = output_dir.path().join("_moss").join(&dirs[0]);
         assert!(dir.join("world.svg").exists());
-        let index: Vec<(i16, i16)> = serde_json::from_slice(&std::fs::read(dir.join("tiles.json")).unwrap()).unwrap();
-        assert!(index.is_empty());
+        #[derive(serde::Deserialize)]
+        struct Owned {
+            k: f64,
+            bleed: f64,
+            cells: Vec<(i16, i16)>,
+        }
+        let index: Owned = serde_json::from_slice(&std::fs::read(dir.join("tiles.json")).unwrap()).unwrap();
+        assert!(index.cells.is_empty());
+        assert_eq!(index.k, TILE_K);
+        assert_eq!(index.bleed, TILE_BLEED);
         assert_eq!(std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).count(), 2, "world.svg + tiles.json only");
     }
 

@@ -226,6 +226,24 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         default: "0s",
         description: "How long the mark takes to change colour. The default snaps, which is what a surface that never recolours it wants. Give it a duration where the paint changes on hover or focus, so the mark fades rather than snaps — the colophon sets 240ms, the duration its wording fades out on.",
     },
+    CustomProp {
+        name: "--moss-place-marker",
+        owner: "moss-places-marker",
+        default: "#2d5a2d",
+        description: "Fill colour of an explorer marker's own dot, its cluster-count badge, and a bloomed ring's legs/dots. `.moss-place-map` already sets this to `var(--moss-color-accent, #2d5a2d)` for the static map's own pins (precision_rank's marker colour); the explorer's own JS-positioned markers read the same property, so recolouring one recolours both.",
+    },
+    CustomProp {
+        name: "--moss-place-marker-casing",
+        owner: "moss-places-marker",
+        default: "#ffffff",
+        description: "The ring/border colour around a marker's dot and a cluster badge — set to the page background so a dense cluster of markers still reads as separate dots rather than a solid blob.",
+    },
+    CustomProp {
+        name: "--moss-place-water",
+        owner: "moss-places-viewport",
+        default: "#e9eff2",
+        description: "First-paint background of the explorer's own pannable viewport, before the inlined world SVG's own identically-coloured water layer has loaded — never itself set independently of `.moss-place-map`'s own `--moss-place-water`, which already carries the site's light/dark values.",
+    },
 ];
 
 /// A `data-*` attribute moss emits on an element that carries no `moss-*` class.

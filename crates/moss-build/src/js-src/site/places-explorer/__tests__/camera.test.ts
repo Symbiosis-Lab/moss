@@ -13,6 +13,8 @@ import {
   clampCamera,
   coverCamera,
   fitPoints,
+  worldToScreen,
+  screenToWorld,
 } from "../camera";
 
 describe("coverCamera", () => {
@@ -113,5 +115,25 @@ describe("fitPoints", () => {
     const viewport = { width: 1000, height: 600 };
     const camera = fitPoints([{ x: 500, y: 280 }], viewport);
     expect(camera.zoom).toBe(detailMaxZoom(viewport));
+  });
+});
+
+describe("worldToScreen / screenToWorld", () => {
+  test("the camera's own centre lands in the middle of the viewport", () => {
+    const viewport = { width: 1000, height: 600 };
+    const camera = { x: 300, y: 200, zoom: 2 };
+    const screen = worldToScreen({ x: camera.x, y: camera.y }, camera, viewport);
+    expect(screen.x).toBeCloseTo(viewport.width / 2);
+    expect(screen.y).toBeCloseTo(viewport.height / 2);
+  });
+
+  test("round-trips through both directions", () => {
+    const viewport = { width: 1000, height: 600 };
+    const camera = { x: 410, y: 180, zoom: 3.4 };
+    for (const point of [{ x: 0, y: 0 }, { x: WORLD_WIDTH, y: WORLD_HEIGHT }, { x: 410, y: 180 }]) {
+      const back = screenToWorld(worldToScreen(point, camera, viewport), camera, viewport);
+      expect(back.x).toBeCloseTo(point.x);
+      expect(back.y).toBeCloseTo(point.y);
+    }
   });
 });

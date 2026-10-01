@@ -76,6 +76,10 @@ GATES_BUILD=(
   place-map-route
   preview-parity-gate
   touch-targets
+  places-explorer-boot
+  places-explorer-camera
+  places-explorer-ring
+  places-explorer-cards
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

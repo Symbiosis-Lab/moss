@@ -279,7 +279,20 @@ fn moss_grid_data_columns_description_agrees_with_the_stylesheets_mobile_collaps
 /// emits, e.g. a per-cover `--moss-cover-color`) to avoid flagging that
 /// entire ordinary category — out of scope for the fallback-hook table this
 /// test polices.
-const CUSTOM_PROP_ALLOWLIST: &[(&str, &str)] = &[];
+const CUSTOM_PROP_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "--moss-place-relief-strength",
+        "Runtime scalar the places-explorer JS writes on every camera settle (0..1, fading relief shading toward the detail ceiling) — never a value a theme sets, so it carries no stable default worth documenting as a hook.",
+    ),
+    (
+        "--moss-place-river-scale",
+        "Runtime scalar the places-explorer JS writes alongside --moss-place-relief-strength, keeping a river's on-screen stroke width constant as the camera zooms — same internal-plumbing reasoning, not a theme hook.",
+    ),
+    (
+        "--moss-place-tile-opacity",
+        "Runtime scalar the places-explorer JS writes on every camera settle (0..1, the regional-tile layer's own cross-fade toward the world map's detail ceiling) — same internal-plumbing reasoning as --moss-place-relief-strength, not a theme hook.",
+    ),
+];
 
 #[test]
 fn every_escape_hatch_is_declared() {

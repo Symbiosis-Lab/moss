@@ -1,0 +1,86 @@
+/**
+ * strings.ts — the places explorer's own runtime copy.
+ *
+ * Bucketed the same way every other site runtime localises itself
+ * (`subscribe/i18n.ts`'s `langBucket`/`Lang` — the blessed TS twin of Rust's
+ * `Language::from_bcp47_lenient`): three buckets, read off `<html lang>`.
+ * No per-site override exists for this landing, the same posture
+ * `subscribe/i18n.ts` itself takes.
+ */
+import { langBucket, type Lang } from "../subscribe/i18n";
+
+export interface PlacesStrings {
+  /** `aria-label` on the pannable map region. */
+  map: string;
+  /** `aria-label` on the controls group (the zoom capsule plus the reset circle). */
+  mapControls: string;
+  zoomIn: string;
+  zoomOut: string;
+  /** `aria-label` on the reset-to-cover control. */
+  reset: string;
+  /** Untitled work fallback, same role as a card's own title fallback elsewhere. */
+  untitled: string;
+  /** `{n}` placeholder, replaced with a formatted count — a cluster marker's own label. */
+  worksHere: string;
+  /** Live-region announcement once a ring opens, scoping the row. */
+  ringOpened: string;
+  /** Live-region announcement once the scope returns to every work. */
+  scopeCleared: string;
+  /** `aria-label` on the works row. */
+  worksInView: string;
+  /** Link text to a work's own article. */
+  readArticle: string;
+}
+
+const STRINGS: Record<Lang, PlacesStrings> = {
+  en: {
+    map: "Map. Use arrow keys to pan, plus and minus to zoom.",
+    mapControls: "Map controls",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    reset: "Fit all places",
+    untitled: "Untitled",
+    worksHere: "{n} works here",
+    ringOpened: "Showing works for this place.",
+    scopeCleared: "Showing all works again.",
+    worksInView: "Works in view",
+    readArticle: "Read article",
+  },
+  "zh-hans": {
+    map: "地图。使用方向键平移，加号及减号缩放。",
+    mapControls: "地图控制",
+    zoomIn: "放大地图",
+    zoomOut: "缩小地图",
+    reset: "显示全部地点",
+    untitled: "未命名作品",
+    worksHere: "此处 {n} 篇",
+    ringOpened: "已显示此地点的作品。",
+    scopeCleared: "已显示全部作品。",
+    worksInView: "视野中的作品",
+    readArticle: "阅读原文",
+  },
+  "zh-hant": {
+    map: "地圖。使用方向鍵平移，加號及減號縮放。",
+    mapControls: "地圖控制",
+    zoomIn: "放大地圖",
+    zoomOut: "縮小地圖",
+    reset: "顯示全部地點",
+    untitled: "未命名作品",
+    worksHere: "此處 {n} 篇",
+    ringOpened: "已顯示此地點的作品。",
+    scopeCleared: "已顯示全部作品。",
+    worksInView: "視野中的作品",
+    readArticle: "閱讀原文",
+  },
+};
+
+/** This document's own copy bucket, read once per boot — `<html lang>` never changes mid-session. */
+export function copyFor(lang: string | null | undefined): PlacesStrings {
+  return STRINGS[langBucket(lang)];
+}
+
+/** `worksHere`'s `{n}` filled with a locale-formatted count. */
+export function worksHereLabel(strings: PlacesStrings, lang: string | null | undefined, count: number): string {
+  const formatted = new Intl.NumberFormat(lang ?? undefined).format(count);
+  return strings.worksHere.replace("{n}", formatted);
+}

@@ -1,1 +1,0 @@
-"use strict";(()=>{function t(){let e=document.querySelector("[data-moss-places-explorer]");e&&e.setAttribute("data-moss-places-explorer-ready","pending")}document.addEventListener("DOMContentLoaded",t);})();

@@ -694,13 +694,19 @@ fn snapshot_places_route_site() {
 /// pinned ceiling of 96 KiB, matching the aggregate map's own budget,
 /// since the two emitters share a rendering body); this fixture's
 /// Kansai-region places all fall in one 3x3 neighbourhood, so its 9 tiles
-/// combined = 134,854 brotli bytes (pinned ceiling 512 KiB). Before tiles
-/// were scoped to the gazetteer's own cells, every one of the pack's 648
-/// tiles was emitted regardless of this site's places — 6,678,052 brotli
-/// bytes, 50x this fixture's actual footprint and the same for every site
-/// regardless of how many places it names. `tiles.json` lists exactly the
-/// tiles emitted, so the explorer can know which cells exist without
-/// probing.
+/// combined = 51,886 brotli bytes (pinned ceiling 512 KiB) — down from
+/// 134,854 when each tile still drew a full 720x480 `FlatProjection`
+/// canvas: a tile's own viewBox is now its cell's Patterson rectangle
+/// times `TILE_K` (about 94x88 viewBox units near the equator, smaller
+/// toward the poles), a fraction of the old fixed canvas's area, for the
+/// same fine-tier detail. Before tiles were scoped to the gazetteer's own
+/// cells, every one of the pack's 648 tiles was emitted regardless of this
+/// site's places — 6,678,052 brotli bytes, 50x this fixture's actual
+/// footprint and the same for every site regardless of how many places it
+/// names. `tiles.json` lists exactly the tiles emitted, plus `k` (the
+/// factor each tile was drawn at over the world's own scale), so the
+/// explorer can know which cells exist without probing and can never
+/// disagree with the build about the scale it rendered them at.
 #[test]
 fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
     use std::io::Write;
@@ -749,10 +755,18 @@ fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
         "{tile_count} tiles total {tiles_brotli_total} brotli bytes, over the {TILES_BROTLI_CEILING} ceiling"
     );
 
-    let index: Vec<(i16, i16)> =
+    #[derive(serde::Deserialize)]
+    struct TileIndex {
+        k: f64,
+        bleed: f64,
+        cells: Vec<(i16, i16)>,
+    }
+    let index: TileIndex =
         serde_json::from_slice(&fs::read(map_dir.join("tiles.json")).expect("tiles.json must be emitted"))
-            .expect("tiles.json must be a JSON array of [x, y] pairs");
-    assert_eq!(index.len(), tile_count, "tiles.json must list exactly the tiles actually emitted");
+            .expect("tiles.json must be {k, bleed, cells}");
+    assert_eq!(index.cells.len(), tile_count, "tiles.json must list exactly the tiles actually emitted");
+    assert_eq!(index.k, 4.0, "tiles.json's k must match the build's own TILE_K");
+    assert_eq!(index.bleed, 0.1, "tiles.json's bleed must match the build's own TILE_BLEED");
 }
 
 /// The places root and a parent place's listing mark every place their

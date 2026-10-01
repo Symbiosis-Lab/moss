@@ -150,6 +150,7 @@ fn emit_svg_with_mode(
             Precision::Country => LocatorProfile::Country,
         }),
         canvas_width: f64::from(SVG_WIDTH),
+        canvas_height: f64::from(SVG_HEIGHT),
         full_extent: false,
     };
     writer.open_figure(
@@ -198,7 +199,18 @@ pub(super) fn render_svg(
     writer.water();
 
     let projection = choose_projection(writer, target);
-    let wide = projection.as_ref().is_some_and(Projection::is_wide);
+    // A `Tile` frame is drawn in the world's own Patterson projection at
+    // `TILE_K` times its scale (`PattersonProjection::for_tile`), so its
+    // projection `scale` reads as geographically "wide" under
+    // `Projection::is_wide()`'s ratio — that heuristic conflates a
+    // projection's own internal scale constant with geographic extent, a
+    // conflation that happens to hold for `FlatProjection` and the
+    // per-page/full-extent Patterson projections but not for a
+    // `TILE_K`-multiplied one. A tile is always exactly a 10-degree cell —
+    // the same span a `Local` frame never trips `is_wide` for — so it never
+    // gets the world map's rank/layer thinning either.
+    let is_tile = target.frame.as_ref().is_some_and(|frame| frame.tier == FrameTier::Tile);
+    let wide = !is_tile && projection.as_ref().is_some_and(Projection::is_wide);
     let wide_locator = writer.locator_profile.is_some() && wide;
     let grouped = target.frame.as_ref().map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
@@ -289,11 +301,17 @@ pub(super) struct Writer<'a> {
     pub(super) detail: f64,
     pub(super) locator_profile: Option<LocatorProfile>,
     /// This figure's own canvas width, in viewBox units: `SVG_WIDTH` for
-    /// every page figure and the explorer's regional tiles, or the wider
-    /// `geometry::world_viewbox_width()` for the explorer's shared world
-    /// SVG — the one asset a reader pans and zooms across the whole globe
-    /// at runtime instead of viewing through a fixed, cropped frame.
+    /// every page figure, the wider `geometry::world_viewbox_width()` for
+    /// the explorer's shared world SVG, or a tile's own `TILE_K`-scaled
+    /// cell width for a regional tile (`explorer::emit_tile_svg`, via
+    /// `Projection::canvas_size`).
     pub(super) canvas_width: f64,
+    /// This figure's own canvas height, in viewBox units: `SVG_HEIGHT` for
+    /// every page figure and the world SVG, or a tile's own `TILE_K`-scaled
+    /// cell height for a regional tile — shorter than `SVG_HEIGHT` away
+    /// from the equator, since Patterson itself compresses a high-latitude
+    /// cell vertically (see `PattersonProjection::for_tile`).
+    pub(super) canvas_height: f64,
     /// Whether `render_svg` draws with the explorer world SVG's full-extent
     /// Patterson projection rather than the target's own per-frame one. Set
     /// explicitly by each caller — never inferred from `canvas_width`, which
@@ -305,9 +323,9 @@ impl<'a> Writer<'a> {
     /// The shared literal for a page-independent places-explorer base-map
     /// asset (`explorer::emit_world_svg`/`emit_tile_svg`): full capacity, no
     /// globe inset, no href, no locator, undetailed (never shown smaller
-    /// than its own viewBox) — the two emitters differ only in `ids`,
-    /// `canvas_width`, and `full_extent`.
-    pub(super) fn for_explorer_asset(ids: &'a Ids, canvas_width: f64, full_extent: bool) -> Self {
+    /// than its own viewBox) — the three emitters differ only in `ids`,
+    /// `canvas_width`/`canvas_height`, and `full_extent`.
+    pub(super) fn for_explorer_asset(ids: &'a Ids, canvas_width: f64, canvas_height: f64, full_extent: bool) -> Self {
         Self {
             output: String::with_capacity(32 * 1024),
             ids,
@@ -318,6 +336,7 @@ impl<'a> Writer<'a> {
             detail: 1.0,
             locator_profile: None,
             canvas_width,
+            canvas_height,
             full_extent,
         }
     }
@@ -387,11 +406,13 @@ fn keep_world_scale_layers(grouped: &mut [Vec<&Feature>]) {
 }
 
 /// Whether any part of a projected ring falls inside the view, rather than
-/// only in the clip margin around it. `width` is the figure's own
-/// `canvas_width` (720 for every page figure, wider for the explorer's
-/// full-extent world SVG), not a fixed 720 — a band beyond 720 on that
-/// wider canvas is still on screen and must not be culled here.
-fn on_screen(ring: &[(f64, f64)], width: f64) -> bool {
+/// only in the clip margin around it. `width`/`height` are the figure's own
+/// `canvas_width`/`canvas_height` (720x480 for every page figure, wider for
+/// the explorer's full-extent world SVG, a cell's own smaller size for a
+/// regional tile), never the fixed `SVG_WIDTH`/`SVG_HEIGHT` — a band beyond
+/// those bounds on a differently-sized canvas is still on screen and must
+/// not be culled here.
+fn on_screen(ring: &[(f64, f64)], width: f64, height: f64) -> bool {
     let (mut min_x, mut max_x, mut min_y, mut max_y) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     for &(x, y) in ring {
         min_x = min_x.min(x);
@@ -399,7 +420,7 @@ fn on_screen(ring: &[(f64, f64)], width: f64) -> bool {
         min_y = min_y.min(y);
         max_y = max_y.max(y);
     }
-    min_x < width && max_x > 0.0 && min_y < f64::from(SVG_HEIGHT) && max_y > 0.0
+    min_x < width && max_x > 0.0 && min_y < height && max_y > 0.0
 }
 
 fn grouped_features<'a>(pack: &'a Pack, selected: &TileSelection) -> Vec<Vec<&'a Feature>> {
@@ -432,6 +453,11 @@ impl Writer<'_> {
             FrameTier::Local => "local",
             FrameTier::Wide => "wide",
             FrameTier::World => "world",
+            // Unreachable in practice: a `Tile` frame only ever reaches
+            // `render_svg` directly (`explorer::emit_tile_svg`), which
+            // skips `open_figure` entirely (see that function's own doc) —
+            // kept here only so this match stays exhaustive.
+            FrameTier::Tile => "tile",
         };
         write!(
             self.output,
@@ -455,9 +481,10 @@ impl Writer<'_> {
 
     fn open_svg(&mut self) {
         let width = length(self.canvas_width);
+        let height = length(self.canvas_height);
         write!(
             self.output,
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{SVG_HEIGHT}\" viewBox=\"0 0 {width} {SVG_HEIGHT}\" aria-hidden=\"true\" focusable=\"false\">",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" aria-hidden=\"true\" focusable=\"false\">",
         )
         .expect("writing to String cannot fail");
     }
@@ -524,9 +551,10 @@ impl Writer<'_> {
     fn water(&mut self) {
         let id = self.ids.get("layer-water");
         let width = length(self.canvas_width);
+        let height = length(self.canvas_height);
         write!(
             self.output,
-            "<g id=\"{id}\" data-map-layer=\"water\"><rect width=\"{width}\" height=\"{SVG_HEIGHT}\" fill=\"var(--moss-place-water, #e9eff2)\"/></g>",
+            "<g id=\"{id}\" data-map-layer=\"water\"><rect width=\"{width}\" height=\"{height}\" fill=\"var(--moss-place-water, #e9eff2)\"/></g>",
         )
         .expect("writing to String cannot fail");
     }
@@ -693,7 +721,7 @@ impl Writer<'_> {
                 // stay in one path, preserving holes through
                 // clipping.
                 let rings = projection.project_feature(&rings, quantisation);
-                let on_screen = rings.iter().any(|ring| on_screen(ring, self.canvas_width));
+                let on_screen = rings.iter().any(|ring| on_screen(ring, self.canvas_width, self.canvas_height));
                 (feature, on_screen.then(|| serialize_path(&rings, true, BY_AREA.scaled(self.detail))).flatten())
             })
             .filter(|(_, path)| path.is_some())
@@ -1080,6 +1108,7 @@ mod tests {
             detail: 1.0,
             locator_profile: None,
             canvas_width: f64::from(SVG_WIDTH),
+            canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
         };
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
@@ -1123,6 +1152,7 @@ mod tests {
             detail: 1.0,
             locator_profile: None,
             canvas_width: f64::from(SVG_WIDTH),
+            canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
         };
         writer.emit_river_layer(10_000, &projection, &grouped, "#5b93bd");
@@ -1327,6 +1357,7 @@ mod tests {
             detail: 1.0,
             locator_profile: None,
             canvas_width: f64::from(SVG_WIDTH),
+            canvas_height: f64::from(SVG_HEIGHT),
             full_extent: true,
         };
         let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None, route: false };

@@ -30,6 +30,13 @@ pub enum FrameTier {
     Local,
     Wide,
     World,
+    /// One explorer regional detail tile: a 10x10 degree cell drawn in the
+    /// SAME Patterson projection as the world map (not `FlatProjection`),
+    /// at `TILE_K` times the world's own scale and clipped to the cell's
+    /// own rectangle — see `PattersonProjection::for_tile`. Only
+    /// `explorer::tile_frame` ever builds a `Frame` with this tier; no
+    /// per-page figure does.
+    Tile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -241,7 +248,7 @@ impl FlatProjection {
             self.project_unwrapped(longitude, latitude)
         })
         .iter()
-        .flat_map(|screen| clip_polyline(screen, CLIP_MIN_X, CLIP_MAX_X))
+        .flat_map(|screen| clip_polyline(screen, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y))
         .collect()
     }
 }
@@ -282,16 +289,58 @@ pub(crate) fn world_viewbox_width() -> f64 {
     VIEWBOX_HEIGHT * std::f64::consts::PI / patterson_y(std::f64::consts::FRAC_PI_2)
 }
 
+/// How many times the world map's own scale a regional detail tile is drawn
+/// at (`PattersonProjection::for_tile`). Chosen from the runtime's own
+/// detail ceilings (`js-src/site/places-explorer/camera.ts`'s
+/// `DETAIL_MAX_SCALE`): the world map stops at about 8.41 CSS px per world
+/// unit, and a world unit covers `world_viewbox_width() / 360` viewBox
+/// units of longitude, so the world ceiling is about 8.41 * (842.035/360)
+/// = 19.7 screen px per degree of longitude. `K = 4` puts the tile ceiling
+/// at `4 * 19.7` = about 79 px per degree — the detail the static 10-degree
+/// locators (`DESIGN_PIXELS_PER_DEGREE`, about 70.6 px per degree) are
+/// drawn at. Exposed to the runtime through `tiles.json`'s own `k` field
+/// (`emit::place_map_assets::emit`) so the two can never drift apart.
+pub(crate) const TILE_K: f64 = 4.0;
+
+/// How far, in world units (the same space `tileCellBounds` and
+/// `tile_viewbox_equals_its_cell_rectangle_times_k` both work in — see
+/// `for_tile` below), a tile's canvas extends past its own nominal cell on
+/// every edge. `tileCellBounds` gives two adjacent tiles the exact same
+/// shared-edge value to float precision, but each tile's own serialized
+/// canvas size (`svg.rs`'s `length`, rounded to a thousandth of a canvas
+/// unit) and its own CSS transform are computed and rasterized
+/// independently, which can disagree by a fraction of a device pixel at the
+/// shared edge — a gap with the world layer's own colour showing through.
+/// A cell is about 23 world units wide at the equator; `TILE_BLEED` is
+/// small enough to cost nothing in file size or render time but, at the
+/// tile's own native screen scale, covers that disagreement with overlap
+/// instead of a gap. Exposed to the runtime through `tiles.json`'s own
+/// `bleed` field, the same way `k` is — see `tiles.ts`'s
+/// `tileOverlayTransform`.
+pub(crate) const TILE_BLEED: f64 = 0.1;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PattersonProjection {
     scale: f64,
     offset_x: f64,
+    /// Added to `canvas_height / 2` before the scaled y term, mirroring
+    /// `offset_x`: zero for the page map and the full-extent world copy
+    /// (both vertically centred on the equator), non-zero only for
+    /// `for_tile`, whose cell is rarely centred there.
+    offset_y: f64,
     /// This projection's own canvas width, in viewBox units: `VIEWBOX_WIDTH`
-    /// for the cropped per-page map (`new`), or `world_viewbox_width()` for
-    /// the explorer's uncropped copy (`full_extent`). Centres
+    /// for the cropped per-page map (`new`), `world_viewbox_width()` for
+    /// the explorer's uncropped copy (`full_extent`), or a cell's own
+    /// `TILE_K`-scaled width for a regional tile (`for_tile`). Centres
     /// `project_unwrapped` and bounds the ring/line clip margin below, so
-    /// one projection formula and one clip routine serve both.
+    /// one projection formula and one clip routine serve all three.
     canvas_width: f64,
+    /// This projection's own canvas height, in viewBox units: `VIEWBOX_HEIGHT`
+    /// for `new`/`full_extent` (both fixed to the page canvas height), or a
+    /// cell's own `TILE_K`-scaled height for a regional tile — shorter than
+    /// `VIEWBOX_HEIGHT` at a cell away from the equator, since Patterson
+    /// itself compresses high-latitude cells vertically. See `for_tile`.
+    canvas_height: f64,
 }
 
 impl PattersonProjection {
@@ -299,7 +348,7 @@ impl PattersonProjection {
         let scale = VIEWBOX_HEIGHT / 2.0 / patterson_y(std::f64::consts::FRAC_PI_2);
         let cropped = (scale * std::f64::consts::PI - VIEWBOX_WIDTH / 2.0).max(0.0);
         let offset_x = (-scale * frame.center_longitude.to_radians()).clamp(-cropped, cropped);
-        Self { scale, offset_x, canvas_width: VIEWBOX_WIDTH }
+        Self { scale, offset_x, offset_y: 0.0, canvas_width: VIEWBOX_WIDTH, canvas_height: VIEWBOX_HEIGHT }
     }
 
     /// The whole globe, no crop and no slide toward any frame's centre:
@@ -310,7 +359,58 @@ impl PattersonProjection {
     /// `VIEWBOX_WIDTH` canvas.
     fn full_extent() -> Self {
         let scale = VIEWBOX_HEIGHT / 2.0 / patterson_y(std::f64::consts::FRAC_PI_2);
-        Self { scale, offset_x: 0.0, canvas_width: world_viewbox_width() }
+        Self { scale, offset_x: 0.0, offset_y: 0.0, canvas_width: world_viewbox_width(), canvas_height: VIEWBOX_HEIGHT }
+    }
+
+    /// One regional detail tile (`FrameTier::Tile`, built by
+    /// `explorer::tile_frame`): the SAME Patterson projection as the world
+    /// map, at `TILE_K` times its scale, with its own viewBox clipped to the
+    /// cell's rectangle padded by `TILE_BLEED` on every edge — not the
+    /// world's. `frame`'s
+    /// `center_longitude`/`center_latitude`/`longitude_span`/`latitude_span`
+    /// already describe that 10x10 degree cell (`explorer::tile_frame`), so
+    /// the cell's west/east/north/south edges come straight from them.
+    ///
+    /// Scaling `full_extent`'s own `scale` by `TILE_K` and re-deriving
+    /// `offset_x`/`offset_y`/`canvas_width`/`canvas_height` from the SAME
+    /// (bled) cell edges, rather than composing a second transform on top of
+    /// the world's own output, is what makes a tile overlay the world
+    /// exactly: any point this projects and any point `full_extent` projects
+    /// for the same longitude/latitude differ by exactly the affine map the
+    /// runtime also applies (`translate(cellX - TILE_BLEED, cellY -
+    /// TILE_BLEED) scale(1/TILE_K)`, `js-src/site/places-explorer/tiles.ts`'s
+    /// `tileOverlayTransform`), to float precision — see
+    /// `world_and_a_tile_agree_on_a_known_points_position_after_the_runtimes_transform`.
+    fn for_tile(frame: &Frame) -> Self {
+        let full = Self::full_extent();
+        let west = frame.center_longitude - frame.longitude_span / 2.0;
+        let east = frame.center_longitude + frame.longitude_span / 2.0;
+        let north = frame.center_latitude + frame.latitude_span / 2.0;
+        let south = frame.center_latitude - frame.latitude_span / 2.0;
+        let (min_x, _) = full.project_unwrapped(west, 0.0);
+        let (max_x, _) = full.project_unwrapped(east, 0.0);
+        // Higher latitude (north) projects to a SMALLER y (north is up), so
+        // the cell's own north edge gives min_y and south gives max_y —
+        // mirrors `map.ts`'s `tileCellBounds` exactly.
+        let (_, min_y) = full.project_unwrapped(0.0, north);
+        let (_, max_y) = full.project_unwrapped(0.0, south);
+        // Padding the box symmetrically, before deriving canvas_width/height
+        // and offset_x/offset_y from it, is what makes the bleed free: the
+        // midpoint `offset_x`/`offset_y` center on (and so the content's own
+        // position is unchanged by padding both edges equally), while
+        // canvas_width/canvas_height — and so the viewBox every other layer
+        // in this file sizes itself against (the water rect, the ring-clip
+        // bounds) — grow to cover the wider box. See `TILE_BLEED`.
+        let min_x = min_x - TILE_BLEED;
+        let max_x = max_x + TILE_BLEED;
+        let min_y = min_y - TILE_BLEED;
+        let max_y = max_y + TILE_BLEED;
+        let scale = full.scale * TILE_K;
+        let canvas_width = (max_x - min_x) * TILE_K;
+        let canvas_height = (max_y - min_y) * TILE_K;
+        let offset_x = TILE_K * (full.canvas_width / 2.0 - (min_x + max_x) / 2.0);
+        let offset_y = TILE_K * (full.canvas_height / 2.0 - (min_y + max_y) / 2.0);
+        Self { scale, offset_x, offset_y, canvas_width, canvas_height }
     }
 
     fn project_point(&self, point: ProjectedPoint) -> (f64, f64) {
@@ -322,21 +422,30 @@ impl PattersonProjection {
         let y = patterson_y(latitude.to_radians());
         (
             self.canvas_width / 2.0 + self.offset_x + self.scale * x,
-            VIEWBOX_HEIGHT / 2.0 - self.scale * y,
+            self.canvas_height / 2.0 + self.offset_y - self.scale * y,
         )
     }
 
     /// The world map spans exactly one turn, so each ring is drawn once,
     /// from its raw coordinates (see `raw_screen_copies`). The clip bounds
-    /// follow this projection's own `canvas_width`, not the page-map's
-    /// fixed `CLIP_MIN_X`/`CLIP_MAX_X`, so the explorer's full-extent copy
-    /// clips at its own wider edge instead of the cropped one.
+    /// follow this projection's own `canvas_width`/`canvas_height`, not the
+    /// page-map's fixed `CLIP_MIN_X`/`CLIP_MAX_X`/`CLIP_MIN_Y`/`CLIP_MAX_Y`,
+    /// so the explorer's full-extent copy and a regional tile each clip at
+    /// their own edge instead of the cropped page canvas's.
     fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
         raw_screen_copies(points, quantisation, &[0.0], |longitude, latitude| {
             self.project_unwrapped(longitude, latitude)
         })
         .into_iter()
-        .map(|screen| clip_closed_ring(&screen, -CLIP_MARGIN, self.canvas_width + CLIP_MARGIN, CLIP_MIN_Y, CLIP_MAX_Y))
+        .map(|screen| {
+            clip_closed_ring(
+                &screen,
+                -CLIP_MARGIN,
+                self.canvas_width + CLIP_MARGIN,
+                -CLIP_MARGIN,
+                self.canvas_height + CLIP_MARGIN,
+            )
+        })
         .filter(|ring| ring.len() >= 4)
         .collect()
     }
@@ -346,7 +455,15 @@ impl PattersonProjection {
             self.project_unwrapped(longitude, latitude)
         })
         .iter()
-        .flat_map(|screen| clip_polyline(screen, -CLIP_MARGIN, self.canvas_width + CLIP_MARGIN))
+        .flat_map(|screen| {
+            clip_polyline(
+                screen,
+                -CLIP_MARGIN,
+                self.canvas_width + CLIP_MARGIN,
+                -CLIP_MARGIN,
+                self.canvas_height + CLIP_MARGIN,
+            )
+        })
         .collect()
     }
 }
@@ -368,6 +485,7 @@ impl Projection {
         match frame.tier {
             FrameTier::World => Self::Patterson(PattersonProjection::new(frame)),
             FrameTier::Local | FrameTier::Wide => Self::Flat(FlatProjection::new(frame)),
+            FrameTier::Tile => Self::Patterson(PattersonProjection::for_tile(frame)),
         }
     }
 
@@ -375,6 +493,20 @@ impl Projection {
     /// for the places explorer's shared world SVG only.
     pub fn new_world_full_extent() -> Self {
         Self::Patterson(PattersonProjection::full_extent())
+    }
+
+    /// This projection's own `(canvas_width, canvas_height)`, in viewBox
+    /// units — `(VIEWBOX_WIDTH, VIEWBOX_HEIGHT)` for every `FlatProjection`
+    /// (every page figure keeps the fixed 720x480 canvas), or the
+    /// `PattersonProjection`'s own stored pair otherwise. Exposed so
+    /// `explorer::emit_tile_svg` can size its `Writer` from the SAME
+    /// projection `render_svg` goes on to draw with, rather than
+    /// re-deriving a tile's canvas dimensions a second way.
+    pub(crate) fn canvas_size(&self) -> (f64, f64) {
+        match self {
+            Self::Flat(_) => (VIEWBOX_WIDTH, VIEWBOX_HEIGHT),
+            Self::Patterson(projection) => (projection.canvas_width, projection.canvas_height),
+        }
     }
 
     /// Whether the map is drawn at or under half the design's zoom.
@@ -565,10 +697,10 @@ fn raw_screen_copies(
 
 const SEAM_OVERLAP: f64 = 0.5;
 
-fn clip_polyline(points: &[(f64, f64)], min_x: f64, max_x: f64) -> Vec<Vec<(f64, f64)>> {
+fn clip_polyline(points: &[(f64, f64)], min_x: f64, max_x: f64, min_y: f64, max_y: f64) -> Vec<Vec<(f64, f64)>> {
     let mut paths: Vec<Vec<(f64, f64)>> = Vec::new();
     for pair in points.windows(2) {
-        let Some((start, end)) = clip_segment(pair[0], pair[1], min_x, max_x) else {
+        let Some((start, end)) = clip_segment(pair[0], pair[1], min_x, max_x, min_y, max_y) else {
             continue;
         };
         if let Some(path) = paths.last_mut() {
@@ -582,18 +714,25 @@ fn clip_polyline(points: &[(f64, f64)], min_x: f64, max_x: f64) -> Vec<Vec<(f64,
     paths
 }
 
-/// `min_x`/`max_x` let the Patterson full-extent projection clip against
-/// its own wider canvas instead of the page-map's fixed `CLIP_MIN_X`/
-/// `CLIP_MAX_X` (see `PattersonProjection::project_part`); the vertical
-/// bounds never vary, since the viewBox height is fixed either way.
-fn clip_segment(start: (f64, f64), end: (f64, f64), min_x: f64, max_x: f64) -> Option<((f64, f64), (f64, f64))> {
+/// `min_x`/`max_x`/`min_y`/`max_y` let the Patterson full-extent and
+/// regional-tile projections clip against their own canvas instead of the
+/// page-map's fixed `CLIP_MIN_X`/`CLIP_MAX_X`/`CLIP_MIN_Y`/`CLIP_MAX_Y`
+/// (see `PattersonProjection::project_part`).
+fn clip_segment(
+    start: (f64, f64),
+    end: (f64, f64),
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+) -> Option<((f64, f64), (f64, f64))> {
     let dx = end.0 - start.0;
     let dy = end.1 - start.1;
     let mut lower: f64 = 0.0;
     let mut upper: f64 = 1.0;
     for (coordinate, delta, minimum, maximum) in [
         (start.0, dx, min_x, max_x),
-        (start.1, dy, CLIP_MIN_Y, CLIP_MAX_Y),
+        (start.1, dy, min_y, max_y),
     ] {
         if delta.abs() < f64::EPSILON {
             if coordinate < minimum || coordinate > maximum {

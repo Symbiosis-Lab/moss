@@ -282,7 +282,7 @@ pub(super) fn draw_globe_line(writer: &mut Writer<'_>, target: &PlaceMapTarget, 
 mod tests {
     use super::*;
     use crate::build::place_map::Frame;
-    use super::super::{Ids, SVG_WIDTH};
+    use super::super::{Ids, SVG_HEIGHT, SVG_WIDTH};
 
     fn place(display: &str, lon: f64, lat: f64, precision: Precision) -> ResolvedPlace {
         ResolvedPlace {
@@ -308,6 +308,7 @@ mod tests {
             detail: 1.0,
             locator_profile: None,
             canvas_width: f64::from(SVG_WIDTH),
+            canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
         }
     }

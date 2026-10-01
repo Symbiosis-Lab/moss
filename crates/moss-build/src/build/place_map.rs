@@ -33,6 +33,15 @@ pub(crate) use svg::precision_rank;
 // diagnostic at the two call sites that resolve a route-eligible target
 // (`render_locator`, `render_term_map`) — see `svg::route`'s module doc.
 pub(crate) use svg::{route_blocked_diagnostic, route_precision_gate};
+// Crate-internal only: `emit::place_map_assets` writes `k` into `tiles.json`
+// from this SAME constant, so the runtime's tile detail ceiling and
+// placement transform can never drift from the factor a tile was actually
+// rendered at.
+pub(crate) use geometry::TILE_K;
+// Crate-internal only: `emit::place_map_assets` writes `bleed` into
+// `tiles.json` from this SAME constant, the same reason `TILE_K` travels
+// with it — see `geometry::TILE_BLEED`.
+pub(crate) use geometry::TILE_BLEED;
 
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
 const HEADER_LEN: usize = 92;
