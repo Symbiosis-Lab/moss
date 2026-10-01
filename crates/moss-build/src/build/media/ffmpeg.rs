@@ -286,9 +286,7 @@ pub fn collect_videos_for_conversion(project: &ProjectStructure) -> Vec<String> 
 ///
 /// Creates the directory if it doesn't exist.
 pub fn get_moss_bin_dir() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
-
-    let bin_dir = home.join(".moss").join("bin");
+    let bin_dir = crate::infra::home::moss_home()?.join("bin");
 
     // allow:raw_write ~/.moss/bin, not the build tree
     std::fs::create_dir_all(&bin_dir)

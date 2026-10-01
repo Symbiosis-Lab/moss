@@ -1201,6 +1201,13 @@ fn build_inner(
     // `advertise_sealed`, behind every background worker) is on this build's
     // critical path — hypothesis H-lock, against H-config
     // just below.
+    // Cross-PROCESS counterpart of `_stage_write_guard` below, for this
+    // build's own render span — see `infra::folder_lock`'s module doc for
+    // why this is a SEPARATE window from `advertise_sealed`'s, rather than
+    // one continuous hold. Acquired unconditionally, unlike
+    // `_stage_write_guard`: two separate processes with no session between
+    // them are exactly the case this exists for.
+    let _folder_build_lock = crate::infra::folder_lock::acquire(root.path())?;
     let t_lock = std::time::Instant::now();
     let _stage_write_guard = services
         .and_then(|s| s.session.as_ref())
@@ -1750,6 +1757,10 @@ fn build_inner(
     // (it covers this entire synchronous span, including notebook
     // processing, but not the detached background dispatch below).
     drop(_stage_write_guard);
+    // The cross-process counterpart releases here too — see its acquisition
+    // above for why this window ends here rather than carrying through the
+    // detached seal task.
+    drop(_folder_build_lock);
 
     // Subscribe landing pages moved to generate_blocking_content.
 

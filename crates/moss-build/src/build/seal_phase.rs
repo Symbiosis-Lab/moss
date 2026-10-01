@@ -98,6 +98,12 @@ pub(crate) struct PendingSeal {
     /// exists to shrink the *count* of, not to hide.
     pub sealed_at: std::time::Instant,
     pub promotion_epoch: u64,
+    /// `promotion_epoch`'s cross-process-comparable counterpart — wall-clock
+    /// nanos, since `promotion_epoch` is process-local and cannot be compared
+    /// against a second `moss` process's own admission. Read in this phase,
+    /// against `infra::folder_lock::last_promoted_epoch`, immediately before
+    /// `materialize_and_promote`.
+    pub admission_nanos: u64,
     pub render_seq: Option<u64>,
     pub freshness: Freshness,
     pub is_pinned: Arc<dyn Fn(&str) -> bool + Send + Sync>,
@@ -179,6 +185,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         stage_dir,
         sealed_at,
         promotion_epoch,
+        admission_nanos,
         render_seq,
         freshness,
         is_pinned,
@@ -237,21 +244,48 @@ async fn run_materialize_phase(req: PendingSeal) {
     #[cfg(test)]
     let materialize_test_delay = MATERIALIZE_TEST_DELAY.try_with(|d| *d).ok();
     let folder_path_for_materialize = folder_path.clone();
+    // Cross-PROCESS counterpart of the stage-write guard just re-acquired
+    // above — see `infra::folder_lock`'s module doc for why its own window,
+    // freshly taken HERE rather than carried over from `advertise_sealed`
+    // (which ran this build's per-build half, possibly long before the
+    // debounce fired this phase).
+    let folder_build_lock = crate::infra::folder_lock::acquire_async(Path::new(&folder_path)).await;
+    // Order, not just exclusion: a slower phase can land here after a newer
+    // admission already promoted, which `promotion_epoch` (process-local)
+    // can't catch — compare `admission_nanos` against the cross-process record.
+    let cross_process_verdict: Option<Promotion> = folder_build_lock.as_ref().and_then(|_| {
+        let persisted = crate::infra::folder_lock::last_promoted_epoch(Path::new(&folder_path));
+        (admission_nanos <= persisted).then(|| {
+            log::info!("promotion refused (cross-process): epoch {admission_nanos} <= persisted {persisted}");
+            Promotion::Superseded
+        })
+    });
     let blocking_result = tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         if let Some(delay) = materialize_test_delay {
             std::thread::sleep(delay);
         }
         let mp = MossPaths::new(Path::new(&folder_path_for_materialize));
-        let promotion = crate::build::ship::materialize_and_promote(
-            &sealed,
-            &mp,
-            &stage_dir,
-            None,
-            promotion_epoch,
-            render_seq,
-            verdict,
-        );
+        let promotion = match cross_process_verdict {
+            Some(superseded) => Ok(superseded),
+            None => crate::build::ship::materialize_and_promote(
+                &sealed,
+                &mp,
+                &stage_dir,
+                None,
+                promotion_epoch,
+                render_seq,
+                verdict,
+            ),
+        };
+        // Record a real promotion before the lock drops, so read+promote+write
+        // land in one held window.
+        if matches!(promotion, Ok(Promotion::Promoted)) {
+            if let Err(e) = crate::infra::folder_lock::record_promoted_epoch(Path::new(&folder_path_for_materialize), admission_nanos) {
+                log::error!("run_materialize_phase: could not record the cross-process promotion epoch: {e}");
+            }
+        }
+        drop(folder_build_lock);
         (sealed, promotion)
     })
     .await;

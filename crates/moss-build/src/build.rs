@@ -692,6 +692,9 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     let build_generation = config
         .admission_epoch
         .unwrap_or_else(crate::build::ship::next_promotion_epoch);
+    // `build_generation`'s cross-process-comparable counterpart; override for `folder_build_lock_test.rs` only.
+    let admission_nanos: u64 = std::env::var("MOSS_TEST_ADMISSION_NANOS").ok().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0));
 
     // This build may write the object store and staging from here until its
     // background workers join: scan stores blobs, render and the media workers
@@ -1359,6 +1362,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             std::sync::Arc::new(move |g: &str| store.is_pinned(g)),
                             session_opt.clone(),
                             promotion_epoch,
+                            admission_nanos,
                             render_seq,
                             publishable,
                             seal_freshness,
@@ -1448,6 +1452,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         std::sync::Arc::new(|_: &str| false),
                         session.clone(),
                         promotion_epoch,
+                        admission_nanos,
                         render_seq,
                         publishable,
                         crate::build::feeds::search_lane::Freshness::Now,
@@ -1865,6 +1870,7 @@ async fn advertise_sealed(
     is_pinned: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
     session: Option<std::sync::Arc<crate::system::folder_session::FolderSession>>,
     promotion_epoch: u64,
+    admission_nanos: u64, // `promotion_epoch`'s cross-process-comparable counterpart.
     // The render `lifecycle::show_render` minted for this build.
     render_seq: Option<u64>,
     publishable: bool,
@@ -2030,6 +2036,7 @@ async fn advertise_sealed(
         stage_dir: stage_dir.to_path_buf(),
         sealed_at,
         promotion_epoch,
+        admission_nanos,
         render_seq,
         freshness,
         is_pinned,

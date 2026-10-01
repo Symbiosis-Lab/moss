@@ -155,8 +155,7 @@ fn resolve_asset_directory_in(
 /// theme/ is for user-facing design assets, assets/ is for cached
 /// build tool downloads (JupyterLite, etc.).
 pub fn get_moss_assets_dir() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
-    let assets_dir = home.join(".moss").join("assets");
+    let assets_dir = crate::infra::home::moss_home()?.join("assets");
     if !assets_dir.exists() {
         // allow:raw_write ~/.moss/assets, not the build tree
         std::fs::create_dir_all(&assets_dir)
