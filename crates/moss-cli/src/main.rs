@@ -57,6 +57,17 @@ fn main() {
     // same `MOSS_ENV` / `MOSS_SETA_URL` in both binaries.
     dotenvy::dotenv().ok();
 
+    // `build`, `deploy` and `history` already install this logger themselves
+    // (inside moss-build, since the app binary's own headless interception
+    // needs it too), but the rest of the `CROSSED` table — `import` among
+    // them — never did, so every `log::warn!`/`log::info!` a crossed command
+    // raised (the importer's rate-limit and unrecognized-variant warnings,
+    // for instance) was silently dropped by `log`'s default no-op logger.
+    // Installing it once, here, before any dispatch, covers every verb this
+    // binary can run; `install_headless_logger` is `Once`-guarded, so the
+    // three verbs that already call it internally are unaffected.
+    moss_build::build::cli_output::install_headless_logger();
+
     let args: Vec<String> = std::env::args().collect();
     // `--help` only when it is the whole request, so `<cmd> --help` falls
     // through to the per-command table below instead of printing this one.
