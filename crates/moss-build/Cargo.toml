@@ -22,7 +22,7 @@ test-fixtures = []
 moss-core = { workspace = true, features = ["specta", "cjk-friendly-emphasis"] }
 # `VaultRoot::find_containing_in` bounds its `.moss/` ancestor walk at the user's
 # home directory — same dep the app crate uses for the same guard.
-dirs = "5.0"
+dirs = "7.0"
 # `moss_paths` logs best-effort cloud-exclusion failures; the app crate initialises
 # the logger, this crate only emits.
 log = "0.4"
@@ -32,8 +32,8 @@ log = "0.4"
 # (ADR-059); `toml_edit` is here for `infra::toml_rewrite`, the surgical editor
 # the plugin uninstaller uses to drop a plugin's keys without touching the
 # user's comments (ADR-076).
-toml = "0.8"
-toml_edit = { version = "0.20", default-features = false }
+toml = "1.1"
+toml_edit = { version = "0.25", default-features = false }
 # `plugins::install` compares manifest versions against the running moss.
 semver = "1"
 
@@ -41,7 +41,7 @@ semver = "1"
 # serde-mapped from the toml text; specta rides the crossed vocabulary for the
 # Tauri bindings (required since M6a — the moved types derive it outright).
 serde = { version = "1", features = ["derive"] }
-specta = { version = "=2.0.0-rc.20", features = ["derive", "serde_json", "chrono"] }
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json", "chrono"] }
 # `advisory::Action::InApp` carries op-specific arguments as free-form JSON.
 # Already in the workspace tree via src-tauri, so this duplicates nothing.
 serde_json = "1"
@@ -50,10 +50,10 @@ serde_json = "1"
 # Copied verbatim from src-tauri/Cargo.toml so each crate is compiled once for
 # the workspace. Versions and feature sets must stay aligned with the app's;
 # `cargo tree -d` is the check.
-base64 = "0.21"
+base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
-fast_qr = { version = "0.12", default-features = false, features = ["svg"] }
+fast_qr = { version = "0.14", default-features = false, features = ["svg"] }
 flate2 = "1"
 fs2 = "0.4.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
@@ -61,27 +61,27 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # what Cargo.lock resolves there (`cargo tree -d` is the check).
 include-flate = "0.3.4"
 include_dir = "0.7"
-jieba-rs = "0.10"
-k256 = { version = "0.13", features = ["schnorr", "ecdsa"] }
-kamadak-exif = "0.5"
-lol_html = "1.2"
-notify = "6.1"
-notify-debouncer-full = "0.3"
+jieba-rs = "0.11"
+k256 = { version = "0.14", features = ["schnorr", "ecdsa"] }
+kamadak-exif = "0.6"
+lol_html = "2.9"
+notify = "8.2"
+notify-debouncer-full = "0.7"
 percent-encoding = "2"
 pulldown-cmark = "0.13"
-rand = "0.8"
-ratex-parser = "=0.1.13"
-ratex-layout = "=0.1.13"
-ratex-svg = { version = "=0.1.13", features = ["standalone", "embed-fonts"] }
+rand = "0.10"
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-svg = { version = "=0.1.14", features = ["standalone", "embed-fonts"] }
 rayon = "1.11"
 regex = "1.12.2"
-resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
-scraper = "0.20"
-sha2 = "0.10"
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
+scraper = "0.27"
+sha2 = "0.11"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "html", "regex-fancy"] }
 tar = "0.4"
-thiserror = "1.0"
-tiny-skia = "0.11"
+thiserror = "2.0"
+tiny-skia = "0.12"
 tokio = { version = "1.0", features = ["rt-multi-thread", "net", "process", "io-util", "sync", "time", "signal", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 # `vault::fs::delete_entry_inner` — recoverable OS-trash delete shared by the
@@ -94,30 +94,30 @@ ureq = { version = "2", features = ["json", "tls", "socks-proxy"] }
 reqwest = { version = "0.13", features = ["json", "query", "socks"] }
 url = "2.4"
 urlencoding = "2.1"
-usvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
+usvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
 uuid = { version = "1.11", features = ["v4"] }
 walkdir = "2.4"
 whatlang = "0.18.0"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-zip = "0.6"
+zip = "8.6"
 ammonia = "4"
 async-trait = "0.1"
-color_quant = "1.1"
+color_quant = "2.0"
 hex = "0.4"
 libc = "0.2"
 pagefind = { version = "1.5.2", default-features = false }
 png = "0.18"
 serde_yaml = "0.9"
-ttf-parser = "0.21"
+ttf-parser = "0.25"
 webp = "0.3"
 # Prod use too: `build::feeds::search` unpacks the pagefind bundle via a tempdir.
 tempfile = "3.0"
 
 # ── The QuickJS plugin engine (open-CLI slice 2, #1019) ──────────────────────
 # futures⇄ES Promises + drive(); `macro` → #[rquickjs::function] host fns.
-rquickjs = { version = "=0.12.0", features = ["futures", "macro"] }
+rquickjs = { version = "=0.14.0", features = ["futures", "macro"] }
 # `plugins::runtime::portable::html_to_markdown` — the engine's markdown arm.
-htmd = "=0.5.4"
+htmd = "=0.5.5"
 # The engine's Promise plumbing (`FutureExt::catch_unwind` around hook dispatch).
 futures = "0.3"
 # `identity::keystore` — the file-based vault keypair store.
@@ -126,9 +126,9 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std", "r
 # ── The preview server (ops/serve, S1 server relocation, ADR-067) ────────────
 # Exactly src-tauri's versions and feature sets so each crate compiles once for
 # the workspace (`cargo tree -d` is the check). hyper-1.x stack only.
-axum = "0.7"
-tower = { version = "0.4", features = ["util"] }
-tower-http = { version = "0.5", features = ["fs"] }
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs"] }
 http-body-util = "0.1"
 
 # `exclude_from_cloud_sync` sets the File Provider ignore xattr — an Apple subsystem,
@@ -138,7 +138,7 @@ http-body-util = "0.1"
 [target.'cfg(target_os = "macos")'.dependencies]
 # `platform/{iopolicy,file_coordination}` (M6a move): Foundation file
 # coordination + the file-provider I/O policy. Feature sets mirror src-tauri's.
-core-foundation = "0.9"
+core-foundation = "0.10"
 core-foundation-sys = "0.8"
 objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
 objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSFileCoordinator", "NSURL", "NSString", "NSError", "NSNotification", "NSOperation", "NSArray", "NSSet", "NSData", "NSDate", "NSRunLoop", "block2"] }
@@ -152,7 +152,7 @@ block2 = "0.6"
 pathdiff = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # vault_root_tests.rs mints unique temp dirs per test.
