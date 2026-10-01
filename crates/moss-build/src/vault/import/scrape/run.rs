@@ -17,8 +17,8 @@ use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 
 use super::converter::{extract_article, extract_article_with_snapshot, rewrite_image_links};
-use super::crawl_state::CrawlState;
-use super::crawler::{extract_canonical_url, extract_links, looks_like_html_page};
+use super::crawl_state::{CrawlState, HostPacer};
+use super::crawler::{extract_canonical_url, extract_links, host_of, looks_like_html_page};
 use super::scope::{is_within_scope, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
 use super::writer::{rename_for_collision, sanitize_filename, url_to_file_path};
@@ -97,7 +97,25 @@ pub struct ScrapeResult {
     /// True when the sitemap itself declared more than
     /// `sitemap::MAX_SITEMAP_URLS` entries and was truncated.
     pub sitemap_truncated: bool,
+    /// Hosts this crawl's own per-host pacing (`crawl_state::HostPacer`)
+    /// slowed down after a 429/503 — see [`RateLimitedHost`]. Empty when
+    /// every fetch stayed under every host's rate limit for the whole
+    /// crawl, same as before pacing existed.
+    pub rate_limited_hosts: Vec<RateLimitedHost>,
     pub error: Option<String>,
+}
+
+/// One host [`ScrapeResult::rate_limited_hosts`] names, with the PEAK
+/// pacing interval it reached — kept even if later successes decayed the
+/// interval back down before the crawl finished, since "this host needed
+/// slowing down" is the fact worth surfacing, not whatever the interval
+/// happened to be at the very last request.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct RateLimitedHost {
+    pub host: String,
+    /// Peak pacing interval enforced for this host during the crawl, in
+    /// milliseconds.
+    pub interval_ms: u64,
 }
 
 /// What became of one URL popped from the crawl queue.
@@ -267,7 +285,11 @@ where
         // file it lands in (or doesn't) is decided in exactly one place
         // below. A fourth outcome cannot forget to do that.
         let outcome: PageOutcome = 'page: {
-        let (html, content_type) = match fetch_page(&url, &config.user_agent).await {
+        let fetch_host = host_of(&url);
+        state.pacer.wait(&fetch_host).await;
+        let page_result = fetch_page(&url, &config.user_agent).await;
+        observe_pace(&mut state.pacer, &fetch_host, &page_result);
+        let (html, content_type) = match page_result {
             Ok(v) => v,
             Err(e) => {
                 // A failed fetch on a path this crawl has already
@@ -284,7 +306,7 @@ where
                     );
                     break 'page PageOutcome::VariantFetchFailed;
                 }
-                break 'page PageOutcome::Failed(e);
+                break 'page PageOutcome::Failed(e.into());
             }
         };
 
@@ -339,15 +361,22 @@ where
         // to the site's own account. Fetch failure just falls back to the
         // page's own DOM (generic scorer).
         let snapshot_html = match crate::vault::import::engine::snapshot_request(&html, &url) {
-            Some(snapshot_url) => match fetch_page(&snapshot_url, &config.user_agent).await {
-                Ok((s, _content_type)) => Some(s),
-                // The page degrades to its own (often empty) DOM — loud, not
-                // silent: for a client-rendered viewer this loses the body.
-                Err(e) => {
-                    log::warn!("import: snapshot fetch failed for {url}: {snapshot_url}: {e}");
-                    None
+            Some(snapshot_url) => {
+                let snapshot_host = host_of(&snapshot_url);
+                state.pacer.wait(&snapshot_host).await;
+                let snapshot_result = fetch_page(&snapshot_url, &config.user_agent).await;
+                observe_pace(&mut state.pacer, &snapshot_host, &snapshot_result);
+                match snapshot_result {
+                    Ok((s, _content_type)) => Some(s),
+                    // The page degrades to its own (often empty) DOM — loud,
+                    // not silent: for a client-rendered viewer this loses
+                    // the body.
+                    Err(e) => {
+                        log::warn!("import: snapshot fetch failed for {url}: {snapshot_url}: {e}");
+                        None
+                    }
                 }
-            },
+            }
             None => None,
         };
         let mut article = extract_article_with_snapshot(&html, snapshot_html.as_deref(), &url);
@@ -377,7 +406,15 @@ where
             if state.assets.contains(media_url) {
                 continue;
             }
-            match download_asset(media_url, &assets_dir, &config.user_agent).await {
+            // Keyed by the asset's OWN host, not the page's — a page's
+            // images routinely redirect to a separate CDN subdomain (see
+            // `fetch_following_redirects`'s doc below), which shares no
+            // rate limit with the page host and must pace independently.
+            let asset_host = host_of(media_url);
+            state.pacer.wait(&asset_host).await;
+            let download_result = download_asset(media_url, &assets_dir, &config.user_agent).await;
+            observe_pace(&mut state.pacer, &asset_host, &download_result);
+            match download_result {
                 Ok(filename) => {
                     let local_rel = format!("./{}/{}", ASSETS_SUBDIR, filename);
                     state.assets.insert(media_url.clone(), local_rel);
@@ -460,6 +497,13 @@ where
     let remaining_urls =
         if state.cap.capped() { state.frontier.remaining_unvisited_count() } else { 0 };
 
+    let rate_limited_hosts: Vec<RateLimitedHost> = state
+        .pacer
+        .rate_limited_hosts()
+        .into_iter()
+        .map(|(host, interval)| RateLimitedHost { host, interval_ms: interval.as_millis() as u64 })
+        .collect();
+
     Ok(ScrapeResult {
         success: true,
         total_pages: state.tally.scraped(),
@@ -471,6 +515,7 @@ where
         remaining_urls,
         sitemap_urls: sitemap.urls.len(),
         sitemap_truncated: sitemap.truncated,
+        rate_limited_hosts,
         error: None,
     })
 }
@@ -615,6 +660,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         remaining_urls: 0,
         sitemap_urls: 0,
         sitemap_truncated: false,
+        rate_limited_hosts: Vec::new(),
         error: None,
     })
 }
@@ -863,6 +909,41 @@ fn fetch_following_redirects(
     Err(refused(&format!("too many redirects (> {MAX_REDIRECT_HOPS})")))
 }
 
+/// A fetch's final failure, carrying the HTTP status code as DATA when the
+/// failure was a response status — as opposed to a transport failure, a
+/// body-read failure, or a redirect refusal before any status came back —
+/// so a caller that needs to know *why* a fetch failed (chiefly
+/// [`observe_pace`], deciding whether a host just rate-limited this crawl)
+/// matches on `status` instead of re-parsing the text composed for display.
+/// `Display` prints the same `"{code} {status_text}"` / `"HTTP error: …"`
+/// text [`PageOutcome::Failed`] and the crawl's `log::warn!` calls already
+/// expect, and `From<FetchError> for String` lets every caller outside this
+/// file's status-aware ones (`fetch_raw`/`fetch_raw_bytes`, whose callers in
+/// `sitemap.rs` only ever check `.is_ok()`) keep using `?` unchanged.
+#[derive(Debug, Clone)]
+struct FetchError {
+    status: Option<u16>,
+    message: String,
+}
+
+impl FetchError {
+    fn message(message: String) -> Self {
+        Self { status: None, message }
+    }
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<FetchError> for String {
+    fn from(e: FetchError) -> String {
+        e.message
+    }
+}
+
 /// `ureq::get` with up to `tries` attempts, for transient failures only (see
 /// [`should_retry_status`]). Permanent failures (4xx other than 429) return
 /// immediately regardless of `tries`.
@@ -887,8 +968,8 @@ fn call_with_retry_n(
     timeout: std::time::Duration,
     tries: u32,
     accept: Option<&str>,
-) -> Result<ureq::Response, String> {
-    let mut last_err = String::new();
+) -> Result<ureq::Response, FetchError> {
+    let mut last_err = FetchError::message(String::new());
     // What the PREVIOUS attempt's response asked for via `Retry-After`,
     // consumed by the sleep before the NEXT attempt. Reset on every
     // iteration (not just when absent), so a Retry-After-less response
@@ -910,18 +991,18 @@ fn call_with_retry_n(
         match fetch_with_validated_redirects(&agent, url, user_agent, accept) {
             Ok(resp) => return Ok(resp),
             Err(ureq::Error::Status(code, resp)) => {
-                let text = format!("{} {}", code, resp.status_text());
+                let err = FetchError { status: Some(code), message: format!("{} {}", code, resp.status_text()) };
                 if !should_retry_status(Some(code)) {
-                    return Err(text);
+                    return Err(err);
                 }
                 retry_after = resp.header("Retry-After").and_then(parse_retry_after);
-                last_err = text;
+                last_err = err;
             }
             Err(e) => {
                 // Transport-level error (timeout, connection reset, TLS...)
-                // — no response at all, so no header to read.
+                // — no response at all, so no status code either.
                 retry_after = None;
-                last_err = format!("HTTP error: {}", e);
+                last_err = FetchError::message(format!("HTTP error: {}", e));
             }
         }
     }
@@ -935,9 +1016,22 @@ fn call_with_retry(
     user_agent: &str,
     timeout: std::time::Duration,
     accept: Option<&str>,
-) -> Result<ureq::Response, String> {
+) -> Result<ureq::Response, FetchError> {
     const TRIES: u32 = 3;
     call_with_retry_n(url, user_agent, timeout, TRIES, accept)
+}
+
+/// Translates a fetch's `Result` into the bare `Result<(), Option<u16>>`
+/// [`HostPacer::observe`] reacts to — `status` is read off
+/// [`FetchError::status`], the typed code [`call_with_retry_n`] captured
+/// straight from `ureq::Error::Status`, not re-derived from the message text
+/// a wording change could drift out from under a string match. The
+/// grow/decay decision itself lives on `HostPacer` (`crawl_state.rs`) so the
+/// pacing module stays usable without this file's HTTP types in scope; this
+/// is the one line of glue between them, called right after every page or
+/// asset fetch in the crawl loop.
+fn observe_pace<T>(pacer: &mut HostPacer, host: &str, result: &Result<T, FetchError>) {
+    pacer.observe(host, result.as_ref().map(|_| ()).map_err(|e| e.status));
 }
 
 /// Fetch a page's body, alongside its declared Content-Type — the caller
@@ -946,7 +1040,7 @@ fn call_with_retry(
 ///
 /// `accept: None` — a page fetch is never asked to localize a transcoded
 /// variant, so it keeps ureq's own `Accept: */*` default unchanged.
-async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, String), String> {
+async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, String), FetchError> {
     let url = url.to_string();
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
@@ -957,10 +1051,10 @@ async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, String), Str
         response
             .into_string()
             .map(|body| (body, content_type))
-            .map_err(|e| format!("Failed to read response: {}", e))
+            .map_err(|e| FetchError::message(format!("Failed to read response: {}", e)))
     })
     .await
-    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| FetchError::message(format!("Task error: {}", e)))?
 }
 
 /// Bytes read from [`fetch_raw`]/[`fetch_raw_bytes`] beyond this are refused
@@ -1029,7 +1123,7 @@ async fn download_asset(
     url: &str,
     assets_dir: &Path,
     user_agent: &str,
-) -> Result<String, String> {
+) -> Result<String, FetchError> {
     let url_clone = url.to_string();
     let assets_dir = assets_dir.to_path_buf();
     let user_agent = user_agent.to_string();
@@ -1054,16 +1148,17 @@ async fn download_asset(
         response
             .into_reader()
             .read_to_end(&mut bytes)
-            .map_err(|e| format!("Failed to read asset: {}", e))?;
+            .map_err(|e| FetchError::message(format!("Failed to read asset: {}", e)))?;
 
         let file_path = assets_dir.join(&filename);
         // allow:raw_write the author's own source content, not `.moss/build.nosync/` output — a downloaded media file
-        fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write asset: {}", e))?;
+        fs::write(&file_path, &bytes)
+            .map_err(|e| FetchError::message(format!("Failed to write asset: {}", e)))?;
 
         Ok(filename)
     })
     .await
-    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| FetchError::message(format!("Task error: {}", e)))?
 }
 
 fn content_type_to_extension(content_type: &str) -> &str {
@@ -1162,6 +1257,42 @@ mod tests {
         assert_eq!(parse_retry_after(&header), None, "a date already past means retry now, via backoff, not a negative sleep");
     }
 
+    // ── observe_pace (pure — the wiring between a fetch's own Result and
+    // the host pacer, independent of any real network or sleep) ──────────
+
+    /// `observe_pace` is only the glue that pulls `status` out of
+    /// `FetchError` and hands it to `HostPacer::observe` — the grow/decay/
+    /// ignore decision itself is `crawl_state.rs`'s to test. What this file
+    /// owns is that the status survives the trip intact.
+    #[test]
+    fn observe_pace_passes_the_typed_status_through_to_the_pacer() {
+        let mut pacer = HostPacer::default();
+        let err: Result<(), FetchError> =
+            Err(FetchError { status: Some(429), message: "429 Too Many Requests".to_string() });
+        observe_pace(&mut pacer, "example.test", &err);
+        assert!(pacer.current_interval("example.test") > std::time::Duration::ZERO);
+    }
+
+    /// The gap a string-prefix match on the message would have left: the
+    /// status travels as DATA `call_with_retry_n` captured straight from
+    /// `ureq::Error::Status`, so pacing keeps working even when the message
+    /// text doesn't start with the code at all — a wording change (a
+    /// translated status line, a reordered message) can't silently disable
+    /// it the way matching on `message.starts_with("429 ")` could have.
+    #[test]
+    fn observe_pace_matches_by_typed_status_not_message_wording() {
+        let mut pacer = HostPacer::default();
+        let err: Result<(), FetchError> = Err(FetchError {
+            status: Some(429),
+            message: "fetch failed, server said: too many requests".to_string(),
+        });
+        observe_pace(&mut pacer, "example.test", &err);
+        assert!(
+            pacer.current_interval("example.test") > std::time::Duration::ZERO,
+            "status is read as typed data, not re-derived from the message text"
+        );
+    }
+
     /// The gap this closes: a host's own `Retry-After` was previously
     /// ignored outright — every retry used the same blind exponential
     /// schedule (500ms, 1s, 2s, …) regardless of what the 429 response
@@ -1232,6 +1363,118 @@ mod tests {
 
         assert_eq!(res.total_pages, 0);
         assert_eq!(res.failed_pages, 1, "a 429 that never clears is reported as a failed page");
+    }
+
+    /// The fix this file exists for: once a fetch to a host has exhausted
+    /// every retry on 429 (the test above), the crawl must not go straight
+    /// back to hammering that SAME host at full speed — the next request to
+    /// it is paced out. Sitemap-seeded (not link-discovered) so `/a`, `/b`,
+    /// `/c` are queued in a fixed, known order — `extract_links` returns a
+    /// `HashSet`, so sibling links from one page have no guaranteed order
+    /// (see the comment on the duplicate-variant test below), which this
+    /// test cannot tolerate: `/b` must be fetched right after `/a` fails,
+    /// and `/c` right after `/b` succeeds, or the timing math doesn't hold.
+    /// `/a`'s own three failed attempts already space its retries out by
+    /// ~1.5s (500ms + 1s backoff) — more than the pacer's first 500ms
+    /// growth step — so `/b` sees no EXTRA wait (it doesn't need to, to
+    /// prove the fix); `/c` is where growth becomes observable, since `/b`
+    /// itself answers almost instantly and leaves little of that 1.5s
+    /// credit behind.
+    #[tokio::test]
+    async fn a_terminal_rate_limit_paces_the_next_request_to_the_same_host() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body(format!("Sitemap: {base}/sitemap.xml\n"))
+            .create_async()
+            .await;
+        let sitemap = server
+            .mock("GET", "/sitemap.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+                 <url><loc>{base}/a</loc></url>\
+                 <url><loc>{base}/b</loc></url>\
+                 <url><loc>{base}/c</loc></url>\
+                 </urlset>"
+            ))
+            .create_async()
+            .await;
+        let root = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Root page, long enough to be extracted \
+                 as content by the generic scorer.</p></article></body></html>",
+            )
+            .create_async()
+            .await;
+        let stuck = server
+            .mock("GET", "/a")
+            .with_status(429)
+            .with_body("rate limited")
+            .expect(3)
+            .create_async()
+            .await;
+        let b = server
+            .mock("GET", "/b")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Page b, long enough to be extracted \
+                 as content by the generic scorer.</p></article></body></html>",
+            )
+            .create_async()
+            .await;
+        let c = server
+            .mock("GET", "/c")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Page c, long enough to be extracted \
+                 as content by the generic scorer.</p></article></body></html>",
+            )
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let started = std::time::Instant::now();
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        let elapsed = started.elapsed();
+
+        robots.assert_async().await;
+        sitemap.assert_async().await;
+        root.assert_async().await;
+        stuck.assert_async().await;
+        b.assert_async().await;
+        c.assert_async().await;
+
+        assert_eq!(res.total_pages, 3, "root, b, and c all import");
+        assert_eq!(res.failed_pages, 1, "a's 429 never clears");
+        assert_eq!(
+            res.rate_limited_hosts.len(),
+            1,
+            "exactly one host was ever rate-limited this crawl"
+        );
+        assert_eq!(
+            res.rate_limited_hosts[0].interval_ms, 500,
+            "one 429 event grows the interval by exactly one doubling step from zero"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(1700),
+            "`/a`'s own ~1.5s of retry backoff plus the ~250ms pacing wait before `/c` \
+             (half the grown interval, decayed once by `/b`'s own success) must both show \
+             up in the total crawl time, proving the wait is actually awaited rather than \
+             merely recorded: {elapsed:?}"
+        );
     }
 
     /// Gap 2: a failed fetch of a query-string variant of a path this crawl

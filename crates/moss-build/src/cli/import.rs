@@ -125,6 +125,16 @@ pub fn run(args: &[String]) -> i32 {
                         folder.display(),
                     );
                 }
+                // One line per host this crawl's own pacing had to slow
+                // down for after a 429/503 — silent, like every other line
+                // here, when nothing engaged it.
+                for host in &res.rate_limited_hosts {
+                    eprintln!(
+                        "  ⚠ slowed to 1 request/{:.1}s for {} after rate limiting",
+                        host.interval_ms as f64 / 1000.0,
+                        host.host
+                    );
+                }
                 totals.record(&res);
             }
             Err(e) => {

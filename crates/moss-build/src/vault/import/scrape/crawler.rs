@@ -133,6 +133,20 @@ pub fn normalize_url(url_str: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+/// A URL's host, lowercased — the key per-host request pacing
+/// ([`super::crawl_state::HostPacer`]) groups by. Read fresh from each URL
+/// rather than assumed to match the crawl's own scope host: a page's own
+/// images routinely redirect to a separate CDN subdomain (see
+/// `fetch_following_redirects`'s doc in `run.rs`), which is its own pacing
+/// bucket, not the page host's. Empty string for a URL that fails to parse
+/// or carries no host at all — its own (harmless) bucket, never a panic.
+pub fn host_of(url_str: &str) -> String {
+    Url::parse(url_str)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        .unwrap_or_default()
+}
+
 /// A page's identity for the no-canonical duplicate fallback (rule 2):
 /// scheme + host + path, with the query string and fragment dropped
 /// entirely and a leading `www.` / one trailing `/` normalized away on
@@ -187,6 +201,22 @@ pub fn extract_canonical_url(html: &str, page_url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_of_lowercases_and_strips_scheme_and_path() {
+        assert_eq!(host_of("https://Example.TEST/blog/post?x=1"), "example.test");
+    }
+
+    #[test]
+    fn host_of_distinguishes_a_different_subdomain() {
+        assert_eq!(host_of("https://cdn.example.test/a.png"), "cdn.example.test");
+        assert_ne!(host_of("https://cdn.example.test/a.png"), host_of("https://example.test/"));
+    }
+
+    #[test]
+    fn host_of_is_empty_for_an_unparsable_url() {
+        assert_eq!(host_of("not a url"), "");
+    }
 
     #[test]
     fn test_extract_links_basic() {

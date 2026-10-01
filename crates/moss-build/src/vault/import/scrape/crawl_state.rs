@@ -6,19 +6,21 @@
 //! known-variant check — are unit-testable without an HTTP-mocked crawl.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 
-use super::crawler::path_identity;
+use super::crawler::{host_of, path_identity};
 use super::sitemap::{block_if_locale_alternate, SitemapDiscovery};
 
 /// The crawl's frontier (cap bookkeeping), duplicate detection, the asset
-/// map, and the outcome tally — everything the loop in `scrape_to_folder`
-/// mutates across iterations.
+/// map, the outcome tally, and per-host request pacing — everything the
+/// loop in `scrape_to_folder` mutates across iterations.
 pub(crate) struct CrawlState {
     pub(crate) frontier: Frontier,
     pub(crate) cap: CapBudget,
     pub(crate) dedupe: Dedupe,
     pub(crate) assets: AssetMap,
     pub(crate) tally: Tally,
+    pub(crate) pacer: HostPacer,
 }
 
 impl CrawlState {
@@ -27,15 +29,24 @@ impl CrawlState {
     /// so a sitemap URL wins survivor choice over a link-discovered
     /// duplicate of the same page (see [`Dedupe::is_duplicate_identity`]) —
     /// and exempts every sitemap URL from the page cap (rule 3: a site's
-    /// declared page list is always imported).
+    /// declared page list is always imported). The start URL's host also
+    /// seeds the pacer's floor from the site's own declared `Crawl-delay`,
+    /// if `robots.txt` named one, so a site that already told every crawler
+    /// how fast it wants to be hit is never paced faster than that — even
+    /// before this crawl has seen a single 429.
     pub(crate) fn new(start_url: &str, sitemap: &SitemapDiscovery) -> Self {
         let declared: HashSet<String> = sitemap.urls.iter().cloned().collect();
+        let mut pacer = HostPacer::default();
+        if let Some(floor) = sitemap.crawl_delay {
+            pacer.set_floor(&host_of(start_url), floor);
+        }
         Self {
             frontier: Frontier::seeded(start_url.to_string(), &sitemap.urls),
             cap: CapBudget::new(declared),
             dedupe: Dedupe::default(),
             assets: AssetMap::default(),
             tally: Tally::default(),
+            pacer,
         }
     }
 
@@ -267,6 +278,211 @@ impl AssetMap {
     }
 }
 
+/// Doubling step a host's pacing interval grows to on its FIRST 429/503 —
+/// multiplying a ZERO interval by two would never leave zero, so growth
+/// needs a nonzero seed before it has anything to double from. Matches the
+/// retry backoff's own first step (`run.rs`'s `call_with_retry_n`), so a
+/// host that has started rate-limiting sees one familiar number either way.
+const PACING_START_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Ceiling the BACKOFF growth in [`HostPacer::record_rate_limited`] will
+/// ever double `interval` past — repeated 429/503s are this crawl's own
+/// retry budget failing over and over, and a crawl backing off forever on
+/// that alone is indistinguishable from one that gave up. Does NOT bound
+/// [`HostPacer::set_floor`] — a site's declared `Crawl-delay` is a request,
+/// not a failure signal, and is held to its own, more generous
+/// [`MAX_CRAWL_DELAY_FLOOR`] instead. `record_rate_limited` and
+/// `record_success` both still clamp the result to `floor` afterward, so a
+/// host whose floor exceeds this cap is never paced faster than its floor
+/// even while backing off.
+const MAX_PACING_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Ceiling a `robots.txt` `Crawl-delay` floor ([`HostPacer::set_floor`]) is
+/// held to — mirrors `run.rs`'s `MAX_RETRY_AFTER` (also 60s, also a
+/// server-declared wait this crawl honors up to a point): a host naming an
+/// hour is asking the wrong tool, and a crawl that waited it out verbatim
+/// could stall the whole run on one host. Deliberately a separate, larger
+/// constant from [`MAX_PACING_INTERVAL`] rather than reusing it — a site
+/// that explicitly told every crawler "wait N seconds" gets more deference
+/// than this crawl's own backoff growth from repeated failures does; capping
+/// both at the same 2s would mean a site asking for anything past that is
+/// paced faster than it asked, silently breaking the promise `CrawlState::
+/// new`'s doc comment makes ("never paced faster than that").
+const MAX_CRAWL_DELAY_FLOOR: Duration = Duration::from_secs(60);
+
+/// Per-host request pacing: a minimum interval enforced between requests to
+/// the same host, so a recursive crawl's own request rate backs off
+/// automatically once a host starts returning 429/503, instead of hammering
+/// it at the pipeline's full speed until every retry budget
+/// (`call_with_retry_n`, in `run.rs`) is spent. Starts at zero for a host
+/// never rate-limited — an ordinary site is never slowed down — grows on
+/// 429/503 ([`record_rate_limited`](HostPacer::record_rate_limited)), and
+/// decays back down on success
+/// ([`record_success`](HostPacer::record_success)), never below `floor` (a
+/// site's own declared `robots.txt` `Crawl-delay`, zero when it named
+/// none). Every mutator maintains `interval >= floor` as it goes, so a
+/// reader never needs to re-apply the floor itself.
+///
+/// Pure and time-injected — `now` is always a caller-supplied [`Instant`],
+/// never read internally — so the backoff/decay math is unit-testable
+/// without a real sleep; `run.rs`'s `wait_for_pace` is what actually calls
+/// [`Instant::now`] and sleeps.
+#[derive(Default)]
+pub(crate) struct HostPacer {
+    hosts: HashMap<String, HostPace>,
+}
+
+#[derive(Clone, Copy)]
+struct HostPace {
+    /// Current minimum spacing between requests to this host.
+    interval: Duration,
+    /// Highest `interval` this host has ever reached this crawl, kept even
+    /// after a later success decays `interval` back down — what
+    /// [`HostPacer::rate_limited_hosts`] reports, since "this host needed
+    /// slowing down" is the fact worth surfacing, not whatever the interval
+    /// happened to be at the very last request.
+    peak: Duration,
+    /// A hard minimum `interval` is never decayed below — see
+    /// [`HostPacer::set_floor`].
+    floor: Duration,
+    /// When the last request to this host went out, so the next one can be
+    /// measured against it. `None` for a host no request has been sent to
+    /// yet, and [`HostPacer::wait_duration`] always returns zero for one.
+    last_request: Option<Instant>,
+}
+
+impl Default for HostPace {
+    fn default() -> Self {
+        Self {
+            interval: Duration::ZERO,
+            peak: Duration::ZERO,
+            floor: Duration::ZERO,
+            last_request: None,
+        }
+    }
+}
+
+impl HostPacer {
+    /// How long the caller must still wait, from `now`, before a request to
+    /// `host` honors its pacing interval. Zero for a host never seen before,
+    /// or whose last request was already far enough in the past.
+    pub(crate) fn wait_duration(&self, host: &str, now: Instant) -> Duration {
+        let Some(pace) = self.hosts.get(host) else { return Duration::ZERO };
+        let Some(last) = pace.last_request else { return Duration::ZERO };
+        // `interval` is always already `>= floor` — every mutator below
+        // maintains that — so this reads it directly rather than
+        // re-applying `.max(floor)`.
+        pace.interval.saturating_sub(now.saturating_duration_since(last))
+    }
+
+    /// Records that a request to `host` is going out at `now` — called
+    /// right before the request, once `wait_duration`'s wait (if any) has
+    /// elapsed, so the NEXT request's `wait_duration` measures from it.
+    pub(crate) fn record_request(&mut self, host: &str, now: Instant) {
+        self.hosts.entry(host.to_string()).or_default().last_request = Some(now);
+    }
+
+    /// Sleeps out `host`'s current pacing interval, if any, then records a
+    /// request about to go out at the moment the wait ends — call right
+    /// before every page or asset fetch in the crawl loop, so a host's own
+    /// politeness interval (grown by a PRIOR fetch to it — see
+    /// [`observe`](HostPacer::observe)) is honored before the NEXT request
+    /// reaches the network, rather than only slowing the one request already
+    /// retrying against it. A no-op for a host this crawl has never slowed
+    /// down, so an ordinary site's requests go out exactly as fast as before
+    /// pacing existed. The crate's one real sleep, kept on this type rather
+    /// than the crawl loop (`run.rs`) so the loop reads as one call instead
+    /// of the wait/record pair — [`wait_duration`](HostPacer::wait_duration)
+    /// and [`record_request`](HostPacer::record_request) remain separately
+    /// callable for the timing math the unit tests above exercise without a
+    /// real sleep.
+    pub(crate) async fn wait(&mut self, host: &str) {
+        let wait = self.wait_duration(host, Instant::now());
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+        self.record_request(host, Instant::now());
+    }
+
+    /// Reacts to one fetch's terminal outcome against `host`: `Ok(())`
+    /// decays the interval (the host is no longer under strain); a status
+    /// this crawl reads as the host asking it to slow down (429/503) grows
+    /// it; anything else — no status at all (a transport error, a redirect
+    /// refusal, a body-read failure), or a status outside that pair (a 404,
+    /// a permanent 400) — leaves the interval alone, since none of those is
+    /// a signal from the HOST that this crawl is going too fast, only that
+    /// this one request failed for its own reason. Takes the bare status
+    /// rather than an HTTP-client error type so this pacing module stays
+    /// usable without ureq in scope — `run.rs`'s `observe_pace` does the
+    /// one-line translation from its own `FetchError`.
+    pub(crate) fn observe(&mut self, host: &str, outcome: Result<(), Option<u16>>) {
+        match outcome {
+            Ok(()) => self.record_success(host),
+            Err(Some(429)) | Err(Some(503)) => self.record_rate_limited(host),
+            Err(_) => {}
+        }
+    }
+
+    /// Doubles `host`'s pacing interval (seeding it to
+    /// [`PACING_START_INTERVAL`] first, if it was still zero), capped at
+    /// [`MAX_PACING_INTERVAL`] — called after a request to `host` comes back
+    /// 429 or 503 having outlasted every retry.
+    pub(crate) fn record_rate_limited(&mut self, host: &str) {
+        let pace = self.hosts.entry(host.to_string()).or_default();
+        let grown = if pace.interval.is_zero() {
+            PACING_START_INTERVAL
+        } else {
+            pace.interval * 2
+        };
+        pace.interval = grown.min(MAX_PACING_INTERVAL).max(pace.floor);
+        pace.peak = pace.peak.max(pace.interval);
+    }
+
+    /// Halves `host`'s pacing interval — called after a request to `host`
+    /// succeeds, so a host that has gone quiet is gradually trusted with a
+    /// faster request rate again. Never drops below `floor`. A no-op host
+    /// this pacer has never touched simply stays at zero.
+    pub(crate) fn record_success(&mut self, host: &str) {
+        if let Some(pace) = self.hosts.get_mut(host) {
+            pace.interval = (pace.interval / 2).max(pace.floor);
+        }
+    }
+
+    /// Sets `host`'s hard floor — a site's own declared `robots.txt`
+    /// `Crawl-delay`, capped at [`MAX_CRAWL_DELAY_FLOOR`] rather than the
+    /// (much smaller) backoff ceiling [`MAX_PACING_INTERVAL`] — and raises
+    /// its current interval to at least that floor immediately, rather than
+    /// waiting for the next grow/decay event to notice it.
+    pub(crate) fn set_floor(&mut self, host: &str, floor: Duration) {
+        let floor = floor.min(MAX_CRAWL_DELAY_FLOOR);
+        let pace = self.hosts.entry(host.to_string()).or_default();
+        pace.floor = floor;
+        pace.interval = pace.interval.max(floor);
+    }
+
+    /// `host`'s current pacing interval — zero for a host never seen or
+    /// never rate-limited. Exposed for tests; the crawl loop itself only
+    /// ever needs `wait_duration`.
+    #[cfg(test)]
+    pub(crate) fn current_interval(&self, host: &str) -> Duration {
+        self.hosts.get(host).map(|pace| pace.interval).unwrap_or(Duration::ZERO)
+    }
+
+    /// Every host this pacer ever rate-limited, with the peak interval it
+    /// reached — sorted by host for a deterministic report. Empty when no
+    /// host this crawl talked to ever returned 429/503.
+    pub(crate) fn rate_limited_hosts(&self) -> Vec<(String, Duration)> {
+        let mut out: Vec<(String, Duration)> = self
+            .hosts
+            .iter()
+            .filter(|(_, pace)| !pace.peak.is_zero())
+            .map(|(host, pace)| (host.clone(), pace.peak))
+            .collect();
+        out.sort();
+        out
+    }
+}
+
 /// The five mutually-exclusive outcomes one popped URL can land in
 /// ([`super::run::PageOutcome`]). Never derived from a set's size — e.g.
 /// two duplicates can share one path identity in `Dedupe`, so
@@ -325,6 +541,28 @@ impl Tally {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── CrawlState::new (the Crawl-delay-to-pacer wiring) ───────────────
+
+    #[test]
+    fn crawl_state_new_seeds_the_pacer_floor_from_a_sitemap_crawl_delay() {
+        let sitemap = SitemapDiscovery {
+            crawl_delay: Some(Duration::from_secs(1)),
+            ..SitemapDiscovery::default()
+        };
+        let state = CrawlState::new("https://example.test/", &sitemap);
+        assert_eq!(
+            state.pacer.current_interval("example.test"),
+            Duration::from_secs(1),
+            "a declared Crawl-delay must floor the pacer before any request is made"
+        );
+    }
+
+    #[test]
+    fn crawl_state_new_leaves_the_pacer_unpaced_when_no_crawl_delay_is_declared() {
+        let state = CrawlState::new("https://example.test/", &SitemapDiscovery::default());
+        assert_eq!(state.pacer.current_interval("example.test"), Duration::ZERO);
+    }
 
     // ── Frontier ──────────────────────────────────────────────────────
 
@@ -459,6 +697,204 @@ mod tests {
             assets.as_map().get("https://example.com/a.png").map(String::as_str),
             Some("./assets/imported/x.png")
         );
+    }
+
+    // ── HostPacer ─────────────────────────────────────────────────────
+
+    #[test]
+    fn host_pacer_never_seen_host_needs_no_wait() {
+        let pacer = HostPacer::default();
+        assert_eq!(pacer.wait_duration("example.test", Instant::now()), Duration::ZERO);
+    }
+
+    /// The core gap: after a host returns 429/503, the NEXT request to it
+    /// must be spaced out by the newly-grown interval, not fired off
+    /// immediately the way an ordinary site's requests are.
+    #[test]
+    fn host_pacer_paces_the_next_request_after_a_rate_limit() {
+        let mut pacer = HostPacer::default();
+        let t0 = Instant::now();
+        pacer.record_request("example.test", t0);
+        pacer.record_rate_limited("example.test");
+
+        assert_eq!(
+            pacer.wait_duration("example.test", t0),
+            PACING_START_INTERVAL,
+            "right after the rate-limited request, the full interval is still owed"
+        );
+        assert_eq!(
+            pacer.wait_duration("example.test", t0 + PACING_START_INTERVAL / 2),
+            PACING_START_INTERVAL / 2,
+            "halfway through the interval, half of it remains"
+        );
+        assert_eq!(
+            pacer.wait_duration("example.test", t0 + PACING_START_INTERVAL),
+            Duration::ZERO,
+            "once the interval has fully elapsed, nothing more is owed"
+        );
+    }
+
+    #[test]
+    fn host_pacer_another_host_is_unaffected() {
+        let mut pacer = HostPacer::default();
+        let t0 = Instant::now();
+        pacer.record_request("limited.test", t0);
+        pacer.record_rate_limited("limited.test");
+        pacer.record_request("quiet.test", t0);
+
+        assert!(pacer.wait_duration("limited.test", t0) > Duration::ZERO);
+        assert_eq!(
+            pacer.wait_duration("quiet.test", t0),
+            Duration::ZERO,
+            "a host this pacer never rate-limited must never be slowed down"
+        );
+    }
+
+    #[test]
+    fn host_pacer_grows_by_doubling_and_never_exceeds_the_cap() {
+        let mut pacer = HostPacer::default();
+        pacer.record_rate_limited("example.test");
+        assert_eq!(pacer.current_interval("example.test"), PACING_START_INTERVAL);
+        pacer.record_rate_limited("example.test");
+        assert_eq!(pacer.current_interval("example.test"), PACING_START_INTERVAL * 2);
+        // Repeated rate limiting must never push the interval past the cap,
+        // however many times it fires.
+        for _ in 0..10 {
+            pacer.record_rate_limited("example.test");
+        }
+        assert_eq!(pacer.current_interval("example.test"), MAX_PACING_INTERVAL);
+    }
+
+    #[test]
+    fn host_pacer_decays_on_success_and_bottoms_out_at_zero() {
+        let mut pacer = HostPacer::default();
+        pacer.record_rate_limited("example.test"); // -> 500ms
+        pacer.record_rate_limited("example.test"); // -> 1000ms
+        assert_eq!(pacer.current_interval("example.test"), Duration::from_millis(1000));
+
+        pacer.record_success("example.test");
+        assert_eq!(pacer.current_interval("example.test"), Duration::from_millis(500));
+        pacer.record_success("example.test");
+        assert_eq!(pacer.current_interval("example.test"), Duration::from_millis(250));
+
+        // Each success only halves (integer division), so clearing 1000ms
+        // of nanosecond-granular duration down to exactly zero takes ~30
+        // halvings in total (2^30 > 1_000_000_000) — 40 more is a safe
+        // margin, not a tight bound.
+        for _ in 0..40 {
+            pacer.record_success("example.test");
+        }
+        assert_eq!(
+            pacer.current_interval("example.test"),
+            Duration::ZERO,
+            "enough successes must fully clear the interval, not just approach zero"
+        );
+    }
+
+    #[test]
+    fn host_pacer_crawl_delay_sets_a_floor_decay_never_crosses() {
+        let mut pacer = HostPacer::default();
+        pacer.set_floor("example.test", Duration::from_secs(1));
+        // The floor applies immediately, before any request or rate limit.
+        assert_eq!(pacer.current_interval("example.test"), Duration::from_secs(1));
+
+        for _ in 0..20 {
+            pacer.record_success("example.test");
+        }
+        assert_eq!(
+            pacer.current_interval("example.test"),
+            Duration::from_secs(1),
+            "Crawl-delay is a hard floor — success must never decay below it"
+        );
+    }
+
+    #[test]
+    fn host_pacer_floor_is_capped_at_the_max_crawl_delay_floor() {
+        let mut pacer = HostPacer::default();
+        pacer.set_floor("example.test", Duration::from_secs(600));
+        assert_eq!(pacer.current_interval("example.test"), MAX_CRAWL_DELAY_FLOOR);
+    }
+
+    /// The gap a single shared cap would have left: a `Crawl-delay` above
+    /// [`MAX_PACING_INTERVAL`] (the much smaller backoff-growth ceiling)
+    /// must still win, because the site explicitly asked for it — a
+    /// declared delay is a request, not this crawl's own repeated-failure
+    /// signal, and must not be paced faster than it names just because that
+    /// happens to exceed what unprompted backoff would ever grow to.
+    #[test]
+    fn host_pacer_crawl_delay_above_the_backoff_cap_still_wins() {
+        let mut pacer = HostPacer::default();
+        let declared = Duration::from_secs(10);
+        assert!(declared > MAX_PACING_INTERVAL, "the case this test exists to cover");
+        pacer.set_floor("example.test", declared);
+        assert_eq!(
+            pacer.current_interval("example.test"),
+            declared,
+            "a Crawl-delay above the backoff ceiling must not be silently clipped to it"
+        );
+
+        // Even while actively rate-limited, the interval never drops below
+        // the declared floor — nor does growth get re-clipped to the
+        // (smaller) backoff cap on top of it.
+        pacer.record_rate_limited("example.test");
+        assert_eq!(
+            pacer.current_interval("example.test"),
+            declared,
+            "backoff growth must not override a floor already above its own cap"
+        );
+    }
+
+    #[test]
+    fn host_pacer_rate_limited_hosts_reports_the_peak_not_the_decayed_value() {
+        let mut pacer = HostPacer::default();
+        pacer.record_rate_limited("a.test"); // -> 500ms
+        pacer.record_rate_limited("a.test"); // -> 1000ms
+        pacer.record_success("a.test"); // decays back to 500ms
+        pacer.record_request("b.test", Instant::now()); // seen, never rate-limited
+
+        assert_eq!(
+            pacer.rate_limited_hosts(),
+            vec![("a.test".to_string(), Duration::from_millis(1000))],
+            "the peak survives the later decay, and an unaffected host is never listed"
+        );
+    }
+
+    // ── HostPacer::observe (the grow/decay DECISION — `run.rs`'s
+    // `observe_pace` only translates its own error type into the bare
+    // `Result<(), Option<u16>>` this takes, so the decision itself is
+    // tested at the layer that makes it) ────────────────────────────────
+
+    #[test]
+    fn host_pacer_observe_grows_on_429_or_503() {
+        let mut pacer = HostPacer::default();
+        pacer.observe("example.test", Err(Some(429)));
+        assert!(pacer.current_interval("example.test") > Duration::ZERO);
+
+        let mut pacer = HostPacer::default();
+        pacer.observe("example.test", Err(Some(503)));
+        assert!(pacer.current_interval("example.test") > Duration::ZERO);
+    }
+
+    #[test]
+    fn host_pacer_observe_ignores_a_status_outside_429_and_503_and_a_statusless_failure() {
+        let mut pacer = HostPacer::default();
+        pacer.observe("example.test", Err(Some(404)));
+        pacer.observe("example.test", Err(None));
+        assert_eq!(
+            pacer.current_interval("example.test"),
+            Duration::ZERO,
+            "a 404, or a failure that carries no status at all (transport error, \
+             redirect refusal), is not a rate-limit signal"
+        );
+    }
+
+    #[test]
+    fn host_pacer_observe_decays_on_ok() {
+        let mut pacer = HostPacer::default();
+        pacer.record_rate_limited("example.test");
+        let before = pacer.current_interval("example.test");
+        pacer.observe("example.test", Ok(()));
+        assert!(pacer.current_interval("example.test") < before);
     }
 
     // ── Tally ─────────────────────────────────────────────────────────

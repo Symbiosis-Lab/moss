@@ -15,6 +15,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::io::Read;
+use std::time::Duration;
 
 use super::crawler::normalize_url;
 use super::scope::{is_within_scope, UrlScope};
@@ -55,6 +56,14 @@ pub struct SitemapDiscovery {
     /// truncated; the caller should say so rather than silently importing a
     /// partial list with no sign anything was cut.
     pub truncated: bool,
+    /// The site's own `robots.txt` `Crawl-delay` (see
+    /// [`parse_robots_crawl_delay`]), if it declared one — the crawl's
+    /// per-host pacer (`crawl_state::HostPacer`) takes this as the floor
+    /// for the crawl's own host, so a site that already told every crawler
+    /// how fast it wants to be hit is never paced faster than that, even
+    /// before the crawl has seen a single 429. `None` when `robots.txt`
+    /// named no directive, or there is no `robots.txt` at all.
+    pub crawl_delay: Option<Duration>,
 }
 
 /// Discover a site's sitemap and return its declared, in-scope URLs.
@@ -74,10 +83,12 @@ pub(crate) async fn discover(
         return SitemapDiscovery::default();
     };
 
-    let mut seeds = robots_txt_sitemaps(&root, user_agent).await;
+    let robots_body = fetch_robots_txt(&root, user_agent).await;
+    let mut seeds = robots_body.as_deref().map(parse_robots_sitemaps).unwrap_or_default();
     if seeds.is_empty() {
         seeds.push(format!("{root}/sitemap.xml"));
     }
+    let crawl_delay = robots_body.as_deref().and_then(parse_robots_crawl_delay);
 
     let mut visited_docs: HashSet<String> = HashSet::new();
     let mut worklist: VecDeque<(String, u32)> = seeds.into_iter().map(|u| (u, 0)).collect();
@@ -154,6 +165,7 @@ pub(crate) async fn discover(
         urls,
         locale_alternates,
         truncated,
+        crawl_delay,
     }
 }
 
@@ -287,11 +299,35 @@ fn decode_sitemap_bytes(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-async fn robots_txt_sitemaps(root: &str, user_agent: &str) -> Vec<String> {
-    match super::run::fetch_raw(&format!("{root}/robots.txt"), user_agent).await {
-        Ok(body) => parse_robots_sitemaps(&body),
-        Err(_) => Vec::new(),
-    }
+/// Fetches `robots.txt` once, for both the sitemap seeds
+/// ([`parse_robots_sitemaps`]) and the `Crawl-delay` floor
+/// ([`parse_robots_crawl_delay`]) [`discover`] reads out of the same body —
+/// a site with none (or an unreachable one) returns `None`, and the caller
+/// falls back to `/sitemap.xml` and an unpaced crawl exactly as before
+/// either existed.
+async fn fetch_robots_txt(root: &str, user_agent: &str) -> Option<String> {
+    super::run::fetch_raw(&format!("{root}/robots.txt"), user_agent).await.ok()
+}
+
+/// Parse a `Crawl-delay:` directive out of a `robots.txt` body — not part of
+/// the original robots.txt standard, but a de facto convention several
+/// major crawlers honor, for a host to declare the minimum gap (in seconds,
+/// a plain number, fractional allowed) it wants between requests. Matched
+/// case-insensitively, same as `Sitemap:` above, with no user-agent-block
+/// scoping — the first valid value anywhere in the file wins, the same
+/// simple reading this parser already gives `Sitemap:` lines. A missing,
+/// unparsable, or non-positive value is `None` rather than "no delay at
+/// all" — the same non-contradiction `run.rs`'s `Retry-After` parsing
+/// already applies to a zero or negative wait.
+fn parse_robots_crawl_delay(body: &str) -> Option<Duration> {
+    body.lines().find_map(|line| {
+        let line = line.trim();
+        let lower = line.to_ascii_lowercase();
+        let value = lower.strip_prefix("crawl-delay:")?;
+        let cut = line.len() - value.len();
+        let secs: f64 = line[cut..].trim().parse().ok()?;
+        (secs > 0.0).then(|| Duration::from_secs_f64(secs))
+    })
 }
 
 #[cfg(test)]
@@ -337,6 +373,41 @@ mod tests {
     fn parse_robots_sitemaps_absent_returns_empty() {
         let body = "User-agent: *\nDisallow: /\n";
         assert!(parse_robots_sitemaps(body).is_empty());
+    }
+
+    // ── parse_robots_crawl_delay (pure, no network) ─────────────────────
+
+    #[test]
+    fn parse_robots_crawl_delay_reads_a_plain_integer() {
+        let body = "User-agent: *\nCrawl-delay: 5\n";
+        assert_eq!(parse_robots_crawl_delay(body), Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn parse_robots_crawl_delay_reads_a_fractional_value() {
+        assert_eq!(
+            parse_robots_crawl_delay("Crawl-delay: 1.5\n"),
+            Some(Duration::from_millis(1500))
+        );
+    }
+
+    #[test]
+    fn parse_robots_crawl_delay_is_case_insensitive() {
+        assert_eq!(parse_robots_crawl_delay("CRAWL-DELAY: 2\n"), Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn parse_robots_crawl_delay_absent_returns_none() {
+        assert_eq!(parse_robots_crawl_delay("User-agent: *\nDisallow: /\n"), None);
+    }
+
+    /// Same non-contradiction `run.rs`'s `Retry-After` parsing applies to a
+    /// zero or negative wait: a directive naming one is not read as license
+    /// for an instant request, only as naming nothing useful.
+    #[test]
+    fn parse_robots_crawl_delay_rejects_zero_and_negative() {
+        assert_eq!(parse_robots_crawl_delay("Crawl-delay: 0\n"), None);
+        assert_eq!(parse_robots_crawl_delay("Crawl-delay: -1\n"), None);
     }
 
     // ── collapse_locale_alternates (pure, no network) ───────────────────
