@@ -110,6 +110,32 @@ pub use router::{start_server, ServeConfig};
 
 use std::sync::Arc;
 
+/// What a host decides about the headless server, as one value. `Default` is
+/// the plain loopback-only server `moss build --serve` starts.
+#[derive(Default, Clone)]
+pub struct HeadlessServe {
+    /// Forwarded to [`ownership::acquire_for_site_dir`] via [`ServeConfig`].
+    /// `ops::run_headless_build` sets it from `--watch` (standing by makes no
+    /// sense for a one-shot build that would just exit right after).
+    pub standby_on_conflict: bool,
+    /// Forwarded to [`ServeConfig`]: `ops::run_headless_build` holds the same
+    /// `Arc` across every call this process makes here, so a `/__moss/yield`
+    /// hit on whichever server is live always wakes the one driver loop
+    /// waiting on it.
+    pub yield_notify: Arc<tokio::sync::Notify>,
+    /// See [`ServeConfig::host_routes`].
+    pub host_routes: Option<axum::Router>,
+    /// See [`ServeConfig::bind`]. `None` keeps the loopback-only bind.
+    pub bind: Option<std::net::IpAddr>,
+    /// See [`ServeConfig::extra_hosts`].
+    pub extra_hosts: Vec<String>,
+    /// See [`ServeConfig::announce_sign_in`].
+    pub announce_sign_in: Option<String>,
+    /// First port of the upward scan. `None` reads `MOSS_PREVIEW_PORT_BASE`
+    /// (see [`port::env_port_base`]).
+    pub port_base: Option<u16>,
+}
+
 /// Start a preview server with no host shell — the CLI / headless
 /// `moss build --serve` arm. The GUI arm (server reuse, folder-switch
 /// re-keying, managed state) is the app's `launch_server` impl and lives in
@@ -136,23 +162,14 @@ use std::sync::Arc;
 /// one caller that still cannot send — an in-process test build — forgets it
 /// at its own site (`events/host_ports.rs`, app crate).
 ///
-/// `standby_on_conflict` is forwarded to [`ownership::acquire_for_site_dir`]
-/// via [`ServeConfig`] — see its doc for what it does. `ops::run_headless_build`
-/// sets it from `--watch` (standing by makes no sense for a one-shot build
-/// that would just exit right after).
-///
-/// `yield_notify` is forwarded to [`ServeConfig`] too: `ops::run_headless_build`
-/// holds the same `Arc` across every call this process makes here (the
-/// initial launch and any relaunch after honoring a yield), so a `/__moss/yield`
-/// hit on whichever server is live right now always wakes the one driver loop
-/// waiting on it.
+/// `serve` carries everything a host decides about the server — see
+/// [`HeadlessServe`]. [`HeadlessServe::default`] is the loopback-only server a
+/// plain `moss build --serve` starts.
 pub async fn start_server_headless(
     moss_path: &str,
     cli_site_dir: Option<Arc<std::sync::RwLock<std::path::PathBuf>>>,
     asset_registry: Option<Arc<crate::types::assets::AssetRegistry>>,
-    standby_on_conflict: bool,
-    yield_notify: Arc<tokio::sync::Notify>,
-    host_routes: Option<axum::Router>,
+    serve: HeadlessServe,
 ) -> Result<(u16, tokio::sync::oneshot::Sender<()>), String> {
     let serve_dir = serve_dir_for_site_path(moss_path);
     let site_dir_state =
@@ -170,10 +187,16 @@ pub async fn start_server_headless(
         invoke: invoke_ctx,
         asset_registry,
         kind: HostKind::Cli,
-        standby_on_conflict,
-        yield_notify,
-        host_routes,
-        ..ServeConfig::new(site_dir_state, port::env_port_base())
+        standby_on_conflict: serve.standby_on_conflict,
+        yield_notify: serve.yield_notify,
+        host_routes: serve.host_routes,
+        bind: serve.bind,
+        extra_hosts: serve.extra_hosts,
+        announce_sign_in: serve.announce_sign_in,
+        ..ServeConfig::new(
+            site_dir_state,
+            serve.port_base.unwrap_or_else(port::env_port_base),
+        )
     })
     .await?;
     Ok((port, shutdown_tx))

@@ -67,7 +67,7 @@
 //! token need only be readable by the *user* who runs moss. [`publish`]'s error
 //! path names the *path*, never the bytes.
 //!
-//! One deliberate exception: `ServeConfig::announce_token` prints the token in
+//! One deliberate exception: `ServeConfig::announce_sign_in` prints the token in
 //! a sign-in URL to stderr, for a non-loopback (`ServeConfig::bind`) operator
 //! who has no loopback-readable file to read it from. It is the one sink this
 //! module does not otherwise allow, scoped to the one case — an explicitly

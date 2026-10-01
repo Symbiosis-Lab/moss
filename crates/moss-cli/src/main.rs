@@ -143,7 +143,7 @@ fn main() {
                 folder_path: parsed.folder.clone(),
                 flags: parsed.flags,
                 host_ports: Arc::new(|folder| moss_build::cli::host::cli_host_ports(folder)),
-                host_routes: None,
+                serve: Default::default(),
                 start_watch: Box::new(|folder, plugins| {
                     Box::pin(async move {
                         // No sweep here: the periodic disk-vs-baseline

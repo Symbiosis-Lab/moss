@@ -197,7 +197,7 @@ pub struct ServeConfig {
     pub extra_hosts: Vec<String>,
     /// Print the one-time sign-in URL (`super::session_route::announce_line`)
     /// to stderr at bind time. Ignored unless `bind` is `Some`.
-    pub announce_token: bool,
+    pub announce_sign_in: Option<String>,
 }
 
 impl ServeConfig {
@@ -222,7 +222,7 @@ impl ServeConfig {
             host_routes: None,
             bind: None,
             extra_hosts: Vec::new(),
-            announce_token: false,
+            announce_sign_in: None,
         }
     }
 }
@@ -248,7 +248,7 @@ pub async fn start_server(
         host_routes,
         bind,
         extra_hosts,
-        announce_token,
+        announce_sign_in,
     } = config;
     let extra_hosts = Arc::new(extra_hosts);
     // === SETUP PHASE ===
@@ -714,7 +714,7 @@ pub async fn start_server(
     let token_arc = invoke_ctx.as_ref().and_then(|ctx| ctx.token());
     let token_str = token_arc.as_ref().map(|t| t.as_str());
     if let Some(line) =
-        super::session_route::maybe_announce_line(bind, announce_token, &extra_hosts, port, token_str)
+        super::session_route::maybe_announce_line(bind, announce_sign_in.as_deref(), &extra_hosts, port, token_str)
     {
         eprintln!("{line}");
     }

@@ -116,33 +116,37 @@ pub(crate) async fn handle_session(
         .expect("static 303 response is always valid")
 }
 
-/// The one line `ServeConfig::announce_token` prints to stderr — a function
+/// The one line `ServeConfig::announce_sign_in` prints to stderr — a function
 /// so a test can assert on the exact string without capturing a real stderr
 /// writer.
-pub(crate) fn announce_line(host: &str, port: u16, token: &str) -> String {
-    format!("Open http://{host}:{port}/__moss/session?token={token}&next=/ to sign in")
+pub(crate) fn announce_line(host: &str, port: u16, token: &str, next: &str) -> String {
+    format!("Open http://{host}:{port}/__moss/session?token={token}&next={next} to sign in")
 }
 
 /// What `router::start_server` prints at bind time, computed as pure data so
 /// the "prints nothing" cases are a unit test rather than a stderr capture.
 /// `None` whenever any of the three conditions this feature requires is
-/// missing: `announce_token` opted in, `bind` actually configured a
+/// missing: `announce_sign_in` names a landing path (a same-origin path, as
+/// the session route itself requires), `bind` actually configured a
 /// non-loopback address, and a session token exists to announce (absent only
 /// when the served directory resolves to no vault).
 pub(crate) fn maybe_announce_line(
     bind: Option<std::net::IpAddr>,
-    announce_token: bool,
+    announce_sign_in: Option<&str>,
     extra_hosts: &[String],
     port: u16,
     token: Option<&str>,
 ) -> Option<String> {
-    let addr = bind.filter(|_| announce_token)?;
+    let (addr, next) = bind.zip(announce_sign_in)?;
+    if !next_is_same_origin(next) {
+        return None;
+    }
     let token = token?;
     let host = extra_hosts
         .first()
         .cloned()
         .unwrap_or_else(|| addr.to_string());
-    Some(announce_line(&host, port, token))
+    Some(announce_line(&host, port, token, next))
 }
 
 #[cfg(test)]
@@ -257,22 +261,37 @@ mod tests {
     fn maybe_announce_line_is_none_unless_bind_the_flag_and_a_token_all_agree() {
         let addr = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
         assert!(
-            maybe_announce_line(None, true, &[], 8080, Some("tok")).is_none(),
+            maybe_announce_line(None, Some("/"), &[], 8080, Some("tok")).is_none(),
             "bind: None must never announce, even with the flag on"
         );
-        assert!(maybe_announce_line(Some(addr), false, &[], 8080, Some("tok")).is_none());
-        assert!(maybe_announce_line(Some(addr), true, &[], 8080, None).is_none());
+        assert!(maybe_announce_line(Some(addr), None, &[], 8080, Some("tok")).is_none());
+        assert!(maybe_announce_line(Some(addr), Some("/"), &[], 8080, None).is_none());
+        assert!(
+            maybe_announce_line(Some(addr), Some("//evil.com"), &[], 8080, Some("tok")).is_none(),
+            "a protocol-relative landing path must never be announced"
+        );
     }
 
     #[test]
     fn maybe_announce_line_names_the_first_extra_host_and_the_token() {
         let addr = std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0));
         let extra = vec!["preview.example.com".to_string()];
-        let line = maybe_announce_line(Some(addr), true, &extra, 8080, Some("tok123"))
+        let line = maybe_announce_line(Some(addr), Some("/"), &extra, 8080, Some("tok123"))
             .expect("all three conditions hold");
         assert_eq!(
             line,
             "Open http://preview.example.com:8080/__moss/session?token=tok123&next=/ to sign in"
+        );
+    }
+
+    #[test]
+    fn maybe_announce_line_lands_on_the_requested_path() {
+        let addr = std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0));
+        let line = maybe_announce_line(Some(addr), Some("/__moss/editor/"), &[], 8080, Some("t"))
+            .expect("a same-origin path announces");
+        assert_eq!(
+            line,
+            "Open http://0.0.0.0:8080/__moss/session?token=t&next=/__moss/editor/ to sign in"
         );
     }
 }
