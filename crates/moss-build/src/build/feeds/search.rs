@@ -69,7 +69,7 @@
 //! skipped so code samples and URLs are not corrupted.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -88,6 +88,58 @@ pub struct SearchIndexFile {
     pub rel_path: String,
     /// File contents (already gzip-compressed where Pagefind compresses).
     pub bytes: Vec<u8>,
+}
+
+/// The bundle's entry point: the first file Pagefind's loader fetches, naming
+/// each language's index.
+const ENTRY_FILE: &str = "pagefind-entry.json";
+
+/// `pagefind-entry.json` as Pagefind 1.5 writes it, field for field and in its
+/// field order, except that `languages` is sorted.
+///
+/// Pagefind builds `languages` from a hash map with a fresh random seed, so a
+/// multilingual site's entry lists its languages in a different order on every
+/// run. The bytes of the bundle feed the generation id, so an unchanged site
+/// would get a new one each time search reindexed. Order carries no meaning:
+/// the loader looks a language up by key, and when none matches, falls back to
+/// the one with the most pages.
+///
+/// `deny_unknown_fields` makes a Pagefind upgrade that changes this shape fail
+/// to parse rather than silently drop a field.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EntryMeta {
+    version: String,
+    languages: BTreeMap<String, EntryLanguage>,
+    include_characters: Vec<char>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EntryLanguage {
+    hash: String,
+    wasm: Option<String>,
+    page_count: usize,
+}
+
+/// Re-serialize an entry file with its languages sorted, compact as Pagefind
+/// writes it, so the result differs from Pagefind's only in that order.
+fn canonical_entry(bytes: &[u8]) -> serde_json::Result<Vec<u8>> {
+    serde_json::to_vec(&serde_json::from_slice::<EntryMeta>(bytes)?)
+}
+
+/// One file of Pagefind's output as moss ships it: its path with `/`
+/// separators, and the entry file in canonical order (see [`EntryMeta`]).
+fn bundle_file(file: pagefind::api::SyntheticFile) -> SearchIndexFile {
+    let rel_path = file.filename.to_string_lossy().replace('\\', "/");
+    let mut bytes = file.contents;
+    if rel_path == ENTRY_FILE {
+        match canonical_entry(&bytes) {
+            Ok(canonical) => bytes = canonical,
+            Err(e) => log::warn!(target: "search", "{ENTRY_FILE} kept in Pagefind's order: {e}"),
+        }
+    }
+    SearchIndexFile { rel_path, bytes }
 }
 
 /// One built bundle, together with **how much of the corpus it actually
@@ -582,13 +634,7 @@ pub fn build_search_index_cancellable(
                 }
 
                 Ok(Some(SearchIndex {
-                    files: files
-                        .into_iter()
-                        .map(|f| SearchIndexFile {
-                            rel_path: f.filename.to_string_lossy().replace('\\', "/"),
-                            bytes: f.contents,
-                        })
-                        .collect(),
+                    files: files.into_iter().map(bundle_file).collect(),
                     pages: readable,
                     skipped,
                 }))

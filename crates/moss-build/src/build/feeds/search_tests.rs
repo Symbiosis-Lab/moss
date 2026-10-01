@@ -158,10 +158,6 @@ fn sorted_files(index: &SearchIndex) -> Vec<(String, Vec<u8>)> {
 }
 
 /// Assert two bundles hold the same files with the same bytes.
-///
-/// `pagefind-entry.json` is compared as JSON instead: Pagefind lists the
-/// languages in it in hash-map order, which differs between two runs over the
-/// same pages.
 fn assert_same_bundle(got: &SearchIndex, expected: &SearchIndex, reference: &str) {
     let (got, expected) = (sorted_files(got), sorted_files(expected));
     assert_eq!(
@@ -169,13 +165,8 @@ fn assert_same_bundle(got: &SearchIndex, expected: &SearchIndex, reference: &str
         expected.iter().map(|(p, _)| p).collect::<Vec<_>>(),
         "bundle file set differs from the {reference}"
     );
-    let parse = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(b).unwrap();
     for ((path, got), (_, expected)) in got.iter().zip(&expected) {
-        if path == "pagefind-entry.json" {
-            assert_eq!(parse(got), parse(expected), "{path} differs from the {reference}");
-        } else {
-            assert!(got == expected, "{path} differs from the {reference}");
-        }
+        assert!(got == expected, "{path} differs from the {reference}");
     }
 }
 
@@ -216,13 +207,7 @@ fn bundle_via_scratch_copy(site_dir: &Path) -> SearchIndex {
         index.get_files().await.unwrap()
     });
     SearchIndex {
-        files: files
-            .into_iter()
-            .map(|f| SearchIndexFile {
-                rel_path: f.filename.to_string_lossy().replace('\\', "/"),
-                bytes: f.contents,
-            })
-            .collect(),
+        files: files.into_iter().map(bundle_file).collect(),
         pages: rels.len(),
         skipped: 0,
     }
@@ -258,6 +243,47 @@ fn in_memory_bundle_matches_the_scratch_copy_bundle() {
         before,
         "the deployed build output must never be mutated"
     );
+}
+
+/// Two builds of the same pages ship the same bytes, entry file included, so
+/// an unchanged site keeps its generation id when search reindexes. Pagefind
+/// orders the entry's languages with a freshly seeded hash map on every build;
+/// with five languages, an unsorted entry would pass both checks below by luck
+/// about once in 14,000 runs.
+#[test]
+fn identical_pages_build_an_identical_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    write_bilingual_site(dir.path());
+    for lang in ["ja", "fr", "de"] {
+        std::fs::write(
+            dir.path().join(format!("{lang}.html")),
+            format!("<html lang=\"{lang}\"><body><h1>{lang}</h1><p>Trail notes.</p></body></html>"),
+        )
+        .unwrap();
+    }
+
+    let _serialize = lock_index_counter();
+    let first = build_search_index(dir.path()).expect("index should build");
+    let second = build_search_index(dir.path()).expect("index should build");
+    assert_same_bundle(&second, &first, "first build");
+
+    let entry = &first.files.iter().find(|f| f.rel_path == ENTRY_FILE).expect("entry file").bytes;
+    let entry = std::str::from_utf8(entry).unwrap();
+    let at = |lang: &str| entry.find(&format!("\"{lang}\":{{")).unwrap_or_else(|| panic!("{lang} missing: {entry}"));
+    let order = ["de", "en", "fr", "ja", "zh-hant"].map(at);
+    assert!(order.is_sorted(), "languages not in sorted order: {entry}");
+}
+
+/// The canonical entry differs from Pagefind's only in language order: same
+/// compact form, same field order, every value intact.
+#[test]
+fn entry_canonicalizes_to_one_byte_order() {
+    let en = r#""en":{"hash":"en_1a2b3c4","wasm":"en","page_count":3}"#;
+    let zh = r#""zh-hant":{"hash":"zh-hant_5d6e7f8","wasm":null,"page_count":9}"#;
+    let entry = |a: &str, b: &str| format!(r#"{{"version":"1.5.2","languages":{{{a},{b}}},"include_characters":["_","é"]}}"#);
+    let sorted = entry(en, zh);
+    assert_eq!(canonical_entry(entry(zh, en).as_bytes()).unwrap(), sorted.as_bytes());
+    assert_eq!(canonical_entry(sorted.as_bytes()).unwrap(), sorted.as_bytes());
 }
 
 /// An edit re-segments only the page it touched; every other page replays its
