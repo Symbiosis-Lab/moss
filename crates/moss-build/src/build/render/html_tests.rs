@@ -1,5 +1,33 @@
 use super::tab_title;
 
+/// Render `test_dir` through the build path's entry point and write its pages
+/// as rendered, since no slot pass follows here. Returns the output dir.
+fn render_for_build(
+    test_dir: &std::path::Path,
+    site_config: crate::build::render::blocking::SiteConfig,
+    exits_after_build: bool,
+) -> std::path::PathBuf {
+    let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let project_structure =
+        crate::build::scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
+    let mut pending = crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
+    crate::build::render::generate_blocking_content_for_build(
+        &crate::vault::paths::VaultRoot::resolve(test_dir),
+        &project_structure,
+        &output_dir,
+        None,
+        None,
+        true,
+        site_config,
+        &mut pending,
+        exits_after_build,
+    )
+    .expect("generate_blocking_content_for_build should succeed");
+    crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
+    output_dir
+}
+
 #[test]
 fn tab_title_rules() {
     assert_eq!(tab_title("Research", "Site", false), "Research - Site");
@@ -9085,11 +9113,7 @@ mod registry_clear_tests {
 /// ("New links: FETCH DURING THE BUILD... so a card is complete on its
 /// first build").
 mod build_time_link_meta_fetch_tests {
-    use crate::build::manifest::PendingManifest;
     use crate::build::render::blocking::SiteConfig;
-    use crate::build::render::generate_blocking_content_for_build;
-    use crate::build::scan_folder;
-    use crate::types::content::SiteHashes;
     use std::fs;
 
     struct Cleanup(std::path::PathBuf);
@@ -9125,22 +9149,7 @@ mod build_time_link_meta_fetch_tests {
     }
 
     fn build_site(test_dir: &std::path::Path, exits_after_build: bool) {
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
-        fs::create_dir_all(&output_dir).unwrap();
-        let project_structure =
-            scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
-        generate_blocking_content_for_build(
-            &crate::vault::paths::VaultRoot::resolve(test_dir),
-            &project_structure,
-            &output_dir,
-            None,
-            None,
-            true,
-            SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
-            exits_after_build,
-        )
-        .expect("generate_blocking_content_for_build should succeed");
+        super::render_for_build(test_dir, SiteConfig::default(), exits_after_build);
     }
 
     #[test]
@@ -9229,11 +9238,7 @@ mod build_time_link_meta_fetch_tests {
 /// URL — which writes no feed at all — so every page carried a dead link;
 /// see the `has_rss` note in `blocking.rs` above `show_rss_in_footer`.
 mod rss_footer_feed_gate_tests {
-    use crate::build::manifest::PendingManifest;
     use crate::build::render::blocking::SiteConfig;
-    use crate::build::render::generate_blocking_content_for_build;
-    use crate::build::scan_folder;
-    use crate::types::content::SiteHashes;
     use std::fs;
 
     struct Cleanup(std::path::PathBuf);
@@ -9261,26 +9266,11 @@ mod rss_footer_feed_gate_tests {
         fs::create_dir_all(test_dir.join(".moss")).unwrap();
         fs::write(test_dir.join(".moss").join("config.toml"), "[site]\nrss_footer = true\n").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
-        fs::create_dir_all(&output_dir).unwrap();
-        let project_structure =
-            scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
         let site_config = SiteConfig {
             site_url_override: site_url_override.map(str::to_string),
             ..SiteConfig::default()
         };
-        generate_blocking_content_for_build(
-            &crate::vault::paths::VaultRoot::resolve(test_dir),
-            &project_structure,
-            &output_dir,
-            None,
-            None,
-            true,
-            site_config,
-            &mut PendingManifest::new(SiteHashes::default()),
-            true,
-        )
-        .expect("generate_blocking_content_for_build should succeed");
+        let output_dir = super::render_for_build(test_dir, site_config, true);
 
         let index_html = fs::read_to_string(output_dir.join("index.html")).expect("index.html should exist");
         (index_html, output_dir.join("rss.xml"))
@@ -9324,11 +9314,7 @@ mod rss_footer_feed_gate_tests {
 /// link, mirroring `build_time_link_meta_fetch_tests` above for the cover
 /// half of the "one card kind" story.
 mod remote_cover_end_to_end_tests {
-    use crate::build::manifest::PendingManifest;
     use crate::build::render::blocking::SiteConfig;
-    use crate::build::render::generate_blocking_content_for_build;
-    use crate::build::scan_folder;
-    use crate::types::content::SiteHashes;
     use std::fs;
 
     struct Cleanup(std::path::PathBuf);
@@ -9389,22 +9375,7 @@ mod remote_cover_end_to_end_tests {
     }
 
     fn build_site(test_dir: &std::path::Path) -> String {
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
-        fs::create_dir_all(&output_dir).unwrap();
-        let project_structure =
-            scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
-        generate_blocking_content_for_build(
-            &crate::vault::paths::VaultRoot::resolve(test_dir),
-            &project_structure,
-            &output_dir,
-            None,
-            None,
-            true,
-            SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
-            true,
-        )
-        .expect("generate_blocking_content_for_build should succeed");
+        let output_dir = super::render_for_build(test_dir, SiteConfig::default(), true);
         fs::read_to_string(output_dir.join("index.html")).expect("index.html should exist")
     }
 

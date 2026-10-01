@@ -16,6 +16,7 @@
 //! - Astro: `injectScript('head-inline' | 'before-hydration' | 'page')`
 //!   https://docs.astro.build/en/reference/integrations-reference/
 
+use crate::build::lifecycle::cas_heal::{Placement, StagedLinks};
 use crate::build::outcome::{io_stop, BuildStopped};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -530,29 +531,45 @@ impl StoreFailures {
     }
 }
 
+/// Put a page's final bytes at `path`: link the blob `oid` unless `staged` vouches
+/// the file already is it, else write `bytes` (no blob, or the link failed: a real
+/// write's failure is one `io_stop` can classify). `true` when it wrote.
+fn place_page(root: &std::path::Path, path: &std::path::Path, oid: Option<&str>, bytes: Option<&str>,
+    objects: &crate::build::cache::ObjectStore, staged: &mut StagedLinks) -> Result<bool, BuildStopped> {
+    if let Some(oid) = oid {
+        match staged.link(objects, oid, path) {
+            Placement::Held => return Ok(false),
+            Placement::Linked => return Ok(true),
+            Placement::Unverified(e) => return Err(io_stop(root, "check staged page", path, e)),
+            Placement::Failed(e) if bytes.is_none() => return Err(e.into()),
+            Placement::Failed(_) => {}
+        }
+    }
+    let bytes = bytes.ok_or_else(|| format!("no bytes and no blob to stage {}", path.display()))?;
+    // `write_output`, not `fs::write`: an `O_TRUNC` open of a stage page the
+    // sync client evicted fails EDEADLK.
+    crate::build::io_utils::write_output(path, bytes.as_bytes())
+        .map_err(|e| io_stop(root, "write injected page", path, e))?;
+    Ok(true)
+}
+
 /// The slot-injection pass over the stage, used by the live pipeline.
 ///
-/// `generate_blocking_content` re-renders and writes every page's HTML on
-/// every build unconditionally (no incremental skip), so a staged file's
-/// mtime is never a valid "unchanged" signal — this keys on content instead.
-/// `source_oid` is `xxh3:<hash of this file's freshly-written bytes>` (the
-/// same non-SHA256-key convention the scan stat-key branch already uses);
+/// Its pages are the ones this build rendered, still in memory (`rendered`: the
+/// pass is their one writer), and every other `.html` already in the stage. The
+/// cache keys on content: `source_oid` is `xxh3:<hash of the page as rendered>`;
 /// `params` covers `page_path` plus a hash of the ENTIRE resolved slot set
-/// ([`resolved_slots_hash`]) — deliberately the whole set, not just what
-/// applies to this one page, so this cache can never alias a change to
-/// content that ultimately lands somewhere else in `ResolvedSlots`.
-///
-/// On a hit, `link_to`s the previously-injected bytes into place (or leaves
-/// the freshly-rendered raw bytes alone, for the cached no-op case) and
-/// re-emits the cached residual-marker WARN if the miss that produced this
-/// entry had one — the diagnostic must never become cache-skippable. On a
-/// miss, runs the real read/inject/diff once and stores the result.
+/// ([`resolved_slots_hash`]), so it can never alias a change that lands
+/// somewhere else in `ResolvedSlots`. A hit names the blob of the final bytes
+/// and re-emits the cached residual-marker WARN (a diagnostic must never become
+/// cache-skippable); a miss injects once and stores the result. Pages reach the
+/// stage through `staged`, which skips a file it vouches already holds the blob.
 ///
 /// Returns one [`SlotInjectionReceipt`] per page scanned, whichever way it went.
 /// A CAS that cannot take a page's bytes costs that page its `content_oid`, never
 /// the build: a full or unwritable object store must not fail a build that
 /// succeeds today for a page that never needed a blob.
-pub fn inject_slots_into_directory_cached(
+pub(crate) fn inject_slots_into_directory_cached(
     // The VAULT root, not `dir` (which is the stage below it): `io_stop` asks
     // the watcher predicates about the path inside the vault.
     root: &std::path::Path,
@@ -560,6 +577,8 @@ pub fn inject_slots_into_directory_cached(
     slots: &ResolvedSlots,
     object_store: &crate::build::cache::ObjectStore,
     transform_cache: &crate::build::cache::TransformCache,
+    rendered: std::collections::BTreeMap<String, String>,
+    staged: &mut StagedLinks,
     // `BuildStopped`: this reads the stage back, so a cloud eviction here must
     // stay distinguishable from a plugin returning garbage. See `build::outcome`.
 ) -> Result<Vec<SlotInjectionReceipt>, BuildStopped> {
@@ -567,27 +586,32 @@ pub fn inject_slots_into_directory_cached(
     let mut receipts = Vec::new();
     let mut scanned = 0usize;
     let mut rewritten = 0usize;
+    let mut written = 0usize;
     let mut residual_files = 0usize;
     let mut store_failures = StoreFailures::default();
-    // Split the pass into the part that scales with the CORPUS (walk every HTML
-    // file, read it, hash it — paid even when nothing changed) and the part that
-    // scales with the DELTA (inject + write). One prediction was that the walk is the
-    // majority of the ~0.9s and that narrowing the render set therefore reclaims
-    // less of it than it looks; these two numbers settle that.
-    // `walk` is measured directly and `rewrite` derived as the remainder, because
-    // the cache-hit path below leaves the loop body through a `continue` and an
-    // accumulator at each exit would rot the moment another is added.
+    // The part that scales with the CORPUS (walk, read, hash: paid even when
+    // nothing changed); the rest, inject and write, scales with the DELTA.
     let mut walk_ms = std::time::Duration::ZERO;
     let t_pass = std::time::Instant::now();
 
-    for entry in walk_html_files(dir) {
+    let t_walk = std::time::Instant::now();
+    let staged_only: Vec<String> = walk_html_files(dir)
+        .map(|entry| page_path_for(dir, entry.path()))
+        .filter(|page_path| !rendered.contains_key(page_path))
+        .collect();
+    walk_ms += t_walk.elapsed();
+    let pages = rendered.into_iter().map(|(page_path, html)| (page_path, Some(html)));
+    for (page_path, unwritten) in pages.chain(staged_only.into_iter().map(|page_path| (page_path, None))) {
         let t_walk = std::time::Instant::now();
-        let page_path = page_path_for(dir, entry.path());
-        // Reads back HTML this build just wrote into the stage. The sync client
-        // can evict it in between; `io_stop` keeps that answer distinguishable
-        // from a real failure all the way up to the cloud gate.
-        let html = std::fs::read_to_string(entry.path())
-            .map_err(|e| io_stop(root, "re-read for slot injection", entry.path(), e))?;
+        let path = dir.join(&page_path);
+        // A stage page is written only if injection changes it; a rendered one always is.
+        let in_stage = unwritten.is_none();
+        let html = match unwritten {
+            Some(html) => html,
+            // The sync client can evict a stage page; `io_stop` keeps that
+            // distinguishable from a real failure all the way up to the cloud gate.
+            None => std::fs::read_to_string(&path).map_err(|e| io_stop(root, "re-read for slot injection", &path, e))?,
+        };
         scanned += 1;
 
         let source_oid = format!(
@@ -610,66 +634,54 @@ pub fn inject_slots_into_directory_cached(
             // Its blob may have been collected since: a miss too, re-run live. A
             // receipt must never name a blob `ship_phase` would not find.
             .filter(|record| object_store.get_path(&record.content_oid).is_some());
-        if let Some(record) = hit {
+        let (changed, manifest_hash, content_oid, injected) = if let Some(record) = hit {
             if !record.residual.is_empty() {
                 residual_files += 1;
                 let residual: Vec<&str> = record.residual.iter().map(String::as_str).collect();
                 log_residual_slot_markers(&page_path, &residual);
             }
-            if record.rewritten {
-                object_store.link_to(&record.content_oid, entry.path())?;
-                rewritten += 1;
+            (record.rewritten, record.manifest_hash, Some(record.content_oid), None)
+        } else {
+            // Miss (or stale record) — do the real work.
+            let injected = inject_slots(&html, slots, &page_path);
+            let residual = residual_known_slot_markers(&injected);
+            if !residual.is_empty() {
+                residual_files += 1;
+                log_residual_slot_markers(&page_path, &residual);
             }
-            receipts.push(SlotInjectionReceipt {
-                page_path,
-                manifest_hash: record.manifest_hash,
-                content_oid: Some(record.content_oid),
-            });
-            continue;
-        }
-
-        // Miss (or stale record) — do the real work.
-        let injected = inject_slots(&html, slots, &page_path);
-        let residual = residual_known_slot_markers(&injected);
-        if !residual.is_empty() {
-            residual_files += 1;
-            log_residual_slot_markers(&page_path, &residual);
-        }
-        let changed_page = injected != html;
-        if changed_page {
-            // `write_output`, not `fs::write`: `dir` is `.moss/build.nosync/staging/`,
-            // and an `O_TRUNC` open of a page the sync client evicted between
-            // render and injection fails EDEADLK.
-            crate::build::io_utils::write_output(entry.path(), injected.as_bytes())
-                .map_err(|e| io_stop(root, "write injected page", entry.path(), e))?;
-            rewritten += 1;
-        }
-        // The manifest records the bytes the SITE will serve, which are the
-        // stripped ones — computed here, from the bytes in hand, because
-        // this is the last moment anything holds them.
-        let manifest_hash = crate::build::assets::paths::compute_binary_hash(
-            &crate::build::ship::apply_transform(
-                crate::build::ship::transform_for(&page_path),
-                injected.as_bytes(),
-            ),
-        );
-        let content_oid = store_failures.store(object_store, injected.as_bytes());
-        // Cache only what a hit can serve whole: a record without its blob would
-        // have to be a miss again anyway.
-        if let Some(oid) = &content_oid {
-            write_slot_inject_record(
-                object_store,
-                transform_cache,
-                &source_oid,
-                html.len() as u64,
-                &params,
-                &SlotInjectRecord {
-                    content_oid: oid.clone(),
-                    manifest_hash: manifest_hash.clone(),
-                    rewritten: changed_page,
-                    residual: residual.iter().map(|s| s.to_string()).collect(),
-                },
+            let changed_page = injected != html;
+            // The manifest records the bytes the SITE will serve, which are the
+            // stripped ones — computed here, from the bytes in hand, because
+            // this is the last moment anything holds them.
+            let manifest_hash = crate::build::assets::paths::compute_binary_hash(
+                &crate::build::ship::apply_transform(
+                    crate::build::ship::transform_for(&page_path),
+                    injected.as_bytes(),
+                ),
             );
+            let content_oid = store_failures.store(object_store, injected.as_bytes());
+            // Cache only what a hit can serve whole: a record without its blob would
+            // have to be a miss again anyway.
+            if let Some(oid) = &content_oid {
+                write_slot_inject_record(
+                    object_store,
+                    transform_cache,
+                    &source_oid,
+                    html.len() as u64,
+                    &params,
+                    &SlotInjectRecord {
+                        content_oid: oid.clone(),
+                        manifest_hash: manifest_hash.clone(),
+                        rewritten: changed_page,
+                        residual: residual.iter().map(|s| s.to_string()).collect(),
+                    },
+                );
+            }
+            (changed_page, manifest_hash, content_oid, Some(injected))
+        };
+        rewritten += changed as usize;
+        if changed || !in_stage {
+            written += place_page(root, &path, content_oid.as_deref(), injected.as_deref(), object_store, staged)? as usize;
         }
         receipts.push(SlotInjectionReceipt { page_path, manifest_hash, content_oid });
     }
@@ -678,9 +690,10 @@ pub fn inject_slots_into_directory_cached(
     let total = t_pass.elapsed();
     log::info!(
         target: "slots",
-        "slot injection: {} html scanned, {} rewritten, {} with unresolved markers",
+        "slot injection: {} html scanned, {} rewritten, {} written, {} with unresolved markers",
         scanned,
         rewritten,
+        written,
         residual_files,
     );
     log::info!(

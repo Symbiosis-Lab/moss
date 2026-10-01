@@ -211,6 +211,11 @@ pub struct PendingManifest {
     /// path between this build sealing its hash and shipping its bytes. An
     /// entry with no source here ships from `stage_dir` exactly as before.
     ship_sources: HashMap<String, ShipSource>,
+    /// Rendered pages not yet written to the stage, by output path. The slot
+    /// pass takes them and writes each page once, final bytes only; a later
+    /// registration of the same path drops its entry, since that writer put its
+    /// own bytes in the stage.
+    unwritten_pages: std::collections::BTreeMap<String, String>,
 }
 
 /// Is this `SiteHashes.sources` key in the page half?
@@ -330,6 +335,7 @@ impl PendingManifest {
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
             ship_sources: HashMap::new(),
+            unwritten_pages: std::collections::BTreeMap::new(),
         }
     }
 
@@ -395,6 +401,17 @@ impl PendingManifest {
     pub fn register(&mut self, rel_path: &crate::build::served_path::ServedPath, bytes: &[u8], bucket: HashBucket) {
         let hash = compute_binary_hash(bytes);
         self.register_with_hash(rel_path.as_str().to_string(), &hash, bucket, None);
+    }
+
+    /// [`register`][Self::register] a rendered page and leave its stage write to
+    /// the slot pass, which takes it with [`take_unwritten_pages`][Self::take_unwritten_pages].
+    pub(crate) fn register_unwritten_page(&mut self, rel_path: &crate::build::served_path::ServedPath, html: String) {
+        self.register(rel_path, html.as_bytes(), HashBucket::Files);
+        self.unwritten_pages.insert(rel_path.as_str().to_string(), html);
+    }
+
+    pub(crate) fn take_unwritten_pages(&mut self) -> std::collections::BTreeMap<String, String> {
+        std::mem::take(&mut self.unwritten_pages)
     }
 
     /// Apply a manifest registration from a pre-computed xxHash3 hex digest.
@@ -689,6 +706,7 @@ impl PendingManifest {
         // entry from the previous build that this build did not re-register
         // is dropped. See module docs.
         self.touched.insert(rel_path.clone());
+        self.unwritten_pages.remove(&rel_path);
 
         // The last registration of a path wins, its CAS object included: an oid
         // is valid only for the (path, hash) pair it was registered with. A

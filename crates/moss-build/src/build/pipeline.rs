@@ -1445,10 +1445,11 @@ fn build_inner(
         }
     }
 
-    // Step 3b: Resolve and inject slots into the marked stage BEFORE hash
-    // comparison, ship_phase, or manifest seal. The rendered page loop above
-    // registers marker-bearing bytes; this phase rewrites those entries so all
-    // downstream artifact boundaries see the final HTML bytes.
+    // Step 3b: Resolve and inject slots into the rendered pages BEFORE hash
+    // comparison, ship_phase, or manifest seal. The render above registers
+    // marker-bearing bytes and leaves the pages for this phase to write, which
+    // rewrites those entries so all downstream artifact boundaries see the
+    // final HTML bytes.
     let resolved_slots = match slot_resolver {
         Some(resolve) => resolve(&documents, &site_lang, site_comments)?,
         None => ResolvedSlots::empty(),

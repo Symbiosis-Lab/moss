@@ -362,6 +362,19 @@ fn serde_roundtrip_per_page() {
 
 // --- inject_slots_into_directory_cached tests ---
 
+/// The pass over pages a test already put in the stage `dir`, with nothing
+/// rendered in memory and no record of earlier links.
+fn inject_staged(
+    dir: &std::path::Path,
+    slots: &ResolvedSlots,
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+) -> Result<Vec<SlotInjectionReceipt>, BuildStopped> {
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
+    let mut staged = StagedLinks::load(&paths, "pages", dir);
+    inject_slots_into_directory_cached(dir, dir, slots, objects, transforms, Default::default(), &mut staged)
+}
+
 fn slot_test_cache(
     tmp: &std::path::Path,
 ) -> (
@@ -419,6 +432,35 @@ fn cached_slot_record(
         .and_then(|record_oid| read_slot_inject_record(objects, &record_oid))
 }
 
+/// `jupyter/` in the stage is JupyterLite's own third-party HTML, which the pass
+/// must not rewrite. A page moss rendered from the author's markdown is not that,
+/// wherever it lives, so it gets its slots under `jupyter/` like anywhere else.
+#[test]
+fn jupyterlite_html_is_left_alone_while_a_rendered_page_under_jupyter_is_filled() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let marked = "<html><head><!-- slot:head-end --></head><body></body></html>";
+    let lab = dir.path().join("jupyter/lab/index.html");
+    std::fs::create_dir_all(lab.parent().unwrap()).unwrap();
+    std::fs::write(&lab, marked).unwrap();
+    let rendered = std::collections::BTreeMap::from([("jupyter/note/index.html".to_string(), marked.to_string())]);
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().join(".moss"));
+    let mut staged = StagedLinks::load(&paths, "pages", dir.path());
+    let slots = head_end_slots("<style>h1{}</style>");
+
+    let receipts = inject_slots_into_directory_cached(
+        dir.path(), dir.path(), &slots, &objects, &transforms, rendered, &mut staged,
+    )
+    .unwrap();
+
+    assert_eq!(std::fs::read_to_string(&lab).unwrap(), marked, "JupyterLite's page was rewritten");
+    let note = std::fs::read_to_string(dir.path().join("jupyter/note/index.html")).unwrap();
+    assert!(note.contains("<style>h1{}</style>") && !note.contains("<!-- slot:"), "the rendered page was not filled: {note}");
+    let pages: Vec<&str> = receipts.iter().map(|r| r.page_path.as_str()).collect();
+    assert_eq!(pages, ["jupyter/note/index.html"]);
+}
+
 #[test]
 fn inject_slots_into_directory_cached_hit_matches_miss_output_byte_for_byte() {
     let src_dir_a = tempfile::tempdir().unwrap();
@@ -432,11 +474,11 @@ fn inject_slots_into_directory_cached_hit_matches_miss_output_byte_for_byte() {
 
     // Miss: dir A, empty cache.
     let changed_a =
-        inject_slots_into_directory_cached(src_dir_a.path(), src_dir_a.path(), &slots, &objects, &transforms)
+        inject_staged(src_dir_a.path(), &slots, &objects, &transforms)
             .unwrap();
     // Hit: dir B, same slots, same relative page path, warm cache.
     let changed_b =
-        inject_slots_into_directory_cached(src_dir_b.path(), src_dir_b.path(), &slots, &objects, &transforms)
+        inject_staged(src_dir_b.path(), &slots, &objects, &transforms)
             .unwrap();
 
     assert_eq!(changed_a, changed_b);
@@ -464,7 +506,7 @@ fn inject_slots_receipt_hashes_the_stripped_bytes_not_the_staged_ones() {
     let slots = head_end_slots("<style>h1{}</style>");
 
     let changed =
-        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms)
+        inject_staged(dir.path(), &slots, &objects, &transforms)
             .unwrap();
 
     let staged = std::fs::read(dir.path().join("index.html")).unwrap();
@@ -505,7 +547,7 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
     std::fs::write(dir.path().join("index.html"), html).unwrap();
     let slots = ResolvedSlots::empty();
     let run = || {
-        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap()
+        inject_staged(dir.path(), &slots, &objects, &transforms).unwrap()
     };
 
     let cold = run();
@@ -568,7 +610,7 @@ fn a_cold_pass_caches_a_record_that_matches_the_receipt_it_returned() {
     let slots = head_end_slots("<style>h1{}</style>");
 
     let receipts =
-        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap();
+        inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
 
     assert_eq!(receipts.len(), 2);
     for (page, raw, injected) in [("marked.html", marked, true), ("plain.html", plain, false)] {
@@ -606,7 +648,7 @@ fn the_record_a_cold_pass_wrote_is_what_the_next_pass_ships() {
     std::fs::write(&page, render).unwrap();
     let slots = head_end_slots("<style>h1{}</style>");
     let run = || {
-        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap()
+        inject_staged(dir.path(), &slots, &objects, &transforms).unwrap()
     };
 
     let cold = run();
@@ -642,7 +684,7 @@ fn a_warm_no_op_page_is_left_untouched_in_the_stage() {
     std::fs::write(&page, "<html><head></head><body>no markers</body></html>").unwrap();
     let slots = ResolvedSlots::empty();
     let run = || {
-        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap()
+        inject_staged(dir.path(), &slots, &objects, &transforms).unwrap()
     };
 
     let cold = run();
@@ -723,7 +765,7 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
 
     let first = slots_with_eight_keys_per_map("");
     let cold =
-        inject_slots_into_directory_cached(dir.path(), dir.path(), &first, &objects, &transforms).unwrap();
+        inject_staged(dir.path(), &first, &objects, &transforms).unwrap();
     let oid = cold[0].content_oid.clone().expect("a no-op page still gets a blob");
     let (source_oid, params) = slot_cache_key(html, "index.html", &first);
 
@@ -743,7 +785,7 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
         );
         let rebuilt = slots_with_eight_keys_per_map("");
         let warm =
-            inject_slots_into_directory_cached(dir.path(), dir.path(), &rebuilt, &objects, &transforms).unwrap();
+            inject_staged(dir.path(), &rebuilt, &objects, &transforms).unwrap();
         assert_eq!(
             warm[0].manifest_hash, "SENTINEL",
             "build {build}: identical slot content, rebuilt from scratch, missed the cache"
@@ -769,7 +811,7 @@ fn a_record_naming_a_collected_blob_is_a_miss_that_stores_it_again() {
     let slots = ResolvedSlots::empty();
 
     let cold =
-        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap();
+        inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
     let oid = cold[0].content_oid.clone().unwrap();
     let cached = cached_slot_record(&objects, &transforms, html, "index.html", &slots)
         .expect("fixture: the cold pass cached its page");
@@ -782,7 +824,7 @@ fn a_record_naming_a_collected_blob_is_a_miss_that_stores_it_again() {
     );
 
     let warm =
-        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap();
+        inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
 
     assert_eq!(warm[0].content_oid.as_deref(), Some(oid.as_str()));
     assert!(objects.get_path(&oid).is_some(), "the miss path must put the blob back");
@@ -810,8 +852,7 @@ fn an_unwritable_object_store_costs_a_page_its_oid_not_the_pass() {
     .unwrap();
     std::fs::write(dir.path().join("plain.html"), "<html><body>no markers</body></html>").unwrap();
 
-    let mut receipts = inject_slots_into_directory_cached(
-        dir.path(),
+    let mut receipts = inject_staged(
         dir.path(),
         &head_end_slots("<style>h1{}</style>"),
         &objects,

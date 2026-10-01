@@ -247,10 +247,13 @@ pub fn generate_blocking_content(
     // care about it. `pipeline::run`'s real build path calls
     // `generate_blocking_content_for_build` instead, so this name's contract
     // ("just render the site") never quietly changed under existing callers.
-    generate_blocking_content_for_build(
+    let output = generate_blocking_content_for_build(
         root, project_structure, output_dir, services, progress_sender, emit_source_lines,
         site_config, pending, false,
-    )
+    )?;
+    // No slot pass follows this entry point, so its pages are written as rendered.
+    crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages())?;
+    Ok(output)
 }
 
 /// Same as [`generate_blocking_content`], with the synchronous link-metadata
@@ -260,7 +263,8 @@ pub fn generate_blocking_content(
 /// interactive rebuild must not block on the network, so it keeps relying on
 /// `spawn_native_process_sync`'s background task instead. The only caller
 /// that needs this distinction is `pipeline::run`; every other caller wants
-/// [`generate_blocking_content`]'s plain default.
+/// [`generate_blocking_content`]'s plain default. Unlike that one, it leaves the
+/// rendered pages in `pending` for the slot pass to write.
 pub fn generate_blocking_content_for_build(
     root: &crate::vault::paths::VaultRoot,
     project_structure: &ProjectStructure,
@@ -1761,7 +1765,7 @@ pub fn generate_blocking_content_for_build(
         // own HTML + OG PNGs to distinct paths and reads only immutable inputs.
         struct RenderedPage {
             url_sp: ServedPath,
-            html_bytes: Vec<u8>,
+            html: String,
             og_cards: Vec<crate::build::page::og_card::CardOutput>,
             source_mapping: Option<(String, ServedPath)>,
             /// This page's title/date, registered into `SiteHashes::page_meta`
@@ -1895,10 +1899,6 @@ pub fn generate_blocking_content_for_build(
             .par_iter()
             .map(|doc| {
                 let output_file_path = output_dir.join(&doc.url_path);
-                if let Some(parent) = output_file_path.parent() {
-                    crate::build::io_utils::create_output_dir_all(parent)
-                        .map_err(|e| format!("Failed to create directory: {}", e))?;
-                }
                 let mut og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
                 let html_page = generate_html_collect_og(
                     Some(doc),
@@ -1928,7 +1928,7 @@ pub fn generate_blocking_content_for_build(
                     &scripts,
                 )?;
 
-                // Snapshot BEFORE the write below replaces the file: these are
+                // Snapshot BEFORE the slot pass replaces the file: these are
                 // the previous build's FINAL (post-slot-injection) bytes, and
                 // they are the only copy of them that survives this build.
                 let carried_previous = if verify_shadow.contains(&doc.url_path) {
@@ -1947,8 +1947,6 @@ pub fn generate_blocking_content_for_build(
                     None
                 };
 
-                crate::build::io_utils::write_output_if_changed(&output_file_path, html_page.as_bytes())
-                    .map_err(|e| format!("Failed to write HTML file: {}", e))?;
                 let url_sp = ServedPath::from_source(&doc.url_path)
                     .map_err(|e| format!("Failed to construct article URL path: {}", e))?;
                 let source_mapping = match doc.source_path.as_ref() {
@@ -1983,7 +1981,7 @@ pub fn generate_blocking_content_for_build(
 
                 Ok(RenderedPage {
                     url_sp,
-                    html_bytes: html_page.into_bytes(),
+                    html: html_page,
                     og_cards: og_outputs.into_cards(),
                     source_mapping,
                     page_meta,
@@ -2022,7 +2020,7 @@ pub fn generate_blocking_content_for_build(
                 for card in &page.og_cards {
                     card.register(pending);
                 }
-                pending.register(&page.url_sp, &page.html_bytes, HashBucket::Files);
+                pending.register_unwritten_page(&page.url_sp, page.html);
                 // Register source→output mapping so the file watcher's rename-hint
                 // resolver can find the output path without re-deriving slug rules.
                 // See `build::watch::build_rebuild_event_with_renames`.
@@ -2617,13 +2615,9 @@ pub fn generate_blocking_content_for_build(
 
             let html_page = processor.process(shell_type, vars);
 
-            // Site 5 (Pattern A): emit auto-generated folder index.html.
-            // ctx.emit creates parent dirs, writes the file, and registers in pending (SHA-256).
             let auto_sp = ServedPath::from_source(&auto_url_path)
                 .map_err(|e| format!("Failed to construct auto-index path: {}", e))?;
-            BuildContext::for_render(output_dir, pending)
-                .emit(&auto_sp, html_page.as_bytes(), HashBucket::Files)
-                .map_err(|e| format!("Failed to emit auto-generated index: {}", e))?;
+            pending.register_unwritten_page(&auto_sp, html_page);
 
             // …and its QR code, here rather than in the loop below, because a
             // synthetic index has no entry in `documents` for that loop to walk.
@@ -2901,9 +2895,7 @@ pub fn generate_blocking_content_for_build(
                 card.register(pending);
             }
 
-            crate::build::io_utils::write_output(&output_dir.join("index.html"), index_html.as_bytes())
-                .map_err(|e| format!("Failed to write index.html: {}", e))?;
-            pending.register(&homepage_index_sp, index_html.as_bytes(), HashBucket::Files);
+            pending.register_unwritten_page(&homepage_index_sp, index_html);
         }
         // Register source→output for the homepage's source markdown (e.g.
         // index.md, readme.md, or a self-named home file) so the rename-hint
@@ -3146,9 +3138,7 @@ pub fn generate_blocking_content_for_build(
                 }
                 let subscribe_sp = ServedPath::from_source(&rel_path)
                     .map_err(|e| format!("Failed to construct subscribe page path: {}", e))?;
-                BuildContext::for_render(output_dir, pending)
-                    .emit(&subscribe_sp, html.as_bytes(), HashBucket::Files)
-                    .map_err(|e| format!("Failed to emit subscribe landing page: {}", e))?;
+                pending.register_unwritten_page(&subscribe_sp, html);
             }
         }
     }
@@ -3291,19 +3281,10 @@ pub fn generate_blocking_content_for_build(
                 &scripts.tag("search", &layout_config.assets, &media_path_resolver),
             );
 
-            // Create directory and write page
-            let page_dir = output_dir.join(page_slug);
-            crate::build::io_utils::create_output_dir_all(&page_dir)
-                .map_err(|e| format!("Failed to create {} directory: {}", page_slug, e))?;
-
-            // Site 14d (Pattern A): emit {page_slug}/index.html (media pages loop).
-            // ctx.emit creates parent dirs, writes, and registers in pending (SHA-256).
             let page_url = format!("{}/index.html", page_slug);
             let page_sp = ServedPath::from_source(&page_url)
                 .map_err(|e| format!("Failed to construct media page path: {}", e))?;
-            BuildContext::for_render(output_dir, pending)
-                .emit(&page_sp, page_html.as_bytes(), HashBucket::Files)
-                .map_err(|e| format!("Failed to emit {} page: {}", page_slug, e))?;
+            pending.register_unwritten_page(&page_sp, page_html);
             sitemap_pages.insert(page_url);
 
             page_count += 1;

@@ -6566,3 +6566,71 @@ fn the_sitemap_lists_static_pages_and_notebooks_but_never_stubs() {
         }
     }
 }
+
+/// A warm build of an unchanged site writes no page to the stage: the render
+/// leaves its pages in memory, the slot pass is their one writer, and it skips
+/// a stage file its staged-link record vouches already holds the page's final
+/// bytes. Every stage write replaces the file (temp and rename, or a clone
+/// renamed in), so any write at all moves the page's inode and mtime.
+#[test]
+fn an_unchanged_warm_build_writes_no_page_to_the_stage() {
+    use crate::build::enhance::{EnhanceContent, EnhanceResult};
+
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("essay.md"), "---\ntitle: Essay\n---\n\nAn essay.\n").unwrap();
+    // `notes/` has no index of its own, so the build synthesizes one.
+    fs::create_dir_all(test_dir.join("notes")).unwrap();
+    fs::write(test_dir.join("notes/one.md"), "---\ntitle: One\n---\n\nA note.\n").unwrap();
+    // A photograph makes the build emit the photography collection page, and a
+    // site id makes it emit the subscribe landing pages.
+    fs::write(test_dir.join("gallery.md"), "# Gallery\n\n![Sunset](sunset.jpg)\n<!-- photography -->\n").unwrap();
+    fs::create_dir_all(test_dir.join(".moss")).unwrap();
+    fs::write(test_dir.join(".moss/state.toml"), "[deployment]\nsite_id = \"test-site\"\n").unwrap();
+    let mut slots = ResolvedSlots::empty();
+    slots.merge(
+        &EnhanceResult {
+            success: true,
+            slots: std::collections::HashMap::from([(
+                "head-end".to_string(),
+                EnhanceContent::Static { html: "<meta name=\"injected\">".to_string() },
+            )]),
+        },
+        0,
+        "test",
+    );
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    let staged_pages = || -> std::collections::BTreeMap<String, crate::build::stat::FileStat> {
+        walkdir::WalkDir::new(&staging)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "html"))
+            .map(|e| {
+                let html = fs::read_to_string(e.path()).unwrap();
+                assert!(!html.contains("<!-- slot:"), "{}: not its final bytes", e.path().display());
+                let key = e.path().strip_prefix(&staging).unwrap().to_string_lossy().into_owned();
+                (key, crate::build::stat::FileStat::of(&fs::metadata(e.path()).unwrap()))
+            })
+            .collect()
+    };
+
+    build_test(folder_path, None, None, None, None, &slots).expect("cold build");
+    let cold = staged_pages();
+    assert!(fs::read_to_string(staging.join("index.html")).unwrap().contains("<meta name=\"injected\">"));
+    for page in [
+        "index.html",
+        "essay/index.html",
+        "notes/index.html",
+        "notes/one/index.html",
+        "photography/index.html",
+        "subscribe/confirmed/index.html",
+    ] {
+        assert!(cold.contains_key(page), "premise: {page} is staged, in {:?}", cold.keys());
+    }
+    build_test(folder_path, None, None, None, None, &slots).expect("warm build");
+    let warm = staged_pages();
+
+    let rewritten: Vec<&String> = cold.keys().filter(|page| cold.get(*page) != warm.get(*page)).collect();
+    assert!(rewritten.is_empty(), "an unchanged warm build rewrote {rewritten:?}");
+}

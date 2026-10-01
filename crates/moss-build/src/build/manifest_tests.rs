@@ -1333,3 +1333,20 @@ fn a_carried_zero_subsecond_mtime_its_own_clock_cannot_vouch_for_is_dropped() {
     assert_eq!(nanos("precise.png"), Some(5));
     assert!(m.inner.captured_at > Some(10_000), "premise: the new build's clock replaced the old one");
 }
+
+/// A page registered unwritten is the slot pass's to write only until something
+/// else registers that path: that writer has put its own bytes in the stage,
+/// and the slot pass writing the earlier render over them would undo it.
+#[test]
+fn a_later_registration_drops_the_unwritten_copy_of_its_path() {
+    let sp = |p: &str| crate::build::served_path::ServedPath::from_source(p).unwrap();
+    let mut m = empty_manifest();
+    m.register_unwritten_page(&sp("photography/index.html"), "<p>from the render</p>".to_string());
+    m.register_unwritten_page(&sp("essay/index.html"), "<p>essay</p>".to_string());
+
+    m.register(&sp("photography/index.html"), b"<p>from a later emit</p>", HashBucket::Files);
+
+    let unwritten = m.take_unwritten_pages();
+    assert_eq!(unwritten.keys().collect::<Vec<_>>(), ["essay/index.html"]);
+    assert!(m.take_unwritten_pages().is_empty(), "taking them leaves none behind");
+}

@@ -46,16 +46,22 @@ pub fn apply_to_stage_and_manifest(
     // first point that has both. See `build::emit::feature_styles`.
     crate::build::emit::feature_styles::emit(slots.feature_styles(), stage_dir, pending)?;
 
+    // The record of which blob each staged page was linked from, so a page
+    // whose stage file already holds its final bytes is not written again.
+    let mut staged = crate::build::lifecycle::cas_heal::StagedLinks::load(paths, "pages", stage_dir);
     let receipts = crate::build::enhance::inject_slots_into_directory_cached(
         paths.project_root(),
         stage_dir,
         slots,
         &object_store,
         &transform_cache,
+        pending.take_unwritten_pages(),
+        &mut staged,
     )
     // `with_context`, not `format!`: re-stringifying would discard the deferred
     // verdict. `BuildStopped` has no `Display`, so that mistake cannot compile.
     .map_err(|e| e.with_context("Slot injection failed on site-stage"))?;
+    staged.save();
 
     // Takes what the injection pass REPORTS, never what a read of the stage says
     // is there. The hash and the CAS object arrive in the receipt because the
@@ -87,6 +93,20 @@ pub fn apply_to_stage_and_manifest(
         verification.compare_final_bytes(stage_dir);
     }
 
+    Ok(())
+}
+
+/// Write rendered pages to the stage as rendered, slot markers and all: what
+/// an entry point with no slot pass after it leaves.
+pub(crate) fn write_as_rendered(
+    stage_dir: &Path,
+    pages: std::collections::BTreeMap<String, String>,
+) -> Result<(), BuildStopped> {
+    for (page_path, html) in pages {
+        let path = stage_dir.join(&page_path);
+        crate::build::io_utils::write_output_if_changed(&path, html.as_bytes())
+            .map_err(|e| format!("Failed to write HTML file {}: {}", path.display(), e))?;
+    }
     Ok(())
 }
 
