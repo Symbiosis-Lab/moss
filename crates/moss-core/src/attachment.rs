@@ -16,10 +16,10 @@
 //! stem-indexed and location-independent, so `![[photo.png]]` resolves
 //! wherever the file lands — changing the setting never breaks existing links.
 //!
-//! The rules live here, in the pure crate, because two callers on opposite
-//! sides of a crate boundary need them: the editor (the desktop app) resolves where
-//! to *write* an image, and the build (`moss-build`) asks which scanned
-//! directories are storage rather than sections of the site.
+//! The rules live here, in the pure crate, because two callers in `moss-build`
+//! need them: the editor resolves where to *write* an image, and the build
+//! asks which scanned directories are storage rather than sections of the
+//! site.
 
 /// Reject values that would escape the project: absolute paths and any `..`
 /// component. Returns the reason so both the save command and the load-time

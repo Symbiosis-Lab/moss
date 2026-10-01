@@ -55,8 +55,8 @@ use pulldown_cmark::Event;
 /// caller passes the range *inside* the heading tags (exclusive of the
 /// matching `Event::End(TagEnd::Heading)`).
 ///
-/// Mirrors production's `transform_events` heading-text collection in
-/// the desktop app's markdown pipeline. Inline HTML
+/// Mirrors the pre-AST-migration `transform_events` pass's heading-text
+/// collection byte-for-byte. Inline HTML
 /// (`Event::InlineHtml` / `Event::Html`) is intentionally skipped, so
 /// `# HELLO,<br>AND GOODBYE` slugs as `HELLO,AND GOODBYE` with no `<br>`
 /// in the anchor. Link and image *labels* are captured: pulldown walks the

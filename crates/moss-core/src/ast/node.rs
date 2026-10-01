@@ -231,8 +231,8 @@ pub enum Block {
     /// for symmetry with [`crate::ast::document::BlockMeta::source_line`]).
     ///
     /// Phase 4 source-lines followup (2026-05-28): added because the
-    /// preview's scroll-sync (cm-scroll-sync via
-    /// the desktop app's iframe bridge) interpolates editor positions
+    /// preview's scroll-sync (the desktop editor's cm-scroll-sync, through
+    /// moss-build's iframe bridge) interpolates editor positions
     /// proportionally between annotated DOM elements. A 30-item list
     /// spanning 50 source lines without per-`<li>` annotations forces
     /// interpolation between the outer `<ul>` and the next top-level

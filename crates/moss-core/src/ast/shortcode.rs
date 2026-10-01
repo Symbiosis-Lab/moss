@@ -39,7 +39,7 @@ pub enum Shortcode {
     /// Optional `{.classname}` extra classes attach to the wrapping div.
     ///
     /// URLs flow through [`Url::Unresolved`] at parse time;
-    /// [`crate::ast::visit::visit_urls_mut`] (or the desktop app's
+    /// [`crate::ast::visit::visit_urls_mut`] (or moss-build's
     /// `apply_typed_shortcodes`) classifies them into [`Url::Resolved`]
     /// before rendering. The resolver-bypass class is closed by
     /// construction: `RenderHooks::render_shortcode` reads `Url::Resolved`,
@@ -325,7 +325,7 @@ pub struct ApplyShortcode {
 ///
 /// Parameters parsed at shortcode-extract time; the query runs at render
 /// time against the full post set. Renderer lives in
-/// the desktop app's `recent.rs`.
+/// moss-build's `recent.rs`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecentShortcode {
     /// `since="YYYY-MM-DD"` — posts on or after this date. Stored as the

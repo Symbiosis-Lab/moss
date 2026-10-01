@@ -6,7 +6,7 @@
 //! # Phase 4: render_document IS the production rendering path (target)
 //!
 //! Today (2026-05-27) this function runs as a parallel observer via
-//! `observe_typed_ast` in the desktop app's markdown pipeline;
+//! `observe_typed_ast` in moss-build's markdown pipeline;
 //! production HTML still comes from `pulldown_cmark::html::push_html` over
 //! the event stream. Phase 4 PR7a flips this: `render_document` becomes
 //! the production renderer, `html::push_html` is no longer called in the
@@ -181,7 +181,7 @@ pub fn render_document<H: RenderHooks>(doc: &Document, hooks: &H) -> String {
 ///
 /// A host that serializes a document one top-level block at a time (so it can
 /// record where each block's output begins and ends, instead of scanning the
-/// finished string for structure later — see the desktop app's `BodyPlan`)
+/// finished string for structure later — see moss-build's `BodyPlan`)
 /// must go through this rather than [`render_blocks`]: the latter has
 /// no meta vec and would silently drop every `data-source-line` annotation.
 ///
@@ -204,7 +204,7 @@ pub fn render_block_with_meta<H: RenderHooks + ?Sized>(
 }
 
 /// Render a sequence of blocks to HTML. Used by shortcode-body renderers —
-/// grid cells and, via the desktop app's `render_hero_html_typed` (Phase 4 PR4.5),
+/// grid cells and, via moss-build's `render_hero_html_typed` (Phase 4 PR4.5),
 /// the hero overlay — to render a `Vec<Block>` that didn't come from a full
 /// `Document`. [`render_document`] does NOT call this: it walks its blocks
 /// and meta in lockstep, calling `render_block` directly.
@@ -768,13 +768,13 @@ fn hoist_emptied(children: &[Block], rendered: &str) -> bool {
 /// Append ` data-source-line="N"` to `out` when `source_line` is `Some`.
 /// No-op otherwise.
 ///
-/// Used at every top-level block's opening tag arm so the preview's
-/// `cm-scroll-sync` (in the desktop app's iframe bridge) can locate
+/// Used at every top-level block's opening tag arm so the desktop editor's
+/// `cm-scroll-sync`, through moss-build's iframe bridge, can locate
 /// the DOM element that corresponds to a given editor source line.
 ///
 /// Matches the legacy `transform_events` emit byte shape — leading space,
 /// double-quoted attribute value, decimal integer — verified against
-/// the desktop app's `ship.rs::apply_strip_removes_data_source_line`
+/// moss-build's `ship.rs::apply_strip_removes_data_source_line`
 /// which scrubs this exact pattern from the ship-stage output.
 fn push_source_line_attr(out: &mut String, source_line: Option<usize>) {
     if let Some(n) = source_line {
@@ -898,7 +898,7 @@ fn render_inline<H: RenderHooks + ?Sized>(
         Inline::Other(html) => {
             // A math node is an `Inline::Other` carrying the P1
             // escaped-source `<code class="moss-math">` payload. Route it
-            // through `render_math` so a typesetting hook (the desktop app's
+            // through `render_math` so a typesetting hook (moss-build's
             // `PipelineHooks`) can replace it with an SVG; the default hook
             // re-emits `html` verbatim, so non-pipeline renders are byte-
             // identical to P1. Any non-math `Inline::Other` falls straight

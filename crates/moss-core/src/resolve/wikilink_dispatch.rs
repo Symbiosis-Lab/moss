@@ -1,9 +1,9 @@
 //! Phase 3: Stage 2 entry point for wikilink embed dispatch.
 //!
 //! This module is the sole dispatcher for `[[…]]` / `![[…]]` events
-//! emitted by pulldown-cmark with `Options::ENABLE_WIKILINKS`. The
-//! desktop app's markdown pipeline `transform_events` calls
-//! [`dispatch_wikilink_embed_with_registry`] once per WikiLink-typed
+//! emitted by pulldown-cmark with `Options::ENABLE_WIKILINKS`. This
+//! crate's own AST visitor ([`mod@crate::ast::dispatch_wikilink_embeds`])
+//! calls [`dispatch_wikilink_embed_with_registry`] once per WikiLink-typed
 //! event, swallows the event range, and substitutes the renderer-
 //! produced HTML.
 //!
@@ -310,7 +310,7 @@ fn build_anchor(section: Option<&str>) -> String {
 ///
 /// This function compiles and is unit-tested, but no caller wires it in
 /// at runtime yet. PR2 enables `ENABLE_WIKILINKS` and adds the call from
-/// the desktop app's `pipeline.rs::transform_events`.
+/// this crate's own `ast::dispatch_wikilink_embeds` visitor.
 pub fn dispatch_wikilink_embed(
     dest_url: &str,
     pothole: Option<&str>,
@@ -953,7 +953,7 @@ enum SynthKind {
 /// Classify a file extension into a [`SynthKind`] when the dispatcher should
 /// emit final HTML directly. Returns `None` for image (`png`/`jpg`/...) —
 /// which keeps its inline-markdown round-trip — and for deferred kinds
-/// (`md`/`ipynb`/`csv`/`tsv`) which still need the desktop app's post-passes.
+/// (`md`/`ipynb`/`csv`/`tsv`) which still need moss-build's post-passes.
 ///
 /// The built-in renderers and their `EmbedRenderer::extensions()` slices
 /// were deleted as unreachable; `ext_kind::reference_kind_for_ext` is the

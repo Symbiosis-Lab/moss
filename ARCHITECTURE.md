@@ -10,6 +10,8 @@ What each crate in this repository is for, what it may depend on, and where new 
 | `moss-build` | everything that runs without a window: the build pipeline (scan → render → emit), the preview server, the publish path, the plugin engine, the HTTP client for the hosting service | any GUI toolkit, direct or transitive (no Tauri, no wry, no webview) |
 | `moss-cli` | the `moss` binary | anything beyond `moss-build` — it links `moss-build` only, never `moss-core` directly |
 
+`moss-core` carries no rendering engine of its own: it is published to crates.io (`publish = true` in its `Cargo.toml`), so every dependency it adds is a commitment every consumer's `Cargo.lock` inherits, and an engine with embedded fonts or a rasterizer — math typesetting (RaTeX, pinned in `moss-build`'s `Cargo.toml`) and the place map (resvg/usvg plus an embedded tile pack) — stays out; both live in `moss-build` instead and reach page output through `moss-core`'s `RenderHooks` trait, whose `render_math` default just emits the plain escaped-source fallback rather than typesetting anything.
+
 ## Dependency direction
 
 `moss-core ← moss-build ← moss-cli`. Each crate depends only on the one(s) to its left; nothing here depends back on the CLI or on any consumer.

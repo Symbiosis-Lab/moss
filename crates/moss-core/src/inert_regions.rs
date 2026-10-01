@@ -3,7 +3,7 @@
 //! moss runs several scanners over raw markdown *before* pulldown-cmark ever
 //! sees it — `:::shortcode` extraction ([`crate::ast::shortcode_extract`]),
 //! transclusion/folder-embed lowering ([`crate::resolve`]), CriticMarkup
-//! accept and `%%comment%%` stripping (the desktop app's `html_post`). Each of them
+//! accept and `%%comment%%` stripping (moss-build's `html_post`). Each of them
 //! has to know which byte ranges are *inert*: regions where author text that
 //! merely looks like syntax must be left completely alone.
 //!
@@ -52,7 +52,7 @@
 //!
 //! Not yet consolidated onto this module (each still carries a fence-only
 //! scan): [`crate::resolve::block_refs`], [`crate::ast::editor_scan`], and
-//! the desktop app's `build::scan::scan`. They should move here as they are next
+//! moss-build's `build::scan::scan`. They should move here as they are next
 //! touched. [`crate::resolve::md_extract`] moved here 2026-08-03.
 
 use std::ops::Range;
@@ -274,7 +274,7 @@ impl InertRegions {
     ///
     /// The result has the same byte length and the same line structure as the
     /// input, so a byte offset found in the mask indexes the original — the
-    /// pattern the desktop app's CriticMarkup pass relies on (match on the mask,
+    /// pattern moss-build's CriticMarkup pass relies on (match on the mask,
     /// read the capture out of the original).
     pub fn mask(&self, markdown: &str) -> String {
         let mut out = markdown.as_bytes().to_vec();

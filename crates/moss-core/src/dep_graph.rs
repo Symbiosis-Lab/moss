@@ -7,7 +7,7 @@
 //! from file paths alone (zero content reads, see `content_graph.rs`)
 //! while `DepGraph` is built from parsed per-page edges — same
 //! type-vs-populator split as `ContentGraph` itself (the type here; the
-//! `Vec<ParsedDocument>` → edges glue lives in the desktop app, which is not a
+//! `Vec<ParsedDocument>` → edges glue lives in moss-build, which is not a
 //! moss-core dependency).
 //!
 //! Rebuilt fresh every build from scratch — cheap (a handful of `HashMap`

@@ -11,10 +11,10 @@
 //! fence tracking is needed.
 //!
 //! `resolve_link_urls` emits a `moss-resolved:<path>` sentinel and leaves the
-//! URL `Url::Unresolved` so the desktop app's `classify_url_prod` can apply
+//! URL `Url::Unresolved` so moss-build's `classify_url_prod` can apply
 //! `page_map` / `external_url_map` / wikilink-class-aware decoding. That
-//! sentinel IS the moss-core ↔ desktop-app layering seam: moss-core resolves
-//! filesystem paths, the desktop app owns the deployed URL space.
+//! sentinel IS the moss-core ↔ moss-build layering seam: moss-core resolves
+//! filesystem paths, moss-build owns the deployed URL space.
 //!
 //! ## OutgoingLink contract
 //!
@@ -117,7 +117,7 @@ pub fn resolve_urls(
     // anchors that fell through, edge cases), the caller is responsible
     // for one more classification pass before rendering. Callers that
     // need a complete classification can call
-    // [`classify_remaining_urls`] explicitly. The desktop app's host pipeline
+    // [`classify_remaining_urls`] explicitly. moss-build's host pipeline
     // chains a second `visit_urls_mut` to apply its `classify_url_prod`
     // for page_map-aware decoding of the three sentinel prefixes.
 
@@ -232,7 +232,7 @@ fn resolve_asset_url(
     // the editor adapter (`editor::asset_resolver`) via the `@codemirror/lint`
     // hover tooltip. The build's job here is only to emit a correct URL; a
     // build-time console warning is a deferred follow-up (would require
-    // surfacing provenance to the desktop app's build layer).
+    // surfacing provenance to moss-build's build layer).
     match resolve_asset_ref(&raw, source_path, &GraphAssetIndex(graph)) {
         AssetResolution::Resolved { root_rel, provenance: _ } => {
             pin_asset_url(url, root_rel, alt, graph, found);
@@ -433,9 +433,9 @@ fn resolve_link_urls(
         // sentinel (`moss-resolved:`, `moss-newtab:`, `wikilink:`) carry
         // Stage 1 / upstream state the visitor cannot decode in isolation
         // — the final pretty URL depends on the host's `page_map`, which
-        // lives in the desktop app's pipeline context. Leave these as
+        // lives in moss-build's pipeline context. Leave these as
         // `Url::Unresolved` so the host's per-URL classifier
-        // (`classify_url_prod` in the desktop app's pipeline) can apply the
+        // (`classify_url_prod` in moss-build's pipeline) can apply the
         // page_map-aware decoding. This preserves the byte-equivalence
         // contract (no OutgoingLink emitted for already-resolved targets
         // — Stage 1 already counted them) while letting the host close
@@ -462,10 +462,10 @@ fn resolve_link_urls(
         // (`moss-resolved:<path>[<suffix>]`), same suffix concatenation.
         //
         // Phase 4 PR7a-stage1b (2026-05-28): moss-core resolves the
-        // filesystem path; the desktop app's `classify_url_prod` decodes the
+        // filesystem path; moss-build's `classify_url_prod` decodes the
         // sentinel into the final pretty / external / asset URL using
         // `page_map`, `external_url_map`, and the wikilink-class signal.
-        // The sentinel IS the moss-core ↔ desktop-app layering seam — the
+        // The sentinel IS the moss-core ↔ moss-build layering seam — the
         // visitor must NOT collapse it to a final `Url::Resolved` or
         // page_map decoding silently breaks.
         let (path_part, suffix) = split_path_suffix(&raw);
@@ -511,11 +511,11 @@ fn resolve_link_urls(
 
 /// Split a URL into (path, suffix) where `suffix` is `?query` and/or
 /// `#fragment` in source order. Suffix is opaque — round-trip parity with
-/// `crate::build::markdown::pipeline::classify_url_prod` (the desktop app's
+/// moss-build's `build::markdown::pipeline::classify_url_prod` (its
 /// decoder) is the contract; this function must not reorder, normalize,
 /// or escape the suffix bytes.
 ///
-/// The desktop app carries a parallel implementation,
+/// moss-build carries a parallel implementation,
 /// `pipeline.rs::split_path_suffix`, which must share this exact shape.
 fn split_path_suffix(url: &str) -> (&str, Option<&str>) {
     let q = url.find('?');
@@ -583,7 +583,7 @@ pub fn slug_wikilink_suffix(suffix: &str) -> String {
 /// `Inline::Link` variant added before its phase-2 arm is wired).
 ///
 /// Callers that follow [`resolve_urls`] with their own per-URL classifier
-/// (e.g., the desktop app's pipeline calling `classify_url_prod` for
+/// (e.g., moss-build's pipeline calling `classify_url_prod` for
 /// resolver-prefix decoding) should NOT call this — let the secondary
 /// classifier handle the remaining URLs. Callers that have no secondary
 /// pass should call this to maintain the render invariant.

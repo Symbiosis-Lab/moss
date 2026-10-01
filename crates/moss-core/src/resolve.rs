@@ -105,7 +105,7 @@ pub struct ResolveResult {
 /// typed AST (`crates/moss-core/src/ast/`). For standard markdown
 /// links, the AST visitor (`ast/resolve_urls::resolve_link_urls`)
 /// emits the same `moss-resolved:` sentinel Stage 1 used to emit, so
-/// the desktop app's `classify_url_prod` decoder still drives page_map /
+/// moss-build's `classify_url_prod` decoder still drives page_map /
 /// external_url_map / wikilink-class decoding unchanged.
 pub fn resolve_content(
     source_path: &str,
@@ -165,7 +165,7 @@ pub fn resolve_content_with_handlers(
 /// **Phase 0**: the snapshot is threaded but **not yet consumed** by any
 /// resolver — Stage 1 still emits markdown without reading variants/dims.
 /// Phase 1 wires the consumption side in moss-core's synthesizer. The
-/// signature exists now so the desktop app's build pipeline can populate the
+/// signature exists now so moss-build's build pipeline can populate the
 /// snapshot (from `MediaDimensionLookup` + `AssetRegistry`) and prove the
 /// threading path before consumers depend on it.
 pub fn resolve_content_with_handlers_and_snapshot(
@@ -204,7 +204,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     //     `![[note#section]]`) → `<!-- moss-embed:TARGET -->` for
     //     `embeds::resolve_embeds` to inline the body.
     //   - **folder-list embeds** (`![[/dir/|limit:N]]`) →
-    //     `<!-- MOSS_MARKER_FOLDER_LIST:… -->` for the desktop app's marker
+    //     `<!-- MOSS_MARKER_FOLDER_LIST:… -->` for moss-build's marker
     //     handlers to expand into card grids.
     // Both cases used to be emitted by Stage 1's wikilink resolver; with
     // that resolver retired, pulldown-cmark's Stage 2 dispatcher would
@@ -216,7 +216,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
 
     // Step 3: Resolve markdown transclusion embeds. The inlined body of
     // each embedded `.md` file is appended verbatim — its wikilinks (if
-    // any) survive into the markdown handed back to the desktop app, where
+    // any) survive into the markdown handed back to moss-build, where
     // pulldown-cmark + Stage 2 dispatcher resolves them along with the
     // host page's own wikilinks.
     let embed_result = embeds::resolve_embeds(&body, source_path, file_reader);
@@ -235,7 +235,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     // `markdown_links::resolve_markdown_links` is gone. The typed AST
     // visitor (`crates/moss-core/src/ast/resolve_urls.rs::resolve_link_urls`)
     // now produces byte-equivalent results — including the
-    // `moss-resolved:<path>` sentinel that the desktop app's `classify_url_prod`
+    // `moss-resolved:<path>` sentinel that moss-build's `classify_url_prod`
     // decoder consumes for `page_map` / `external_url_map` / wikilink-class
     // decoding. `outgoing_links` remains empty at this layer; the AST
     // visitor's OutgoingLink Vec is consumed downstream in
@@ -278,8 +278,9 @@ pub fn resolve_content_with_handlers_and_snapshot(
 ///
 /// Why this pre-pass exists: pre-Phase-3, Stage 1's wikilink resolver
 /// did this conversion. Phase 3 retires that resolver and routes most
-/// wikilink handling through pulldown-cmark's Stage 2 dispatcher in
-/// the desktop app's `pipeline.rs::transform_events`. But
+/// wikilink handling through this crate's own AST visitor
+/// ([`crate::ast::dispatch_wikilink_embeds`]), called from moss-build's
+/// `process_markdown_file`. But
 /// `embeds::resolve_embeds` runs BEFORE pulldown-cmark, so the
 /// dispatcher cannot emit the marker in time. We pre-convert the
 /// transclusion wikilinks here.
@@ -369,7 +370,7 @@ fn lower_transclusion_and_folder_wikilinks(
             }
 
             // Folder-list embed: trailing slash dispatches to the
-            // `MOSS_MARKER_FOLDER_LIST` marker that the desktop app's marker
+            // `MOSS_MARKER_FOLDER_LIST` marker that moss-build's marker
             // handler resolves into a card grid. The pothole carries
             // params (limit:N, more, sort:axis) in pipe-encoded form.
             if file_part.ends_with('/') {
@@ -420,7 +421,7 @@ fn lower_transclusion_and_folder_wikilinks(
             }
             // Deferred-handler embeds: `.ipynb` → notebook marker,
             // `.csv` / `.tsv` → table marker. These extensions route to
-            // the desktop app's marker handlers; the Stage 2 dispatcher would
+            // moss-build's marker handlers; the Stage 2 dispatcher would
             // also produce these markers, but it runs AFTER
             // `resolve_deferred_markers`, so pre-converting here keeps
             // the existing marker-handler pipeline working.
@@ -932,8 +933,9 @@ mod tests {
             .starts_with("---\ntitle: Test\n---\n"));
 
         // Phase 3 PR2: `resolve_content` no longer resolves body wikilinks
-        // — that's the Stage 2 dispatcher's job in
-        // the desktop app's `pipeline.rs::transform_events`.
+        // — that's this crate's own AST visitor's job, in
+        // `crate::ast::dispatch_wikilink_embeds`, called from moss-build's
+        // `process_markdown_file`.
         // The `[[guide#Setup]]` wikilink passes through unchanged here.
         assert!(result.content_markdown.contains("[[guide#Setup]]"));
 
@@ -991,7 +993,7 @@ mod tests {
 
         // disclaimer.md body contains `See [[guide]] for details.`
         // Phase 3 PR2: the embedded body's wikilink is no longer
-        // resolved by `resolve_content`; the desktop app's Stage 2 dispatcher
+        // resolved by `resolve_content`; the Stage 2 dispatcher (`ast::dispatch_wikilink_embeds`)
         // handles it. `resolve_content` lowers
         // `![[disclaimer]]` into the `<!-- moss-embed:disclaimer.md -->`
         // marker, then `resolve_embeds` inlines the disclaimer body
@@ -1017,7 +1019,7 @@ mod tests {
         let files = HashMap::new();
 
         // Phase 3 PR2: wikilink unresolved diagnostics now surface from
-        // the desktop app's Stage 2 dispatcher. `resolve_content` only
+        // the Stage 2 dispatcher (`ast::dispatch_wikilink_embeds`). `resolve_content` only
         // surfaces diagnostics from passes it still runs (transclusion
         // / deferred markers / block refs). `![[missing]]` with no
         // extension resolves to Unresolved in the lowering pass — but
@@ -1045,7 +1047,7 @@ mod tests {
         let files = test_files();
 
         // Phase 3 PR2: body wikilink outgoing-links are populated by
-        // the desktop app's Stage 2 dispatcher (not by `resolve_content`).
+        // `ast::dispatch_wikilink_embeds` (not by `resolve_content`).
         // What this layer still populates: block_refs results. The
         // wikilink body links `[[guide]]` and `![[disclaimer]]` pass
         // through to Stage 2; standard markdown links pass through to
@@ -1423,8 +1425,8 @@ mod tests {
         );
 
         // Phase 3 PR2: body wikilink `[[news]]` passes through as raw
-        // markdown — the desktop app's Stage 2 resolves it via the
-        // `dispatch_wikilink_embed` arm in `transform_events`.
+        // markdown — this crate's own `ast::dispatch_wikilink_embeds`
+        // visitor resolves it via the `dispatch_wikilink_embed` arm.
         assert!(
             result.content_markdown.contains("[[news]]"),
             "Expected body wikilink to pass through verbatim, got: {}",
@@ -1484,7 +1486,7 @@ mod tests {
         // the typed AST visitor
         // (`ast/resolve_urls::resolve_link_urls`) emits the
         // `moss-resolved:文字/文字.md` sentinel later in
-        // `process_markdown_file`, and the desktop app's `classify_url_prod`
+        // `process_markdown_file`, and moss-build's `classify_url_prod`
         // decodes the sentinel into the final pretty URL. Visitor
         // coverage lives in
         // `resolve_urls.rs::tests::standard_markdown_link_emits_sentinel`.

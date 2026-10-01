@@ -37,7 +37,7 @@
 //!   entry is in the snapshot.
 //! - `data-placeholder-src` is the ORIGINAL src (e.g. `clip.mov`). The
 //!   iframe-bridge swaps `src` to the `.mp4` payload once the transcode
-//!   completes (the desktop app's iframe bridge).
+//!   completes (moss-build's iframe bridge).
 //! - `poster` and `data-thumb-src` both reference `to_thumb(original_src)`.
 //!   The iframe-bridge listens for `moss-asset-ready` and swaps `poster`
 //!   in when the thumbnail lands.

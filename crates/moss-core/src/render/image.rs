@@ -1056,7 +1056,7 @@ pub(crate) fn render_img_tag(
 
     // `data-placeholder-src` removed 2026-05-20: the iframe-bridge handler
     // now matches by URL substring against `src` / `srcset` (see
-    // the desktop app's iframe bridge, moss-asset-ready branch). The
+    // moss-build's iframe bridge, moss-asset-ready branch). The
     // AssetRegistry's promise model + the preview server's URL-keyed lookup
     // make the attribute redundant.
     //

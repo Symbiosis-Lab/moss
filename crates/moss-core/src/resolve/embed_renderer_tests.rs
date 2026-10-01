@@ -120,7 +120,7 @@ fn test_embed_class_constants_stable() {
 #[test]
 fn test_embed_marker_prefixes_stable() {
     // Marker prefixes are a contract between moss-core (emit) and
-    // the desktop app (resolve). Changing them breaks the resolver.
+    // moss-build (resolve). Changing them breaks the resolver.
     assert_eq!(MARKER_MARKDOWN, "moss-embed");
     assert_eq!(MARKER_IPYNB, "moss-embed-ipynb");
     assert_eq!(MARKER_TABLE, "moss-embed-table");

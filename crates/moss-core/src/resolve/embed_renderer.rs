@@ -26,7 +26,7 @@
 mod common;
 pub mod folder_list;
 
-// Re-export the canonical 4-char attribute escaper so the desktop app's synthesizers
+// Re-export the canonical 4-char attribute escaper so moss-core's own synthesizers
 // (pdf / iframe / model / audio / video) can share one definition instead of
 // inlining private copies that drifted apart (moss-core's was 4 chars; some
 // synthesizers via `moss_core::media::html_escape` was 5 chars including
@@ -44,7 +44,7 @@ use crate::media::Placement;
 ///
 /// Theme authors may target `.moss-embed` to style the wrapper of any embed;
 /// renderer-specific classes (e.g. [`CLASS_EMBED_IFRAME`]) extend the base.
-/// The CSS that ships with moss is defined in the desktop app.
+/// The CSS that ships with moss is defined in moss-build.
 pub const CLASS_EMBED: &str = "moss-embed";
 
 /// Applied to iframe renderer output (Phase B).
@@ -69,14 +69,14 @@ pub const CLASS_EMBED_3D: &str = "moss-embed-3d";
 pub const CLASS_EMBED_TABLE: &str = "moss-embed-table";
 
 // ---------------------------------------------------------------------------
-// Deferred-marker prefixes (contract with the desktop app's resolvers)
+// Deferred-marker prefixes (contract with moss-build's resolvers)
 // ---------------------------------------------------------------------------
 
 /// Marker prefix for a markdown transclusion embed (`![[file.md]]`).
 ///
 /// Format: `<!-- moss-embed:PATH[#anchor] -->`. Emitted by `resolve.rs`'s
 /// pre-pass (`lower_transclusion_and_folder_wikilinks`) and resolved by
-/// the desktop app's `resolve_embeds` (inlines target markdown content).
+/// [`super::embeds::resolve_embeds`] (inlines target markdown content).
 ///
 /// No `-<type>` suffix for historical reasons: this was the original embed
 /// marker before typed embeds existed. New typed markers use
@@ -86,13 +86,14 @@ pub const MARKER_MARKDOWN: &str = "moss-embed";
 /// Marker prefix for a Jupyter notebook embed (`![[file.ipynb]]`).
 ///
 /// Format: `<!-- moss-embed-ipynb:PATH[?query] -->`. Emitted by `resolve.rs`'s
-/// pre-pass and resolved by the desktop app via nbconvert.
+/// pre-pass and resolved by moss-build's notebook handler (an inline
+/// JupyterLite viewer `<iframe>`, not a static nbconvert render).
 pub const MARKER_IPYNB: &str = "moss-embed-ipynb";
 
 /// Marker prefix for a tabular-data embed (`![[file.csv]]`/`![[file.tsv]]`).
 ///
 /// Format: `<!-- moss-embed-table:PATH -->`. Emitted by `resolve.rs`'s
-/// pre-pass; the desktop app reads the file and calls [`crate::csv_table::render`]
+/// pre-pass; moss-build reads the file and calls [`crate::csv_table::render`]
 /// (a pure renderer).
 pub const MARKER_TABLE: &str = "moss-embed-table";
 

@@ -404,7 +404,7 @@ fn is_stray_control_char(c: char) -> bool {
 ///
 /// The shared control-char stripper: this is the same string-level primitive
 /// `strip_control_chars` (above) applies recursively to `serde_yaml::Value`
-/// trees. It is `pub` so other crates (e.g. the desktop app's scrape/email write
+/// trees. It is `pub` so other crates (e.g. moss-build's scrape/email write
 /// paths) can apply the identical defense-in-depth strip at their own
 /// hand-rolled or `serde_yaml`-based frontmatter funnels — see
 /// `tauri-apps/tauri#10194`.

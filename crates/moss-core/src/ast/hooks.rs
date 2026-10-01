@@ -5,7 +5,7 @@
 //! method has a default implementation in [`DefaultHooks`] that produces
 //! moss's canonical HTML.
 //!
-//! Consumers (the desktop app's `PipelineHooks`, future plugins) override one
+//! Consumers (moss-build's `PipelineHooks`, future plugins) override one
 //! method without touching the renderer or the AST. Defaults handle the
 //! ~80% case; overrides handle site-specific concerns (asset path
 //! rewriting, classname injection, etc).
@@ -157,7 +157,7 @@ pub trait RenderHooks {
     ///
     /// **Default impl (this crate, the editor, tests): emit `fallback_html`
     /// verbatim.** moss-core ships no typesetting engine, and this keeps every
-    /// non-pipeline render byte-identical to P1. The desktop app's `PipelineHooks`
+    /// non-pipeline render byte-identical to P1. moss-build's `PipelineHooks`
     /// overrides this to typeset `tex` to an inline `<svg>` via RaTeX, falling
     /// back to `fallback_html` on any guard/engine/validation refusal — so the
     /// two impls are genuinely different (SVG vs source), which is why this is a
@@ -197,13 +197,13 @@ pub trait RenderHooks {
     ///
     /// The default impl produces a minimal HTML skeleton suitable for the
     /// moss-core test harness; site-specific HTML (subscribe forms, button
-    /// styles, gallery grids) lives in the desktop app's `PipelineHooks` impl
+    /// styles, gallery grids) lives in moss-build's `PipelineHooks` impl
     /// because it depends on filesystem context (site_id, lang, asset
     /// paths) that moss-core doesn't have.
     fn render_shortcode(&self, out: &mut String, sc: &Shortcode, source_line: Option<usize>) {
         match sc {
             Shortcode::Subscribe(args) => {
-                // Test-harness skeleton; the desktop app's PipelineHooks renders
+                // Test-harness skeleton; moss-build's PipelineHooks renders
                 // the production HTML (form action URL, language defaults,
                 // status spans). Description prose moved out of the
                 // shortcode under the unified grammar.
@@ -390,7 +390,7 @@ pub trait RenderHooks {
             }
             Shortcode::Hero(args) => {
                 // Test-harness skeleton; the production renderer in
-                // the desktop app's PipelineHooks routes the image through the
+                // moss-build's PipelineHooks routes the image through the
                 // resolver, runs media-attrs into a style attribute, and
                 // processes the overlay markdown to HTML. This default
                 // emits a minimal `<section class="moss-hero">` so unit
@@ -556,7 +556,7 @@ pub trait RenderHooks {
             }
             Shortcode::Recent(_args) => {
                 // Test-harness skeleton; the production renderer in
-                // the desktop app's PipelineHooks queries the post set (which
+                // moss-build's PipelineHooks queries the post set (which
                 // moss-core cannot see) and emits the actual list. This
                 // default emits an empty `<div class="moss-recent">` so
                 // unit tests that only care about presence can pattern-
@@ -566,7 +566,7 @@ pub trait RenderHooks {
             }
             Shortcode::Apply(args) => {
                 // Test-harness skeleton; the production renderer in
-                // the desktop app's PipelineHooks emits the full form HTML with
+                // moss-build's PipelineHooks emits the full form HTML with
                 // the seta action URL and language-specific copy.
                 let placeholder = args.placeholder.as_deref().unwrap_or("your@email.com");
                 out.push_str(r#"<div class="moss-apply">"#);
@@ -599,7 +599,7 @@ pub trait RenderHooks {
     /// regex-over-emitted-HTML pass this replaced.
     ///
     /// Impls that delegate `render_shortcode`'s `Grid` arm to a *different*
-    /// hooks value (the desktop app's `PipelineHooks` delegates to a
+    /// hooks value (moss-build's `PipelineHooks` delegates to a
     /// [`DefaultHooks`] bound to its asset snapshot, so grid-cell images get
     /// the snapshot-aware `sizes=` ladder) must override this method the same
     /// way, or the split form will render cells through the wrong hooks.
@@ -650,7 +650,7 @@ pub trait RenderHooks {
     /// (`<a class="moss-heading-anchor" aria-label="…">`).
     ///
     /// moss-core is pure Rust with no i18n table (no `i18n::Language`),
-    /// so the LOCALIZED string is resolved by the desktop app's caller
+    /// so the LOCALIZED string is resolved by moss-build's caller
     /// (`crate::i18n::strings::t(site_lang, "permalink_section")`) and
     /// threaded in via the hooks impl — `render_heading` just emits
     /// whatever this returns. The trait default keeps the historical
@@ -668,7 +668,7 @@ pub trait RenderHooks {
     /// `source_line` is the 1-based source line where the heading appears
     /// in the markdown. When `Some`, the rendered tag carries
     /// `data-source-line="N"` for the preview's editor↔preview scroll
-    /// sync (see the desktop app's iframe bridge's `scrollToSourceLine`
+    /// sync (see moss-build's iframe bridge's `scrollToSourceLine`
     /// RPC). When `None` (default config / fragment-render paths), no
     /// attr is emitted — byte-identical to the pre-source-line shape.
     ///
@@ -703,7 +703,7 @@ pub trait RenderHooks {
         // Appended AFTER content / BEFORE </h> so the opening tag (id,
         // data-source-line) stays byte-identical for preview scroll-sync.
         // The auto-injected article-title H1 (`<h1 class="moss-article-title">`)
-        // is emitted separately in the desktop app's HTML post-pass and never
+        // is emitted separately in moss-build's HTML post-pass and never
         // reaches this hook — its "no anchor" is structural, not this gate.
         //
         // The `#` glyph is NOT in here. It is drawn by site.css as
@@ -825,7 +825,7 @@ impl<'a> DefaultHooks<'a> {
     /// trait defaults said anchors-on and English-label, so a cell heading
     /// carried a `#` even on a site with `[site].heading_anchors = false`, and
     /// carried `aria-label="Permalink to this section"` on a zh-tw site. Both
-    /// were invisible from the desktop app's side, which reads its own
+    /// were invisible from moss-build's side, which reads its own
     /// `PipelineHooks` overrides and never sees the ones a delegated render
     /// uses. Suppressing outright means neither setting can be wrong here.
     pub fn grid_cells(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {

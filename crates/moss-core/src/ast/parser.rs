@@ -11,7 +11,7 @@
 //! Heading IDs ARE assigned by this parser. Phase 4 PR2: each
 //! `Tag::Heading` arm computes the Obsidian-compatible anchor slug from
 //! the heading's text content (only `Event::Text` / `Event::Code`,
-//! matching production's `transform_events` behavior in the desktop app's
+//! matching the retired `transform_events` pass in moss-build's
 //! markdown pipeline); a
 //! post-parse pass ([`assign_heading_id_suffixes`]) walks all headings in
 //! document order (recursively into BlockQuotes, lists, callouts) and
@@ -151,7 +151,7 @@ impl Default for ParseConfig {
 /// events.** pulldown emits them as leaf inline events; a walker that
 /// pattern-matches known events and ignores the rest will *silently delete*
 /// every equation in the document (measured: `Energy $E = mc^2$.` →
-/// `<p>Energy .</p>`). See the desktop app's math-wiring invariant test,
+/// `<p>Energy .</p>`). See this crate's math-wiring invariant test,
 /// which fails any site that turns math on without arms in the same walker.
 ///
 /// `ENABLE_TASKLISTS` carries the same obligation, and it is met by
@@ -1879,8 +1879,8 @@ fn flush_pending_paragraph(out: &mut Vec<Block>, pending_inlines: &mut Vec<Inlin
 /// Post-parse pass: disambiguate duplicate heading IDs by appending `-1`,
 /// `-2`, … to the slug, in the order the headings will appear ON THE PAGE.
 ///
-/// Mirrors the `id_counts: HashMap<String, usize>` behavior in the desktop
-/// app's markdown pipeline:
+/// Mirrors the `id_counts: HashMap<String, usize>` behavior in moss-build's
+/// markdown pipeline:
 ///
 /// - First occurrence of slug `foo` keeps id `foo`; counter starts at 1.
 /// - Second occurrence becomes `foo-1`; counter becomes 2.

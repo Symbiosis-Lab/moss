@@ -1,7 +1,7 @@
 //! Folder-listing embed: ![[/folder/|limit:N,sort:axis]]
 //!
 //! Pure-Rust path parsing + marker emission. The actual children
-//! lookup + sort + HTML render happens in the desktop app (which has I/O).
+//! lookup + sort + HTML render happens in moss-build (which has I/O).
 
 use crate::media::{extract_placement_from_alias, AlignSide, Placement};
 use crate::resolve::embed_renderer::Sizing;
@@ -201,7 +201,7 @@ fn is_size_token(tok: &str) -> bool {
 }
 
 /// Marker prefix for folder-list embeds emitted by moss-core.
-/// The desktop app's marker resolver (Task 16) reads everything between the prefix
+/// moss-build's marker resolver reads everything between the prefix
 /// and the terminator as `path=...|from=...|limit=N|more=target|sort=axis`. The
 /// `path` is the user-written target (which may carry a leading `/`); `from` is
 /// the source markdown file path, used for resolving relative paths against the

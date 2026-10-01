@@ -1,6 +1,6 @@
 //! Pure URL/path transform helpers — no filesystem access, no env lookups.
 //! Used by moss-core's render functions (see crate::render::*) and by
-//! upstream call sites in the desktop app.
+//! upstream call sites in moss-build.
 //!
 //! # Design Intent
 //!

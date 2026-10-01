@@ -8,8 +8,8 @@
 //!
 //! 1. Emit the class from your renderer module (`build/markdown/*`, `build/components/*`).
 //! 2. Add a `ComponentEntry` to [`COMPONENTS`] here.
-//! 3. Run `cargo test --test components_sync_test` from the desktop app — the
-//!    scanner test will fail if you forget.
+//! 3. Run `cargo test --test components_sync_test` — the scanner test will
+//!    fail if you forget.
 //! 4. Run `cargo run --bin generate-artifacts --features dev-tools -- contract-docs` to
 //!    refresh the generated contract documentation.
 //!

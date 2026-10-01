@@ -118,7 +118,7 @@ impl Position {
 /// Image alignment for editorial runaround layout. Mirrors WordPress's
 /// `alignleft` / `alignright` block-editor convention; the moss CSS class
 /// is `moss-align-left` / `moss-align-right`. Float behavior plus mobile
-/// collapse (≤48rem) live in the desktop app's `site.css`.
+/// collapse (≤48rem) live in moss-build's `site.css`.
 ///
 /// Hyphenated `align-left` is the canonical pipe-keyword form; unhyphenated
 /// `alignleft` (matching the WP class name) is a forgiveness alias.

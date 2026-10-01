@@ -5,7 +5,7 @@
 //! covering the whole token. The offsets let callers rewrite the source without
 //! re-scanning.
 //!
-//! **No resolution** happens here. The caller (the desktop app) resolves each
+//! **No resolution** happens here. The caller (moss-build) resolves each
 //! `RawRef` against the project's indexes.
 //!
 //! Recognition runs over [`crate::inert_regions`]'s mask rather than a
@@ -16,7 +16,7 @@
 //! authored `<!-- … -->` comment and inside an indented code block are no
 //! longer extracted. The old doc justified scanning comments with
 //! build-internal `<!-- moss-embed:… -->` sentinels, which never appear in
-//! the author files this module's only consumer (the desktop app's
+//! the author files this module's only consumer (moss-build's
 //! `editor::ref_scan`) reads from disk.
 
 /// Which surface syntax produced this reference.
@@ -585,8 +585,8 @@ mod tests;
 // `:::gallery` body line, a `:::hero {image=…}` attribute and a frontmatter
 // `cover:` value are asset references with no reference syntax around them,
 // so they were invisible to rename tracking and silently broke on rename.
-// The types below are the second half of the answer; `ref_scan` (the desktop
-// app) unions the two.
+// The types below are the second half of the answer; moss-build's
+// `editor::ref_scan` unions the two.
 
 /// Which container a structurally-extracted path was found in.
 /// Decides quoting when the value is rebuilt.
@@ -683,7 +683,7 @@ pub(crate) fn line_table(source: &str) -> Vec<(usize, usize, usize)> {
 ///
 /// Complements [`extract_md_references`], which sees only bracketed markdown
 /// tokens. A caller that REWRITES must union the two and resolve overlaps —
-/// see `apply_edits` in the desktop app's `editor::ref_scan`.
+/// see `apply_edits` in moss-build's `editor::ref_rewrite`.
 pub fn extract_structural_asset_refs(source: &str) -> Vec<AssetPathSpan> {
     let mut v = crate::ast::shortcode_extract::shortcode_asset_spans(source);
     v.extend(crate::frontmatter::frontmatter_asset_spans(source));

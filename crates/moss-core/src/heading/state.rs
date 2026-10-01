@@ -1,9 +1,11 @@
 //! Article heading rule — single source of truth for the auto-injected
 //! `<h1 class="moss-article-title">` and the editor's pinned heading element.
 //!
-//! Both consumers — the build pipeline (in the desktop app's markdown pipeline)
+//! Both consumers — the build pipeline (moss-build's markdown pipeline)
 //! and the editor command `compute_heading_state`
-//! (in the desktop app's editor commands) — feed the same inputs into [`compute`]
+//! (moss-build's `editor::content::compute_heading_state_inner`, called by
+//! both the desktop app's Tauri command and the preview server) — feed the
+//! same inputs into [`compute`]
 //! and act on the same answer. Without this module the two paths silently
 //! desync the next time the rule changes.
 //!

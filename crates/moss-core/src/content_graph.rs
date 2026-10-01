@@ -263,7 +263,7 @@ impl ContentGraph {
     /// graph the authority on emitted URLs as well as on resolution.
     ///
     /// The host calls this once, right after the overrides are computed
-    /// (`build_page_map` in the desktop app), and every emitter downstream reads the
+    /// (`build_page_map` in moss-build), and every emitter downstream reads the
     /// answer off the same graph it already holds. Sites that don't map any
     /// directory still benefit: base slugification (`MIRROR/` → `mirror/`) runs
     /// with an empty map.

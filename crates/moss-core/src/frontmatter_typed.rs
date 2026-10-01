@@ -1,6 +1,6 @@
 //! Typed frontmatter structs for the build pipeline.
 //!
-//! Lives in moss-core so validation, the resolver, and the desktop app's
+//! Lives in moss-core so validation, the resolver, and moss-build's
 //! pipeline all share one definition.
 
 use std::collections::HashMap;

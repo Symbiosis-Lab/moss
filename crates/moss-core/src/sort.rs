@@ -66,7 +66,7 @@ impl ResolvedSort {
     }
 }
 
-/// Minimal document trait for sort inference. Both the desktop app's
+/// Minimal document trait for sort inference. Both moss-build's
 /// ParsedDocument and the editor's in-memory document model implement this.
 pub trait SortableDoc {
     fn url_path(&self) -> &str;
@@ -118,7 +118,7 @@ pub fn resolve_folder_sort<D: SortableDoc>(
     // wrong under pretty URLs — every article also ends with
     // `<stem>/index.html` — so we delegate to the impl. The default
     // `is_folder_index() == false` keeps moss-core's existing single-file
-    // tests (`a.url = "a.html"`) green; the desktop app's `ParsedDocument`
+    // tests (`a.url = "a.html"`) green; moss-build's `ParsedDocument`
     // returns true when `kind == Folder`.
     let article_children: Vec<&&D> = children
         .iter()

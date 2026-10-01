@@ -59,8 +59,8 @@ pub struct CustomProp {
 /// (`--moss-nav-width` is read against the `<body>`-level content width;
 /// `--moss-escape` is set by `[data-width]` on any block).
 ///
-/// Enforced by `every_escape_hatch_is_declared` in
-/// the desktop app's `components_sync_test.rs`: a `var(--moss-*, …)` read that no
+/// Enforced by `every_escape_hatch_is_declared` in this crate's own
+/// `tests/components_sync_test.rs`: a `var(--moss-*, …)` read that no
 /// entry here declares fails the build. That test is the point of the table —
 /// a hook nothing declares is a hook no agent can find.
 pub const CUSTOM_PROPS: &[CustomProp] = &[
