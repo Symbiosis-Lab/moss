@@ -10,7 +10,10 @@
 //! foreign server's port, [`verify_server_ready`] hits the dedicated
 //! [`MOSS_HEALTH_PATH`] endpoint and requires a moss-specific marker token
 //! ([`MOSS_HEALTH_MARKER`]) in the response body before accepting the port as
-//! moss-owned. The matching route handler is defined in `router.rs`.
+//! moss-owned. [`moss_health_handler`] is that endpoint's route handler,
+//! mounted by `router.rs`; it lives here, beside the constant and the probe
+//! that read its body, rather than in `router.rs` with the rest of the route
+//! table.
 
 /// The reserved health-check path served by every moss preview server.
 ///
@@ -26,6 +29,60 @@ pub const MOSS_HEALTH_PATH: &str = "/__moss_health/";
 /// the probed port is actually a moss preview server, not a stale eleventy /
 /// vite / jekyll / next.js instance that happened to bind the same port.
 pub const MOSS_HEALTH_MARKER: &str = "\"moss-preview-server\"";
+
+/// Body served by [`MOSS_HEALTH_PATH`].
+///
+/// The marker substring is physically substituted from [`MOSS_HEALTH_MARKER`]
+/// at format time, so the producer and [`verify_server_ready`] cannot drift
+/// apart: a rename of the marker constant updates both sides automatically
+/// (`moss_health_body_contains_marker` in `router_tests.rs` locks it too).
+///
+/// Schema 2 spends the `schema: 1` forward-compat field: `folder_id` and
+/// `pid` let [`super::ownership::find_live_owner`] confirm whoever answers
+/// this URL still serves the folder asked about, not just that some moss is
+/// alive on the port. A field schema 2 introduces needs a `schema >= 2` gate,
+/// not presence alone — an older server has no `folder_id`, not an empty
+/// one, and `>=` keeps a future schema-3 reader accepting this body too.
+/// `folder_id` is JSON `null` (never `""`) when the served directory
+/// resolves to no vault.
+///
+/// `MOSS_HEALTH_MARKER` already includes its own surrounding double quotes,
+/// so the format expression drops it in pre-quoted — no extra `\"` needed.
+pub(crate) fn moss_health_body(folder_id: Option<&str>, pid: u32) -> String {
+    let folder_id_json = match folder_id {
+        Some(id) => format!("\"{id}\""),
+        None => "null".to_string(),
+    };
+    format!(
+        "{{\"server\":{},\"version\":\"{}\",\"preview\":true,\"schema\":2,\"folder_id\":{},\"pid\":{}}}",
+        MOSS_HEALTH_MARKER,
+        env!("CARGO_PKG_VERSION"),
+        folder_id_json,
+        pid
+    )
+}
+
+/// Handler for [`MOSS_HEALTH_PATH`], mounted by `router.rs`.
+///
+/// Returns the moss marker [`verify_server_ready`] checks for, plus the
+/// folder identity `find_live_owner` needs. Re-resolved from the live
+/// `site_dir` on every request, not fixed at router-build time, so a future
+/// folder switch reports the folder served NOW.
+pub(crate) async fn moss_health_handler(
+    site_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+) -> axum::response::Response<axum::body::Body> {
+    let folder_id = site_dir
+        .read()
+        .ok()
+        .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir))
+        .map(|vault| crate::infra::folder_lock::folder_id(vault.path()));
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json; charset=utf-8")
+        .header("cache-control", "no-store")
+        .body(axum::body::Body::from(moss_health_body(folder_id.as_deref(), std::process::id())))
+        .unwrap()
+}
 
 /// Finds an available TCP port starting from the given port number.
 ///
@@ -113,6 +170,33 @@ pub fn env_port_base() -> u16 {
 /// # Returns
 /// * `Ok(())` - A moss preview server is responding on this port
 /// * `Err(String)` - No moss server detected (foreign server, no server, or unreachable)
+/// One blocking GET, run off the async executor because `ureq` is a sync
+/// client. The sole piece [`verify_server_ready`]'s retry loop and
+/// [`super::ownership::find_live_owner`]'s one-shot discovery probe have in
+/// common — see [`blocking_get`] for why the retry policy around it is not
+/// shared too.
+fn blocking_get_sync(url: &str) -> Result<String, ureq::Error> {
+    ureq::get(url)
+        .timeout(std::time::Duration::from_secs(1))
+        .call()
+        .map(|resp| resp.into_string().unwrap_or_default())
+}
+
+/// [`blocking_get_sync`] on `spawn_blocking`, collapsed to a single `Result`
+/// a one-shot caller can just `?` through. [`verify_server_ready`] does NOT
+/// use this: its retry loop must tell "connection refused, try again" apart
+/// from "a non-success status, a foreign server, stop now," a distinction
+/// this collapsed shape throws away. [`find_live_owner`] has no such
+/// distinction to make — any failure at all simply means "not a confirmed
+/// live owner" — so it reuses the plain GET without the retry wrapper.
+pub(crate) async fn blocking_get(url: String) -> Result<String, String> {
+    match tokio::task::spawn_blocking(move || blocking_get_sync(&url)).await {
+        Ok(Ok(body)) => Ok(body),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(e) => Err(format!("probe task panicked: {e}")),
+    }
+}
+
 pub async fn verify_server_ready(port: u16) -> Result<(), String> {
     // Use the IPv4 literal explicitly. `localhost` would expose us to IPv6-first
     // DNS resolution on macOS, which can route the probe to a foreign IPv6
@@ -124,13 +208,7 @@ pub async fn verify_server_ready(port: u16) -> Result<(), String> {
 
     for attempt in 1..=max_attempts {
         let url_clone = url.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            ureq::get(&url_clone)
-                .timeout(std::time::Duration::from_secs(1))
-                .call()
-                .map(|resp| resp.into_string().unwrap_or_default())
-        })
-        .await;
+        let result = tokio::task::spawn_blocking(move || blocking_get_sync(&url_clone)).await;
 
         match result {
             Ok(Ok(body)) => {

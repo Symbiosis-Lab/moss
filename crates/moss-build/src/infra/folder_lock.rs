@@ -72,7 +72,11 @@ impl Drop for Held {
 /// canonicalized (`std::fs::canonicalize` requires the path to already
 /// exist on disk): the lock still needs something to name, and every real
 /// build call site canonicalizes a folder that is already there.
-fn folder_id(folder: &Path) -> String {
+///
+/// `pub(crate)` rather than private: `ops::serve::ownership` names the same
+/// folder for its owner record and lock, and must agree with this one on
+/// what a folder is called.
+pub(crate) fn folder_id(folder: &Path) -> String {
     use sha2::{Digest, Sha256};
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     format!("{:x}", Sha256::digest(canonical.to_string_lossy().as_bytes()))

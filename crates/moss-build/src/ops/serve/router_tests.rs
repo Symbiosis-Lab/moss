@@ -2,7 +2,9 @@ use super::*;
 // `is_port_available` is no longer needed by the production server-start
 // path (the bind-with-scan helper is the authoritative check), but tests
 // still use it as a non-binding "did the port get freed?" probe.
-use super::super::port::is_port_available;
+// `moss_health_body`/`MOSS_HEALTH_MARKER` moved to `port.rs` alongside the
+// constant and the probe that reads their shared body shape.
+use super::super::port::{is_port_available, moss_health_body, MOSS_HEALTH_MARKER};
 use std::sync::Arc;
 
 /// Sync test: the moss-health body MUST contain `MOSS_HEALTH_MARKER`.
@@ -11,18 +13,41 @@ use std::sync::Arc;
 /// reject moss's own server.
 #[test]
 fn moss_health_body_contains_marker() {
-    let body = moss_health_body();
+    let body = moss_health_body(Some("abc123"), 999);
     assert!(
         body.contains(MOSS_HEALTH_MARKER),
         "moss_health_body() must contain MOSS_HEALTH_MARKER ({}); got: {}",
         MOSS_HEALTH_MARKER,
         body
     );
-    // Spot-check the schema field landed too — readers don't parse it
-    // yet but its presence is part of the wire-format contract.
+    // Schema 2: `find_live_owner` parses `folder_id` and `pid` out of this
+    // body to confirm a URL still answers for the folder it was recorded
+    // for — see `moss_health_body`'s doc on why the gate is `>= 2`.
     assert!(
-        body.contains("\"schema\":1"),
-        "moss_health_body() must include schema:1; got: {}",
+        body.contains("\"schema\":2"),
+        "moss_health_body() must include schema:2; got: {}",
+        body
+    );
+    assert!(
+        body.contains("\"folder_id\":\"abc123\""),
+        "moss_health_body() must carry the folder id it was given; got: {}",
+        body
+    );
+    assert!(
+        body.contains("\"pid\":999"),
+        "moss_health_body() must carry the pid it was given; got: {}",
+        body
+    );
+}
+
+#[test]
+fn moss_health_body_folder_id_is_null_when_absent() {
+    let body = moss_health_body(None, 1);
+    assert!(
+        body.contains("\"folder_id\":null"),
+        "a server with no resolvable vault must report folder_id as JSON null, not an \
+         empty string a real folder id could never collide with but a careless reader \
+         might; got: {}",
         body
     );
 }

@@ -6,10 +6,11 @@
 //! the iframe-bridge script alive on missing pages.
 
 use super::placeholder::{handle_asset_request, transparent_stub_response};
-use super::port::{verify_server_ready, MOSS_HEALTH_MARKER, MOSS_HEALTH_PATH};
+use super::port::{verify_server_ready, MOSS_HEALTH_PATH};
 use super::asset_rewriter;
 use super::content_wrapper;
 use super::iframe_bridge::inject_iframe_bridge;
+use super::ownership;
 use axum::{
     body::Body,
     http::{self, Request},
@@ -114,29 +115,6 @@ async fn bind_dual_stack_with_scan(
     ))
 }
 
-/// Body served by the [`MOSS_HEALTH_PATH`] endpoint.
-///
-/// The marker substring is physically substituted from [`MOSS_HEALTH_MARKER`]
-/// at format time, so the producer and the consumer
-/// ([`super::port::verify_server_ready`]) cannot drift apart: a rename of the
-/// marker constant updates both sides automatically. The sync test
-/// `moss_health_body_contains_marker` below also locks the invariant.
-///
-/// `schema: 1` is a forward-compat field for future format evolution. Readers
-/// (currently `verify_server_ready`) ignore it; if the body shape changes,
-/// bump to `2` and gate the consumer on `schema >= 1`.
-///
-/// Note that `MOSS_HEALTH_MARKER` already includes its own surrounding double
-/// quotes (it is itself a quoted JSON string token), so the format expression
-/// drops it in pre-quoted — no extra `\"` needed around the `{}`.
-fn moss_health_body() -> String {
-    format!(
-        "{{\"server\":{},\"version\":\"{}\",\"preview\":true,\"schema\":1}}",
-        MOSS_HEALTH_MARKER,
-        env!("CARGO_PKG_VERSION")
-    )
-}
-
 /// `/__moss/source/*path` — serve a project-scoped SOURCE file over HTTP.
 ///
 /// The vault root is derived from the served site directory rather than passed
@@ -182,21 +160,6 @@ fn source_asset_404() -> Response {
         .header("Content-Type", "text/plain; charset=utf-8")
         .body(Body::from("Not Found"))
         .expect("static 404 response is always valid")
-}
-
-/// Handler for [`MOSS_HEALTH_PATH`].
-///
-/// Returns a JSON body containing the moss-specific marker token used by
-/// `verify_server_ready` to confirm that the responding server is moss
-/// (rather than a foreign dev server like eleventy that happens to be
-/// holding the same port).
-async fn moss_health_handler() -> Response<Body> {
-    Response::builder()
-        .status(http::StatusCode::OK)
-        .header("content-type", "application/json; charset=utf-8")
-        .header("cache-control", "no-store")
-        .body(Body::from(moss_health_body()))
-        .unwrap()
 }
 
 /// A page for a request `ServeDir` could not answer because the file's bytes
@@ -295,6 +258,13 @@ pub struct ServeConfig {
     /// see [`EvictedProbe`] for why the branch it guards cannot otherwise be
     /// reached on a Linux CI box.
     pub is_evicted: EvictedProbe,
+    /// Which kind of host is starting this server, recorded in the folder's
+    /// [`super::ownership::OwnerRecord`]. [`Self::new`] defaults this to
+    /// [`super::ownership::HostKind::Cli`] — every caller in this crate is
+    /// moss-cli or a test standing in for it; the desktop app's `launch_server`
+    /// impl (app crate, not a call site here) overrides it to `Desktop` via
+    /// struct-update syntax, the same way it already would `invoke`.
+    pub kind: super::ownership::HostKind,
 }
 
 impl ServeConfig {
@@ -313,6 +283,7 @@ impl ServeConfig {
             invoke: None,
             start_port,
             is_evicted: crate::build::icloud::is_evicted,
+            kind: super::ownership::HostKind::Cli,
         }
     }
 }
@@ -332,6 +303,7 @@ pub async fn start_server(
         invoke: invoke_ctx,
         start_port,
         is_evicted,
+        kind,
     } = config;
     // === SETUP PHASE ===
     // Note: We don't check for index.html here - the server can start even for empty folders.
@@ -381,8 +353,15 @@ pub async fn start_server(
         // body that `verify_server_ready` checks before accepting a port as
         // moss-owned.
         let state_for_source = state.clone();
+        let state_for_health = state.clone();
         let mut router = Router::new()
-            .route(MOSS_HEALTH_PATH, get(moss_health_handler))
+            .route(
+                MOSS_HEALTH_PATH,
+                get(move || {
+                    let site_dir = state_for_health.clone();
+                    async move { super::port::moss_health_handler(site_dir).await }
+                }),
+            )
             .route(
                 "/__moss/source/*path",
                 get(move |axum::extract::Path(p): axum::extract::Path<String>| {
@@ -700,6 +679,19 @@ pub async fn start_server(
             ))
     };
 
+    // Record this process as the folder's owner — the ONE server entry both
+    // the CLI and the desktop reach, so this is the one place an acquire on
+    // behalf of either host can live. See `ownership::acquire_for_site_dir`
+    // for what `None` and `Err` mean here; a conflict fails before the
+    // carrier binds or anything spawns, same error channel as any other
+    // start failure.
+    let owner_guard = ownership::acquire_for_site_dir(
+        &site_dir_state,
+        kind,
+        crate::system::app_version().to_string(),
+        format!("http://127.0.0.1:{port}"),
+    )?;
+
     // Bind the carrier to the served vault before the first request, which
     // mints the session token and publishes it to the vault's loopback-readable
     // file — so a local client (coding agent / Playwright) can authenticate
@@ -717,6 +709,9 @@ pub async fn start_server(
     // Both listeners were bound above. Hand them straight to the serve
     // loops — no further chance for a foreign process to slip in.
     let serve_future = async move {
+        // Held for exactly as long as this server runs: dropped only when
+        // the loops below return, which is after the shutdown signal fires.
+        let _owner_guard = owner_guard;
         // Drive both listeners with the same router. Two oneshot
         // receivers feed off the single shutdown signal via a
         // broadcast channel-of-one pattern.

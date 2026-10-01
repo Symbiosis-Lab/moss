@@ -76,6 +76,7 @@ pub(crate) mod content_wrapper;
 pub mod events;
 pub(crate) mod iframe_bridge;
 pub mod invoke;
+pub mod ownership;
 pub mod placeholder;
 pub mod port;
 pub mod router;
@@ -83,6 +84,7 @@ pub mod session;
 pub(crate) mod trust_boundary;
 
 pub use invoke::InvokeCtx;
+pub use ownership::HostKind;
 pub use router::{start_server, ServeConfig};
 
 use std::sync::Arc;
@@ -132,6 +134,7 @@ pub async fn start_server_headless(
     let (port, shutdown_tx) = start_server(ServeConfig {
         invoke: invoke_ctx,
         asset_registry,
+        kind: HostKind::Cli,
         ..ServeConfig::new(site_dir_state, port::env_port_base())
     })
     .await?;
