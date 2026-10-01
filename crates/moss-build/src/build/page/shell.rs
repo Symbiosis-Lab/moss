@@ -318,12 +318,14 @@ impl ShellProcessor {
         // Note: these reflect the static token bg value baked into tokens.json.
         // Author background overrides (via .moss/theme/style.css) are applied at
         // toggle-time by theme.js JS sync, NOT tracked here at build time.
-        let (bg_light, bg_dark) = {
+        // tokens.json is compiled in, so it is parsed once per process, not per page.
+        static THEME_BG: std::sync::LazyLock<(String, String)> = std::sync::LazyLock::new(|| {
             use moss_core::contract::tokens::{bg_colors, load_tokens};
             let t = load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {}", e));
             let (l, d) = bg_colors(&t);
             (l.to_owned(), d.to_owned())
-        };
+        });
+        let (bg_light, bg_dark) = THEME_BG.clone();
 
         // main_class_attr: expands to ` class="X"` when non-empty, empty string otherwise
         let main_class_attr =
