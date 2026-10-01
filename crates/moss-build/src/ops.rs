@@ -219,6 +219,10 @@ pub struct HeadlessBuildRun {
     pub host_ports: watch::headless::HostPortsFactory,
     /// See [`WatchStarter`].
     pub start_watch: WatchStarter,
+    /// Routes an embedding host binary contributes to the server this driver
+    /// starts under `--serve` — see [`serve::ServeConfig::host_routes`].
+    /// `None` for a host with nothing to add.
+    pub host_routes: Option<axum::Router>,
 }
 
 /// Run a headless CLI build — the one driver behind both `moss-cli build`
@@ -304,14 +308,16 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             // after anyway, so `--serve` alone keeps A2's plain refusal.
             let standby_on_conflict = run.flags.watch;
             let yield_notify = yield_requested.clone();
+            let host_routes = run.host_routes.take();
             let launch: Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync> =
                 Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();
                 let launch_error_slot = launch_error_slot.clone();
                 let assets = assets.clone();
                 let yield_notify = yield_notify.clone();
+                let host_routes = host_routes.clone();
                 Box::pin(async move {
-                    match serve::start_server_headless(&moss_dir, cell, assets, standby_on_conflict, yield_notify).await {
+                    match serve::start_server_headless(&moss_dir, cell, assets, standby_on_conflict, yield_notify, host_routes).await {
                         Ok((port, shutdown_tx)) => {
                             *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(shutdown_tx);

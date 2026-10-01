@@ -6,7 +6,7 @@
 //! the iframe-bridge script alive on missing pages.
 
 use super::placeholder::{handle_asset_request, transparent_stub_response};
-use super::port::{verify_server_ready, MOSS_HEALTH_PATH};
+use super::port::{bind_dual_stack_with_scan, verify_server_ready, MOSS_HEALTH_PATH};
 use super::asset_rewriter;
 use super::content_wrapper;
 use super::iframe_bridge::inject_iframe_bridge;
@@ -20,100 +20,9 @@ use axum::{
     Router,
 };
 use moss_core::media::html_escape;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpListener;
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
-
-/// Attempt to bind TCP listeners for moss on both IPv4 (`127.0.0.1`) and
-/// IPv6 (`[::1]`) loopback for exactly the given port.
-///
-/// Returns `Err` if either family is unbindable; the caller is expected to
-/// move on to the next candidate port in that case.
-///
-/// ### Why two listeners instead of one wildcard bind
-///
-/// The obvious approach — binding the IPv6 wildcard `[::]:port` with
-/// `IPV6_V6ONLY=0` — does NOT work as a collision detector on macOS / BSD.
-/// macOS allows a later `127.0.0.1:port` bind to coexist with a prior
-/// `[::]:port` bind, and the more-specific listener wins for incoming
-/// localhost traffic. That is exactly the foreign-vs-moss collision pattern
-/// this code is supposed to detect and refuse.
-///
-/// Binding both specific loopback addresses explicitly accomplishes two
-/// things:
-///
-/// 1. **Detection.** If a foreign server holds `127.0.0.1:port` or `[::1]:port`
-///    directly, our bind fails on that address and we fall through to the
-///    next-port scan.
-/// 2. **Correctness in the wildcard case.** Even if a foreign dev server
-///    holds the IPv6 wildcard `[::]:port` (eleventy's default), the kernel
-///    routes connections to whichever listener has the more specific
-///    address. Our two specific-loopback listeners win, so the iframe
-///    sees moss content regardless of whether `localhost` resolves to
-///    `127.0.0.1` or `::1`.
-async fn try_bind_dual_stack(port: u16) -> Result<(TcpListener, TcpListener), String> {
-    let v4_addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], port));
-    let v6_addr: SocketAddr = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
-
-    let v4 = TcpListener::bind(&v4_addr)
-        .await
-        .map_err(|e| format!("bind 127.0.0.1:{}: {}", port, e))?;
-    // If v4 succeeded but v6 fails, dropping `v4` here releases the IPv4
-    // listener so we don't leak a half-bound port — the next loop iteration
-    // (or a competing process) is free to grab the IPv4 side again.
-    let v6 = TcpListener::bind(&v6_addr)
-        .await
-        .map_err(|e| format!("bind [::1]:{}: {}", port, e))?;
-    Ok((v4, v6))
-}
-
-/// Scan upward from `start_port` until both IPv4 and IPv6 loopback can be
-/// bound simultaneously. Returns the bound port plus both listeners.
-///
-/// This is the **authoritative collision check** for the server-start path:
-/// the bind itself is the source of truth for "is this port free?", which
-/// closes the TOCTOU window that a separate `is_port_available` →
-/// `bind_dual_stack` sequence would leave open. Other callers that just
-/// want a non-binding probe (e.g. lifecycle health checks) can still use
-/// `port::is_port_available`.
-///
-/// Scans `MAX_PORT_SCAN` ports (currently 100) starting from `start_port`.
-/// Returns the same shape `try_bind_dual_stack` does on success, or an
-/// `Err` describing the last bind failure if no port in the range works.
-async fn bind_dual_stack_with_scan(
-    start_port: u16,
-) -> Result<(u16, TcpListener, TcpListener), String> {
-    const MAX_PORT_SCAN: u16 = 100;
-    let mut last_err: Option<String> = None;
-    for port in start_port..start_port.saturating_add(MAX_PORT_SCAN) {
-        match try_bind_dual_stack(port).await {
-            Ok((v4, v6)) => {
-                log::info!(
-                    target: "preview",
-                    "Preview server bound to port {} (dual-stack: IPv4 + IPv6)",
-                    port
-                );
-                return Ok((port, v4, v6));
-            }
-            Err(e) => {
-                log::info!(
-                    target: "preview",
-                    "Port {} unavailable, trying next port (foreign server may be holding it): {}",
-                    port, e
-                );
-                last_err = Some(e);
-            }
-        }
-    }
-    Err(format!(
-        "No dual-stack-bindable port found in range {}..{} (last error: {})",
-        start_port,
-        start_port.saturating_add(MAX_PORT_SCAN),
-        last_err.unwrap_or_else(|| "unknown".to_string())
-    ))
-}
 
 /// `/__moss/source/*path` — serve a project-scoped SOURCE file over HTTP.
 ///
@@ -273,6 +182,10 @@ pub struct ServeConfig {
     pub standby_on_conflict: bool,
     /// Fires on an admitted `POST /__moss/yield` — see `super::yield_route`.
     pub yield_notify: Arc<tokio::sync::Notify>,
+    /// Routes an embedding host contributes, merged in before the
+    /// `ServeDir` fallback so a host route wins over a site file at the
+    /// same path. `None` merges nothing.
+    pub host_routes: Option<Router>,
 }
 
 impl ServeConfig {
@@ -294,6 +207,7 @@ impl ServeConfig {
             kind: super::ownership::HostKind::Cli,
             standby_on_conflict: false,
             yield_notify: Arc::new(tokio::sync::Notify::new()),
+            host_routes: None,
         }
     }
 }
@@ -316,6 +230,7 @@ pub async fn start_server(
         kind,
         standby_on_conflict,
         yield_notify,
+        host_routes,
     } = config;
     // === SETUP PHASE ===
     // Note: We don't check for index.html here - the server can start even for empty folders.
@@ -358,7 +273,8 @@ pub async fn start_server(
     let build_router = |state: Arc<std::sync::RwLock<std::path::PathBuf>>,
                         registry: Option<Arc<crate::types::assets::AssetRegistry>>,
                         invoke: Option<super::invoke::InvokeCtx>,
-                        is_evicted: EvictedProbe| {
+                        is_evicted: EvictedProbe,
+                        host_routes: Option<Router>| {
         let registry_for_layer = registry.clone();
         // The `/__moss_health/` route is registered BEFORE `.fallback()` so it
         // always wins over `ServeDir`. The endpoint emits a moss-specific JSON
@@ -485,6 +401,11 @@ pub async fn start_server(
                     ),
                 );
         }
+
+        // See `host_routes::merge_host_routes` (split out for router.rs's
+        // own size gate): merged in before `.fallback()`, same ordering rule
+        // as every route above.
+        let router = super::host_routes::merge_host_routes(router, host_routes);
 
         router
             .fallback(move |request: Request<Body>| {
@@ -723,7 +644,7 @@ pub async fn start_server(
 
     // Spawn the server task. We use a helper closure to avoid duplicating the
     // serve logic — both code paths run the same axum::serve with graceful shutdown.
-    let app = build_router(state_clone, registry_clone, invoke_ctx_clone, is_evicted);
+    let app = build_router(state_clone, registry_clone, invoke_ctx_clone, is_evicted, host_routes);
 
     // Both listeners were bound above. Hand them straight to the serve
     // loops — no further chance for a foreign process to slip in.

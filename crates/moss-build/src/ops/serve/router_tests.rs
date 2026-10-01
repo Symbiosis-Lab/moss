@@ -2796,3 +2796,156 @@ async fn the_subscriber_count_follows_an_open_event_stream() {
 
     let _ = shutdown_tx.send(());
 }
+
+// ===== Host-owned routes (ServeConfig::host_routes) =====
+
+/// A tiny stand-in for what an embedding host binary would mount: one route
+/// under the reserved `/__moss/` prefix, answering with a body only the host
+/// could have produced.
+fn host_ping_router() -> axum::Router {
+    axum::Router::new().route("/__moss/host/ping", axum::routing::get(|| async { "host-pong" }))
+}
+
+/// A route contributed via `ServeConfig::host_routes` answers with the
+/// host's own body — proving the field is actually merged into the router,
+/// not just accepted and ignored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_route_answers_with_the_hosts_body() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let (port, shutdown_tx) = start_server(ServeConfig {
+        host_routes: Some(host_ping_router()),
+        ..ServeConfig::new(site_dir_state, 59200)
+    })
+    .await
+    .expect("Server should start");
+
+    let body = ureq::get(&format!("http://localhost:{}/__moss/host/ping", port))
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .expect("a mounted host route must answer")
+        .into_string()
+        .expect("body should read");
+    assert_eq!(body, "host-pong");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A site file written at the same served path as a host route does not
+/// shadow it — host routes are merged in before `.fallback(ServeDir)`, the
+/// same ordering rule that already protects every other `/__moss/` endpoint
+/// from a same-path user file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_route_is_not_shadowed_by_a_site_file_at_the_same_path() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(temp_dir.path().join("__moss/host")).unwrap();
+    std::fs::write(temp_dir.path().join("__moss/host/ping"), b"a site author's own file").unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let (port, shutdown_tx) = start_server(ServeConfig {
+        host_routes: Some(host_ping_router()),
+        ..ServeConfig::new(site_dir_state, 59300)
+    })
+    .await
+    .expect("Server should start");
+
+    let body = ureq::get(&format!("http://localhost:{}/__moss/host/ping", port))
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .expect("the host route must still answer")
+        .into_string()
+        .expect("body should read");
+    assert_eq!(
+        body, "host-pong",
+        "a site file at the same path must not shadow the host route"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A host route is behind the same trust boundary as the carrier: a rebound
+/// (non-loopback) `Host` header is refused with 421 before the host's own
+/// handler ever runs. Raw TCP for the same reason as
+/// `trust_boundary_refuses_a_rebound_host_but_serves_localhost` — ureq
+/// manages `Host` from the URL, so only a hand-written request reproduces
+/// what a rebinding attack looks like on the wire. The `localhost` request
+/// is the positive control: without it, a 421 on every request would pass
+/// just as well if the layer were refusing everything.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_route_refuses_a_rebound_host_but_serves_localhost() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let (port, shutdown_tx) = start_server(ServeConfig {
+        host_routes: Some(host_ping_router()),
+        ..ServeConfig::new(site_dir_state, 59400)
+    })
+    .await
+    .expect("Server should start");
+
+    let status_line = |host: &str| -> String {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /__moss/host/ping HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        resp.lines().next().unwrap_or("").to_string()
+    };
+
+    // Positive control: the socket and the host route both work for a loopback Host.
+    assert!(
+        status_line("localhost").contains("200"),
+        "control: a loopback Host must reach the host route; the refusal below would be vacuous otherwise"
+    );
+
+    // The rebinding attack: same socket, attacker's hostname in Host → 421.
+    assert!(
+        status_line("evil.com").contains("421"),
+        "a rebound (non-loopback) Host must be refused with 421, exactly like the carrier"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A host route registered at an engine-owned path (`/__moss/invoke/*cmd`,
+/// mounted whenever `invoke` is `Some`) does not silently shadow the
+/// engine's own handler — `Router::merge` panics on the exact path+method
+/// collision, at construction time, before the server ever binds a port.
+/// Spawned so the panic surfaces as a `JoinError` rather than aborting this
+/// test's own task; `is_panic()` is the merge order's actual guarantee here,
+/// not a graceful `Result::Err` from `start_server`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_route_colliding_with_an_engine_path_fails_construction_instead_of_shadowing_it() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
+    // Same method as the engine's own route (`POST /__moss/invoke/*cmd`):
+    // a different method at the same path is not a collision at all — axum
+    // merges it onto the same path's existing method router — so only a
+    // same-method registration actually exercises the construction-time
+    // guarantee this test is for.
+    let colliding = axum::Router::new()
+        .route("/__moss/invoke/*cmd", axum::routing::post(|| async { "shadow" }));
+
+    let result = tokio::spawn(async move {
+        start_server(ServeConfig {
+            invoke: Some(ctx),
+            host_routes: Some(colliding),
+            ..ServeConfig::new(site_dir_state, 59500)
+        })
+        .await
+    })
+    .await;
+
+    assert!(
+        result.is_err() && result.unwrap_err().is_panic(),
+        "a host route at an engine path must fail construction loudly (panic), not shadow the engine's handler"
+    );
+}

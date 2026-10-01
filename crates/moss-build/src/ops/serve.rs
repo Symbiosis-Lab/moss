@@ -75,10 +75,11 @@
 // internal to the server and stay `pub(crate)` — they are the security-relevant
 // half, and the open repo will make "crate-external" mean "public".
 pub mod asset_rewriter;
-pub(crate) mod carrier_token;
+pub mod carrier_token;
 pub(crate) mod comment_stub;
 pub(crate) mod content_wrapper;
 pub mod events;
+pub(crate) mod host_routes;
 pub(crate) mod iframe_bridge;
 pub mod invoke;
 pub mod ownership;
@@ -137,6 +138,7 @@ pub async fn start_server_headless(
     asset_registry: Option<Arc<crate::types::assets::AssetRegistry>>,
     standby_on_conflict: bool,
     yield_notify: Arc<tokio::sync::Notify>,
+    host_routes: Option<axum::Router>,
 ) -> Result<(u16, tokio::sync::oneshot::Sender<()>), String> {
     let serve_dir = serve_dir_for_site_path(moss_path);
     let site_dir_state =
@@ -156,6 +158,7 @@ pub async fn start_server_headless(
         kind: HostKind::Cli,
         standby_on_conflict,
         yield_notify,
+        host_routes,
         ..ServeConfig::new(site_dir_state, port::env_port_base())
     })
     .await?;

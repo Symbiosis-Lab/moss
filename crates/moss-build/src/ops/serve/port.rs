@@ -248,6 +248,98 @@ pub async fn verify_server_ready(port: u16) -> Result<(), String> {
     ))
 }
 
+/// Attempt to bind TCP listeners for moss on both IPv4 (`127.0.0.1`) and
+/// IPv6 (`[::1]`) loopback for exactly the given port.
+///
+/// Returns `Err` if either family is unbindable; the caller is expected to
+/// move on to the next candidate port in that case.
+///
+/// ### Why two listeners instead of one wildcard bind
+///
+/// The obvious approach — binding the IPv6 wildcard `[::]:port` with
+/// `IPV6_V6ONLY=0` — does NOT work as a collision detector on macOS / BSD.
+/// macOS allows a later `127.0.0.1:port` bind to coexist with a prior
+/// `[::]:port` bind, and the more-specific listener wins for incoming
+/// localhost traffic. That is exactly the foreign-vs-moss collision pattern
+/// this code is supposed to detect and refuse.
+///
+/// Binding both specific loopback addresses explicitly accomplishes two
+/// things:
+///
+/// 1. **Detection.** If a foreign server holds `127.0.0.1:port` or `[::1]:port`
+///    directly, our bind fails on that address and we fall through to the
+///    next-port scan.
+/// 2. **Correctness in the wildcard case.** Even if a foreign dev server
+///    holds the IPv6 wildcard `[::]:port` (eleventy's default), the kernel
+///    routes connections to whichever listener has the more specific
+///    address. Our two specific-loopback listeners win, so the iframe
+///    sees moss content regardless of whether `localhost` resolves to
+///    `127.0.0.1` or `::1`.
+async fn try_bind_dual_stack(
+    port: u16,
+) -> Result<(tokio::net::TcpListener, tokio::net::TcpListener), String> {
+    let v4_addr: std::net::SocketAddr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let v6_addr: std::net::SocketAddr =
+        std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+
+    let v4 = tokio::net::TcpListener::bind(&v4_addr)
+        .await
+        .map_err(|e| format!("bind 127.0.0.1:{}: {}", port, e))?;
+    // If v4 succeeded but v6 fails, dropping `v4` here releases the IPv4
+    // listener so we don't leak a half-bound port — the next loop iteration
+    // (or a competing process) is free to grab the IPv4 side again.
+    let v6 = tokio::net::TcpListener::bind(&v6_addr)
+        .await
+        .map_err(|e| format!("bind [::1]:{}: {}", port, e))?;
+    Ok((v4, v6))
+}
+
+/// Scan upward from `start_port` until both IPv4 and IPv6 loopback can be
+/// bound simultaneously. Returns the bound port plus both listeners.
+///
+/// This is the **authoritative collision check** for the server-start path:
+/// the bind itself is the source of truth for "is this port free?", which
+/// closes the TOCTOU window that a separate `is_port_available` →
+/// `bind_dual_stack` sequence would leave open. Other callers that just
+/// want a non-binding probe (e.g. lifecycle health checks) can still use
+/// `is_port_available`.
+///
+/// Scans `MAX_PORT_SCAN` ports (currently 100) starting from `start_port`.
+/// Returns the same shape `try_bind_dual_stack` does on success, or an
+/// `Err` describing the last bind failure if no port in the range works.
+pub(super) async fn bind_dual_stack_with_scan(
+    start_port: u16,
+) -> Result<(u16, tokio::net::TcpListener, tokio::net::TcpListener), String> {
+    const MAX_PORT_SCAN: u16 = 100;
+    let mut last_err: Option<String> = None;
+    for port in start_port..start_port.saturating_add(MAX_PORT_SCAN) {
+        match try_bind_dual_stack(port).await {
+            Ok((v4, v6)) => {
+                log::info!(
+                    target: "preview",
+                    "Preview server bound to port {} (dual-stack: IPv4 + IPv6)",
+                    port
+                );
+                return Ok((port, v4, v6));
+            }
+            Err(e) => {
+                log::info!(
+                    target: "preview",
+                    "Port {} unavailable, trying next port (foreign server may be holding it): {}",
+                    port, e
+                );
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(format!(
+        "No dual-stack-bindable port found in range {}..{} (last error: {})",
+        start_port,
+        start_port.saturating_add(MAX_PORT_SCAN),
+        last_err.unwrap_or_else(|| "unknown".to_string())
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
