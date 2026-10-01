@@ -25,6 +25,11 @@ use super::scope::{is_within_scope, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
 use super::writer::{rename_for_collision, url_to_file_path};
 
+// Re-exported at this module's old path: a consumer outside this crate
+// already names `refuse_unsafe_scrape_url` here, from before the SSRF/fetch
+// stack moved into its own sibling module.
+pub use super::fetch::refuse_unsafe_scrape_url;
+
 /// Subdirectory inside the output folder where downloaded media lands.
 /// Relative to `<output>/` so the saved markdown can reference assets
 /// with portable `./assets/imported/…` paths.
