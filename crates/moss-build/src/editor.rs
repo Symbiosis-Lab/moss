@@ -9,6 +9,7 @@
 
 pub mod completions;
 pub mod content;
+pub mod copy_in;
 pub mod filesystem;
 pub mod frontmatter;
 // Reference-aware rename and delete: the pure text rewriting (`ref_rewrite`),
