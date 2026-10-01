@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +17,8 @@ use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 
 use super::converter::{extract_article, extract_article_with_snapshot, rewrite_image_links};
-use super::crawler::{extract_canonical_url, extract_links, looks_like_html_page, path_identity};
+use super::crawl_state::CrawlState;
+use super::crawler::{extract_canonical_url, extract_links, looks_like_html_page};
 use super::scope::{is_within_scope, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
 use super::writer::{rename_for_collision, sanitize_filename, url_to_file_path};
@@ -218,43 +219,6 @@ where
     fs::create_dir_all(&assets_dir)
         .map_err(|e| format!("Failed to create assets directory: {}", e))?;
 
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut queue: VecDeque<String> = VecDeque::new();
-    let mut remote_to_local: HashMap<String, String> = HashMap::new();
-    let mut pages_scraped: usize = 0;
-    let mut pages_failed: usize = 0;
-    let mut pages_skipped: usize = 0;
-    let mut pages_duplicate: usize = 0;
-    let mut pages_unreachable_variants: usize = 0;
-    let mut capped = false;
-    // Identity of every page WRITTEN so far in this crawl — its own
-    // canonical URL when it declared one, else the URL it was fetched from.
-    // A later page whose own canonical names an identity already in this
-    // set is a duplicate (rule 1).
-    let mut imported_identities: HashSet<String> = HashSet::new();
-    // Body hashes of every page WRITTEN so far, keyed by that page's own
-    // `path_identity` (scheme + host + path, query and fragment dropped).
-    // Consulted only for a page that declares no canonical of its own
-    // (rule 2, the fallback): a duplicate needs BOTH the same path identity
-    // AND the same body hash, so two different pages that happen to render
-    // the same short templated body (two "coming soon" stubs at different
-    // addresses) never collapse into one — only a query-string variant of
-    // the SAME path does.
-    let mut written_path_bodies: HashMap<String, HashSet<u64>> = HashMap::new();
-    // Path identities where this crawl has already CONFIRMED a duplicate —
-    // a URL resolved as `PageOutcome::Duplicate` (by rule 1 or rule 2) at
-    // that path. Consulted only when a fetch fails outright: a failed URL
-    // can never run rule 1/2 itself (there is no body or canonical to
-    // compare), so the only safe positive evidence that it, too, is "just
-    // another variant" is that SOME other URL at the same path has already
-    // been confirmed one. A path that has only ever produced `Written`
-    // pages (an old-CMS `?p=1`/`?p=2`/… with distinct self-canonicals, say)
-    // stays out of this set, so a later sibling at that path that fails to
-    // fetch still gets `Failed`'s ordinary stub rather than silently
-    // vanishing — see the regression test
-    // `an_old_cms_style_path_with_no_confirmed_duplicate_still_stubs_a_failed_sibling`.
-    let mut known_duplicate_paths: HashSet<String> = HashSet::new();
-
     // The site's own declared page list — read before the link-following
     // walk starts, so an unlinked page is queued regardless and, seeded
     // ahead of every link-discovered URL below, is also the one on disk
@@ -266,44 +230,32 @@ where
     } else {
         super::sitemap::SitemapDiscovery::default()
     };
-    let declared: HashSet<String> = sitemap.urls.iter().cloned().collect();
 
-    queue.push_back(config.start_url.clone());
-    for url in &sitemap.urls {
-        queue.push_back(url.clone());
-    }
+    // One record per crawl concern (frontier, page cap, duplicate
+    // detection, the asset map, the outcome tally) instead of a dozen loose
+    // mutables threaded through the loop by hand — see `crawl_state` for
+    // the rules each sub-record owns and why.
+    let mut state = CrawlState::new(&config.start_url, &sitemap);
 
-    // Pages counted against `max_pages` — a sitemap-declared URL never is
-    // (rule 3: the cap is a safety limit on link-discovered extras only),
-    // so this undercounts `pages_scraped + pages_failed + pages_skipped`
-    // exactly by however many of those were declared, and the cap check
-    // below reads this instead of that sum.
-    let mut capped_progress: usize = 0;
-
-    while let Some(url) = queue.pop_front() {
-        if visited.contains(&url) {
+    while let Some(url) = state.frontier.pop() {
+        if state.frontier.is_visited(&url) {
             continue;
         }
 
-        let is_declared = declared.contains(&url);
+        let is_declared = state.cap.is_declared(&url);
 
-        if !is_declared {
-            if let Some(cap) = config.max_pages {
-                if capped_progress >= cap {
-                    // Popped but never visited or processed: put it back so
-                    // the leftover count computed after the loop includes
-                    // it.
-                    queue.push_front(url);
-                    capped = true;
-                    break;
-                }
-            }
+        if !is_declared && !state.cap.has_room(config.max_pages) {
+            // Popped but never visited or processed: put it back so the
+            // leftover count computed after the loop includes it.
+            state.frontier.requeue_front(url);
+            state.cap.mark_capped();
+            break;
         }
-        visited.insert(url.clone());
+        state.frontier.visit(&url);
 
         on_progress(ScrapeProgress {
-            pages_scraped,
-            pages_failed,
+            pages_scraped: state.tally.scraped(),
+            pages_failed: state.tally.failed(),
             current_url: Some(url.clone()),
             complete: false,
         });
@@ -318,19 +270,14 @@ where
         let (html, content_type) = match fetch_page(&url, &config.user_agent).await {
             Ok(v) => v,
             Err(e) => {
-                // A failed fetch whose path (query string ignored) already
-                // names a path this crawl has already CONFIRMED produces
-                // duplicates (not merely a path that has produced ANY
-                // written page — an old-CMS `?p=1`/`?p=2` pair is written
-                // under the same path with no duplicate between them) is a
-                // query-string variant that couldn't be reconfirmed, not a
-                // page gone missing — the real content is already on disk
-                // under that path. See `PageOutcome::VariantFetchFailed`. A
-                // genuinely new URL that fails still gets `Failed`'s stub
-                // below, exactly as before this check existed.
-                let is_known_variant = path_identity(&url)
-                    .is_some_and(|id| known_duplicate_paths.contains(&id));
-                if is_known_variant {
+                // A failed fetch on a path this crawl has already
+                // CONFIRMED produces duplicates is a query-string variant
+                // that couldn't be reconfirmed, not a page gone missing —
+                // see `Dedupe::is_known_variant` and
+                // `PageOutcome::VariantFetchFailed`. A genuinely new URL
+                // that fails still gets `Failed`'s stub below, exactly as
+                // before this check existed.
+                if state.dedupe.is_known_variant(&url) {
                     log::warn!(
                         "import: fetch failed for a query-string variant of an \
                          already-imported page, skipping the stub: {url}: {e}"
@@ -359,56 +306,30 @@ where
 
         if config.recursive {
             for link in extract_links(&html, &url) {
-                if super::sitemap::block_if_locale_alternate(
-                    &link,
-                    &sitemap.locale_alternates,
-                    &mut visited,
-                    &mut pages_duplicate,
-                ) {
+                if state.block_locale_alternate(&link, &sitemap.locale_alternates) {
                     continue;
                 }
-                if is_within_scope(&scope, &link) && !visited.contains(&link) {
-                    queue.push_back(link);
+                if is_within_scope(&scope, &link) {
+                    state.frontier.enqueue_if_unvisited(link);
                 }
             }
             // Manifest-declared pages (client-rendered viewers have no
             // server-side anchors to follow).
             for page in crate::vault::import::engine::discover_pages(&html, &url) {
-                if super::sitemap::block_if_locale_alternate(
-                    &page,
-                    &sitemap.locale_alternates,
-                    &mut visited,
-                    &mut pages_duplicate,
-                ) {
+                if state.block_locale_alternate(&page, &sitemap.locale_alternates) {
                     continue;
                 }
-                if is_within_scope(&scope, &page) && !visited.contains(&page) {
-                    queue.push_back(page);
+                if is_within_scope(&scope, &page) {
+                    state.frontier.enqueue_if_unvisited(page);
                 }
             }
         }
 
-        // Rule 1: a canonical identity already imported makes THIS page a
-        // duplicate of it. Deliberately checked against identities already
-        // WRITTEN, never against an unvisited target still sitting in the
-        // queue: an earlier version of this rule bet on that queued target
-        // too, dropping this page on the assumption that the future pop
-        // would import it under the same identity. When the bet was wrong —
-        // the canonical target itself later failed to fetch (a dead link, a
-        // moved page, a stale tag left behind by a CMS migration) — nothing
-        // was ever written under that identity, and the only real copy of
-        // this content, the one already in hand, had already been thrown
-        // away. Comparing only against identities already written keeps a
-        // real distinct page from ever being dropped; the cost is that the
-        // page kept, when two variants race for one identity, is whichever
-        // one this crawl reaches first, not necessarily the one its own
-        // canonical tag points at — and a kept variant is a page still on
-        // disk, not a page gone.
+        // Rule 1 — see `Dedupe::is_duplicate_identity` for why this is
+        // checked against identities already WRITTEN, never against an
+        // unvisited target still sitting in the queue.
         if let Some(canon) = &canonical {
-            if imported_identities.contains(canon) {
-                if let Some(id) = path_identity(&url) {
-                    known_duplicate_paths.insert(id);
-                }
+            if state.dedupe.is_duplicate_identity(&url, canon) {
                 break 'page PageOutcome::Duplicate;
             }
         }
@@ -432,21 +353,10 @@ where
         let mut article = extract_article_with_snapshot(&html, snapshot_html.as_deref(), &url);
         let body_hash = hash_body(&article.markdown);
 
-        // Rule 2: the fallback for a page that declares no canonical of its
-        // own — a body byte-identical to an already-written page's AT THE
-        // SAME PATH (query string and fragment ignored) is a query-string
-        // variant of it (seen on calendar/filter exports with no canonical
-        // tag at all). The path match is required: without it, two
-        // different real pages that happen to render the same short
-        // templated body would collapse into one, which this rule must
-        // never do.
-        if canonical.is_none() {
-            if let Some(id) = path_identity(&url) {
-                if written_path_bodies.get(&id).is_some_and(|hashes| hashes.contains(&body_hash)) {
-                    known_duplicate_paths.insert(id);
-                    break 'page PageOutcome::Duplicate;
-                }
-            }
+        // Rule 2, the fallback for a page with no canonical of its own —
+        // see `Dedupe::is_duplicate_body`.
+        if canonical.is_none() && state.dedupe.is_duplicate_body(&url, body_hash) {
+            break 'page PageOutcome::Duplicate;
         }
 
         // Prefer og:image for the card cover — it is explicitly declared for
@@ -454,7 +364,7 @@ where
         // in-order body image when og:image is absent. We capture the REMOTE
         // URL here so we can look up the local hash filename after the download
         // loop below. If the chosen image's download fails, `cover_remote`
-        // simply isn't in `remote_to_local` and the `cover:` frontmatter stays
+        // simply isn't in the asset map and the `cover:` frontmatter stays
         // unset — better than emitting a path pointing at a file that didn't
         // land on disk.
         let cover_remote = article
@@ -464,13 +374,13 @@ where
             .or_else(|| super::converter::first_image_url(&article.markdown, &url));
 
         for media_url in &article.media_urls {
-            if remote_to_local.contains_key(media_url) {
+            if state.assets.contains(media_url) {
                 continue;
             }
             match download_asset(media_url, &assets_dir, &config.user_agent).await {
                 Ok(filename) => {
                     let local_rel = format!("./{}/{}", ASSETS_SUBDIR, filename);
-                    remote_to_local.insert(media_url.clone(), local_rel);
+                    state.assets.insert(media_url.clone(), local_rel);
                 }
                 // The reference keeps its remote URL — degraded, not broken —
                 // but never fail silently.
@@ -486,7 +396,7 @@ where
         // unparseable page in a hundred must not cost the other ninety-nine.
         match compose_note(
             &mut article,
-            &remote_to_local,
+            state.assets.as_map(),
             cover_remote,
             &url,
             scope_for_links,
@@ -494,14 +404,8 @@ where
             Some(note) => {
                 // Record this page's identity so a later duplicate of it —
                 // by canonical (rule 1) or by same-path body (rule 2) — is
-                // caught. Recorded regardless of whether THIS page itself
-                // had a canonical: rule 2 matches against any already-
-                // written page at that path, not only ones that also lacked
-                // a canonical of their own.
-                imported_identities.insert(canonical.clone().unwrap_or_else(|| url.clone()));
-                if let Some(id) = path_identity(&url) {
-                    written_path_bodies.entry(id).or_default().insert(body_hash);
-                }
+                // caught. See `Dedupe::record_written`.
+                state.dedupe.record_written(&url, canonical.as_deref(), body_hash);
                 PageOutcome::Written(note)
             }
             None => PageOutcome::Failed(
@@ -514,70 +418,56 @@ where
             PageOutcome::Written(note) => {
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &note)?;
-                pages_scraped += 1;
-                if !is_declared {
-                    capped_progress += 1;
-                }
+                state.tally.record_scraped();
+                state.cap.record_progress(is_declared);
             }
             PageOutcome::Failed(reason) => {
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &render_error_markdown(&url, &reason))?;
-                pages_failed += 1;
-                if !is_declared {
-                    capped_progress += 1;
-                }
+                state.tally.record_failed();
+                state.cap.record_progress(is_declared);
             }
             // Never written as a `.md` file at all — that is the whole fix.
             PageOutcome::Skipped => {
-                pages_skipped += 1;
-                if !is_declared {
-                    capped_progress += 1;
-                }
+                state.tally.record_skipped();
+                state.cap.record_progress(is_declared);
             }
             // Also never written — its links were already harvested above.
             // Never counted against the cap regardless of provenance, same
             // as before this fix.
             PageOutcome::Duplicate => {
-                pages_duplicate += 1;
+                state.tally.record_duplicate();
             }
             // Never written as a `.md` stub — the content it would have
             // pointed at is already on disk under its own path. Not counted
             // against the cap, same as `Duplicate`: this URL was never a
             // real additional page to begin with.
             PageOutcome::VariantFetchFailed => {
-                pages_unreachable_variants += 1;
+                state.tally.record_unreachable_variant();
             }
         }
     }
 
     on_progress(ScrapeProgress {
-        pages_scraped,
-        pages_failed,
+        pages_scraped: state.tally.scraped(),
+        pages_failed: state.tally.failed(),
         current_url: None,
         complete: true,
     });
 
-    // Discovered, in-scope URLs the cap left behind: deduplicated, since the
-    // same not-yet-visited URL can have been queued more than once by
-    // different pages that both linked to it before either was processed.
-    let remaining_urls = if capped {
-        queue
-            .iter()
-            .filter(|u| !visited.contains(*u))
-            .collect::<HashSet<_>>()
-            .len()
-    } else {
-        0
-    };
+    // Discovered, in-scope URLs the cap left behind — see
+    // `Frontier::remaining_unvisited_count`.
+    let remaining_urls =
+        if state.cap.capped() { state.frontier.remaining_unvisited_count() } else { 0 };
 
     Ok(ScrapeResult {
         success: true,
-        total_pages: pages_scraped,
-        failed_pages: pages_failed,
-        skipped_pages: pages_skipped,
-        duplicate_pages: pages_duplicate,
-        unreachable_variants: pages_unreachable_variants,
-        capped,
+        total_pages: state.tally.scraped(),
+        failed_pages: state.tally.failed(),
+        skipped_pages: state.tally.skipped(),
+        duplicate_pages: state.tally.duplicate(),
+        unreachable_variants: state.tally.unreachable_variants(),
+        capped: state.cap.capped(),
         remaining_urls,
         sitemap_urls: sitemap.urls.len(),
         sitemap_truncated: sitemap.truncated,

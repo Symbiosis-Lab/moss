@@ -21,6 +21,7 @@ pub mod run;
 pub mod service;
 
 pub(crate) mod crawler;
+mod crawl_state;
 pub(crate) mod extractor;
 pub(crate) mod metadata;
 pub(crate) mod mhtml;
