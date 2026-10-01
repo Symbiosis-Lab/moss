@@ -59,6 +59,25 @@ impl Gazetteer {
     }
 }
 
+/// Every precision value `.moss/places.toml` accepts, in ladder order
+/// (narrowest to widest) rather than `Precision`'s declaration order — a
+/// diagnostic listing them should read as the ladder an author can pick a
+/// rung from, not as an arbitrary enum dump.
+const ALLOWED_PRECISIONS: &str = "exact, city, region, country";
+
+/// The diagnostic text for an unrecognized `precision` value. Previously this
+/// named only the place and the bad value, leaving an author who mistyped
+/// (`"town"`) with no indication of WHERE to fix it or WHAT to fix it to —
+/// the downgrade to `country` (the privacy floor) still happened, just
+/// without enough in the message to tell a typo from an intentional choice.
+/// Pure and separately testable so the message's content — not just that
+/// some diagnostic fired — is what a test pins.
+fn precision_diagnostic(place: &str, bad: &str) -> String {
+    format!(
+        "'.moss/places.toml': place '{place}' has an invalid precision '{bad}' (allowed: {ALLOWED_PRECISIONS}); treating it as 'country'"
+    )
+}
+
 /// Turn an already-loaded `.moss/places.toml` table into a [`Gazetteer`].
 /// Pure — no I/O of its own — so it is covered by unit tests with no temp
 /// files; [`load_gazetteer`] is the thin I/O wrapper around it.
@@ -83,9 +102,7 @@ pub fn parse_gazetteer(table: &toml::value::Table) -> Gazetteer {
             Some("region") => Precision::Region,
             Some("country") => Precision::Country,
             Some(bad) => {
-                crate::build::cli_output::log_warn_problem!(
-                    "place '{name}' has an invalid precision '{bad}'; treating it as 'country'"
-                );
+                crate::build::cli_output::log_warn_problem!("{}", precision_diagnostic(name, bad));
                 Precision::Country
             }
             // No `precision` key at all is not itself a mistake worth a
@@ -157,6 +174,21 @@ mod tests {
         ));
         let kyoto = gaz.get("Kyoto").expect("Kyoto entry present");
         assert_eq!(kyoto.precision, Precision::Country);
+    }
+
+    /// The downgrade alone (pinned above) told nobody WHERE a bad value came
+    /// from or WHAT would have been accepted — a site that wrote `"town"`
+    /// just silently got the privacy floor. The diagnostic text has to carry
+    /// all four facts, or the gap reopens the moment a line gets trimmed.
+    #[test]
+    fn unknown_precision_diagnostic_names_the_file_place_value_and_allowed_set() {
+        let msg = precision_diagnostic("Kyoto", "town");
+        assert!(msg.contains(".moss/places.toml"), "names the file: {msg}");
+        assert!(msg.contains("Kyoto"), "names the place: {msg}");
+        assert!(msg.contains("'town'"), "names the value given: {msg}");
+        for allowed in ["exact", "city", "region", "country"] {
+            assert!(msg.contains(allowed), "names allowed value '{allowed}': {msg}");
+        }
     }
 
     #[test]
