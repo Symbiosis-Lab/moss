@@ -271,6 +271,8 @@ pub struct ServeConfig {
     /// (`ops::run_headless_build`) opts into standing by for the existing
     /// owner instead.
     pub standby_on_conflict: bool,
+    /// Fires on an admitted `POST /__moss/yield` — see `super::yield_route`.
+    pub yield_notify: Arc<tokio::sync::Notify>,
 }
 
 impl ServeConfig {
@@ -291,6 +293,7 @@ impl ServeConfig {
             is_evicted: crate::build::icloud::is_evicted,
             kind: super::ownership::HostKind::Cli,
             standby_on_conflict: false,
+            yield_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 }
@@ -312,6 +315,7 @@ pub async fn start_server(
         is_evicted,
         kind,
         standby_on_conflict,
+        yield_notify,
     } = config;
     // === SETUP PHASE ===
     // Note: We don't check for index.html here - the server can start even for empty folders.
@@ -386,7 +390,12 @@ pub async fn start_server(
             .route(
                 "/__moss/comments/api/v2/comments",
                 axum::routing::post(super::comment_stub::handle_comment_stub),
-            );
+            )
+            // Unconditional like health/source/comments — see `yield_route`.
+            .route("/__moss/yield", axum::routing::post({
+                let (site_dir, invoke, notify) = (state.clone(), invoke.clone(), yield_notify.clone());
+                move |r: Request<Body>| async move { super::yield_route::handle_yield(invoke, site_dir, kind, notify, r).await }
+            }));
 
         // Read-only HTTP command carrier (`POST /__moss/invoke/*cmd`). Registered
         // BEFORE `.fallback()` (same `/__moss/` ordering rule) and only when a

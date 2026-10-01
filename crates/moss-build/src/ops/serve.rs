@@ -27,6 +27,10 @@
 //!   `MossEvent` bus the desktop frontend receives over Tauri IPC (`events.rs`).
 //!   Same token gate as `/read`, minus the media-type half (a GET has no body).
 //!
+//! `POST /__moss/yield` is a fourth, unconditional endpoint outside this
+//! three-tier model — an infrastructure route like health and source, not a
+//! carrier command (see `yield_route`'s module doc).
+//!
 //! ## The token
 //!
 //! One token per bound vault, minted by `InvokeCtx::bind` — at start-up from
@@ -58,6 +62,7 @@
 //! - `invoke` — the HTTP command carrier (three tiers above)
 //! - `carrier_token` — per-session token mint/publish + the gate middleware
 //! - `trust_boundary` — Host/Origin validation (outermost layer)
+//! - `yield_route` — `POST /__moss/yield` handler + contract
 //! - `events` — the SSE event carrier + headless announcer/reporter
 //! - `placeholder` — SVG placeholders for assets still being processed
 //! - `asset_rewriter` / `content_wrapper` / `iframe_bridge` / `comment_stub` —
@@ -82,6 +87,7 @@ pub mod port;
 pub mod router;
 pub mod session;
 pub(crate) mod trust_boundary;
+pub(crate) mod yield_route;
 
 pub use invoke::InvokeCtx;
 pub use ownership::HostKind;
@@ -119,11 +125,18 @@ use std::sync::Arc;
 /// via [`ServeConfig`] — see its doc for what it does. `ops::run_headless_build`
 /// sets it from `--watch` (standing by makes no sense for a one-shot build
 /// that would just exit right after).
+///
+/// `yield_notify` is forwarded to [`ServeConfig`] too: `ops::run_headless_build`
+/// holds the same `Arc` across every call this process makes here (the
+/// initial launch and any relaunch after honoring a yield), so a `/__moss/yield`
+/// hit on whichever server is live right now always wakes the one driver loop
+/// waiting on it.
 pub async fn start_server_headless(
     moss_path: &str,
     cli_site_dir: Option<Arc<std::sync::RwLock<std::path::PathBuf>>>,
     asset_registry: Option<Arc<crate::types::assets::AssetRegistry>>,
     standby_on_conflict: bool,
+    yield_notify: Arc<tokio::sync::Notify>,
 ) -> Result<(u16, tokio::sync::oneshot::Sender<()>), String> {
     let serve_dir = serve_dir_for_site_path(moss_path);
     let site_dir_state =
@@ -142,6 +155,7 @@ pub async fn start_server_headless(
         asset_registry,
         kind: HostKind::Cli,
         standby_on_conflict,
+        yield_notify,
         ..ServeConfig::new(site_dir_state, port::env_port_base())
     })
     .await?;

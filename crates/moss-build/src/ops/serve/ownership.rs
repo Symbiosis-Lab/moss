@@ -379,8 +379,8 @@ fn resolve_vault_folder(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -
 /// repeatedly, since the folder could be re-claimed by yet another process in
 /// the gap between "owner gone" and this retry. Unset (the default, and every
 /// `--serve` without `--watch`), a conflict is [`already_served_message`],
-/// ready to hand back as the reason the server never started — A2's
-/// behaviour, unchanged.
+/// ready to hand back as the reason the server never started — the original
+/// no-`--watch` conflict behaviour, unchanged.
 pub async fn acquire_for_site_dir(
     site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>,
     kind: HostKind,
@@ -437,6 +437,96 @@ pub async fn wait_for_owner_to_leave(folder: &Path) {
     }
 }
 
+/// Wait up to `timeout` for `folder` to GET a live owner — the reverse wait
+/// of [`wait_for_owner_to_leave`], for a process that just honored a yield
+/// and must not simply reacquire the lock it just freed. A folder is briefly
+/// ownerless right after a yield, and reacquiring immediately (the lock IS
+/// free) would make the yielder its own next owner, defeating the whole
+/// point: this wait is what leaves the window open for someone else — the
+/// caller `/__moss/yield` exists for — to claim it first. A record naming
+/// THIS process's own pid is ignored rather than accepted: the `OwnerGuard`
+/// that erases our previous record only drops once the server we just told
+/// to shut down actually finishes doing so, so the very first poll can still
+/// read our own, about-to-vanish record.
+///
+/// `None` if nobody else claims the folder before `timeout` elapses — a
+/// yield is a courtesy, not a guarantee, and the caller falls back to
+/// resuming service itself rather than waiting forever for a requester who
+/// may have gone away. Same fixed 2-second poll as `wait_for_owner_to_leave`
+/// otherwise, capped so the final wait never overshoots `timeout`.
+pub async fn wait_for_owner_to_appear(folder: &Path, timeout: std::time::Duration) -> Option<OwnerRecord> {
+    let own_pid = std::process::id();
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(owner) = find_live_owner(folder).await {
+            if owner.pid != own_pid {
+                return Some(owner);
+            }
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        tokio::time::sleep(remaining.min(std::time::Duration::from_secs(2))).await;
+    }
+}
+
+/// The one line a `--serve` process prints the moment it honors a
+/// `/__moss/yield` request, before it drops its own ownership — shared so
+/// the `--watch` standby branch and the one-shot exit-0 branch of
+/// `ops::run_headless_build` cannot drift into two different wordings.
+pub fn yielded_message(folder: &str) -> String {
+    format!("Yielding ownership of {folder}")
+}
+
+/// What [`request_yield`] learned from asking a folder's live owner to give
+/// it up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YieldOutcome {
+    /// The owner admitted the request (202) and will drop ownership shortly.
+    Accepted,
+    /// The owner is a [`HostKind::Desktop`] host, which a yield never moves.
+    RefusedDesktop,
+    /// Nobody is recorded as serving `folder` right now — nothing to yield.
+    NoOwner,
+}
+
+/// Ask whichever process currently serves `folder` to give it up over
+/// `POST /__moss/yield`, so a fuller engine elsewhere on the machine (the
+/// desktop app) can take the folder over. Reads the live owner's record
+/// (for its URL), then the vault's
+/// `.moss/build.nosync/http-token` (for the same bearer token the carrier
+/// checks — see [`super::carrier_token`]), and reports what the owner
+/// answered rather than assuming the request landed.
+pub async fn request_yield(folder: &Path) -> Result<YieldOutcome, String> {
+    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let Some(owner) = find_live_owner(&canonical).await else {
+        return Ok(YieldOutcome::NoOwner);
+    };
+    let vault = crate::vault::paths::VaultRoot::find_containing(&canonical)
+        .ok_or_else(|| format!("{} is not inside a vault", canonical.display()))?;
+    let token_path = super::carrier_token::token_path(vault.path());
+    let token = std::fs::read_to_string(&token_path)
+        .map_err(|e| format!("could not read the HTTP carrier token at {}: {e}", token_path.display()))?;
+    let url = format!("{}/__moss/yield", owner.url);
+    let post_url = url.clone();
+    let token = token.trim().to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        ureq::post(&post_url)
+            .set(super::carrier_token::TOKEN_HEADER, &token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send_string("")
+    })
+    .await
+    .map_err(|e| format!("yield request to {url} panicked: {e}"))?;
+    match result {
+        Ok(resp) if resp.status() == 202 => Ok(YieldOutcome::Accepted),
+        Ok(resp) => Err(format!("unexpected response from {url}: {}", resp.status())),
+        Err(ureq::Error::Status(409, _)) => Ok(YieldOutcome::RefusedDesktop),
+        Err(e) => Err(format!("yield request to {url} failed: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +539,30 @@ mod tests {
     /// process-global hazard `infra::home`'s own test documents.
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
         crate::infra::home::MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The timeout fallback: nobody ever claims the folder (an empty,
+    /// freshly-made `MOSS_HOME` has no record for it at all), so the wait
+    /// must give up and return `None` rather than hang — the ablation target
+    /// for the yield arm's "serve it myself again" fallback.
+    #[tokio::test]
+    async fn wait_for_owner_to_appear_gives_up_and_returns_none_within_the_timeout() {
+        let _guard = env_guard();
+        let home = moss_home_dir();
+        std::env::set_var("MOSS_HOME", home.path());
+        let folder = tempfile::tempdir().expect("tempdir for the unclaimed folder");
+
+        let timeout = std::time::Duration::from_millis(300);
+        let started = std::time::Instant::now();
+        let result = wait_for_owner_to_appear(folder.path(), timeout).await;
+        let elapsed = started.elapsed();
+
+        assert!(result.is_none(), "nobody claimed the folder — the wait must report that, not invent an owner");
+        assert!(
+            elapsed < timeout + std::time::Duration::from_secs(2),
+            "the wait must return at or shortly after its timeout, not hang; took {elapsed:?}"
+        );
+        std::env::remove_var("MOSS_HOME");
     }
 
     #[test]

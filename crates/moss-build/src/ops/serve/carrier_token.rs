@@ -239,7 +239,8 @@ use axum::{
 /// static reason string only.
 ///
 /// The token half is [`admit`], shared with the event stream
-/// (`GET /__moss/events`), which needs the same 401 and no body at all.
+/// (`GET /__moss/events`) and the yield route (`POST /__moss/yield`, see
+/// `super::yield_route`), which need the same 401 and no body at all.
 pub(crate) async fn require_carrier_token(
     ctx: super::invoke::InvokeCtx,
     site_dir: Arc<RwLock<PathBuf>>,
@@ -289,7 +290,10 @@ pub(crate) async fn require_carrier_token(
 /// Separate from [`require_carrier_token`] because the event stream is a `GET`
 /// with no body, so the media-type gate that belongs on the two command routes
 /// would refuse every legitimate subscriber with a 415.
-fn admit(
+///
+/// `pub(crate)`, not `fn`, so `super::yield_route::handle_yield` can run the
+/// same check directly rather than growing a second token comparison.
+pub(crate) fn admit(
     ctx: &super::invoke::InvokeCtx,
     site_dir: &Arc<RwLock<PathBuf>>,
     request: &Request<Body>,
@@ -313,7 +317,10 @@ fn admit(
     Err(unauthorized())
 }
 
-fn unauthorized() -> Response {
+/// `pub(crate)` so the yield route's no-session-bound case (no carrier to
+/// authenticate against at all) can hand back the exact same refusal rather
+/// than a second, slightly different 401 body.
+pub(crate) fn unauthorized() -> Response {
     Response::builder()
         .status(http::StatusCode::UNAUTHORIZED)
         .header("content-type", "text/plain; charset=utf-8")

@@ -21,8 +21,13 @@ use crate::vault::paths::VaultRoot;
 /// (`build_shell/watch.rs::start_file_watching_headless`) layers the app-side
 /// sweep over [`watch::headless::start`]; moss-cli's is that construction
 /// alone. The mode is the driver's to decide, so neither host derives it.
+///
+/// `Fn`, not `FnOnce`: a `--watch` process that honors a `/__moss/yield`
+/// request and later resumes serving calls this a second time, same as it
+/// calls `HostPorts::launch_server` again — the one construction either
+/// binary supplies captures nothing that a second call would double-consume.
 pub type WatchStarter = Box<
-    dyn FnOnce(
+    dyn Fn(
             String,
             PluginMode,
         ) -> std::pin::Pin<
@@ -275,9 +280,20 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         // the whole build has run — a re-probe can miss an owner that has
         // since exited in that window and wrongly report success.
         let launch_error: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+        // Fires when `POST /__moss/yield` is admitted on whichever server is
+        // live right now. One `Notify` for the whole process: every
+        // relaunch after honoring a yield passes this SAME `Arc` back into
+        // `start_server_headless`, so the ctrl-c `select!` below always waits
+        // on the one object any current or future server's yield route wakes.
+        let yield_requested: Arc<tokio::sync::Notify> = Arc::new(tokio::sync::Notify::new());
 
         let mut host = (run.host_ports)(&run.folder_path);
-        if run.flags.serve {
+        // Kept alongside `host.launch_server` (not just inside it) so a
+        // yielded `--watch` process can call it again to resume serving —
+        // `HostPorts::launch_server` is an `Arc<dyn Fn>`, not `FnOnce`, for
+        // exactly this reuse.
+        let launch_server_fn: Option<Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync>> =
+            if run.flags.serve {
             let slot = server_shutdown.clone();
             let launch_error_slot = launch_error.clone();
             // The same registry this build fills, so the server can answer for
@@ -287,12 +303,15 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             // long-lived watcher: a one-shot build would just exit right
             // after anyway, so `--serve` alone keeps A2's plain refusal.
             let standby_on_conflict = run.flags.watch;
-            host.launch_server = Some(Arc::new(move |moss_dir, cell| {
+            let yield_notify = yield_requested.clone();
+            let launch: Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync> =
+                Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();
                 let launch_error_slot = launch_error_slot.clone();
                 let assets = assets.clone();
+                let yield_notify = yield_notify.clone();
                 Box::pin(async move {
-                    match serve::start_server_headless(&moss_dir, cell, assets, standby_on_conflict).await {
+                    match serve::start_server_headless(&moss_dir, cell, assets, standby_on_conflict, yield_notify).await {
                         Ok((port, shutdown_tx)) => {
                             *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(shutdown_tx);
@@ -306,8 +325,12 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                         }
                     }
                 })
-            }));
-        }
+            });
+            host.launch_server = Some(launch.clone());
+            Some(launch)
+        } else {
+            None
+        };
 
         let result = run_pipeline(PipelineConfig {
             root: VaultRoot::resolve(std::path::Path::new(&run.folder_path)),
@@ -353,10 +376,11 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
 
                 let problems = finish_cli_build(&msg, &run.folder_path, run.flags.strict).await;
 
-                // Held until shutdown: dropping the sender stops the watch.
-                // Rebuild events reach an attached browser over the SSE
-                // carrier (`ops/serve/events.rs`).
-                let _watch_shutdown = if run.flags.serve && run.flags.watch {
+                // Held until a replacement is started (yield) or dropped for
+                // good (ctrl-c): dropping the sender stops the watch. Rebuild
+                // events reach an attached browser over the SSE carrier
+                // (`ops/serve/events.rs`).
+                let mut watch_shutdown = if run.flags.serve && run.flags.watch {
                     cli_eprintln!("Watching for file changes (Ctrl+C to stop)");
                     Some((run.start_watch)(run.folder_path.clone(), watch_plugins).await)
                 } else {
@@ -364,17 +388,71 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                 };
 
                 if run.flags.serve {
-                    cli_eprintln!("Press Ctrl+C to stop the server");
-                    let _ = tokio::signal::ctrl_c().await;
-                    cli_eprintln!("Stopping...");
-                    if let Some(tx) = server_shutdown
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .take()
-                    {
-                        let _ = tx.send(());
+                    // Shared by both arms below: stop the watch, then the
+                    // server, through the exact two senders either shutdown
+                    // path holds — `watch_shutdown` as a parameter (not a
+                    // capture) so reassigning it after a yield-triggered
+                    // relaunch is never fighting a closure's own borrow of it.
+                    let shut_down_current = |watch_shutdown: &mut Option<tokio::sync::oneshot::Sender<()>>| {
+                        if let Some(tx) = watch_shutdown.take() { let _ = tx.send(()); }
+                        if let Some(tx) = server_shutdown
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take()
+                        {
+                            let _ = tx.send(());
+                        }
+                    };
+                    // A yielded `--watch` process stands by this long for a
+                    // new owner before giving up and resuming service itself
+                    // — a yield is a courtesy, not a guarantee the requester
+                    // follows through.
+                    const YIELD_STANDBY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+                    loop {
+                        cli_eprintln!("Press Ctrl+C to stop the server");
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                cli_eprintln!("Stopping...");
+                                shut_down_current(&mut watch_shutdown);
+                                cli_eprintln!("Stopped");
+                                break;
+                            }
+                            // `POST /__moss/yield` was admitted on the live
+                            // server. Stop exactly as ctrl-c does above, then
+                            // either exit (no `--watch` — nothing would ever
+                            // restart serving) or stand by for whoever claims
+                            // the folder next and resume once they leave, the
+                            // same standby a fresh process already runs on a
+                            // startup conflict — falling back to serving the
+                            // folder itself if nobody claims it in time.
+                            _ = yield_requested.notified() => {
+                                cli_eprintln!("{}", serve::ownership::yielded_message(&run.folder_path));
+                                shut_down_current(&mut watch_shutdown);
+                                if !run.flags.watch {
+                                    break;
+                                }
+                                let folder = std::path::Path::new(&run.folder_path);
+                                match serve::ownership::wait_for_owner_to_appear(folder, YIELD_STANDBY_TIMEOUT).await {
+                                    Some(owner) => {
+                                        cli_eprintln!("{}", serve::ownership::preview_ready_line(&owner.url));
+                                        cli_eprintln!("{}", serve::ownership::standing_by_message(&owner));
+                                        serve::ownership::wait_for_owner_to_leave(folder).await;
+                                    }
+                                    None => {
+                                        cli_eprintln!("no other moss claimed the folder; serving again");
+                                    }
+                                }
+                                let Some(launch) = &launch_server_fn else { break };
+                                if let Err(e) = launch(run.folder_path.clone(), None).await {
+                                    cli_eprintln!("Could not resume serving after yielding: {}", e);
+                                    break;
+                                }
+                                cli_eprintln!("Watching for file changes (Ctrl+C to stop)");
+                                watch_shutdown = Some((run.start_watch)(run.folder_path.clone(), watch_plugins).await);
+                            }
+                        }
                     }
-                    cli_eprintln!("Stopped");
                 }
 
                 if run.flags.strict && problems > 0 {
