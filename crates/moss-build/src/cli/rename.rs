@@ -41,7 +41,7 @@ pub fn run(args: &[String]) -> i32 {
     let new_s = new_abs.to_string_lossy().to_string();
 
     match crate::editor::ref_scan::rename_entry_with_refs_core(root.path().to_path_buf(), &old_s, &new_s) {
-        Ok(()) => {
+        Ok(_) => {
             println!("Renamed {} → {} (references updated)", positional[0], positional[1]);
             0
         }

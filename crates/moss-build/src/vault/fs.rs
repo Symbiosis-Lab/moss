@@ -154,97 +154,113 @@ pub fn recheck_canonical_allowing_missing(
     }
 }
 
-/// Move a file or folder to the OS trash — recoverable via the file manager,
-/// never a permanent unlink. Refuses to trash the project root itself (callers
-/// should never surface Delete on the root; defend in depth). The ONE delete
-/// core: the desktop `delete_entry` command and the HTTP mutation arm both
-/// call here, so the two carriers cannot drift on the containment checks.
-pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String> {
-    // Fast pre-check: traversal guard + raw starts_with.
-    let target = validate_entry_path(project_root, path)?;
+/// Move one or more files/folders to the OS trash — recoverable via the file
+/// manager, never a permanent unlink. Refuses to trash the project root
+/// itself (callers should never surface Delete on the root; defend in
+/// depth). The ONE delete core: the desktop's single-entry and batch delete
+/// commands, and both HTTP mutation arms (`delete_entry`, `delete_entries`),
+/// all call here — [`delete_entry_inner`] below is this loop's one-element
+/// case, not a second copy of it.
+///
+/// Stops at the first failure. The OS trash call is not transactional: an
+/// entry already processed earlier in the same batch stays trashed even when
+/// a later one fails, and there is no multi-entry rollback — see the
+/// per-entry comment below for why a single delete can genuinely fail with
+/// nothing further to try.
+pub fn delete_entries_inner(project_root: &Path, paths: &[String]) -> Result<(), String> {
+    for path in paths {
+        // Fast pre-check: traversal guard + raw starts_with.
+        let target = validate_entry_path(project_root, path)?;
 
-    // Already gone — the state the delete asked for. Without this, the
-    // canonical recheck below turns an achieved goal into "Failed to
-    // resolve … os error 2": on 2026-09-05 a Drive-synced vault trashed
-    // `untitled.md` moments before the command landed, and the author got a
-    // failure dialog for a delete that had succeeded.
-    if target.symlink_metadata().is_err() {
-        return Ok(());
-    }
+        // Already gone — the state the delete asked for. Without this, the
+        // canonical recheck below turns an achieved goal into "Failed to
+        // resolve … os error 2": on 2026-09-05 a Drive-synced vault trashed
+        // `untitled.md` moments before the command landed, and the author got
+        // a failure dialog for a delete that had succeeded.
+        if target.symlink_metadata().is_err() {
+            continue;
+        }
 
-    // Canonical-form recheck to defeat symlink-escape.
-    let (root_canonical, target_canonical) = recheck_canonical(project_root, &target)?;
+        // Canonical-form recheck to defeat symlink-escape.
+        let (root_canonical, target_canonical) = recheck_canonical(project_root, &target)?;
 
-    if target_canonical == root_canonical {
-        return Err("Cannot delete the project root".to_string());
-    }
+        if target_canonical == root_canonical {
+            return Err("Cannot delete the project root".to_string());
+        }
 
-    // On macOS, trash via `NSFileManager.trashItemAtURL`, not the crate's
-    // default Finder AppleScript. The Finder route serializes through a
-    // busy Finder under the default ~60s AppleEvent ceiling — on a cloud
-    // File Provider vault it timed out (-1712) where trashItemAtURL took
-    // 30ms (measured 2026-09-05, Google Drive) — and it needs the
-    // Automation permission whose denial (-1743) was a real regression. Both
-    // failure modes cease to exist on this route. Known cost: Finder may
-    // not offer "Put Back" for items trashed this way; drag-out recovery
-    // still works.
-    //
-    // And with NO fallback route when it fails, though 31101e8 briefly added
-    // one. A client's delete inside iCloud Drive failed with Apple's "the
-    // volume doesn't have one", so the obvious repair was to hand the file to
-    // Finder — the one process whose job is knowing where a given item's
-    // Trash lives, and the route that had worked for that client by hand.
-    // Measured 2026-09-17 on a scratch APFS volume whose `.Trashes` was
-    // deliberately blocked by a regular file, which reproduces that class of
-    // failure:
-    //
-    //   - `FileManager.trashItem`   fails: NSCocoaErrorDomain 512, underlying
-    //                               -1407 errFSNotAFolder.
-    //   - `NSWorkspace.recycle`     fails, wrapping the SAME -1407. AppKit's
-    //                               route is not a second door, it is this
-    //                               door with another handle — so there is no
-    //                               sanctioned API left to fall back to.
-    //   - Finder via `osascript`    "succeeds", and the file is GONE: absent
-    //                               from `~/.Trash`, absent from the volume,
-    //                               nowhere on disk.
-    //
-    // That last line is why there is no fallback. Asked to delete something
-    // whose volume has no usable Trash, Finder deletes it permanently — the
-    // exact opposite of what this function promises three paragraphs up, and
-    // on a synced vault that destruction propagates to every other device
-    // with no undo. A delete door that silently becomes a shredder in its
-    // degraded case is worse than one that refuses, so it refuses.
-    //
-    // Trashing an item really can be impossible (a File Provider item whose
-    // provider does not advertise `allowsTrashing`, a volume with no Trash),
-    // and destroying it anyway is a decision only the person can make. Making
-    // it available needs a typed error this returns instead of a string, and a
-    // confirmation the frontend owns — see the desktop repo's delete-error
-    // surface work for that contract. Until then: say so, and stop.
-    #[allow(unused_mut)]
-    let mut ctx = trash::TrashContext::default();
-    #[cfg(target_os = "macos")]
-    ctx.set_delete_method(DeleteMethod::NsFileManager);
-    match ctx.delete(&target) {
-        Ok(()) => Ok(()),
-        // Vanished mid-flight (the pre-check's race window): goal state
-        // reached, same as the pre-check.
-        Err(_) if target.symlink_metadata().is_err() => Ok(()),
-        Err(e) => {
-            // The raw `trash::Error` is a nested Rust Debug dump — not
-            // something to hand a user through a toast that is otherwise in
-            // their own language. Keep it in the log for support; give the
-            // user one sentence that tells them what to do next, including
-            // the part they need to weigh: Finder can remove it, but where
-            // there is no Trash to move it to, Finder removes it for good.
-            log::error!("delete_entry: couldn't move '{}' to the Trash: {}", path, e);
-            Err(format!(
-                "Couldn't move '{}' to the Trash. Deleting it in Finder will work, \
-                 but may remove it permanently.",
-                path
-            ))
+        // On macOS, trash via `NSFileManager.trashItemAtURL`, not the crate's
+        // default Finder AppleScript. The Finder route serializes through a
+        // busy Finder under the default ~60s AppleEvent ceiling — on a cloud
+        // File Provider vault it timed out (-1712) where trashItemAtURL took
+        // 30ms (measured 2026-09-05, Google Drive) — and it needs the
+        // Automation permission whose denial (-1743) was a real regression. Both
+        // failure modes cease to exist on this route. Known cost: Finder may
+        // not offer "Put Back" for items trashed this way; drag-out recovery
+        // still works.
+        //
+        // And with NO fallback route when it fails, though 31101e8 briefly added
+        // one. A client's delete inside iCloud Drive failed with Apple's "the
+        // volume doesn't have one", so the obvious repair was to hand the file to
+        // Finder — the one process whose job is knowing where a given item's
+        // Trash lives, and the route that had worked for that client by hand.
+        // Measured 2026-09-17 on a scratch APFS volume whose `.Trashes` was
+        // deliberately blocked by a regular file, which reproduces that class of
+        // failure:
+        //
+        //   - `FileManager.trashItem`   fails: NSCocoaErrorDomain 512, underlying
+        //                               -1407 errFSNotAFolder.
+        //   - `NSWorkspace.recycle`     fails, wrapping the SAME -1407. AppKit's
+        //                               route is not a second door, it is this
+        //                               door with another handle — so there is no
+        //                               sanctioned API left to fall back to.
+        //   - Finder via `osascript`    "succeeds", and the file is GONE: absent
+        //                               from `~/.Trash`, absent from the volume,
+        //                               nowhere on disk.
+        //
+        // That last line is why there is no fallback. Asked to delete something
+        // whose volume has no usable Trash, Finder deletes it permanently — the
+        // exact opposite of what this function promises three paragraphs up, and
+        // on a synced vault that destruction propagates to every other device
+        // with no undo. A delete door that silently becomes a shredder in its
+        // degraded case is worse than one that refuses, so it refuses.
+        //
+        // Trashing an item really can be impossible (a File Provider item whose
+        // provider does not advertise `allowsTrashing`, a volume with no Trash),
+        // and destroying it anyway is a decision only the person can make. Making
+        // it available needs a typed error this returns instead of a string, and a
+        // confirmation the frontend owns — see the desktop repo's delete-error
+        // surface work for that contract. Until then: say so, and stop.
+        #[allow(unused_mut)]
+        let mut ctx = trash::TrashContext::default();
+        #[cfg(target_os = "macos")]
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+        match ctx.delete(&target) {
+            Ok(()) => {}
+            // Vanished mid-flight (the pre-check's race window): goal state
+            // reached, same as the pre-check.
+            Err(_) if target.symlink_metadata().is_err() => {}
+            Err(e) => {
+                // The raw `trash::Error` is a nested Rust Debug dump — not
+                // something to hand a user through a toast that is otherwise in
+                // their own language. Keep it in the log for support; give the
+                // user one sentence that tells them what to do next, including
+                // the part they need to weigh: Finder can remove it, but where
+                // there is no Trash to move it to, Finder removes it for good.
+                log::error!("delete_entry: couldn't move '{}' to the Trash: {}", path, e);
+                return Err(format!(
+                    "Couldn't move '{}' to the Trash. Deleting it in Finder will work, \
+                     but may remove it permanently.",
+                    path
+                ));
+            }
         }
     }
+    Ok(())
+}
+
+/// [`delete_entries_inner`] for exactly one path.
+pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String> {
+    delete_entries_inner(project_root, std::slice::from_ref(&path.to_string()))
 }
 
 /// Rename an entry: path-traversal guard + project-root boundary check +

@@ -81,6 +81,8 @@ use serde_json::{json, Value};
 
 pub use super::session::{InvokeCtx, Session};
 
+mod file_ops;
+
 /// Outcome of one dispatch arm. Distinguishes a caller error (bad/absent args →
 /// 400) from a command failure (the command's own `Err(String)` → 500), so the
 /// HTTP status carries the same information the Tauri IPC reject would.
@@ -274,27 +276,11 @@ async fn arm_create_folder(ctx: &Session, args: Value) -> ArmResult {
     to_value(created)
 }
 
-/// `delete_entry(path)` — the SAME trash-backed core the desktop command calls
-/// (`vault::fs::delete_entry_inner`): traversal guard, canonical recheck, root
-/// refusal, then OS trash — recoverable, never a permanent unlink. Relative
-/// paths join onto the project root, same contract as `confine`.
-async fn arm_delete_entry(ctx: &Session, args: Value) -> ArmResult {
-    #[derive(serde::Deserialize)]
-    struct A {
-        path: String,
-    }
-    let a: A = parse_args(args)?;
-    let root = project_root(ctx);
-    let joined;
-    let path = if Path::new(&a.path).is_absolute() {
-        a.path.as_str()
-    } else {
-        joined = root.join(&a.path).to_string_lossy().into_owned();
-        &joined
-    };
-    crate::vault::fs::delete_entry_inner(&root, path).map_err(ArmError::Command)?;
-    to_value(())
-}
+// `delete_entry` and the other file-operation arms (`delete_entries`,
+// `rename_entry_with_refs`, `scan_references_for_delete`,
+// `clean_references_and_delete`, `undo_rename`) live in `file_ops.rs`, a
+// sibling file split out so this slice's growth didn't push this file over
+// its size baseline. The `carrier!` lists below reference them by path.
 
 /// `save_editor_content(file_path, frontmatter, body, …)` — the arm calls the
 /// SAME `persist_editor_content` byte-writing core the command's `run_safely`
@@ -763,14 +749,21 @@ carrier! {
     /// The MUTATION subset of `command_list!` exposed over `POST
     /// /__moss/mutate/<cmd>`. Token-GATED (`X-Moss-Token`). A strict subset of
     /// the registry, validated by the SAME subset test as the read-only list.
-    /// Kept minimal: exactly the commands the acceptance flow needs — create a
-    /// file, persist edited page bytes to disk, and the two Versions actions
-    /// that write into the vault (a restore overwrites and trashes; a save
-    /// writes a record and its blobs).
+    /// Create, persist, rename-with-refs, delete (single and batch) and the
+    /// reference-cleanup/undo commands the file tree needs, plus the two
+    /// Versions actions that write into the vault (a restore overwrites and
+    /// trashes; a save writes a record and its blobs). The file-operation arms
+    /// (everything from `delete_entry` down to `undo_rename`) live in the
+    /// sibling `file_ops` module.
     MUTATION_HTTP_COMMANDS, dispatch_mutation {
         create_files => arm_create_files,
         create_folder => arm_create_folder,
-        delete_entry => arm_delete_entry,
+        delete_entry => file_ops::arm_delete_entry,
+        delete_entries => file_ops::arm_delete_entries,
+        rename_entry_with_refs => file_ops::arm_rename_entry_with_refs,
+        scan_references_for_delete => file_ops::arm_scan_references_for_delete,
+        clean_references_and_delete => file_ops::arm_clean_references_and_delete,
+        undo_rename => file_ops::arm_undo_rename,
         save_editor_content => arm_save_editor_content,
         restore_version => arm_restore_version,
         save_version => arm_save_version,

@@ -246,17 +246,22 @@ fn clean_references_to(
 /// why (a rename used to rewrite references by pattern-matching their raw
 /// text against the renamed entry's own path, which missed any reference the
 /// real resolver would find through a route the pattern-matcher didn't know).
+///
+/// Returns the [`crate::editor::rename_plan::RenameApplyResult`]
+/// `apply_planned_moves` produced — precise enough for
+/// `rename_plan::undo_applied` to reverse — rather than discarding it: a
+/// caller that never gets this back (the CLI prints and moves on) has no way
+/// to offer "undo" for a rename it just made.
 pub fn rename_entry_with_refs_core(
     project_root: std::path::PathBuf,
     old_path: &str,
     new_path: &str,
-) -> Result<(), String> {
+) -> Result<crate::editor::rename_plan::RenameApplyResult, String> {
     let plan = crate::editor::rename_plan::plan_moves(
         &project_root,
         &[(old_path.to_string(), new_path.to_string())],
     )?;
-    crate::editor::rename_plan::apply_planned_moves(&project_root, &plan)?;
-    Ok(())
+    crate::editor::rename_plan::apply_planned_moves(&project_root, &plan)
 }
 
 #[cfg(test)]

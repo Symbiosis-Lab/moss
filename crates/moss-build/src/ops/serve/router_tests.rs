@@ -3046,3 +3046,259 @@ async fn host_route_colliding_with_an_engine_path_fails_construction_instead_of_
         "a host route at an engine path must fail construction loudly (panic), not shadow the engine's handler"
     );
 }
+
+// ===== File-operation arms: rename-with-refs, batch delete, reference =====
+// ===== cleanup and undo (the `file_ops` sibling module)               =====
+
+/// `rename_entry_with_refs` renames in place and rewrites the referencing
+/// file to follow it; the mutation tier must still refuse a destination
+/// outside the vault even with a valid token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_rename_entry_with_refs_renames_and_refuses_outside_the_vault() {
+    let (parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("note.md"), "# Note").unwrap();
+    std::fs::write(vault_path.join("other.md"), "See [[note]] for details.").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64100).await;
+    let url = format!("http://localhost:{}/__moss/mutate/rename_entry_with_refs", port);
+
+    // Positive control: an in-vault rename succeeds and the reference follows.
+    let old = vault_path.join("note.md");
+    let new = vault_path.join("renamed.md");
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({
+                "oldPath": old.to_string_lossy(),
+                "newPath": new.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .expect("control: an in-vault rename must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(new.exists(), "control: the renamed file must exist");
+    assert!(!old.exists(), "control: the old name must be gone");
+    let other = std::fs::read_to_string(vault_path.join("other.md")).unwrap();
+    assert!(other.contains("renamed"), "the reference must follow the rename: {other}");
+
+    // The escape: rename a vault file to a destination OUTSIDE the vault.
+    let escape_target = parent.path().join("escaped.md");
+    let escaped = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({
+                "oldPath": new.to_string_lossy(),
+                "newPath": escape_target.to_string_lossy(),
+            })
+            .to_string(),
+        );
+    assert!(escaped.is_err(), "rename must refuse a destination outside the vault");
+    assert!(!escape_target.exists(), "no file must land outside the vault");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `delete_entries` trashes a batch in one call, each entry guarded by the
+/// SAME confinement a single delete always had; an escape must be refused
+/// even with a valid token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_delete_entries_trashes_a_batch_and_refuses_outside_the_vault() {
+    let (parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("a.md"), "a").unwrap();
+    std::fs::write(vault_path.join("b.md"), "b").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64200).await;
+    let url = format!("http://localhost:{}/__moss/mutate/delete_entries", port);
+
+    // Positive control: both in-vault paths are trashed in one call.
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({
+                "paths": [
+                    vault_path.join("a.md").to_string_lossy(),
+                    vault_path.join("b.md").to_string_lossy(),
+                ],
+            })
+            .to_string(),
+        )
+        .expect("control: an in-vault batch delete must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(!vault_path.join("a.md").exists(), "control: a.md must be trashed");
+    assert!(!vault_path.join("b.md").exists(), "control: b.md must be trashed");
+
+    // The escape: a batch naming a sibling of the vault.
+    let outside = parent.path().join("secret.md");
+    let before = std::fs::read_to_string(&outside).unwrap();
+    let escaped = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&serde_json::json!({ "paths": [outside.to_string_lossy()] }).to_string());
+    assert!(escaped.is_err(), "delete_entries must refuse a path outside the vault");
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        before,
+        "the out-of-vault file must be byte-for-byte untouched"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `scan_references_for_delete` reports every referencing file for a vault
+/// path, and refuses to scan a target outside the vault even with a valid
+/// token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_scan_references_for_delete_finds_hits_and_refuses_outside_the_vault() {
+    let (parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("target.md"), "# Target").unwrap();
+    std::fs::write(vault_path.join("referrer.md"), "See [[target]] for details.").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64300).await;
+    let url = format!("http://localhost:{}/__moss/mutate/scan_references_for_delete", port);
+
+    // Positive control: the referencing file is reported.
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({ "path": vault_path.join("target.md").to_string_lossy() }).to_string(),
+        )
+        .expect("control: an in-vault scan must succeed");
+    assert_eq!(resp.status(), 200);
+    let hits: Vec<serde_json::Value> = resp.into_json().expect("a hit list");
+    assert!(
+        hits.iter()
+            .any(|h| h["referencing_file"].as_str().is_some_and(|f| f.contains("referrer"))),
+        "must report referrer.md as a referencing file: {hits:?}"
+    );
+
+    // The escape: scan a sibling of the vault.
+    let escaped = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({ "path": parent.path().join("secret.md").to_string_lossy() }).to_string(),
+        );
+    assert!(escaped.is_err(), "scan_references_for_delete must refuse a target outside the vault");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `clean_references_and_delete` strips every reference to its targets, then
+/// trashes them through the SAME core `delete_entries` uses; an escape must
+/// be refused even with a valid token, with the referencing file left
+/// byte-for-byte untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_clean_references_and_delete_cleans_and_refuses_outside_the_vault() {
+    let (parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("target.md"), "# Target").unwrap();
+    std::fs::write(vault_path.join("referrer.md"), "See [[target]] for details.").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64400).await;
+    let url = format!("http://localhost:{}/__moss/mutate/clean_references_and_delete", port);
+
+    // Positive control: the reference is stripped and the target trashed.
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({ "paths": [vault_path.join("target.md").to_string_lossy()] })
+                .to_string(),
+        )
+        .expect("control: an in-vault clean-and-delete must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(!vault_path.join("target.md").exists(), "control: target.md must be trashed");
+    let referrer = std::fs::read_to_string(vault_path.join("referrer.md")).unwrap();
+    assert!(!referrer.contains("[[target]]"), "the reference must be stripped: {referrer}");
+
+    // The escape: name a sibling of the vault.
+    let outside = parent.path().join("secret.md");
+    let before = std::fs::read_to_string(&outside).unwrap();
+    let escaped = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&serde_json::json!({ "paths": [outside.to_string_lossy()] }).to_string());
+    assert!(escaped.is_err(), "clean_references_and_delete must refuse a path outside the vault");
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        before,
+        "the out-of-vault file must be byte-for-byte untouched"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `undo_rename` reverses a prior `rename_entry_with_refs` result. Its core,
+/// `rename_plan::undo_applied`, joins every path inside the plan onto the
+/// project root with no containment check of its own — it trusts the plan it
+/// was handed — so this pins that the carrier's `confine` is what refuses a
+/// forged, out-of-vault plan even with a valid token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_undo_rename_reverses_and_refuses_outside_the_vault() {
+    let (_parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("note.md"), "# Note").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64500).await;
+
+    // Set-up: a real rename, to get a genuine RenameApplyResult to undo.
+    let rename_url = format!("http://localhost:{}/__moss/mutate/rename_entry_with_refs", port);
+    let old = vault_path.join("note.md");
+    let new = vault_path.join("renamed.md");
+    let resp = ureq::post(&rename_url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({
+                "oldPath": old.to_string_lossy(),
+                "newPath": new.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .expect("setup: the rename must succeed");
+    let applied: serde_json::Value = resp.into_json().expect("a RenameApplyResult");
+
+    // Positive control: undoing it restores the original name.
+    let undo_url = format!("http://localhost:{}/__moss/mutate/undo_rename", port);
+    let resp = ureq::post(&undo_url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&serde_json::json!({ "applied": applied }).to_string())
+        .expect("control: undo must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(old.exists(), "control: undo must restore the original name");
+    assert!(!new.exists(), "control: the renamed-to name must be gone after undo");
+
+    // The escape: a forged `applied` whose move claims a path outside the vault.
+    let forged = serde_json::json!({
+        "applied": {
+            "moves": [{ "old_path": "../secret.md", "new_path": "whatever.md", "is_dir": false }],
+            "edits": [],
+            "skipped": [],
+        }
+    });
+    let escaped = ureq::post(&undo_url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&forged.to_string());
+    assert!(escaped.is_err(), "undo_rename must refuse a plan naming a path outside the vault");
+    assert!(
+        !vault_path.join("whatever.md").exists(),
+        "no file must land from a forged out-of-vault undo plan"
+    );
+
+    let _ = shutdown_tx.send(());
+}
