@@ -127,6 +127,14 @@ fn card_script(lang: crate::i18n::Language, title: &str) -> Option<CardScript> {
         if title.chars().any(kana) {
             return None;
         }
+        // Both judges inside `detect_language` (its own CJK count and
+        // whatlang's Mandarin script) only answer Chinese for a character at
+        // or above U+2E80. Below that the answer is `En` or nothing, so a
+        // Latin title skips the detector, which costs more than the card
+        // decision around it.
+        if title.chars().all(|c| c < '\u{2e80}') {
+            return None;
+        }
         crate::i18n::detect::detect_language(title).and_then(script_of)
     })
 }
