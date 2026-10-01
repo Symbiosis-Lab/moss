@@ -1164,7 +1164,9 @@ fn generate_html_inner(
                 })
                 .collect();
 
-            dated_articles.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key()));
+            // Always newest-first: a "Latest" sidebar has no folder of its own
+            // whose `sort: date-asc` could apply.
+            dated_articles.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), false));
 
             // Resolve effective limit and More-link rule:
             //   - Alias path (`doc.sidebar` is set): legacy default 3 on cross-ref;

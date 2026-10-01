@@ -44,6 +44,7 @@ struct Expect {
 fn axis_name(a: SortAxis) -> String {
     match a {
         SortAxis::Date => "date",
+        SortAxis::DateAsc => "date-asc",
         SortAxis::Weight => "weight",
         SortAxis::Title => "title",
     }

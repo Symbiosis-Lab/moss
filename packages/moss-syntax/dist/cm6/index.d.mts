@@ -208,7 +208,7 @@ declare function embedParts(node: EmbedNodeRef, doc: DocSlice): EmbedParts | nul
  */
 interface FolderEmbedParams {
   style?: string;
-  sort?: 'date' | 'weight' | 'title';
+  sort?: 'date' | 'date-asc' | 'weight' | 'title';
   depth?: string;
   group?: string;
   limit?: number;

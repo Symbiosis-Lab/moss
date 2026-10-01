@@ -123,7 +123,7 @@ The trailing slash signals a folder embed, not a page. The cards inherit the tar
 |---|---|
 | `limit:N` | cap at N items |
 | `more` | append a "More →" link to the source folder when truncated |
-| `sort:date` / `sort:weight` / `sort:title` | override the source folder's sort axis for this embed only |
+| `sort:date` / `sort:date-asc` / `sort:weight` / `sort:title` | override the source folder's sort axis for this embed only |
 
 Examples:
 

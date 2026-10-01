@@ -40,7 +40,7 @@ pub fn render_with_sort(
     // duplicating the date. Single-source cases fall back to the previous
     // behavior: meta carries the date if there's no kicker.
     let kicker_base = props.kicker.as_deref().filter(|s| !s.is_empty());
-    let date_year = if matches!(sort_axis, moss_core::sort::SortAxis::Date) {
+    let date_year = if sort_axis.shows_date() {
         props.date_raw.as_deref().and_then(extract_year)
             .or_else(|| props.date_display.as_deref().and_then(extract_year))
             .map(|y| y.to_string())
@@ -92,10 +92,10 @@ pub fn render_with_sort(
         // the place alone instead of silently dropping it. `None` (no meta
         // div at all) only when there's no place either, since this module
         // never emits an empty `.moss-card-meta`.
-        (None, moss_core::sort::SortAxis::Date) if date_merged_into_kicker => {
+        (None, axis) if axis.shows_date() && date_merged_into_kicker => {
             props.place.as_deref().map(|_| String::new())
         }
-        (None, moss_core::sort::SortAxis::Date) => props.date_display.clone(),
+        (None, axis) if axis.shows_date() => props.date_display.clone(),
         _ => None,
     };
     // A leaf's resolved place goes next to its date; a folder's count is not

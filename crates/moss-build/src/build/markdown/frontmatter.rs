@@ -664,6 +664,12 @@ analytics: "https://analytics.mysite.com/script.js"
     }
 
     #[test]
+    fn frontmatter_parses_sort_date_asc() {
+        let fm: FrontMatter = serde_yaml::from_str("title: T\nsort: date-asc\n").unwrap();
+        assert!(matches!(fm.sort, Some(moss_core::sort::SortField::Axis(moss_core::sort::SortAxis::DateAsc))));
+    }
+
+    #[test]
     fn frontmatter_parses_sort_list() {
         let fm: FrontMatter = serde_yaml::from_str("title: T\nsort: [intro, setup]\n").unwrap();
         match fm.sort {

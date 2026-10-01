@@ -183,18 +183,18 @@ const SERIES_MEMBERS: &[BuiltinField] = &[
     },
 ];
 
-/// Union members for `sort`: a named axis (`date` / `weight` / `title`) OR a
-/// list of child stems giving the explicit order. Both forms have always been
-/// honoured by the build and both are documented in the field's own
-/// description; declaring the field as a bare string made the list form —
-/// `sort: [上篇, 中篇, 下篇]` — report "wrong type: expected string, got array"
-/// on every folder index that used it.
+/// Union members for `sort`: a named axis (`date` / `date-asc` / `weight` /
+/// `title`) OR a list of child stems giving the explicit order. Both forms
+/// have always been honoured by the build and both are documented in the
+/// field's own description; declaring the field as a bare string made the
+/// list form — `sort: [上篇, 中篇, 下篇]` — report "wrong type: expected
+/// string, got array" on every folder index that used it.
 const SORT_MEMBERS: &[BuiltinField] = &[
     BuiltinField {
         name: "",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["date", "weight", "title"]),
+        enum_values: Some(&["date", "date-asc", "weight", "title"]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -766,17 +766,17 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "sort",
         // OneOf, but NOT the union WIDGET — same reasoning as `byline`. The
         // type is a union because the field genuinely accepts an axis name or
-        // a list of child stems; the widget stays a select over the three axes
+        // a list of child stems; the widget stays a select over the four axes
         // because that is what an author picks from in the common case.
         // `enum_values` stays on the parent so `sort: banana` is still an
         // error: the enum check only fires on string values and ignores lists.
         field_type: FieldType::OneOf,
         widget: Widget::Select,
         one_of_members: Some(SORT_MEMBERS),
-        enum_values: Some(&["date", "weight", "title"]),
+        enum_values: Some(&["date", "date-asc", "weight", "title"]),
         // Frequency=3, Importance=3 → score = 100 - (3*6 + 3*4) = 70
         score: 70,
-        description: "How to sort children in this folder's listing. Use date for chronological streams, weight for authored order, title for alphabetical. A list of child stems (e.g. [intro, setup]) declares explicit order.",
+        description: "How to sort children in this folder's listing. Use date for newest-first chronological streams, date-asc for the same but oldest first, weight for authored order, title for alphabetical. A list of child stems (e.g. [intro, setup]) declares explicit order.",
         label_key: "chip.sort.label",
         group: "Child Pages",
         ..FIELD_DEFAULTS

@@ -133,6 +133,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "sort" => {
                     out.sort = match v.trim() {
                         "date" => Some(SortAxis::Date),
+                        "date-asc" => Some(SortAxis::DateAsc),
                         "weight" => Some(SortAxis::Weight),
                         "title" => Some(SortAxis::Title),
                         _ => None,
@@ -287,7 +288,7 @@ pub(crate) fn effective_group_for_axis(
     group_resolved: &moss_core::Resolved<String>,
     axis: moss_core::sort::SortAxis,
 ) -> String {
-    let axis_suppresses_auto_year = !matches!(axis, moss_core::sort::SortAxis::Date);
+    let axis_suppresses_auto_year = !axis.shows_date();
     if axis_suppresses_auto_year && !group_resolved.is_explicit() {
         "none".to_string()
     } else {
@@ -448,13 +449,14 @@ pub(crate) fn generate_children(
     // date in the filename, or the file's creation time.
     let mut sorted: Vec<&ChildItemProps> = items.iter().collect();
     if !skip_resort {
+        let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
         sorted.sort_by(|a, b| {
             // Undated children list first here on purpose: in practice they are
             // the folder's subfolders, which lead its page. The series chain
             // puts undated pages last, but it never contains subfolders, so the
             // two disagree only over an undated article inside a series.
             a.date_raw.is_some().cmp(&b.date_raw.is_some())
-                .then_with(|| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key()))
+                .then_with(|| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending))
         });
     }
 
@@ -563,7 +565,8 @@ pub(crate) fn generate_children(
                     place: item.place.clone(),
                 })
                 .collect();
-            html.push_str(&components::render_year_grouped_list(&article_props, true, lang, typesetting));
+            let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
+            html.push_str(&components::render_year_grouped_list(&article_props, true, lang, typesetting, ascending));
         }
     } else {
         for article in &articles {
@@ -1335,8 +1338,7 @@ fn render_one(
     // re-sort the children date-descending below and discard the order). The
     // upstream `sort_by_resolved` already placed listed children in the explicit
     // order, so render that order verbatim — no date re-sort, no year grouping.
-    let skip_resort = !matches!(resolved.axis, moss_core::sort::SortAxis::Date)
-        || resolved.explicit_order.is_some();
+    let skip_resort = !resolved.axis.shows_date() || resolved.explicit_order.is_some();
     let effective_group = effective_group_for_axis(&group_resolved, resolved.axis);
 
     let sorted = moss_core::sort::sort_by_resolved(&folder_docs, &resolved);

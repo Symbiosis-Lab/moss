@@ -3,14 +3,14 @@ use super::*;
 #[test]
 fn test_render_empty_list() {
     // Empty input renders nothing — moss does not fabricate a placeholder.
-    let html = render(&[], false, crate::i18n::Language::En, None);
+    let html = render(&[], false, crate::i18n::Language::En, None, false);
     assert_eq!(html, "");
 }
 
 #[test]
 fn test_render_empty_list_chinese() {
     // Empty regardless of language — no placeholder string to localize.
-    let html = render(&[], false, crate::i18n::Language::ZhHans, None);
+    let html = render(&[], false, crate::i18n::Language::ZhHans, None, false);
     assert_eq!(html, "");
 }
 
@@ -24,7 +24,7 @@ fn test_render_single_article() {
         url_path: String::new(),
         place: None,
     }];
-    let html = render(&articles, false, crate::i18n::Language::En, None);
+    let html = render(&articles, false, crate::i18n::Language::En, None, false);
 
     assert!(html.contains(r#"<section class="moss-cards-minimal-year-group">"#));
     assert!(html.contains("<h2>2025</h2>"));
@@ -43,13 +43,13 @@ fn test_render_minimal_mode() {
     }];
 
     // Standard mode - shows "2025 · 11"
-    let html_standard = render(&articles, false, crate::i18n::Language::En, None);
+    let html_standard = render(&articles, false, crate::i18n::Language::En, None, false);
     assert!(html_standard.contains(r#"<section class="moss-cards-minimal-year-group">"#));
     assert!(!html_standard.contains(r#"class="moss-cards-minimal-year-group minimal">"#));
     assert!(html_standard.contains("2025 · 11")); // Full date format
 
     // Minimal mode - shows only "11" (month only)
-    let html_minimal = render(&articles, true, crate::i18n::Language::En, None);
+    let html_minimal = render(&articles, true, crate::i18n::Language::En, None, false);
     assert!(html_minimal.contains(r#"<section class="moss-cards-minimal-year-group minimal">"#));
     assert!(html_minimal.contains(r#"<span class="moss-prefix-link-prefix date">11</span>"#)); // Month only with shared class
     assert!(!html_minimal.contains("2025 · 11")); // No full date format
@@ -83,7 +83,7 @@ fn test_render_groups_by_year() {
             place: None,
         },
     ];
-    let html = render(&articles, false, crate::i18n::Language::En, None);
+    let html = render(&articles, false, crate::i18n::Language::En, None, false);
 
     // Should have two year sections
     assert!(html.contains("<h2>2025</h2>"));
@@ -115,7 +115,7 @@ fn test_render_sorts_within_year() {
             place: None,
         },
     ];
-    let html = render(&articles, false, crate::i18n::Language::En, None);
+    let html = render(&articles, false, crate::i18n::Language::En, None, false);
 
     // November should come before January (newer first)
     let pos_nov = html.find("November").unwrap();
@@ -160,7 +160,7 @@ fn test_render_sorts_by_precise_datetime() {
             place: None,
         },
     ];
-    let html = render(&articles, false, crate::i18n::Language::En, None);
+    let html = render(&articles, false, crate::i18n::Language::En, None, false);
 
     // Should be sorted newest first: Fourth, Third, Second, First
     let pos_fourth = html.find("Fourth").unwrap();
@@ -193,7 +193,7 @@ fn test_render_handles_mixed_parseable_and_unparseable_dates() {
             place: None,
         },
     ];
-    let html = render(&articles, false, crate::i18n::Language::En, None);
+    let html = render(&articles, false, crate::i18n::Language::En, None, false);
 
     // Both articles should be rendered
     assert!(html.contains("Dated Article"));
@@ -224,7 +224,7 @@ fn vertical_cjk_rows_still_group_by_year() {
         article("一七〇三年", "1703", "蘆雁圖"),
         article("一七〇〇年", "1700", "雙雁圖"),
     ];
-    let html = render(&articles, true, crate::i18n::Language::ZhHant, Some("vertical"));
+    let html = render(&articles, true, crate::i18n::Language::ZhHant, Some("vertical"), false);
 
     // Two year sections, headed in Chinese numerals — an Arabic 1703 would lie
     // on its side in a vertical column.
@@ -262,7 +262,7 @@ fn horizontal_rows_keep_arabic_headings_and_drop_the_bare_year_prefix() {
             place: None,
         },
     ];
-    let html = render(&articles, true, crate::i18n::Language::En, None);
+    let html = render(&articles, true, crate::i18n::Language::En, None, false);
     assert!(html.contains("<h2>2025</h2>"), "{html}");
     assert_eq!(html.matches("<section").count(), 1, "{html}");
     assert!(html.contains(r#"<span class="moss-prefix-link-prefix date">11</span>"#), "{html}");

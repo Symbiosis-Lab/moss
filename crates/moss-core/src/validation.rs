@@ -685,6 +685,9 @@ mod tests {
         let axis = make_fm(&[("title", str_val("Test")), ("sort", str_val("weight"))]);
         assert!(errors(&axis).is_empty(), "axis form: {:?}", errors(&axis));
 
+        let date_asc = make_fm(&[("title", str_val("Test")), ("sort", str_val("date-asc"))]);
+        assert!(errors(&date_asc).is_empty(), "date-asc form: {:?}", errors(&date_asc));
+
         let bogus = make_fm(&[("title", str_val("Test")), ("sort", str_val("banana"))]);
         assert!(
             errors(&bogus).iter().any(|m| m.contains("invalid value 'banana'")),

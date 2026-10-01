@@ -107,7 +107,9 @@ pub fn generate_year_grouped_article_list(
         })
         .collect();
 
-    components::render_year_grouped_list(&articles, minimal, lang, typesetting)
+    // This flattened, site-wide list has no single folder whose `sort:` could
+    // apply — always newest-first.
+    components::render_year_grouped_list(&articles, minimal, lang, typesetting, false)
 }
 
 #[cfg(test)]

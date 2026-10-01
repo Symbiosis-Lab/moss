@@ -241,7 +241,9 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     // flag — the CSS selects on these to pick the right
     // `--moss-card-min` token.
     let axis_str = match sort_axis {
-        moss_core::sort::SortAxis::Date => "date",
+        // DateAsc presents identically to Date — same density tuning, same
+        // compact-date meta slot; only the comparator's direction differs.
+        moss_core::sort::SortAxis::Date | moss_core::sort::SortAxis::DateAsc => "date",
         moss_core::sort::SortAxis::Weight => "weight",
         moss_core::sort::SortAxis::Title => "title",
     };

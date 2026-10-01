@@ -227,14 +227,14 @@ export function embedParts(node: EmbedNodeRef, doc: DocSlice): EmbedParts | null
  */
 export interface FolderEmbedParams {
   style?: string;
-  sort?: 'date' | 'weight' | 'title';
+  sort?: 'date' | 'date-asc' | 'weight' | 'title';
   depth?: string;
   group?: string;
   limit?: number;
 }
 
 /** `sort:` values the build recognises; anything else clears the axis. */
-const SORT_AXES = new Set(['date', 'weight', 'title']);
+const SORT_AXES = new Set(['date', 'date-asc', 'weight', 'title']);
 
 /**
  * Parse the `key:value,key:value` pothole of a folder embed.

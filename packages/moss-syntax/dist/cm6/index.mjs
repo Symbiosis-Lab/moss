@@ -295,6 +295,7 @@ function embedParts(node, doc) {
 /** `sort:` values the build recognises; anything else clears the axis. */
 const SORT_AXES = new Set([
 	"date",
+	"date-asc",
 	"weight",
 	"title"
 ]);

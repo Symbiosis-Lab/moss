@@ -32,6 +32,8 @@ use super::date as date_formatters;
 /// # Arguments
 /// * `articles` - List of article properties to render
 /// * `minimal` - If true, uses minimal styling: month-only dates, no underlines, flexbox layout
+/// * `ascending` - Oldest-first (the folder's `sort: date-asc`) instead of
+///   the default newest-first; also reverses which year section leads.
 ///
 /// # Returns
 /// HTML string with moss-cards-minimal-year-grouped article list
@@ -40,9 +42,10 @@ pub fn render(
     minimal: bool,
     lang: crate::i18n::Language,
     typesetting: Option<&str>,
+    ascending: bool,
 ) -> String {
     let section_class = if minimal { "moss-cards-minimal-year-group minimal" } else { "moss-cards-minimal-year-group" };
-    render_internal(articles, section_class, minimal, lang, typesetting)
+    render_internal(articles, section_class, minimal, lang, typesetting, ascending)
 }
 
 /// Internal render function with all options.
@@ -51,6 +54,7 @@ pub fn render(
 /// * `articles` - List of article properties to render
 /// * `section_class` - CSS class(es) to apply to section elements
 /// * `use_minimal_items` - If true, use render_minimal for article items
+/// * `ascending` - See [`render`].
 ///
 /// # Returns
 /// HTML string with moss-cards-minimal-year-grouped article list
@@ -60,14 +64,17 @@ fn render_internal(
     use_minimal_items: bool,
     lang: crate::i18n::Language,
     typesetting: Option<&str>,
+    ascending: bool,
 ) -> String {
-    // Dated rows go newest first through the one date-axis comparator, so two
-    // rows on the same date fall in the order the folder's series links walk.
-    // Undated rows lead, as folder listings keep them, ordered by their
-    // display string and then title.
+    // Dated rows go newest first (oldest first under `ascending`) through the
+    // one date-axis comparator, so two rows on the same date fall in the
+    // order the folder's series links walk. Undated rows lead, as folder
+    // listings keep them, ordered by their display string and then title —
+    // that tiebreak is unaffected by direction, same as `cmp_date_axis`'s own
+    // undated-entries arm.
     let mut sorted_articles = articles.to_vec();
     sorted_articles.sort_by(|a, b| match (&a.date_raw, &b.date_raw) {
-        (Some(_), Some(_)) => moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key()),
+        (Some(_), Some(_)) => moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending),
         (None, Some(_)) => std::cmp::Ordering::Less,
         (Some(_), None) => std::cmp::Ordering::Greater,
         (None, None) => b.date_display.cmp(&a.date_display)

@@ -10,9 +10,29 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "lowercase")]
 pub enum SortAxis {
+    /// Newest first — the default, and the only direction before `DateAsc`
+    /// existed.
     Date,
+    /// Oldest first. A second, sibling axis rather than a flag on `Date`: a
+    /// reader picks `sort:` from one flat list of tokens, and `date-asc`
+    /// reads the same way `date`/`weight`/`title` already do. Presents
+    /// identically to `Date` everywhere but the comparator's direction — see
+    /// [`SortAxis::shows_date`].
+    #[serde(rename = "date-asc")]
+    DateAsc,
     Weight,
     Title,
+}
+
+impl SortAxis {
+    /// True for either date axis — `Date` and `DateAsc` present identically
+    /// (a compact date in the card meta slot, auto-year-grouping), and only
+    /// [`cmp_date_axis`]'s direction tells them apart. Callers deciding
+    /// "does this listing show a date" call this instead of comparing to
+    /// `Date` alone, so `DateAsc` is never silently treated like `Weight`/`Title`.
+    pub fn shows_date(&self) -> bool {
+        matches!(self, Self::Date | Self::DateAsc)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,8 +146,17 @@ mod tests {
     #[test]
     fn sort_field_parses_axis_strings() {
         assert!(matches!(serde_yaml::from_str::<SortField>("date").unwrap(), SortField::Axis(SortAxis::Date)));
+        assert!(matches!(serde_yaml::from_str::<SortField>("date-asc").unwrap(), SortField::Axis(SortAxis::DateAsc)));
         assert!(matches!(serde_yaml::from_str::<SortField>("weight").unwrap(), SortField::Axis(SortAxis::Weight)));
         assert!(matches!(serde_yaml::from_str::<SortField>("title").unwrap(), SortField::Axis(SortAxis::Title)));
+    }
+
+    #[test]
+    fn shows_date_is_true_for_both_date_axes_only() {
+        assert!(SortAxis::Date.shows_date());
+        assert!(SortAxis::DateAsc.shows_date());
+        assert!(!SortAxis::Weight.shows_date());
+        assert!(!SortAxis::Title.shows_date());
     }
 
     #[test]
@@ -342,14 +371,18 @@ pub struct DateSortKey<'a> {
 /// sort through here, so a reader walking the chain meets the pages in the
 /// order the folder's page lists them.
 ///
-/// Newest first, undated last; among undated entries folders come first,
-/// then titles in [`cmp_labels`] order. The url path, unique per page,
-/// settles anything still tied — otherwise a tie keeps the order pages were
-/// read from disk, which changes between builds and platforms.
-pub fn cmp_date_axis(a: &DateSortKey<'_>, b: &DateSortKey<'_>) -> std::cmp::Ordering {
+/// Newest first when `ascending` is false (the `Date` axis), oldest first
+/// when true (`DateAsc`); dated entries always sort before undated ones,
+/// regardless of direction — a chronology oldest-first still doesn't want
+/// its undated stragglers leading. Among undated entries folders come first,
+/// then titles in [`cmp_labels`] order, the same in both directions. The url
+/// path, unique per page, settles anything still tied — otherwise a tie
+/// keeps the order pages were read from disk, which changes between builds
+/// and platforms.
+pub fn cmp_date_axis(a: &DateSortKey<'_>, b: &DateSortKey<'_>, ascending: bool) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a.date, b.date) {
-        (Some(ad), Some(bd)) => bd.cmp(ad),
+        (Some(ad), Some(bd)) => if ascending { ad.cmp(bd) } else { bd.cmp(ad) },
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => b.is_folder.cmp(&a.is_folder).then_with(|| cmp_labels(a.label, b.label)),
@@ -372,7 +405,8 @@ where
     };
     let axis_cmp = |a: &&'a D, b: &&'a D| -> std::cmp::Ordering {
         match resolved.axis {
-            SortAxis::Date => cmp_date_axis(&date_key(a), &date_key(b)),
+            SortAxis::Date => cmp_date_axis(&date_key(a), &date_key(b), false),
+            SortAxis::DateAsc => cmp_date_axis(&date_key(a), &date_key(b), true),
             SortAxis::Weight => match (a.weight(), b.weight()) {
                 (Some(aw), Some(bw)) => aw.cmp(&bw),
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -451,6 +485,34 @@ mod sort_dispatch_tests {
         let sorted = sort_by_resolved(&[&a, &b, &c], &r);
         assert_eq!(sorted[0].clean_stem(), "b");
         assert_eq!(sorted[2].clean_stem(), "a");
+    }
+
+    /// `sort: date-asc` — a chronology wanted oldest-first (a site publishing
+    /// a sequence of lectures by year, say) rather than the newest-first
+    /// default.
+    #[test]
+    fn date_asc_orders_oldest_first() {
+        let a = doc_with_label("a", Some("2025-01-01"), None, "A");
+        let b = doc_with_label("b", Some("2025-03-01"), None, "B");
+        let c = doc_with_label("c", Some("2025-02-01"), None, "C");
+        let r = ResolvedSort { axis: SortAxis::DateAsc, explicit_order: None, series_default: false };
+        let sorted = sort_by_resolved(&[&a, &b, &c], &r);
+        assert_eq!(sorted[0].clean_stem(), "a");
+        assert_eq!(sorted[1].clean_stem(), "c");
+        assert_eq!(sorted[2].clean_stem(), "b");
+    }
+
+    /// Undated entries still trail every dated one under `date-asc`, same as
+    /// `date` — ascending reverses which dated entry leads, not whether an
+    /// undated one does.
+    #[test]
+    fn date_asc_still_keeps_undated_entries_last() {
+        let dated = doc_with_label("dated", Some("2025-01-01"), None, "Dated");
+        let undated = doc_with_label("undated", None, None, "Undated");
+        let r = ResolvedSort { axis: SortAxis::DateAsc, explicit_order: None, series_default: false };
+        let sorted = sort_by_resolved(&[&undated, &dated], &r);
+        assert_eq!(sorted[0].clean_stem(), "dated");
+        assert_eq!(sorted[1].clean_stem(), "undated");
     }
 
     /// Pages on the same date come out in one order however they arrive:

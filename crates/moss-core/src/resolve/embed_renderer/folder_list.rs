@@ -155,6 +155,7 @@ fn merge_keyed_params(out: &mut FolderEmbedParams, raw: &str) {
                 "sort" => {
                     out.sort = match v.trim() {
                         "date" => Some(SortAxis::Date),
+                        "date-asc" => Some(SortAxis::DateAsc),
                         "weight" => Some(SortAxis::Weight),
                         "title" => Some(SortAxis::Title),
                         _ => None,
@@ -308,6 +309,7 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
             "sort={}",
             match s {
                 SortAxis::Date => "date",
+                SortAxis::DateAsc => "date-asc",
                 SortAxis::Weight => "weight",
                 SortAxis::Title => "title",
             }

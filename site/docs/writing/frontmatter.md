@@ -110,6 +110,7 @@ Set `children: false` to opt out of the auto-emitted child listing on a folder p
 | Value | Order | Card meta |
 |---|---|---|
 | `date` | newest first | year · month |
+| `date-asc` | oldest first | year · month |
 | `weight` | by `weight` integer, lowest first; unweighted fall to the end | (none) |
 | `title` | alphabetical | (none) |
 | `[a, b, c]` | explicit list of child stems first, in that order; rest by inferred axis | (none) |

@@ -53,6 +53,24 @@ fn parse_marker_body_round_trips_with_emit() {
 }
 
 #[test]
+fn parse_marker_body_accepts_date_asc() {
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        sort: Some(SortAxis::DateAsc),
+        ..Default::default()
+    };
+    let m = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "/journal/",
+        "index.md",
+        &params,
+    );
+    let body = m
+        .trim_start_matches(MARKER_FOLDER_LIST)
+        .trim_end_matches(MARKER_END);
+    let parsed = parse_marker_body(body).unwrap();
+    assert_eq!(parsed.sort, Some(SortAxis::DateAsc));
+}
+
+#[test]
 fn resolve_folder_id_absolute_strips_slashes() {
     assert_eq!(resolve_folder_id("/journal/", "index.md"), "journal");
     assert_eq!(
@@ -2031,6 +2049,56 @@ fn year_groups_under_non_date_axis_skip_resort() {
     assert!(
         out.contains(r#"<span class="moss-prefix-link-title title">Alpha</span>"#),
         "items must use child_list::render's title span; got: {}",
+        out
+    );
+}
+
+/// `sort: date-asc` (a site wanting a chronology oldest-first, e.g. a
+/// sequence of lectures) — the year-grouped listing leads with the oldest
+/// year, and rows within a year also run oldest-first, the reverse of
+/// `date`'s default. `DateAsc.shows_date()` still triggers the resort
+/// (skip_resort=false), same as plain `Date`.
+#[test]
+fn date_asc_year_groups_lead_with_the_oldest_year() {
+    let alpha = make_doc("alpha.html", "Alpha", Some("1924-05-01"));
+    let bravo = make_doc("bravo.html", "Bravo", Some("1926-03-01"));
+    let charlie = make_doc("charlie.html", "Charlie", Some("1924-09-01"));
+    let items = vec![&alpha, &bravo, &charlie];
+    let all: Vec<&ParsedDocument> = items.clone();
+
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let out = generate_children(
+        &items,
+        &all,
+        &project,
+        "minimal",
+        "year",
+        crate::i18n::Language::En,
+        false, // DateAsc still resorts, same as Date
+        &dir_overrides,
+        None,
+        None,
+        Some(moss_core::sort::SortAxis::DateAsc),
+        true,
+        false,
+        &Default::default(),
+    );
+
+    let pos_1924 = out.find("<h2>1924</h2>").expect("1924 heading present");
+    let pos_1926 = out.find("<h2>1926</h2>").expect("1926 heading present");
+    assert!(
+        pos_1924 < pos_1926,
+        "oldest year must lead under date-asc; got: {}",
+        out
+    );
+
+    // Within 1924: Alpha (May) before Charlie (September) — oldest first.
+    let pos_alpha = out.find("Alpha").unwrap();
+    let pos_charlie = out.find("Charlie").unwrap();
+    assert!(
+        pos_alpha < pos_charlie,
+        "within-year order must be oldest-first too; got: {}",
         out
     );
 }

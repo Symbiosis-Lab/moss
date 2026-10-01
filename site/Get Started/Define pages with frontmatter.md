@@ -51,7 +51,7 @@ When a filename contains spaces (or non-Latin characters), pin a short, stable U
 |------|------|
 | `children` | Whether to list child pages (defaults to `true`; set `false` to turn off) |
 | `children_style` | `list`, `card`, or `summary` |
-| `sort` | `date`, `weight`, `title`, or an explicit order |
+| `sort` | `date`, `date-asc`, `weight`, `title`, or an explicit order |
 | `cover` | Cover image for cards and the page header |
 
 Most folders never need to declare `sort`: moss infers it — pages with dates sort by date, pages with weights by weight, and the rest by title.
