@@ -149,6 +149,11 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     } else {
         String::new()
     };
+    let align_attr = if args.align.as_deref() == Some("end") {
+        r#" data-align="end""#.to_string()
+    } else {
+        String::new()
+    };
     // A pale hero photo needs a stronger legibility scrim than a mid-tone or
     // dark one — the same gradient that carries white type over a dusk photo
     // washes out over a watercolour. Classify from the scan-cached dominant
@@ -160,8 +165,8 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     // slide. Deliberate — per-slide scrims would need the ::before split into
     // per-slide layers, and a mixed-tone slideshow is rare enough that the
     // first slide is the honest proxy.
-    let tone_attr = if args.overlay.is_empty() {
-        String::new()
+    let raw_hero_color: Option<String> = if args.overlay.is_empty() {
+        None
     } else {
         resolved_image
             .as_deref()
@@ -170,11 +175,33 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
                 let key = href.strip_prefix('/').unwrap_or(href);
                 lookup.get_dominant_color(key)
             })
-            .and_then(|raw| crate::build::components::color_extract::is_light_cover(&raw))
-            .filter(|&light| light)
-            .map(|_| r#" data-hero-tone="light""#.to_string())
-            .unwrap_or_default()
     };
+    let is_light_tone = raw_hero_color
+        .as_deref()
+        .and_then(crate::build::components::color_extract::is_light_cover)
+        .unwrap_or(false);
+    let tone_attr = if is_light_tone {
+        r#" data-hero-tone="light""#.to_string()
+    } else {
+        String::new()
+    };
+    // Overlay text needs something between it and the photo wherever a
+    // drawn line, lettering or a face falls under it — no crop fixes that
+    // for an image with no calm ground in the text's corner. The panel is
+    // tinted from the image's own dominant colour so it reads as part of
+    // the picture, not a grey box; `panel_background` engineers its
+    // lightness so even the worst-case blend with the photo beneath (the
+    // panel is translucent, so its EFFECTIVE colour drifts toward
+    // whatever is behind it) still clears WCAG AA against the overlay
+    // text colour. `is_light_tone` picks which text colour that is: white
+    // by default, dark when `data-hero-tone="light"` just flipped it.
+    let panel_style_attr = raw_hero_color
+        .as_deref()
+        .and_then(|raw| {
+            crate::build::components::color_extract::panel_background(raw, !is_light_tone)
+        })
+        .map(|c| format!(r#" style="--moss-hero-panel-bg: {}""#, html_escape(&c)))
+        .unwrap_or_default();
     let mobile_style_attr = if args.mobile.as_deref() != Some("overlay") {
         dominant_color
             .map(|c| format!(
@@ -423,17 +450,19 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         // are preserved.
         let collapsed = moss_core::ast::hooks::collapse_tag_adjacent_newlines(&html_content);
         format!(
-            "<section {}{}{}{}{}{}{}{}{}>{}<div class=\"moss-hero-content\">{}</div></section>{}",
+            "<section {}{}{}{}{}{}{}{}{}{}>{}<div class=\"moss-hero-content\"{}>{}</div></section>{}",
             class_attr,
             slides_attr,
             width_attr,
             source_range_attr,
             mobile_attr,
+            align_attr,
             mobile_style_attr,
             tone_attr,
             plate_attr,
             caption_attr,
             img_part,
+            panel_style_attr,
             collapsed.trim(),
             caption_html
         )
@@ -865,6 +894,35 @@ mod tests {
         let resolver = |s: &str| s.to_string();
         let html = render_hero_html_typed(&args, &resolver, None, None, None);
         assert!(!html.contains("data-mobile"), "got: {html}");
+    }
+
+    #[test]
+    fn render_hero_align_end_emits_data_align() {
+        let args = moss_core::ast::HeroShortcode {
+            align: Some("end".to_string()),
+            overlay: vec![moss_core::ast::Block::Paragraph(vec![
+                moss_core::ast::Inline::Text("Text".to_string()),
+            ])],
+            overlay_text: "Text".to_string(),
+            ..Default::default()
+        };
+        let resolver = |s: &str| s.to_string();
+        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        assert!(html.contains(r#"data-align="end""#), "got: {html}");
+    }
+
+    #[test]
+    fn render_hero_default_omits_data_align() {
+        let args = moss_core::ast::HeroShortcode {
+            overlay: vec![moss_core::ast::Block::Paragraph(vec![
+                moss_core::ast::Inline::Text("Text".to_string()),
+            ])],
+            overlay_text: "Text".to_string(),
+            ..Default::default()
+        };
+        let resolver = |s: &str| s.to_string();
+        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        assert!(!html.contains("data-align"), "got: {html}");
     }
 
     #[test]

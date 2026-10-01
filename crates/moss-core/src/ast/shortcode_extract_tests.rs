@@ -1972,6 +1972,45 @@ fn hero_unknown_mobile_value_emits_warning() {
 }
 
 #[test]
+fn hero_align_end_attr_is_parsed() {
+    let md = ":::hero {image=hero.jpg align=end}\n# Title\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Hero(args) => {
+            assert_eq!(args.align.as_deref(), Some("end"));
+        }
+        other => panic!("expected Hero, got {other:?}"),
+    }
+}
+
+#[test]
+fn hero_without_align_attr_has_none() {
+    let md = ":::hero {image=hero.jpg}\n# Title\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Hero(args) => {
+            assert!(args.align.is_none());
+        }
+        other => panic!("expected Hero, got {other:?}"),
+    }
+}
+
+#[test]
+fn hero_unknown_align_value_emits_warning() {
+    let md = ":::hero {image=hero.jpg align=center}\n# Title\n:::\n";
+    let result = extract_shortcodes(md);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.contains("unrecognized") && w.contains("center")),
+        "expected warning for unknown align value, got: {:?}",
+        result.warnings,
+    );
+    assert_eq!(result.extracted.len(), 1);
+}
+
+#[test]
 fn placeholder_preserves_block_line_count_for_source_line_accuracy() {
     // A multi-line shortcode must collapse to a placeholder occupying the
     // SAME number of lines, so the post-extraction LineLookup stays line-

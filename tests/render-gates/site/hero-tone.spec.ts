@@ -6,19 +6,9 @@
  * browser rather than as Rust assertions on emitted markup.
  */
 import { test, expect, Page } from "@playwright/test";
+import { luminanceOfCss as luminance } from "../../e2e/helpers/wcag-contrast";
 
 const PROBE = "/hero-tone.html";
-
-/** WCAG relative luminance of a computed `rgb(...)` / `rgba(...)` string. */
-function luminance(css: string): number {
-  const nums = css.match(/[\d.]+/g);
-  if (!nums || nums.length < 3) throw new Error(`not a colour: ${css}`);
-  const [r, g, b] = nums.slice(0, 3).map((n) => {
-    const c = Number(n) / 255;
-    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
 
 const scrimContent = (page: Page, id: string) =>
   page.evaluate(

@@ -293,6 +293,34 @@ export function syntheticTestClip(width: number, height: number): Buffer {
   return fs.readFileSync(cachePath);
 }
 
+/**
+ * A `width`x`height` PNG with no calm ground anywhere in it: a black grid
+ * on a yellow field, dense enough (an 8px cell, 3px stroke) that every
+ * corner — not just one — carries lines a hero overlay's text could land
+ * on. For the hero-overlay-legibility gate, which needs a real decoded
+ * image (moss's dominant-colour scan reads actual pixels) rather than the
+ * hand-set `data-hero-tone` the hero-tone gate above uses. Shells out to
+ * `ffmpeg`'s `drawgrid` filter — same dependency and caching shape as
+ * `syntheticTestClip` above, which already requires it be on PATH.
+ */
+export function syntheticBusyImage(width: number, height: number): Buffer {
+  const cachePath = path.join(WORKTREE, `target/test-tmp/fixtures/busy-${width}x${height}.png`);
+  if (fs.existsSync(cachePath)) return fs.readFileSync(cachePath);
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  try {
+    execSync(
+      `ffmpeg -y -f lavfi -i "color=c=yellow:s=${width}x${height},drawgrid=w=8:h=8:t=3:c=black@1.0" ` +
+        `-frames:v 1 -update 1 "${cachePath}"`,
+      { stdio: "pipe" },
+    );
+  } catch (e) {
+    throw new Error(
+      `could not generate the ${width}x${height} busy image — is ffmpeg on PATH? (${(e as Error).message})`,
+    );
+  }
+  return fs.readFileSync(cachePath);
+}
+
 function writeOrRemove(filePath: string, content: string | Buffer | null): void {
   if (content === null) {
     fs.rmSync(filePath, { force: true });

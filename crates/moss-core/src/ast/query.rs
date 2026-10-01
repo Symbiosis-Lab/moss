@@ -527,6 +527,7 @@ mod tests {
             overlay_text: String::new(),
             width: None,
             mobile: None,
+            align: None,
             caption: String::new(),
         }))]);
         match find_first_block_image(&doc) {

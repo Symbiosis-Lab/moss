@@ -264,6 +264,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
     let mobile = parsed.get("mobile").map(str::to_string);
+    let align = parsed.get("align").map(str::to_string);
     // Read once, for all three image-source branches below — a caption belongs
     // to the hero, not to whichever syntax named its image.
     let caption = parsed.get("caption").unwrap_or_default().trim().to_string();
@@ -287,6 +288,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 overlay_text,
                 width,
                 mobile,
+                align,
                 caption,
             },
             false,
@@ -315,6 +317,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 overlay_text,
                 width,
                 mobile,
+                align,
                 caption,
             },
             false,
@@ -369,6 +372,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             overlay_text,
             width,
             mobile,
+            align,
             caption,
         },
         used_priority_3,

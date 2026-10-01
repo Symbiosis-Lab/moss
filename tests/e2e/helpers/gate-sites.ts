@@ -21,6 +21,7 @@ import {
   ScratchSiteSpec,
   findLinkHref,
   requireLinkHref,
+  syntheticBusyImage,
   syntheticTestClip,
 } from "./scratch-site";
 
@@ -2431,5 +2432,88 @@ lng = 135.458
 precision = "exact"
 `,
     ".moss/theme/style.css": null,
+  },
+};
+
+// ── Overlay text needs a panel, and a hero grows to fit it ───────────────────
+// A real decoded image this time, not a hand-set `data-hero-tone` — the panel
+// colour comes from `color_extract::panel_background`, which reads the
+// image's own scan-cached dominant colour, so a probe page (a given
+// attribute, no real pixels) would test nothing about the thing that can
+// actually go wrong: a tint computed from the wrong image, or a panel too
+// transparent to carry the text it sits on. `busy.png` is a black grid on
+// yellow spanning every corner, so no crop finds calm ground for the text —
+// the exact failure the panel exists to survive. The paragraph is long
+// enough, and `mobile=overlay` narrow enough, to overflow the old fixed-height
+// clipped frame; that overflow is the second defect this gate pins.
+// Served by playwright/hero-overlay-legibility.config.ts.
+export const HERO_OVERLAY_LEGIBILITY_GATE: ScratchSiteSpec = {
+  name: "hero-overlay-legibility-gate",
+  files: {
+    "busy.png": syntheticBusyImage(1600, 900),
+    "index.md": `---
+title: Hero overlay legibility gate
+uid: "hol00101"
+---
+
+:::hero {image=busy.png mobile=overlay}
+# Overlay on a busy backdrop
+
+This hero demonstrates why overlay text needs its own backing panel rather
+than sitting directly on a photograph. A busy image carries drawn lines in
+every corner, so no amount of careful cropping finds calm ground for the
+words to rest on. The panel behind this paragraph is tinted from the image
+itself, so it reads as part of the picture rather than a grey box dropped on
+top of it, and it stays readable in both light and dark mode whatever the
+photo beneath happens to be. The box beneath this text grows tall enough to
+hold every line of it without clipping any of them off, however long the
+paragraph runs or however narrow the column gets on a phone. Read more
+about [the fix](https://example.com/hero-fix).
+:::
+
+Body text below the hero.
+`,
+    // A short overlay on an align=end hero: covers two things the long
+    // overlay above can't. (1) The panel hugs its own content rather than
+    // the hero's full height -- a long overlay's panel could still cover
+    // most of the frame by genuinely NEEDING that much height for its
+    // words, so only a short one proves the panel isn't stretching to fill
+    // space it doesn't need. (2) align=end moves the panel to the
+    // inline-end edge, for a subject the crop can't move out from under it.
+    "align-end.md": `---
+title: Hero align end gate
+uid: "hol00102"
+---
+
+:::hero {image=busy.png align=end}
+# Short heading
+
+One line of overlay text.
+:::
+
+Body text below the hero.
+`,
+    // Image-only: no overlay text, so the scrim never paints at all (search
+    // data-page="home" -- no, search ":has()" above) -- the ground truth
+    // for "undarkened pixel" the align=end scrim-direction test compares
+    // against, same image and same crop so only the scrim differs.
+    "plain.md": `---
+title: Hero plain gate
+uid: "hol00103"
+---
+
+:::hero {image=busy.png}
+:::
+
+Body text below the hero.
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    // A full-bleed, opaque, body-level layer -- the shape a real theme's
+    // background treatment takes. .moss-hero's grow-to-fit media sits at
+    // z-index: -1 so it paints behind the hero's own (in-flow) overlay
+    // text; without isolation: isolate on .moss-hero containing that,
+    // -1 is relative to the WHOLE page, not just the hero, and this layer
+    // (at the default stacking level, effectively 0) would paint over it.
+    ".moss/theme/style.css": `body::before { content: ""; position: fixed; inset: 0; background: #fff; z-index: 0; }`,
   },
 };

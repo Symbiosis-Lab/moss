@@ -83,6 +83,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Text colour over a pale ('light'-toned) hero image, in both overlaid layouts (desktop, and mobile in `data-mobile=\"overlay\"`). Deliberately not `var(--moss-color-text)`: that token is `#2c2825` in light mode but `#d4cbba` in dark, while the photograph underneath does not repaint with the colour scheme, so the token's dark-mode value would put pale text back on the same pale image. Set this to tune the exact shade; it stays fixed across both colour schemes.",
     },
     CustomProp {
+        name: "--moss-hero-panel-bg",
+        owner: "moss-hero-content",
+        default: "rgba(20, 16, 12, 0.82)",
+        description: "Backing panel behind overlay text in both overlaid hero layouts (desktop, and mobile under `mobile=overlay`), so the text stays legible wherever a drawn line, lettering or a face in the photo falls under it. moss sets this inline per-render, tinted from the image's own scan-cached dominant colour (`color_extract::panel_background`) and engineered so the panel's WCAG contrast against the overlay text holds even in the worst case of its own translucency — composited over pure black or pure white, which bounds every actual pixel underneath. The flat default here only applies when that can't be computed (no media manifest). A pale ('light'-toned) hero reads this against a different literal fallback, `rgba(250, 248, 244, 0.82)` — same property, the other side of the dark/light text split `--moss-hero-tone-color` makes.",
+    },
+    CustomProp {
+        name: "--moss-hero-mobile-band",
+        owner: "moss-hero",
+        default: "min(45vb, 320px)",
+        description: "Under `mobile=overlay`, the height of image reserved above the text panel on a narrow viewport. Without a floor here the panel could grow tall enough (a heading plus a long paragraph and a link) to cover the whole hero, leaving no picture at all — a photo the words sit on, not one they erase. Raise it for a subject that needs more room to read, or lower it toward `0px` for a short caption where the default reserve would look like wasted space.",
+    },
+    CustomProp {
         name: "--moss-nav-island-display",
         owner: "moss-nav-island",
         default: "block",

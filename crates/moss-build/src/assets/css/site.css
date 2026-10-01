@@ -6174,30 +6174,20 @@ article a:where(:not(.moss-btn)):focus {
 
 .moss-hero {
   position: relative;
-  /* Full-bleed by DOM position: a body-level flex item, outside <main>. The
-     shift term is what escapes the sidenote gutter — body's padding-right
-     narrows this element's containing block by exactly that much, so adding it
-     back lands the banner on the viewport's right edge. `body { overflow-x:
-     clip }` absorbs the overhang without a scrollbar. On a page or site with no
-     reserve declared the inset clamps to 0px and this is plain 100%.
-
-     The inset, NOT the reserve: the inset is what body actually gave up, and
-     it is much less — 0px from 1316px up. Adding the reserve back here would
-     overshoot the window by the difference, up to 280px, and `overflow-x:
-     clip` would hide it while `object-fit: cover` cropped against a box wider
-     than the screen and .moss-hero-caption centred 140px right of where it
-     belongs.
-
-     No fallback, deliberately, in both reads of the property: `body` declares
-     it unconditionally, and a `var(--moss-x, …)` read WITH a fallback is what
-     components_sync_test.rs's `every_escape_hatch_is_declared` treats as a
-     theme hook needing a CUSTOM_PROPS row. This is plumbing, not a hook.
-
-     NOT a negative margin. That was the first attempt, and it silently did
-     nothing: a negative margin widens a flex item only while its cross size
-     comes from `align-items: stretch`, and the `width` here is an explicit
-     size, which turns stretch off. The banner sat 280px short of the right
-     edge on every wide viewport of a footnoted site. */
+  /* `position: relative` alone does NOT create a stacking context (that
+     needs an explicit z-index too) — so without this, the overlay-growth
+     block's `z-index: -1` media escapes past this element entirely and
+     stacks against whatever else is in the BODY's context, which can
+     paint it behind an opaque theme layer instead of just behind this
+     hero's own text. */
+  isolation: isolate;
+  /* Full-bleed by DOM position: a body-level flex item, outside <main>.
+     body's padding-right narrows this element's containing block, so
+     adding the INSET back (not the reserve — much less, 0px from 1316px
+     up) lands the banner on the viewport's right edge; `overflow-x: clip`
+     on body absorbs the overhang. No fallback: `body` always declares it.
+     Not a negative margin — that silently did nothing, since an explicit
+     width turns off the `align-items: stretch` a negative margin needs. */
   inline-size: calc(100% + var(--moss-sidenote-inset));
   /* Reads the same hook as the media cap below, with its own (looser) fallback:
      the wrapper clips, the media scales, so they want different defaults but the
@@ -6225,19 +6215,12 @@ article a:where(:not(.moss-btn)):focus {
   z-index: 0;
 }
 
-/* A hero that carries a caption is a photograph being shown, not a backdrop
-   for overlay text — and a caption that names a subject («the memorial wall at
-   the monastery gate») is a promise that the subject is in the frame. The
-   default `object-fit: cover` crops to fill, which can cut that subject out,
-   so a captioned hero shows the whole image and the frame grows to fit it.
-   An author who wants the crop back writes it on the image itself
-   (`image=cover.jpg|cover top`) — media attrs land as an inline style and
-   beat this.
-
-   `[data-fit="plate"]` (`:::hero {.plate}`, 2026-09-11) shares this block:
-   an artwork/manuscript/photograph reproduction that must render WHOLE and
-   at no more than its own delivered pixels — same "don't crop, don't force
-   the frame" shape as a captioned hero, just without requiring a caption. */
+/* A captioned hero names its subject, a promise the subject is in frame —
+   so unlike the default crop-to-fill, it shows the whole image and the
+   frame grows to fit it. The crop comes back via `image=cover.jpg|cover
+   top` (an inline style, beats this). `[data-fit="plate"]` (`.plate`)
+   shares this block: same "don't crop, don't force the frame" shape, for
+   an artwork/manuscript reproduction rather than a caption's promise. */
 .moss-hero[data-captioned],
 .moss-hero[data-fit="plate"] {
   max-block-size: none;
@@ -6322,26 +6305,34 @@ article a:where(:not(.moss-btn)):focus {
   max-block-size: var(--moss-hero-max-height, 70vb);
 }
 
-/* Legibility scrim.
-   Painted ONLY under a hero that actually carries overlay text: on an
-   image-only hero there is nothing to make legible, so darkening the
-   author's chosen image is pure damage. This rule used to be ungated, which
-   is how image-only heroes ended up dimmed; render_hero_html_typed omits
-   .moss-hero-content entirely when there is no overlay, so `:has()` is
-   enough to tell the two apart.
-   Aimed at the bottom-left, where .moss-hero-content is anchored. The old
-   135deg ramp put its 0.6 maximum in the top-left corner, which by
-   construction never holds text, and left the text zone at ~0.36 — too
-   weak to carry white type over a mid-tone photo. */
+/* Legibility scrim. Gated on `:has()` so an image-only hero stays undimmed.
+   Darkens the START side by default; `align=end` moves the panel to the
+   opposite side, so the ramp moves with it. Mirrored under :dir(rtl) too. */
 .moss-hero::before {
   content: none;
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(to top,   rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
     linear-gradient(to right, rgba(0,0,0,0.30) 0%, transparent 55%);
   z-index: 1;
   pointer-events: none;
+}
+
+.moss-hero[data-align="end"]::before {
+  background:
+    linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to left, rgba(0,0,0,0.30) 0%, transparent 55%);
+}
+:dir(rtl) .moss-hero::before {
+  background:
+    linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to left, rgba(0,0,0,0.30) 0%, transparent 55%);
+}
+:dir(rtl) .moss-hero[data-align="end"]::before {
+  background:
+    linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to right, rgba(0,0,0,0.30) 0%, transparent 55%);
 }
 
 .moss-hero:has(.moss-hero-content)::before { content: ''; }
@@ -6379,6 +6370,7 @@ article a:where(:not(.moss-btn)):focus {
      the photo. */
   color: #ffffff;
   text-shadow: 0 1px 3px rgba(0,0,0,0.35);
+  background: var(--moss-hero-panel-bg, rgba(20, 16, 12, 0.82)); /* tinted panel; see color_extract::panel_background */
 }
 
 /* Elements that carry their OWN colour from the base stylesheet have to hand
@@ -6436,14 +6428,10 @@ article a:where(:not(.moss-btn)):focus {
   background: rgba(255,255,255,0.15);
 }
 
-/* Multi-image hero: ambient crossfade. One slide visible at a time, no
-   controls — no slide may carry information the others don't. The
-   .moss-hero-slides wrapper is the positioning context: the first slide
-   keeps normal flow (the wrapper takes its height), the rest stack inside
-   the wrapper — never over stacked mobile content. Timing: 7s per slide,
-   1.5s dissolve; keyframe percentages depend on the slide count, hence the
-   per-count blocks (the renderer caps at 6). An unmatched count degrades
-   to the static first slide. */
+/* Multi-image hero: ambient crossfade, one slide visible at a time, no
+   controls. `.moss-hero-slides` is the positioning context for the rest to
+   stack inside. Timing: 7s/slide, 1.5s dissolve; per-count keyframe blocks
+   (capped at 6). An unmatched count degrades to the static first slide. */
 .moss-hero .moss-hero-slides {
   position: relative;
 }
@@ -6492,6 +6480,57 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero[data-slides] .moss-hero-slide:not(:first-child) { opacity: 0; }
 }
 
+/* Grow to fit overlay text instead of clipping it: media goes absolute and
+   fills via inset (mirrors `.moss-card-cover > picture`'s sizing idiom, not
+   its stacking — that one has no in-flow sibling to stay behind). Content
+   flows and sets the height; `min-block-size` is the old cap as a FLOOR.
+   Mirrored below for mobile-overlay, which also adds a reserved image band
+   above the panel (`padding-block-start`, --moss-hero-mobile-band) and uses
+   range syntax rather than min/max-width, which tied with this block at
+   exactly 768px. `:not([data-fit="plate"])`: a plate's own rules promise
+   never to crop or upscale, which this would break. */
+@media (width >= 48rem) {
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    min-block-size: var(--moss-hero-max-height, min(80vb, 800px));
+    max-block-size: none;
+  }
+
+  /* `align=end` moves the panel to the inline-end (flex-end resolves per direction). */
+  .moss-hero[data-align="end"]:has(.moss-hero-content):not([data-fit="plate"]) {
+    align-items: flex-end;
+  }
+
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > picture,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > img,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > video,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > .moss-ambient-video,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > .moss-hero-slides {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    z-index: -1; /* not 0/auto: that still paints above flow content */
+  }
+
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) img,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) video,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-ambient-video video[data-loop] {
+    max-block-size: none;
+    object-position: var(--moss-hero-object-position, top);
+  }
+
+  .moss-hero:has(.moss-hero-content) .moss-hero-content {
+    position: static;
+    inset-block-end: auto;
+    inset-inline-start: auto;
+    z-index: 2; /* not auto: else this flex item paints below the scrim */
+    flex: none; /* hugs its own content; never stretch to the hero's height */
+  }
+}
+
 /* Responsive — tablet */
 @media (max-width: 64rem) {
   .moss-hero-content {
@@ -6520,7 +6559,7 @@ article a:where(:not(.moss-btn)):focus {
    With overlay text: stack layout — image full-width at natural ratio on top,
    text in a solid block below. No crop, no forced aspect ratio. Gradient
    overlay is hidden since text is no longer on the image. */
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .moss-hero img,
   .moss-hero video,
   .moss-hero .moss-ambient-video video[data-loop] {
@@ -6614,19 +6653,26 @@ article a:where(:not(.moss-btn)):focus {
    NOTE: `.moss-hero[data-mobile="overlay"] img` overrides the stacking block's
    `.moss-hero:has(.moss-hero-content) img { position: static }` by
    source order. This block MUST remain after that block. */
-@media (max-width: 48rem) {
-  .moss-hero[data-mobile="overlay"] {
-    block-size: min(60vb, 480px);
-    max-block-size: min(60vb, 480px);
-    display: block;
+@media (width < 48rem) {
+  /* Same grow-to-fit shape as the >= 48rem block above: a FLOOR, not a cap.
+     Same `:not([data-fit="plate"])` guard too — see that block's comment. */
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    min-block-size: min(60vb, 480px);
+    max-block-size: none;
+    padding-block-start: var(--moss-hero-mobile-band, min(45vb, 320px));
   }
 
-  .moss-hero[data-mobile="overlay"] img,
-  .moss-hero[data-mobile="overlay"] video {
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) img,
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) video {
     position: absolute;
+    inset: 0;
     inline-size: 100%;
     block-size: 100%;
     object-fit: cover;
+    z-index: -1; /* else paints above the now in-flow content */
   }
 
   .moss-hero[data-mobile="overlay"]::before {
@@ -6634,8 +6680,8 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content {
-    position: absolute;
-    background: none;
+    position: static;
+    background: var(--moss-hero-panel-bg, rgba(20, 16, 12, 0.82)); /* see "Backing panel" above */
     /* Back over the image, so back to white — and the children inherit it
        via the `:is(h1…blockquote)` rule in the base block. */
     color: #fff;
@@ -6644,22 +6690,22 @@ article a:where(:not(.moss-btn)):focus {
     max-inline-size: none;
   }
 
-  /* Multi-image hero in overlay mode: the section has an explicit height
-     and imgs are absolute — size the wrapper and every slide to the
-     section so the first slide can't collapse to zero height. */
-  .moss-hero[data-mobile="overlay"] .moss-hero-slides,
-  .moss-hero[data-mobile="overlay"] .moss-hero-slide {
+  /* Multi-image: slides wrapper fills and sits behind, same as a single image. */
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) .moss-hero-slides {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+  }
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) .moss-hero-slide {
     position: absolute;
     inset: 0;
   }
 
-  /* Overlay mode keeps the text ON the image, so the shadow has to come back.
-     It carries the same three-`:not()` specificity brace as the stacked block
-     above for a sharper reason than custom.css: without it this rule is
-     (0,3,1) and the stacked block's (0,4,1) `text-shadow: none` beat it on
-     specificity regardless of source order — an overlay hero's heading was
-     rendering white on a photograph with no shadow at all. Braced, this is
-     (0,6,1) and wins. */
+  /* Shadow comes back since text is ON the image here. Needs the same
+     three-`:not()` brace as the stacked block above — without it this is
+     (0,3,1), losing the tie to the stacked block's (0,4,1) `text-shadow:
+     none` regardless of source order, which rendered white-on-photo with
+     no shadow at all. Braced, this is (0,6,1) and wins. */
   .moss-hero[data-mobile="overlay"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
     font-size: 1.2rem;
     text-shadow: 0 2px 4px rgba(0,0,0,0.4);
@@ -6674,36 +6720,19 @@ article a:where(:not(.moss-btn)):focus {
   }
 }
 
-/* Pale cover — the rules. The reasoning is up at the scrim block (search
-   data-hero-tone); this is where it takes effect, and it must stay LAST.
-
-   Off comes the scrim, at every width. `.moss-hero[data-mobile="overlay"]
-   ::before { content: '' }` above is (0,2,1) and so is this, so the only thing
-   between a pale overlay hero and its scrim is these lines being later.
-
-   The text colour is written in the two OVERLAID contexts only — desktop, and
-   mobile in overlay mode. The third context, mobile stacked, must not be
-   touched: there the text sits below the image on a `--moss-cover-color` band,
-   which is the WCAG-darkened extract, so it already carries white type
-   correctly. A blanket
-   `[data-hero-tone="light"] .moss-hero-content { color: dark }` would out-
-   specify `[data-cover-color] .moss-hero-content` and paint dark text on that
-   dark band.
-
-   `--moss-hero-tone-color`, not the text token — which is pale in dark mode
-   and would land right back on this same pale image. See custom_props.rs.
-
-   Placed after the mobile-overlay block on purpose. Every rule here ties on
-   specificity with the overlay rule it replaces — (0,3,0) against (0,3,0) for
-   the container, (0,6,1) against (0,6,1) for the headings, which carry the
-   same three-`:not()` brace for the same reason documented there. Source order
-   is what decides the tie, so this block must stay last. */
+/* Pale cover — the rules (reasoning at the scrim block, search
+   data-hero-tone). MUST STAY LAST: ties on specificity with the rule it
+   replaces, source order is the only tiebreak. Scoped to the two OVERLAID
+   contexts only: mobile stacked text sits on `--moss-cover-color`, already
+   WCAG-correct white. `--moss-hero-tone-color` (custom_props.rs), not the
+   text token — pale in dark mode, landing back on this same pale image. */
 .moss-hero[data-hero-tone="light"]::before { content: none; }
 
-@media (min-width: 48rem) {
+@media (width >= 48rem) {
   .moss-hero[data-hero-tone="light"] .moss-hero-content {
     color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
+    background: var(--moss-hero-panel-bg, rgba(250, 248, 244, 0.82)); /* pale panel for dark text */
   }
 
   .moss-hero[data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
@@ -6711,10 +6740,11 @@ article a:where(:not(.moss-btn)):focus {
   }
 }
 
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content {
     color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
+    background: var(--moss-hero-panel-bg, rgba(250, 248, 244, 0.82));
   }
 
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {

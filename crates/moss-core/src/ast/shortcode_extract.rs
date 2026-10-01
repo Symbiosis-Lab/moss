@@ -107,6 +107,14 @@ fn parse_shortcode_block(
                     ));
                 }
             }
+            if let Some(ref v) = sc.align {
+                if v != "end" {
+                    warns.push(format!(
+                        "shortcode `:::hero` has unrecognized `align={v}`. \
+                         Only `align=end` is recognized. The attribute is ignored."
+                    ));
+                }
+            }
             (Some(Shortcode::Hero(sc)), warns)
         }
         "grid" => {

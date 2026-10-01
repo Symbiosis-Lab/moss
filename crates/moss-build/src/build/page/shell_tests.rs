@@ -1479,9 +1479,13 @@ fn test_css_hero_mobile_stacks_overlay_below_image() {
     // Keep the selector at exactly this specificity (0-2-0): the mobile
     // overlay-mode block below relies on `.moss-hero[data-mobile="overlay"]`
     // tying with it and winning on source order.
+    //
+    // Range syntax, not `max-width`: the hero's mobile/desktop boundary
+    // moved to `(width < 48rem)` / `(width >= 48rem)` so the two can never
+    // both match the same width (see site.css's comment at that rule).
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
-        "@media (max-width: 48rem)",
+        "@media (width < 48rem)",
         ".moss-hero:has(.moss-hero-content)",
     )
     .expect(".moss-hero:has(.moss-hero-content) mobile CSS rule should exist");

@@ -1188,6 +1188,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Below **48rem** (moss's mobile threshold), `overlay` keeps the title on top of the image instead of stacking it underneath. Emitted **only** for `:::hero {mobile=overlay}` — an author must ask for it; a hero with overlay text does not get it by default. The selector to fight if you want the other behaviour is `.moss-hero[data-mobile=\"overlay\"]`.",
             },
             DataAttr {
+                name: "data-align",
+                values: &["end"],
+                default: "",
+                description: "Moves the overlay panel to the INLINE-END edge (right in LTR, left in RTL) instead of the default start. Emitted **only** for `:::hero {align=end}`. For a portrait subject in a wide frame the crop cannot move the subject sideways — the image already spans the full width — so when the subject sits at the start edge, this moves the words to the other end instead. At >= 48rem only: below the mobile breakpoint under `mobile=overlay` the panel is already full width, so this has no visible effect there, and it does nothing to a hero with no overlay text.",
+            },
+            DataAttr {
                 name: "data-captioned",
                 values: &[""],
                 default: "",

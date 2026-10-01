@@ -211,13 +211,9 @@ body[data-typesetting="vertical"] .moss-hero {
   flex-shrink: 0;
 }
 
-/* Same cap, on the plate/captioned image's own BLOCK axis — not the INLINE
-   axis site.css's `max-inline-size: 100%` already covers. Site.css's
-   `max-block-size: var(--moss-hero-max-height, 70vb)` capped this by
-   coincidence (`vb` is flow-relative, reads viewport width here); the
-   mobile reset removes it assuming it caps a photo's height, as it does
-   horizontally. `vw` not `%`: even a `vw`-capped `.moss-hero` isn't
-   definite for a descendant's `%` here (verified live). */
+/* Same cap, on the plate/captioned image's BLOCK axis — site.css's
+   `max-inline-size: 100%` already covers INLINE. `vw` not `%`: a `vw`-capped
+   `.moss-hero` still isn't a definite size for a descendant's `%` here. */
 body[data-typesetting="vertical"] .moss-hero[data-captioned] img,
 body[data-typesetting="vertical"] .moss-hero[data-fit="plate"] img,
 body[data-typesetting="vertical"] .moss-hero[data-captioned] video,
