@@ -4,11 +4,18 @@
 # downloads the matching moss binary), so it publishes on its own
 # cadence, outside the changesets flow that owns moss-api and the plugins
 # (.changeset/config.json ignores it for the same reason). This job therefore
-# uses the NPM_TOKEN repo secret directly rather than the `npm` deployment
-# environment: that environment exists to keep `changeset publish` — which
-# sweeps every unpublished workspace package — pinned to main. A single-package
-# publish of a version that must equal an existing moss tag has
-# nothing to sweep, and the guard step below enforces exactly that.
+# runs outside the `npm` deployment environment: that environment exists to
+# keep `changeset publish` — which sweeps every unpublished workspace package —
+# pinned to main. A single-package publish of a version that must equal an
+# existing moss tag has nothing to sweep, and the guard step below enforces
+# exactly that.
+#
+# NO NPM TOKEN (2026-10-01): npm trusts this workflow file by name (Trusted
+# Publishing, configured on the package's npmjs.com settings), and the job
+# proves who it is with a short-lived GitHub OIDC token. The NPM_TOKEN secret
+# it replaced failed with EOTP on 2026-09-29: npm wanted a one-time password
+# no CI run can supply. Renaming this file breaks publishing until the
+# package's trusted publisher is updated to the new name.
 #
 # WHY IT DOES THE VERSION BUMP ITSELF (2026-08-14): it used to read the version
 # out of packages/moss/package.json and go no further, so shipping the wrapper
@@ -43,6 +50,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # npm Trusted Publishing: the OIDC token npm exchanges for a publish credential
 
 jobs:
   publish:
@@ -57,6 +65,9 @@ jobs:
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org
+
+      # Node 20 bundles npm 10, which cannot do Trusted Publishing (11.5.1+).
+      - run: npm install -g npm@^11.5.1
 
       - name: Which version are we publishing
         id: target
@@ -125,8 +136,6 @@ jobs:
         if: steps.target.outputs.needed == 'true'
         working-directory: packages/moss
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Last, so the committed version can never claim a publish that failed.
       - name: Record the bump in the repo
