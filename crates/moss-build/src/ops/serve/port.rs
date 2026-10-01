@@ -1,7 +1,10 @@
 //! TCP port utilities for the preview server.
 //!
 //! Provides port availability checking, port scanning, and server readiness
-//! verification used by the server lifecycle layer.
+//! verification used by the server lifecycle layer, plus [`bind_with_scan`]
+//! and [`drive`] — the one owner of binding the preview server's actual
+//! listener(s) (loopback dual-stack, or `ServeConfig::bind`'s explicit
+//! address) and driving `axum::serve` on whichever came back.
 //!
 //! ## Identity verification
 //!
@@ -338,6 +341,103 @@ pub(super) async fn bind_dual_stack_with_scan(
         start_port.saturating_add(MAX_PORT_SCAN),
         last_err.unwrap_or_else(|| "unknown".to_string())
     ))
+}
+
+/// Bind a single explicit, operator-named address — and nothing else — on
+/// the chosen port, scanning the same range the loopback bind does. Safe to
+/// expose beyond loopback for the reason `trust_boundary`'s `extra_hosts`
+/// doc section adds to its DNS-rebinding reasoning: the operator named this
+/// address, it did not arrive by a rebind.
+async fn bind_explicit_with_scan(
+    addr: std::net::IpAddr,
+    start_port: u16,
+) -> Result<(u16, tokio::net::TcpListener), String> {
+    const MAX_PORT_SCAN: u16 = 100;
+    let mut last_err: Option<String> = None;
+    for port in start_port..start_port.saturating_add(MAX_PORT_SCAN) {
+        match tokio::net::TcpListener::bind(std::net::SocketAddr::new(addr, port)).await {
+            Ok(listener) => return Ok((port, listener)),
+            Err(e) => last_err = Some(format!("bind {addr}:{port}: {e}")),
+        }
+    }
+    Err(format!(
+        "No bindable port found in range {}..{} for {} (last error: {})",
+        start_port,
+        start_port.saturating_add(MAX_PORT_SCAN),
+        addr,
+        last_err.unwrap_or_else(|| "unknown".to_string())
+    ))
+}
+
+/// Bind the port for one server start. `bind` is `ServeConfig::bind`
+/// verbatim: `None` scans for the loopback dual-stack pair
+/// ([`bind_dual_stack_with_scan`]); `Some(addr)` scans for `addr` alone
+/// ([`bind_explicit_with_scan`]). Returns the bound port, the primary
+/// listener, and a secondary one only in the dual-stack case.
+pub(super) async fn bind_with_scan(
+    bind: Option<std::net::IpAddr>,
+    start_port: u16,
+) -> Result<(u16, tokio::net::TcpListener, Option<tokio::net::TcpListener>), String> {
+    match bind {
+        Some(addr) => {
+            let (port, listener) = bind_explicit_with_scan(addr, start_port).await?;
+            Ok((port, listener, None))
+        }
+        None => {
+            let (port, v4, v6) = bind_dual_stack_with_scan(start_port).await?;
+            Ok((port, v4, Some(v6)))
+        }
+    }
+}
+
+/// Serve `app` on `primary` (and `secondary`, when present) until
+/// `shutdown_rx` fires, then stop both gracefully. One external signal,
+/// fanned out to every bound listener through a broadcast channel of one.
+pub(super) async fn drive(
+    primary: tokio::net::TcpListener,
+    secondary: Option<tokio::net::TcpListener>,
+    app: axum::Router,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) {
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+    let shutdown_primary = {
+        let mut rx = broadcast_tx.subscribe();
+        async move {
+            let _ = rx.recv().await;
+        }
+    };
+    let shutdown_secondary = secondary.is_some().then(|| {
+        let mut rx = broadcast_tx.subscribe();
+        async move {
+            let _ = rx.recv().await;
+        }
+    });
+
+    let app_secondary = app.clone();
+    let primary_serve = async move {
+        if let Err(e) = axum::serve(primary, app)
+            .with_graceful_shutdown(shutdown_primary)
+            .await
+        {
+            log::error!(target: "preview", "Preview server error: {}", e);
+        }
+    };
+    let secondary_serve = async move {
+        if let (Some(listener), Some(shutdown)) = (secondary, shutdown_secondary) {
+            if let Err(e) = axum::serve(listener, app_secondary)
+                .with_graceful_shutdown(shutdown)
+                .await
+            {
+                log::error!(target: "preview", "Preview server (secondary) error: {}", e);
+            }
+        }
+    };
+    let bridge = async move {
+        let _ = shutdown_rx.await;
+        let _ = broadcast_tx.send(());
+    };
+
+    tokio::join!(primary_serve, secondary_serve, bridge);
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
 //! the iframe-bridge script alive on missing pages.
 
 use super::placeholder::{handle_asset_request, transparent_stub_response};
-use super::port::{bind_dual_stack_with_scan, verify_server_ready, MOSS_HEALTH_PATH};
+use super::port::{verify_server_ready, MOSS_HEALTH_PATH};
 use super::asset_rewriter;
 use super::content_wrapper;
 use super::iframe_bridge::inject_iframe_bridge;
@@ -20,6 +20,7 @@ use axum::{
     Router,
 };
 use moss_core::media::html_escape;
+use std::net::IpAddr;
 use std::sync::Arc;
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
@@ -186,6 +187,17 @@ pub struct ServeConfig {
     /// `ServeDir` fallback so a host route wins over a site file at the
     /// same path. `None` merges nothing.
     pub host_routes: Option<Router>,
+    /// Explicit non-loopback bind address. `None` (default) keeps today's
+    /// loopback dual-stack bind; `Some` binds that address alone — see
+    /// `super::port::bind_with_scan` and `super::trust_boundary`'s
+    /// `extra_hosts` section for what else opting in requires.
+    pub bind: Option<IpAddr>,
+    /// `Host`/`Origin` values trusted alongside loopback when `bind` is
+    /// `Some` — the hostnames the operator named for that address.
+    pub extra_hosts: Vec<String>,
+    /// Print the one-time sign-in URL (`super::session_route::announce_line`)
+    /// to stderr at bind time. Ignored unless `bind` is `Some`.
+    pub announce_token: bool,
 }
 
 impl ServeConfig {
@@ -208,6 +220,9 @@ impl ServeConfig {
             standby_on_conflict: false,
             yield_notify: Arc::new(tokio::sync::Notify::new()),
             host_routes: None,
+            bind: None,
+            extra_hosts: Vec::new(),
+            announce_token: false,
         }
     }
 }
@@ -231,7 +246,11 @@ pub async fn start_server(
         standby_on_conflict,
         yield_notify,
         host_routes,
+        bind,
+        extra_hosts,
+        announce_token,
     } = config;
+    let extra_hosts = Arc::new(extra_hosts);
     // === SETUP PHASE ===
     // Note: We don't check for index.html here - the server can start even for empty folders.
     // ServeDir will return 404 for missing files, and when content is generated (e.g., by
@@ -245,7 +264,8 @@ pub async fn start_server(
     // a useless half-bind and a confusing "server failed readiness check"
     // error). If neither stack can be bound at any port in the scan range,
     // we return Err synchronously, before spawning anything.
-    let (port, listener_v4, listener_v6) = bind_dual_stack_with_scan(start_port).await?;
+    let (port, listener_primary, listener_secondary) =
+        super::port::bind_with_scan(bind, start_port).await?;
 
     // Create shutdown channel for graceful server termination
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -274,7 +294,8 @@ pub async fn start_server(
                         registry: Option<Arc<crate::types::assets::AssetRegistry>>,
                         invoke: Option<super::invoke::InvokeCtx>,
                         is_evicted: EvictedProbe,
-                        host_routes: Option<Router>| {
+                        host_routes: Option<Router>,
+                        extra_hosts: Arc<Vec<String>>| {
         let registry_for_layer = registry.clone();
         // The `/__moss_health/` route is registered BEFORE `.fallback()` so it
         // always wins over `ServeDir`. The endpoint emits a moss-specific JSON
@@ -311,6 +332,17 @@ pub async fn start_server(
             .route("/__moss/yield", axum::routing::post({
                 let (site_dir, invoke, notify) = (state.clone(), invoke.clone(), yield_notify.clone());
                 move |r: Request<Body>| async move { super::yield_route::handle_yield(invoke, site_dir, kind, notify, r).await }
+            }))
+            // Unconditional like health/source/comments/yield — see
+            // `session_route`. The token→cookie exchange for a browser tab
+            // reached via `bind`/`extra_hosts`.
+            .route("/__moss/session", axum::routing::get({
+                let (site_dir, invoke, extra_hosts) = (state.clone(), invoke.clone(), extra_hosts.clone());
+                move |axum::extract::Query(q): axum::extract::Query<super::session_route::SessionQuery>,
+                      headers: http::HeaderMap| {
+                    let (site_dir, invoke, extra_hosts) = (site_dir.clone(), invoke.clone(), extra_hosts.clone());
+                    async move { super::session_route::handle_session(invoke, site_dir, extra_hosts, q, headers).await }
+                }
             }));
 
         // Read-only HTTP command carrier (`POST /__moss/invoke/*cmd`). Registered
@@ -610,11 +642,18 @@ pub async fn start_server(
             .layer(middleware::from_fn(inject_iframe_bridge))
             // Outermost layer: added last, so it runs FIRST — ahead of routing,
             // ServeDir and bridge injection — and covers every route including
-            // the health check. Refuses a non-loopback Host (DNS-rebinding
-            // defense) and a foreign Origin before any handler sees the request.
-            .layer(middleware::from_fn(
-                super::trust_boundary::validate_host_origin,
-            ))
+            // the health check. Refuses a Host that is neither loopback nor
+            // `extra_hosts` (DNS-rebinding defense) and a foreign Origin
+            // before any handler sees the request.
+            .layer({
+                let extra_hosts = extra_hosts.clone();
+                middleware::from_fn(move |request, next| {
+                    let extra_hosts = extra_hosts.clone();
+                    async move {
+                        super::trust_boundary::validate_host_origin(extra_hosts, request, next).await
+                    }
+                })
+            })
     };
 
     // Record this process as the folder's owner — the ONE server entry both
@@ -641,58 +680,32 @@ pub async fn start_server(
     if let Some(ctx) = &invoke_ctx {
         ctx.bind(&site_dir_state);
     }
+    let token_arc = invoke_ctx.as_ref().and_then(|ctx| ctx.token());
+    let token_str = token_arc.as_ref().map(|t| t.as_str());
+    if let Some(line) =
+        super::session_route::maybe_announce_line(bind, announce_token, &extra_hosts, port, token_str)
+    {
+        eprintln!("{line}");
+    }
 
     // Spawn the server task. We use a helper closure to avoid duplicating the
     // serve logic — both code paths run the same axum::serve with graceful shutdown.
-    let app = build_router(state_clone, registry_clone, invoke_ctx_clone, is_evicted, host_routes);
+    let app = build_router(
+        state_clone,
+        registry_clone,
+        invoke_ctx_clone,
+        is_evicted,
+        host_routes,
+        extra_hosts.clone(),
+    );
 
-    // Both listeners were bound above. Hand them straight to the serve
-    // loops — no further chance for a foreign process to slip in.
+    // Both listeners were bound above. Hand them straight to `port::drive`'s
+    // serve loop — no further chance for a foreign process to slip in.
     let serve_future = async move {
         // Held for exactly as long as this server runs: dropped only when
-        // the loops below return, which is after the shutdown signal fires.
+        // `drive` returns, which is after the shutdown signal fires.
         let _owner_guard = owner_guard;
-        // Drive both listeners with the same router. Two oneshot
-        // receivers feed off the single shutdown signal via a
-        // broadcast channel-of-one pattern.
-        let (broadcast_tx, _) = tokio::sync::broadcast::channel::<()>(1);
-        let shutdown_v4 = {
-            let mut rx = broadcast_tx.subscribe();
-            async move { let _ = rx.recv().await; }
-        };
-        let shutdown_v6 = {
-            let mut rx = broadcast_tx.subscribe();
-            async move { let _ = rx.recv().await; }
-        };
-
-        let app_v4 = app.clone();
-        let app_v6 = app;
-
-        let v4_serve = async move {
-            if let Err(e) = axum::serve(listener_v4, app_v4)
-                .with_graceful_shutdown(shutdown_v4)
-                .await
-            {
-                log::error!(target: "preview", "Preview server (IPv4) error: {}", e);
-            }
-        };
-        let v6_serve = async move {
-            if let Err(e) = axum::serve(listener_v6, app_v6)
-                .with_graceful_shutdown(shutdown_v6)
-                .await
-            {
-                log::error!(target: "preview", "Preview server (IPv6) error: {}", e);
-            }
-        };
-
-        // Wait for the external shutdown signal, then fan it out to
-        // both serve loops.
-        let bridge = async move {
-            let _ = shutdown_rx.await;
-            let _ = broadcast_tx.send(());
-        };
-
-        tokio::join!(v4_serve, v6_serve, bridge);
+        super::port::drive(listener_primary, listener_secondary, app, shutdown_rx).await;
     };
 
     if let Ok(handle) = tokio::runtime::Handle::try_current() {

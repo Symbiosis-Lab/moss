@@ -27,9 +27,10 @@
 //!   `MossEvent` bus the desktop frontend receives over Tauri IPC (`events.rs`).
 //!   Same token gate as `/read`, minus the media-type half (a GET has no body).
 //!
-//! `POST /__moss/yield` is a fourth, unconditional endpoint outside this
-//! three-tier model — an infrastructure route like health and source, not a
-//! carrier command (see `yield_route`'s module doc).
+//! `POST /__moss/yield` and `GET /__moss/session` are two further,
+//! unconditional endpoints outside this three-tier model — infrastructure
+//! routes like health and source, not carrier commands (see `yield_route`'s
+//! and `session_route`'s module docs).
 //!
 //! ## The token
 //!
@@ -45,24 +46,31 @@
 //!
 //! ## Trust boundary
 //!
-//! The server binds loopback only (dual-stack `127.0.0.1` + `[::1]`), and the
-//! OUTERMOST router layer (`trust_boundary::validate_host_origin`) refuses a
-//! non-loopback `Host` (DNS-rebinding defence) and a foreign `Origin` with 403
-//! before any handler runs — including on the token-gated tiers, so the token
-//! is never even inspected for a foreign caller. Which carrier a given moss
-//! instance mounts is governed by a one-carrier-per-instance rule: the
-//! routes exist only when the host threads an `InvokeCtx` into [`ServeConfig`].
+//! The server binds loopback only (dual-stack `127.0.0.1` + `[::1]`) by
+//! default, and the OUTERMOST router layer (`trust_boundary::validate_host_origin`)
+//! refuses a `Host` that is neither loopback nor operator-named (DNS-rebinding
+//! defence) and a foreign `Origin` with 403 before any handler runs —
+//! including on the token-gated tiers, so the token is never even inspected
+//! for a foreign caller. [`ServeConfig::bind`] opts a single explicit address
+//! into reach beyond loopback, and [`ServeConfig::extra_hosts`] is what then
+//! widens the Host/Origin allowlist to match — the default stays loopback-only
+//! until both are set. Which carrier a given moss instance mounts is governed
+//! by a one-carrier-per-instance rule: the routes exist only when the host
+//! threads an `InvokeCtx` into [`ServeConfig`].
 //!
 //! No behavioral change crossed with the code: this module doc is the contract
 //! statement the relocation plan called for.
 //!
 //! ## Module layout
 //! - `router` — Axum router construction, [`ServeConfig`]/[`start_server`], middleware stack
-//! - `port` — port availability checking, scanning, readiness verification
+//! - `port` — port availability checking, scanning, readiness verification,
+//!   and binding/driving the actual listener(s) (loopback dual-stack or
+//!   `ServeConfig::bind`'s explicit address)
 //! - `invoke` — the HTTP command carrier (three tiers above)
 //! - `carrier_token` — per-session token mint/publish + the gate middleware
 //! - `trust_boundary` — Host/Origin validation (outermost layer)
 //! - `yield_route` — `POST /__moss/yield` handler + contract
+//! - `session_route` — `GET /__moss/session` token→cookie exchange
 //! - `events` — the SSE event carrier + headless announcer/reporter
 //! - `placeholder` — SVG placeholders for assets still being processed
 //! - `asset_rewriter` / `content_wrapper` / `iframe_bridge` / `comment_stub` —
@@ -87,6 +95,7 @@ pub mod placeholder;
 pub mod port;
 pub mod router;
 pub mod session;
+pub(crate) mod session_route;
 pub(crate) mod trust_boundary;
 pub(crate) mod yield_route;
 

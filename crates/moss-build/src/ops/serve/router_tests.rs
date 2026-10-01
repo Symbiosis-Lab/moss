@@ -1477,9 +1477,10 @@ async fn test_bind_dual_stack_scan_skips_v6_collision() {
 
     // The bind-with-scan helper must skip `start_port` and return a
     // later port with both listeners cleanly bound.
-    let (bound_port, v4, v6) = bind_dual_stack_with_scan(start_port)
+    let (bound_port, v4, v6) = super::super::port::bind_with_scan(None, start_port)
         .await
-        .expect("bind_dual_stack_with_scan must succeed by hopping past the IPv6-held port");
+        .expect("bind_with_scan must succeed by hopping past the IPv6-held port");
+    let v6 = v6.expect("a None bind must return a secondary IPv6 listener");
 
     assert!(
         bound_port > start_port,
@@ -1739,6 +1740,59 @@ async fn trust_boundary_refuses_a_foreign_origin() {
     let _ = shutdown_tx.send(());
 }
 
+/// `ServeConfig::extra_hosts` widens the trust boundary's `Host` allowlist end
+/// to end: a `Host` naming a configured extra host passes, loopback still
+/// passes alongside it, and an unlisted hostname still 421s exactly as a
+/// rebound one does today. Raw TCP for the same reason the rebind test above
+/// uses it — `ureq` manages `Host` from the URL.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_extra_host_passes_the_trust_boundary_but_an_unlisted_one_still_421s() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(temp_dir.path().join("index.html"), b"<html>ok</html>").unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    // `bind` is loopback itself here — only `extra_hosts` is under test, and
+    // binding elsewhere would make the test depend on the sandbox's network
+    // config rather than the Host-allowlist logic.
+    let (port, shutdown_tx) = start_server(ServeConfig {
+        bind: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+        extra_hosts: vec!["preview.example.com".to_string()],
+        ..ServeConfig::new(site_dir_state, 58950)
+    })
+    .await
+    .expect("Server should start");
+
+    let status_line = |host: &str| -> String {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        stream
+            .write_all(
+                format!("GET /__moss_health/ HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        resp.lines().next().unwrap_or("").to_string()
+    };
+
+    assert!(
+        status_line("localhost").contains("200"),
+        "control: loopback must still pass alongside a configured extra host"
+    );
+    assert!(
+        status_line("preview.example.com").contains("200"),
+        "a configured extra host must pass the Host check"
+    );
+    assert!(
+        status_line("unlisted.example.com").contains("421"),
+        "a hostname not in extra_hosts must still be refused, same as a rebound one"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
 // ===== Read-only HTTP command carrier: POST /__moss/invoke/<cmd> =====
 
 /// A read-only command invoked over `POST /__moss/invoke/<cmd>` with a JSON
@@ -1981,6 +2035,49 @@ async fn mutate_carrier_without_or_with_wrong_token_is_401() {
         !vault.path().join("should-not-exist.md").exists(),
         "a 401'd mutation must not have created any file"
     );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `carrier_token::admit` accepts the session token carried as the
+/// `moss_token` cookie, not just the `X-Moss-Token` header — the second way
+/// in, set by `GET /__moss/session`'s `Set-Cookie` response for a plain
+/// browser tab with no script of its own. A wrong cookie value still 401s;
+/// the gate is comparing the value, not just checking the cookie's presence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_accepts_the_session_cookie_and_rejects_a_wrong_one() {
+    let (vault, site_dir) = served_vault();
+    let (port, shutdown_tx, token) = serve_bound(site_dir, 62750).await;
+
+    let target = vault.path().join("via-cookie.md");
+    let payload = serde_json::json!({
+        "files": [{ "dir": vault.path().to_string_lossy(), "name": "via-cookie", "frontmatter": {} }],
+    })
+    .to_string();
+    let url = format!("http://localhost:{}/__moss/mutate/create_files", port);
+
+    // A wrong cookie value must still 401, and must not create the file.
+    match ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("Cookie", "moss_token=not-the-real-token")
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&payload)
+    {
+        Err(ureq::Error::Status(401, _)) => {}
+        Ok(resp) => panic!("a wrong cookie must 401; got {}", resp.status()),
+        Err(e) => panic!("expected a 401, got transport error: {e}"),
+    }
+    assert!(!target.exists(), "a 401'd mutation must not have created any file");
+
+    // The real token, carried as a cookie instead of the header, must pass.
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("Cookie", &format!("other=ignored; moss_token={token}"))
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&payload)
+        .expect("the session cookie must admit the mutation carrier");
+    assert_eq!(resp.status(), 200);
+    assert!(target.exists(), "the carrier must have created the file");
 
     let _ = shutdown_tx.send(());
 }
