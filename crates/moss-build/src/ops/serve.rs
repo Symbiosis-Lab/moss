@@ -114,10 +114,16 @@ use std::sync::Arc;
 /// ctrl-C and shuts down deliberately (`ops::run_headless_build`), and the
 /// one caller that still cannot send — an in-process test build — forgets it
 /// at its own site (`events/host_ports.rs`, app crate).
+///
+/// `standby_on_conflict` is forwarded to [`ownership::acquire_for_site_dir`]
+/// via [`ServeConfig`] — see its doc for what it does. `ops::run_headless_build`
+/// sets it from `--watch` (standing by makes no sense for a one-shot build
+/// that would just exit right after).
 pub async fn start_server_headless(
     moss_path: &str,
     cli_site_dir: Option<Arc<std::sync::RwLock<std::path::PathBuf>>>,
     asset_registry: Option<Arc<crate::types::assets::AssetRegistry>>,
+    standby_on_conflict: bool,
 ) -> Result<(u16, tokio::sync::oneshot::Sender<()>), String> {
     let serve_dir = serve_dir_for_site_path(moss_path);
     let site_dir_state =
@@ -135,6 +141,7 @@ pub async fn start_server_headless(
         invoke: invoke_ctx,
         asset_registry,
         kind: HostKind::Cli,
+        standby_on_conflict,
         ..ServeConfig::new(site_dir_state, port::env_port_base())
     })
     .await?;

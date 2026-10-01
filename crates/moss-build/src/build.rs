@@ -1522,10 +1522,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
 
     if let Some(p) = port_now() {
         let preview_url = format!("http://localhost:{}", p);
-        Ok(format!(
-            "{}\n🌐 Preview server ready! Access at {}",
-            base_message, preview_url
-        ))
+        Ok(format!("{}\n{}", base_message, crate::ops::serve::ownership::preview_ready_line(&preview_url)))
     } else {
         Ok(base_message)
     }

@@ -265,6 +265,12 @@ pub struct ServeConfig {
     /// impl (app crate, not a call site here) overrides it to `Desktop` via
     /// struct-update syntax, the same way it already would `invoke`.
     pub kind: super::ownership::HostKind,
+    /// Forwarded to [`super::ownership::acquire_for_site_dir`]. [`Self::new`]
+    /// defaults this to `false` — a one-shot `moss build --serve` still
+    /// refuses outright on a conflict; only a `--serve --watch` caller
+    /// (`ops::run_headless_build`) opts into standing by for the existing
+    /// owner instead.
+    pub standby_on_conflict: bool,
 }
 
 impl ServeConfig {
@@ -284,6 +290,7 @@ impl ServeConfig {
             start_port,
             is_evicted: crate::build::icloud::is_evicted,
             kind: super::ownership::HostKind::Cli,
+            standby_on_conflict: false,
         }
     }
 }
@@ -304,6 +311,7 @@ pub async fn start_server(
         start_port,
         is_evicted,
         kind,
+        standby_on_conflict,
     } = config;
     // === SETUP PHASE ===
     // Note: We don't check for index.html here - the server can start even for empty folders.
@@ -690,7 +698,9 @@ pub async fn start_server(
         kind,
         crate::system::app_version().to_string(),
         format!("http://127.0.0.1:{port}"),
-    )?;
+        standby_on_conflict,
+    )
+    .await?;
 
     // Bind the carrier to the served vault before the first request, which
     // mints the session token and publishes it to the vault's loopback-readable

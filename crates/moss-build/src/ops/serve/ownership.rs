@@ -346,33 +346,94 @@ pub fn already_served_message(owner: &OwnerRecord) -> String {
 /// a caller can tell the two apart without parsing stderr.
 pub const ALREADY_SERVED_EXIT_CODE: i32 = 3;
 
+/// The vault `site_dir` currently resolves to — a folder's identity for
+/// ownership purposes is its vault root, not whichever generation the cell
+/// happens to be pointing a server at right now. [`acquire_for_site_dir`]
+/// resolves it once up front and passes the result on to
+/// [`wait_for_owner_to_leave`], which takes the already-resolved path rather
+/// than re-resolving it itself.
+fn resolve_vault_folder(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> Option<PathBuf> {
+    site_dir
+        .read()
+        .ok()
+        .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir).map(|v| v.path().to_path_buf()))
+}
+
 /// [`acquire`] for whichever folder `site_dir` currently resolves to, for
 /// `start_server` to call once it knows the port it bound. Lives here rather
 /// than inline in `router.rs` so that file stays about routing: this is the
 /// one place that needs the vault-from-site_dir resolution and the acquire
-/// call together, and `router.rs` just reacts to the two outcomes.
+/// call together, and `router.rs` just reacts to the outcome.
 ///
 /// `Ok(None)` when `site_dir` resolves to no vault — not every headless case
 /// is vault-rooted, same as `InvokeCtx::bind` already documents, and such a
-/// server is simply not discoverable by folder. `Err` is
-/// [`already_served_message`], ready to hand back as the reason the server
-/// never started.
-pub fn acquire_for_site_dir(
+/// server is simply not discoverable by folder.
+///
+/// `standby_on_conflict` is the one-shot `moss build --serve` refusal's
+/// opposite: a `--serve --watch` child (an editor plugin's long-lived
+/// handle on the preview, say) has no reason to give up just because another
+/// process is serving this folder right now. Set, a conflict reports the
+/// existing owner's URL on stderr in the same wording a normal bind prints
+/// ([`preview_ready_line`]) plus [`standing_by_message`], then
+/// waits for that owner to leave ([`wait_for_owner_to_leave`]) and retries —
+/// repeatedly, since the folder could be re-claimed by yet another process in
+/// the gap between "owner gone" and this retry. Unset (the default, and every
+/// `--serve` without `--watch`), a conflict is [`already_served_message`],
+/// ready to hand back as the reason the server never started — A2's
+/// behaviour, unchanged.
+pub async fn acquire_for_site_dir(
     site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>,
     kind: HostKind,
     version: String,
     url: String,
+    standby_on_conflict: bool,
 ) -> Result<Option<OwnerGuard>, String> {
-    let folder = site_dir
-        .read()
-        .ok()
-        .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir).map(|v| v.path().to_path_buf()));
-    match &folder {
-        Some(folder) => match acquire(folder, kind, version, url) {
-            Ok(guard) => Ok(Some(guard)),
-            Err(ExistingOwner(existing)) => Err(already_served_message(&existing)),
-        },
-        None => Ok(None),
+    let Some(folder) = resolve_vault_folder(site_dir) else {
+        return Ok(None);
+    };
+    loop {
+        match acquire(&folder, kind, version.clone(), url.clone()) {
+            Ok(guard) => return Ok(Some(guard)),
+            Err(ExistingOwner(existing)) => {
+                if !standby_on_conflict {
+                    return Err(already_served_message(&existing));
+                }
+                crate::cli_eprintln!("{}", preview_ready_line(&existing.url));
+                crate::cli_eprintln!("{}", standing_by_message(&existing));
+                wait_for_owner_to_leave(&folder).await;
+            }
+        }
+    }
+}
+
+/// The line a build names its own preview URL with, once a server is up.
+/// Reused verbatim by [`acquire_for_site_dir`]'s standby branch, which
+/// reports an owner's URL without having just run a build of its own, so the
+/// two call sites can't drift into two different "here's where to look"
+/// wordings.
+pub fn preview_ready_line(url: &str) -> String {
+    format!("🌐 Preview server ready! Access at {}", url)
+}
+
+/// The one line a standby takeover names the owner it is waiting on with —
+/// printed once, right after [`preview_ready_line`] reports that owner's
+/// URL, by [`acquire_for_site_dir`]'s standby branch.
+pub fn standing_by_message(owner: &OwnerRecord) -> String {
+    format!("served by {:?} (pid {}, moss {}); standing by", owner.kind, owner.pid, owner.version)
+}
+
+/// Block until `folder` has no live owner. Polls [`find_live_owner`] on a
+/// plain fixed interval — this is a standby wait behind a long-running
+/// `--watch` child, not a latency-sensitive probe, so there is no backoff or
+/// event source to wire up: the folder's owner leaving is a rare event (a
+/// crash, or the desktop app closing the vault) and two seconds of staleness
+/// on noticing it costs nothing a human would feel.
+pub async fn wait_for_owner_to_leave(folder: &Path) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if find_live_owner(folder).await.is_none() {
+            return;
+        }
     }
 }
 

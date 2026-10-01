@@ -283,12 +283,16 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             // The same registry this build fills, so the server can answer for
             // a variant that is still encoding.
             let assets = host.services.assets.clone();
+            // Standing by for an existing owner only makes sense for a
+            // long-lived watcher: a one-shot build would just exit right
+            // after anyway, so `--serve` alone keeps A2's plain refusal.
+            let standby_on_conflict = run.flags.watch;
             host.launch_server = Some(Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();
                 let launch_error_slot = launch_error_slot.clone();
                 let assets = assets.clone();
                 Box::pin(async move {
-                    match serve::start_server_headless(&moss_dir, cell, assets).await {
+                    match serve::start_server_headless(&moss_dir, cell, assets, standby_on_conflict).await {
                         Ok((port, shutdown_tx)) => {
                             *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(shutdown_tx);
