@@ -278,6 +278,17 @@ pub struct ParsedDocument {
     /// `Some(true)` renders it when one would otherwise show. No effect on
     /// any other page.
     pub map: Option<bool>,
+    /// Opt-in from frontmatter `route:` to draw this page's `location:` list,
+    /// in its existing declared order, as a route: a dashed line through the
+    /// stops with numbered badges, on this page's own map and the locator
+    /// beside it (`build::place_map::svg::route`). Mapped from
+    /// `frontmatter.route` by the canonical constructor
+    /// (`markdown::pipeline::process_markdown_file`). No effect without a
+    /// `location:` list, and no effect on a listing map (the places root, a
+    /// folder's `style: map` card), which never draws a route.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(skip)]
+    pub route: bool,
     /// Whether to render child pages below content.
     /// Accepts bool or wikilink in frontmatter (e.g. `children: "[[News]]"`).
     /// true = render children, false = hide, None = default to true.

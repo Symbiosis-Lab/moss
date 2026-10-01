@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use moss_core::terms::{term_fold, term_folder_key};
 
-use super::{precision_rank, Frame, FrameTier, Pack, ProjectedPoint, Projection};
+use super::{precision_rank, route_blocked_diagnostic, route_precision_gate, Frame, FrameTier, Pack, ProjectedPoint, Projection};
 use crate::vault::places::Precision;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,9 +150,10 @@ impl PlaceMapRenderContext {
         &self.parents
     }
 
-    pub fn render_locator(&self, names: &[String], page_path: &str, ordinal: usize) -> Option<String> {
+    pub fn render_locator(&self, names: &[String], route: bool, page_path: &str, ordinal: usize) -> Option<String> {
         if self.locator == LocatorPlacement::None { return None; }
-        let target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names);
+        let mut target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names, route);
+        apply_route_gate(&mut target, page_path);
         if !target.has_coordinates() { return None; }
         let first = target.places.iter().find(|place| place.point().is_some())?;
         // The profile (how much detail the locator carries) has to reflect
@@ -194,19 +195,21 @@ impl PlaceMapRenderContext {
         members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
         page_path: &str,
         ordinal: usize,
+        route: bool,
     ) -> Option<String> {
         if !self.is_place_key(key) { return None; }
         let members = members.into_iter();
         let own_name = self.gazetteer.iter().find_map(|(display, _)| {
             (term_folder_key(&self.namespace, display) == key).then(|| display.clone())
         });
-        let target = if let Some(name) = own_name.as_ref() {
-            let direct = self.maps.resolve_locations(&self.namespace, &self.gazetteer, std::slice::from_ref(name));
+        let mut target = if let Some(name) = own_name.as_ref() {
+            let direct = self.maps.resolve_locations(&self.namespace, &self.gazetteer, std::slice::from_ref(name), route);
             if direct.has_coordinates() { direct } else { self.aggregate(key, name, members) }
         } else {
             let label = key.strip_prefix(&format!("{}/", self.namespace)).unwrap_or(&self.namespace);
             self.aggregate(key, label, members)
         };
+        apply_route_gate(&mut target, page_path);
         let svg = target.has_coordinates().then(|| super::emit_svg(&self.maps, &target, page_path, ordinal))?;
         Some(self.with_explorer_handshake(key, svg))
     }
@@ -301,6 +304,26 @@ impl PlaceMapRenderContext {
     }
 }
 
+/// Apply the route privacy gate ([`route_precision_gate`]) to an
+/// already-resolved target: a country-precision stop blocks the whole route
+/// rather than drawing a line into one corner of a country, so this clears
+/// `target.route` and prints the one diagnostic the gate allows
+/// ([`route_blocked_diagnostic`]), naming the page and that stop. Shared by
+/// [`PlaceMapRenderContext::render_locator`] and
+/// [`PlaceMapRenderContext::render_term_map`]'s own-place branch — the two
+/// surfaces a route may draw on — so a future caller only has to call this
+/// once rather than re-implementing the check. A no-op, including for an
+/// aggregate/listing target, whenever `target.route` is already false.
+fn apply_route_gate(target: &mut PlaceMapTarget, page_path: &str) {
+    if !target.route {
+        return;
+    }
+    if let Err(stop) = route_precision_gate(&target.places) {
+        crate::build::cli_output::log_warn_problem!("{}", route_blocked_diagnostic(page_path, stop));
+        target.route = false;
+    }
+}
+
 /// The immutable inputs shared by every map rendered during one build.
 /// Decoding is deliberately outside page rendering: a page can borrow this
 /// context without reopening the checked-in pack or the gazetteer.
@@ -345,11 +368,17 @@ impl PlaceMapContext {
     /// Resolve declared `location:` values in declaration order. A missing
     /// coordinate intentionally remains in the result so the caller can keep
     /// the linked place line while omitting only the map target.
+    ///
+    /// `route` carries the page's own `route: true` opt-in through to the
+    /// target; it is the caller's job to pass `false` for anything that
+    /// isn't a single page's own map or locator (see
+    /// [`Self::resolve_aggregate`], which always does).
     pub fn resolve_locations(
         &self,
         namespace: &str,
         gazetteer: &crate::vault::places::Gazetteer,
         names: &[String],
+        route: bool,
     ) -> PlaceMapTarget {
         let mut seen = HashSet::new();
         let mut places = Vec::new();
@@ -363,13 +392,16 @@ impl PlaceMapContext {
             }
             places.push(ResolvedPlace::from_record(key, display.clone(), record));
         }
-        PlaceMapTarget::from_places(places)
+        PlaceMapTarget::from_places(places, route)
     }
 
     /// Resolve a listing map (the namespace root, or a parent place with no
     /// coordinates of its own) from the places its member pages name. The
     /// frame holds them all and each is marked by its own precision;
-    /// nothing marks the parent, which has no location to mark.
+    /// nothing marks the parent, which has no location to mark. A listing
+    /// never draws a route — there is no single page-ordered list to draw
+    /// one from — so this always resolves with `route: false`, regardless
+    /// of whether any member page itself set `route: true`.
     pub fn resolve_aggregate(
         &self,
         namespace: &str,
@@ -377,7 +409,7 @@ impl PlaceMapContext {
         parent_name: &str,
         descendants: &[String],
     ) -> PlaceMapTarget {
-        let mut target = self.resolve_locations(namespace, gazetteer, descendants);
+        let mut target = self.resolve_locations(namespace, gazetteer, descendants, false);
         target.aggregate_name = Some(parent_name.trim().to_string());
         target
     }
@@ -431,10 +463,18 @@ pub struct PlaceMapTarget {
     pub places: Vec<ResolvedPlace>,
     pub frame: Option<Frame>,
     pub aggregate_name: Option<String>,
+    /// The page's `route: true` opt-in, already gated by the time anything
+    /// outside this module reads it true: [`resolve_locations`](PlaceMapContext::resolve_locations)
+    /// sets the author's own request, and the two call sites that may draw a
+    /// route (`render_locator`, `render_term_map`) run it through
+    /// `apply_route_gate` before rendering, which clears it on a
+    /// country-precision stop. Always `false` on an aggregate/listing
+    /// target — see [`PlaceMapContext::resolve_aggregate`].
+    pub route: bool,
 }
 
 impl PlaceMapTarget {
-    fn from_places(places: Vec<ResolvedPlace>) -> Self {
+    fn from_places(places: Vec<ResolvedPlace>, route: bool) -> Self {
         let valid: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
         let floors = places
             .iter()
@@ -444,6 +484,7 @@ impl PlaceMapTarget {
             places,
             frame,
             aggregate_name: None,
+            route,
         }
     }
 
@@ -490,6 +531,7 @@ mod tests {
             "places",
             &gazetteer(),
             &[" harbor ".into(), "HARBOR".into(), "Harbor East".into()],
+            false,
         );
         assert_eq!(target.places.len(), 2);
         assert_eq!(target.places[0].display, "Harbor");
@@ -505,6 +547,7 @@ mod tests {
             "places",
             &crate::vault::places::parse_gazetteer(&table),
             &["Unknown".into()],
+            false,
         );
         assert_eq!(target.places.len(), 1);
         assert!(!target.has_coordinates());
@@ -534,7 +577,7 @@ mod tests {
     #[test]
     fn resolved_keys_use_the_declared_namespace() {
         let context = PlaceMapContext::new(super::super::embedded().unwrap());
-        let target = context.resolve_locations("locations", &gazetteer(), &["Harbor".into()]);
+        let target = context.resolve_locations("locations", &gazetteer(), &["Harbor".into()], false);
         assert_eq!(target.places[0].key, "locations/harbor");
     }
 
@@ -548,6 +591,7 @@ mod tests {
             "places",
             &crate::vault::places::parse_gazetteer(&table),
             &["Invalid".into()],
+            false,
         );
         assert_eq!(target.places[0].longitude, None);
         assert_eq!(target.places[0].latitude, None);
@@ -560,12 +604,12 @@ mod tests {
         let off = PlaceMapRenderContext::new(
             maps.clone(), gazetteer(), "places".into(), LocatorPlacement::None, BTreeMap::new(),
         );
-        assert!(off.render_locator(&["Harbor".into()], "story/index.html", 0).is_none());
+        assert!(off.render_locator(&["Harbor".into()], false, "story/index.html", 0).is_none());
 
         let on = PlaceMapRenderContext::new(
             maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
         );
-        let html = on.render_locator(&["Harbor".into()], "story/index.html", 0).unwrap();
+        let html = on.render_locator(&["Harbor".into()], false, "story/index.html", 0).unwrap();
         assert!(html.contains("moss-place-locator moss-align-right"));
         assert!(html.contains("data-map-locator-profile=\"exact-city\""));
     }
@@ -587,13 +631,94 @@ mod tests {
             maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
         );
         let html = context
-            .render_locator(&["Harbor".into(), "Harbor East".into()], "story/index.html", 0)
+            .render_locator(&["Harbor".into(), "Harbor East".into()], false, "story/index.html", 0)
             .expect("a mixed-precision list must still produce a locator");
         assert!(
             html.contains("data-map-locator-profile=\"region\""),
             "must use Harbor East's (region) precision, not Harbor's (city, first-declared): {html}"
         );
         assert!(!html.contains("data-map-locator-profile=\"exact-city\""));
+    }
+
+    /// `route: true`, threaded as `render_locator`'s own `route` parameter
+    /// the way `render::credits::render_place_locator` threads `doc.route`,
+    /// reaches the drawn line: the privacy gate has nothing to block here
+    /// (both stops are city precision), so the route survives it unchanged.
+    #[test]
+    fn render_locator_with_route_true_draws_the_route_line_and_badges() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        );
+        let html = context
+            .render_locator(&["Harbor".into(), "Harbor East".into()], true, "story/index.html", 0)
+            .expect("a route-eligible list must still produce a locator");
+        assert!(html.contains("data-map-route=\"line\""), "{html}");
+        assert!(html.contains("data-map-route-badge=\"1\""), "{html}");
+        assert!(html.contains("data-map-route-badge=\"2\""), "{html}");
+    }
+
+    /// A region-precision stop joins the route rather than blocking it: its
+    /// badge is drawn hollow, marking an area rather than a point, while the
+    /// city-precision stop beside it keeps the ordinary filled chip.
+    #[test]
+    fn render_locator_draws_a_region_stop_hollow_and_joined() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        );
+        let html = context
+            .render_locator(&["Harbor".into(), "Harbor East".into()], true, "story/index.html", 0)
+            .unwrap();
+        assert!(html.contains("data-map-route-badge=\"1\" data-map-route-badge-style=\"filled\""), "{html}");
+        assert!(html.contains("data-map-route-badge=\"2\" data-map-route-badge-style=\"hollow\""), "{html}");
+    }
+
+    /// `route: false` (the default) draws no route at all, even over the
+    /// same two-stop list the test above draws one from — the flag, not the
+    /// shape of `location:`, decides.
+    #[test]
+    fn render_locator_without_route_draws_no_route_markup() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        );
+        let html = context
+            .render_locator(&["Harbor".into(), "Harbor East".into()], false, "story/index.html", 0)
+            .unwrap();
+        assert!(!html.contains("data-map-route"), "{html}");
+    }
+
+    /// Precision is privacy: a country-precision stop blocks the WHOLE
+    /// route — the gate applied here through `render_locator` rather than
+    /// called directly — and prints the one diagnostic naming the page and
+    /// that stop, rather than silently drawing a line that stops short or
+    /// jumps past it.
+    #[test]
+    fn render_locator_drops_the_route_and_warns_on_a_country_precision_stop() {
+        let table: toml::value::Table = toml::from_str(
+            "[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n\n\
+             [\"Wide Land\"]\nlat = 40.0\nlng = 140.0\nprecision = \"country\"\n",
+        )
+        .unwrap();
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps,
+            crate::vault::places::parse_gazetteer(&table),
+            "places".into(),
+            LocatorPlacement::AlignRight,
+            BTreeMap::new(),
+        );
+        crate::build::cli_output::take_cli_problems();
+        let html = context
+            .render_locator(&["Harbor".into(), "Wide Land".into()], true, "story/index.html", 0)
+            .expect("the list still has a coordinate-bearing stop, so a plain (routeless) locator still renders");
+        assert!(!html.contains("data-map-route"), "{html}");
+        assert_eq!(
+            crate::build::cli_output::take_cli_problems(),
+            1,
+            "the blocked gate must print exactly its one allowed diagnostic"
+        );
     }
 
     /// The safety ceiling stops an oversized locator from shipping, and
@@ -620,7 +745,7 @@ mod tests {
         );
         crate::build::cli_output::take_cli_problems(); // count only what the render itself reports
         let result =
-            context.render_locator(&["F".repeat(LONG_NAME)], "story/oversized.html", 0);
+            context.render_locator(&["F".repeat(LONG_NAME)], false, "story/oversized.html", 0);
         assert!(result.is_none(), "an oversized locator must be dropped, not shipped");
         assert!(
             crate::build::cli_output::take_cli_problems() >= 1,
@@ -689,7 +814,7 @@ mod tests {
     fn root_map_carries_the_explorer_handshake_when_everything_is_ready() {
         let context = ready_root_context();
         let docs = [located_doc("Harbor")];
-        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0).unwrap();
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false).unwrap();
         assert!(html.contains("data-moss-places-explorer"), "{html:.200}");
         assert!(html.contains("data-world=\"/_moss/map.abc123/world.svg\""), "{html:.200}");
         assert!(html.contains("data-tiles=\"/_moss/map.abc123/tiles.json\""), "{html:.200}");
@@ -702,7 +827,7 @@ mod tests {
         let context = ready_root_context();
         let docs = [located_doc("Harbor East")];
         let html = context
-            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0)
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false)
             .unwrap();
         assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
     }
@@ -711,7 +836,7 @@ mod tests {
     fn explorer_off_leaves_the_root_map_untouched() {
         let context = ready_root_context().with_explorer(false);
         let docs = [located_doc("Harbor")];
-        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0).unwrap();
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false).unwrap();
         assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
     }
 
@@ -722,7 +847,7 @@ mod tests {
             .with_explorer(true)
             .with_map_assets_hash("abc123".into());
         let docs = [located_doc("Harbor")];
-        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0).unwrap();
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false).unwrap();
         assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
     }
 }

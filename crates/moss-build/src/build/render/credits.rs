@@ -155,7 +155,7 @@ pub fn render_place_locator(
     layout
         .place_maps
         .as_ref()
-        .and_then(|maps| maps.render_locator(&doc.location, &doc.url_path, 0))
+        .and_then(|maps| maps.render_locator(&doc.location, doc.route, &doc.url_path, 0))
 }
 
 /// Put a non-empty page masthead after the authored title block.

@@ -1,0 +1,19 @@
+["Harbor"]
+lat = 35.0
+lng = 135.0
+precision = "city"
+
+["Harbor Overlook"]
+lat = 35.0
+lng = 135.0
+precision = "exact"
+
+["Inland Reach"]
+lat = 36.0
+lng = 136.0
+precision = "region"
+
+["Far Point"]
+lat = 34.0
+lng = 134.5
+precision = "city"

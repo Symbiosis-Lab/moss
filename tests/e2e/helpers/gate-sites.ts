@@ -1836,6 +1836,62 @@ precision = "exact"
   },
 };
 
+// ── route: true draws a line, badges and leaders ─────────────────────────────
+// Four stops in travel order: Harbor and Harbor Overlook share one
+// coordinate, so the badge-offset rule fires and badge 2 carries a leader
+// back to it; Inland Reach is region precision, for the hollow badge; Far
+// Point is a plain fourth stop. The Rust snapshot suite pins the exact SVG
+// bytes this produces; this gate asks what a real browser does with
+// them — DOM order (line under markers), badge contrast in both themes, and
+// the leader's presence — which no byte comparison can see. Served by
+// playwright/place-map-route.config.ts.
+export const PLACE_MAP_ROUTE_GATE: ScratchSiteSpec = {
+  name: "place-map-route-gate",
+  files: {
+    "index.md": `---
+title: Place Map Route Gate
+uid: "pmr001a"
+location: [Harbor, Harbor Overlook, Inland Reach, Far Point]
+route: true
+---
+
+# Place Map Route Test
+
+Four stops, two of them coincident, for reading the drawn route in a real browser.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+locator = "align-right"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+`,
+    ".moss/places.toml": `["Harbor"]
+lat = 35.0
+lng = 135.0
+precision = "city"
+
+["Harbor Overlook"]
+lat = 35.0
+lng = 135.0
+precision = "exact"
+
+["Inland Reach"]
+lat = 36.0
+lng = 136.0
+precision = "region"
+
+["Far Point"]
+lat = 34.0
+lng = 134.5
+precision = "city"
+`,
+  },
+};
+
 /**
  * The locator's position relative to the article body's first TEXT block (a
  * paragraph, list or blockquote) — never a heading or media. `heading-first.md`

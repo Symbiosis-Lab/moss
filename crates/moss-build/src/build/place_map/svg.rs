@@ -28,6 +28,10 @@ pub use locator::{
 mod river;
 mod palette;
 use palette::{band_tint, relief_height_grey};
+mod route;
+use route::{draw_badges, draw_globe_line, draw_line};
+// Re-exported (via place_map.rs) for context.rs's privacy gate; see route.rs.
+pub(crate) use route::{route_blocked_diagnostic, route_precision_gate};
 
 use super::geometry::{marker_radius, FrameTier, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES, REGION_FADE_MIN_RADIUS};
 use super::globe::{globe_line, globe_marker, globe_rings};
@@ -228,7 +232,9 @@ pub(super) fn render_svg(
         }
         _ => writer.empty_layers_after_lighting(),
     }
+    draw_line(writer, target, projection.as_ref());
     writer.markers(target);
+    draw_badges(writer, target, projection.as_ref());
     if draw_globe && target.frame.as_ref().map_or(true, |frame| frame.tier != FrameTier::World) {
         writer.globe(context, target);
     }
@@ -875,6 +881,7 @@ impl Writer<'_> {
                 write!(self.output, "<path d=\"{path}\" fill=\"var(--moss-place-globe-land, #d7d5c9)\" fill-rule=\"evenodd\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
             }
         }
+        draw_globe_line(self, target, center, quantisation);
         let mut drawn = std::collections::HashSet::new();
         for place in target.marker_places() {
             let Some(point) = place.point() else {
@@ -919,6 +926,7 @@ mod tests {
             }],
             frame: Some(frame),
             aggregate_name: None,
+            route: false,
         }
     }
 
@@ -930,6 +938,7 @@ mod tests {
                 places: vec![],
                 frame: None,
                 aggregate_name: None,
+                route: false,
             },
             "a/page.md",
             0,
@@ -940,6 +949,7 @@ mod tests {
                 places: vec![],
                 frame: None,
                 aggregate_name: None,
+                route: false,
             },
             "a/page.md",
             1,
@@ -956,6 +966,7 @@ mod tests {
             places: vec![],
             frame: None,
             aggregate_name: None,
+            route: false,
         };
         let first = emit_svg_with_options(
             &context,
@@ -982,6 +993,7 @@ mod tests {
                 places: vec![],
                 frame: None,
                 aggregate_name: None,
+                route: false,
             },
             "p",
             0,
@@ -1227,7 +1239,7 @@ mod tests {
             assert!(svg.contains(&format!("{} data-map-globe-marker=\"true\"", dot("6", "var(--moss-place-marker, #2d5a2d)"))));
         }
         let place = ResolvedPlace { key: "places/kansai".into(), display: "Kansai".into(), longitude: Some(135.5), latitude: Some(34.7), precision: Precision::Region };
-        let world = PlaceMapTarget { places: vec![place], frame: world_frame(), aggregate_name: Some("places".into()) };
+        let world = PlaceMapTarget { places: vec![place], frame: world_frame(), aggregate_name: Some("places".into()), route: false };
         let svg = emit_svg(&PlaceMapContext::embedded().unwrap(), &world, "p", 0);
         assert!(layer_body(&svg, "marker").contains(" r=\"12\""), "{}", layer_body(&svg, "marker"));
     }
@@ -1317,7 +1329,7 @@ mod tests {
             canvas_width: f64::from(SVG_WIDTH),
             full_extent: true,
         };
-        let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None };
+        let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None, route: false };
         let projection = choose_projection(&writer, &target).unwrap();
         let width = world_viewbox_width();
         let (east_x, _) = projection.project(ProjectedPoint::new(180.0 - 1e-9, 0.0).unwrap()).unwrap();
@@ -1504,6 +1516,7 @@ mod tests {
         let svg_source = include_str!("svg.rs");
         let locator_source = include_str!("svg/locator.rs");
         let palette_source = include_str!("svg/palette.rs");
+        let route_source = include_str!("svg/route.rs");
         let css = include_str!("../../assets/css/site.css");
 
         // Call-site literals: `var(--moss-place-NAME, #hex)`. The
@@ -1512,7 +1525,7 @@ mod tests {
         // own source text (this file's `include_str!` of itself) the way a
         // bare `find(',')` would.
         let mut tokens: Vec<String> = Vec::new();
-        for source in [svg_source, locator_source, palette_source] {
+        for source in [svg_source, locator_source, palette_source, route_source] {
             let mut rest = source;
             while let Some(start) = rest.find("var(--moss-place-") {
                 let name_start = start + "var(--".len();
@@ -1616,7 +1629,7 @@ mod tests {
         ];
         let points: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
         let frame = Frame::from_points(&points, places.iter().map(|place| place.precision)).unwrap();
-        let target = PlaceMapTarget { places, frame: Some(frame), aggregate_name: Some("places".to_string()) };
+        let target = PlaceMapTarget { places, frame: Some(frame), aggregate_name: Some("places".to_string()), route: false };
         let svg = emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0);
         let markers = layer_body(&svg, "marker");
         let marked: Vec<&str> = markers
@@ -1651,7 +1664,7 @@ mod tests {
         let context = PlaceMapContext::embedded().unwrap();
         let output = emit_svg(&context, &populated_target(Precision::City), "p", 0);
         assert!(output.contains("data-map-globe-marker=\"true\""));
-        let empty = PlaceMapTarget { places: vec![], frame: None, aggregate_name: None };
+        let empty = PlaceMapTarget { places: vec![], frame: None, aggregate_name: None, route: false };
         assert!(!emit_svg(&context, &empty, "p", 0).contains("data-map-globe-marker=\"true\""));
     }
 
@@ -1724,6 +1737,7 @@ mod tests {
                     }],
                     frame: Some(frame),
                     aggregate_name: None,
+                    route: false,
                 };
                 let options = SvgMapOptions::new(
                     case_name,
@@ -1792,6 +1806,7 @@ mod tests {
             }],
             frame: Some(frame),
             aggregate_name: None,
+            route: false,
         };
         let options = SvgMapOptions::new("p", 0, "Probe", precision);
         emit_locator(&PlaceMapContext::embedded().unwrap(), &target, options).unwrap().svg
@@ -1840,7 +1855,7 @@ mod tests {
     }
 
     fn world_map() -> String {
-        let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None };
+        let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None, route: false };
         emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0)
     }
 
@@ -1889,7 +1904,7 @@ mod tests {
         let points: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
         let frame = Frame::from_points(&points, places.iter().map(|place| place.precision)).unwrap();
         assert_eq!(frame.tier, tier);
-        PlaceMapTarget { places, frame: Some(frame), aggregate_name: None }
+        PlaceMapTarget { places, frame: Some(frame), aggregate_name: None, route: false }
     }
 
     /// From London to Hong Kong by way of Kerala: over a hundred degrees.

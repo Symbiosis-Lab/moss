@@ -87,6 +87,7 @@ const GATE_PORT_KEYS = [
   'grid-card-no-cover',
   'touch-targets:footer-md',
   'touch-targets:footer-fallback',
+  'place-map-route',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

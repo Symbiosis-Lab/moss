@@ -114,6 +114,31 @@ Some content.
     }
 
     #[test]
+    fn test_frontmatter_route_true_beside_location() {
+        let markdown = r#"---
+title: To Spain
+location: [Dieppe, Bordeaux, Sierra Nevada]
+route: true
+---
+
+# To Spain
+"#;
+        let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
+        assert_eq!(
+            frontmatter.location,
+            Some(vec!["Dieppe".to_string(), "Bordeaux".to_string(), "Sierra Nevada".to_string()])
+        );
+        assert_eq!(frontmatter.route, Some(true));
+    }
+
+    #[test]
+    fn test_frontmatter_route_absent_by_default() {
+        let markdown = "---\ntitle: Untitled\nlocation: Kyoto\n---\n\nBody.\n";
+        let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
+        assert_eq!(frontmatter.route, None);
+    }
+
+    #[test]
     fn test_frontmatter_breadcrumb_string_true() {
         let markdown = r#"---
 title: 山居

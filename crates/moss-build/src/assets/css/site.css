@@ -2703,6 +2703,14 @@ header:has(+ .moss-hero) .main-nav {
      --moss-color-accent. */
   --moss-place-marker: var(--moss-color-accent, #2d5a2d);
   --moss-place-marker-casing: #ffffff;
+  /* A route's dashed line, its leaders, and its hollow (region-precision)
+     badge — the same muted slate-blue --moss-place-shadow already uses for
+     the filled badge's own chip, so a route's line, leaders and both badge
+     styles read as one quiet hue. A first, more vivid clay tone sat well
+     outside every other --moss-place-* token's low saturation. In light
+     mode this value matches --moss-place-shadow exactly; the dark value
+     below does not (see its own comment). */
+  --moss-place-route: #5a6488;
   --moss-place-shadow: #5a6488;
   --moss-place-relief-edge-opacity: 0;
   --moss-place-light-warm: #fff3d0;
@@ -2761,6 +2769,11 @@ header:has(+ .moss-hero) .main-nav {
   --moss-place-globe-edge: #23272a;
   --moss-place-shadow: #4d5f8f;
   --moss-place-marker-casing: #0e1210;
+  /* Not --moss-place-shadow's own dark value (#4d5f8f): that is a
+     background fill in the filled badge, not a stroke/text colour, and is
+     too dark to read as either against this theme's near-black casing. A
+     lighter tint of the same slate-blue hue instead. */
+  --moss-place-route: #9aa8d9;
   --moss-place-relief-edge-opacity: 0.18;
   --moss-place-light-warm: #d9cfa6;
   --moss-place-light-cool: #4d5f8f;

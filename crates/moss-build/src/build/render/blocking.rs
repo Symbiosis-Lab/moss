@@ -2448,8 +2448,12 @@ pub fn generate_blocking_content_for_build(
                 content_html.push('\n');
                 content_html.push_str(&place_breadcrumb_html);
             }
+            // No `ParsedDocument` backs this synthetic folder index (see
+            // above), so there is no frontmatter to carry a `route: true`
+            // from — this listing's map is always an aggregate anyway, which
+            // `render_term_map` never draws a route on regardless.
             if let Some(map) = layout_config.place_maps.as_ref().and_then(|maps| {
-                maps.render_term_map(folder, all_docs_refs.iter().copied(), &auto_url_path, 0)
+                maps.render_term_map(folder, all_docs_refs.iter().copied(), &auto_url_path, 0, false)
             }) {
                 content_html.push('\n');
                 content_html.push_str(&map);

@@ -64,6 +64,7 @@ pub fn emit_world_svg(context: &PlaceMapContext) -> String {
         places: Vec::new(),
         frame: Some(world_frame()),
         aggregate_name: None,
+        route: false,
     };
     let ids = Ids::for_seed("world");
     let mut writer = Writer::for_explorer_asset(&ids, world_viewbox_width(), true);
@@ -80,6 +81,7 @@ pub fn emit_tile_svg(context: &PlaceMapContext, x: i16, y: i16) -> String {
         places: Vec::new(),
         frame: Some(tile_frame(x, y)),
         aggregate_name: None,
+        route: false,
     };
     let ids = Ids::for_seed(&format!("tile-{x}-{y}"));
     let mut writer = Writer::for_explorer_asset(&ids, f64::from(SVG_WIDTH), false);

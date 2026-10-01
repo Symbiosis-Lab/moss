@@ -73,6 +73,7 @@ GATES_BUILD=(
   video-embed-shape
   place-map-tokens
   place-map-align
+  place-map-route
   preview-parity-gate
   touch-targets
 )

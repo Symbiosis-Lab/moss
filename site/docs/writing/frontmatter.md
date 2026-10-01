@@ -136,6 +136,10 @@ A child folder with its own `date:` (on its home page) sorts by that date on a `
 
 The legacy `order: [...]` field is a back-compat alias for `sort: [...]`.
 
+## Places
+
+`location:` names one or more places from `.moss/places.toml`, in the order you write them; a site with a place-typed term shows each named place on a map, sized to the coarsest precision among them (`exact`/`city` a small dot, `region`/`country` a soft area). Set `route: true` alongside an already-ordered `location:` list to draw that order as a route instead: a dashed line through the stops with numbered badges, on the page's own map and its locator. A country-precision stop is too coarse a point to draw a line through, so it blocks the whole route and prints a build diagnostic naming the page and that stop; a region-precision stop still joins the route, at the centre of its own area marker, with its badge drawn as an outline rather than filled.
+
 ## Media
 
 | Field | Type | Default | Description |

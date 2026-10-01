@@ -29,6 +29,10 @@ pub use svg::{
 // the same coarsest-precision rule emit_svg applies to the full/aggregate
 // map, rather than a second copy of the Precision -> rank mapping.
 pub(crate) use svg::precision_rank;
+// Crate-internal only: context.rs applies the route privacy gate and its one
+// diagnostic at the two call sites that resolve a route-eligible target
+// (`render_locator`, `render_term_map`) — see `svg::route`'s module doc.
+pub(crate) use svg::{route_blocked_diagnostic, route_precision_gate};
 
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
 const HEADER_LEN: usize = 92;

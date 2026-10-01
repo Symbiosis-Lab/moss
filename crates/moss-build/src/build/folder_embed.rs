@@ -1295,7 +1295,10 @@ fn render_one(
 
     if parsed.style.as_deref() == Some("map") {
         if let Some(map) = place_maps.filter(|map| map.is_place_key(&folder_id_slug)) {
-            if let Some(svg) = map.render_term_map(&folder_id_slug, folder_docs.iter().copied(), from, 0) {
+            // A `style:map` embed is a listing card — always `route: false`,
+            // same as any other aggregate/listing surface (rule: listing
+            // cards never draw a route).
+            if let Some(svg) = map.render_term_map(&folder_id_slug, folder_docs.iter().copied(), from, 0, false) {
                 return place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref());
             }
             warn_map_fallback_once(parsed.path, "has no coordinate-bearing places");

@@ -208,6 +208,16 @@ pub struct FrontMatter {
         serialize_with = "serialize_name_list"
     )]
     pub location: Option<Vec<String>>,
+    /// Opt in to drawing `location:`'s already-ordered list as a route: a
+    /// dashed line through the stops in list order, with numbered badges,
+    /// on this page's own map and locator (`moss-build`'s
+    /// `build::place_map::svg::route` actually draws it; this crate only
+    /// carries the flag through). No second ordered-list field — the one
+    /// `location:` already keeps its declared order is the route. Has no
+    /// effect on a listing map (the places root, a folder's `style: map`
+    /// card), which never draws a route regardless of this flag.
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub route: Option<bool>,
     /// Term-page claim for the `editor` field — same shapes and behaviour as
     /// `author_page`, in whichever kind carries `editor`.
     #[serde(

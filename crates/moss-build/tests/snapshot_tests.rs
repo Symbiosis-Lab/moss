@@ -665,6 +665,17 @@ fn snapshot_places_site() {
     run_snapshot_test("places-site");
 }
 
+/// `route: true` over four stops, two of them (Harbor / Harbor Overlook)
+/// resolved to the identical coordinate so the badge-offset rule actually
+/// fires, plus one region-precision stop (Inland Reach) for the hollow
+/// badge — a whole-build snapshot is the only layer that can see the
+/// dashed line, the numbered badges, and the globe inset's thin line
+/// together, byte for byte.
+#[test]
+fn snapshot_places_route_site() {
+    run_snapshot_test("places-route-site");
+}
+
 /// The places explorer's world/tile SVGs (`place_map::emit_world_svg`/
 /// `emit_tile_svg`, emitted by `emit::place_map_assets`) land under one
 /// `_moss/map.<hash>/` directory — exactly one, since for a given pack and

@@ -179,7 +179,10 @@ fn resolve_entry_places(
     namespace: &str,
     names: &[String],
 ) -> Option<(Vec<String>, Vec<ResolvedPlace>)> {
-    let target = maps.resolve_locations(namespace, gazetteer, names);
+    // `route` is irrelevant to this data feed — the places-explorer never
+    // draws a route (rule: listing/explorer surfaces don't) — so this always
+    // resolves with `false` regardless of the page's own `route:` flag.
+    let target = maps.resolve_locations(namespace, gazetteer, names, false);
     if !target.has_coordinates() {
         return None;
     }
