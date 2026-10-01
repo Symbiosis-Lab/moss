@@ -84,3 +84,58 @@ async fn a_watch_start_attaches_its_cadence_to_the_folder_session() {
     let _ = shutdown_tx.send(());
     super::super::registry().remove(&folder);
 }
+
+/// Work already under way while hidden runs at background QoS, and returns to
+/// the thread's own class when the window is visible again.
+#[cfg(target_os = "macos")]
+#[test]
+fn pacing_lowers_a_thread_to_background_qos_while_hidden_and_restores_it() {
+    use libc::qos_class_t::{QOS_CLASS_BACKGROUND, QOS_CLASS_USER_INITIATED};
+    let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let (tx, rx) = watch::channel(Cadence::Background);
+    let gate = DerivedWorkGate::following(rx);
+    std::thread::spawn(move || {
+        // SAFETY: the calling thread's own QoS.
+        assert_eq!(unsafe { libc::pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) }, 0);
+
+        gate.pace_this_thread();
+        assert_eq!(super::qos::current().0 as u32, QOS_CLASS_BACKGROUND as u32);
+        gate.pace_this_thread();
+        assert_eq!(super::qos::current().0 as u32, QOS_CLASS_BACKGROUND as u32);
+
+        tx.send_replace(Cadence::Live);
+        gate.pace_this_thread();
+        assert_eq!(super::qos::current().0 as u32, QOS_CLASS_USER_INITIATED as u32);
+    })
+    .join()
+    .unwrap();
+}
+
+/// A publish waits on the encodes in flight, so while one is under way they
+/// run at the thread's own class even though the window is hidden.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn pacing_leaves_a_thread_alone_while_a_publish_is_in_flight() {
+    use libc::qos_class_t::QOS_CLASS_USER_INITIATED;
+    let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let (_tx, rx) = watch::channel(Cadence::Background);
+    let gate = DerivedWorkGate::following(rx);
+    let sink = crate::deploy::progress::silent();
+    let class = crate::deploy::freeze::with_publish_guard(&sink, async move {
+        Ok(std::thread::spawn(move || {
+            // SAFETY: the calling thread's own QoS.
+            assert_eq!(unsafe { libc::pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) }, 0);
+            gate.pace_this_thread();
+            super::qos::current().0 as u32
+        })
+        .join()
+        .unwrap())
+    })
+    .await
+    .unwrap();
+    assert_eq!(class, QOS_CLASS_USER_INITIATED as u32);
+}

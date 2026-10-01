@@ -1963,6 +1963,8 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             .filter(|&n| n > 0)
             .unwrap_or(64);
         let mp_budget = MegapixelBudget::new(budget_mp);
+        // Encodes keep running while the window is hidden, at background QoS.
+        let gate = crate::system::folder_session::DerivedWorkGate::of(services.session.as_ref());
         std::thread::scope(|scope| {
             for _ in 0..n_threads {
                 scope.spawn(|| loop {
@@ -1970,6 +1972,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     if index >= n_items {
                         break;
                     }
+                    gate.pace_this_thread();
                     let item = &ctx.items[index];
                     // The whole of one image's decision. Every exit is a value,
                     // never a `return` with teardown attached — see `ItemStep`.
