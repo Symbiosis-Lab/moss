@@ -77,6 +77,13 @@ pub struct MediaDimensionLookup {
     snapshot: moss_core::asset_snapshot::AssetSnapshot,
 }
 
+// How many lookups this thread has built. Each one walks every image and
+// video in the vault, so a test can tell one per build from one per page.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BUILT_ON_THIS_THREAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl MediaDimensionLookup {
     /// Creates a new lookup table from image and video metadata.
     ///
@@ -105,6 +112,8 @@ impl MediaDimensionLookup {
         // why it is a required argument rather than an `Option` with one.
         registry: Option<&crate::types::assets::AssetRegistry>,
     ) -> Self {
+        #[cfg(test)]
+        BUILT_ON_THIS_THREAD.with(|n| n.set(n.get() + 1));
         let mut dimensions = HashMap::new();
         let mut colors = HashMap::new();
         let mut lqips = HashMap::new();

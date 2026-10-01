@@ -5,6 +5,7 @@ mod source_evidence;
 pub use source_evidence::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 pub mod config;
 pub mod blocking;
+pub mod build_shared;
 pub mod credits;
 pub mod empty_home;
 pub mod html;
@@ -26,7 +27,8 @@ pub use crate::build::incremental_gates::IncrementalGates;
 // section at all (not just the `data-comments` JS hint this module emits).
 pub(crate) use config::resolve_comments_pref;
 
-// From html — called directly by blocking and may be called by plugins
+// From html — renders one page outside a build, for tests
+#[cfg(test)]
 pub use html::generate_html;
 
 // From preflight — called by build.rs to surface compile-time warnings

@@ -21,6 +21,7 @@ use crate::build::page::shell::{
 
 // Sibling module imports (within build/render/)
 use super::config::{resolve_logo_url, resolve_data_attr, resolve_comments_attr};
+use super::build_shared::BuildShared;
 use super::credits;
 
 /// Load a JS asset: read from disk in dev (for Vite hot reload), use include_str! in release.
@@ -89,6 +90,8 @@ pub(crate) fn localized_site_title(
         .unwrap_or_else(|| fallback.to_string())
 }
 
+/// One page rendered outside any build, with shared state built for it alone.
+#[cfg(test)]
 pub fn generate_html(
     doc: Option<&ParsedDocument>,
     all_docs: &[ParsedDocument],
@@ -113,11 +116,6 @@ pub fn generate_html(
     output_dir: Option<&std::path::Path>,
     source_root: &std::path::Path,
 ) -> Result<String, String> {
-    // Resolves its own script snapshot: this entry point renders one page in
-    // isolation (tests, one-off callers), so there is no build-wide snapshot to
-    // share. The real multi-page path is `generate_html_collect_og`, which takes
-    // the caller's — see the comment on the hash block in `generate_html_inner`.
-    let scripts = crate::build::emit::scripts::ScriptAssets::resolve();
     // Pass `None` for og_outputs so the inner skips auto-card rendering when
     // there is no caller-provided sink to track the generated PNG path.
     // Without this, an auto-card would be written to disk and immediately
@@ -129,7 +127,8 @@ pub fn generate_html(
         content_graph, dir_overrides, site_url, show_rss_in_footer,
         emit_source_lines, favicon_filename, false, output_dir,
         None,
-        source_root, &scripts,
+        source_root,
+        &BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), project, dir_overrides),
     )
 }
 
@@ -165,10 +164,8 @@ pub fn generate_html_collect_og(
     output_dir: Option<&std::path::Path>,
     og_outputs: &mut crate::build::page::og_card::OgSink<'_>,
     source_root: &std::path::Path,
-    // The build's one script snapshot, taken once in `blocking.rs`. Passing it
-    // rather than re-resolving keeps every page's `<script src>` naming a file
-    // the same snapshot emitted.
-    scripts: &crate::build::emit::scripts::ScriptAssets,
+    // Built once per build by the caller, never per page.
+    shared: &BuildShared,
 ) -> Result<String, String> {
     generate_html_inner(
         doc, all_docs, project, layout_config, is_homepage, rss_link,
@@ -177,7 +174,7 @@ pub fn generate_html_collect_og(
         content_graph, dir_overrides, site_url, show_rss_in_footer,
         emit_source_lines, favicon_filename, favicon_has_raster_pngs, output_dir,
         Some(og_outputs),
-        source_root, scripts,
+        source_root, shared,
     )
 }
 
@@ -329,8 +326,9 @@ fn generate_html_inner(
     output_dir: Option<&std::path::Path>,
     mut og_outputs: Option<&mut crate::build::page::og_card::OgSink<'_>>,
     source_root: &std::path::Path,
-    scripts: &crate::build::emit::scripts::ScriptAssets,
+    shared: &BuildShared,
 ) -> Result<String, String> {
+    let BuildShared { scripts, media_lookup } = shared;
     // The language moss's own interface is drawn in: the page's own when it
     // declares one moss has strings for, else the site default. Distinct from
     // `<html lang>`, which describes the content and may name a language moss
@@ -521,23 +519,13 @@ fn generate_html_inner(
             // leading <h1> matching doc.title — it only ever deleted the
             // author's heading.)
 
-            // Build the media lookup once: shared between folder-card
-            // color resolution and the post-pass placeholder enrichment.
-            let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
-                &project.image_files,
-                &project.video_files,
-                &dir_overrides,
-                // One page in isolation: no `BuildServices`, so no variants.
-                None,
-            );
-
             let mut body_plan = grid_cells::resolve_page_body(
                 doc,
                 all_docs,
                 content_graph,
                 &dir_overrides,
                 &project.root_path,
-                &media_lookup,
+                media_lookup,
                 resolved_typesetting,
             );
             splice_body_locator(&mut body_plan, doc, layout_config, is_article_page);
@@ -592,7 +580,7 @@ fn generate_html_inner(
                     &dir_overrides,
                     doc.lang, // per-page language, not site default
                     resolved_typesetting,
-                    Some(&media_lookup),
+                    Some(media_lookup),
                     layout_config.assets.math,
                 );
                 content.push_str(&annotate_children_listing(resolved_html, emit_source_lines));
@@ -609,23 +597,13 @@ fn generate_html_inner(
         (Some(doc), false) => {
             // Regular page content. Body H1 (if any) is preserved verbatim and
             // is the sole source of the visible heading — moss never injects one.
-            // Build the media lookup once: shared between folder-card
-            // color resolution and the post-pass placeholder enrichment.
-            let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
-                &project.image_files,
-                &project.video_files,
-                &dir_overrides,
-                // One page in isolation: no `BuildServices`, so no variants.
-                None,
-            );
-
             let mut body = grid_cells::resolve_page_body(
                 doc,
                 all_docs,
                 content_graph,
                 &dir_overrides,
                 &project.root_path,
-                &media_lookup,
+                media_lookup,
                 resolved_typesetting,
             );
             // Done before any cover-wrap below reads `body`, so a claimed
@@ -756,7 +734,7 @@ fn generate_html_inner(
                         &format!("{}{}", folder_byline, lead),
                         cover_type,
                         &cover_attrs,
-                        Some(&media_lookup),
+                        Some(media_lookup),
                         emit_source_lines,
                     );
                     content = format!("{}{}", cover_row_html, trailer);
@@ -812,7 +790,7 @@ fn generate_html_inner(
                                 &lead,
                                 cover_type,
                                 &cover_attrs,
-                                Some(&media_lookup),
+                                Some(media_lookup),
                                 emit_source_lines,
                             ),
                             trailer,
@@ -913,7 +891,7 @@ fn generate_html_inner(
                         &dir_overrides,
                         doc.lang, // per-page language, not site default
                         resolved_typesetting,
-                        Some(&media_lookup),
+                        Some(media_lookup),
                         layout_config.assets.math,
                     );
                     content.push_str(&annotate_children_listing(resolved_html, emit_source_lines));

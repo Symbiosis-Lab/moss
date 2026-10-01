@@ -6614,7 +6614,7 @@ mod og_url_tests {
                 &SiteUrl::parse("https://example.com").unwrap(),
                 true, false, "favicon.svg", false, Some(dir.path()), &mut og_outputs,
                 source_root,
-                &crate::build::emit::scripts::ScriptAssets::resolve(),
+                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
             )
             .expect("generate_html_collect_og should succeed")
         }
@@ -6676,7 +6676,7 @@ mod og_url_tests {
                 &SiteUrl::parse("https://example.com").unwrap(),
                 true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
                 vault.path(),
-                &crate::build::emit::scripts::ScriptAssets::resolve(),
+                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &make_project(), &std::collections::HashMap::new()),
             )
             .expect("render");
             assert!(
@@ -6689,6 +6689,49 @@ mod og_url_tests {
                 std::fs::remove_file(items.join("Cover.JPG")).unwrap();
             }
         }
+    }
+
+    /// Pages read the build's one media index rather than building their own.
+    /// The index walks every image and video in the vault, so building it per
+    /// page made re-rendering a whole image-heavy site cost pages x media.
+    #[test]
+    fn pages_render_against_the_builds_one_media_index() {
+        use super::super::generate_html_collect_og;
+        use crate::build::media::dimensions::BUILT_ON_THIS_THREAD;
+
+        let out = tempfile::tempdir().expect("tempdir");
+        let home = make_doc("Home", "index.html");
+        let pages: Vec<_> = (0..3)
+            .map(|i| make_doc(&format!("Page {i}"), &format!("p{i}/index.html")))
+            .collect();
+        let mut all_docs = vec![home.clone()];
+        all_docs.extend(pages.iter().cloned());
+        let project = make_project();
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+
+        let shared = crate::build::render::build_shared::BuildShared::new(
+            crate::build::emit::scripts::ScriptAssets::resolve(),
+            &project,
+            &std::collections::HashMap::new(),
+        );
+        let before = BUILT_ON_THIS_THREAD.with(|n| n.get());
+        // The homepage and a regular page take different branches, and each
+        // used to build its own index.
+        for (page, is_homepage) in std::iter::once((&home, true)).chain(pages.iter().map(|p| (p, false))) {
+            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+            generate_html_collect_og(
+                Some(page), &all_docs, &project, &make_layout(), is_homepage, None, None,
+                Language::En, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(),
+                &SiteUrl::parse("https://example.com").unwrap(),
+                true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
+                out.path(),
+                &shared,
+            )
+            .expect("render");
+        }
+        assert_eq!(BUILT_ON_THIS_THREAD.with(|n| n.get()) - before, 0, "a page built its own media index");
     }
 
     /// A favicon raster trio an earlier default-SVG build left in the output
@@ -6718,7 +6761,7 @@ mod og_url_tests {
             &SiteUrl::parse("https://example.com").unwrap(),
             true, false, "favicon.png", false, Some(dir.path()), &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &make_project(), &std::collections::HashMap::new()),
         )
         .expect("render");
 
@@ -6770,8 +6813,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), // source_root
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -6851,8 +6893,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), // source_root
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -6918,8 +6959,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), // source_root
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -6979,8 +7019,7 @@ mod og_url_tests {
                 false,
                 Some(dir.path()),
                 &mut og_outputs,
-                std::path::Path::new(""), // source_root
-                &crate::build::emit::scripts::ScriptAssets::resolve(),
+                std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
             )
             .expect("generate_html_collect_og should succeed");
             html.lines()
@@ -7040,8 +7079,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), // source_root
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7114,7 +7152,7 @@ mod og_url_tests {
             Some(tmp.path()),
             &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7273,7 +7311,7 @@ mod listable_page_card_tests {
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed")
     }

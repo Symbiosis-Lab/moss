@@ -1717,6 +1717,9 @@ pub fn generate_blocking_content_for_build(
     // page it spares costs 3.5ms. Medians of 7 rebuilds.
     log::debug!(target: "timing", "[render] verdict computed: {:?}", total_start.elapsed());
 
+    // Built once here rather than once per page. See `BuildShared`.
+    let shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
+
     // The render-prelude cut: the literal homepage (`index.html`)
     // is excluded from the to_render/to_carry partition below (it is looked
     // up via `documents.iter().find`, not iterated) and used to be rendered
@@ -1939,7 +1942,7 @@ pub fn generate_blocking_content_for_build(
                     Some(output_dir),
                     &mut og_outputs,
                     source_path_buf,
-                    &scripts,
+                    &shared,
                 )?;
 
                 // Snapshot BEFORE the slot pass replaces the file: these are
@@ -2869,7 +2872,7 @@ pub fn generate_blocking_content_for_build(
                     Some(output_dir),
                     &mut homepage_og_outputs,
                     source_path_buf,
-                    &scripts,
+                    &shared,
                 )?
             } else {
                 // No homepage document found - generate auto-index page with year-grouped article list
@@ -2901,7 +2904,7 @@ pub fn generate_blocking_content_for_build(
                     Some(output_dir),
                     &mut homepage_og_outputs,
                     source_path_buf,
-                    &scripts,
+                    &shared,
                 )?
             };
             // Site 14b: register the homepage's OG cards from their receipts.
@@ -3292,7 +3295,7 @@ pub fn generate_blocking_content_for_build(
                 &media_path_resolver.js_path(),
                 &media_path_resolver.lazy_chunk_attrs(&share_card_hash, hls_attr_hash),
                 js_fullscreen_path_arg,
-                &scripts.tag("search", &layout_config.assets, &media_path_resolver),
+                &shared.scripts.tag("search", &layout_config.assets, &media_path_resolver),
             );
 
             let page_url = format!("{}/index.html", page_slug);
@@ -3319,7 +3322,7 @@ pub fn generate_blocking_content_for_build(
     // Each file's gate is the same fact its `<script>` tag reads, so a tag can
     // never name a file that was skipped. Replaces seven hand-rolled
     // `if gate { emit }` blocks; see `build::emit::scripts`.
-    scripts.emit(&site_assets, output_dir, pending)?;
+    shared.scripts.emit(&site_assets, output_dir, pending)?;
 
     // Email/RSS math PNG projection. This is only the GATE
     // (the fullscreen.js conditional-emission precedent above) — the emission
