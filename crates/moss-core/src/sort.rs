@@ -83,6 +83,28 @@ pub trait SortableDoc {
     fn is_folder_index(&self) -> bool {
         false
     }
+
+    /// The name an explicit `sort: [a, b, c]` list matches this child
+    /// against. Defaults to `clean_stem()`, correct for a leaf — its own
+    /// filename is exactly what an author types to name it.
+    ///
+    /// A folder index is the case this default gets wrong: its home file is
+    /// very often literally `index.md` (the generic convention, not a
+    /// self-named file), so its `clean_stem()` is the fixed string
+    /// `"index"` — never what an author would write to name the folder
+    /// itself. `render/html.rs`'s own "every folder index's clean_stem is
+    /// 'index'" comment already routes around this same fact for sibling
+    /// identity; an explicit-order list must do the same, or a folder named
+    /// in the list silently falls through to the inferred axis instead of
+    /// keeping its declared position — invisible in a flat folder (an
+    /// article's `clean_stem` already matches), and only visible once the
+    /// matching child is itself a folder.
+    ///
+    /// An implementor whose `url_path()` can name the folder some other way
+    /// should override this; the default keeps today's behavior.
+    fn order_match_name(&self) -> &str {
+        self.clean_stem()
+    }
 }
 
 const DATE_FRACTION_THRESHOLD: f32 = 0.8;
@@ -429,11 +451,11 @@ where
                 .map(|(i, s)| (s.as_str(), i))
                 .collect();
             let (mut listed, mut unlisted): (Vec<_>, Vec<_>) = docs.iter().copied().partition(|d| {
-                order_map.contains_key(d.clean_stem().to_lowercase().as_str())
+                order_map.contains_key(d.order_match_name().to_lowercase().as_str())
             });
             listed.sort_by(|a, b| {
-                let ai = order_map.get(a.clean_stem().to_lowercase().as_str()).copied().unwrap_or(usize::MAX);
-                let bi = order_map.get(b.clean_stem().to_lowercase().as_str()).copied().unwrap_or(usize::MAX);
+                let ai = order_map.get(a.order_match_name().to_lowercase().as_str()).copied().unwrap_or(usize::MAX);
+                let bi = order_map.get(b.order_match_name().to_lowercase().as_str()).copied().unwrap_or(usize::MAX);
                 ai.cmp(&bi)
             });
             unlisted.sort_by(axis_cmp);
@@ -621,6 +643,51 @@ mod sort_dispatch_tests {
         assert_eq!(sorted[0].clean_stem(), "intro");  // listed first
         assert_eq!(sorted[1].clean_stem(), "a");      // newest in tail
         assert_eq!(sorted[2].clean_stem(), "b");
+    }
+
+    /// A doc that can stand in for either a leaf (`order_match_name` equal to
+    /// `clean_stem`, the default) or a folder whose home file is the generic
+    /// `index.md` (`clean_stem` is "index", `order_match_name` is the
+    /// folder's real name) — the same split `ParsedDocument`'s own override
+    /// makes in moss-build, reproduced minimally here so `sort_by_resolved`'s
+    /// explicit-order match is proven to read `order_match_name`, not
+    /// `clean_stem`, at the trait level.
+    struct NamedDoc {
+        base: TestDocWithLabel,
+        order_name: &'static str,
+    }
+    impl SortableDoc for NamedDoc {
+        fn url_path(&self) -> &str { self.base.url_path() }
+        fn date(&self) -> Option<&str> { self.base.date() }
+        fn weight(&self) -> Option<i32> { self.base.weight() }
+        fn declared_sort(&self) -> Option<&SortField> { self.base.declared_sort() }
+        fn clean_stem(&self) -> &str { self.base.clean_stem() }
+        fn order_match_name(&self) -> &str { self.order_name }
+    }
+    impl SortableLabel for NamedDoc {
+        fn label(&self) -> &str { self.base.label() }
+    }
+
+    #[test]
+    fn explicit_order_matches_by_order_match_name_not_clean_stem() {
+        let intro = NamedDoc { base: doc_with_label("intro", None, None, "Intro"), order_name: "intro" };
+        // Stands in for a subfolder named "appendix" whose home file is the
+        // generic `index.md`: clean_stem is "index", but order_match_name —
+        // what `ParsedDocument` derives from the URL, and what the author
+        // wrote in `sort:` — is "appendix".
+        let appendix = NamedDoc { base: doc_with_label("index", None, None, "Appendix"), order_name: "appendix" };
+        let r = ResolvedSort {
+            axis: SortAxis::Title,
+            explicit_order: Some(vec!["appendix".into(), "intro".into()]),
+            series_default: true,
+        };
+
+        let sorted = sort_by_resolved(&[&appendix, &intro], &r);
+        assert_eq!(
+            sorted.iter().map(|d| d.order_match_name()).collect::<Vec<_>>(),
+            vec!["appendix", "intro"],
+            "appendix must keep its declared first position, matched by order_match_name"
+        );
     }
 }
 

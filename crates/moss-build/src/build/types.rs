@@ -863,6 +863,42 @@ impl moss_core::sort::SortableDoc for ParsedDocument {
     fn declared_sort(&self) -> Option<&moss_core::sort::SortField> { self.sort.as_ref() }
     fn clean_stem(&self) -> &str { &self.clean_stem }
     fn is_folder_index(&self) -> bool { self.kind == moss_core::PageKind::Folder }
+
+    /// A folder's own directory name — NOT `clean_stem`, which for a folder
+    /// names its home FILE, not the folder itself, and is "index" whenever
+    /// that file is the generic `index.md` rather than a self-named one. An
+    /// explicit `sort: [a, b, c]` names folders the way the body links to
+    /// them (`[[Appendix]]`, or a bare `appendix`), not by their home
+    /// file's filename.
+    ///
+    /// Read off `source_path` (the raw on-disk relative path, e.g.
+    /// `"appendix/index.md"`) rather than `url_path`: a page's `clean_stem`
+    /// is the raw filename, untouched by slug rules, so a folder's own name
+    /// has to come from an equally raw source to match the same way a page
+    /// does — a directory named with a space or a CJK interpunct
+    /// (`京都・鎌倉/`) slugs to `url_path`'s `京都-鎌倉`, which an author's
+    /// `sort: [京都・鎌倉]` (typed exactly as the folder reads) would never
+    /// match. Falls back to the `url_path` segment only when `source_path`
+    /// is unavailable (a hand-built test document, say), and to
+    /// `clean_stem` after that, same as before.
+    fn order_match_name(&self) -> &str {
+        if self.is_folder_index() {
+            self.source_path
+                .as_deref()
+                .and_then(|p| p.rsplit('/').nth(1))
+                .or_else(|| {
+                    self.url_path
+                        .trim_end_matches("index.html")
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                })
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&self.clean_stem)
+        } else {
+            &self.clean_stem
+        }
+    }
 }
 
 impl moss_core::sort::SortableLabel for ParsedDocument {
@@ -890,6 +926,120 @@ mod tests {
         assert!(doc.declared_sort().is_none());
         assert_eq!(doc.clean_stem(), "post");
         assert_eq!(doc.label(), "Post");
+    }
+
+    /// `order_match_name` is what `sort: [a, b, c]` matches a child against.
+    /// For a leaf it's `clean_stem` (its own filename) — unaffected.
+    #[test]
+    fn order_match_name_is_clean_stem_for_a_leaf() {
+        use moss_core::sort::SortableDoc;
+        let doc = ParsedDocument {
+            url_path: "blog/appendix.html".to_string(),
+            clean_stem: "appendix".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        assert_eq!(doc.order_match_name(), "appendix");
+    }
+
+    /// The bug this exists for: a folder's home file is very often literally
+    /// `index.md`, so its `clean_stem` is the fixed string "index" — never
+    /// the folder's own name an author writes in `sort: [a, appendix]`.
+    /// `order_match_name` must read the folder's own name off its URL
+    /// instead, the same way `render/html.rs`'s sibling lookup already does.
+    #[test]
+    fn order_match_name_is_the_folder_name_not_its_index_files_clean_stem() {
+        use moss_core::sort::SortableDoc;
+        let doc = ParsedDocument {
+            url_path: "blog/appendix/index.html".to_string(),
+            clean_stem: "index".to_string(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        assert_eq!(doc.order_match_name(), "appendix");
+    }
+
+    /// A folder named with a CJK interpunct (`京都・鎌倉`) slugs to
+    /// `京都-鎌倉` in its URL — the interpunct isn't alphanumeric, so
+    /// `generate_slug` turns it into a separator. `order_match_name` must
+    /// still read `京都・鎌倉`, straight off the raw on-disk path, so it
+    /// matches a `sort: [...]` entry written exactly as the folder reads —
+    /// the same way a page named `京都・鎌倉.md` already matches by its own
+    /// untouched `clean_stem`.
+    #[test]
+    fn order_match_name_matches_a_cjk_interpunct_name_the_same_way_a_page_does() {
+        use moss_core::sort::SortableDoc;
+        let folder = ParsedDocument {
+            url_path: "works/京都-鎌倉/index.html".to_string(),
+            source_path: Some("works/京都・鎌倉/index.md".to_string()),
+            clean_stem: "index".to_string(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let page = ParsedDocument {
+            url_path: "works/京都-鎌倉-2/index.html".to_string(),
+            clean_stem: "京都・鎌倉".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        assert_eq!(folder.order_match_name(), "京都・鎌倉");
+        assert_eq!(page.order_match_name(), "京都・鎌倉");
+    }
+
+    /// End-to-end regression for the same bug, through `sort_by_resolved`
+    /// itself: `sort: [appendix, intro]` kept its declared order in a flat
+    /// folder, but silently fell back to the inferred axis the moment the
+    /// named child was a subfolder with a child of its own (`appendix/`,
+    /// home file `appendix/index.md` — a self-named `appendix/appendix.md`
+    /// never hit this, since its clean_stem already happened to equal
+    /// "appendix"). `appendix` must keep its declared first position.
+    #[test]
+    fn explicit_order_keeps_a_subfolder_in_its_declared_position() {
+        let intro = ParsedDocument {
+            url_path: "journal/intro.html".to_string(),
+            clean_stem: "intro".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        let appendix = ParsedDocument {
+            url_path: "journal/appendix/index.html".to_string(),
+            clean_stem: "index".to_string(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let appendix_note = ParsedDocument {
+            url_path: "journal/appendix/notes.html".to_string(),
+            clean_stem: "notes".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        let closing = ParsedDocument {
+            url_path: "journal/closing.html".to_string(),
+            clean_stem: "closing".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+
+        // `appendix_note` is `appendix`'s own child, not a direct child of
+        // `journal/` — it plays no part in the sort below; it just gives
+        // `appendix` the shape the bug report names ("a subfolder that has
+        // children of its own"), the reason its home file is `index.md`
+        // rather than a self-named one in the first place.
+        let _ = &appendix_note;
+
+        let resolved = moss_core::sort::ResolvedSort {
+            axis: moss_core::sort::SortAxis::Title,
+            explicit_order: Some(vec!["appendix".to_string(), "intro".to_string()]),
+            series_default: true,
+        };
+        let docs: Vec<&ParsedDocument> = vec![&intro, &appendix, &closing];
+        let sorted = moss_core::sort::sort_by_resolved(&docs, &resolved);
+
+        assert_eq!(
+            sorted.iter().map(|d| d.url_path.as_str()).collect::<Vec<_>>(),
+            vec!["journal/appendix/index.html", "journal/intro.html", "journal/closing.html"],
+            "appendix (a subfolder) must keep its declared first position"
+        );
     }
 
     #[test]

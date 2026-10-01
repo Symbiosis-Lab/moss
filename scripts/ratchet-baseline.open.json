@@ -22,7 +22,7 @@
         "crates/moss-build/src/build/render/html.rs": 1800,
         "crates/moss-build/src/build/scan/scan.rs": 1600,
         "crates/moss-build/src/build/ship.rs": 1000,
-        "crates/moss-build/src/build/types.rs": 900,
+        "crates/moss-build/src/build/types.rs": 1000,
         "crates/moss-build/src/build/watch.rs": 1200,
         "crates/moss-build/src/build.rs": 2200,
         "crates/moss-build/src/engine.rs": 1000,

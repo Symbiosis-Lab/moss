@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sort_by_resolved`'s explicit-order list now matches a folder by its own name, not its home file's `clean_stem`.** `SortableDoc` gains `order_match_name()` (default: `clean_stem()`, unchanged for a leaf); `ParsedDocument` overrides it to read the folder's own name off its URL. A folder's home file is very often the generic `index.md`, whose `clean_stem` is the fixed string "index" — a `sort: [a, appendix]` naming that subfolder matched only by accident before, when the folder happened to be self-named (`appendix/appendix.md`).
 - Renaming or deleting a file no longer skips a link written with the angle-bracket destination form (`[text](<a note.md>)`), the syntax Markdown allows so a destination can contain a space. Renaming now updates it and keeps the brackets, since the new path may still need them; deleting now finds it.
 - Deleting a file no longer misses a link to it that carries a `?query` string (`[text](note.md?v=1)`) — the query used to be read as part of the path, so the reference never matched.
 - Deleting a file no longer misses a reference-style link to it — `[text][id]` plus a `[id]: note.md` definition elsewhere in the document. The definition's destination is now read the same way a plain link's destination is; a definition inside a fenced code block is correctly left alone.
