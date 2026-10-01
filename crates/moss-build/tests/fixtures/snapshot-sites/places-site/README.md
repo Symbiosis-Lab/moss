@@ -5,6 +5,7 @@ Covers: the places build slice — `[terms.places] type = "place" fields = ["loc
 Declares one place-typed kind. Kyoto (`kyoto.md`) claims its own term page; Osaka and Nara are unclaimed and get generated pages. Both Kyoto and Osaka name Japan as their gazetteer parent, and Japan has no gazetteer row of its own — the roll-up creates its page from the parent link alone. `places/index.md` is a real page at the namespace root itself (no `place_page:` claim) — its own title and intro compose with the term map below them, rather than the map losing outright to a real page the way it used to. What only a whole-build snapshot can see:
 
 - a real page at the namespace root (`places/index.md`) keeping its own intro AND the root's term map, in that order, instead of the map silently disappearing behind the real page's content;
+- the places root figure carries the explorer handshake attributes (`data-moss-places-explorer`, `data-world`, `data-tiles`, `data-places`, `data-scope`) whose URLs match the emitted asset names, and the `places-explorer` stylesheet partial moves the site stylesheet hash;
 - a claimed place page (`kyoto.md`) rendering a breadcrumb up to Japan and a children list with counts, with no coordinates anywhere in its output;
 - a generated place page (Osaka) doing the same;
 - Japan's own generated page, created purely by the roll-up, listing both Kyoto and Osaka as children;

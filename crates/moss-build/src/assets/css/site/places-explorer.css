@@ -1,0 +1,22 @@
+/* ============================================================================
+   Places explorer — interactive layer over a place namespace root's static
+   map figure.
+
+   Gated partial: ships only when `places-explorer.js` does too, both behind
+   `SiteAssets.places_explorer`. Registered in `build/emit/stylesheet.rs`'s
+   CSS_PARTIALS.
+
+   This landing's bundle is a stub (see `js-src/site/places-explorer/index.ts`'s
+   own doc) with nothing visual yet, so there is nothing to style — only a
+   custom property, which declares no selector core could already own and
+   does not change how `.moss-place-map` paints. The interactive layer's own
+   rules land with it.
+   ========================================================================= */
+
+@layer shortcodes {
+
+[data-moss-places-explorer] {
+  --moss-places-explorer: 1;
+}
+
+}

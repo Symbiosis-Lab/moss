@@ -741,6 +741,15 @@ pub struct SiteAssets {
     /// where the ladder's `<source>` also comes from, so the gate and the tag
     /// that needs it cannot disagree.
     pub video_ladder: bool,
+    /// `features::should_inject_places_explorer` — a place-typed namespace
+    /// root (real or synthetic) is in use in this build AND its kind
+    /// resolves `explorer` true. Not a page fact folded here the way
+    /// `callouts`/`has_footnotes` are: it needs the term index alongside the
+    /// kinds table, so the caller (`render/blocking.rs`, right where
+    /// `media_pages`/`video_ladder` are also set) computes it and this field
+    /// just carries the answer through to the `places-explorer` script/CSS
+    /// gates.
+    pub places_explorer: bool,
 }
 
 impl SiteAssets {

@@ -238,7 +238,8 @@ impl ConfigFile {
                     fields.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
                 let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
                 let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
-                declared.push(RawKind { key: key.clone(), fields, title, kind_type });
+                let explorer = table.get("explorer").and_then(|v| v.as_bool());
+                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer });
             }
         }
         let declared_keys: std::collections::HashSet<&str> =
@@ -258,6 +259,7 @@ impl ConfigFile {
                 },
                 title: None,
                 kind_type: None,
+                explorer: None,
             });
         }
         kinds.extend(declared);
@@ -297,6 +299,12 @@ pub struct RawKind {
     /// diagnostic there, not here. `None` for the two built-ins and for a
     /// declared kind that didn't set one.
     pub kind_type: Option<String>,
+    /// `[terms.<key>] explorer`, unvalidated and not yet gated on
+    /// `kind_type`: `term_kinds` reads this only for the place-typed kind
+    /// and drops it for every other one, the same way `type` itself is only
+    /// ever meaningful there. `None` for the two built-ins and for a
+    /// declared kind that didn't set the key.
+    pub explorer: Option<bool>,
 }
 
 #[cfg(test)]

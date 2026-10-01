@@ -977,7 +977,7 @@ fn article_map_persists_kinds_and_fields_with_members() {
             "jury".to_string(),
         ],
         title: "People".to_string(),
-        is_place: false, parents: Default::default(),
+        is_place: false, parents: Default::default(), explorer: None,
     }];
 
     let mut documents = vec![
@@ -1010,7 +1010,7 @@ fn article_map_omits_a_term_no_field_claims_a_member_for() {
         key: "people".to_string(),
         fields: vec!["author".to_string(), "editor".to_string()],
         title: "People".to_string(),
-        is_place: false, parents: Default::default(),
+        is_place: false, parents: Default::default(), explorer: None,
     }];
 
     let mut documents = vec![make_doc("Sam Okafor", "people/sam-okafor/index.html", false)];

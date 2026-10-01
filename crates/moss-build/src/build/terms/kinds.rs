@@ -53,6 +53,27 @@ pub struct TermKind {
     /// `derive_terms` itself never reads the gazetteer.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub parents: std::collections::BTreeMap<String, String>,
+    /// `[terms.<key>] explorer`, carried through only for the place-typed
+    /// kind — `term_kinds` drops a declared value for every other kind, the
+    /// same way `parents` is only ever filled for one. `None` means
+    /// "default on" (`explorer_enabled` resolves the default); `Some(false)`
+    /// is the only way to see the interactive layer turned off. Always
+    /// `None` for a non-place kind, so the key is accepted without error but
+    /// has no effect there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explorer: Option<bool>,
+}
+
+impl TermKind {
+    /// Whether the places explorer should activate for this kind: only ever
+    /// true for the place-typed kind, default-on absent an explicit
+    /// `explorer = false`. The one place both the injection predicate
+    /// (`features::should_inject_places_explorer`) and the markup handshake
+    /// (`PlaceMapRenderContext`) read this, so they cannot resolve the
+    /// default differently.
+    pub fn explorer_enabled(&self) -> bool {
+        self.is_place && self.explorer.unwrap_or(true)
+    }
 }
 
 /// Turn config into the kinds table [`super::derive_terms`] derives from —
@@ -138,7 +159,12 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) 
                 }
                 None => false,
             };
-            TermKind { key: kind.key, fields, title, is_place, parents: Default::default() }
+            // Dropped for every non-place kind: `explorer` is ignored, not an
+            // error, on a kind that isn't `type = "place"` (there is nothing
+            // for it to turn off), the same posture `is_place` itself takes
+            // toward an unrecognized `type`.
+            let explorer = is_place.then_some(kind.explorer).flatten();
+            TermKind { key: kind.key, fields, title, is_place, parents: Default::default(), explorer }
         })
         .collect()
 }
@@ -192,6 +218,40 @@ mod tests {
         let kinds = term_kinds(&cfg, crate::i18n::Language::En);
         let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
         assert!(places.is_place);
+    }
+
+    #[test]
+    fn explorer_defaults_on_for_a_place_kind_with_no_explorer_key() {
+        let cfg = crate::config::ConfigFile::parse(
+            "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\n",
+        )
+        .unwrap();
+        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
+        assert!(places.explorer_enabled(), "absent key defaults the explorer on");
+    }
+
+    #[test]
+    fn explorer_false_turns_the_explorer_off_for_a_place_kind() {
+        let cfg = crate::config::ConfigFile::parse(
+            "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\nexplorer = false\n",
+        )
+        .unwrap();
+        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
+        assert!(!places.explorer_enabled());
+    }
+
+    #[test]
+    fn explorer_on_a_non_place_kind_is_ignored_not_an_error() {
+        let cfg = crate::config::ConfigFile::parse(
+            "[terms.people]\nfields = [\"author\"]\nexplorer = false\n",
+        )
+        .unwrap();
+        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
+        assert_eq!(people.explorer, None, "the key is dropped for a non-place kind");
+        assert!(!people.explorer_enabled(), "never true off is_place, whatever the raw value was");
     }
 
     #[test]

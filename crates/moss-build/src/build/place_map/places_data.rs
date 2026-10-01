@@ -360,7 +360,7 @@ mod tests {
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
             is_place: true,
-            parents: Default::default(),
+            parents: Default::default(), explorer: None,
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gazetteer());
         kinds.into_iter().next().unwrap().parents

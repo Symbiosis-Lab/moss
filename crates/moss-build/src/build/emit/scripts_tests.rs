@@ -13,6 +13,7 @@ fn all_on() -> SiteAssets {
         has_footnotes: true,
         scroll_rows: true,
         video_ladder: true,
+        places_explorer: true,
     }
 }
 

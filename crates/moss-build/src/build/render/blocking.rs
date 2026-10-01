@@ -272,7 +272,7 @@ pub fn generate_blocking_content_for_build(
     services: Option<&crate::types::services::BuildServices>,
     progress_sender: Option<&dyn crate::build::ports::reporter::BuildReporter>,
     emit_source_lines: bool,
-    site_config: SiteConfig,
+    mut site_config: SiteConfig,
     pending: &mut PendingManifest,
     exits_after_build: bool,
 ) -> Result<BlockingContentOutput, BuildStopped> {
@@ -1167,6 +1167,19 @@ pub fn generate_blocking_content_for_build(
         crate::build::terms::set_place_lines(&mut documents, &term_index, site_lang);
         log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
 
+        // Places-explorer handshake, part 1: `places.<hash>.json`'s hash,
+        // computed now while `documents` already carries this pass's
+        // finished output — no field `place_map::places_data::emit_places_data`
+        // reads moves again below. The SAME document set `places_data::emit`
+        // (pipeline.rs, after this function returns) serializes, so the URL
+        // `render_term_map` bakes into a namespace root's figure can never
+        // name a file this build doesn't also write.
+        if let Some(ctx) = site_config.place_maps.take() {
+            let json = crate::build::place_map::places_data::emit_places_data(&documents, &ctx, site_config.math);
+            let hash = compute_content_hash(&json);
+            site_config.place_maps = Some(ctx.with_explorer_places_hash(hash));
+        }
+
         // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`).
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
@@ -1386,6 +1399,7 @@ pub fn generate_blocking_content_for_build(
             video_ladder: services
                 .and_then(|s| s.assets.as_deref())
                 .is_some_and(|r| r.iter_registered_variants().values().any(|k| k.hls)),
+            places_explorer: crate::build::features::should_inject_places_explorer(&term_index, &site_config),
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four

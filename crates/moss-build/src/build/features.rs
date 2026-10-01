@@ -77,6 +77,26 @@ pub fn should_inject_subscribe_assets(
         || pages.iter().any(|p| p.features.inline_apply)
 }
 
+/// Decide whether to inject the places-explorer JS bundle (and, through
+/// `SiteAssets.places_explorer`, its stylesheet partial).
+///
+/// Returns `true` when both:
+/// - the term index has a place-typed namespace root in use
+///   (`TermIndex::place_namespace_roots`) — a real root document
+///   (`places/index.md`) and a synthetic one (no such file, the root
+///   rendered by `render/blocking.rs` from the term index) both qualify,
+///   since both get the same handshake from
+///   `PlaceMapRenderContext::render_term_map`, AND
+/// - the site's place-typed kind resolves `explorer` true
+///   (`TermKind::explorer_enabled`, the one place that default is read).
+pub fn should_inject_places_explorer(
+    term_index: &crate::build::terms::TermIndex,
+    site_config: &crate::build::render::SiteConfig,
+) -> bool {
+    site_config.term_kinds.iter().any(crate::build::terms::TermKind::explorer_enabled)
+        && term_index.place_namespace_roots().next().is_some()
+}
+
 // `project_has_inline_subscribe(folder_path)` was removed in PR7b.
 //
 // It was a temporary filesystem-scan stand-in for "does any page in this

@@ -75,7 +75,7 @@ mod tests {
             fields: fields.iter().map(|f| f.to_string()).collect(),
             title: key.to_string(),
             is_place: false,
-            parents: Default::default(),
+            parents: Default::default(), explorer: None,
         }
     }
 

@@ -39,6 +39,32 @@ pub struct PlaceMapRenderContext {
     /// the raw gazetteer, so a parent-chain cycle is fixed in exactly one
     /// place rather than risking a second, differently-capped repair here.
     parents: BTreeMap<String, String>,
+    /// `TermKind::explorer_enabled()` for this build's place-typed kind,
+    /// captured once at construction (`pipeline.rs`) from the same `kinds`
+    /// table `namespace`/`parents` already came from. `render_term_map`
+    /// reads this rather than re-reading config, so the injection predicate
+    /// (`features::should_inject_places_explorer`) and the markup handshake
+    /// below can never resolve the default differently.
+    explorer: bool,
+    /// The `_moss/map.<hash>/` directory name for this build's world map and
+    /// regional tiles (`emit::place_map_assets::assets_hash`) — a pure
+    /// function of the pack and the gazetteer, so unlike
+    /// `explorer_places_hash` below it is known at construction, before any
+    /// document is parsed. Empty only when nothing has set it (no
+    /// `with_map_assets_hash` call), which `with_explorer_handshake` reads
+    /// as "not ready" the same way it reads a `None` places hash.
+    map_assets_hash: String,
+    /// `places.<hash>.json`'s content hash, set once `derive_terms` has
+    /// produced this build's finished document set
+    /// (`render::blocking::generate_blocking_content_for_build`, right after
+    /// the pass that fills `ParsedDocument::location`/`byline` for the last
+    /// time) — `None` until then. `render_term_map` only emits the
+    /// `data-moss-places-explorer` handshake once this is `Some`, so a
+    /// namespace root rendered before the hash exists (there is no such
+    /// call site today, but nothing stops a future one) degrades to the
+    /// plain static figure instead of baking in a hash the build might not
+    /// actually write.
+    explorer_places_hash: Option<String>,
 }
 
 impl PlaceMapRenderContext {
@@ -49,7 +75,44 @@ impl PlaceMapRenderContext {
         locator: LocatorPlacement,
         parents: BTreeMap<String, String>,
     ) -> Self {
-        Self { maps, gazetteer: Arc::new(gazetteer), namespace, locator, parents }
+        Self {
+            maps,
+            gazetteer: Arc::new(gazetteer),
+            namespace,
+            locator,
+            parents,
+            explorer: true,
+            map_assets_hash: String::new(),
+            explorer_places_hash: None,
+        }
+    }
+
+    /// `TermKind::explorer_enabled()` for the place-typed kind this context
+    /// was built from. Chained onto `new()` rather than widened into it so
+    /// every existing call site (several in this crate's own tests) keeps
+    /// compiling unchanged.
+    pub fn with_explorer(mut self, explorer: bool) -> Self {
+        self.explorer = explorer;
+        self
+    }
+
+    /// This build's `_moss/map.<hash>/` directory name
+    /// (`emit::place_map_assets::assets_hash`) — set once, at construction,
+    /// since unlike the places hash it needs nothing documents haven't
+    /// provided yet.
+    pub fn with_map_assets_hash(mut self, hash: String) -> Self {
+        self.map_assets_hash = hash;
+        self
+    }
+
+    /// `places.<hash>.json`'s content hash, set once the caller's own
+    /// `place_map::places_data::emit_places_data` call (over the SAME
+    /// finished document set `places_data::emit` serializes to disk) has
+    /// produced it. See [`Self::explorer_places_hash`]'s own doc for why
+    /// this is a late `with_*` rather than a `new()` parameter.
+    pub fn with_explorer_places_hash(mut self, hash: String) -> Self {
+        self.explorer_places_hash = Some(hash);
+        self
     }
 
     pub fn is_place_key(&self, key: &str) -> bool {
@@ -134,7 +197,42 @@ impl PlaceMapRenderContext {
             let label = key.strip_prefix(&format!("{}/", self.namespace)).unwrap_or(&self.namespace);
             self.aggregate(key, label, members)
         };
-        target.has_coordinates().then(|| super::emit_svg(&self.maps, &target, page_path, ordinal))
+        let svg = target.has_coordinates().then(|| super::emit_svg(&self.maps, &target, page_path, ordinal))?;
+        Some(self.with_explorer_handshake(key, svg))
+    }
+
+    /// Splice the places-explorer handshake attributes onto the figure's
+    /// opening tag when `key` is the bare namespace root and every piece the
+    /// runtime needs is ready: the explorer is on, and both hashes have been
+    /// set. `emit_svg` is the sole writer of `<figure class="moss-place-map"
+    /// ...>` (its own module doc), and this is the only other place that
+    /// touches that opening tag — never a second spot that could disagree
+    /// about the URLs. A sub-place's own map (`key` holds a `/`) is left
+    /// untouched: the explorer scopes to the root, so a claimed place's
+    /// embed stays exactly the no-JavaScript figure it always was.
+    fn with_explorer_handshake(&self, key: &str, svg: String) -> String {
+        if key != self.namespace || !self.explorer || self.map_assets_hash.is_empty() {
+            return svg;
+        }
+        let Some(places_hash) = self.explorer_places_hash.as_deref() else { return svg };
+        let (Ok(world), Ok(tiles)) = (
+            crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "world.svg"),
+            crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "tiles.json"),
+        ) else {
+            return svg;
+        };
+        let places = crate::build::served_path::ServedPath::for_places_data_hashed(places_hash);
+        svg.replacen(
+            "<figure class=\"moss-place-map\"",
+            &format!(
+                "<figure class=\"moss-place-map\" data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-scope=\"{}\"",
+                world.to_relative_url(),
+                tiles.to_relative_url(),
+                places.to_relative_url(),
+                self.namespace,
+            ),
+            1,
+        )
     }
 
     fn aggregate<'a>(
@@ -535,7 +633,7 @@ mod tests {
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
             is_place: true,
-            parents: Default::default(),
+            parents: Default::default(), explorer: None,
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gaz);
         let maps = PlaceMapContext::new(super::super::embedded().unwrap());
@@ -546,5 +644,61 @@ mod tests {
             context.lies_under("Leaf", "places/p8"),
             "the repaired chain still reaches P8 past the cut cycle edge"
         );
+    }
+
+    fn located_doc(name: &str) -> crate::build::types::ParsedDocument {
+        crate::build::types::ParsedDocument {
+            location: vec![name.to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn ready_root_context() -> PlaceMapRenderContext {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        PlaceMapRenderContext::new(maps, gazetteer(), "places".into(), LocatorPlacement::None, BTreeMap::new())
+            .with_explorer(true)
+            .with_map_assets_hash("abc123".into())
+            .with_explorer_places_hash("def456".into())
+    }
+
+    #[test]
+    fn root_map_carries_the_explorer_handshake_when_everything_is_ready() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor")];
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0).unwrap();
+        assert!(html.contains("data-moss-places-explorer"), "{html:.200}");
+        assert!(html.contains("data-world=\"/_moss/map.abc123/world.svg\""), "{html:.200}");
+        assert!(html.contains("data-tiles=\"/_moss/map.abc123/tiles.json\""), "{html:.200}");
+        assert!(html.contains("data-places=\"/_moss/places.def456.json\""), "{html:.200}");
+        assert!(html.contains("data-scope=\"places\""), "{html:.200}");
+    }
+
+    #[test]
+    fn sub_place_map_never_carries_the_handshake() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor East")];
+        let html = context
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0)
+            .unwrap();
+        assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
+    }
+
+    #[test]
+    fn explorer_off_leaves_the_root_map_untouched() {
+        let context = ready_root_context().with_explorer(false);
+        let docs = [located_doc("Harbor")];
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0).unwrap();
+        assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
+    }
+
+    #[test]
+    fn missing_places_hash_leaves_the_root_map_untouched() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(maps, gazetteer(), "places".into(), LocatorPlacement::None, BTreeMap::new())
+            .with_explorer(true)
+            .with_map_assets_hash("abc123".into());
+        let docs = [located_doc("Harbor")];
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0).unwrap();
+        assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
     }
 }

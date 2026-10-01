@@ -85,6 +85,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         source: include_str!("../../assets/css/site/vertical.css"),
         gate: |a| a.vertical,
     },
+    CssPartial {
+        name: "places-explorer",
+        source: include_str!("../../assets/css/site/places-explorer.css"),
+        gate: |a| a.places_explorer,
+    },
 ];
 
 /// The core stylesheet — everything not behind a gate.

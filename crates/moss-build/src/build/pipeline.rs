@@ -1294,16 +1294,28 @@ fn build_inner(
     let place_maps = kinds
         .iter()
         .find(|kind| kind.is_place)
-        .map(|kind| (kind.key.clone(), kind.parents.clone()))
-        .and_then(|(namespace, parents)| {
+        .map(|kind| (kind.key.clone(), kind.parents.clone(), kind.explorer_enabled()))
+        .and_then(|(namespace, parents, explorer)| {
             match crate::build::place_map::PlaceMapContext::embedded() {
-                Ok(maps) => Some(crate::build::place_map::PlaceMapRenderContext::new(
-                    maps,
-                    gazetteer,
-                    namespace,
-                    crate::build::place_map::LocatorPlacement::from_config(site_str("locator").as_deref()),
-                    parents,
-                )),
+                Ok(maps) => {
+                    // Pure function of the pack and the gazetteer (see its
+                    // own doc), so known before any document is parsed —
+                    // unlike the places-explorer data hash, which needs
+                    // `derive_terms`'s finished output and is set later, in
+                    // `generate_blocking_content_for_build`.
+                    let map_assets_hash = crate::build::emit::place_map_assets::assets_hash(&maps, &gazetteer);
+                    Some(
+                        crate::build::place_map::PlaceMapRenderContext::new(
+                            maps,
+                            gazetteer,
+                            namespace,
+                            crate::build::place_map::LocatorPlacement::from_config(site_str("locator").as_deref()),
+                            parents,
+                        )
+                        .with_explorer(explorer)
+                        .with_map_assets_hash(map_assets_hash),
+                    )
+                }
                 Err(error) => {
                     crate::build::cli_output::log_warn_problem!("bundled place-map data could not be decoded ({error:?}); omitting maps");
                     None

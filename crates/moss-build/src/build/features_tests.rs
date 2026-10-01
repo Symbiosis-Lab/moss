@@ -2367,3 +2367,62 @@ fn footer_survives_a_build_that_could_not_read_footer_md() {
         "the footer must not go blank site-wide just because this build could not read footer.md"
     );
 }
+
+// ===== should_inject_places_explorer helper =====
+
+use crate::build::render::SiteConfig;
+use crate::build::terms::{derive_terms, TermIndex, TermKind};
+
+fn site_config_with_kinds(kinds: Vec<TermKind>) -> SiteConfig {
+    SiteConfig { term_kinds: kinds, ..SiteConfig::default() }
+}
+
+fn place_kind(explorer: Option<bool>) -> TermKind {
+    TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: Default::default(),
+        explorer,
+    }
+}
+
+/// A term index with the `places` namespace root in use — reached only
+/// through a member's `location:` field, exactly as a SYNTHETIC root is
+/// (no `ParsedDocument` ever carries `is_place_namespace_root` here). The
+/// real-root case needs no separate fixture: `place_namespace_roots` cannot
+/// tell a claimed root from an unclaimed one apart, by design.
+fn index_with_place_root_in_use(kinds: Vec<TermKind>) -> TermIndex {
+    let mut docs = vec![page_with_features(PageFeatures::default())];
+    docs[0].location = vec!["Harbor".to_string()];
+    derive_terms(&mut docs, kinds)
+}
+
+#[test]
+fn no_place_kind_never_injects() {
+    let config = site_config_with_kinds(Vec::new());
+    let index = index_with_place_root_in_use(Vec::new());
+    assert!(!crate::build::features::should_inject_places_explorer(&index, &config));
+}
+
+#[test]
+fn place_kind_with_no_root_in_use_does_not_inject() {
+    let config = site_config_with_kinds(vec![place_kind(None)]);
+    let index = derive_terms(&mut [page_with_features(PageFeatures::default())], config.term_kinds.clone());
+    assert!(!crate::build::features::should_inject_places_explorer(&index, &config));
+}
+
+#[test]
+fn place_kind_default_explorer_with_a_synthetic_root_injects() {
+    let config = site_config_with_kinds(vec![place_kind(None)]);
+    let index = index_with_place_root_in_use(config.term_kinds.clone());
+    assert!(crate::build::features::should_inject_places_explorer(&index, &config));
+}
+
+#[test]
+fn explorer_false_suppresses_injection_even_with_a_synthetic_root() {
+    let config = site_config_with_kinds(vec![place_kind(Some(false))]);
+    let index = index_with_place_root_in_use(config.term_kinds.clone());
+    assert!(!crate::build::features::should_inject_places_explorer(&index, &config));
+}

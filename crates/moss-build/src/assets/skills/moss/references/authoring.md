@@ -296,6 +296,8 @@ A place namespace, parent, or leaf can also be embedded explicitly with `style:m
 
 A place's page — its own leaf (`/places/kyoto/`), or an ancestor reached only through roll-up (`/places/japan/`, with no page of its own naming it directly) — embeds as a listing anywhere in the body the same way a real folder does: `![[/places/kyoto/|style:grid]]`. Nothing on disk backs that path; it resolves through the same term membership the page itself is built from, member order included, whether the page underneath is generated or claimed with `place_page:`.
 
+A place namespace's root page can also carry an interactive explorer layered over the same offline map — on by default, turned off with `explorer = false` in that kind's `[terms.<key>]` table (`places`, or whatever key you declared `type = "place"` on). The key is read only for a place-typed kind; setting it elsewhere is silently ignored rather than an error.
+
 ### Long archives
 
 moss has **no pagination**: no `paginate:`, no `offset`, no `/page/2/`. Do not

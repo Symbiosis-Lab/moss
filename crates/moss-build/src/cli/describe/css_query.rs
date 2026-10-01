@@ -219,6 +219,9 @@ fn shipping_note(sheet: &str) -> &'static str {
              render nothing below a 76rem viewport"
         }
         "site/vertical.css" => "shipped only when some page uses vertical typesetting",
+        "site/places-explorer.css" => {
+            "shipped only when the site has a place-typed namespace root with the explorer on"
+        }
         "comments.css" => "linked only when the site has synced comments",
         "email.css" => {
             "linked only when the email channel is installed or a page has :::subscribe / :::apply"
