@@ -4,6 +4,30 @@
 
 use url::Url;
 
+/// `Accept` header for a media/asset download — asks for the file as
+/// uploaded, not a format the server might substitute for it.
+///
+/// ureq's own default is `Accept: */*` (sent whenever a request sets no
+/// `Accept` of its own), and on at least one real CDN that default is enough
+/// on its own to trigger auto-transcoding: a Squarespace image request with
+/// `Accept: */*` comes back `image/webp` even with `?format=original` on the
+/// URL (see `original_media_url`'s doc comment — the query never controlled
+/// this), while the same request with no `Accept` header, or one that
+/// doesn't mention WebP/AVIF, gets the real uploaded JPEG back. Verified
+/// against the live CDN that `;q=0` does NOT suppress this — `image/webp;q=0`
+/// alone still comes back as WebP, so the fix is to never name `image/webp`
+/// or `image/avif` in the header at all, not to down-rank them.
+///
+/// `image/*` asks for any image format by name (satisfying that CDN's
+/// negotiation without mentioning the two it auto-converts to), and the
+/// trailing low-priority `*/*` is the same permissive fallback a real
+/// browser sends, so a non-negotiating host (plain file server, a CDN that
+/// ignores `Accept` entirely) serves exactly what it already serves any
+/// other client — verified byte-identical against a Wikimedia upload URL, a
+/// WordPress-hosted upload, and a Jetpack Photon URL with and without this
+/// header.
+pub(crate) const MEDIA_ACCEPT: &str = "image/*,*/*;q=0.1";
+
 /// Query keys that are image-transform hints (resize/crop/quality), shared
 /// by rmcdn, imgix, wsrv and countless custom CDNs.
 const TRANSFORM_KEYS: &[&str] = &[
@@ -45,15 +69,16 @@ struct OriginalMediaRule {
 /// `format=2500w` both return the same 2500px-capped rendition, and
 /// `format=original` is not documented as exceeding that cap either.
 /// Verified against a live corpus image, it doesn't: same 2500px width.
-/// What it does do is skip the CDN's own-format rendition pipeline, which
-/// otherwise auto-transcodes to WebP — `format=original` returns the
-/// uploaded file's actual bytes (JPEG here) at that width, one lossy
-/// re-encode removed. Combined with collapsing every query variant of one
-/// photo (bare, `?format=750w`, `?format=2500w`, …) onto a single
-/// canonical URL — which is what lets the asset pass dedupe by URL and
-/// download once instead of once per variant referenced on the page —
-/// that's this row's real, verified payoff: a cleaner file at the same
-/// resolution, not a resolution increase.
+///
+/// It does NOT, on its own, avoid the CDN's WebP transcoding — that is
+/// decided by the request's `Accept` header, not the query (see
+/// [`MEDIA_ACCEPT`]; a prior version of this comment claimed otherwise and
+/// was wrong, because it was tested only with the download path's actual
+/// `Accept` header, which was the real cause). This rule's real, verified
+/// payoff is collapsing every query variant of one photo (bare,
+/// `?format=750w`, `?format=2500w`, …) onto a single canonical URL, which is
+/// what lets the asset pass dedupe by URL and download once instead of once
+/// per variant referenced on the page.
 const ORIGINAL_MEDIA_RULES: &[OriginalMediaRule] = &[
     OriginalMediaRule {
         host: "images.squarespace-cdn.com",

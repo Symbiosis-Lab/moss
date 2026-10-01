@@ -772,12 +772,18 @@ const MAX_REDIRECT_HOPS: u32 = 5;
 /// relative) before being checked and followed. A 3xx with no `Location`,
 /// or one that fails to parse even as a relative reference, is returned
 /// as-is rather than chased.
+///
+/// `accept`, when given, is sent as the `Accept` header on every hop
+/// (including the start URL) — see [`crate::vault::import::media::MEDIA_ACCEPT`].
+/// `None` leaves ureq's own default (`Accept: */*`) in place, for a page
+/// fetch.
 fn fetch_with_validated_redirects(
     agent: &ureq::Agent,
     start_url: &str,
     user_agent: &str,
+    accept: Option<&str>,
 ) -> Result<ureq::Response, ureq::Error> {
-    fetch_following_redirects(agent, start_url, user_agent, refuse_unsafe_scrape_url)
+    fetch_following_redirects(agent, start_url, user_agent, accept, refuse_unsafe_scrape_url)
 }
 
 /// [`fetch_with_validated_redirects`]'s body, taking the per-hop validator as
@@ -787,13 +793,26 @@ fn fetch_with_validated_redirects(
 /// test server a unit test can stand up is itself a loopback address, so a
 /// test proving a legitimate same-host redirect is still followed cannot
 /// use the real policy without tripping its own loopback refusal. Production
-/// always calls the two-argument wrapper above, which always wires in the
-/// real policy; no caller outside this file's tests should call this
-/// directly.
+/// always calls the [`fetch_with_validated_redirects`] wrapper above, which
+/// always wires in the real policy; no caller outside this file's tests
+/// should call this directly.
+///
+/// On an asset download (`accept` is `Some`), every redirect target also
+/// goes through [`crate::vault::import::media::original_media_url`] before
+/// it is validated or followed — the single place that rewrite applies to a
+/// hop, so a CDN row never needs to be re-applied by each caller. Without
+/// it, a `static1.squarespace.com` URL this function was handed already
+/// rewritten (by the caller, before the URL was ever committed to markdown)
+/// 301s to `images.squarespace-cdn.com` with a plain `content-type=` query
+/// that dropped the rewrite, and that redirect target would download
+/// un-rewritten. A page fetch (`accept: None`) never applies this rewrite —
+/// it has no media URL to canonicalize, and the two ruled hosts are
+/// asset-only CDNs no page redirect has a legitimate reason to land on.
 fn fetch_following_redirects(
     agent: &ureq::Agent,
     start_url: &str,
     user_agent: &str,
+    accept: Option<&str>,
     validate: impl Fn(&str) -> Result<(), String>,
 ) -> Result<ureq::Response, ureq::Error> {
     // 400: a permanent, never-retried refusal (`should_retry_status` only
@@ -813,7 +832,11 @@ fn fetch_following_redirects(
 
     let mut current = start_url.to_string();
     for _ in 0..=MAX_REDIRECT_HOPS {
-        let response = agent.get(&current).set("User-Agent", user_agent).call()?;
+        let mut req = agent.get(&current).set("User-Agent", user_agent);
+        if let Some(accept) = accept {
+            req = req.set("Accept", accept);
+        }
+        let response = req.call()?;
         if !(300..400).contains(&response.status()) {
             return Ok(response);
         }
@@ -823,6 +846,16 @@ fn fetch_following_redirects(
         let next = match url::Url::parse(&current).and_then(|base| base.join(location)) {
             Ok(joined) => joined.to_string(),
             Err(_) => return Ok(response),
+        };
+        // Re-canonicalize the hop the same way the pre-download rewrite
+        // does (see this function's doc comment) — a redirect can land on a
+        // ruled CDN host carrying a query the table never produced. Scoped
+        // to asset downloads: a page fetch (`accept: None`) has no media
+        // URL to canonicalize and must not have one invented for it.
+        let next = if accept.is_some() {
+            crate::vault::import::media::original_media_url(&next).unwrap_or(next)
+        } else {
+            next
         };
         if let Err(msg) = validate(&next) {
             return Err(refused(&format!("redirected to a disallowed URL: {msg}")));
@@ -840,11 +873,16 @@ fn fetch_following_redirects(
 /// Note: ureq maps any non-2xx response to `Error::Status` on `.call()`
 /// itself, so this single retry loop also replaces what used to be a
 /// separate manual `status >= 400` check in `fetch_page`.
+///
+/// `accept` is forwarded to [`fetch_with_validated_redirects`] unchanged —
+/// `None` for a page fetch (ureq's own `Accept: */*` default), `Some(
+/// media::MEDIA_ACCEPT)` for an asset download.
 fn call_with_retry_n(
     url: &str,
     user_agent: &str,
     timeout: std::time::Duration,
     tries: u32,
+    accept: Option<&str>,
 ) -> Result<ureq::Response, String> {
     let mut last_err = String::new();
     for attempt in 0..tries {
@@ -859,7 +897,7 @@ fn call_with_retry_n(
         // (see `fetch_with_validated_redirects`) rather than trusting
         // ureq's own follower, which never re-checks a Location header.
         let agent = crate::system::proxy::proxied_ureq_agent_no_redirects(url, timeout);
-        match fetch_with_validated_redirects(&agent, url, user_agent) {
+        match fetch_with_validated_redirects(&agent, url, user_agent, accept) {
             Ok(resp) => return Ok(resp),
             Err(ureq::Error::Status(code, resp)) => {
                 let text = format!("{} {}", code, resp.status_text());
@@ -883,19 +921,24 @@ fn call_with_retry(
     url: &str,
     user_agent: &str,
     timeout: std::time::Duration,
+    accept: Option<&str>,
 ) -> Result<ureq::Response, String> {
     const TRIES: u32 = 3;
-    call_with_retry_n(url, user_agent, timeout, TRIES)
+    call_with_retry_n(url, user_agent, timeout, TRIES, accept)
 }
 
 /// Fetch a page's body, alongside its declared Content-Type — the caller
 /// decides whether the response is a page worth importing at all
 /// ([`looks_like_html_page`]) before doing anything else with the body.
+///
+/// `accept: None` — a page fetch is never asked to localize a transcoded
+/// variant, so it keeps ureq's own `Accept: */*` default unchanged.
 async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, String), String> {
     let url = url.to_string();
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
-        let response = call_with_retry(&url, &user_agent, std::time::Duration::from_secs(30))?;
+        let response =
+            call_with_retry(&url, &user_agent, std::time::Duration::from_secs(30), None)?;
         let content_type = response.content_type().to_string();
 
         response
@@ -928,8 +971,13 @@ pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u
     let url = url.to_string();
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
-        let response =
-            call_with_retry_n(&url, &user_agent, std::time::Duration::from_secs(15), 1)?;
+        let response = call_with_retry_n(
+            &url,
+            &user_agent,
+            std::time::Duration::from_secs(15),
+            1,
+            None,
+        )?;
         let mut buf = Vec::new();
         response
             .into_reader()
@@ -974,8 +1022,15 @@ async fn download_asset(
     let user_agent = user_agent.to_string();
 
     tokio::task::spawn_blocking(move || {
-        let response =
-            call_with_retry(&url_clone, &user_agent, std::time::Duration::from_secs(60))?;
+        // `Some(MEDIA_ACCEPT)`: a media download wants the file as uploaded,
+        // not whatever format a negotiating CDN would substitute for ureq's
+        // own `Accept: */*` default — see that constant's doc comment.
+        let response = call_with_retry(
+            &url_clone,
+            &user_agent,
+            std::time::Duration::from_secs(60),
+            Some(crate::vault::import::media::MEDIA_ACCEPT),
+        )?;
 
         let hash = hash_url(&url_clone);
         let content_type = response.content_type();
@@ -1826,7 +1881,7 @@ Content-Location: https://img.douban.com/a.png\r\n\
 
         let start = format!("{}/start", server.url());
         let agent = no_redirect_test_agent(&start);
-        let err = fetch_with_validated_redirects(&agent, &start, "test-agent")
+        let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None)
             .expect_err("a redirect to a loopback address must be refused");
         // Not just `.expect_err(...)`: an ablated per-hop check would still
         // ATTEMPT the connection to 127.0.0.1:1 and get a real connection
@@ -1848,7 +1903,7 @@ Content-Location: https://img.douban.com/a.png\r\n\
 
         let start = format!("{}/start", server.url());
         let agent = no_redirect_test_agent(&start);
-        let err = fetch_with_validated_redirects(&agent, &start, "test-agent")
+        let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None)
             .expect_err("a redirect to the cloud-metadata address must be refused");
         // Asserting the detail (not just "some Err") matters here: an
         // ablated check would still connect-fail refusing this unroutable
@@ -1869,7 +1924,7 @@ Content-Location: https://img.douban.com/a.png\r\n\
 
         let start = format!("{}/start", server.url());
         let agent = no_redirect_test_agent(&start);
-        let err = fetch_with_validated_redirects(&agent, &start, "test-agent")
+        let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None)
             .expect_err("a redirect to ::1 must be refused");
         assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
     }
@@ -1902,7 +1957,7 @@ Content-Location: https://img.douban.com/a.png\r\n\
 
         let start = format!("{}/old-path", server.url());
         let agent = no_redirect_test_agent(&start);
-        let response = fetch_following_redirects(&agent, &start, "test-agent", |_| Ok(()))
+        let response = fetch_following_redirects(&agent, &start, "test-agent", None, |_| Ok(()))
             .expect("a legitimate redirect must still be followed");
         assert_eq!(response.status(), 200);
     }
@@ -1924,8 +1979,134 @@ Content-Location: https://img.douban.com/a.png\r\n\
 
         let start = format!("{}/hop0", server.url());
         let agent = no_redirect_test_agent(&start);
-        fetch_with_validated_redirects(&agent, &start, "test-agent")
+        fetch_with_validated_redirects(&agent, &start, "test-agent", None)
             .expect_err("a chain past MAX_REDIRECT_HOPS must be refused, not followed forever");
+    }
+
+    // ── media Accept header (CDN content negotiation, not SSRF) ─────────
+    //
+    // Reproduced against the real `images.squarespace-cdn.com` /
+    // `static1.squarespace.com` pattern: a request with ureq's own default
+    // `Accept: */*` comes back `image/webp` even with `?format=original` on
+    // the URL; the same request with no `Accept` header, or one that never
+    // names `image/webp`/`image/avif`, gets the real uploaded file back.
+    // These paths are invented reductions of that host pattern, not a real
+    // site's URLs.
+
+    #[tokio::test]
+    async fn a_media_download_sends_the_media_accept_header() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/content/v1/abc/def/photo.jpg")
+            .match_header("accept", crate::vault::import::media::MEDIA_ACCEPT)
+            .with_status(200)
+            .with_header("content-type", "image/jpeg")
+            .with_body(b"\xff\xd8\xff\xe0fake-jpeg-bytes".as_slice())
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let url = format!("{}/content/v1/abc/def/photo.jpg", server.url());
+        download_asset(&url, tmp.path(), "test-agent")
+            .await
+            .expect("mock only matches the request carrying MEDIA_ACCEPT; an \
+                     unmatched mockito request errors instead of 200-ing");
+    }
+
+    #[tokio::test]
+    async fn a_page_fetch_keeps_the_default_accept_header() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/article")
+            // ureq's own default, unchanged by this fix — a page fetch must
+            // never carry MEDIA_ACCEPT.
+            .match_header("accept", "*/*")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>ok</body></html>")
+            .create_async()
+            .await;
+
+        let url = format!("{}/article", server.url());
+        fetch_page(&url, "test-agent")
+            .await
+            .expect("mock only matches Accept: */*; a page fetch must still send it");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_target_on_a_ruled_host_is_rewritten_before_validation() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/start")
+            .with_status(302)
+            .with_header(
+                "Location",
+                "https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=750w",
+            )
+            .create_async()
+            .await;
+
+        let start = format!("{}/start", server.url());
+        let agent = no_redirect_test_agent(&start);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let seen_clone = seen.clone();
+        // A validator that always refuses: this test is about what URL the
+        // rewrite hook hands the validator, not the SSRF policy (proven
+        // separately) or an actual connection to a live CDN. `accept:
+        // Some(..)` is what an asset download actually passes — this is the
+        // only caller the rewrite applies to.
+        let err = fetch_following_redirects(
+            &agent,
+            &start,
+            "test-agent",
+            Some(crate::vault::import::media::MEDIA_ACCEPT),
+            move |u: &str| {
+                *seen_clone.lock().unwrap() = Some(u.to_string());
+                Err("refused for test".to_string())
+            },
+        )
+        .expect_err("the validator always refuses");
+        assert!(refusal_detail(&err).contains("refused for test"));
+        assert_eq!(
+            seen.lock().unwrap().as_deref(),
+            Some("https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=original"),
+            "the redirect target must be canonicalized by original_media_url \
+             before it reaches the validator, same as the pre-download rewrite"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_page_fetch_redirect_is_never_rewritten_even_on_a_ruled_host() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/start")
+            .with_status(302)
+            .with_header(
+                "Location",
+                "https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=750w",
+            )
+            .create_async()
+            .await;
+
+        let start = format!("{}/start", server.url());
+        let agent = no_redirect_test_agent(&start);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let seen_clone = seen.clone();
+        // `accept: None` — a page fetch, same as `fetch_page` passes. The
+        // rewrite hook must not fire just because the redirect target
+        // happens to land on a host the media table rules on.
+        let err = fetch_following_redirects(&agent, &start, "test-agent", None, move |u: &str| {
+            *seen_clone.lock().unwrap() = Some(u.to_string());
+            Err("refused for test".to_string())
+        })
+        .expect_err("the validator always refuses");
+        assert!(refusal_detail(&err).contains("refused for test"));
+        assert_eq!(
+            seen.lock().unwrap().as_deref(),
+            Some("https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=750w"),
+            "a page fetch must see the redirect target exactly as the server sent it, \
+             never canonicalized onto the media table's query"
+        );
     }
 
     // ── sitemap discovery (a crawl that only follows links never reaches a
