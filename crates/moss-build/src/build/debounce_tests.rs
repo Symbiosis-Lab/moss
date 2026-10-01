@@ -144,3 +144,88 @@ async fn evict_keeps_a_pending_lane_and_removes_it_once_settled() {
     lanes.evict(&key);
     assert!(!lanes.has_lane(&key), "a settled lane must be evicted");
 }
+
+// ── The derived-work gate ───────────────────────────────────────────────────
+
+use crate::ops::watch::cadence::Cadence;
+
+/// The cadence every gated test lane follows. Shared, so each test sets it
+/// first and holds `TEST_LOCK` throughout.
+static CADENCE: std::sync::LazyLock<watch::Sender<Cadence>> =
+    std::sync::LazyLock::new(|| watch::channel(Cadence::Live).0);
+
+fn follow_test_cadence(_: &u32) -> DerivedWorkGate {
+    DerivedWorkGate::following(CADENCE.subscribe())
+}
+
+/// While nobody is looking, a quiesced request must stay pending however long
+/// the wait, and newer requests must still replace it. The flip to `Live` then
+/// runs exactly one pass, over the latest request, without a second idle wait.
+#[tokio::test(start_paused = true)]
+async fn a_closed_gate_holds_the_pass_until_live_then_runs_it_once_with_the_latest() {
+    let _serialize = TEST_LOCK.lock().await;
+    CALLS.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    CADENCE.send_replace(Cadence::Background);
+    let lanes = Lanes::new(Duration::from_secs(20), Duration::from_secs(120), record)
+        .with_gate(follow_test_cadence);
+    let key = PathBuf::from("/vault-gated");
+
+    for i in 0..3u32 {
+        lanes.request(&key, i);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(600)).await;
+    assert!(calls().is_empty(), "nothing may run while the gate is closed");
+    assert!(lanes.is_pending(&key), "the latest request must stay pending");
+
+    CADENCE.send_replace(Cadence::Live);
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!(calls(), vec![2], "the flip to Live must run one pass, over the latest request");
+
+    tokio::time::sleep(Duration::from_secs(600)).await;
+    assert_eq!(calls(), vec![2], "and only one");
+}
+
+/// A forced settle (publish, quit, folder switch) must not wait for the window
+/// to become visible.
+#[tokio::test(start_paused = true)]
+async fn settle_now_runs_a_pending_request_while_the_gate_is_closed() {
+    let _serialize = TEST_LOCK.lock().await;
+    CALLS.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    CADENCE.send_replace(Cadence::Background);
+    let lanes = Lanes::new(Duration::from_secs(20), Duration::from_secs(120), record)
+        .with_gate(follow_test_cadence);
+    let key = PathBuf::from("/vault-gated-settle");
+
+    lanes.request(&key, 9);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    lanes.settle_now(&key).await;
+    assert_eq!(calls(), vec![9]);
+
+    CADENCE.send_replace(Cadence::Live);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(calls(), vec![9], "the settled request must not run again when the gate opens");
+}
+
+/// A lane evicted while its pass waits on a closed gate (a forced settle took
+/// the request, then the session ended) must exit, not linger until the window
+/// is visible again.
+#[tokio::test(start_paused = true)]
+async fn evicting_a_lane_that_waits_on_a_closed_gate_ends_its_task() {
+    let _serialize = TEST_LOCK.lock().await;
+    CALLS.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    CADENCE.send_replace(Cadence::Background);
+    let lanes = Lanes::new(Duration::from_secs(20), Duration::from_secs(120), record)
+        .with_gate(follow_test_cadence);
+    let key = PathBuf::from("/vault-gated-evict");
+
+    lanes.request(&key, 5);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let lane = lanes.lane_handle(&key).expect("the lane exists");
+    lanes.settle_now(&key).await;
+    lanes.evict(&key);
+    assert!(!lanes.has_lane(&key));
+
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert!(lane.upgrade().is_none(), "the evicted lane's task must have exited");
+}

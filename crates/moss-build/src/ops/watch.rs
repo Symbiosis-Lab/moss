@@ -90,7 +90,8 @@ pub struct WatchConfig {
     pub dispatch: RebuildDispatch,
     pub attempt: RebuildAttempt,
     /// Live/Background — races the reconcile timer's sleep against a
-    /// change instead of ticking on a fixed `Duration`. A headless host
+    /// change instead of ticking on a fixed `Duration`, and gates the
+    /// folder's derived work (`FolderSession::derived_work_gate`). A headless host
     /// with no visibility signal passes a constant `Live` receiver (see
     /// `headless::start`); the GUI passes the real, live-updating one.
     pub cadence: tokio::sync::watch::Receiver<cadence::Cadence>,
@@ -226,6 +227,13 @@ pub async fn start(config: WatchConfig) {
     // records liveness into it, the sweep judges strikes against it, and the
     // session loop below executes its recreate verdicts.
     let health = supervision::register(&folder_path);
+
+    // Derived work (the debounced seal, search) waits on this cadence while
+    // nobody is looking. The host registers the session before its watch
+    // starts; without one the gate stays open, which is today's behavior.
+    if let Some(session) = crate::system::folder_session::registry().get(&folder_path) {
+        session.follow_cadence(cadence.clone());
+    }
 
     drop(spawner.spawn(Box::pin(async move {
         /// Why one watcher session ended — decides whether the next begins.

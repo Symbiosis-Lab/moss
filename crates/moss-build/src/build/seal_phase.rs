@@ -56,7 +56,7 @@ use crate::build::feeds::search_lane::Freshness;
 use crate::build::manifest::SealedManifest;
 use crate::build::ship::ShipVerdict;
 use crate::moss_paths::MossPaths;
-use crate::system::folder_session::FolderSession;
+use crate::system::folder_session::{DerivedWorkGate, FolderSession};
 
 /// Quiet period a sealed generation must survive before it materializes. Same
 /// value as the search lane's own (pre-extraction) window — long enough that
@@ -113,9 +113,21 @@ pub(crate) struct PendingSeal {
 }
 
 /// One debounce lane per open folder (`.moss` directory), keyed the same way
-/// `search_lane`'s own lanes used to be.
-static LANES: LazyLock<Lanes<PendingSeal>> =
-    LazyLock::new(|| Lanes::new(IDLE, MAX_DEFER, dispatch_materialize_phase));
+/// `search_lane`'s own lanes used to be. While the folder's derived-work gate
+/// is closed (nobody is looking) a quiesced seal stays pending instead of
+/// materializing; see `system/folder_session/derived_work.rs`. The cache
+/// sweep waits with it, since a pending seal holds its cache lease.
+static LANES: LazyLock<Lanes<PendingSeal>> = LazyLock::new(|| {
+    Lanes::new(IDLE, MAX_DEFER, dispatch_materialize_phase).with_gate(seal_gate)
+});
+
+fn seal_gate(req: &PendingSeal) -> DerivedWorkGate {
+    let gate = DerivedWorkGate::of(req.session.as_ref());
+    if gate.is_closed() {
+        log::debug!("materialize deferred until the window is visible again");
+    }
+    gate
+}
 
 /// Plain-fn adapter `build::debounce::Handler<PendingSeal>` needs: `Lanes`
 /// stores a function pointer (see its own doc), so the actual async body

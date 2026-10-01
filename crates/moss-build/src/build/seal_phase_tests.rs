@@ -395,3 +395,70 @@ async fn an_earlier_generation_that_is_not_whole_is_copied_again() {
         "a generation whose copy was cut off must be copied again in full"
     );
 }
+
+/// The seal is derived work: while nobody is looking a sealed build stays
+/// pending behind the folder's gate, and a forced settle (a publish, a quit, a
+/// folder switch) still materializes it at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hidden_window_holds_the_seal_behind_the_gate_and_settle_still_runs_it() {
+    use crate::ops::watch::cadence::Cadence;
+    let vault = Vault::new();
+    let (_cadence, rx) = tokio::sync::watch::channel(Cadence::Background);
+    vault.session.follow_cadence(rx);
+
+    vault.build().await;
+    vault.drained().await;
+    let gate = LANES.pending_gate(vault.mp.root()).expect("the seal must be pending");
+    assert!(gate.is_closed(), "a hidden window must hold the seal behind the folder's gate");
+
+    settle(&vault.mp).await;
+    assert!(vault.mp.current_generation_id().is_ok(), "settle must materialize whatever the gate says");
+}
+
+/// Once the window is visible again, the held seal runs and its own tail asks
+/// search for exactly one index of the generation it promoted.
+///
+/// On a current-thread runtime so the 20 s idle window can be skipped on the
+/// paused clock; the builds themselves run on real time.
+#[tokio::test(flavor = "current_thread")]
+async fn the_flush_on_live_runs_the_held_seal_then_one_index() {
+    use crate::build::feeds::search_lane::PageSet;
+    use crate::ops::watch::cadence::Cadence;
+    let _serialize = crate::build::feeds::search::lock_index_counter();
+    let vault = Vault::new();
+    std::fs::create_dir_all(vault.mp.root()).unwrap();
+    std::fs::write(vault.mp.config(), "[site]\nsearch = true\n").unwrap();
+    let (cadence, rx) = tokio::sync::watch::channel(Cadence::Background);
+    vault.session.follow_cadence(rx);
+
+    vault.build().await;
+    vault.drained().await;
+    tokio::time::pause();
+    tokio::time::advance(IDLE + std::time::Duration::from_secs(1)).await;
+    tokio::time::resume();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(vault.generations().is_empty(), "a hidden window must hold the seal past its idle window");
+
+    let hashes: crate::types::content::SiteHashes =
+        serde_json::from_str(&std::fs::read_to_string(vault.mp.hashes()).unwrap()).unwrap();
+    let want = format!("{:?}", PageSet::of(&hashes.files).fp);
+    let receipt_fp = || {
+        std::fs::read_to_string(vault.mp.index_receipt())
+            .ok()
+            .and_then(|raw| serde_json::from_str::<crate::build::feeds::search_lane::BundleReceipt>(&raw).ok())
+            .and_then(|r| u64::from_str_radix(&r.fp, 16).ok())
+            .map(|fp| format!("PageSetFp({fp})"))
+    };
+    let before = crate::build::feeds::search::index_build_count();
+    cadence.send_replace(Cadence::Live);
+    for _ in 0..500 {
+        if receipt_fp().as_deref() == Some(want.as_str()) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(vault.generations().len(), 1, "Live must materialize the held seal");
+    assert_eq!(receipt_fp().as_deref(), Some(want.as_str()), "and index the generation it promoted");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(crate::build::feeds::search::index_build_count() - before, 1, "exactly once");
+}

@@ -25,6 +25,9 @@ use tokio::task::JoinSet;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+mod derived_work;
+pub use derived_work::DerivedWorkGate;
+
 pub struct FolderSession {
     pub folder: PathBuf,
     pub cancel: CancellationToken,
@@ -97,6 +100,9 @@ pub struct FolderSession {
     /// The sweep reads it every tick and surfaces transitions to the preview
     /// as `FolderHealthChanged` — the full-window project-unavailable state.
     unavailable: AtomicBool,
+    /// The host's Live/Background signal, once a watch attaches one. Read
+    /// through [`DerivedWorkGate`]; see `folder_session/derived_work.rs`.
+    cadence: StdMutex<Option<tokio::sync::watch::Receiver<crate::ops::watch::cadence::Cadence>>>,
 }
 
 impl FolderSession {
@@ -116,6 +122,7 @@ impl FolderSession {
             ui_bound: AtomicU32::new(0),
             stage_write_lock,
             unavailable: AtomicBool::new(false),
+            cadence: StdMutex::new(None),
         })
     }
 

@@ -27,6 +27,14 @@
 //! do and returns immediately. No request is ever run twice, and none is
 //! ever dropped: if a NEWER request lands while one is being handled, it is
 //! still there afterward for the next pass.
+//!
+//! # Gating
+//!
+//! A lane built with [`Lanes::with_gate`] asks the request's
+//! [`DerivedWorkGate`] before a background pass runs it. While the gate is
+//! closed the request stays pending (newer ones still replace it), and the
+//! pass runs as soon as the gate opens, without a second idle wait.
+//! [`Lanes::settle_now`] does not consult the gate.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -42,11 +50,20 @@ use tokio::sync::watch;
 // `search_lane.rs` made this switch.
 use tokio::time::Instant;
 
+use crate::system::folder_session::DerivedWorkGate;
+
 pub type HandlerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// A plain function pointer, not a closure: every lane sharing one [`Lanes`]
 /// registry calls the same handler, so there is nothing per-lane to capture.
 pub type Handler<R> = fn(R) -> HandlerFuture;
+
+/// Which gate a request waits on before a background pass runs it.
+pub type Gate<R> = fn(&R) -> DerivedWorkGate;
+
+fn always_open<R>(_: &R) -> DerivedWorkGate {
+    DerivedWorkGate::default()
+}
 
 /// One value in a lane's channel: either nothing pending, or a request handed
 /// off by [`Lanes::request`] and not yet handled. Deliberately not `Clone`:
@@ -81,12 +98,18 @@ pub struct Lanes<R: Send + Sync + 'static> {
     idle: Duration,
     max_defer: Duration,
     handler: Handler<R>,
+    gate: Gate<R>,
     lanes: Mutex<HashMap<PathBuf, Arc<Lane<R>>>>,
 }
 
 impl<R: Send + Sync + 'static> Lanes<R> {
     pub fn new(idle: Duration, max_defer: Duration, handler: Handler<R>) -> Self {
-        Self { idle, max_defer, handler, lanes: Mutex::new(HashMap::new()) }
+        Self { idle, max_defer, handler, gate: always_open::<R>, lanes: Mutex::new(HashMap::new()) }
+    }
+
+    /// Hold each background pass until `gate` opens for its request.
+    pub fn with_gate(self, gate: Gate<R>) -> Self {
+        Self { gate, ..self }
     }
 
     /// Hand off `req` for `key`, replacing whatever was pending. Cheap and
@@ -120,7 +143,7 @@ impl<R: Send + Sync + 'static> Lanes<R> {
         };
         if is_new {
             let rx = lane.tx.subscribe();
-            tokio::spawn(run_lane(rx, lane, self.idle, self.max_defer, self.handler));
+            tokio::spawn(run_lane(rx, lane, self.idle, self.max_defer, self.handler, self.gate));
         }
     }
 
@@ -160,6 +183,24 @@ impl<R: Send + Sync + 'static> Lanes<R> {
     pub fn is_pending(&self, key: &Path) -> bool {
         let lanes = self.lanes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         lanes.get(key).is_some_and(|lane| matches!(&*lane.tx.borrow(), Slot::Pending(_)))
+    }
+
+    /// The gate the pending request for `key` would wait on, if one is pending.
+    #[cfg(test)]
+    pub fn pending_gate(&self, key: &Path) -> Option<DerivedWorkGate> {
+        let lanes = self.lanes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let gate = match &*lanes.get(key)?.tx.borrow() {
+            Slot::Pending(req) => Some((self.gate)(req)),
+            _ => None,
+        };
+        gate
+    }
+
+    /// A handle that dies with the lane's background task, which also holds it.
+    #[cfg(test)]
+    fn lane_handle(&self, key: &Path) -> Option<std::sync::Weak<Lane<R>>> {
+        let lanes = self.lanes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        lanes.get(key).map(Arc::downgrade)
     }
 
     #[cfg(test)]
@@ -241,6 +282,7 @@ async fn run_lane<R: Send + Sync + 'static>(
     idle: Duration,
     max_defer: Duration,
     handler: Handler<R>,
+    gate: Gate<R>,
 ) {
     loop {
         if matches!(&*rx.borrow(), Slot::Idle) {
@@ -257,6 +299,18 @@ async fn run_lane<R: Send + Sync + 'static>(
         }
         if !quiesce(&mut rx, idle, max_defer).await {
             return;
+        }
+        let gate = match &*rx.borrow() {
+            Slot::Pending(req) => Some(gate(req)),
+            _ => None,
+        };
+        if let Some(gate) = gate {
+            // `evict` closes only an idle slot, which a forced settle can
+            // leave behind while this pass waits, so watch for it here too.
+            tokio::select! {
+                _ = gate.opened() => {}
+                _ = rx.wait_for(|slot| matches!(slot, Slot::Closed)) => return,
+            }
         }
         // Between `quiesce` returning and taking this lock, a racing
         // `settle_now` may already have run the handler — `run_pending`'s
