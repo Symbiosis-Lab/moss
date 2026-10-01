@@ -665,6 +665,82 @@ fn snapshot_places_site() {
     run_snapshot_test("places-site");
 }
 
+/// The places explorer's world/tile SVGs (`place_map::emit_world_svg`/
+/// `emit_tile_svg`, emitted by `emit::place_map_assets`) land under one
+/// `_moss/map.<hash>/` directory — exactly one, since for a given pack and
+/// generator version the hash is a function of the gazetteer's cells alone,
+/// not of page content (see `place_map_assets::assets_hash`'s own tests for
+/// the gazetteer half of that claim). Their brotli-q11 size is page weight
+/// the explorer's later task will actually serve, so it is pinned here the
+/// same way `svg.rs`'s own `the_world_map_stays_under_its_inline_budget`
+/// pins the places-root aggregate map: measured at landing (this commit)
+/// and allowed only to shrink without a thermo-reviewed reason for growth.
+///
+/// Measured at landing, on the `places-site` fixture: world.svg = 83,325
+/// brotli bytes (pinned ceiling 96 KiB, matching the aggregate map's own
+/// budget, since the two emitters share a rendering body); this fixture's
+/// Kansai-region places all fall in one 3x3 neighbourhood, so its 9 tiles
+/// combined = 134,854 brotli bytes (pinned ceiling 512 KiB). Before tiles
+/// were scoped to the gazetteer's own cells, every one of the pack's 648
+/// tiles was emitted regardless of this site's places — 6,678,052 brotli
+/// bytes, 50x this fixture's actual footprint and the same for every site
+/// regardless of how many places it names. `tiles.json` lists exactly the
+/// tiles emitted, so the explorer can know which cells exist without
+/// probing.
+#[test]
+fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
+    use std::io::Write;
+
+    const WORLD_SVG_BROTLI_CEILING: usize = 96 * 1024;
+    const TILES_BROTLI_CEILING: usize = 512 * 1024;
+
+    let (_cleanup, output) = build_fixture("places-site");
+    let moss_dir = output.join("_moss");
+    let map_dirs: Vec<PathBuf> = fs::read_dir(&moss_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("map."))
+        .map(|entry| entry.path())
+        .collect();
+    assert_eq!(map_dirs.len(), 1, "expected exactly one place-map assets directory: {map_dirs:?}");
+    let map_dir = &map_dirs[0];
+
+    let brotli_len = |bytes: &[u8]| -> usize {
+        let mut compressor = brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22);
+        compressor.write_all(bytes).unwrap();
+        compressor.into_inner().len()
+    };
+
+    let world_bytes = fs::read(map_dir.join("world.svg")).expect("world.svg must be emitted");
+    let world_brotli = brotli_len(&world_bytes);
+    assert!(
+        world_brotli <= WORLD_SVG_BROTLI_CEILING,
+        "world.svg grew to {world_brotli} brotli bytes, over the {WORLD_SVG_BROTLI_CEILING} ceiling"
+    );
+
+    let mut tile_count = 0usize;
+    let mut tiles_brotli_total = 0usize;
+    for entry in fs::read_dir(map_dir).unwrap().filter_map(|e| e.ok()) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("tile-") {
+            continue;
+        }
+        tile_count += 1;
+        tiles_brotli_total += brotli_len(&fs::read(entry.path()).unwrap());
+    }
+    assert!(tile_count > 0, "expected at least one tile SVG");
+    assert!(tile_count < 20, "expected a small Kansai-region neighbourhood, not the whole pack: {tile_count} tiles");
+    assert!(
+        tiles_brotli_total <= TILES_BROTLI_CEILING,
+        "{tile_count} tiles total {tiles_brotli_total} brotli bytes, over the {TILES_BROTLI_CEILING} ceiling"
+    );
+
+    let index: Vec<(i16, i16)> =
+        serde_json::from_slice(&fs::read(map_dir.join("tiles.json")).expect("tiles.json must be emitted"))
+            .expect("tiles.json must be a JSON array of [x, y] pairs");
+    assert_eq!(index.len(), tile_count, "tiles.json must list exactly the tiles actually emitted");
+}
+
 /// The places root and a parent place's listing mark every place their
 /// pages name, each once and by its own precision: Kyoto (city) with a
 /// dot, and Nara, whose invalid precision falls back to country, with a

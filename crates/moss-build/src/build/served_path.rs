@@ -49,6 +49,16 @@ pub const MATH_PNG_PREFIX: &str = "_moss/math/";
 /// See [`ServedPath::for_remote_cover`].
 pub const REMOTE_COVER_PREFIX: &str = "_moss/link/";
 
+/// Prefix of the content-addressed directory the place-map explorer's
+/// world/tile SVGs are written under: `_moss/map.<hash>/`, where `hash`
+/// covers the embedded place-map pack plus the emitter's generator version
+/// (never site config or page content — see
+/// `build::emit::place_map_assets::assets_hash`). Unlike every other
+/// `*_PREFIX` above, the hash names the DIRECTORY, not the filename: every
+/// page's copy of the set shares one directory, so the world map and every
+/// tile it references stay one content-addressed unit.
+pub const PLACE_MAP_ASSET_PREFIX: &str = "_moss/map.";
+
 /// A normalized served path. Directory segments are slugged; the basename
 /// is preserved verbatim.
 ///
@@ -243,6 +253,29 @@ impl ServedPath {
             return Err(ServedPathError::InvalidInput("remote cover extension must be jpg, jpeg, png, or webp"));
         }
         Ok(ServedPath(format!("{}{}.{}", REMOTE_COVER_PREFIX, content_hash, ext)))
+    }
+
+    /// One asset (the world map, a tile, or the `tiles.json` index) inside
+    /// a place-map assets directory `_moss/map.<assets_hash>/`.
+    /// `assets_hash` is lowercase hex (the xxHash3 digest
+    /// `compute_binary_hash` produces, 16 chars, though any non-empty
+    /// lowercase-hex string is accepted so a future longer digest does not
+    /// need a new constructor); `filename` is a bare basename — no `/`, no
+    /// `..` — ending `.svg` or `.json`.
+    pub fn for_place_map_asset(assets_hash: &str, filename: &str) -> Result<Self, ServedPathError> {
+        if assets_hash.is_empty() {
+            return Err(ServedPathError::InvalidInput("place-map assets hash is empty"));
+        }
+        if !assets_hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+            return Err(ServedPathError::InvalidInput("place-map assets hash must be lowercase hex"));
+        }
+        if filename.is_empty() || filename.contains('/') || filename.contains("..") {
+            return Err(ServedPathError::InvalidInput("place-map asset filename must be a bare basename"));
+        }
+        if !(filename.ends_with(".svg") || filename.ends_with(".json")) {
+            return Err(ServedPathError::InvalidInput("place-map asset filename must end .svg or .json"));
+        }
+        Ok(ServedPath(format!("{PLACE_MAP_ASSET_PREFIX}{assets_hash}/{filename}")))
     }
 
     /// Site favicon. `ext` is a bare extension (no dot, no slash).
@@ -808,6 +841,36 @@ mod tests {
         let sp = ServedPath::for_remote_cover("87ba30f2b3c09ca9", "jpg").unwrap();
         assert_eq!(sp.as_str(), "_moss/link/87ba30f2b3c09ca9.jpg");
         assert_eq!(sp.to_relative_url(), "/_moss/link/87ba30f2b3c09ca9.jpg");
+    }
+
+    #[test]
+    fn for_place_map_asset_names_the_directory_by_hash_not_the_file() {
+        let world = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "world.svg").unwrap();
+        assert_eq!(world.as_str(), "_moss/map.87ba30f2b3c09ca9/world.svg");
+        let tile = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "tile-20-12.svg").unwrap();
+        assert_eq!(tile.as_str(), "_moss/map.87ba30f2b3c09ca9/tile-20-12.svg");
+        let index = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "tiles.json").unwrap();
+        assert_eq!(index.as_str(), "_moss/map.87ba30f2b3c09ca9/tiles.json");
+    }
+
+    #[test]
+    fn for_place_map_asset_rejects_non_hex_hash_and_a_non_basename_filename() {
+        assert!(matches!(
+            ServedPath::for_place_map_asset("not-hex!", "world.svg"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "../world.svg"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "sub/world.svg"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "world.png"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
     }
 
     #[test]

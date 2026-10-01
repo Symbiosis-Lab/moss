@@ -1744,6 +1744,17 @@ fn build_inner(
         &search_paths, &stage_dir, &mut pending, search_enabled, search_freshness);
     log::debug!(target: "search", "search bundle: {:?}", adoption);
 
+    // Places explorer world/tile base-map SVGs; see that module's doc for
+    // the gate and the cache. `place_maps_for_places_data` already carries
+    // the gazetteer (see its own comment above), so there is no second
+    // `load_gazetteer` call here.
+    crate::build::emit::place_map_assets::emit_if_place_typed(
+        place_maps_for_places_data.as_ref(),
+        &paths,
+        &stage_dir,
+        &mut pending,
+    );
+
     // Seal-persist-race-404 fix: release the stage-write guard now — this
     // build's own synchronous stage-writing span (generate_blocking_content
     // through the notebook-processing block just above, which itself writes

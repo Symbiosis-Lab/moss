@@ -723,11 +723,11 @@ impl TileSelection {
     }
 }
 
-fn tile_x(longitude: f64) -> i16 {
+pub(super) fn tile_x(longitude: f64) -> i16 {
     (((normalize_longitude(longitude) + 180.0) / 10.0).floor() as i16).clamp(0, 35)
 }
 
-fn tile_y(latitude: f64) -> i16 {
+pub(super) fn tile_y(latitude: f64) -> i16 {
     (((latitude.clamp(-90.0, 90.0) + 90.0) / 10.0).floor() as i16).clamp(0, 17)
 }
 

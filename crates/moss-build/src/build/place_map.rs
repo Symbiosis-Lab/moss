@@ -1,6 +1,7 @@
 //! Immutable decoder for the checked-in `MOSSPLM1` place-map pack.
 
 mod context;
+mod explorer;
 mod geometry;
 mod globe;
 // The places-explorer data emitter (`places.<hash>.json`). `pub(crate)`,
@@ -11,6 +12,7 @@ mod simplify;
 mod svg;
 
 pub use context::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext, PlaceMapTarget, ResolvedPlace};
+pub use explorer::{emit_tile_svg, emit_world_svg, relevant_tiles};
 pub use geometry::{marker_radius, privacy_floor, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
 pub use svg::{
     emit_locator, emit_locator_svg, emit_svg, emit_svg_with_options, LocatorProfile,

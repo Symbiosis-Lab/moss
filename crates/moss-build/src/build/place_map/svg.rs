@@ -153,10 +153,36 @@ fn emit_svg_with_mode(
         &label,
         options.href,
     );
+    render_svg(&mut writer, context, target, true);
+    writer.close_figure();
+    writer.output
+}
+
+/// Render one complete `<svg width="720" height="480" ...>...</svg>`: defs,
+/// water, the physical layers in the approved paint order, lighting, a
+/// marker group (left empty when `target.places` carries none — see
+/// `markers()`), and the globe inset when `draw_globe` and the frame is not
+/// already the world tier (the globe shows where a frame sits in the world;
+/// a world map is its own answer).
+///
+/// Shared by the per-page figure (`emit_svg_with_mode`, which wraps this in
+/// `<figure>`) and `explorer::emit_world_svg`/`emit_tile_svg`, which call it
+/// directly: a page-independent asset fetched or `<img src>`-referenced at
+/// runtime has no page-relative accessible label to carry, so it skips the
+/// figure wrapper rather than carrying an empty one.
+pub(super) fn render_svg(
+    writer: &mut Writer<'_>,
+    context: &PlaceMapContext,
+    target: &PlaceMapTarget,
+    draw_globe: bool,
+) {
     writer.open_svg();
     writer.defs();
     writer.water();
 
+    let projection = target.frame.as_ref().map(Projection::new);
+    let wide = projection.as_ref().is_some_and(Projection::is_wide);
+    let wide_locator = writer.locator_profile.is_some() && wide;
     let grouped = target.frame.as_ref().map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
         let mut grouped = grouped_features(context.pack(), &selected);
@@ -190,17 +216,14 @@ fn emit_svg_with_mode(
         _ => writer.empty_layers_after_lighting(),
     }
     writer.markers(target);
-    // The globe shows where a frame sits in the world; a world map is its
-    // own answer.
-    if target.frame.as_ref().map_or(true, |frame| frame.tier != FrameTier::World) {
+    if draw_globe && target.frame.as_ref().map_or(true, |frame| frame.tier != FrameTier::World) {
         writer.globe(context, target);
     }
-    writer.close_svg();
-    writer.output
+    writer.close_svg_tag();
 }
 
 #[derive(Debug, Clone)]
-struct Ids {
+pub(super) struct Ids {
     base: String,
 }
 
@@ -220,22 +243,51 @@ impl Ids {
         }
     }
 
+    /// A fixed, human-readable seed in place of a page-derived hash: for
+    /// `explorer`'s page-independent world/tile SVGs there is no page path
+    /// to hide (unlike the per-page figure, see `Ids::new`'s doc), and the
+    /// whole point is a STABLE id shared by every build of the same pack.
+    pub(super) fn for_seed(seed: &str) -> Self {
+        Self {
+            base: format!("moss-place-map-{seed}"),
+        }
+    }
+
     fn get(&self, name: &str) -> String {
         format!("{}-{name}", self.base)
     }
 }
 
-struct Writer<'a> {
-    output: String,
-    ids: &'a Ids,
-    height_uses: Vec<String>,
-    land_paths: Vec<String>,
-    has_href: bool,
-    effect_scale: f64,
+pub(super) struct Writer<'a> {
+    pub(super) output: String,
+    pub(super) ids: &'a Ids,
+    pub(super) height_uses: Vec<String>,
+    pub(super) land_paths: Vec<String>,
+    pub(super) has_href: bool,
+    pub(super) effect_scale: f64,
     /// How many times smaller than its viewBox the map is shown, which
     /// scales the render-time simplification.
-    detail: f64,
-    locator_profile: Option<LocatorProfile>,
+    pub(super) detail: f64,
+    pub(super) locator_profile: Option<LocatorProfile>,
+}
+
+impl<'a> Writer<'a> {
+    /// The shared literal for a page-independent places-explorer base-map
+    /// asset (`explorer::emit_world_svg`/`emit_tile_svg`): full capacity, no
+    /// globe inset, no href, no locator, undetailed (never shown smaller
+    /// than its own viewBox) — the two emitters differ only in `ids`.
+    pub(super) fn for_explorer_asset(ids: &'a Ids) -> Self {
+        Self {
+            output: String::with_capacity(32 * 1024),
+            ids,
+            height_uses: Vec::new(),
+            land_paths: Vec::new(),
+            has_href: false,
+            effect_scale: 1.0,
+            detail: 1.0,
+            locator_profile: None,
+        }
+    }
 }
 
 /// A round dot of `radius` screen px at a viewBox point, drawn as a
@@ -373,8 +425,11 @@ impl Writer<'_> {
         .expect("writing to String cannot fail");
     }
 
-    fn close_svg(&mut self) {
+    fn close_svg_tag(&mut self) {
         self.output.push_str("</svg>");
+    }
+
+    fn close_figure(&mut self) {
         if self.has_href {
             self.output.push_str("</a>");
         }
