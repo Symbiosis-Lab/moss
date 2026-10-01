@@ -22,7 +22,11 @@
  * moss-places-labels, moss-places-label, moss-places-label-dot,
  * moss-places-markers, moss-places-marker, moss-places-ring-leg,
  * moss-places-ring-dot, moss-places-controls, moss-places-capsule,
- * moss-places-control, moss-places-cards, moss-places-card-select,
+ * moss-places-control, moss-places-chip, moss-places-chip-trail,
+ * moss-places-chip-crumb, moss-places-chip-sep, moss-places-chip-chevron,
+ * moss-places-chip-collapsible, moss-places-chip-ellipsis,
+ * moss-places-chip-menu, moss-places-chip-menu-item,
+ * moss-places-chip-menu-count, moss-places-cards, moss-places-card-select,
  * moss-places-card-detail, moss-places-card-read, moss-places-status.
  */
 import { mountPlacesMap } from "./map";

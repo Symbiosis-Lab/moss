@@ -2307,6 +2307,7 @@ Every work this site locates, gathered on one map.
     "lisbon-harbor-light.md": placesExplorerWork("pex002bb", "Lisbon Harbor Light", "Lisbon Harbor", "2024-06-05"),
     "porto-steps.md": placesExplorerWork("pex003cc", "Porto Steps", "Porto", "2024-05-20"),
     "coimbra-library.md": placesExplorerWork("pex004dd", "Coimbra Library", "Coimbra", "2024-05-01"),
+    "portugal-overview.md": placesExplorerWork("pex013mm", "Portugal Overview", "Portugal", "2024-07-01"),
     "kyoto-garden.md": placesExplorerWork("pex005ee", "Kyoto Garden", "Kyoto", "2024-04-15"),
     "osaka-market.md": placesExplorerWork("pex006ff", "Osaka Market", "Osaka", "2024-04-01"),
     "tokyo-crossing.md": placesExplorerWork("pex007gg", "Tokyo Crossing", "Tokyo", "2024-03-10"),
@@ -2334,15 +2335,22 @@ lat = 38.715
 lng = -9.145
 precision = "exact"
 
+["Portugal"]
+lat = 37.0139
+lng = -7.9303
+precision = "country"
+
 ["Porto"]
 lat = 41.1579
 lng = -8.6291
 precision = "city"
+parent = "Portugal"
 
 ["Coimbra"]
 lat = 40.2033
 lng = -8.4103
 precision = "city"
+parent = "Portugal"
 
 ["Kyoto"]
 lat = 35.0116

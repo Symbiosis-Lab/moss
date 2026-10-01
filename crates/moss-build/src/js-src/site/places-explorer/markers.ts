@@ -92,6 +92,8 @@ export class MarkerLayer {
   private ring: RingState | null = null;
   private lastPoints: WorkPoint[] = [];
   private lastCamera: Camera = { x: 0, y: 0, zoom: 1 };
+  /** Work ids exempted from the ring's own dimming attribute while the scope chip's menu has an item hovered/focused — `null` lifts the exemption. Independent of `ring`: the chip never shows a dig-down menu while a ring is open (its terminal crumb is the ring itself), so the two are never both active. */
+  private highlightIds: Set<string> | null = null;
 
   constructor(container: HTMLElement, callbacks: MarkerCallbacks, strings: PlacesStrings, lang: string) {
     this.container = container;
@@ -117,6 +119,16 @@ export class MarkerLayer {
 
   hasOpenRing(): boolean {
     return this.ring != null;
+  }
+
+  /** The open ring's own member count, or `null` when no ring is open — the scope chip's own trailing "N here" crumb reads this. */
+  ringCount(): number | null {
+    return this.ring?.members.length ?? null;
+  }
+
+  /** Exempt exactly these work ids from dimming, `null` to lift the exemption — the chip menu's hover/focus highlight, reusing the ring's own `data-dimmed` attribute rather than a second one. Does not itself re-render; the caller re-renders (`map.ts`'s `applyCamera`). */
+  setHighlight(ids: Set<string> | null): void {
+    this.highlightIds = ids;
   }
 
   closeRing(): void {
@@ -171,7 +183,8 @@ export class MarkerLayer {
     button.dataset.precision = coarsestPrecision(members.map((member) => member.precision));
     if (cluster.ids.length > 1) button.dataset.count = String(cluster.ids.length);
     if (cluster.ids.some((id) => id === selectedId)) button.dataset.selected = "true";
-    if (this.ring) button.dataset.dimmed = "";
+    const dimmedByHighlight = this.highlightIds != null && !cluster.ids.some((id) => this.highlightIds!.has(id));
+    if (this.ring || dimmedByHighlight) button.dataset.dimmed = "";
     button.setAttribute("aria-label", this.labelFor(cluster.ids, works));
     button.addEventListener("click", () => this.activate(cluster, members));
     this.container.append(button);

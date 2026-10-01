@@ -30,6 +30,12 @@ export interface PlacesStrings {
   worksInView: string;
   /** Link text to a work's own article. */
   readArticle: string;
+  /** The scope chip's root crumb — every other crumb widens toward this. */
+  chipAll: string;
+  /** The scope chip's terminal crumb when a work is selected, replacing the place chain entirely. */
+  chipThisArticle: string;
+  /** `aria-label` on the phone-width "…" button that reveals the trail's collapsed middle crumbs in place. */
+  chipShowHidden: string;
 }
 
 const STRINGS: Record<Lang, PlacesStrings> = {
@@ -45,6 +51,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "Showing all works again.",
     worksInView: "Works in view",
     readArticle: "Read article",
+    chipAll: "All articles",
+    chipThisArticle: "This article",
+    chipShowHidden: "Show hidden places",
   },
   "zh-hans": {
     map: "地图。使用方向键平移，加号及减号缩放。",
@@ -58,6 +67,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "已显示全部作品。",
     worksInView: "视野中的作品",
     readArticle: "阅读原文",
+    chipAll: "全部文章",
+    chipThisArticle: "本文",
+    chipShowHidden: "显示隐藏地点",
   },
   "zh-hant": {
     map: "地圖。使用方向鍵平移，加號及減號縮放。",
@@ -71,6 +83,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "已顯示全部作品。",
     worksInView: "視野中的作品",
     readArticle: "閱讀原文",
+    chipAll: "全部文章",
+    chipThisArticle: "本文",
+    chipShowHidden: "顯示隱藏地點",
   },
 };
 

@@ -81,6 +81,7 @@ GATES_BUILD=(
   places-explorer-ring
   places-explorer-cards
   places-explorer-labels
+  places-explorer-chip
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

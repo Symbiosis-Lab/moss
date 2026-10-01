@@ -23,9 +23,11 @@ import {
   worldToScreen,
 } from "./camera";
 import { CardRow, worksForRow } from "./cards";
+import { ScopeChip } from "./chip";
 import { LabelLayer } from "./labels";
 import { MarkerLayer, pointsForWorks } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
+import { inScope } from "./scope";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
 import { parseMapSvg, TileLayer } from "./tiles";
@@ -63,7 +65,7 @@ export interface MountOptions {
 }
 
 export interface PlacesMapController {
-  /** The scope seam: `all` or `place` this landing, a future breadcrumb chip's own dig-down included. Re-fits the camera and re-renders. */
+  /** The scope seam: `all` or `place` this landing, the breadcrumb chip's own dig-down included. Re-fits the camera and re-renders. */
   setScope(scope: Scope): void;
 }
 
@@ -116,12 +118,15 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   cardsEl.setAttribute("role", "list");
   cardsEl.setAttribute("aria-label", strings.worksInView);
 
+  const chipEl = document.createElement("nav");
+  chipEl.className = "moss-places-chip";
+
   const statusEl = document.createElement("p");
   statusEl.className = "moss-places-status";
   statusEl.setAttribute("role", "status");
   statusEl.setAttribute("aria-live", "polite");
 
-  viewportEl.append(worldEl, labelsEl, markersEl, controlsEl, cardsEl);
+  viewportEl.append(worldEl, labelsEl, markersEl, controlsEl, chipEl, cardsEl);
   figure.replaceChildren(viewportEl, statusEl);
 
   // ---- state -----------------------------------------------------------
@@ -186,7 +191,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   const cardRow = new CardRow(cardsEl, { selectWork }, strings);
   const labelLayer = new LabelLayer(labelsEl, options.labels, options.lang);
 
-  /** Boxes a label must never cover beyond the markers themselves, in viewport-relative CSS px — the zoom controls, a breadcrumb/scope chip (forward-compatible: nothing emits that class here yet, so the query simply matches nothing today), and the card row. `:empty` card rows collapse to zero size on their own (`places-explorer.css`), so an empty one reserves nothing without a separate check here. */
+  /** Boxes a label must never cover beyond the markers themselves, in viewport-relative CSS px — the zoom controls, the breadcrumb scope chip, and the card row. `:empty` card rows collapse to zero size on their own (`places-explorer.css`), so an empty one reserves nothing without a separate check here. */
   function reservedLabelRects(): Rect[] {
     const origin = viewportEl.getBoundingClientRect();
     const relative = (el: Element | null): Rect | null => {
@@ -195,7 +200,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       if (box.width <= 0 || box.height <= 0) return null;
       return { x: box.x - origin.x, y: box.y - origin.y, width: box.width, height: box.height };
     };
-    return [relative(controlsEl), relative(cardsEl), relative(viewportEl.querySelector(".moss-places-scope-chip"))].filter(
+    return [relative(controlsEl), relative(cardsEl), relative(chipEl)].filter(
       (rect): rect is Rect => rect != null,
     );
   }
@@ -230,6 +235,25 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     camera = points.length ? fitPoints(points, viewport, currentMaxZoom(viewport)) : coverCamera(allPoints(), viewport);
     applyCamera(true);
   }
+
+  // The chip's own hover/focus highlight: exempt one child place's works
+  // from the ring's dimming attribute without opening a ring — `inScope`
+  // (not `pointsForWorks`) because only membership is needed here, never a
+  // projected point.
+  function highlightPlace(placeId: string | null): void {
+    markerLayer.setHighlight(
+      placeId == null
+        ? null
+        : new Set(
+            options.places.works
+              .filter((work) => inScope(work, options.places.places, { kind: "place", id: placeId }))
+              .map((work) => work.id),
+          ),
+    );
+    applyCamera(false);
+  }
+
+  const scopeChip = new ScopeChip(chipEl, { setScope, selectWork, highlightPlace }, strings, options.lang);
 
   // The saved camera (`?p=patterson&z&x&y`) always wins over a scope fit —
   // a reader who panned/zoomed and copied the link gets exactly that view
@@ -298,6 +322,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       cardRow.render(rows, options.places.places, selectedId);
       labelLayer.render(visiblePoints, camera, viewport, worksById, placesById, reservedLabelRects());
       urlState.writeCamera(camera);
+      const selectedWork = selectedId ? (worksById.get(selectedId) ?? null) : null;
+      scopeChip.render(scope, options.places.places, options.places.works, selectedWork, markerLayer.ringCount());
     }
   }
 

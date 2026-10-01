@@ -12,6 +12,7 @@ import { coverCamera, detailMaxZoom, screenScale, tileDetailMaxZoom } from "../c
 import { mountPlacesMap } from "../map";
 import { project } from "../projection";
 import { readUrlState } from "../state";
+import type { LabelsData } from "../types";
 
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const VIEWPORT = { width: 800, height: 500 };
@@ -103,5 +104,61 @@ describe("mountPlacesMap — the applyCamera re-clamp never forces a zoom-out on
     // the pan (now off the tile, so back to the plain world ceiling) would
     // snap the zoom down mid-drag. A pan must never change zoom at all.
     expect(pannedState.camera!.zoom).toBeCloseTo(zoomInZoom, 3);
+  });
+});
+
+function rect(x: number, y: number, width: number, height: number): DOMRect {
+  return { x, y, width, height, top: y, left: x, right: x + width, bottom: y + height, toJSON() {} } as DOMRect;
+}
+
+describe("mountPlacesMap — the label layer actually reserves the breadcrumb chip's own area", () => {
+  test("a city label whose only possible positions all sit under the chip is hidden, not drawn over it", () => {
+    const viewport = { width: 800, height: 600 };
+    // A box around the viewport's centre generous enough to cover every one
+    // of a city label's four candidate positions (right/left/above/below
+    // its anchor, each offset by only a few px — see labels.ts's own
+    // `candidateBox`), so however the dead-selector bug this guards against
+    // would have let the label land, it still falls inside this rect.
+    const chipRect = { x: 275, y: 175, width: 250, height: 250 };
+    const cityPoint = project(10, 20); // arbitrary — no work sits here, so no marker competes for the same spot
+
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const el = this as HTMLElement;
+      if (el.classList.contains("moss-places-viewport")) return rect(0, 0, viewport.width, viewport.height);
+      if (el.classList.contains("moss-places-chip")) return rect(chipRect.x, chipRect.y, chipRect.width, chipRect.height);
+      // `labels.ts`'s own `measure()` reads this for a label's text size —
+      // jsdom never lays out real text, so this stands in for it.
+      if (el.classList.contains("moss-places-label")) return rect(0, 0, 60, 20);
+      // Every other element (controls, cards, markers, the world…) reserves
+      // nothing, so only the chip's own rect is in play.
+      return rect(0, 0, 0, 0);
+    });
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no network in tests"))));
+    // Read back as the initial camera (map.ts's own `urlState.readUrlState`),
+    // centred exactly on the city's world point — its unreserved screen
+    // anchor is then exactly the viewport centre, deep inside `chipRect`.
+    history.replaceState(null, "", `/places/?p=patterson&z=4&x=${cityPoint.x}&y=${cityPoint.y}`);
+
+    const figure = document.createElement("figure");
+    document.body.append(figure);
+    const labels: LabelsData = {
+      languages: ["en"],
+      en: { cities: [{ name: "Testopolis", lat: 10, lng: 20, rank: 0 }], ranges: [], peaks: [], rivers: [] },
+    };
+    const controller = mountPlacesMap(figure, {
+      worldSvgText: WORLD_SVG,
+      tilesBaseUrl: "/_moss/map.abc/",
+      tileCells: [],
+      tileK: 4,
+      tileBleed: 0.1,
+      places: { works: [], places: [] },
+      labels,
+      lang: "en",
+    });
+    expect(controller).not.toBeNull();
+
+    const labelEl = figure.querySelector<HTMLElement>(".moss-places-label[data-kind='city']");
+    expect(labelEl).not.toBeNull();
+    expect(labelEl!.hidden).toBe(true);
   });
 });

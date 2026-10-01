@@ -63,7 +63,7 @@ Every file over 1000 production lines (tests excluded, counted the same way `scr
 <!-- ratchet:known-debt:start -->
 | File | Prod lines | Disposition |
 |---|---:|---|
-| `crates/moss-core/src/contract/components.rs` | 4120 | One ComponentEntry per emitted moss-* class in a single const table, the federated contract's Source 2; splitting it by category would need the components_sync_test scanner taught to scan multiple files, which nothing currently proposes. |
+| `crates/moss-core/src/contract/components.rs` | 4234 | One ComponentEntry per emitted moss-* class in a single const table, the federated contract's Source 2; splitting it by category would need the components_sync_test scanner taught to scan multiple files, which nothing currently proposes. |
 | `crates/moss-build/src/build/render/blocking.rs` | 3907 | The blocking half of the two-phase build — everything the preview iframe needs before it can render — is one file so the phase boundary stays legible; retires only when moss_build::ops exists and the M6a/M6b pipeline split (already build/'s own disposition) actually lands. |
 | `crates/moss-build/src/build/media/image.rs` | 3089 | Mirrors video.rs's cache-then-convert-then-CAS shape for the image side (WebP encode, EXIF, resize, CAS store); retires the same way video.rs does, by factoring the shared cache/CAS/dispatch skeleton the module doc says the two files mirror by hand today. |
 | `crates/moss-build/src/build/media/video.rs` | 2270 | Video's half of the same cache-then-convert-then-CAS shape as image.rs, grown by a long tail of individually necessary fixes (poster repair, HLS ladder capping and healing, CAS-oid threading) rather than one feature; retires by extracting that shared skeleton the two files mirror by hand today. |

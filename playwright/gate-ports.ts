@@ -94,6 +94,7 @@ const GATE_PORT_KEYS = [
   'places-explorer-cards',
   'places-explorer-labels',
   'hero-overlay-legibility',
+  'places-explorer-chip',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];
