@@ -7,9 +7,8 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::vault::import::scrape::run::{
-    import_local_file, scrape_to_folder, ScrapeProgress, ScrapeResult,
-};
+use crate::vault::import::scrape::import_local::import_local_file;
+use crate::vault::import::scrape::run::{scrape_to_folder, ScrapeProgress, ScrapeResult};
 use crate::vault::import::scrape::service::{ScrapeConfig, DEFAULT_MAX_PAGES};
 
 /// Top-level dispatcher for `moss import …`. Returns a process exit code.

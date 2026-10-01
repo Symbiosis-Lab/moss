@@ -2,12 +2,13 @@
 //!
 //! Generator: markdown files → HTML website. Scraper: HTML website →
 //! markdown files. [`run`] is the pipeline; the modules under it are its
-//! stages — [`sitemap`] discovers a recursive crawl's declared page list
+//! stages — [`fetch`] is the pure HTTP/SSRF/retry layer every network call
+//! goes through, [`sitemap`] discovers a recursive crawl's declared page list
 //! before the crawl itself starts, [`scope`] decides what is in bounds,
 //! [`crawler`] finds the next URLs, [`extractor`] and [`converter`] turn a
 //! page into content, [`metadata`] and [`service`] shape the frontmatter,
-//! [`writer`] decides where the file lands, and [`mhtml`] reads a local
-//! capture instead of the network.
+//! [`writer`] decides where the file lands, and [`mhtml`]/[`import_local`]
+//! read a local capture instead of the network.
 //!
 //! Sibling to the dialect importers in the parent module: this half fetches
 //! a live site, that half reads a site builder's own export.
@@ -23,6 +24,8 @@ pub mod service;
 pub(crate) mod crawler;
 mod crawl_state;
 pub(crate) mod extractor;
+pub(crate) mod fetch;
+pub(crate) mod import_local;
 pub(crate) mod metadata;
 pub(crate) mod mhtml;
 pub(crate) mod scope;

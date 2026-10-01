@@ -413,7 +413,7 @@ impl HostPacer {
     /// a signal from the HOST that this crawl is going too fast, only that
     /// this one request failed for its own reason. Takes the bare status
     /// rather than an HTTP-client error type so this pacing module stays
-    /// usable without ureq in scope — `run.rs`'s `observe_pace` does the
+    /// usable without ureq in scope — `fetch.rs`'s `observe_pace` does the
     /// one-line translation from its own `FetchError`.
     pub(crate) fn observe(&mut self, host: &str, outcome: Result<(), Option<u16>>) {
         match outcome {
@@ -483,7 +483,7 @@ impl HostPacer {
     }
 }
 
-/// The five mutually-exclusive outcomes one popped URL can land in
+/// The six mutually-exclusive outcomes one popped URL can land in
 /// ([`super::run::PageOutcome`]). Never derived from a set's size — e.g.
 /// two duplicates can share one path identity in `Dedupe`, so
 /// `known_duplicate_paths.len()` is not `duplicate`.
@@ -868,7 +868,7 @@ mod tests {
         );
     }
 
-    // ── HostPacer::observe (the grow/decay DECISION — `run.rs`'s
+    // ── HostPacer::observe (the grow/decay DECISION — `fetch.rs`'s
     // `observe_pace` only translates its own error type into the bare
     // `Result<(), Option<u16>>` this takes, so the decision itself is
     // tested at the layer that makes it) ────────────────────────────────

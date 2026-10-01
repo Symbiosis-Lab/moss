@@ -8,7 +8,7 @@
 //! queued regardless, and a declared URL is exempt from the page cap that
 //! still limits link-discovered extras.
 //!
-//! Fetches go through [`super::run::fetch_raw`] / [`super::run::fetch_raw_bytes`]
+//! Fetches go through [`super::fetch::fetch_raw`] / [`super::fetch::fetch_raw_bytes`]
 //! — the same SSRF-hardened, proxy-aware, retrying, size-capped fetch a page
 //! fetch itself uses — so a hostile `Sitemap:` line or a redirect out of a
 //! sitemap document is refused the same way a hostile page link would be.
@@ -110,7 +110,7 @@ pub(crate) async fn discover(
         if depth > MAX_SITEMAP_INDEX_DEPTH || !visited_docs.insert(doc_url.clone()) {
             continue;
         }
-        let Ok(bytes) = super::run::fetch_raw_bytes(&doc_url, user_agent).await else {
+        let Ok(bytes) = super::fetch::fetch_raw_bytes(&doc_url, user_agent).await else {
             continue;
         };
         let body = decode_sitemap_bytes(&bytes);
@@ -306,7 +306,7 @@ fn decode_sitemap_bytes(bytes: &[u8]) -> String {
 /// falls back to `/sitemap.xml` and an unpaced crawl exactly as before
 /// either existed.
 async fn fetch_robots_txt(root: &str, user_agent: &str) -> Option<String> {
-    super::run::fetch_raw(&format!("{root}/robots.txt"), user_agent).await.ok()
+    super::fetch::fetch_raw(&format!("{root}/robots.txt"), user_agent).await.ok()
 }
 
 /// Parse a `Crawl-delay:` directive out of a `robots.txt` body — not part of

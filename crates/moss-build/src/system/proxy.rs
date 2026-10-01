@@ -42,7 +42,7 @@ pub fn proxied_ureq_agent(url: &str, timeout: std::time::Duration) -> ureq::Agen
 /// caller that must re-validate every hop's target itself before following
 /// it (SSRF: a validated public host can 302/303/307/308 to an
 /// internal/loopback address the caller's own check never sees). See
-/// `vault::import::scrape::run::refuse_unsafe_scrape_url` and its
+/// `vault::import::scrape::fetch::refuse_unsafe_scrape_url` and its
 /// redirect-following caller, the only consumer today.
 ///
 /// A 3xx response comes back as `Ok` with the redirect status intact
