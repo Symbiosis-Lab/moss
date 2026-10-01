@@ -304,7 +304,7 @@ moss has **no pagination**: no `paginate:`, no `offset`, no `/page/2/`. Do not
 invent one — unknown frontmatter keys are silently ignored, and hand-built
 `/page/N/` folders drift the moment an article is added or removed.
 
-Split a long archive by folder instead — by year, by series, by section. Give each folder's home `sort: date` for a newest-first chronological stream, `sort: date-asc` for the same stream oldest-first — a sequence of lectures, say, read in the order they were given — or `sort` also accepts `weight` and `title`.
+Split a long archive by folder instead — by year, by series, by section. Give each folder's home `sort: date` for a newest-first chronological stream, `sort: date-asc` for the same stream oldest-first — a sequence of lectures, say, read in the order they were given — or `sort` also accepts `weight` and `title`. A subfolder in that stream sorts by its own `date:` the same way: a section of the series with a dated home page takes its place in the chronology instead of always leading the list, and its card shows that date (and its `location:`) ahead of its article count.
 
 `date:` takes `YYYY-MM-DD`, `YYYY-MM`, or a bare year, so a work whose day or month is unknown can still sort and show what is known. Quote a bare year — `date: "1695"` — because YAML reads an unquoted `1695` as an integer and the build rejects it. On a vertical CJK page every date, on the article and on its cards, renders in Chinese numerals (一六九五年·三月).
 

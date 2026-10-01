@@ -840,23 +840,35 @@ fn folder(description: Option<&str>, date_display: Option<&str>) -> ChildItemPro
     props
 }
 
-/// A folder's count is its meta, whatever else the card carries: a
-/// description does not displace it, and on a date listing it wins over the
-/// folder's own date.
+/// A folder's count always shows, whatever else the card carries: a
+/// description does not displace it, and neither does a sort axis. A
+/// dateless folder's meta is the count alone; a folder whose own home page
+/// declares a date (`date` here stands in for that) leads with it instead,
+/// the count still following — never silently dropped by either.
 #[test]
 fn folder_count_fills_the_meta_slot() {
     for (desc, date, axis) in [
         (None, None, moss_core::sort::SortAxis::Title),
         (Some("Get started"), None, moss_core::sort::SortAxis::Title),
-        (Some("Get started"), Some("2025 · 04"), moss_core::sort::SortAxis::Date),
+        (Some("Get started"), None, moss_core::sort::SortAxis::Date),
     ] {
         let html = render_with_sort(&folder(desc, date), crate::i18n::Language::En, None, None, axis);
         assert!(
             html.contains(r#"<div class="moss-card-meta">4 articles</div>"#),
             "axis {axis:?}, description {desc:?}: {html}"
         );
-        assert!(!html.contains("2025 · 04"), "a folder's own date is not what it is picked by");
     }
+    let html = render_with_sort(
+        &folder(Some("Get started"), Some("2025 · 04")),
+        crate::i18n::Language::En,
+        None,
+        None,
+        moss_core::sort::SortAxis::Date,
+    );
+    assert!(
+        html.contains(r#"<div class="moss-card-meta">2025 · 04 · 4 articles</div>"#),
+        "a folder with its own date leads the count with it: {html}"
+    );
 }
 
 /// The two card shapes agree. Asserted alone, each emitter looked right

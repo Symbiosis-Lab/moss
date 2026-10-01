@@ -629,35 +629,31 @@ fn props_for_document_has_no_place_when_the_page_names_none() {
     assert_eq!(props(&docs[0], &docs).place, None);
 }
 
-// ── `leaf_place`: the one owner `grid_card`/`child_summary` both call ─────
+// ── `meta_text`: the one owner `grid_card`/`child_summary`/`render_child` all call ─
 
 #[test]
-fn leaf_place_is_the_place_when_there_is_no_child_count() {
-    let props = ChildItemProps { place: Some("Kyoto".into()), ..blank_props() };
-    assert_eq!(props.leaf_place(), Some("Kyoto"));
+fn meta_text_is_a_leafs_date_and_place() {
+    assert_eq!(meta_text(Some("1924 · 05"), Some("Cambridge"), None), "1924 · 05 · Cambridge");
 }
 
 #[test]
-fn leaf_place_is_none_for_a_folder_even_with_a_place() {
-    let props = ChildItemProps { child_count: Some(2), place: Some("Kyoto".into()), ..blank_props() };
-    assert_eq!(props.leaf_place(), None);
+fn meta_text_is_a_bare_folders_count_alone_even_with_a_place() {
+    // A folder with no date of its own: its `location:` (if any) is not a
+    // date to sit beside — only the count shows.
+    assert_eq!(meta_text(None, Some("Kyoto"), Some("2 articles")), "2 articles");
 }
 
-fn blank_props() -> ChildItemProps {
-    ChildItemProps {
-        title: String::new(),
-        url: String::new(),
-        date_display: None,
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-    }
+#[test]
+fn meta_text_is_a_dated_folders_date_and_place_then_its_count() {
+    assert_eq!(
+        meta_text(Some("1928 · 10"), Some("Cambridge"), Some("6 articles")),
+        "1928 · 10 · Cambridge · 6 articles"
+    );
+}
+
+#[test]
+fn meta_text_is_a_dated_folders_date_then_count_with_no_place() {
+    assert_eq!(meta_text(Some("1928 · 10"), None, Some("6 articles")), "1928 · 10 · 6 articles");
 }
 
 // ── `with_place`: the one owner of "date text plus resolved place" ────────

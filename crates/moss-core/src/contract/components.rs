@@ -475,7 +475,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Type-aware metadata slot (date for articles, count for folders, domain for links), with the page's resolved place appended after its date — never after a folder's count — when `location:` names one. Renders ABOVE the title in horizontal mode — filling the kicker position when the explicit `kicker` slot is unset. To the right of the title in vertical CJK mode (the horizontal kicker position transposed). Meta IS the visual kicker, with the same uppercase overline treatment.",
+        description: "Type-aware metadata slot (date for articles, count for folders, domain for links), with the page's resolved place appended after its date when `location:` names one — a bare folder's count never gets a place of its own, but a folder with its own `date:` (on its home page) shows that date and place first, then its article count after them. Renders ABOVE the title in horizontal mode — filling the kicker position when the explicit `kicker` slot is unset. To the right of the title in vertical CJK mode (the horizontal kicker position transposed). Meta IS the visual kicker, with the same uppercase overline treatment.",
     },
     ComponentEntry {
         class: "moss-card-kicker",

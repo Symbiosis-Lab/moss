@@ -83,19 +83,21 @@ fn render_item(
     eager: bool,
     list_has_covers: bool,
 ) -> String {
-    // A folder's meta is its count; a leaf's is its date, or nothing. The
-    // slot is emitted either way so the two shapes keep one layout.
-    let count_text = match props.child_count {
-        Some(count) => i18n::article_count_label(lang, count, typesetting),
-        None => props.date_display.clone().unwrap_or_default(),
-    };
-    // A leaf's resolved place goes next to its date; a folder's count is not
-    // a date, so it never gets one (`ChildItemProps::leaf_place`). One owner
-    // of this composition across every listing form — see
-    // `child_list::with_place`, which also HTML-escapes the result (this
-    // slot used to print `count_text` unescaped, safe only because it was
-    // always machine-generated text).
-    let count_text = super::child_list::with_place(&count_text, props.leaf_place());
+    // A folder's meta is its count (preceded by its own date and place when
+    // its home page declares one); a leaf's is its date and place, or
+    // nothing. The slot is emitted either way so the two shapes keep one
+    // layout. One owner across every listing form — see
+    // `child_list::meta_text`, which also HTML-escapes the result (this slot
+    // used to print the count unescaped, safe only because it was always
+    // machine-generated text).
+    let count_label = props
+        .child_count
+        .map(|count| i18n::article_count_label(lang, count, typesetting));
+    let count_text = super::child_list::meta_text(
+        props.date_display.as_deref(),
+        props.place.as_deref(),
+        count_label.as_deref(),
+    );
 
     let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);
 

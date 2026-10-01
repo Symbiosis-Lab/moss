@@ -2103,6 +2103,102 @@ fn date_asc_year_groups_lead_with_the_oldest_year() {
     );
 }
 
+/// The bug this exists for, seen live: a `sort: date-asc` folder listing
+/// two dated pages (1924, 1926) and one subfolder whose own home page is
+/// dated 1928 and located — the subfolder, having children of its own,
+/// sorted first (folders always hoisted above articles) and its card showed
+/// only "2 articles", no date, no place, breaking the chronology and hiding
+/// its occasion. A folder with a dated home page now sorts by that date like
+/// any page, and its meta shows the same `date · place` a page gets, with
+/// the count after it.
+#[test]
+fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
+    let cambridge_1924 = ParsedDocument {
+        url_path: "lectures/cambridge-1924.html".to_string(),
+        label: "Cambridge Lecture".to_string(),
+        title: "Cambridge Lecture".to_string(),
+        clean_stem: "cambridge-1924".to_string(),
+        date: Some("1924-05-18".to_string()),
+        place_names: Some("Cambridge".to_string()),
+        kind: PageKind::Article,
+        ..Default::default()
+    };
+    let hayes_court_1926 = ParsedDocument {
+        url_path: "lectures/hayes-court-1926.html".to_string(),
+        label: "Hayes Court Lecture".to_string(),
+        title: "Hayes Court Lecture".to_string(),
+        clean_stem: "hayes-court-1926".to_string(),
+        date: Some("1926-01-30".to_string()),
+        place_names: Some("Hayes Court".to_string()),
+        kind: PageKind::Article,
+        ..Default::default()
+    };
+    // The subfolder's own home page: dated and located, same as a page —
+    // and, matching the reported shape, it has children of its own (its
+    // home file is the generic `index.md`, clean_stem "index", not a
+    // self-named one).
+    let series_1928 = ParsedDocument {
+        url_path: "lectures/1928-series/index.html".to_string(),
+        label: "1928 Series".to_string(),
+        title: "1928 Series".to_string(),
+        clean_stem: "index".to_string(),
+        date: Some("1928-10-20".to_string()),
+        place_names: Some("Cambridge".to_string()),
+        kind: PageKind::Folder,
+        ..Default::default()
+    };
+    let series_child_a = ParsedDocument {
+        url_path: "lectures/1928-series/opening.html".to_string(),
+        clean_stem: "opening".to_string(),
+        kind: PageKind::Article,
+        ..Default::default()
+    };
+    let series_child_b = ParsedDocument {
+        url_path: "lectures/1928-series/closing.html".to_string(),
+        clean_stem: "closing".to_string(),
+        kind: PageKind::Article,
+        ..Default::default()
+    };
+
+    let items = vec![&cambridge_1924, &hayes_court_1926, &series_1928];
+    let all: Vec<&ParsedDocument> =
+        vec![&cambridge_1924, &hayes_court_1926, &series_1928, &series_child_a, &series_child_b];
+
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let out = generate_children(
+        &items,
+        &all,
+        &project,
+        "minimal",
+        "none",
+        crate::i18n::Language::En,
+        false, // DateAsc resorts, same as Date
+        &dir_overrides,
+        None,
+        None,
+        Some(moss_core::sort::SortAxis::DateAsc),
+        true,
+        false,
+        &Default::default(),
+    );
+
+    let pos_1924 = out.find(r#"href="/lectures/cambridge-1924""#).expect("1924 lecture present");
+    let pos_1926 = out.find(r#"href="/lectures/hayes-court-1926""#).expect("1926 lecture present");
+    let pos_1928 = out.find("1928-series").expect("1928 series folder present");
+    assert!(
+        pos_1924 < pos_1926 && pos_1926 < pos_1928,
+        "chronology must read 1924, 1926, 1928 (oldest first) — the dated \
+         subfolder must not be hoisted above pages older than it; got: {out}"
+    );
+
+    assert!(
+        out.contains(r#"<span class="moss-prefix-link-prefix">1928 · 10 · Cambridge · 2 articles</span>"#),
+        "the subfolder's meta must read date · place · count, the same form \
+         a page's date and place take; got: {out}"
+    );
+}
+
 /// BUG 7 regression — folders always render FLAT above the year sections
 /// under group=="year" skip_resort; they are never bucketed into a year.
 #[test]

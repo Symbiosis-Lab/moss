@@ -184,14 +184,6 @@ impl ChildItemProps {
             url_path: &self.url_path,
         }
     }
-
-    /// This card's place, only when it's a leaf — a folder's count is not a
-    /// date, so its own `location:` never shows beside it. One owner for
-    /// `grid_card`/`child_summary`, which each resolved this the same way
-    /// independently before.
-    pub(crate) fn leaf_place(&self) -> Option<&str> {
-        self.child_count.is_none().then(|| self.place.as_deref()).flatten()
-    }
 }
 
 /// The compact meta text for a leaf's date, with its resolved place appended
@@ -213,6 +205,27 @@ pub(crate) fn with_place(text: &str, place: Option<&str>) -> String {
         None => text,
         Some(p) if text.is_empty() => html_escape(p),
         Some(p) => format!("{} · {}", text, html_escape(p)),
+    }
+}
+
+/// The compact meta text every listing form shows: a leaf's date (with its
+/// place via [`with_place`]), a folder's article count, or — when a child
+/// folder's own home page declares a date — that date (with its place) and
+/// the count after it, the same `date · place` a page's own meta gets. The
+/// one owner of this composition; `grid_card`, `child_summary` and this
+/// module's own `render_child` all call it instead of deciding count-vs-date
+/// on their own.
+///
+/// `count_label` is `None` for a leaf (no count at all) and `Some` for a
+/// folder (always shown, with or without a date of its own) — a folder's
+/// place only ever shows beside ITS OWN date, never beside a bare count.
+pub(crate) fn meta_text(date_display: Option<&str>, place: Option<&str>, count_label: Option<&str>) -> String {
+    match count_label {
+        Some(count) => match date_display {
+            Some(date) => format!("{} · {}", with_place(date, place), html_escape(count)),
+            None => html_escape(count),
+        },
+        None => with_place(date_display.unwrap_or(""), place),
     }
 }
 
@@ -254,8 +267,21 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         .filter(|n| *n > 0);
 
     let (child_count, date_raw, date_display) = if let Some(count) = article_count {
-        let latest = crate::build::folder_embed::folder_latest_date(doc, all_docs, root_path);
-        (Some(count), latest, None)
+        // A folder's own home page can declare `date:` (and `location:`)
+        // just like any page — that's the date a reader picks the folder
+        // by, so it wins over `folder_latest_date` (the latest date among
+        // the folder's children, which stays the fallback when the home
+        // page has none of its own, e.g. a folder that only groups other
+        // dated pages). `date_display` is set ONLY from the folder's own
+        // date, never from the fallback: a folder with no date of its own
+        // keeps showing just its count, exactly as before.
+        let date_display = doc.date.as_deref().map(|d| {
+            date_formatters::format_compact_date(d, doc.lang, typesetting)
+        });
+        let date_raw = doc.date.clone().or_else(|| {
+            crate::build::folder_embed::folder_latest_date(doc, all_docs, root_path)
+        });
+        (Some(count), date_raw, date_display)
     } else {
         // `dd` is Arabic-formatted; re-format the raw date so a vertical-CJK
         // page gets CJK numerals.
@@ -317,14 +343,18 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
 /// - For articles (child_count is None, date_display is Some): renders with the
 ///   full-precision date prefix ("year · month", or "year" alone) — there is no
 ///   year heading above this row to carry it, unlike the year-grouped rows.
-/// - For folders (child_count is Some): renders with count suffix (e.g., "4 篇")
+/// - For folders (child_count is Some): renders with count suffix (e.g., "4 篇");
+///   a folder whose own home page declares a date gets that date (and its
+///   place) ahead of the count, the same way a page's date reads, via
+///   [`meta_text`].
 /// - For articles without date: renders title only
 pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typesetting: Option<&str>) -> String {
     let escaped_url = html_escape(&props.url);
     let escaped_title = html_escape(&props.title);
 
     if let Some(count) = props.child_count {
-        let count_text = html_escape(&crate::i18n::article_count_label(lang, count, typesetting));
+        let count_label = crate::i18n::article_count_label(lang, count, typesetting);
+        let count_text = meta_text(props.date_display.as_deref(), props.place.as_deref(), Some(&count_label));
 
         if let Some(ref desc) = props.description {
             // Folder WITH description: title + count suffix, description below

@@ -132,6 +132,8 @@ Most folders need no `sort` declaration: a blog folder is automatically `date`, 
 
 **Why sort drives appearance:** date listings put the date in each card's meta slot; weight and title listings omit the meta slot entirely (no empty space). Folder cards in non-date listings show a small "N articles" subtitle only when they have no description.
 
+A child folder with its own `date:` (on its home page) sorts by that date on a `date`/`date-asc` listing, the same as any page, instead of always leading the list — its card shows that date (and its `location:`, if set) ahead of the article count, so a chronology that includes a dated section still reads in order.
+
 The legacy `order: [...]` field is a back-compat alias for `sort: [...]`.
 
 ## Media

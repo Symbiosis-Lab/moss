@@ -480,16 +480,27 @@ pub(crate) fn generate_children(
     // Render
     let mut html = String::new();
 
-    // Partition once, unconditionally: folders always render above articles.
-    // That is a layout decision independent of which axis sorted the
-    // children; the partition keeps the sorted order within each side.
+    // Partition once: folders render above articles. That is a layout
+    // decision independent of which axis sorted the children, with one
+    // exception — a folder whose own home page has a date, on a date-sorted
+    // (either direction), non-year-grouped listing, sorts by that date like
+    // any page instead of being hoisted above one that came before it; a
+    // chronology (a sequence of lectures, say) would otherwise read out of
+    // order the moment one of its entries was a folder. Year-grouped
+    // listings keep every folder above the year sections regardless — a
+    // dated folder landing inside a year bucket is a shape this fix doesn't
+    // reach, since bucketing assumes a leaf (`ArticleListItemProps` has no
+    // count slot to carry it with).
+    //
     // Previously this filter was written out three times, once per branch,
     // and skipped entirely for a plain skip_resort (Weight/Title/explicit
     // order) listing — so a manually-ordered folder lost its folder/article
     // split, which is what a `children_style: summary` folder of writings,
     // ordered by `weight:` and holding a subfolder or two, hit.
-    let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) =
-        sorted.into_iter().partition(|i| i.child_count.is_some());
+    let interleave_dated_folders = group != "year" && parent_axis.shows_date();
+    let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) = sorted
+        .into_iter()
+        .partition(|i| i.child_count.is_some() && !(interleave_dated_folders && i.date_display.is_some()));
 
     // Folders always render flat, regardless of group setting.
     for folder in &folders {

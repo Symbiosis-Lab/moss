@@ -80,32 +80,36 @@ pub fn render_with_sort(
     // Meta slot — sort-driven; suppressed when the kicker absorbed the
     // date (kicker + extractable year). Falls back to the separate
     // meta when the kicker exists but the date could not be
-    // year-formatted (e.g. CJK-numeral dates).
+    // year-formatted (e.g. CJK-numeral dates). A folder's own date (its
+    // home page's `date:`, if any) and place lead the count the same way a
+    // page's date and place would read alone — one owner for every listing
+    // form's composition, `child_list::meta_text`.
     let date_merged_into_kicker = kicker_base.is_some() && date_year.is_some();
-    let meta_text = match (props.child_count, sort_axis) {
-        // Folder: the count IS the meta, on every sort axis — a folder's
-        // own date is not what a reader picks it by.
-        (Some(count), _) => Some(crate::i18n::article_count_label(lang, count, typesetting)),
-        // The kicker already carries the date (`{kicker} · {year}`); the
-        // meta slot's only remaining job is the place, if there is one —
-        // an empty string here, not the date, so `with_place` below prints
-        // the place alone instead of silently dropping it. `None` (no meta
-        // div at all) only when there's no place either, since this module
-        // never emits an empty `.moss-card-meta`.
-        (None, axis) if axis.shows_date() && date_merged_into_kicker => {
-            props.place.as_deref().map(|_| String::new())
+    let meta_html = match (props.child_count, sort_axis) {
+        // Folder: the count is always shown, on every sort axis — a bare
+        // folder's own `location:` is not a date to sit beside, but its own
+        // `date:`, if any, is exactly that.
+        (Some(count), _) => {
+            let count_label = crate::i18n::article_count_label(lang, count, typesetting);
+            let text = child_list::meta_text(props.date_display.as_deref(), props.place.as_deref(), Some(&count_label));
+            format!(r#"<div class="moss-card-meta">{}</div>"#, text)
         }
-        (None, axis) if axis.shows_date() => props.date_display.clone(),
-        _ => None,
+        (None, axis) if axis.shows_date() && date_merged_into_kicker => {
+            // The kicker already carries the date; the meta slot's only
+            // remaining job is the place, if there is one — never an empty
+            // `.moss-card-meta`.
+            match props.place.as_deref() {
+                Some(place) => format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::with_place("", Some(place))),
+                None => String::new(),
+            }
+        }
+        (None, axis) if axis.shows_date() => props
+            .date_display
+            .as_deref()
+            .map(|date| format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::with_place(date, props.place.as_deref())))
+            .unwrap_or_default(),
+        _ => String::new(),
     };
-    // A leaf's resolved place goes next to its date; a folder's count is not
-    // a date, so it never gets one (`ChildItemProps::leaf_place`). One owner
-    // of this composition across every listing form — see
-    // `child_list::with_place`, which also does the HTML-escaping this slot
-    // used to do inline.
-    let meta_html = meta_text
-        .map(|t| format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::with_place(&t, props.leaf_place())))
-        .unwrap_or_default();
 
     // Title: wrapped in an anchor for linkblog cards (so it stays
     // clickable now that the outer card is a `<div>`, not an `<a>`);
