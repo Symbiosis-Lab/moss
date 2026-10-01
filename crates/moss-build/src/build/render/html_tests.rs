@@ -74,6 +74,11 @@ fn test_non_sidebar_homepage_should_not_inject_latest_sidebar() {
     );
 }
 
+// How many times this thread has ordered a folder's prev/next chain.
+thread_local! {
+    pub(super) static SEQUENCES_ORDERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Tests for the per-language homepage lookup helper that backs the OG
 /// fallback cascades (cover + description). Critical for multilingual
 /// sites: a Chinese sub-page should pull from `zh-hans/index.html` (if
@@ -6732,6 +6737,69 @@ mod og_url_tests {
             .expect("render");
         }
         assert_eq!(BUILT_ON_THIS_THREAD.with(|n| n.get()) - before, 0, "a page built its own media index");
+    }
+
+    /// Pages of one folder share its prev/next order, sorted once per build.
+    /// Sorting the folder for each of its pages cost n² log n on a folder of n.
+    #[test]
+    fn pages_of_a_series_share_one_ordering_of_their_folder() {
+        use super::super::generate_html_collect_og;
+        use super::SEQUENCES_ORDERED;
+
+        let out = tempfile::tempdir().expect("tempdir");
+        let mut guide = make_doc("Guide", "guide/index.html");
+        guide.kind = PageKind::Folder;
+        guide.series = Some(crate::build::types::SeriesField::Flag(true));
+        let parts: Vec<_> = (1..=3)
+            .map(|i| {
+                let mut part = make_doc(&format!("Part {i}"), &format!("guide/part-{i}/index.html"));
+                part.weight = Some(i);
+                part
+            })
+            .collect();
+        // Read out of weight order, so only the sorted chain gives each part
+        // its neighbours.
+        let all_docs = vec![
+            make_doc("Home", "index.html"),
+            parts[2].clone(),
+            guide,
+            parts[0].clone(),
+            parts[1].clone(),
+        ];
+        let project = make_project();
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let shared = crate::build::render::build_shared::BuildShared::new(
+            crate::build::emit::scripts::ScriptAssets::resolve(),
+            &project,
+            &std::collections::HashMap::new(),
+        );
+
+        let before = SEQUENCES_ORDERED.with(|n| n.get());
+        for (i, part) in (1..=3).zip(&parts) {
+            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+            let html = generate_html_collect_og(
+                Some(part), &all_docs, &project, &make_layout(), false, None, None,
+                Language::En, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(),
+                &SiteUrl::parse("https://example.com").unwrap(),
+                true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
+                out.path(),
+                &shared,
+            )
+            .expect("render");
+            let prev = match i {
+                1 => r#"moss-series-nav-prev empty"#.to_string(),
+                _ => format!(r#"&lt;</span> <span class="moss-series-nav-title">Part {}</span>"#, i - 1),
+            };
+            let next = match i {
+                3 => r#"moss-series-nav-next empty"#.to_string(),
+                _ => format!(r#"<span class="moss-series-nav-title">Part {}</span> <span class="moss-series-nav-arrow">&gt;"#, i + 1),
+            };
+            assert!(html.contains(&prev), "Part {i} should have prev `{prev}`: {html}");
+            assert!(html.contains(&next), "Part {i} should have next `{next}`: {html}");
+        }
+        assert_eq!(SEQUENCES_ORDERED.with(|n| n.get()) - before, 1, "each page sorted its folder again");
     }
 
     /// A favicon raster trio an earlier default-SVG build left in the output

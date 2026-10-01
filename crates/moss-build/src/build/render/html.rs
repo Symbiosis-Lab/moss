@@ -136,9 +136,9 @@ pub fn generate_html(
 /// generated OG card PNG that was written under `output_dir/_moss/og/`. The
 /// caller appends those paths to `site_hashes.image_outputs` so blocking-
 /// phase stale cleanup preserves them.
-pub fn generate_html_collect_og(
+pub fn generate_html_collect_og<'d>(
     doc: Option<&ParsedDocument>,
-    all_docs: &[ParsedDocument],
+    all_docs: &'d [ParsedDocument],
     project: &ProjectStructure,
     layout_config: &LayoutConfig,
     is_homepage: bool,
@@ -165,7 +165,7 @@ pub fn generate_html_collect_og(
     og_outputs: &mut crate::build::page::og_card::OgSink<'_>,
     source_root: &std::path::Path,
     // Built once per build by the caller, never per page.
-    shared: &BuildShared,
+    shared: &BuildShared<'d>,
 ) -> Result<String, String> {
     generate_html_inner(
         doc, all_docs, project, layout_config, is_homepage, rss_link,
@@ -301,9 +301,9 @@ fn namespace_root_map_notice(source_path: &str) -> String {
     format!("{source_path}: supplies this page's intro; the place map composes below it")
 }
 
-fn generate_html_inner(
+fn generate_html_inner<'d>(
     doc: Option<&ParsedDocument>,
-    all_docs: &[ParsedDocument],
+    all_docs: &'d [ParsedDocument],
     project: &ProjectStructure,
     layout_config: &LayoutConfig,
     is_homepage: bool,
@@ -326,9 +326,9 @@ fn generate_html_inner(
     output_dir: Option<&std::path::Path>,
     mut og_outputs: Option<&mut crate::build::page::og_card::OgSink<'_>>,
     source_root: &std::path::Path,
-    shared: &BuildShared,
+    shared: &BuildShared<'d>,
 ) -> Result<String, String> {
-    let BuildShared { scripts, media_lookup } = shared;
+    let BuildShared { scripts, media_lookup, sequences } = shared;
     // The language moss's own interface is drawn in: the page's own when it
     // declares one moss has strings for, else the site default. Distinct from
     // `<html lang>`, which describes the content and may name a language moss
@@ -998,11 +998,11 @@ fn generate_html_inner(
                     Some(crate::build::types::SeriesField::Flag(false))
                 );
                 let nav_enabled = parent_chrome_on && !page_opted_out;
-                let sorted_siblings: Option<Vec<&ParsedDocument>> = if nav_enabled {
+                let sorted_siblings = if nav_enabled {
                     let parent_prefix = format!("{}/", parent_folder);
-                    let sorted = sequence_siblings(
+                    let sorted = sequences.chain(&parent_index, || sequence_siblings(
                         all_docs, &parent_index, &parent_prefix, &resolved,
-                    );
+                    ));
                     if sorted.is_empty() { None } else { Some(sorted) }
                 } else {
                     None
@@ -1738,6 +1738,8 @@ fn sequence_siblings<'a>(
     parent_prefix: &str,
     resolved: &moss_core::sort::ResolvedSort,
 ) -> Vec<&'a ParsedDocument> {
+    #[cfg(test)]
+    tests::SEQUENCES_ORDERED.with(|n| n.set(n.get() + 1));
     let siblings: Vec<&ParsedDocument> = all_docs.iter()
         .filter(|pd| {
             pd.url_path != parent_index
