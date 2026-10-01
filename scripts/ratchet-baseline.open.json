@@ -103,7 +103,7 @@
         "crates/moss-core/src": 39,
         "crates/moss-core/src/ast": 24,
         "crates/moss-core/src/resolve": 16,
-        "crates/moss-build/src/ops/serve": 18,
+        "crates/moss-build/src/ops/serve": 19,
         "crates/moss-build/src/js-src/site/places-explorer": 17
       },
       "oversized": {

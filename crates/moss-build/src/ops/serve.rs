@@ -27,10 +27,12 @@
 //!   `MossEvent` bus the desktop frontend receives over Tauri IPC (`events.rs`).
 //!   Same token gate as `/read`, minus the media-type half (a GET has no body).
 //!
-//! `POST /__moss/yield` and `GET /__moss/session` are two further,
-//! unconditional endpoints outside this three-tier model — infrastructure
-//! routes like health and source, not carrier commands (see `yield_route`'s
-//! and `session_route`'s module docs).
+//! `POST /__moss/yield`, `GET /__moss/session` and `POST /__moss/upload` are
+//! further, unconditional endpoints outside this three-tier model —
+//! infrastructure routes like health and source, not carrier commands (see
+//! `yield_route`'s, `session_route`'s and `upload_route`'s module docs).
+//! `upload` is the one mutating infrastructure route, so unlike its two
+//! siblings it wears the mutation carrier's own token gate.
 //!
 //! ## The token
 //!
@@ -71,6 +73,7 @@
 //! - `trust_boundary` — Host/Origin validation (outermost layer)
 //! - `yield_route` — `POST /__moss/yield` handler + contract
 //! - `session_route` — `GET /__moss/session` token→cookie exchange
+//! - `upload_route` — `POST /__moss/upload` handler + contract
 //! - `events` — the SSE event carrier + headless announcer/reporter, and the
 //!   viewer-activity signal
 //! - `placeholder` — SVG placeholders for assets still being processed
@@ -98,6 +101,7 @@ pub mod router;
 pub mod session;
 pub(crate) mod session_route;
 pub(crate) mod trust_boundary;
+pub(crate) mod upload_route;
 pub(crate) mod yield_route;
 
 pub use invoke::InvokeCtx;

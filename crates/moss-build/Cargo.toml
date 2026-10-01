@@ -132,7 +132,9 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std", "r
 # ── The preview server (ops/serve, S1 server relocation) ─────────────────────
 # Exactly the desktop app's versions and feature sets so each crate compiles
 # once for the workspace (`cargo tree -d` is the check). hyper-1.x stack only.
-axum = "0.7"
+# "multipart" is for the `/__moss/upload` route's `multipart/form-data` body —
+# a feature flag on the same axum version, not a new crate.
+axum = { version = "0.7", features = ["multipart"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs"] }
 http-body-util = "0.1"

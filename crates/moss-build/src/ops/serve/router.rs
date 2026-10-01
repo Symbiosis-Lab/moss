@@ -343,7 +343,29 @@ pub async fn start_server(
                     let (site_dir, invoke, extra_hosts) = (site_dir.clone(), invoke.clone(), extra_hosts.clone());
                     async move { super::session_route::handle_session(invoke, site_dir, extra_hosts, q, headers).await }
                 }
-            }));
+            }))
+            // Unconditional like health/source/comments/yield/session, but the
+            // one mutating infrastructure route — see `upload_route`. The gate
+            // runs INSIDE the handler (same `carrier_token::admit` the
+            // mutation carrier uses) rather than as a `route_layer`, because
+            // it must stay in front of the multipart body: an unadmitted
+            // caller's upload is refused before a single byte of it is parsed.
+            // The `.layer(...)` below is attached to THIS route's own method
+            // router, not via a trailing `route_layer` — `Router::route_layer`
+            // applies to every route added so far in the chain, not just the
+            // last one, so a trailing call here would have raised every
+            // earlier `/__moss/*` route's body cap too. `upload_route::TOTAL_MAX_UPLOAD_BYTES`
+            // replaces axum's 2 MiB default for this route alone;
+            // `upload_route::MAX_UPLOAD_PART_BYTES` is the real, smaller limit,
+            // enforced per part while streaming.
+            .route(
+                "/__moss/upload",
+                axum::routing::post({
+                    let (site_dir, invoke) = (state.clone(), invoke.clone());
+                    move |r: Request<Body>| async move { super::upload_route::handle_upload(invoke, site_dir, r).await }
+                })
+                .layer(axum::extract::DefaultBodyLimit::max(super::upload_route::TOTAL_MAX_UPLOAD_BYTES)),
+            );
 
         // Read-only HTTP command carrier (`POST /__moss/invoke/*cmd`). Registered
         // BEFORE `.fallback()` (same `/__moss/` ordering rule) and only when a
