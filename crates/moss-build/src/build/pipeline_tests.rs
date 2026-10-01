@@ -2117,7 +2117,6 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
                 error: None,
-                hls_rungs: 0,
                 poster: false,
                 mp4_oid: None,
                 thumb_oid: None,
@@ -2132,7 +2131,6 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
                 error: None,
-                hls_rungs: 0,
                 poster: false,
                 mp4_oid: None,
                 thumb_oid: None,

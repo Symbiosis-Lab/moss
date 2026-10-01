@@ -39,7 +39,7 @@ with which values. Scope to those rather than to something merely unique to
 this page today.
 
 ```css
-body[data-page="home"] .moss-hero { --moss-hero-max-height: none; }
+body[data-page="home"] .moss-hero { --moss-hero-object-position: center; }
 ```
 
 **Set the component's custom properties.** A component's declared properties
@@ -212,6 +212,8 @@ moss describe --json | jq -r '.components[] | select(.authorable) | .class'
 ```
 
 Each entry carries `example_markdown`, which is the invocation moss itself tests — copy that shape rather than reconstructing one. Add a site-specific class to a shortcode invocation and style the class; keep the shortcode generic.
+
+`:::hero`'s overlay text (the markdown written inside the fence) has exactly one position on every overlaid layout: bottom-left. No attribute moves it. If the crop needs some region of the image kept clear for legibility, either keep the overlay content away from that corner or drop overlay entirely — an image-only hero (`:::hero {image=…}` with nothing between the fences, followed by ordinary markdown as the page's own next block) or `caption="…"` both put the words below the image instead of on top of it.
 
 `:::hero {.plate}` (2026-09-11) is a moss default, not a per-site class to style: it renders the hero image whole — never cropped, never enlarged past the resolution it was delivered at, shrunk to fit the column instead. Reach for it over a plain hero whenever the image's own shape, not the page layout, should decide how large it appears — an artwork, manuscript page, or photograph reproduction where cropping would cut off part of the object, and especially a wide or tall outlier (a handscroll, a long strip) that a viewport-relative `100vw` sizing would otherwise fetch too small and stretch blurry. A plain `:::hero` (or `:::hero {caption="…"}`, which already avoids cropping but still bounds the frame at the default height cap) stays right for a banner meant to fill its slot.
 
@@ -433,7 +435,10 @@ A `[[reference]]` written from a page inside a language tree prefers that reader
 - **Components** — every `moss-*` class moss emits, with `authorable: true`
   flagging the author-facing shortcodes.
 - **Frontmatter** — every built-in frontmatter field moss recognizes, its type,
-  and allowed enum values where applicable.
+  and allowed enum values where applicable. Check this array before adding any
+  new top-level frontmatter key of your own: a name that collides with one
+  already here is read by moss and silently changes behaviour instead of
+  staying the inert custom field you meant it to be.
 
 Tokens and custom properties are both `--moss-*` names and are easy to confuse.
 The test is where you set it: a token belongs in `:root {}` and cascades

@@ -290,10 +290,6 @@ pub struct VideoConversionOutcome {
     /// Set when conversion failed. Carried inside the outcome so singleflight
     /// waiters receive the error message rather than an opaque sentinel.
     pub(crate) error: Option<String>,
-    /// How many rungs the HLS ladder has, or 0 for no ladder. The caller
-    /// registers the ladder's URLs from this — a ladder truncates from the top
-    /// only, so its length names its files.
-    pub(crate) hls_rungs: usize,
     /// The poster frame reached staging. Absent, it is not delivered: a poster
     /// is optional, a promised URL is not.
     pub(crate) poster: bool,
@@ -307,11 +303,13 @@ pub struct VideoConversionOutcome {
     /// leaves both `false`/`None`, since no bytes actually reached staging.
     pub(crate) thumb_oid: Option<String>,
     /// `(member filename, CAS oid)` for every file the HLS ladder staged this
-    /// call, filename bare (e.g. `"v0.m3u8"`, no `video/hls/` prefix) so it
-    /// matches `asset_paths::hls_members`' own naming. Populated whenever
-    /// `produce_ladder` returns entries — cache hit or fresh encode alike,
-    /// since that function's own cache check runs independently of the
-    /// mp4/thumb one above it.
+    /// call, filename bare (e.g. `"v0.m3u8"`, no `video/hls/` prefix). This is
+    /// the one thing the caller builds `Delivery`s from (`hls_deliveries`) —
+    /// not reconstructed from a rung count, because a silent source's own
+    /// entries are already narrower than the rung table would assume (no
+    /// audio-group members). Populated whenever `produce_ladder` returns
+    /// entries — cache hit or fresh encode alike, since that function's own
+    /// cache check runs independently of the mp4/thumb one above it.
     pub(crate) hls_entries: Vec<(String, String)>,
 }
 
@@ -364,7 +362,7 @@ pub(crate) fn convert_single_video(
     // and a video whose MP4 is a cache hit still needs its ladder linked into
     // staging. A failure here is not a failed conversion — the MP4 is still the
     // page's video and the emitter simply has no ladder to offer.
-    let mut hls_rungs = 0usize;
+    //
     // (bare member filename, CAS oid) for every ladder file `produce_ladder`
     // just linked — same census `entries` carries, minus the `video/hls/`
     // transform-cache prefix, so it lines up with `asset_paths::hls_members`'
@@ -383,11 +381,6 @@ pub(crate) fn convert_single_video(
         cancel_flag,
     ) {
         Ok(Some(entries)) => {
-            // One playlist per rung, plus one segment each — see `hls_members`.
-            hls_rungs = entries
-                .iter()
-                .filter(|(n, _)| n.starts_with("video/hls/v") && n.ends_with(".m3u8"))
-                .count();
             hls_entries = entries
                 .iter()
                 .filter_map(|(name, entry)| {
@@ -413,7 +406,6 @@ pub(crate) fn convert_single_video(
         Err(ref e) if e == "Cancelled" => {
             return VideoConversionOutcome {
                 error: Some("Cancelled".to_string()),
-                hls_rungs: 0,
                 poster: false,
                 mp4_oid: None,
                 thumb_oid: None,
@@ -476,7 +468,6 @@ pub(crate) fn convert_single_video(
             if let Err(e) = objects.link_to(mp4_oid, &output_mp4) {
                 return VideoConversionOutcome {
                     error: Some(format!("could not stage {}: {}", filename, e)),
-                    hls_rungs,
                     poster: false,
                     mp4_oid: None,
                     thumb_oid: None,
@@ -485,7 +476,6 @@ pub(crate) fn convert_single_video(
             }
             return VideoConversionOutcome {
                 error: None,
-                hls_rungs,
                 poster: thumb_linked,
                 mp4_oid: Some(mp4_oid.clone()),
                 // Only when the bytes actually reached staging — a store hit
@@ -508,7 +498,6 @@ pub(crate) fn convert_single_video(
             if let Err(e) = objects.link_to(mp4_oid, &output_mp4) {
                 return VideoConversionOutcome {
                     error: Some(format!("could not stage {}: {}", filename, e)),
-                    hls_rungs,
                     poster: false,
                     mp4_oid: None,
                     thumb_oid: None,
@@ -523,7 +512,6 @@ pub(crate) fn convert_single_video(
                 Err(_) => {
                     return VideoConversionOutcome {
                         error: Some("Cancelled".to_string()),
-                        hls_rungs,
                         poster: false,
                         mp4_oid: None,
                         thumb_oid: None,
@@ -543,7 +531,6 @@ pub(crate) fn convert_single_video(
 
             return VideoConversionOutcome {
                 error: None,
-                hls_rungs,
                 poster: thumb_linked,
                 mp4_oid: Some(mp4_oid.clone()),
                 thumb_oid: if thumb_linked { thumb_oid_result } else { None },
@@ -570,7 +557,6 @@ pub(crate) fn convert_single_video(
         Err(_) => {
             return VideoConversionOutcome {
                 error: Some("Cancelled".to_string()),
-                hls_rungs,
                 poster: false,
                 mp4_oid: None,
                 thumb_oid: None,
@@ -606,7 +592,6 @@ pub(crate) fn convert_single_video(
             let _ = fs::remove_file(&temp_mp4);
             return VideoConversionOutcome {
                 error: Some("Cancelled".to_string()),
-                hls_rungs,
                 poster: false,
                 mp4_oid: None,
                 thumb_oid: None,
@@ -618,7 +603,6 @@ pub(crate) fn convert_single_video(
             let _ = fs::remove_file(&temp_mp4);
             return VideoConversionOutcome {
                 error: Some(e),
-                hls_rungs,
                 poster: false,
                 mp4_oid: None,
                 thumb_oid: None,
@@ -641,7 +625,6 @@ pub(crate) fn convert_single_video(
             let _ = fs::remove_file(&temp_mp4);
             return VideoConversionOutcome {
                 error: Some(format!("Validation failed for {}", filename)),
-                hls_rungs,
                 poster: false,
                 mp4_oid: None,
                 thumb_oid: None,
@@ -658,7 +641,6 @@ pub(crate) fn convert_single_video(
         Err(e) => {
             return VideoConversionOutcome {
                 error: Some(format!("could not stage {}: {}", filename, e)),
-                hls_rungs,
                 poster: false,
                 mp4_oid: None,
                 thumb_oid: None,
@@ -686,7 +668,6 @@ pub(crate) fn convert_single_video(
 
     VideoConversionOutcome {
         error: None,
-        hls_rungs,
         poster: thumb_linked,
         mp4_oid: mp4_oid_result,
         // As above: a stored-but-unlinked thumbnail has no bytes at the URL
@@ -878,6 +859,23 @@ fn abandonment(cancelled: bool) -> ItemStep {
     } else {
         ItemStep::Superseded
     }
+}
+
+/// One `Delivery` per HLS file `produce_ladder` actually linked for this
+/// item, straight from `hls_entries` — the authoritative census, not
+/// reconstructed from the rung table. A silent source's `hls_entries` is
+/// already narrower than `asset_paths::hls_members(rungs)` would assume
+/// (see `hls::ladder_members`), and zipping the full table's names against
+/// it by lookup would deliver phantom entries — a URL for the audio-group
+/// files nothing on disk backs, reported `AssetReady` anyway — for every
+/// name `hls_entries` has no oid for.
+fn hls_deliveries(mapped_source: &str, hls_entries: &[(String, String)]) -> Vec<Delivery> {
+    use moss_core::asset_paths;
+    let hls_dir = asset_paths::to_hls_dir(mapped_source);
+    hls_entries
+        .iter()
+        .map(|(name, oid)| Delivery { url: format!("{hls_dir}/{name}"), kind: DeliveryKind::Video, oid: Some(oid.clone()) })
+        .collect()
 }
 
 /// Record one item's deliveries: the census the manifest reads, the live
@@ -1431,22 +1429,7 @@ pub(crate) fn run_video_conversion(
                     oid: outcome.thumb_oid.clone(),
                 });
             }
-            if let Some(rungs) = asset_paths::video_ladder_rungs_by_count(outcome.hls_rungs) {
-                // `hls_outputs` derives its URLs by prefixing `hls_members`'
-                // bare names with the ladder dir — the SAME `hls_members` call
-                // `outcome.hls_entries` was keyed by inside `convert_single_
-                // video`, so a name found there always names one of these URLs.
-                let names = asset_paths::hls_members(rungs);
-                let urls = asset_paths::hls_outputs(&mapped_source, rungs);
-                delivered.extend(names.into_iter().zip(urls).map(|(name, url)| {
-                    let oid = outcome
-                        .hls_entries
-                        .iter()
-                        .find(|(n, _)| *n == name)
-                        .map(|(_, o)| o.clone());
-                    Delivery { url, kind: DeliveryKind::Video, oid }
-                }));
-            }
+            delivered.extend(hls_deliveries(&mapped_source, &outcome.hls_entries));
 
             if !was_shared && is_headless {
                 eprintln!("  [{}/{}] Done: {}", current, total, filename);
@@ -2290,6 +2273,48 @@ pub(crate) mod tests {
     use super::*;
 
     // ===========================================
+    // hls_deliveries: the Delivery census for one item's ladder
+    // ===========================================
+
+    /// The defect this guards: reconstructing names from the rung table
+    /// (`asset_paths::hls_members(rungs)`) and zipping them against
+    /// `hls_entries` by lookup would deliver four phantom audio-group
+    /// entries for a silent source, whose `hls_entries` never had them —
+    /// `oid: None`, a URL nothing on disk backs, reported `AssetReady`
+    /// anyway. Building straight from `hls_entries` cannot produce more
+    /// deliveries than files that actually exist.
+    #[test]
+    fn hls_deliveries_for_a_silent_ladder_has_no_phantom_audio_entries() {
+        let hls_entries = vec![
+            (moss_core::asset_paths::HLS_MASTER_NAME.to_string(), "oid-master".to_string()),
+            ("v0.m3u8".to_string(), "oid-v0-m3u8".to_string()),
+            ("v0.m4s".to_string(), "oid-v0-m4s".to_string()),
+        ];
+        let deliveries = hls_deliveries("videos/quiet.mov", &hls_entries);
+        assert_eq!(deliveries.len(), hls_entries.len(), "one Delivery per actually-produced file, no more");
+        for d in &deliveries {
+            assert!(!d.url.contains("alo") && !d.url.contains("ahi"), "phantom audio delivery: {}", d.url);
+            assert_eq!(d.oid.as_deref(), hls_entries.iter().find(|(n, _)| d.url.ends_with(n.as_str())).map(|(_, o)| o.as_str()));
+        }
+    }
+
+    /// A source with audio keeps every one of its entries, including the
+    /// audio-group files — this must not regress while the silent case above
+    /// is fixed.
+    #[test]
+    fn hls_deliveries_for_a_normal_ladder_keeps_audio_entries() {
+        let hls_entries = vec![
+            (moss_core::asset_paths::HLS_MASTER_NAME.to_string(), "oid-master".to_string()),
+            ("v0.m3u8".to_string(), "oid-v0-m3u8".to_string()),
+            ("alo.m3u8".to_string(), "oid-alo-m3u8".to_string()),
+            ("alo.m4s".to_string(), "oid-alo-m4s".to_string()),
+        ];
+        let deliveries = hls_deliveries("videos/loud.mov", &hls_entries);
+        assert_eq!(deliveries.len(), 4);
+        assert!(deliveries.iter().any(|d| d.url.ends_with("alo.m3u8")));
+    }
+
+    // ===========================================
     // clear_stale_ladder: the Ok(None) record cleanup
     // ===========================================
 
@@ -2776,6 +2801,7 @@ pub(crate) mod tests {
             duration_secs: 60.0,
             video_kbps: None,
             total_kbps: None,
+            has_audio: true,
         };
         let params = crate::build::media::hls::ladder_params(&config, rungs, source);
         let master = synthetic_master(rungs);

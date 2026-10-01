@@ -32,6 +32,15 @@ pub(crate) struct SourceFacts {
     pub(crate) duration_secs: f64,
     pub(crate) video_kbps: Option<f64>,
     pub(crate) total_kbps: Option<f64>,
+    /// Whether the source carries an audio stream — [`super::ladder_members`]
+    /// needs this to know which member list a cache hit is vouching for; a
+    /// record from before this field existed has none to read back, so
+    /// [`Self::from_json`] defaults it to `true` rather than failing the
+    /// whole lookup, which is exactly what every such record was actually
+    /// encoded with (a silent source never reached a successful cache write
+    /// before this field existed — see the encode-site fix this travels
+    /// with).
+    pub(crate) has_audio: bool,
 }
 
 impl SourceFacts {
@@ -41,6 +50,7 @@ impl SourceFacts {
             duration_secs: probe.duration_secs,
             video_kbps: probe.video_kbps,
             total_kbps: probe.total_kbps,
+            has_audio: probe.has_audio,
         }
     }
 
@@ -64,6 +74,7 @@ impl SourceFacts {
             "duration_secs": self.duration_secs,
             "video_kbps": self.video_kbps,
             "total_kbps": self.total_kbps,
+            "has_audio": self.has_audio,
         })
     }
 
@@ -73,6 +84,7 @@ impl SourceFacts {
             duration_secs: v.get("duration_secs")?.as_f64()?,
             video_kbps: v.get("video_kbps").and_then(serde_json::Value::as_f64),
             total_kbps: v.get("total_kbps").and_then(serde_json::Value::as_f64),
+            has_audio: v.get("has_audio").and_then(serde_json::Value::as_bool).unwrap_or(true),
         })
     }
 }
@@ -131,7 +143,7 @@ pub(super) fn cached_ladder(
         return None;
     }
 
-    let members = hls_members(&effective);
+    let members = super::ladder_members(&effective, source.has_audio);
     if record.transforms.keys().filter(|k| k.starts_with(HLS_TRANSFORM_PREFIX)).count() != members.len() {
         return None;
     }
@@ -175,6 +187,11 @@ pub(super) fn legacy_cached_ladder(
 ) -> Option<(Vec<String>, Vec<String>, serde_json::Value)> {
     let record = transforms.get(source_oid)?;
     let table_rungs = record_table_rungs(&record)?;
+    // Unconditionally the full table, not `super::ladder_members`: every
+    // record old enough to land here predates the fix that lets a silent
+    // source's ladder cache successfully at all, so one could never have
+    // reached this record in the first place — the audio-group files were
+    // always part of what a legacy write actually produced.
     let members = hls_members(table_rungs);
     if record.transforms.keys().filter(|k| k.starts_with(HLS_TRANSFORM_PREFIX)).count() != members.len() {
         return None;

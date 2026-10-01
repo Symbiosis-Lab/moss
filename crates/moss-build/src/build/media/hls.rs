@@ -430,6 +430,30 @@ fn push_member_pair(members: &mut Vec<String>, playlist: &str) {
     members.push(playlist.to_string());
 }
 
+/// The bare filenames a real encode of `rungs` actually writes for a source
+/// whose audio stream is (or isn't) present — [`hls_members`]'s table-only
+/// census narrowed to match `has_audio`.
+///
+/// `hls_members` cannot know this: it takes only `rungs`, so it always lists
+/// every rung's audio group. `build_hls_args` already stops mapping `a:0` and
+/// naming an audio group in `-var_stream_map` once `has_audio` is false (a
+/// silent source declares no group a player could resolve), so a real encode
+/// never writes `alo.*`/`ahi.*` for one. Every caller that reads those bytes
+/// back — storing them in the object store, relying on a cached record's own
+/// file count, building the delivery census — needs the narrowed list, or it
+/// tries to read files ffmpeg was correctly never asked to write.
+fn ladder_members(rungs: &[VideoRung], has_audio: bool) -> Vec<String> {
+    let members = hls_members(rungs);
+    if has_audio {
+        return members;
+    }
+    let audio_names: Vec<String> = audio_groups(rungs)
+        .into_iter()
+        .flat_map(|g| [format!("{}.m3u8", g.as_str()), format!("{}.m4s", g.as_str())])
+        .collect();
+    members.into_iter().filter(|m| !audio_names.contains(m)).collect()
+}
+
 /// Encode the HLS ladder for a source, beside its progressive MP4.
 ///
 /// Encodes the rungs it is given and returns the files it wrote. It does not
@@ -503,8 +527,10 @@ pub fn encode_ladder(
 
     // Every name inside the directory is constant, so the census is the same
     // list wherever the ladder lands — that is what lets a cached ladder be
-    // relinked under a renamed video without rewriting a playlist.
-    Ok(hls_members(rungs))
+    // relinked under a renamed video without rewriting a playlist. Narrowed
+    // by `probe.has_audio`: a silent source's encode above never wrote an
+    // audio group, so this must not claim one either.
+    Ok(ladder_members(rungs, probe.has_audio))
 }
 
 #[cfg(test)]
@@ -598,9 +624,11 @@ pub(crate) fn produce_ladder(
             }
             // `hls_members` is the one owner of the naming scheme: the scratch
             // names, the staging names and the cache keys are all this same
-            // list. The scratch directory can be named anything, because
-            // nothing inside the ladder refers to the directory it sits in.
-            let members = hls_members(&rungs);
+            // list, narrowed by `ladder_members` to drop the audio group a
+            // silent source's encode never writes. The scratch directory can
+            // be named anything, because nothing inside the ladder refers to
+            // the directory it sits in.
+            let members = ladder_members(&rungs, probe.has_audio);
             let scratch = temp_dir.join(format!("hls-{}", uuid::Uuid::new_v4()));
             let result = encode_ladder(
                 Path::new(ffmpeg.bin_path()),

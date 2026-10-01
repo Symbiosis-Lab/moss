@@ -1818,5 +1818,41 @@ pub(crate) fn synthesise_high_bitrate(bin: &str, dest: &Path, size: &str, durati
         .unwrap_or(false)
 }
 #[cfg(test)]
+/// Synthesise a short test video with NO audio stream at all — distinct from
+/// a quiet one: [`probe_source`]'s `has_audio` is a stream-presence check,
+/// not a loudness measurement, and this is the only one of the three
+/// synthesisers that leaves it false.
+pub(crate) fn synthesise_silent(bin: &str, dest: &Path, size: &str) -> bool {
+    std::process::Command::new(bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", &format!("testsrc=size={}:rate=30:duration=4", size),
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        ])
+        .arg(dest)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+#[cfg(test)]
+/// Synthesise a short test video whose audio stream is present but carries
+/// silence (`anullsrc`, not [`synthesise`]'s `sine`) — the source `has_audio`
+/// must still read true for, unlike [`synthesise_silent`]'s no-stream-at-all
+/// case.
+pub(crate) fn synthesise_with_silent_audio_track(bin: &str, dest: &Path, size: &str) -> bool {
+    std::process::Command::new(bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", &format!("testsrc=size={}:rate=30:duration=4", size),
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:duration=4",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest",
+        ])
+        .arg(dest)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+#[cfg(test)]
 #[path = "ffmpeg_tests.rs"]
 mod tests;

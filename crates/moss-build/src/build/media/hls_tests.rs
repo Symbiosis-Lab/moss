@@ -7,7 +7,9 @@
 
 use super::*;
 use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, TransformRecord};
-use crate::build::media::ffmpeg::{real_ffmpeg, synthesise, synthesise_high_bitrate};
+use crate::build::media::ffmpeg::{
+    real_ffmpeg, synthesise, synthesise_high_bitrate, synthesise_silent, synthesise_with_silent_audio_track,
+};
 use moss_core::asset_paths::{AudioGroup, VIDEO_LADDER};
 
 fn args() -> Vec<String> {
@@ -161,6 +163,28 @@ fn a_silent_source_maps_no_audio() {
     let j = a.join(" ");
     assert!(!j.contains("-map a:0"), "no audio stream to map");
     assert!(!j.contains("agroup"), "and no rendition groups to reference");
+}
+
+/// `hls_members` itself always lists both audio groups — it only ever sees
+/// `rungs`, never the source. `ladder_members` is the narrowing `produce_
+/// ladder`/`cached_ladder` read instead, so a silent source's expected file
+/// list matches what `build_hls_args` (above) actually tells ffmpeg to
+/// write.
+#[test]
+fn ladder_members_drops_audio_files_for_a_silent_source() {
+    let full = ladder_members(&VIDEO_LADDER, true);
+    let narrowed = ladder_members(&VIDEO_LADDER, false);
+    assert_eq!(full, hls_members(&VIDEO_LADDER), "has_audio=true is the unnarrowed census, unchanged");
+    assert_eq!(
+        narrowed.len(),
+        full.len() - 4,
+        "exactly the two audio groups' two files each must drop: {narrowed:?}"
+    );
+    for group in [AudioGroup::Lean, AudioGroup::Clean] {
+        let a = group.as_str();
+        assert!(!narrowed.iter().any(|m| m.starts_with(a)), "{a} must be gone: {narrowed:?}");
+    }
+    assert_eq!(narrowed[0], HLS_MASTER_NAME, "the gate stays first");
 }
 
 #[test]
@@ -508,12 +532,217 @@ fn produce_ladder_links_a_self_consistent_ladder_and_reuses_it_under_a_new_name(
     self_consistent(&iceland);
 }
 
+/// A silent source (no audio stream at all) must still get a ladder, and
+/// that ladder must carry neither audio-group files nor an audio reference
+/// in the master playlist. The defect this guards: `hls_members` lists
+/// `alo.*`/`ahi.*` for every rung count regardless of the source, so
+/// `produce_ladder` tried to read files ffmpeg correctly never wrote, and
+/// the whole ladder failed every build.
+#[test]
+fn hls_ladder_for_a_silent_source_has_no_audio_groups() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("quiet.mov");
+    if !synthesise_silent(&bin, &source, "1280x720") {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let ffmpeg = FFmpegManager::from_bin_path(bin);
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    let ladder_dir = staging.join("quiet.hls");
+
+    let entries = produce_ladder(
+        &ffmpeg,
+        &source,
+        "oid-quiet",
+        &ladder_dir,
+        dir.path(),
+        &transforms,
+        &VideoCompressionConfig::default(),
+        None,
+        None,
+        None,
+    )
+    .expect("a silent source must not fail the ladder")
+    .expect("a 1280-wide source fills the ladder");
+
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    for group in [AudioGroup::Lean, AudioGroup::Clean] {
+        let a = group.as_str();
+        assert!(
+            !names.iter().any(|n| n.contains(a)),
+            "a silent source must not produce a {a} member: {names:?}"
+        );
+    }
+
+    let master = std::fs::read_to_string(ladder_dir.join(HLS_MASTER_NAME)).unwrap();
+    assert!(
+        !master.contains("TYPE=AUDIO"),
+        "master playlist for a silent source must not declare an audio group:\n{master}"
+    );
+    assert!(
+        !master.contains("AUDIO=\""),
+        "master playlist for a silent source must not bind a variant to an audio group:\n{master}"
+    );
+}
+
+/// A source whose audio track is present but carries silence (`anullsrc`)
+/// is NOT a silent source — it still has an audio stream, so it must keep
+/// its audio groups exactly like a normal clip.
+#[test]
+fn hls_ladder_for_a_source_with_a_silent_audio_track_keeps_audio_groups() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("hush.mov");
+    if !synthesise_with_silent_audio_track(&bin, &source, "1280x720") {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let ffmpeg = FFmpegManager::from_bin_path(bin);
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    let ladder_dir = staging.join("hush.hls");
+
+    let entries = produce_ladder(
+        &ffmpeg,
+        &source,
+        "oid-hush",
+        &ladder_dir,
+        dir.path(),
+        &transforms,
+        &VideoCompressionConfig::default(),
+        None,
+        None,
+        None,
+    )
+    .expect("a source with a silent audio track must not fail the ladder")
+    .expect("a 1280-wide source fills the ladder");
+
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    for group in [AudioGroup::Lean, AudioGroup::Clean] {
+        let a = group.as_str();
+        assert!(
+            names.iter().any(|n| n.contains(a)),
+            "a source with an audio stream must keep its {a} member: {names:?}"
+        );
+    }
+
+    let master = std::fs::read_to_string(ladder_dir.join(HLS_MASTER_NAME)).unwrap();
+    assert!(
+        master.contains("TYPE=AUDIO"),
+        "master playlist for a source with an audio stream must declare an audio group:\n{master}"
+    );
+}
+
+/// A silent source's cached ladder must hit the cache on a second build, the
+/// same as a source with audio does. The defect this guards: a cache lookup
+/// that assumes every rung carries an audio group counts the record's own
+/// files against a list too long by four, reads that as a partial ladder,
+/// and re-encodes a source that never changed — on every single build,
+/// forever, never erroring but never caching either.
+///
+/// Proved the same way the audio-source cache-reuse test above is: the
+/// source is deleted between the two calls, so a hit that still succeeds
+/// cannot have re-probed or re-encoded anything.
+#[test]
+fn silent_source_hls_ladder_is_cached_not_reencoded_on_the_second_build() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("quiet.mov");
+    if !synthesise_silent(&bin, &source, "1280x720") {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let ffmpeg = FFmpegManager::from_bin_path(bin);
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    let ladder_dir = staging.join("quiet.hls");
+
+    let first = produce_ladder(
+        &ffmpeg,
+        &source,
+        "oid-quiet-cache",
+        &ladder_dir,
+        dir.path(),
+        &transforms,
+        &VideoCompressionConfig::default(),
+        None,
+        None,
+        None,
+    )
+    .expect("a silent source must not fail the ladder")
+    .expect("a 1280-wide source fills the ladder");
+
+    // `produce_ladder` only reads the cache; persisting what a run produced
+    // is the caller's job (video.rs, after the whole conversion lands) —
+    // mirrored here the same way the audio-source cache-reuse test above
+    // does it.
+    let mut record = TransformRecord {
+        source_oid: "oid-quiet-cache".to_string(),
+        source_size: 0,
+        transforms: std::collections::HashMap::new(),
+    };
+    record.transforms.extend(first.iter().cloned());
+    transforms.put(&record).unwrap();
+
+    // Take the source away: a second call that still succeeds must be a
+    // cache hit, since there is nothing left to probe or encode.
+    std::fs::remove_file(&source).unwrap();
+    std::fs::remove_dir_all(&ladder_dir).unwrap();
+
+    let second = produce_ladder(
+        &ffmpeg,
+        &source,
+        "oid-quiet-cache",
+        &ladder_dir,
+        dir.path(),
+        &transforms,
+        &VideoCompressionConfig::default(),
+        None,
+        None,
+        None,
+    )
+    .expect("cache hit")
+    .expect("still a ladder");
+
+    assert_eq!(
+        first.iter().map(|(n, e)| (n.clone(), e.oid.clone())).collect::<Vec<_>>(),
+        second.iter().map(|(n, e)| (n.clone(), e.oid.clone())).collect::<Vec<_>>(),
+        "the cached run returns the same files"
+    );
+}
+
 /// A source wide and short enough that the per-file budget never narrows it
 /// under any config this file uses, and lean enough (no known bitrate) that
 /// the source-bitrate clamp never touches it either — the full 6-rung table,
 /// deterministically, everywhere it's fed to `effective_rungs`.
 fn wide_unclamped_source() -> SourceFacts {
-    SourceFacts { width: 1280, duration_secs: 60.0, video_kbps: None, total_kbps: None }
+    SourceFacts { width: 1280, duration_secs: 60.0, video_kbps: None, total_kbps: None, has_audio: true }
 }
 
 /// A partial ladder is a miss, not a hit: seventeen files that reference each
@@ -657,7 +886,7 @@ fn cached_ladder_misses_when_a_tighter_budget_narrows_the_effective_ladder() {
         ObjectStore::new(dir.path().join("objects")),
     );
     let recorded_under = VideoCompressionConfig { hls_max_file_mb: 100_000, ..VideoCompressionConfig::default() };
-    let source = SourceFacts { width: 1280, duration_secs: 903.47, video_kbps: None, total_kbps: None };
+    let source = SourceFacts { width: 1280, duration_secs: 903.47, video_kbps: None, total_kbps: None, has_audio: true };
     let params = ladder_params(&recorded_under, &VIDEO_LADDER, source);
     let blob = dir.path().join("blob");
     std::fs::write(&blob, b"ladder file").unwrap();
@@ -709,7 +938,7 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
     // One physical source (903.47 s, 1280 px, no known bitrate): under a huge
     // budget nothing narrows it (6 rungs); under the default 150 MiB budget
     // it narrows to 5 (pinned in asset_paths' own tests).
-    let source_facts = SourceFacts { width: 1280, duration_secs: 903.47, video_kbps: None, total_kbps: None };
+    let source_facts = SourceFacts { width: 1280, duration_secs: 903.47, video_kbps: None, total_kbps: None, has_audio: true };
 
     // The complete 6-rung ladder a looser budget left in the record.
     let stale_config =

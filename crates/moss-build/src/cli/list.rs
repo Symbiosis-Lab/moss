@@ -165,6 +165,16 @@ fn legend(rows: &[InventoryEntry]) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+/// `--json` mode's shape for a lookup failure — a JSON object with one
+/// `error` field, so a script parsing `moss list --json`'s stdout gets valid
+/// JSON on every path, including "no build yet" and "the last build's
+/// inventory is corrupt," rather than having to catch a parse error there
+/// and infer the reason from an exit code alone.
+fn json_error(message: &str) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({ "error": message }))
+        .unwrap_or_else(|_| format!("{{\"error\": {message:?}}}"))
+}
+
 fn usage() -> &'static str {
     "Usage: moss list [<folder>] [--json]\n  \
      Prints every document the last build parsed: its source file, the URL it\n  \
@@ -209,6 +219,17 @@ pub fn run(args: &[String]) -> i32 {
         Err(_) => {
             // Never print an empty list here: "no inventory" and "no pages"
             // look identical in output and mean opposite things.
+            if json {
+                println!(
+                    "{}",
+                    json_error(&format!(
+                        "No inventory for {}. Run `moss build {}` first — `moss list` reports what the last build produced.",
+                        root.as_str(),
+                        root.as_str()
+                    ))
+                );
+                return 1;
+            }
             eprintln!("No inventory for {}.", root.as_str());
             eprintln!("Run `moss build {}` first — `moss list` reports what the last build produced.", root.as_str());
             return 1;
@@ -222,6 +243,20 @@ pub fn run(args: &[String]) -> i32 {
             // interrupted never rewrites this file, so `list` goes on reading
             // whatever the last COMPLETED build left — possibly from an older
             // moss whose schema differs. Say which of those it is.
+            if json {
+                println!(
+                    "{}",
+                    json_error(&format!(
+                        "Could not read {}: {e}. This file is rewritten only by a build that runs to \
+                         completion — an interrupted one leaves the previous build's copy in place, which \
+                         may have been written by a different version of moss. Run `moss build {}` and let \
+                         it finish.",
+                        path.display(),
+                        root.as_str()
+                    ))
+                );
+                return 1;
+            }
             eprintln!("Could not read {}: {e}", path.display());
             eprintln!(
                 "This file is rewritten only by a build that runs to completion — an\n\
@@ -255,6 +290,32 @@ pub fn run(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Against a folder with no build at all, `--json` used to print the
+    /// same plain-English lines a human reads, at exit 1 — valid for a
+    /// person, but a script parsing stdout as JSON got a parse error
+    /// instead of a reason. `json_error` is what `run` now prints there
+    /// instead: a real JSON object, with the reason under `error`.
+    #[test]
+    fn json_error_is_valid_json_with_an_error_field() {
+        let out = json_error("No inventory for /site. Run `moss build /site` first.");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&out).expect("--json mode's own error output must itself be valid JSON");
+        assert_eq!(parsed["error"], "No inventory for /site. Run `moss build /site` first.");
+    }
+
+    /// `run` itself, against a real folder that was never built — no
+    /// `.moss` at all, so the read fails before the parse step ever runs.
+    /// `--json` must still fail (a script's whole reason for the flag is
+    /// telling success from failure), and the point of this guard is that
+    /// it fails with JSON on stdout rather than the plain lines a human
+    /// reads.
+    #[test]
+    fn list_json_on_an_unbuilt_folder_prints_json_and_exits_nonzero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().to_str().unwrap().to_string();
+        assert_eq!(run(&["--json".to_string(), folder]), 1, "no inventory is still a failure in --json mode");
+    }
 
     fn entry(url: &str, hidden: &[&str]) -> InventoryEntry {
         InventoryEntry {

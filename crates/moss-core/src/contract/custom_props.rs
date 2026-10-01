@@ -68,7 +68,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-max-height",
         owner: "moss-hero",
         default: "70vb",
-        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). Set `none` for a hero that fills its container. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both.",
+        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both.",
     },
     CustomProp {
         name: "--moss-hero-object-position",
