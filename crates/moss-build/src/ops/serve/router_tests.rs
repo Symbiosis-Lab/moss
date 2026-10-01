@@ -1994,6 +1994,7 @@ async fn mutate_carrier_without_or_with_wrong_token_is_401() {
 /// the server into whatever folder it was next pointed at.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn folder_switch_retires_the_previous_vaults_token() {
+    let _streams = event_stream_lock();
     let (vault_a, site_a) = served_vault();
     let (vault_b, site_b) = served_vault();
     let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
@@ -2616,6 +2617,15 @@ async fn read_carrier_walks_its_own_root_not_a_caller_supplied_one() {
 
 // ── The event carrier (`GET /__moss/events`) ─────────────────────────────────
 
+/// Held by every test that opens `/__moss/events`: each open stream holds a
+/// receiver on the one process-global bus, so a subscriber count is only
+/// meaningful while no sibling can open or close one.
+static EVENT_STREAM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn event_stream_lock() -> std::sync::MutexGuard<'static, ()> {
+    EVENT_STREAM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Read one SSE record (up to the blank line) off a blocking reader, or give up.
 ///
 /// Deliberately hand-rolled rather than pulled from a crate: the frame format
@@ -2642,6 +2652,7 @@ fn read_one_sse_record(mut reader: impl std::io::Read) -> Option<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn event_stream_refuses_a_subscriber_with_no_token() {
+    let _streams = event_stream_lock();
     let (_parent, _vault_path, site_dir) = confinement_vault();
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63410).await;
 
@@ -2698,6 +2709,7 @@ async fn event_stream_refuses_a_subscriber_with_no_token() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn event_stream_delivers_a_published_event_to_a_browser() {
+    let _streams = event_stream_lock();
     use crate::ops::serve::events;
 
     let (_parent, _vault_path, site_dir) = confinement_vault();
@@ -2745,6 +2757,42 @@ async fn event_stream_delivers_a_published_event_to_a_browser() {
     assert_eq!(json["name"], crate::types::events::MOSS_EVENT_CHANNEL);
     assert_eq!(json["payload"]["kind"], "BuildComplete");
     assert_eq!(json["payload"]["payload"]["total_time_ms"], 42);
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `subscriber_count` rises while a browser holds the stream open and falls
+/// once it disconnects — the signal a host reads to tell whether anyone is
+/// watching outside its own window.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_subscriber_count_follows_an_open_event_stream() {
+    use crate::ops::serve::events;
+    let _streams = event_stream_lock();
+
+    let (_parent, _vault_path, site_dir) = confinement_vault();
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63430).await;
+    let before = events::subscriber_count();
+
+    let url = format!("http://localhost:{port}/__moss/events");
+    // Headers arrive only after the handler has subscribed.
+    let stream = tokio::task::spawn_blocking(move || {
+        ureq::get(&url)
+            .set("X-Moss-Token", &token)
+            .timeout(std::time::Duration::from_secs(30))
+            .call()
+            .expect("the stream must open")
+            .into_reader()
+    })
+    .await
+    .unwrap();
+    assert_eq!(events::subscriber_count(), before + 1);
+
+    drop(stream);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while events::subscriber_count() > before && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(events::subscriber_count(), before, "a closed stream must stop counting");
 
     let _ = shutdown_tx.send(());
 }

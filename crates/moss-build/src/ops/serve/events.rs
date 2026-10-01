@@ -67,6 +67,14 @@ fn bus() -> &'static broadcast::Sender<String> {
     BUS.get_or_init(|| broadcast::channel(CAPACITY).0)
 }
 
+/// How many browsers hold `GET /__moss/events` open right now, one receiver
+/// each. A host can read it to tell whether anyone is watching outside its
+/// own window. A browser that went away still counts until its stream fails a
+/// write, at the next event or keep-alive (about 15 s).
+pub fn subscriber_count() -> usize {
+    bus().receiver_count()
+}
+
 /// Publish one named event. Serialization happens once here, not once per
 /// subscriber.
 ///
