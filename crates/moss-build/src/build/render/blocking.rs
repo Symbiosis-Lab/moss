@@ -1914,12 +1914,21 @@ pub fn generate_blocking_content_for_build(
             .map(|doc| {
                 let output_file_path = output_dir.join(&doc.url_path);
                 let mut og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
+                // `is_homepage` used to be hardcoded false here, so only the
+                // site-default-locale home (rendered separately below, never
+                // reaching this generic loop) carried `data-page="home"` —
+                // every other locale's own `<lang>/index.html` fell through
+                // this arm and never got it. `is_language_root` is the
+                // existing structural "is this doc A home" check (the nav
+                // language switcher already trusts it for the same
+                // locale-root question), so this is the one place that
+                // decides it, read instead of re-hardcoded.
                 let html_page = generate_html_collect_og(
                     Some(doc),
                     &documents,
                     project_structure,
                     &layout_config,
-                    false,
+                    crate::build::render::lang_roots::is_language_root(&doc.url_path),
                     page_rss_link.as_deref(),
                     analytics_script.as_deref(),
                     site_lang,

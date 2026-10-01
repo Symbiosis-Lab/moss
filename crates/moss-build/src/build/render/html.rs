@@ -1484,8 +1484,15 @@ fn generate_html_inner<'d>(
             // index pages, og:title is the page label so they unfurl with
             // their own name.
             let d = doc.unwrap();
-            let (og_title, og_url): (&str, String) = if is_homepage {
-                // Homepage og:url: shared with the WebSite JSON-LD node below.
+            // `is_homepage` is true for EVERY locale's own home, but
+            // `homepage_meta_url` (shared with the WebSite JSON-LD node
+            // below, which describes the SITE and must always point at its
+            // true root) is the bare site root regardless of which
+            // language's home is rendering. Reusing it for og:url too was
+            // only ever correct for that one bare-root page — a language
+            // root (`zh-hans/index.html`) needs its OWN absolute URL here,
+            // the same derivation the non-homepage branch already does.
+            let (og_title, og_url): (&str, String) = if is_homepage && d.url_path == "index.html" {
                 (site_title.as_str(), homepage_meta_url.clone())
             } else {
                 let page_path = crate::build::served_path::ServedPath::from_source(&d.url_path)
@@ -1497,7 +1504,8 @@ fn generate_html_inner<'d>(
                 } else {
                     page_relative
                 };
-                (d.label.as_str(), url)
+                let title = if is_homepage { site_title.as_str() } else { d.label.as_str() };
+                (title, url)
             };
             Some(crate::build::page::meta::build_og_tags_website(
                 og_title,

@@ -950,6 +950,33 @@ fn snapshot_video_embed_site() { run_snapshot_test("video-embed-site"); }
 #[test]
 fn snapshot_bilingual_lang_tree_site() { run_snapshot_test("bilingual-lang-tree-site"); }
 
+/// `data-page="home"` on `<body>` used to carry only the SITE-default
+/// locale's home (`index.html`) — the "is this doc A home" check that feeds
+/// it compared `url_path` against the bare literal `"index.html"`, which a
+/// language root like `zh-hans/index.html` can never equal. A theme's
+/// `[data-page="home"]` rule (listed by `moss describe --json`'s
+/// `scope_attributes`) silently never matched on any non-default locale.
+#[test]
+fn every_locale_home_carries_data_page_home() {
+    let (_cleanup, output_dir) = build_fixture("bilingual-lang-tree-site");
+    let en_home = fs::read_to_string(output_dir.join("index.html")).expect("en home built");
+    let zh_home = fs::read_to_string(output_dir.join("zh-hans/index.html")).expect("zh-hans home built");
+    let zh_about =
+        fs::read_to_string(output_dir.join("zh-hans/about/index.html")).expect("zh-hans non-home built");
+    assert!(
+        en_home.contains(r#"data-page="home""#),
+        "default-locale home must carry data-page=\"home\""
+    );
+    assert!(
+        zh_home.contains(r#"data-page="home""#),
+        "zh-hans' own home must ALSO carry data-page=\"home\" -- got:\n{zh_home}"
+    );
+    assert!(
+        !zh_about.contains(r#"data-page="home""#),
+        "a non-home page must not carry data-page=\"home\" -- got:\n{zh_about}"
+    );
+}
+
 #[test]
 fn snapshot_flat_site() {
     run_snapshot_test("flat-site");

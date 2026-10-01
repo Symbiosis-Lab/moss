@@ -310,7 +310,7 @@ fn project_child(
 /// that shape, which would make every page a host.
 pub fn hosts_listing(doc: &ParsedDocument) -> bool {
     doc.kind == PageKind::Folder
-        || doc.url_path == "index.html"
+        || crate::build::render::lang_roots::is_language_root(&doc.url_path)
         || doc.is_home_override
         || doc.children_source.is_some()
         || doc.sidebar.is_some()
@@ -325,11 +325,14 @@ pub fn hosts_listing(doc: &ParsedDocument) -> bool {
 pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<Vec<GroupKey>> {
     let mut keys: Vec<GroupKey> = Vec::new();
 
-    // (a) The root homepage. `synthesize_children_marker(.., is_homepage: true)`
-    //     defaults depth to "all" and — in default mode only, i.e. with no
-    //     `children_source` redirecting the listing — turns on both homepage
-    //     filters.
-    if doc.url_path == "index.html" {
+    // (a) A locale's own homepage — not just the site-default's at the bare
+    //     `index.html`: `<lang>/index.html` reads the same groups, which
+    //     carrying it forward unchanged used to miss entirely (it was never
+    //     even recognized as a listing host by `hosts_listing` above).
+    //     `synthesize_children_marker(.., is_homepage: true)` defaults depth
+    //     to "all" and — in default mode only, i.e. with no `children_source`
+    //     redirecting the listing — turns on both homepage filters.
+    if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
         let default_mode = doc.children_source.is_none();
         let folder_slug = match doc.children_source.as_deref() {
             None => String::new(),
@@ -347,7 +350,7 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
     //     the page's own url-derived folder path, ignoring `children_source`
     //     on this branch — and defaults depth to "direct".
     if doc.kind == PageKind::Folder
-        && doc.url_path != "index.html"
+        && !crate::build::render::lang_roots::is_language_root(&doc.url_path)
         && doc.url_path.ends_with("/index.html")
     {
         keys.push(GroupKey {

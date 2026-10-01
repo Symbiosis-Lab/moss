@@ -284,7 +284,7 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         selector: "body",
         name: "data-page",
         values: &["home"],
-        description: "Present as `home` on the site's front page only. Scope front-page-only rules to `body[data-page=\"home\"]` rather than to something merely unique to your homepage today — a hero that fills the screen, a suppressed footer, a different nav treatment.",
+        description: "Present as `home` on the front page of EVERY language the site publishes, not just the site-default locale's — a multilingual site's `zh-hans/` front page carries this exactly like the default-locale one at the root. Scope front-page-only rules to `body[data-page=\"home\"]` rather than to something merely unique to your homepage today — a hero that fills the screen, a suppressed footer, a different nav treatment.",
     },
     ScopeAttr {
         selector: "html",

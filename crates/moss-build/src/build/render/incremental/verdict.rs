@@ -680,7 +680,14 @@ fn global_contributions(
             continue;
         };
         let is_slot = doc.slot_only || doc.slot.is_some();
-        let is_home = doc.url_path == "index.html" || doc.is_home_override;
+        // `is_language_root`, not a bare `url_path == "index.html"`: every
+        // locale's own home page carries the same global-listing content
+        // (see `data-page="home"` in blocking.rs's render call, the other
+        // consumer of this same "is this doc a home" question) — missing
+        // this here left a NON-default-locale home carrying a stale global
+        // excerpt whenever a title edit elsewhere should have invalidated it.
+        let is_home =
+            crate::build::render::lang_roots::is_language_root(&doc.url_path) || doc.is_home_override;
         if is_slot {
             parts.push((path.clone(), crate::build::facade::compute_page_facade(doc)));
         } else if is_home {
