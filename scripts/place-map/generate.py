@@ -35,6 +35,9 @@ EXPECTED_NAMES = {
     "playas",
     "bathymetry",
     "urban_areas",
+    "populated_places",
+    "geography_regions_polys",
+    "geography_regions_elevation_points",
     "earth_relief_03m_g_n00e000",
     "earth_relief_03m_g_n00e090",
     "earth_relief_03m_g_n00w090",
@@ -55,6 +58,9 @@ EXPECTED_URLS = {
     "playas": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_playas.zip",
     "bathymetry": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_bathymetry_all.zip",
     "urban_areas": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_urban_areas.zip",
+    "populated_places": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_populated_places.zip",
+    "geography_regions_polys": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_geography_regions_polys.zip",
+    "geography_regions_elevation_points": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_geography_regions_elevation_points.zip",
     "earth_relief_03m_g_n00e000": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E000.earth_relief_03m_g.jp2",
     "earth_relief_03m_g_n00e090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E090.earth_relief_03m_g.jp2",
     "earth_relief_03m_g_n00w090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W090.earth_relief_03m_g.jp2",
@@ -74,6 +80,9 @@ EXPECTED_PUBLISHED_VERSIONS = {
     "playas": "5.0.0",
     "bathymetry": "4.1.0",
     "urban_areas": "4.1.0",
+    "populated_places": "5.1.2",
+    "geography_regions_polys": "5.0.0",
+    "geography_regions_elevation_points": "5.0.0",
 }
 
 

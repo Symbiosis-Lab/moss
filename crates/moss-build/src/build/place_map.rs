@@ -4,6 +4,11 @@ mod context;
 mod explorer;
 mod geometry;
 mod globe;
+// Schema-4 label-payload decoder (named cities, mountain ranges, peaks and
+// rivers). A private sibling of this module, not `places_data` -- it only
+// decodes the data this file embeds, with no knowledge of a build's
+// documents or gazetteer the way `places_data` has.
+mod labels;
 // The places-explorer data emitter (`places.<hash>.json`). `pub(crate)`,
 // not private: `build/pipeline.rs` calls `places_data::emit` directly once
 // per build, the same way it reaches `build::emit::feature_styles::emit`.
@@ -14,6 +19,7 @@ mod svg;
 pub use context::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext, PlaceMapTarget, ResolvedPlace};
 pub use explorer::{emit_tile_svg, emit_world_svg, relevant_tiles};
 pub use geometry::{marker_radius, privacy_floor, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
+pub use labels::{Labels, PointLabel, RiverLabel};
 pub use svg::{
     emit_locator, emit_locator_svg, emit_svg, emit_svg_with_options, LocatorProfile,
     LocatorSafetyError, LocatorSvg, SvgMapOptions, LOCATOR_Q11_BROTLI_LIMIT,
@@ -26,7 +32,7 @@ pub(crate) use svg::precision_rank;
 
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
 const HEADER_LEN: usize = 92;
-const SCHEMA: u16 = 3;
+const SCHEMA: u16 = 4;
 // The pack stores no coast (layer 1) record: Natural Earth's coastline and
 // land datasets trace the same digitized shoreline, so every coast is drawn
 // from land's rings: a main map's as the halo of its land paths, the globe
@@ -42,6 +48,11 @@ const MAX_POINTS_PER_PART: usize = 1_000_000;
 const MAX_POINTS_PER_FEATURE: usize = 2_000_000;
 const MAX_FEATURES_PER_LAYER: u32 = 100_000;
 const MAX_FEATURES_PER_TIER: u32 = 200_000;
+// Defense in depth only: the real schema-4 label payload is under 80 KB raw
+// (see `scripts/place-map/README.md`). `Reader::take` already refuses a
+// length past the end of the pack on its own; this just keeps a corrupt or
+// hostile length field from being handed further into `labels::decode`.
+const MAX_LABELS_BYTES: usize = 4_000_000;
 
 // The checked-in artifact is the pack brotli-compressed (generate.mjs writes
 // it that way): the ~5.3MB raw MOSSPLM1 bytes would otherwise sit in the
@@ -75,6 +86,7 @@ pub enum DecodeError {
     InvalidCoordinate,
     InvalidVarint,
     InvalidIndex(&'static str),
+    InvalidString(&'static str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +134,16 @@ pub struct Pack {
     pub header: Header,
     pub tiers: Vec<Tier>,
     pub tiles: Vec<Tile>,
+    /// Named cities, mountain ranges, peaks and rivers decoded from the
+    /// schema-4 label payload appended after `tiles` -- see [`Labels`].
+    pub labels: Labels,
+    /// The label payload's exact raw bytes, kept alongside the decoded
+    /// [`Self::labels`] (not re-derived from it) so a caller that needs a
+    /// stable fingerprint of "the label set, or the generator that produced
+    /// it, changed" (`emit::place_map_assets::assets_hash`'s own directory
+    /// hash is exactly this) can hash these bytes directly rather than
+    /// re-serializing the parsed struct and hoping that stays byte-stable.
+    pub labels_bytes: Vec<u8>,
 }
 
 struct Reader<'a> {
@@ -443,6 +465,14 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
         }
         tiles.push(Tile { x, y, features });
     }
+    let labels_len = reader.u32("labels length")?;
+    if labels_len as usize > MAX_LABELS_BYTES {
+        return Err(DecodeError::InvalidLength("labels length"));
+    }
+    let labels_bytes = reader
+        .take(labels_len as usize, "labels payload")?
+        .to_vec();
+    let labels = labels::decode(&labels_bytes)?;
     if reader.position != bytes.len() {
         return Err(DecodeError::InvalidLength("trailing pack bytes"));
     }
@@ -459,6 +489,8 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
         },
         tiers,
         tiles,
+        labels,
+        labels_bytes,
     })
 }
 

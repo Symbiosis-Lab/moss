@@ -1,11 +1,11 @@
 {
-  "schema": 3,
-  "manifest_sha256": "cc2af263a7a6daabe6bc820df54c5d96adb43391fc52b1498d02dddc75d4099b",
-  "raw_bytes": 5118651,
-  "brotli_bytes": 3280126,
+  "schema": 4,
+  "manifest_sha256": "5968383e1b04f3a11a68986ee692c456c8cc3b31d58312ba174e22f73c0e8449",
+  "raw_bytes": 5198522,
+  "brotli_bytes": 3328141,
   "budget_bytes": 3513889,
-  "margin_bytes": 233763,
-  "margin_percent": 6.653,
+  "margin_bytes": 185748,
+  "margin_percent": 5.286,
   "tiers": {
     "world": 8995,
     "fine": 4941828
@@ -39,6 +39,15 @@
       "built_up": 440261,
       "relief": 1620953,
       "sea_floor": 1888708
+    }
+  },
+  "labels": {
+    "raw_bytes": 79867,
+    "counts": {
+      "cities": 522,
+      "ranges": 222,
+      "peaks": 269,
+      "rivers": 495
     }
   }
 }

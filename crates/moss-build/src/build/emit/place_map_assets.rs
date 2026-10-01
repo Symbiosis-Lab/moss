@@ -66,6 +66,12 @@ pub fn assets_hash(context: &place_map::PlaceMapContext, gazetteer: &Gazetteer) 
     let mut buf = Vec::new();
     buf.extend_from_slice(&context.pack_fingerprint());
     buf.extend_from_slice(&GENERATOR_VERSION.to_le_bytes());
+    // `labels.json` (`emit::place_map_labels`) lands in this SAME
+    // directory, so its own change fingerprint belongs in this SAME hash —
+    // see `PlaceMapContext::labels_bytes`'s own doc for why raw label
+    // bytes, not the pack fingerprint above, are what catches a
+    // generator-only change.
+    buf.extend_from_slice(context.labels_bytes());
     for (x, y) in place_map::relevant_tiles(gazetteer, context.pack()) {
         buf.extend_from_slice(&x.to_le_bytes());
         buf.extend_from_slice(&y.to_le_bytes());
@@ -298,8 +304,26 @@ mod tests {
         let mut buf = Vec::new();
         buf.extend_from_slice(&context.pack_fingerprint());
         buf.extend_from_slice(&(GENERATOR_VERSION + 1).to_le_bytes());
+        buf.extend_from_slice(context.labels_bytes());
         let bumped = compute_binary_hash(&buf);
         assert_ne!(first, bumped);
+    }
+
+    /// A label-only change must move the shared directory even though the
+    /// pack fingerprint (the source-manifest digest) does not: a generator
+    /// change that encodes different label bytes from the SAME pinned
+    /// sources is exactly the case `pack_fingerprint()` alone would miss
+    /// (see `PlaceMapContext::labels_bytes`'s own doc).
+    #[test]
+    fn assets_hash_reacts_to_a_labels_only_change_even_when_the_pack_fingerprint_does_not() {
+        let context = place_map::PlaceMapContext::embedded().unwrap();
+        let mut pack = context.pack().clone();
+        assert_ne!(pack.labels_bytes, vec![0xaa, 0xbb], "fixture must actually change the bytes");
+        pack.labels_bytes = vec![0xaa, 0xbb];
+        let changed = place_map::PlaceMapContext::new(pack);
+        let gaz = empty_gazetteer();
+        assert_eq!(context.pack_fingerprint(), changed.pack_fingerprint());
+        assert_ne!(assets_hash(&context, &gaz), assets_hash(&changed, &gaz));
     }
 
     /// The directory name must react only to the pack/generator/gazetteer,

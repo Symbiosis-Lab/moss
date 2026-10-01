@@ -1766,6 +1766,16 @@ fn build_inner(
         &stage_dir,
         &mut pending,
     );
+    // `labels.json`, in the SAME `_moss/map.<hash>/` directory the call
+    // above just wrote the world/tile SVGs into — see that module's doc for
+    // the gate. Data only: nothing yet reads this to draw a label.
+    crate::build::emit::place_map_labels::emit_if_place_typed(
+        place_maps_for_places_data.as_ref(),
+        &site_lang,
+        &documents,
+        &stage_dir,
+        &mut pending,
+    );
 
     // Seal-persist-race-404 fix: release the stage-write guard now — this
     // build's own synchronous stage-writing span (generate_blocking_content

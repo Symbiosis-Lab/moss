@@ -118,6 +118,41 @@ published_version = "4.1.0"
 members = ["ne_10m_urban_areas.shp", "ne_10m_urban_areas.dbf", "ne_10m_urban_areas.shx", "ne_10m_urban_areas.prj", "ne_10m_urban_areas.cpg"]
 layer = "built_up"
 
+# The three sources below feed the places-explorer LABEL data (city, mountain
+# range, peak and river names in `en`/`zh-Hant`) rather than any drawn
+# geometry layer -- `layer = "labels"` for all three. `rivers`, above, is
+# reused for river names and already-pinned geometry; no fourth entry is
+# needed for it.
+[[sources]]
+name = "populated_places"
+artifact = "ne_10m_populated_places.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_populated_places.zip"
+sha256 = "cd149186f03d2603e0410da399b980a4357d0ac32d3a2305a49ed3dffcc41d7b"
+size_bytes = 2811199
+published_version = "5.1.2"
+members = ["ne_10m_populated_places.shp", "ne_10m_populated_places.dbf", "ne_10m_populated_places.shx", "ne_10m_populated_places.prj", "ne_10m_populated_places.cpg"]
+layer = "labels"
+
+[[sources]]
+name = "geography_regions_polys"
+artifact = "ne_10m_geography_regions_polys.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_geography_regions_polys.zip"
+sha256 = "cb7b9db200284ed1551f20eacc7f3333e9b5f311c19f7cb2670694529f688682"
+size_bytes = 2038519
+published_version = "5.0.0"
+members = ["ne_10m_geography_regions_polys.shp", "ne_10m_geography_regions_polys.dbf", "ne_10m_geography_regions_polys.shx", "ne_10m_geography_regions_polys.prj", "ne_10m_geography_regions_polys.cpg"]
+layer = "labels"
+
+[[sources]]
+name = "geography_regions_elevation_points"
+artifact = "ne_10m_geography_regions_elevation_points.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_geography_regions_elevation_points.zip"
+sha256 = "c7465b5df43045c3b639ab26ce61128273c2391b597074077a55f06fe63e1c99"
+size_bytes = 240144
+published_version = "5.0.0"
+members = ["ne_10m_geography_regions_elevation_points.shp", "ne_10m_geography_regions_elevation_points.dbf", "ne_10m_geography_regions_elevation_points.shx", "ne_10m_geography_regions_elevation_points.prj", "ne_10m_geography_regions_elevation_points.cpg"]
+layer = "labels"
+
 # earth_relief_03m_g ships as eight 90x90-degree gridline-registered tiles
 # (lossless, signed 16-bit JPEG2000) rather than one file; the fine tier
 # contours this dataset at native resolution. Tile naming gives the

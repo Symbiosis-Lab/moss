@@ -31,10 +31,13 @@ const MAGIC = Buffer.from("MOSSPLM1", "ascii");
 // The pack stores no coast (layer 1) record: Natural Earth's coastline and
 // land datasets trace the same digitized shoreline, so land is simplified
 // at the coast's finer tolerance and every coast is drawn from land's
-// rings. Schema 3: the world tier holds land alone, the only layer the
-// globe inset draws; every main map, the world map included, reads the
-// fine tier.
-const SCHEMA = 3;
+// rings. The world tier holds land alone, the only layer the globe inset
+// draws; every main map, the world map included, reads the fine tier.
+// Schema 4: a length-delimited label payload (`encodeLabels`) is appended
+// after the tile index -- named cities, mountain ranges, peaks and rivers
+// for the places-explorer's map labels, opaque to everything in this file
+// except `encodeLabels` itself.
+const SCHEMA = 4;
 const TILE_DEGREES = 10;
 const LAYERS = [
   [2, "land", 1], [3, "lakes", 1], [4, "rivers", 2],
@@ -111,7 +114,7 @@ async function verifySources() {
   const manifestBytes = await readFile(MANIFEST);
   const manifest = parseToml(manifestBytes.toString("utf8"));
   if (manifest.schema !== 1 || manifest.gmt_dataset !== "earth_relief_03m_g") fail("unsupported source manifest");
-  if (manifest.sources.length !== 17) fail("source manifest has an unexpected source count");
+  if (manifest.sources.length !== 20) fail("source manifest has an unexpected source count");
   for (const source of manifest.sources) {
     const path = resolve(CACHE, source.artifact);
     if (dirname(path) !== CACHE || basename(path) !== source.artifact) fail(`unsafe source path ${source.artifact}`);
@@ -391,10 +394,23 @@ function featureBand(layer, properties) {
   return properties?.band ?? (properties?.depth === undefined ? 0 : -properties.depth);
 }
 
+function riverSimplification(primaryOnly = false) {
+  // Rivers are simplified by area (not Douglas-Peucker) at the fine tolerance
+  // with no minimum area (since they are line layers, not polygons). This
+  // helper ensures both the pack's river geometry and the label line use the
+  // same simplification, so labels follow the drawn rivers exactly.
+  return { tolerance: TOLERANCE.fine, minArea: 0, byArea: true, primaryOnly };
+}
+
 function featuresFor(features, tolerance, minArea = 0, layer = null) {
   const output = [];
   for (const feature of features) {
-    const parts = geometryParts(feature.geometry, tolerance, false, minArea, AREA_SIMPLIFIED.has(layer), feature.properties?.wrapped === true);
+    let simplification;
+    if (layer === "rivers") {
+      simplification = riverSimplification(feature.properties?.wrapped === true);
+      ({ tolerance, minArea } = simplification);
+    }
+    const parts = geometryParts(feature.geometry, tolerance, false, minArea, layer === "rivers" ? true : AREA_SIMPLIFIED.has(layer), feature.properties?.wrapped === true);
     if (!parts.length) continue;
     // A loop, not Math.min/max(...spread): a native-resolution relief ring
     // can carry tens of thousands of points before simplification, which
@@ -651,6 +667,226 @@ function tileIndex(refs) {
   return Buffer.concat(chunks);
 }
 
+// --- Place labels ----------------------------------------------------------
+// Named cities, mountain ranges, peaks and rivers for the places explorer's
+// map labels (runtime placement is a separate, later landing; this only
+// produces the data). Three Natural Earth cultural/physical datasets feed
+// it, pinned the same way as every geometry source above; rivers reuse the
+// already-pinned `rivers` source for both geometry and names.
+const LABEL_SOURCES = {
+  cities: "ne_10m_populated_places.zip",
+  ranges: "ne_10m_geography_regions_polys.zip",
+  peaks: "ne_10m_geography_regions_elevation_points.zip",
+};
+const LABEL_SCHEMA = 1;
+// Natural Earth's own `scalerank`/`SCALERANK` (0 = most important). These
+// cutoffs were chosen by measuring: at CITY=3 the set still carries every
+// G20 capital; at PEAK=6 it carries Denali/Kilimanjaro/K2 (rank 2), Mont
+// Blanc (3) and Fuji/the Matterhorn (6); at RIVER=3 it carries the
+// Nile/Yangtze/Mekong/Ganges (ranks 1-3). Mountain ranges are not cut at
+// all -- Natural Earth's "Range/mtn" set is already a curated ~220-name
+// global list at this scale, so an extra rank floor would only be
+// arbitrary. Raising any cutoff is safe exactly as long as `writePack`'s
+// brotli-budget-margin gate stays green; see this script's own size report.
+const CITY_SCALERANK_MAX = 3;
+const PEAK_SCALERANK_MAX = 6;
+const RIVER_SCALERANK_MAX = 3;
+
+// Natural Earth spells the same field in SCREAMING_CASE on some layers
+// (`ne_10m_populated_places`, `ne_10m_geography_regions_polys`) and
+// lower_snake_case on others (`ne_10m_geography_regions_elevation_points`,
+// the rivers layer); reading both avoids four near-duplicate extractors.
+function labelField(properties, name) {
+  return properties[name] ?? properties[name.toUpperCase()];
+}
+
+// A small, explicit override table for a city whose official Traditional-
+// Chinese name is a long formal designation rather than the name readers
+// expect on a map -- e.g. Natural Earth's "Washington" carries "華盛頓哥倫比
+// 亞特區" ("Washington, District of Columbia"). Keyed by the English name
+// (stable across shapefile updates) rather than by the long form itself, so
+// an upstream wording change can't silently stop the override from firing.
+const CITY_NAME_ZHT_OVERRIDES = new Map([["Washington", "華盛頓"]]);
+
+// Natural Earth's Traditional-Chinese city names often carry a redundant
+// administrative "市" ("city") suffix ("北京市" -> "北京" is the more common
+// reader-facing form); strip it, then apply the override table above.
+function cleanCityNameZht(nameEn, nameZht) {
+  return CITY_NAME_ZHT_OVERRIDES.get(nameEn) ?? (nameZht ?? "").replace(/市$/u, "");
+}
+
+// Ordered only by rank/name/position -- never by shapefile feature order,
+// which is an implementation detail of the zip's internal record order, not
+// something this generator's determinism should depend on. The final
+// JSON.stringify comparison is a last-resort tie-break for the (rare, but
+// possible) case of two features sharing rank and name.
+function compareLabels(a, b) {
+  return a.rank - b.rank
+    || (a.nameEn < b.nameEn ? -1 : a.nameEn > b.nameEn ? 1 : 0)
+    || (JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0);
+}
+
+function buildCityLabels(features) {
+  return features
+    .filter((f) => labelField(f.properties, "SCALERANK") <= CITY_SCALERANK_MAX)
+    .map((f) => {
+      const p = f.properties;
+      const nameEn = labelField(p, "NAME_EN") || labelField(p, "NAME") || "";
+      return {
+        nameEn,
+        nameZht: cleanCityNameZht(nameEn, labelField(p, "NAME_ZHT")),
+        lng: labelField(p, "LONGITUDE"),
+        lat: labelField(p, "LATITUDE"),
+        rank: labelField(p, "SCALERANK"),
+      };
+    })
+    .sort(compareLabels);
+}
+
+// Area-weighted centroid of a closed ring (shoelace formula), used as a
+// mountain range's label point: Natural Earth gives ranges as polygons, not
+// points, and a simple centroid is deterministic and dependency-free. Not
+// the same as a visual "pole of inaccessibility" -- a concave range (the
+// Andes) can centroid onto a point outside the polygon's bulk -- but is good
+// enough for a page-scale label anchor, and nothing currently reads this
+// field more precisely than that.
+function ringCentroid(ring) {
+  let area = 0, cx = 0, cy = 0;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const [x0, y0] = ring[i]; const [x1, y1] = ring[i + 1];
+    const cross = x0 * y1 - x1 * y0;
+    area += cross; cx += (x0 + x1) * cross; cy += (y0 + y1) * cross;
+  }
+  area /= 2;
+  if (Math.abs(area) < 1e-12) return ring[0]; // degenerate ring: fall back to a vertex rather than divide by ~0.
+  return [cx / (6 * area), cy / (6 * area)];
+}
+
+function polygonLargestRing(geometry) {
+  const rings = geometry.type === "Polygon" ? geometry.coordinates : geometry.coordinates.flat();
+  return rings.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+function buildRangeLabels(features) {
+  return features
+    .filter((f) => labelField(f.properties, "FEATURECLA") === "Range/mtn")
+    .map((f) => {
+      const [lng, lat] = ringCentroid(polygonLargestRing(f.geometry));
+      const p = f.properties;
+      return {
+        nameEn: labelField(p, "NAME_EN") || "",
+        nameZht: labelField(p, "NAME_ZHT") || "",
+        lng, lat,
+        rank: labelField(p, "SCALERANK"),
+      };
+    })
+    .sort(compareLabels);
+}
+
+function buildPeakLabels(features) {
+  return features
+    .filter((f) => labelField(f.properties, "featurecla") === "mountain" && labelField(f.properties, "scalerank") <= PEAK_SCALERANK_MAX)
+    .map((f) => {
+      const p = f.properties;
+      return {
+        nameEn: labelField(p, "name_en") || "",
+        nameZht: labelField(p, "name_zht") || "",
+        lng: labelField(p, "long_x"),
+        lat: labelField(p, "lat_y"),
+        rank: labelField(p, "scalerank"),
+      };
+    })
+    .sort(compareLabels);
+}
+
+// The longest part of the SAME area-simplified geometry the fine-tier rivers
+// layer itself is encoded from (see `riverSimplification` for the shared
+// parameters) -- so a river's label line is simplified exactly the way the
+// pack's rivers already are, never a second, independently-tuned tolerance.
+// A LineString normally yields one part; `geometryParts` can still split one
+// at the antimeridian, in which case the longer piece is the one worth
+// curving a label along.
+function riverLabelLine(geometry) {
+  const simplification = riverSimplification(false);
+  const parts = geometryParts(geometry, simplification.tolerance, false, simplification.minArea, simplification.byArea, simplification.primaryOnly);
+  if (!parts.length) return null;
+  return parts.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+function buildRiverLabels(features) {
+  return features
+    .filter((f) => labelField(f.properties, "name_en") && labelField(f.properties, "scalerank") <= RIVER_SCALERANK_MAX)
+    .map((f) => {
+      const line = riverLabelLine(f.geometry);
+      if (!line || line.length < 2) return null;
+      const p = f.properties;
+      return {
+        nameEn: labelField(p, "name_en"),
+        nameZht: labelField(p, "name_zht") || "",
+        rank: labelField(p, "scalerank"),
+        line,
+      };
+    })
+    .filter(Boolean)
+    .sort(compareLabels);
+}
+
+async function loadLabelFeatures() {
+  const [cities, ranges, peaks] = await Promise.all([
+    readGeoJson(LABEL_SOURCES.cities),
+    readGeoJson(LABEL_SOURCES.ranges),
+    readGeoJson(LABEL_SOURCES.peaks),
+  ]);
+  return { cities, ranges, peaks };
+}
+
+function labelString(value) {
+  const bytes = Buffer.from(value ?? "", "utf8");
+  if (bytes.length > 255) fail(`label name exceeds 255 UTF-8 bytes: ${value}`);
+  return Buffer.concat([Buffer.from([bytes.length]), bytes]);
+}
+
+function labelPointBytes(label) {
+  return Buffer.concat([
+    i32(Math.round(label.lng * QUANT)),
+    i32(Math.round(label.lat * QUANT)),
+    i16(label.rank),
+    labelString(label.nameEn),
+    labelString(label.nameZht),
+  ]);
+}
+
+function labelLineBytes(label) {
+  const chunks = [i16(label.rank), labelString(label.nameEn), labelString(label.nameZht), u16(label.line.length)];
+  let previousX = 0; let previousY = 0;
+  for (const [lon, lat] of label.line) {
+    const x = Math.round(lon * QUANT); const y = Math.round(lat * QUANT);
+    chunks.push(encodeVarint(zigzag(x - previousX)), encodeVarint(zigzag(y - previousY)));
+    previousX = x; previousY = y;
+  }
+  return Buffer.concat(chunks);
+}
+
+function labelGroupBytes(items, encodeItem) {
+  if (items.length > 0xffff) fail(`label group has ${items.length} records, over the u16 count limit`);
+  return Buffer.concat([u16(items.length), ...items.map(encodeItem)]);
+}
+
+// The schema-4 labels payload appended after the pack's tile index --
+// opaque to every other function in this file, decoded on the Rust side by
+// `place_map::labels::decode` alone. Byte-identical across two runs over the
+// same cached sources: every group is sorted by `compareLabels` above, so
+// nothing here depends on shapefile feature order.
+function encodeLabels(labels) {
+  return Buffer.concat([
+    Buffer.from([LABEL_SCHEMA]),
+    labelGroupBytes(labels.cities, labelPointBytes),
+    labelGroupBytes(labels.ranges, labelPointBytes),
+    labelGroupBytes(labels.peaks, labelPointBytes),
+    labelGroupBytes(labels.rivers, labelLineBytes),
+  ]);
+}
+
 // Lowered by the 51,269 bytes the pack shed when the world tier dropped
 // every layer but land, so the headroom stays what it was.
 const BUDGET_BYTES = 3_513_889;
@@ -683,12 +919,34 @@ async function main() {
   const { worldLayers, fineLayers } = await makeLayers();
   const world = tierPayload(worldLayers, "world"); const fine = tierPayload(fineLayers, "fine");
   const index = tileIndex(fine.refs);
+  const labelFeatures = await loadLabelFeatures();
+  const labels = {
+    cities: buildCityLabels(labelFeatures.cities),
+    ranges: buildRangeLabels(labelFeatures.ranges),
+    peaks: buildPeakLabels(labelFeatures.peaks),
+    // `fineLayers.get("rivers")` is the same raw (pre-simplification)
+    // Natural Earth river features `tierPayload` above encodes as pack
+    // geometry -- loaded once in `makeLayers`, read again here rather than
+    // re-reading the zip.
+    rivers: buildRiverLabels(fineLayers.get("rivers")),
+  };
+  const labelsBytes = encodeLabels(labels);
   const sourceMasks = SOURCE_MASKS.map(u16);
   const header = Buffer.concat([MAGIC, u16(SCHEMA), u16(0), u32(QUANT), i32(-180 * QUANT), i32(180 * QUANT), i32(-90 * QUANT), i32(90 * QUANT), u16(LAYERS.length), u16(2), u16(TILE_DEGREES), u16(0), manifestDigest, ...sourceMasks]);
   const tiers = Buffer.concat([Buffer.from([0, 0]), u32(world.refs.length), u32(world.bytes.length), world.bytes, Buffer.from([1, 0]), u32(fine.refs.length), u32(fine.bytes.length), fine.bytes, index]);
-  const bytes = Buffer.concat([header, tiers]);
+  const bytes = Buffer.concat([header, tiers, u32(labelsBytes.length), labelsBytes]);
   bytes.writeUInt16LE(header.length, 10);
-  const report = await writePack(bytes, { schema: SCHEMA, manifest_sha256: manifestDigest.toString("hex"), tiers: { world: world.bytes.length, fine: fine.bytes.length }, index: index.length, layers: { world_counts: Object.fromEntries([...worldLayers].map(([name, features]) => [name, features.length])), fine_counts: Object.fromEntries([...fineLayers].map(([name, features]) => [name, features.length])), world_bytes: world.layerBytes, fine_bytes: fine.layerBytes } });
+  const report = await writePack(bytes, {
+    schema: SCHEMA,
+    manifest_sha256: manifestDigest.toString("hex"),
+    tiers: { world: world.bytes.length, fine: fine.bytes.length },
+    index: index.length,
+    layers: { world_counts: Object.fromEntries([...worldLayers].map(([name, features]) => [name, features.length])), fine_counts: Object.fromEntries([...fineLayers].map(([name, features]) => [name, features.length])), world_bytes: world.layerBytes, fine_bytes: fine.layerBytes },
+    labels: {
+      raw_bytes: labelsBytes.length,
+      counts: { cities: labels.cities.length, ranges: labels.ranges.length, peaks: labels.peaks.length, rivers: labels.rivers.length },
+    },
+  });
   console.log(JSON.stringify(report, null, 2));
 }
 
@@ -703,15 +961,28 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export {
+  buildCityLabels,
+  buildPeakLabels,
+  buildRangeLabels,
+  buildRiverLabels,
+  CITY_SCALERANK_MAX,
+  cleanCityNameZht,
   COAST_TOLERANCE,
+  compareLabels,
   encodeFeature,
+  encodeLabels,
   QUANT,
   featuresFor,
   FINE_PX,
   geometryParts,
+  LABEL_SCHEMA,
+  PEAK_SCALERANK_MAX,
   reliefBands,
   rdp,
   RELIEF_THRESHOLDS,
+  ringCentroid,
+  riverSimplification,
+  RIVER_SCALERANK_MAX,
   SCHEMA,
   SEA_FLOOR_THRESHOLDS,
   splitDateline,

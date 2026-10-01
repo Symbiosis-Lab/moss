@@ -105,6 +105,16 @@ impl PlaceMapRenderContext {
         self
     }
 
+    /// This build's `_moss/map.<hash>/` directory name, read back by
+    /// `emit::place_map_labels` so `labels.json` lands beside the SVGs
+    /// `emit::place_map_assets` already writes there, under the identical
+    /// hash, without a second `assets_hash` computation at that call site.
+    /// Empty exactly when [`Self::with_map_assets_hash`] was never called —
+    /// the same "not ready" signal `with_explorer_handshake` reads.
+    pub(crate) fn map_assets_hash(&self) -> &str {
+        &self.map_assets_hash
+    }
+
     /// `places.<hash>.json`'s content hash, set once the caller's own
     /// `place_map::places_data::emit_places_data` call (over the SAME
     /// finished document set `places_data::emit` serializes to disk) has
@@ -312,6 +322,20 @@ impl PlaceMapContext {
 
     pub fn pack(&self) -> &Pack {
         &self.pack
+    }
+
+    /// The embedded pack's raw schema-4 label-payload bytes -- a stable
+    /// fingerprint of "the label set, or the generator that produced it,
+    /// changed" for a caller that needs one (`emit::place_map_assets::
+    /// assets_hash` folds this into the `_moss/map.<hash>/` directory name
+    /// so `labels.json`, served from that same directory, is named
+    /// correctly whenever either changes). Unlike [`Self::pack_fingerprint`],
+    /// this is NOT derived from the source manifest's digest: a generator
+    /// change that encodes different label bytes from the SAME pinned
+    /// sources would leave the manifest digest untouched, so these raw
+    /// bytes are hashed directly instead.
+    pub fn labels_bytes(&self) -> &[u8] {
+        &self.pack.labels_bytes
     }
 
     pub fn pack_fingerprint(&self) -> [u8; 32] {

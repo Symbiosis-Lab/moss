@@ -7,15 +7,26 @@ import { fileURLToPath } from "node:url";
 import { brotliDecompressSync } from "node:zlib";
 import test from "node:test";
 import {
+  buildCityLabels,
+  buildPeakLabels,
+  buildRangeLabels,
+  buildRiverLabels,
+  CITY_SCALERANK_MAX,
+  cleanCityNameZht,
   COAST_TOLERANCE,
+  compareLabels,
   encodeFeature,
+  encodeLabels,
   QUANT,
   featuresFor,
   FINE_PX,
   geometryParts,
+  PEAK_SCALERANK_MAX,
   RELIEF_THRESHOLDS,
   reliefBands,
   rdp,
+  riverSimplification,
+  RIVER_SCALERANK_MAX,
   SCHEMA,
   SEA_FLOOR_THRESHOLDS,
   splitDateline,
@@ -314,4 +325,118 @@ test("a band that crosses the antimeridian reaches it from both sides, whatever 
   }).length;
   assert.equal(covering(179.99, 0), 1);
   assert.equal(covering(-179.99, 0), 1);
+});
+
+// --- Place labels ----------------------------------------------------------
+
+test("a city's display name strips the trailing administrative 市 and the override table wins over it", () => {
+  assert.equal(cleanCityNameZht("Beijing", "北京市"), "北京");
+  // No trailing 市: left alone.
+  assert.equal(cleanCityNameZht("Hong Kong", "香港"), "香港");
+  // The override table fires regardless of what the raw name_zht says.
+  assert.equal(cleanCityNameZht("Washington", "華盛頓哥倫比亞特區"), "華盛頓");
+});
+
+test("buildCityLabels reads both Natural Earth field-name conventions, filters by scalerank, and cleans the display name", () => {
+  const feature = (nameEn, scalerank, nameZht) => ({
+    properties: { NAME_EN: nameEn, NAME_ZHT: nameZht, LATITUDE: 1, LONGITUDE: 2, SCALERANK: scalerank },
+    geometry: { type: "Point", coordinates: [2, 1] },
+  });
+  const features = [
+    feature("Beijing", 0, "北京市"),
+    feature("Nowheresville", CITY_SCALERANK_MAX + 1, "無名市"), // below the cutoff: dropped
+  ];
+  const labels = buildCityLabels(features);
+  assert.deepEqual(labels, [{ nameEn: "Beijing", nameZht: "北京", lng: 2, lat: 1, rank: 0 }]);
+});
+
+test("buildRangeLabels keeps only Range/mtn features and labels each at its largest ring's centroid", () => {
+  const square = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]];
+  const notARange = {
+    properties: { FEATURECLA: "Desert", NAME_EN: "Sahara", NAME_ZHT: "撒哈拉", SCALERANK: 1 },
+    geometry: { type: "Polygon", coordinates: [square] },
+  };
+  const range = {
+    properties: { FEATURECLA: "Range/mtn", NAME_EN: "Testrange", NAME_ZHT: "測試山脈", SCALERANK: 4 },
+    geometry: { type: "Polygon", coordinates: [square] },
+  };
+  const labels = buildRangeLabels([notARange, range]);
+  assert.deepEqual(labels, [{ nameEn: "Testrange", nameZht: "測試山脈", lng: 5, lat: 5, rank: 4 }]);
+});
+
+test("buildPeakLabels keeps only mountain features at or under the peak rank cutoff", () => {
+  const feature = (nameEn, scalerank) => ({
+    properties: { featurecla: "mountain", name_en: nameEn, name_zht: `${nameEn}-zht`, lat_y: 27.98, long_x: 86.88, scalerank },
+    geometry: { type: "Point", coordinates: [86.88, 27.98] },
+  });
+  const notAMountain = { properties: { featurecla: "pass", name_en: "Some Pass", scalerank: 1, lat_y: 0, long_x: 0 }, geometry: { type: "Point", coordinates: [0, 0] } };
+  const labels = buildPeakLabels([feature("Everest", 1), feature("TooMinor", PEAK_SCALERANK_MAX + 1), notAMountain]);
+  assert.deepEqual(labels, [{ nameEn: "Everest", nameZht: "Everest-zht", lng: 86.88, lat: 27.98, rank: 1 }]);
+});
+
+test("buildRiverLabels keeps named rivers at or under the river rank cutoff and simplifies the SAME way the pack's own rivers layer does", () => {
+  // A meandering course within one simplification pass's tolerance of a
+  // straight chord -- `featuresFor`'s own river call simplifies this away
+  // to its endpoints, so the label line should too.
+  const course = Array.from({ length: 30 }, (_, i) => {
+    const t = i / 29;
+    return [t * 2, t * 2 + 0.3 * Math.sin(t * Math.PI * 6) * TOLERANCE.fine];
+  });
+  const named = { properties: { name_en: "Testriver", name_zht: "測試河", scalerank: RIVER_SCALERANK_MAX }, geometry: { type: "LineString", coordinates: course } };
+  const unnamed = { properties: { name_en: "", scalerank: 0 }, geometry: { type: "LineString", coordinates: course } };
+  const tooMinor = { properties: { name_en: "Minor Creek", name_zht: "小溪", scalerank: RIVER_SCALERANK_MAX + 1 }, geometry: { type: "LineString", coordinates: course } };
+  const [label] = buildRiverLabels([named, unnamed, tooMinor]);
+  assert.equal(label.nameEn, "Testriver");
+  assert.equal(label.nameZht, "測試河");
+  assert.equal(label.rank, RIVER_SCALERANK_MAX);
+  assert.ok(label.line.length >= 2 && label.line.length < course.length, `expected the meander simplified away, got ${label.line.length} of ${course.length} points`);
+  assert.deepEqual(buildRiverLabels([unnamed, tooMinor]), [], "an unnamed or below-cutoff river contributes no label");
+});
+
+test("river label line equals the pack's river geometry when simplified via riverSimplification", () => {
+  // Create a synthetic river with a meandering course and verify that
+  // riverSimplification ensures the label line matches the pack's geometry.
+  const course = Array.from({ length: 50 }, (_, i) => {
+    const t = i / 49;
+    return [10 + t * 5, 20 + 0.15 * Math.sin(t * Math.PI * 8) * TOLERANCE.fine];
+  });
+  const river = {
+    properties: { scalerank: 2 },
+    geometry: { type: "LineString", coordinates: course },
+  };
+  // Get the pack's river geometry via featuresFor.
+  const [packFeature] = featuresFor([river], TOLERANCE.fine, 0, "rivers");
+  const packRiver = packFeature.parts[0];
+  // Get the label line geometry via riverSimplification.
+  const simplification = riverSimplification(false);
+  const labelParts = geometryParts(river.geometry, simplification.tolerance, false, simplification.minArea, simplification.byArea, simplification.primaryOnly);
+  const labelLine = labelParts.reduce((a, b) => (b.length > a.length ? b : a));
+  // Both must produce the same simplified geometry.
+  assert.deepEqual(labelLine, packRiver, "label line must match pack's river geometry exactly");
+});
+
+test("compareLabels sorts by rank then name regardless of input order, so encodeLabels never depends on shapefile feature order", () => {
+  const point = (nameEn, rank) => ({ nameEn, nameZht: "", lng: 0, lat: 0, rank });
+  const items = [point("Charlie", 2), point("Alpha", 1), point("Bravo", 1), point("Delta", 0)];
+  const sorted = [...items].sort(compareLabels);
+  assert.deepEqual(sorted.map((i) => i.nameEn), ["Delta", "Alpha", "Bravo", "Charlie"]);
+  // Reversing the input must not change the result: the sort, not
+  // insertion order, decides it.
+  const reversedInputSorted = [...items].reverse().sort(compareLabels);
+  assert.deepEqual(reversedInputSorted.map((i) => i.nameEn), ["Delta", "Alpha", "Bravo", "Charlie"]);
+});
+
+test("encodeLabels is deterministic and an empty label set encodes to just the four zero counts", () => {
+  const empty = { cities: [], ranges: [], peaks: [], rivers: [] };
+  const bytes = encodeLabels(empty);
+  // 1 schema byte + 4 groups x u16(0) count.
+  assert.equal(bytes.length, 1 + 4 * 2);
+  assert.deepEqual(bytes, encodeLabels(empty));
+
+  const point = { nameEn: "Alpha", nameZht: "甲", lng: 1.5, lat: 2.5, rank: 3 };
+  const withACity = { cities: [point], ranges: [], peaks: [], rivers: [] };
+  const first = encodeLabels(withACity);
+  const second = encodeLabels(withACity);
+  assert.deepEqual(first, second, "encoding the same labels twice must produce identical bytes");
+  assert.ok(first.length > bytes.length, "a non-empty group must add bytes over the empty baseline");
 });
