@@ -169,8 +169,10 @@ fn legend(rows: &[InventoryEntry]) -> Option<String> {
 /// `error` field, so a script parsing `moss list --json`'s stdout gets valid
 /// JSON on every path, including "no build yet" and "the last build's
 /// inventory is corrupt," rather than having to catch a parse error there
-/// and infer the reason from an exit code alone.
-fn json_error(message: &str) -> String {
+/// and infer the reason from an exit code alone. `pub(crate)`: `deploy::
+/// history::cli` shares this exact shape for its own `--json` failures
+/// rather than keeping a second copy.
+pub(crate) fn json_error(message: &str) -> String {
     serde_json::to_string_pretty(&serde_json::json!({ "error": message }))
         .unwrap_or_else(|_| format!("{{\"error\": {message:?}}}"))
 }
