@@ -62,6 +62,22 @@ pub struct ScrapeResult {
     /// does not count against `max_pages`; its own links are still
     /// harvested before the duplicate verdict is reached.
     pub duplicate_pages: usize,
+    /// A URL whose fetch failed (429 that outlasted every retry, host
+    /// unreachable, …) but whose own [`path_identity`](super::crawler::path_identity)
+    /// already names a path this crawl has already CONFIRMED produces
+    /// duplicates (a prior URL at that same path was itself resolved as
+    /// `Duplicate`, by rule 1 or rule 2) — a query-string variant (lightbox
+    /// `?itemId=…`, a filter, a calendar export) of content already safely
+    /// on disk, not a page gone missing. Deliberately narrower than "any
+    /// page already written at that path": an old-CMS site that routes
+    /// distinct posts through the same path (`?p=1`, `?p=2`, each with its
+    /// own self-canonical) must not lose a later sibling's stub just
+    /// because an earlier sibling at the same path happened to import
+    /// first — only a path with a CONFIRMED duplicate on it is treated as
+    /// one that fails closed. Never written as the `scrape_error` stub
+    /// `failed_pages` gets, and — like `duplicate_pages` — never counted
+    /// against `max_pages`.
+    pub unreachable_variants: usize,
     /// True when `max_pages` stopped a recursive crawl before every
     /// discovered in-scope URL had been visited — distinct from a crawl that
     /// finished because its queue simply ran out.
@@ -103,6 +119,18 @@ enum PageOutcome {
     /// `Written`, nothing reaches disk and it costs no slot in the page
     /// cap.
     Duplicate,
+    /// The fetch itself failed (a 429 that outlasted every retry, a host
+    /// that went away mid-crawl, …) for a URL whose [`path_identity`]
+    /// already names a path this crawl has already CONFIRMED produces
+    /// duplicates (see `unreachable_variants`) — a query-string variant
+    /// (`?itemId=…`) of a page already safely on disk, not a page gone
+    /// missing. Unlike `Failed`, this never reaches disk as a
+    /// `scrape_error` stub: the content it would have pointed at is already
+    /// imported under its own URL, so a stub here would be a confusing,
+    /// redundant duplicate of a real page. Counted on its own rather than
+    /// folded into either `Failed` or `Duplicate`, since it is neither — a
+    /// duplicate that could not be confirmed.
+    VariantFetchFailed,
 }
 
 /// A short, stable name for a media URL, so the same image fetched twice
@@ -197,6 +225,7 @@ where
     let mut pages_failed: usize = 0;
     let mut pages_skipped: usize = 0;
     let mut pages_duplicate: usize = 0;
+    let mut pages_unreachable_variants: usize = 0;
     let mut capped = false;
     // Identity of every page WRITTEN so far in this crawl — its own
     // canonical URL when it declared one, else the URL it was fetched from.
@@ -212,6 +241,19 @@ where
     // addresses) never collapse into one — only a query-string variant of
     // the SAME path does.
     let mut written_path_bodies: HashMap<String, HashSet<u64>> = HashMap::new();
+    // Path identities where this crawl has already CONFIRMED a duplicate —
+    // a URL resolved as `PageOutcome::Duplicate` (by rule 1 or rule 2) at
+    // that path. Consulted only when a fetch fails outright: a failed URL
+    // can never run rule 1/2 itself (there is no body or canonical to
+    // compare), so the only safe positive evidence that it, too, is "just
+    // another variant" is that SOME other URL at the same path has already
+    // been confirmed one. A path that has only ever produced `Written`
+    // pages (an old-CMS `?p=1`/`?p=2`/… with distinct self-canonicals, say)
+    // stays out of this set, so a later sibling at that path that fails to
+    // fetch still gets `Failed`'s ordinary stub rather than silently
+    // vanishing — see the regression test
+    // `an_old_cms_style_path_with_no_confirmed_duplicate_still_stubs_a_failed_sibling`.
+    let mut known_duplicate_paths: HashSet<String> = HashSet::new();
 
     // The site's own declared page list — read before the link-following
     // walk starts, so an unlinked page is queued regardless and, seeded
@@ -275,7 +317,28 @@ where
         let outcome: PageOutcome = 'page: {
         let (html, content_type) = match fetch_page(&url, &config.user_agent).await {
             Ok(v) => v,
-            Err(e) => break 'page PageOutcome::Failed(e),
+            Err(e) => {
+                // A failed fetch whose path (query string ignored) already
+                // names a path this crawl has already CONFIRMED produces
+                // duplicates (not merely a path that has produced ANY
+                // written page — an old-CMS `?p=1`/`?p=2` pair is written
+                // under the same path with no duplicate between them) is a
+                // query-string variant that couldn't be reconfirmed, not a
+                // page gone missing — the real content is already on disk
+                // under that path. See `PageOutcome::VariantFetchFailed`. A
+                // genuinely new URL that fails still gets `Failed`'s stub
+                // below, exactly as before this check existed.
+                let is_known_variant = path_identity(&url)
+                    .is_some_and(|id| known_duplicate_paths.contains(&id));
+                if is_known_variant {
+                    log::warn!(
+                        "import: fetch failed for a query-string variant of an \
+                         already-imported page, skipping the stub: {url}: {e}"
+                    );
+                    break 'page PageOutcome::VariantFetchFailed;
+                }
+                break 'page PageOutcome::Failed(e);
+            }
         };
 
         // A recursive crawl follows every same-host, same-prefix link it
@@ -343,6 +406,9 @@ where
         // disk, not a page gone.
         if let Some(canon) = &canonical {
             if imported_identities.contains(canon) {
+                if let Some(id) = path_identity(&url) {
+                    known_duplicate_paths.insert(id);
+                }
                 break 'page PageOutcome::Duplicate;
             }
         }
@@ -377,6 +443,7 @@ where
         if canonical.is_none() {
             if let Some(id) = path_identity(&url) {
                 if written_path_bodies.get(&id).is_some_and(|hashes| hashes.contains(&body_hash)) {
+                    known_duplicate_paths.insert(id);
                     break 'page PageOutcome::Duplicate;
                 }
             }
@@ -473,6 +540,13 @@ where
             PageOutcome::Duplicate => {
                 pages_duplicate += 1;
             }
+            // Never written as a `.md` stub — the content it would have
+            // pointed at is already on disk under its own path. Not counted
+            // against the cap, same as `Duplicate`: this URL was never a
+            // real additional page to begin with.
+            PageOutcome::VariantFetchFailed => {
+                pages_unreachable_variants += 1;
+            }
         }
     }
 
@@ -502,6 +576,7 @@ where
         failed_pages: pages_failed,
         skipped_pages: pages_skipped,
         duplicate_pages: pages_duplicate,
+        unreachable_variants: pages_unreachable_variants,
         capped,
         remaining_urls,
         sitemap_urls: sitemap.urls.len(),
@@ -645,6 +720,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         failed_pages: 0,
         skipped_pages: 0,
         duplicate_pages: 0,
+        unreachable_variants: 0,
         capped: false,
         remaining_urls: 0,
         sitemap_urls: 0,
@@ -674,6 +750,38 @@ fn should_retry_status(status: Option<u16>) -> bool {
         Some(429) => true,
         Some(s) => s >= 500,
     }
+}
+
+/// Longest delay [`call_with_retry_n`] will ever honor from a `Retry-After`
+/// header, regardless of what the host asked for — a host asking for an
+/// hour is asking the wrong tool, and a crawl that waited it out verbatim
+/// could stall the whole run on one URL.
+const MAX_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Parse a `Retry-After` header value (RFC 9110 §10.2.3): either an integer
+/// delta-seconds, or an HTTP-date — `chrono`'s RFC 2822 parser accepts it,
+/// since the HTTP-date grammar (`Sun, 06 Nov 1994 08:49:37 GMT`) is itself a
+/// valid, non-obsolete RFC 2822 date-time. Returns `None` for a
+/// missing/unparsable header, a non-positive delta-seconds, or a date
+/// already in the past — [`call_with_retry_n`] falls back to its own
+/// exponential backoff in all of those cases, same as a 429/5xx with no
+/// header at all. Zero is treated as "no useful wait", same as a negative
+/// value or a past date, rather than as license to retry with no delay at
+/// all: a 429 pairing its rate-limit refusal with `Retry-After: 0` is a
+/// contradiction the backoff schedule is a safer response to than an
+/// instant retry would be, and the two branches below would otherwise
+/// disagree about it — an integer `0` would have been honored while an
+/// HTTP-date computing to the same "now" was already rejected. The result
+/// is capped at [`MAX_RETRY_AFTER`].
+fn parse_retry_after(value: &str) -> Option<std::time::Duration> {
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<i64>() {
+        return (secs > 0).then(|| std::time::Duration::from_secs(secs as u64).min(MAX_RETRY_AFTER));
+    }
+    let when = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    let delta = when.with_timezone(&chrono::Utc) - chrono::Utc::now();
+    let secs = delta.num_seconds();
+    (secs > 0).then(|| std::time::Duration::from_secs(secs as u64).min(MAX_RETRY_AFTER))
 }
 
 /// Refuse a URL that is not a plain `http`/`https` request to a public host.
@@ -865,10 +973,16 @@ fn fetch_following_redirects(
     Err(refused(&format!("too many redirects (> {MAX_REDIRECT_HOPS})")))
 }
 
-/// `ureq::get` with up to `tries` attempts and exponential backoff (500ms,
-/// then 1s, then 2s, …) between attempts, for transient failures only (see
+/// `ureq::get` with up to `tries` attempts, for transient failures only (see
 /// [`should_retry_status`]). Permanent failures (4xx other than 429) return
 /// immediately regardless of `tries`.
+///
+/// The delay before each retry is polite rather than blind: a 429 or 503
+/// that named a `Retry-After` is honored (parsed by [`parse_retry_after`],
+/// capped at [`MAX_RETRY_AFTER`]); anything else — no header, an unparsable
+/// one, or a transport-level error with no response at all — falls back to
+/// exponential backoff (500ms, then 1s, then 2s, …) the same as before this
+/// header was read at all.
 ///
 /// Note: ureq maps any non-2xx response to `Error::Status` on `.call()`
 /// itself, so this single retry loop also replaces what used to be a
@@ -885,11 +999,17 @@ fn call_with_retry_n(
     accept: Option<&str>,
 ) -> Result<ureq::Response, String> {
     let mut last_err = String::new();
+    // What the PREVIOUS attempt's response asked for via `Retry-After`,
+    // consumed by the sleep before the NEXT attempt. Reset on every
+    // iteration (not just when absent), so a Retry-After-less response
+    // following one that had it doesn't keep honoring a now-stale wait.
+    let mut retry_after: Option<std::time::Duration> = None;
     for attempt in 0..tries {
         if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(
-                500 * 2u64.pow(attempt - 1),
-            ));
+            let delay = retry_after.take().unwrap_or_else(|| {
+                std::time::Duration::from_millis(500 * 2u64.pow(attempt - 1))
+            });
+            std::thread::sleep(delay);
         }
         // Proxy-aware like every other moss HTTP client (system::proxy):
         // a direct connect times out on hosts only reachable via proxy.
@@ -904,10 +1024,13 @@ fn call_with_retry_n(
                 if !should_retry_status(Some(code)) {
                     return Err(text);
                 }
+                retry_after = resp.header("Retry-After").and_then(parse_retry_after);
                 last_err = text;
             }
             Err(e) => {
-                // Transport-level error (timeout, connection reset, TLS...).
+                // Transport-level error (timeout, connection reset, TLS...)
+                // — no response at all, so no header to read.
+                retry_after = None;
                 last_err = format!("HTTP error: {}", e);
             }
         }
@@ -1096,6 +1219,318 @@ mod tests {
         assert!(should_retry_status(Some(503)));
         assert!(!should_retry_status(Some(404)));
         assert!(!should_retry_status(Some(200)));
+    }
+
+    #[test]
+    fn parse_retry_after_accepts_integer_delta_seconds() {
+        assert_eq!(
+            parse_retry_after("5"),
+            Some(std::time::Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_caps_at_the_sane_maximum() {
+        assert_eq!(parse_retry_after("999999"), Some(MAX_RETRY_AFTER));
+    }
+
+    #[test]
+    fn parse_retry_after_rejects_a_negative_delta() {
+        assert_eq!(parse_retry_after("-5"), None, "falls back to exponential backoff");
+    }
+
+    /// `Retry-After: 0` paired with a 429/503 is a contradiction (the host
+    /// just refused the request for being too frequent, then asked for no
+    /// wait at all) — treated as no useful signal, the same as a negative
+    /// delta or a past date, so the retry still gets the exponential
+    /// backoff's real delay instead of hammering the host again instantly.
+    #[test]
+    fn parse_retry_after_rejects_a_zero_delta() {
+        assert_eq!(parse_retry_after("0"), None, "falls back to exponential backoff, not an instant retry");
+    }
+
+    #[test]
+    fn parse_retry_after_rejects_unparsable_text() {
+        assert_eq!(parse_retry_after("not a retry hint"), None);
+    }
+
+    #[test]
+    fn parse_retry_after_accepts_a_future_http_date_capped_at_the_maximum() {
+        // Well past MAX_RETRY_AFTER, so the only way this comes back as
+        // exactly the cap is if the HTTP-date branch (not the integer
+        // branch, which `"Tue, ..."` can't parse as a number) ran and then
+        // was capped — proving both halves of the function at once.
+        let far_future = chrono::Utc::now() + chrono::Duration::seconds(3600);
+        let header = far_future.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        assert_eq!(parse_retry_after(&header), Some(MAX_RETRY_AFTER));
+    }
+
+    #[test]
+    fn parse_retry_after_rejects_a_past_http_date() {
+        let past = chrono::Utc::now() - chrono::Duration::seconds(30);
+        let header = past.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        assert_eq!(parse_retry_after(&header), None, "a date already past means retry now, via backoff, not a negative sleep");
+    }
+
+    /// The gap this closes: a host's own `Retry-After` was previously
+    /// ignored outright — every retry used the same blind exponential
+    /// schedule (500ms, 1s, 2s, …) regardless of what the 429 response
+    /// asked for. `Retry-After: 1` asks for a full second, longer than the
+    /// 500ms the old schedule's first retry would have waited, so a crawl
+    /// that still only waited ~500ms here would prove the header was never
+    /// read. Timing is the only way to observe that distinction — total_pages
+    /// alone can't, since both the old and new code eventually retry and
+    /// succeed either way.
+    #[tokio::test]
+    async fn a_429_with_retry_after_is_honored_before_the_retry_that_imports_the_page() {
+        let mut server = mockito::Server::new_async().await;
+        let rate_limited = server
+            .mock("GET", "/page")
+            .with_status(429)
+            .with_header("Retry-After", "1")
+            .with_body("rate limited")
+            .create_async()
+            .await;
+        let ok = server
+            .mock("GET", "/page")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Real page body, long enough to be extracted \
+                 as content once the rate limit clears.</p></article></body></html>",
+            )
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let config = ScrapeConfig::new(format!("{}/page", server.url()), tmp.path());
+        let started = std::time::Instant::now();
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        let elapsed = started.elapsed();
+        rate_limited.assert_async().await;
+        ok.assert_async().await;
+
+        assert_eq!(res.total_pages, 1, "the page imports once the rate limit clears");
+        assert_eq!(res.failed_pages, 0);
+        assert!(
+            elapsed >= std::time::Duration::from_millis(900),
+            "Retry-After: 1 must be honored as roughly a 1s wait, not the shorter \
+             500ms default backoff the old code would have used instead: {elapsed:?}"
+        );
+    }
+
+    /// A 429 that never clears must not be retried forever — bounded at the
+    /// pipeline's standard attempt count, after which the URL is reported
+    /// failed like any other permanently-unreachable page. `.expect(3)` below
+    /// is the proof: the mock itself fails the test if it is hit any other
+    /// number of times.
+    #[tokio::test]
+    async fn a_429_that_never_clears_fails_after_a_bounded_number_of_attempts() {
+        let mut server = mockito::Server::new_async().await;
+        let rate_limited = server
+            .mock("GET", "/stuck")
+            .with_status(429)
+            .with_body("rate limited")
+            .expect(3)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let config = ScrapeConfig::new(format!("{}/stuck", server.url()), tmp.path());
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        rate_limited.assert_async().await;
+
+        assert_eq!(res.total_pages, 0);
+        assert_eq!(res.failed_pages, 1, "a 429 that never clears is reported as a failed page");
+    }
+
+    /// Gap 2: a failed fetch of a query-string variant of a path this crawl
+    /// has already CONFIRMED a duplicate on must not become a `scrape_error`
+    /// stub — the content is already on disk under that path, so the stub
+    /// would be a confusing duplicate of a real page. Counted as
+    /// `unreachable_variants` instead. `?itemId=1` confirms the duplicate
+    /// (rule 2: same path as root, byte-identical body, no canonical of its
+    /// own) before `?itemId=2` ever fails — guaranteed by linking `?itemId=2`
+    /// only from `?itemId=1`'s own page rather than from root alongside it:
+    /// `extract_links` returns a `HashSet`, so two sibling links discovered
+    /// off the SAME page have no guaranteed processing order, and an earlier
+    /// version of this test asserting that order flaked under
+    /// `--test-threads=1` alone (ablated: reverted to sibling links under
+    /// root, reproduced the flake in a handful of runs). Chaining the link
+    /// through `?itemId=1`'s own body instead means `?itemId=2` is not even
+    /// IN the queue until the loop iteration that confirms `?itemId=1` a
+    /// duplicate has already finished. See
+    /// `an_old_cms_style_path_with_no_confirmed_duplicate_still_stubs_a_failed_sibling`
+    /// for the case where that precondition is absent and the stub must
+    /// survive instead. A genuinely new URL that fails the same way
+    /// (`/new-page`, no relation to anything already written) must still
+    /// get its stub exactly as before this check existed — both are
+    /// exercised together so an over-broad fix (treating every failure on
+    /// a written path as a variant) would be caught by the same test that
+    /// proves the real gap is closed.
+    #[tokio::test]
+    async fn a_failed_variant_of_a_confirmed_duplicate_path_is_not_stubbed_but_a_failed_new_page_still_is()
+    {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+        let shared_body = "Shared root content for the confirmed-duplicate-path test, long \
+             enough to pass the content extraction scorer reliably.";
+
+        let root = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                // The links sit in a <nav> OUTSIDE <article> — link discovery
+                // reads the whole document, but content extraction strips nav
+                // chrome, so root's extracted body still comes out
+                // byte-identical to `?itemId=1`'s. Only `new-page` and
+                // `?itemId=1` are linked here; `?itemId=2` is reachable only
+                // through `?itemId=1`'s own page below, so it cannot be
+                // queued, let alone processed, before `?itemId=1` is.
+                "<html><body><nav><a href=\"{base}/new-page\">New</a>\
+                 <a href=\"{base}/?itemId=1\">Confirmed duplicate</a></nav>\
+                 <article><p>{shared_body}</p></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let new_page = server
+            .mock("GET", "/new-page")
+            .with_status(404)
+            .with_body("not found")
+            .create_async()
+            .await;
+        // Same path as root, same extracted body, no canonical of its own —
+        // rule 2 confirms this a duplicate before `?itemId=2` is ever fetched.
+        // Its own `?itemId=2` link is the only way that URL is ever
+        // discovered, which is what pins the processing order.
+        let confirmed_duplicate = server
+            .mock("GET", "/?itemId=1")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><nav><a href=\"{base}/?itemId=2\">Unreachable after that</a></nav>\
+                 <article><p>{shared_body}</p></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let unreachable_variant = server
+            .mock("GET", "/?itemId=2")
+            .with_status(429)
+            .with_body("rate limited")
+            .expect(3)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        root.assert_async().await;
+        new_page.assert_async().await;
+        confirmed_duplicate.assert_async().await;
+        unreachable_variant.assert_async().await;
+
+        assert_eq!(res.total_pages, 1, "only the root page is real content");
+        assert_eq!(res.failed_pages, 1, "the genuinely new failing URL still counts as failed");
+        assert_eq!(res.duplicate_pages, 1, "?itemId=1 confirms the duplicate");
+        assert_eq!(
+            res.unreachable_variants, 1,
+            "?itemId=2 fails on a path already confirmed to produce duplicates, so it is \
+             counted on its own, not as failed_pages"
+        );
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(
+            written.len(),
+            2,
+            "the root page and the new-page stub, and nothing for either itemId variant: {written:?}"
+        );
+        let bodies: Vec<String> =
+            written.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect();
+        assert!(
+            bodies.iter().any(|b| b.contains("new-page")),
+            "the genuinely new failing URL must still get a scrape_error stub: {bodies:?}"
+        );
+        assert!(
+            !bodies.iter().any(|b| b.contains("itemId=2")),
+            "the failed variant of a confirmed-duplicate path must never produce a stub: {bodies:?}"
+        );
+    }
+
+    /// Gap 2's narrowing, proven directly: an old-CMS site that routes
+    /// distinct posts through the SAME path (`?p=1`, `?p=2`, …, each with
+    /// its own self-canonical, exactly the shape
+    /// `distinct_query_string_pages_with_self_canonicals_both_import` above
+    /// proves must both import when both fetches succeed) must not lose a
+    /// later sibling's stub just because an EARLIER sibling at the same
+    /// path happened to import first. `?p=1` writes successfully and is
+    /// never a duplicate of anything; `?p=2` then fails outright. Before
+    /// this narrowing, `VariantFetchFailed` matched on "any page already
+    /// written at this path" and would have silently dropped `?p=2` with no
+    /// stub — the same loss the real variant case (the test above) must
+    /// avoid, just triggered by two real pages instead of one real page
+    /// and its lightbox/filter echo.
+    #[tokio::test]
+    async fn an_old_cms_style_path_with_no_confirmed_duplicate_still_stubs_a_failed_sibling() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let page1 = server
+            .mock("GET", "/blog/?p=1")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><head><link rel=\"canonical\" href=\"{base}/blog/?p=1\"></head>\
+                 <body><article><p>First real post, unique content A, long enough to be \
+                 extracted as the article body for page one.</p>\
+                 <a href=\"{base}/blog/?p=2\">Next</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let page2 = server
+            .mock("GET", "/blog/?p=2")
+            .with_status(429)
+            .with_body("rate limited")
+            .expect(3)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/blog/?p=1"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        page1.assert_async().await;
+        page2.assert_async().await;
+
+        assert_eq!(res.total_pages, 1, "only ?p=1 ever fetched successfully");
+        assert_eq!(
+            res.failed_pages, 1,
+            "?p=2 is a genuinely distinct post that failed to fetch, not a confirmed variant \
+             of ?p=1 — no Duplicate verdict was ever reached on this path, so it must still \
+             get the ordinary failure stub"
+        );
+        assert_eq!(
+            res.unreachable_variants, 0,
+            "nothing on this path has ever been confirmed a duplicate"
+        );
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(
+            written.len(),
+            2,
+            "?p=1's real content and ?p=2's failure stub, both on disk: {written:?}"
+        );
     }
 
     #[test]

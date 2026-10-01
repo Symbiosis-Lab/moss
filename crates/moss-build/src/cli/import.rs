@@ -77,6 +77,18 @@ pub fn run(args: &[String]) -> i32 {
                     "  ✓ {} page(s) imported, {} failed, {} skipped (non-HTML), {} duplicate(s) skipped",
                     res.total_pages, res.failed_pages, res.skipped_pages, res.duplicate_pages
                 );
+                // A failed fetch of a query-string variant of a page already
+                // imported is neither `failed_pages` (the content isn't
+                // missing) nor `duplicate_pages` (it was never confirmed a
+                // duplicate, just presumed one from its path) — said on its
+                // own line so it doesn't inflate either count silently.
+                if res.unreachable_variants > 0 {
+                    eprintln!(
+                        "  ↳ {} variant(s) of an already-imported page could not be \
+                         reached (not written as a page; the content is already imported)",
+                        res.unreachable_variants
+                    );
+                }
                 // Silent when the site declared no sitemap at all — the
                 // ordinary case, and the one this line must not clutter.
                 if res.sitemap_urls > 0 {
@@ -123,12 +135,17 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{})",
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{})",
         totals.pages,
         folder.display(),
         totals.failed_pages,
         totals.skipped_pages,
         totals.duplicate_pages,
+        if totals.unreachable_variants > 0 {
+            format!(", {} variant(s) unreachable", totals.unreachable_variants)
+        } else {
+            String::new()
+        },
         if totals.capped_leftovers > 0 {
             format!(", {} left unimported by the page cap", totals.capped_leftovers)
         } else {
@@ -150,6 +167,7 @@ struct ImportTotals {
     failed_pages: usize,
     skipped_pages: usize,
     duplicate_pages: usize,
+    unreachable_variants: usize,
     capped_leftovers: usize,
     hard_errors: usize,
 }
@@ -160,6 +178,7 @@ impl ImportTotals {
         self.failed_pages += res.failed_pages;
         self.skipped_pages += res.skipped_pages;
         self.duplicate_pages += res.duplicate_pages;
+        self.unreachable_variants += res.unreachable_variants;
         if res.capped {
             self.capped_leftovers += res.remaining_urls;
         }
@@ -351,6 +370,14 @@ fn print_usage() {
     eprintln!("of the same page — is a duplicate: also never written, and does not count");
     eprintln!("against the page cap. On filename collisions between two distinct pages,");
     eprintln!("the new file is renamed `name 2.md`, `name 3.md`, etc.");
+    eprintln!();
+    eprintln!("A `429 Too Many Requests` (or a `503` naming a Retry-After) is retried —");
+    eprintln!("honoring the host's own Retry-After wait when it sent one, else a short");
+    eprintln!("backoff — for a bounded number of attempts before giving up. If the URL");
+    eprintln!("that never came back is a variant of a page already imported (same path,");
+    eprintln!("different query string), it is counted as \"variant(s) unreachable\"");
+    eprintln!("instead of getting a failure stub; a genuinely new page that never came");
+    eprintln!("back still gets one.");
     eprintln!();
     eprintln!("The vault copy is canonical; the source URL is recorded in `origin`");
     eprintln!("frontmatter as provenance, not as a claim that the content also lives");
