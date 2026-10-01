@@ -1,27 +1,21 @@
-//! Renderer registry for `![[file]]` embeds.
+//! Shared vocabulary for `![[file]]` embed dispatch.
 //!
-//! Each renderer maps a file extension (or extension family) to an output
-//! format. The caller resolves the embed target via the ContentGraph, then
-//! dispatches to the renderer for the target's extension. Unknown extensions
-//! fall back to a file link (Obsidian parity) — that fallback lives in the
-//! caller, not here.
+//! The actual dispatch logic lives in [`super::wikilink_dispatch`] (extension
+//! routing: a pre-pass claims markdown/notebook/table, `synth_kind_for_ext`
+//! claims video/pdf/audio/iframe/3D, and an image-extension check claims the
+//! rest — anything left over falls back to a plain file link, Obsidian
+//! parity). This module holds what that dispatch and its moss-build
+//! resolvers share: [`ParsedEmbed`] (the resolved-embed input every
+//! synthesizer takes), the reserved HTML/CSS class names, the deferred-marker
+//! prefixes moss-build's post-pass resolvers match on, and small formatting
+//! helpers ([`file_stem`], [`html_escape_attr`], [`Sizing`]/[`Dim`]).
 //!
-//! # moss-core ↔ desktop-app boundary
-//!
-//! moss-core is pure: no filesystem, no network, no async. This constrains
-//! what a renderer can do:
-//!
-//! - **Pure renderers** (image, iframe, audio, video, 3D, table) — return
-//!   `RenderedEmbed::Inline(markdown)` or `RenderedEmbed::Html(html)`. No I/O.
-//!   The string is spliced directly into the compiled output.
-//! - **I/O-bound renderers** (markdown transclusion, notebook, PDF preview) —
-//!   return `RenderedEmbed::Deferred { marker }`. The desktop app runs a post-pass
-//!   (`resolve_embeds` in `embeds.rs`) that reads the target file and splices
-//!   its rendered content into the marker.
-//!
-//! Plugin-registered renderers (Phase E) must follow the same rule: if they
-//! need I/O, they emit a marker and register a corresponding resolver on the
-//! desktop app's side.
+//! moss-core is pure: no filesystem, no network, no async. A renderer that
+//! needs file content (markdown transclusion, notebook, CSV/TSV) can't read
+//! it here — [`crate::resolve`]'s pre-pass emits one of the `MARKER_*`
+//! comment prefixes below instead, and moss-build's post-pass
+//! (`resolve_embeds` / `resolve_deferred_markers` in `embeds.rs`) reads the
+//! target file and splices the resolved content into the marker.
 
 mod common;
 pub mod folder_list;
@@ -143,34 +137,6 @@ pub struct ParsedEmbed<'a> {
     pub attrs: Option<crate::ast::attrs::AttrBlock>,
 }
 
-/// Output of a renderer.
-///
-/// The variant tells the caller what further processing (if any) the string
-/// needs. See the module-level doc for the moss-core ↔ desktop-app boundary rule.
-#[derive(Debug, PartialEq, Eq)]
-pub enum RenderedEmbed {
-    /// Markdown-level text that will be processed by CommonMark downstream.
-    /// Example: `![alt](url)` from the image renderer.
-    Inline(String),
-    /// Final HTML to splice into the output — must NOT be re-processed by the
-    /// markdown parser. Example: `<iframe …>` from the iframe renderer.
-    Html(String),
-    /// A marker comment for a post-pass resolver to expand with file I/O.
-    ///
-    /// Format convention: `<!-- <prefix>:<target> -->` where `<prefix>`
-    /// uniquely identifies the resolver (e.g. `moss-embed-ipynb`,
-    /// `moss-embed-table`, `moss-embed-plugin-<plugin-name>`) and
-    /// `<target>` is the body the resolver parses (commonly a path,
-    /// optionally with `?query#fragment|alias`).
-    ///
-    /// The resolver lives in the desktop app (where async and I/O are allowed).
-    /// Built-in prefixes are exported as pub const: [`MARKER_MARKDOWN`],
-    /// [`MARKER_IPYNB`], [`MARKER_TABLE`]. Plugin-registered renderers
-    /// emit `moss-embed-plugin-<plugin-name>:` — see
-    /// [`super::registry`] for the full two-pass dispatch design.
-    Deferred { marker: String },
-}
-
 /// A single dimension with a unit.
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -250,38 +216,11 @@ impl Sizing {
     }
 }
 
-/// A renderer converts a `ParsedEmbed` into its rendered form.
-pub trait EmbedRenderer: std::fmt::Debug + Send + Sync {
-    /// Extensions this renderer claims (lowercase, without leading dot).
-    fn extensions(&self) -> &[&'static str];
-
-    /// Render the embed. Must be pure; moss-core is I/O-free.
-    fn render(&self, embed: &ParsedEmbed<'_>) -> RenderedEmbed;
-}
-
-/// Always empty: every extension that once had a built-in `EmbedRenderer`
-/// here is now claimed earlier in the live pipeline (`resolve.rs`'s
-/// pre-pass, or `synth_kind_for_ext`).
-fn registry() -> &'static [&'static dyn EmbedRenderer] {
-    &[]
-}
-
-/// Look up a renderer by file extension (case-insensitive, no leading dot).
-pub fn lookup_renderer(ext: &str) -> Option<&'static dyn EmbedRenderer> {
-    if ext.is_empty() {
-        return None;
-    }
-    registry()
-        .iter()
-        .copied()
-        .find(|r| r.extensions().iter().any(|e| e.eq_ignore_ascii_case(ext)))
-}
-
 // ---------------------------------------------------------------------------
-// ImageRenderer
+// Image extensions
 // ---------------------------------------------------------------------------
 
-/// Image file extensions recognized by `ImageRenderer`.
+/// Image file extensions the wikilink dispatcher routes to the figure arm.
 pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "svg", "webp", "avif"];
 
 #[cfg(test)]

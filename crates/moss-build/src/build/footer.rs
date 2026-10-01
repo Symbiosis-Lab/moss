@@ -624,7 +624,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             crate::build::markdown::PageContext::default(),
         )
         .expect("footer.md should parse through the standard pipeline");
@@ -661,7 +660,6 @@ mod tests {
             crate::i18n::Language::En,
             None,
             crate::build::markdown::SiteMarkdown::default(),
-            None,
             None,
             None,
             None,

@@ -591,11 +591,11 @@ pub fn generate_blocking_content_for_build(
         let _phase_markdown = PhaseTrace::start("render_markdown");
 
         // Parallel markdown: read → resolve → process is independent per file
-        // (the dominant blocking-path cost measured on image vaults). The typed-
-        // embed renderer registry + Deferred-marker handlers are built once PER
-        // RAYON THREAD via map_init — NOT once per file (each handler captures
-        // the site-root PathBuf, so per-file would clone it for every file) and
-        // NOT shared across threads (MarkerHandler is `Box<dyn Fn>`, !Sync).
+        // (the dominant blocking-path cost measured on image vaults). The
+        // Deferred-marker handlers are rebuilt per file below (each one
+        // captures the site-root PathBuf, so sharing across files would mean
+        // cloning it anyway, and MarkerHandler is `Box<dyn Fn>`, !Sync, so it
+        // can't be shared across threads either).
         // Results collect in `markdown_files` order (rayon's indexed collect),
         // so `documents` order — which the render loop and the manifest depend
         // on — is identical to the old serial loop. Debug sub-phase timers are
@@ -617,9 +617,7 @@ pub fn generate_blocking_content_for_build(
         let rendered: Vec<Option<(ParsedDocument, Option<(std::path::PathBuf, String, Option<crate::build::stat::FileStat>)>)>> = project_structure
             .markdown_files
             .par_iter()
-            .map_init(
-                || moss_core::resolve::registry::RendererRegistry::empty().build(),
-                |resolve_registry, file_info| {
+            .map(|file_info| {
                     // Localize embed-error diagnostics (missing notebook/table)
                     // in the page's own language. The language folder is
                     // derivable from the path alone — before any frontmatter
@@ -704,7 +702,6 @@ pub fn generate_blocking_content_for_build(
                             }
                             std::fs::read_to_string(full_path).ok()
                         },
-                        resolve_registry,
                         &resolve_marker_handlers,
                         asset_snapshot,
                     );
@@ -750,7 +747,7 @@ pub fn generate_blocking_content_for_build(
                         is_homepage: is_root_home,
                     };
 
-                    let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), site_config.markdown(), Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), Some(resolve_registry), page_context) {
+                    let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), site_config.markdown(), Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context) {
                         Ok(doc) => doc,
                         Err(_) => return None,
                     };

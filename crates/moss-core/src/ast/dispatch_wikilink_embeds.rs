@@ -2,10 +2,9 @@
 //!
 //! Walks a [`Document`] and routes every wikilink embed image
 //! (`Inline::Image { is_wikilink: true, .. }`) through the
-//! [`crate::resolve::wikilink_dispatch::dispatch_wikilink_embed_with_registry`]
+//! [`crate::resolve::wikilink_dispatch::dispatch_wikilink_embed`]
 //! dispatcher, replacing the block-level paragraph with the renderer's
-//! output (HTML, inline markdown re-parse, deferred plugin marker, or
-//! standard link).
+//! output (HTML, inline markdown re-parse, or standard link).
 //!
 //! # Why a separate visitor
 //!
@@ -56,10 +55,7 @@
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;
-use crate::resolve::registry::RendererRegistry;
-use crate::resolve::wikilink_dispatch::{
-    dispatch_wikilink_embed_with_registry, EmitKind, WikilinkEmit,
-};
+use crate::resolve::wikilink_dispatch::{dispatch_wikilink_embed, EmitKind, WikilinkEmit};
 use crate::resolve::{Diagnostic, OutgoingLink};
 
 use super::document::Document;
@@ -84,7 +80,7 @@ pub struct WikilinkDispatchResult {
 }
 
 /// Walk the document's top-level blocks and dispatch every wikilink
-/// embed image (`![[…]]` paragraph) through the embed-renderer registry.
+/// embed image (`![[…]]` paragraph) through the wikilink-embed dispatcher.
 ///
 /// Returns the aggregated outgoing-link + diagnostic data; mutates
 /// `doc.blocks` in place to substitute embed paragraphs with their
@@ -94,7 +90,7 @@ pub struct WikilinkDispatchResult {
 ///
 /// Run BEFORE [`crate::ast::resolve_urls::resolve_urls`]. The dispatcher
 /// reads `Inline::Image.src` as `Url::Unresolved(raw)` — the parser's
-/// pre-resolve form — because `dispatch_wikilink_embed_with_registry` does
+/// pre-resolve form — because `dispatch_wikilink_embed` does
 /// its own [`crate::resolve::fuzzy_path::resolve_reference`] internally.
 /// If `resolve_urls` runs first, the wikilink images' src is already
 /// `Url::Resolved(href)` and the dispatcher's internal resolver would
@@ -103,18 +99,10 @@ pub fn dispatch_wikilink_embeds(
     doc: &mut Document,
     snapshot: &AssetSnapshot,
     graph: &ContentGraph,
-    registry: &RendererRegistry,
     source_path: &str,
 ) -> WikilinkDispatchResult {
     let mut result = WikilinkDispatchResult::default();
-    dispatch_in_block_children(
-        &mut doc.blocks,
-        snapshot,
-        graph,
-        registry,
-        source_path,
-        &mut result,
-    );
+    dispatch_in_block_children(&mut doc.blocks, snapshot, graph, source_path, &mut result);
     result
 }
 
@@ -125,7 +113,6 @@ fn dispatch_in_block_children(
     blocks: &mut Vec<Block>,
     snapshot: &AssetSnapshot,
     graph: &ContentGraph,
-    registry: &RendererRegistry,
     source_path: &str,
     result: &mut WikilinkDispatchResult,
 ) {
@@ -138,7 +125,7 @@ fn dispatch_in_block_children(
         };
 
         if let Some((dest_url, pothole)) = dispatch_info {
-            let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, registry, source_path);
+            let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, source_path);
             apply_emit(blocks, i, emit, result);
             i += 1;
             continue;
@@ -150,14 +137,7 @@ fn dispatch_in_block_children(
         // each one in place so paragraph position never decides whether an
         // embed gets its own element.
         if let Block::Paragraph(inlines) = &mut blocks[i] {
-            dispatch_inline_wikilink_embeds(
-                inlines,
-                snapshot,
-                graph,
-                registry,
-                source_path,
-                result,
-            );
+            dispatch_inline_wikilink_embeds(inlines, snapshot, graph, source_path, result);
         }
 
         // Descend into nested containers if any.
@@ -171,41 +151,20 @@ fn dispatch_in_block_children(
             Block::BlockQuote(children)
             | Block::Callout { children, .. }
             | Block::FootnoteDefinition { children, .. } => {
-                dispatch_in_block_children(
-                    children,
-                    snapshot,
-                    graph,
-                    registry,
-                    source_path,
-                    result,
-                );
+                dispatch_in_block_children(children, snapshot, graph, source_path, result);
             }
             Block::List { items, .. } => {
                 for item in items.iter_mut() {
-                    dispatch_in_block_children(
-                        item,
-                        snapshot,
-                        graph,
-                        registry,
-                        source_path,
-                        result,
-                    );
+                    dispatch_in_block_children(item, snapshot, graph, source_path, result);
                 }
             }
             Block::LinkCard { children, .. } => {
                 // PR4.5 compound-link cell — descend into its block body so
                 // wikilinks inside a grid LinkCard render correctly.
-                dispatch_in_block_children(
-                    children,
-                    snapshot,
-                    graph,
-                    registry,
-                    source_path,
-                    result,
-                );
+                dispatch_in_block_children(children, snapshot, graph, source_path, result);
             }
             Block::Shortcode(sc) => {
-                dispatch_in_shortcode(sc, snapshot, graph, registry, source_path, result);
+                dispatch_in_shortcode(sc, snapshot, graph, source_path, result);
             }
             _ => {}
         }
@@ -220,7 +179,6 @@ fn dispatch_in_shortcode(
     sc: &mut Shortcode,
     snapshot: &AssetSnapshot,
     graph: &ContentGraph,
-    registry: &RendererRegistry,
     source_path: &str,
     result: &mut WikilinkDispatchResult,
 ) {
@@ -232,18 +190,11 @@ fn dispatch_in_shortcode(
         | Shortcode::Recent(_)
         | Shortcode::Apply(_) => {}
         Shortcode::Hero(args) => {
-            dispatch_in_block_children(
-                &mut args.overlay,
-                snapshot,
-                graph,
-                registry,
-                source_path,
-                result,
-            );
+            dispatch_in_block_children(&mut args.overlay, snapshot, graph, source_path, result);
         }
         Shortcode::Grid(args) => {
             for cell in args.cells.iter_mut() {
-                dispatch_in_block_children(cell, snapshot, graph, registry, source_path, result);
+                dispatch_in_block_children(cell, snapshot, graph, source_path, result);
             }
         }
     }
@@ -309,10 +260,6 @@ fn find_lone_wikilink_image(inlines: &[Inline]) -> Option<(String, Option<String
 ///   stream would land a block element inside `<p>…</p>`, which a browser
 ///   corrects by closing the paragraph early and reopening a new one —
 ///   splitting the very paragraph this embed sits in.
-/// - `EmitKind::Deferred` — an unresolved marker for a post-pass resolver
-///   (notebook / table / plugin). That post-pass substitutes text with no
-///   notion of where the marker sits and may itself produce block HTML (a
-///   `<table>`), so a marker is never known to be phrasing content either.
 /// - `EmitKind::Block` — an image extension (the dispatcher's typed
 ///   `Block::Figure` arm). Left untouched: the ordinary `render_inline` →
 ///   `hooks.render_image` path already produces the correct bare
@@ -326,7 +273,6 @@ fn dispatch_inline_wikilink_embeds(
     inlines: &mut [Inline],
     snapshot: &AssetSnapshot,
     graph: &ContentGraph,
-    registry: &RendererRegistry,
     source_path: &str,
     result: &mut WikilinkDispatchResult,
 ) {
@@ -342,7 +288,7 @@ fn dispatch_inline_wikilink_embeds(
             // before `resolve_urls`) or not a wikilink embed at all.
             _ => continue,
         };
-        let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, registry, source_path);
+        let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, source_path);
         match emit.output {
             EmitKind::Html(html) => {
                 if let Some(link) = emit.outgoing_link {
@@ -353,45 +299,38 @@ fn dispatch_inline_wikilink_embeds(
             }
             // Not known to be phrasing content — see function doc. Left as
             // the original Inline::Image, exactly as before this fix.
-            EmitKind::HtmlFigure(_)
-            | EmitKind::Deferred(_)
-            | EmitKind::Block(_)
-            | EmitKind::Inline(_)
-            | EmitKind::Link(_) => {}
+            EmitKind::HtmlFigure(_) | EmitKind::Block(_) | EmitKind::Inline(_) | EmitKind::Link(_) => {}
         }
     }
 }
 
-/// Dispatch one wikilink-embed image through the registry with
-/// `is_embed: true` — the one call built by both the lone-paragraph path
-/// ([`dispatch_in_block_children`]) and the mid-paragraph path
-/// ([`dispatch_inline_wikilink_embeds`]), so the two can never drift on how
-/// an embed is dispatched.
+/// Dispatch one wikilink-embed image with `is_embed: true` — the one call
+/// built by both the lone-paragraph path ([`dispatch_in_block_children`])
+/// and the mid-paragraph path ([`dispatch_inline_wikilink_embeds`]), so the
+/// two can never drift on how an embed is dispatched.
 fn dispatch_embed(
     dest_url: &str,
     pothole: Option<&str>,
     snapshot: &AssetSnapshot,
     graph: &ContentGraph,
-    registry: &RendererRegistry,
     source_path: &str,
 ) -> WikilinkEmit {
-    dispatch_wikilink_embed_with_registry(
+    dispatch_wikilink_embed(
         dest_url,
         pothole,
         true, // is_embed
         graph,
         source_path,
         snapshot,
-        registry,
     )
 }
 
 /// Apply the dispatcher's `EmitKind` to `blocks[i]`.
 ///
-/// - `Html` / `HtmlFigure` / `Deferred` → replace with
-///   `Block::Other(html_or_marker)` (block-level raw HTML, bypassing `<p>`
-///   wrap — the whole reason `HtmlFigure`'s `<figure>` is fine here and
-///   only here: this call site is never inside a `<p>`).
+/// - `Html` / `HtmlFigure` → replace with `Block::Other(html)` (block-level
+///   raw HTML, bypassing `<p>` wrap — the whole reason `HtmlFigure`'s
+///   `<figure>` is fine here and only here: this call site is never inside
+///   a `<p>`).
 /// - `Inline` / `Link` → re-parse via [`parse`]; splice the resulting
 ///   blocks in at position `i` (so e.g. an image embed that re-parses
 ///   into a `Block::Paragraph(vec![Inline::Image { … }])` becomes the
@@ -408,7 +347,7 @@ fn apply_emit(
     result.diagnostics.extend(emit.diagnostics);
 
     match emit.output {
-        EmitKind::Html(html) | EmitKind::HtmlFigure(html) | EmitKind::Deferred(html) => {
+        EmitKind::Html(html) | EmitKind::HtmlFigure(html) => {
             blocks[i] = Block::Other(html);
         }
         EmitKind::Block(block) => {
@@ -460,7 +399,6 @@ mod tests {
     use super::*;
     use crate::asset_snapshot::AssetSnapshot;
     use crate::content_graph::ContentGraph;
-    use crate::resolve::registry::RendererRegistry;
 
     fn empty_graph() -> ContentGraph {
         crate::content_graph::ContentGraphBuilder::new().build()
@@ -468,10 +406,6 @@ mod tests {
 
     fn empty_snapshot() -> AssetSnapshot {
         AssetSnapshot::default()
-    }
-
-    fn empty_registry() -> RendererRegistry {
-        RendererRegistry::empty().build()
     }
 
     #[test]
@@ -490,8 +424,7 @@ mod tests {
         }])]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let result = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let result = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         // The original paragraph is replaced. Either with Block::Figure
         // (after re-parse) or Block::Paragraph (when re-parse doesn't
         // promote). Either way, the resulting blocks should NOT contain
@@ -521,8 +454,7 @@ mod tests {
         }])]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         match &doc.blocks[0] {
             Block::Paragraph(inlines) => match &inlines[0] {
                 Inline::Image { is_wikilink, .. } => assert!(!is_wikilink),
@@ -550,8 +482,7 @@ mod tests {
         ])]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         // The paragraph should still carry the inline wikilink image
         // (text + image + text shape preserved).
         match &doc.blocks[0] {
@@ -574,8 +505,7 @@ mod tests {
         let mut doc = Document::from_blocks(vec![]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let result = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let result = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         assert!(doc.blocks.is_empty());
         assert!(result.outgoing_links.is_empty());
         assert!(result.diagnostics.is_empty());
@@ -673,8 +603,7 @@ mod tests {
             }))]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         let has_wikilink_image = find_any_wikilink_image(&doc.blocks);
         assert!(
             !has_wikilink_image,
@@ -711,8 +640,7 @@ mod tests {
             }))]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         let has_wikilink_image = find_any_wikilink_image(&doc.blocks);
         assert!(
             !has_wikilink_image,
@@ -740,8 +668,7 @@ mod tests {
         }
         let graph = b.build();
         let snap = empty_snapshot();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         doc.blocks
     }
 
@@ -927,75 +854,4 @@ mod tests {
         }
     }
 
-    /// A stub `.ipynb` renderer that answers the way the real notebook
-    /// renderer does: a `Deferred` marker for a post-pass to expand later
-    /// (`crate::resolve::embed_renderer::MARKER_IPYNB`). moss-core's own
-    /// registry never registers one (see `registry.rs`'s "No more
-    /// built-ins"), so this stands in for whatever caller does.
-    #[derive(Debug)]
-    struct NotebookStub;
-    impl crate::resolve::embed_renderer::EmbedRenderer for NotebookStub {
-        fn extensions(&self) -> &[&'static str] {
-            &["ipynb"]
-        }
-        fn render(
-            &self,
-            embed: &crate::resolve::embed_renderer::ParsedEmbed<'_>,
-        ) -> crate::resolve::embed_renderer::RenderedEmbed {
-            crate::resolve::embed_renderer::RenderedEmbed::Deferred {
-                marker: format!(
-                    "<!-- {}:{} -->",
-                    crate::resolve::embed_renderer::MARKER_IPYNB,
-                    embed.resolved_path
-                ),
-            }
-        }
-    }
-
-    fn notebook_registry() -> RendererRegistry {
-        RendererRegistry::empty()
-            .with_boxed(Box::new(NotebookStub))
-            .build()
-    }
-
-    #[test]
-    fn mid_paragraph_notebook_embed_is_not_spliced_as_deferred_marker() {
-        // A `.ipynb`/table embed resolves to `EmitKind::Deferred`: an
-        // unresolved marker comment that a LATER, position-blind post-pass
-        // (`resolve::embeds::resolve_deferred_markers`) expands — possibly
-        // into block HTML (a `<table>`). Splicing the still-unresolved
-        // marker into this paragraph's `Inline::Other` would let that later
-        // pass nest block HTML inside `<p>`, with no way for it to know it
-        // shouldn't. Mid-paragraph, the embed must stay `Inline::Image`,
-        // the same as before this dispatcher existed — not become
-        // `Inline::Other(marker)`.
-        let mut doc = crate::ast::parse("See this notebook: ![[nb.ipynb]] for the data.\n");
-        let mut b = crate::content_graph::ContentGraphBuilder::new();
-        b.add_file("nb.ipynb", "nb");
-        let graph = b.build();
-        let snap = empty_snapshot();
-        let reg = notebook_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
-        match &doc.blocks[..] {
-            [Block::Paragraph(inlines)] => {
-                assert!(
-                    inlines
-                        .iter()
-                        .all(|i| !matches!(i, Inline::Other(h) if h.contains("moss-embed-ipynb"))),
-                    "a deferred marker must never be spliced into paragraph inlines: {inlines:?}"
-                );
-                assert!(
-                    inlines.iter().any(|i| matches!(
-                        i,
-                        Inline::Image {
-                            is_wikilink: true,
-                            ..
-                        }
-                    )),
-                    "the embed must survive as Inline::Image when its marker can't be inlined: {inlines:?}"
-                );
-            }
-            other => panic!("expected one Paragraph, got {other:?}"),
-        }
-    }
 }

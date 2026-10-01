@@ -22,7 +22,6 @@ pub mod reference;
 pub mod fuzzy_path;
 pub mod link_class;
 pub mod output_url;
-pub mod registry;
 pub mod title_params;
 pub mod wikilink_dispatch;
 pub mod md_extract;
@@ -114,23 +113,15 @@ pub fn resolve_content(
     file_reader: &dyn Fn(&str) -> Option<String>,
 ) -> ResolveResult {
     let handlers = embeds::MarkerHandlers::new();
-    let registry = registry::RendererRegistry::empty().build();
-    resolve_content_with_handlers(
-        source_path,
-        raw_markdown,
-        graph,
-        file_reader,
-        &registry,
-        &handlers,
-    )
+    resolve_content_with_handlers(source_path, raw_markdown, graph, file_reader, &handlers)
 }
 
-/// Variant of [`resolve_content`] that threads a custom [`registry::RendererRegistry`]
-/// (plugin-aware renderer dispatch) and [`embeds::MarkerHandlers`] (resolvers for
-/// Deferred markers: notebook, table, plugin renderers) through the pipeline.
+/// Variant of [`resolve_content`] that threads custom [`embeds::MarkerHandlers`]
+/// (resolvers for Deferred markers: notebook, table, plugin renderers) through
+/// the pipeline.
 ///
 /// Built-in-only pipelines should call [`resolve_content`]. Pipelines that load
-/// plugins at init time build a registry + handlers once and call this variant.
+/// plugins at init time build a handler set once and call this variant.
 ///
 /// The handler registry fires in a **new step 4.25** that runs after embed
 /// resolution and before the second wikilink pass. This ordering lets
@@ -140,7 +131,6 @@ pub fn resolve_content_with_handlers(
     raw_markdown: &str,
     graph: &ContentGraph,
     file_reader: &dyn Fn(&str) -> Option<String>,
-    registry: &registry::RendererRegistry,
     handlers: &embeds::MarkerHandlers<'_>,
 ) -> ResolveResult {
     // Default-empty snapshot for callers that don't yet thread asset data.
@@ -153,7 +143,6 @@ pub fn resolve_content_with_handlers(
         raw_markdown,
         graph,
         file_reader,
-        registry,
         handlers,
         &empty_snapshot,
     )
@@ -173,7 +162,6 @@ pub fn resolve_content_with_handlers_and_snapshot(
     raw_markdown: &str,
     graph: &ContentGraph,
     file_reader: &dyn Fn(&str) -> Option<String>,
-    registry: &registry::RendererRegistry,
     handlers: &embeds::MarkerHandlers<'_>,
     // Phase 0: threaded but not yet consumed. Phase 1 wires up reads.
     _assets: &AssetSnapshot,
@@ -184,16 +172,14 @@ pub fn resolve_content_with_handlers_and_snapshot(
     // Phase 3 PR2: Stage 1's wikilink rewriter + stage1_sweep retire.
     // pulldown-cmark now parses `[[…]]` / `![[…]]` natively via
     // `Options::ENABLE_WIKILINKS` (flipped in PR2 at every Parser::new_ext
-    // site), and `transform_events::dispatch_wikilink_at` routes each event
-    // through the EmbedRenderer registry. The `stage1_sweep`
+    // site), and `process_markdown_file` dispatches each event directly
+    // (see `moss_core::ast::dispatch_wikilink_embeds`) — this crate-side
+    // path no longer dispatches embeds in Stage 1. The `stage1_sweep`
     // (`![alt](file.pdf)` → `moss:kind=pdf` title rewrite) is retired per
     // plan Option A: authors who want non-image embeds use the wikilink
     // form `![[report.pdf]]`. See plan v2 § PR2.
     let outgoing_links: Vec<OutgoingLink> = Vec::new();
     let diagnostics: Vec<Diagnostic> = Vec::new();
-    let _ = registry; // Phase 3 PR2: registry flows directly to the desktop
-                      // app's `transform_events` via `process_markdown_file`; this
-                      // crate-side path no longer dispatches embeds in Stage 1.
 
     // Phase 3 PR2: pre-pass that lowers block-level wikilinks into
     // marker comments BEFORE pulldown-cmark sees them. Two classes of

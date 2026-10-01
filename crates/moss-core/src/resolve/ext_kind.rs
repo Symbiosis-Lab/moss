@@ -1,6 +1,7 @@
 //! Single source of truth mapping a file extension to its embed kind.
-//! Pure; shared by build + editor. Replaces the duplication flagged at
-//! `wikilink_dispatch.rs` (synth_kind_for_ext tables vs EmbedRenderer::extensions()).
+//! Pure; shared by build + editor. Replaces the duplication once flagged
+//! between `wikilink_dispatch.rs`'s `synth_kind_for_ext` table and the
+//! per-extension renderers it used to delegate to.
 
 use serde::{Deserialize, Serialize};
 

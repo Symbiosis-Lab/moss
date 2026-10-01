@@ -18,7 +18,7 @@
         "crates/moss-build/src/build/media/video.rs": 2300,
         "crates/moss-build/src/build/page/meta.rs": 1700,
         "crates/moss-build/src/build/pipeline.rs": 2200,
-        "crates/moss-build/src/build/render/blocking.rs": 4000,
+        "crates/moss-build/src/build/render/blocking.rs": 3900,
         "crates/moss-build/src/build/render/html.rs": 1800,
         "crates/moss-build/src/build/scan/scan.rs": 1600,
         "crates/moss-build/src/build/ship.rs": 1000,
@@ -103,7 +103,7 @@
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 39,
         "crates/moss-core/src/ast": 24,
-        "crates/moss-core/src/resolve": 17,
+        "crates/moss-core/src/resolve": 16,
         "crates/moss-build/src/ops/serve": 18
       },
       "oversized": {

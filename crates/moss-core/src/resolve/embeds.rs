@@ -368,8 +368,9 @@ fn parse_heading(line: &str) -> Option<(usize, &str)> {
 pub type MarkerHandler<'a> = Box<dyn Fn(&str, &mut Vec<Diagnostic>) -> String + Send + Sync + 'a>;
 
 /// Registry of marker-prefix → handler, used by
-/// [`resolve_deferred_markers`] to dispatch Deferred embeds
-/// ([`crate::resolve::embed_renderer::RenderedEmbed::Deferred`]) in a post-pass.
+/// [`resolve_deferred_markers`] to dispatch the marker comments that
+/// `resolve.rs`'s pre-pass emits for extensions that need file I/O
+/// (notebook, table), in a post-pass.
 ///
 /// The built-in `moss-embed:` (markdown transclusion) is **not** dispatched
 /// here — it's resolved by [`resolve_embeds`] in an earlier pass. This

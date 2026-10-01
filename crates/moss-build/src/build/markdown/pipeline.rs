@@ -411,17 +411,15 @@ pub fn process_markdown_file(
     // outlet. Tests pass `None`; the production call site in `blocking.rs`
     // builds the map from the same frontmatter pre-scan as `build_page_map`.
     external_url_map: Option<&HashMap<String, String>>,
-    // Phase 3 PR2 (native wikilinks): the page's content graph + plugin
-    // renderer registry. When provided, pulldown-cmark's
-    // `LinkType::WikiLink` events get dispatched through
-    // `moss_core::resolve::wikilink_dispatch::dispatch_wikilink_embed`
-    // (extension-routing via the EmbedRenderer registry + ContentGraph
-    // resolution + obsidian-heading-anchor normalization). When `None`,
-    // wikilinks fall through to pulldown-cmark's default emission (tests
-    // only — slot files such as footer.md ride the main document pipeline
-    // and do get a graph, which is what makes their wikilinks resolve).
+    // Phase 3 PR2 (native wikilinks): the page's content graph. When
+    // provided, pulldown-cmark's `LinkType::WikiLink` events get dispatched
+    // through `moss_core::resolve::wikilink_dispatch::dispatch_wikilink_embed`
+    // (extension routing + ContentGraph resolution + obsidian-heading-anchor
+    // normalization). When `None`, wikilinks fall through to pulldown-cmark's
+    // default emission (tests only — slot files such as footer.md ride the
+    // main document pipeline and do get a graph, which is what makes their
+    // wikilinks resolve).
     graph: Option<&moss_core::content_graph::ContentGraph>,
-    renderer_registry: Option<&moss_core::resolve::registry::RendererRegistry>,
     // Project shape and per-file identity — see `PageContext`'s own field
     // docs for each fact folded in here.
     page: PageContext<'_>,
@@ -927,14 +925,13 @@ pub fn process_markdown_file(
     //    if given `Url::Resolved`.
     let mut wikilink_outgoing: Vec<moss_core::resolve::OutgoingLink> = Vec::new();
     let mut wikilink_diagnostics: Vec<moss_core::resolve::Diagnostic> = Vec::new();
-    if let (Some(g), Some(reg)) = (graph, renderer_registry) {
+    if let Some(g) = graph {
         let snapshot_for_dispatch =
             crate::build::media::dimensions::snapshot_or_empty(media_lookup);
         let dispatch_result = moss_core::ast::dispatch_wikilink_embeds(
             &mut doc,
             snapshot_for_dispatch,
             g,
-            reg,
             file_path,
         );
         wikilink_outgoing.extend(dispatch_result.outgoing_links);
@@ -1699,7 +1696,7 @@ fn url_path_to_dir(url_path: &str) -> String {
 /// `moss:` title pass-through, plain anchor emission, bare-image
 /// preservation, raw-`<img>` opaque HTML. Production page rendering
 /// flows through `process_markdown_file`, which threads the full
-/// resolution chain (graph + registry + asset snapshot + media lookup).
+/// resolution chain (graph + asset snapshot + media lookup).
 pub fn render_markdown_to_html(markdown: &str) -> String {
     let default_resolver = |href: &str| -> String { transform_markdown_link(href) };
     render_markdown_to_html_with(markdown, &default_resolver, None, true)
@@ -1717,9 +1714,9 @@ pub fn render_markdown_to_html(markdown: &str) -> String {
 /// this function called the legacy `transform_events` event-pipeline; now
 /// every markdown-to-HTML path in moss flows through one renderer.
 ///
-/// Fragment context (no ContentGraph, no `renderer_registry`):
+/// Fragment context (no ContentGraph):
 /// - **No wikilink dispatch.** The AST visitor `dispatch_wikilink_embeds`
-///   needs a graph + registry; with neither, wikilink-form refs reach the
+///   needs a graph; with none, wikilink-form refs reach the
 ///   renderer as `Url::Unresolved` and the host's `resolve_link` closure
 ///   takes over via `classify_url_prod`. Fragment callers (the in-file
 ///   tests that exercise `render_markdown_to_html` directly) do not feed

@@ -2,7 +2,7 @@
 
 pub use super::contributions::{
     ChannelContribution, ContributedFrontmatter, ContributedJobs, DeployTargetContribution,
-    EmbedRendererContribution, JobDescriptor, PluginContributes,
+    JobDescriptor, PluginContributes,
 };
 use super::setup::SetupVerdict;
 use crate::build::scan::article_map::ArticleInfo;

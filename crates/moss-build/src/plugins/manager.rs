@@ -1154,7 +1154,6 @@ mod tests {
                 capabilities: vec![Capability::Syndicate],
                 contributes: Some(PluginContributes {
                     frontmatter: None,
-                    embed_renderers: vec![],
                     channel: None,
                     deploy_target: None,
                     processor: None,

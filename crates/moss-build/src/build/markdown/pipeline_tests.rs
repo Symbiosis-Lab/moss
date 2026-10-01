@@ -181,7 +181,6 @@ fn short_doc_with_no_signal_uses_site_default_lang() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -205,7 +204,6 @@ fn editor_and_jury_frontmatter_lower_into_parsed_document_beside_author() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -237,7 +235,6 @@ fn body_cover_path_captures_first_markdown_image() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -265,7 +262,6 @@ fn body_cover_path_skips_raw_html_img_in_markdown() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -307,7 +303,6 @@ fn body_cover_path_none_when_document_has_no_images() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -328,7 +323,6 @@ fn frontmatter_lang_overrides_site_default() {
         Language::ZhHans,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -355,7 +349,6 @@ fn article_without_h1_or_title_injects_filename_as_h1() {
         Language::ZhHans,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -386,7 +379,6 @@ fn article_with_frontmatter_title_injects_title() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -424,7 +416,6 @@ fn nav_page_suppresses_injected_article_title() {
         None,
         None,
         None,
-        None,
         PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
@@ -448,7 +439,6 @@ fn non_nav_article_still_injects_title() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -481,7 +471,6 @@ fn nav_false_restores_article_title() {
         None,
         None,
         None,
-        None,
         PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
@@ -505,7 +494,6 @@ fn nav_page_keeps_authored_body_h1() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -547,7 +535,6 @@ fn strict_contract_section_number_h1_does_not_suppress_injection() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -585,7 +572,6 @@ fn strict_contract_leading_blockquote_then_section_h1_injects_title() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -635,7 +621,6 @@ fn matching_leading_body_h1_is_kept_alongside_injected_title() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -673,7 +658,6 @@ fn dedup_does_not_strip_when_text_differs() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -707,7 +691,6 @@ fn dedup_does_not_strip_buried_h1_matching_filename() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -748,7 +731,6 @@ fn article_with_differing_body_h1_renders_both() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -793,7 +775,6 @@ fn article_with_empty_title_suppresses_injection() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -823,7 +804,6 @@ fn index_page_without_h1_does_not_inject() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -849,7 +829,6 @@ fn self_named_folder_index_does_not_inject() {
         Language::ZhHans,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -882,7 +861,6 @@ fn parse_for_test(file_path: &str, md: &str, root: Option<&str>) -> ParsedDocume
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -988,7 +966,6 @@ fn homepage_heading_suppresses_h2_permalink_anchor() {
         None,
         None,
         None,
-        None,
         PageContext { has_content_folders: false, seta_url: None, folder_lang: None, is_homepage: true },
     )
     .expect("should parse");
@@ -1021,7 +998,6 @@ fn ordinary_page_heading_keeps_h2_permalink_anchor() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1084,7 +1060,6 @@ fn filename_title_preserves_case_verbatim() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -1116,7 +1091,6 @@ fn filename_title_no_longer_capitalizes_kebab_case() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -1141,7 +1115,6 @@ fn article_with_h1_inside_hero_block_does_not_inject() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1175,7 +1148,6 @@ fn article_with_an_image_only_hero_still_renders_its_title() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1250,7 +1222,6 @@ fn moss_resolved_link_preserves_query_when_target_in_page_map() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -1290,7 +1261,6 @@ fn moss_resolved_link_to_html_asset_uses_pinned_url_regardless_of_page_depth() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1365,7 +1335,6 @@ fn moss_resolved_link_to_html_asset_depth_table() {
             None,
             None,
             None,
-            None,
             PageContext::default(),
         )
         .expect("should parse");
@@ -1396,7 +1365,6 @@ fn moss_resolved_link_to_html_asset_opens_in_new_tab() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1449,7 +1417,6 @@ fn moss_resolved_link_to_markdown_page_stays_same_tab() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -1478,7 +1445,6 @@ fn moss_resolved_link_to_html_asset_from_root_page() {
         Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1520,7 +1486,6 @@ fn nested_image_link_with_query_renders_correctly() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -1547,7 +1512,6 @@ fn filename_suffix_overrides_site_default() {
         Language::ZhHans,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1582,7 +1546,6 @@ fn folder_index_with_slug_override_is_still_index() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -1614,7 +1577,6 @@ fn home_override_is_index_via_page_map() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -1638,7 +1600,6 @@ fn test_pipeline_sets_features_inline_subscribe_when_shortcode_present() {
         crate::i18n::Language::En,
         Some("test-site"),
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1670,7 +1631,6 @@ fn test_pipeline_features_default_false_without_shortcode() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed");
@@ -1695,7 +1655,6 @@ fn test_pipeline_sets_scroll_rows_only_for_a_scrolling_grid() {
             crate::i18n::Language::En,
             Some("test-site"),
             crate::build::markdown::SiteMarkdown::default(),
-            None,
             None,
             None,
             None,
@@ -1729,7 +1688,6 @@ fn test_pipeline_scroll_grid_that_fits_still_sets_scroll_rows() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed");
@@ -1752,7 +1710,6 @@ fn test_pipeline_single_cell_scroll_grid_does_not_set_scroll_rows() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed");
@@ -1772,7 +1729,6 @@ fn test_pipeline_sets_features_inline_apply_when_shortcode_present() {
         crate::i18n::Language::ZhHans,
         Some("test-site"),
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1810,7 +1766,6 @@ fn test_pipeline_no_site_id_yields_pending_form() {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -1854,7 +1809,6 @@ fn process_markdown_file_emits_data_source_line_when_flag_on() {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
-        None,
         None,
         None,
         None,
@@ -1910,7 +1864,6 @@ fn process_markdown_file_malformed_yaml_does_not_leak_block() {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
-        None,
         None,
         None,
         None,
@@ -1990,7 +1943,6 @@ fn data_source_line_skips_frontmatter_collision() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed");
@@ -2034,7 +1986,6 @@ fn data_source_line_offset_traditional_yaml_frontmatter() {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
-        None,
         None,
         None,
         None,
@@ -2095,7 +2046,6 @@ fn data_source_line_matches_editor_cm6_body_line() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed");
@@ -2152,7 +2102,6 @@ fn data_source_line_matches_editor_on_malformed_frontmatter() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed");
@@ -2191,7 +2140,6 @@ fn data_source_line_matches_editor_on_simplified_frontmatter() {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
-        None,
         None,
         None,
         None,
@@ -2237,7 +2185,6 @@ fn process_markdown_file_omits_data_source_line_when_flag_off() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed");
@@ -2270,7 +2217,6 @@ fn process_markdown_file_emits_data_source_range_on_shortcode_when_flag_on() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed");
@@ -2297,7 +2243,6 @@ fn process_markdown_file_omits_data_source_range_when_flag_off() {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
-        None,
         None,
         None,
         None,
@@ -2341,7 +2286,6 @@ fn buttons_internal_link_does_not_leak_moss_resolved_prefix() {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -2393,7 +2337,6 @@ Inline link to [extend](docs/extend/) for comparison.
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -2479,7 +2422,6 @@ Para with [link](docs/) and *em* and `code`.
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse cleanly with observation path active");
@@ -2523,7 +2465,6 @@ fn render_with_math(md: &str, math: bool) -> String {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown { implicit_figure: true, math, hard_line_breaks: false, ..Default::default() },
-        None,
         None,
         None,
         None,
@@ -2603,7 +2544,6 @@ fn render_with_breaks(md: &str, hard_line_breaks: bool) -> String {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -2657,7 +2597,6 @@ fn render_with_heading_anchors(heading_anchors: bool) -> String {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown { implicit_figure: true, heading_anchors, ..Default::default() },
-        None,
         None,
         None,
         None,
@@ -2746,7 +2685,6 @@ fn tags_of(content: &str) -> Option<Vec<String>> {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("should parse");
@@ -2806,7 +2744,6 @@ fn render(md: &str, implicit_figure: bool) -> String {
         crate::i18n::Language::En,
         None,
         crate::build::markdown::SiteMarkdown { implicit_figure, ..Default::default() },
-        None,
         None,
         None,
         None,
@@ -3293,7 +3230,6 @@ fn recent_shortcode_dispatch_renders_fallback_on_html_path() {
         None,
         None,
         None,
-        None,
         PageContext::default(),
     )
     .expect("pipeline should succeed (no panic from Recent dispatch)");
@@ -3321,7 +3257,6 @@ fn recent_shortcode_dispatch_empty_fallback_yields_no_marker_leak() {
         crate::i18n::Language::En,
         Some("test-site"),
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -3411,7 +3346,6 @@ fn parse_with_graph_cfg(
         b.add_file(p, slug);
     }
     let graph = b.build();
-    let registry = moss_core::resolve::registry::RendererRegistry::empty().build();
     process_markdown_file(
         "test.md",
         md,
@@ -3424,7 +3358,6 @@ fn parse_with_graph_cfg(
         None,
         None,
         Some(&graph),
-        Some(&registry),
         PageContext::default(),
     )
     .expect("should parse")
@@ -3525,7 +3458,6 @@ fn per_page_language_apply_in_zh_hans_subdir() {
         None,
         None,
         None,
-        None,
         PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
@@ -3569,7 +3501,6 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         None,
         None,
         None,
-        None,
         PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
@@ -3606,7 +3537,6 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
         Language::ZhHans, // site default is ZhHans
         None,
         crate::build::markdown::SiteMarkdown::default(),
-        None,
         None,
         None,
         None,
@@ -3784,7 +3714,7 @@ fn body_image_sizes_follow_the_pages_effective_typesetting() {
         let site = SiteMarkdown { typesetting: site_typesetting, ..Default::default() };
         process_markdown_file(
             "a.md", &md, "site", &empty_map, false, Language::ZhHant, None, site,
-            Some(&lookup), None, None, None,
+            Some(&lookup), None, None,
             PageContext::default(),
         )
         .expect("should parse")

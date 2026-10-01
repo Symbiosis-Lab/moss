@@ -89,10 +89,7 @@ Declarative additions moss acts on without running your code:
 just the contribution. `jobs` supplies the words moss uses when it reports your
 hook's progress — moss owns the pixels, you supply the verb and noun.
 
-There is a third key, `embed_renderers`, for renderers of embed syntax. moss
-parses it and **nothing consumes it yet** — the adapter exists but no build path
-constructs it, so a plugin declaring one gets nothing. Do not build on it until
-this note says otherwise.
+A `contributes.embed_renderers` key is no longer recognized. It was parsed but never consumed by any build path, so a plugin declaring one got nothing; moss silently ignores the key now instead of parsing it into a no-op.
 
 ## Configuration
 

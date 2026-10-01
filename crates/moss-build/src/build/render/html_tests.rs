@@ -5993,7 +5993,6 @@ mod article_cover_tests {
             None,
             None,
             None,
-            None,
             crate::build::markdown::PageContext::default(),
         )
     }
@@ -6157,7 +6156,6 @@ mod home_file_demotion_tests {
             crate::i18n::Language::En,
             None,
             crate::build::markdown::SiteMarkdown::default(),
-            None,
             None,
             None,
             None,

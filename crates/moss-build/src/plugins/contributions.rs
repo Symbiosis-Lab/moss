@@ -34,18 +34,6 @@ pub struct PluginContributes {
     #[serde(default)]
     pub frontmatter: Option<ContributedFrontmatter>,
 
-    /// Typed-embed renderers contributed by this plugin.
-    ///
-    /// Each entry declares one or more file extensions and a script that
-    /// renders them. At pipeline init, moss wraps each in a
-    /// `PluginEmbedRenderer` adapter, registers it with the
-    /// `RendererRegistry`, and registers a corresponding `MarkerHandler`
-    /// that invokes the script via plugin IPC when the Deferred marker
-    /// is encountered.
-    ///
-    #[serde(default)]
-    pub embed_renderers: Vec<EmbedRendererContribution>,
-
     /// A place the user's writing can be sent to, and read back from.
     /// Replaces the `syndicate` / `login` / `import` capabilities:
     /// those three said which hook the plugin exported, this says what the
@@ -111,24 +99,6 @@ pub struct JobDescriptor {
     pub verb: String,
     /// The amount noun (e.g. `"posts"`) for the receipt "Syndicated · 3 posts".
     pub noun: String,
-}
-
-/// One entry in a plugin's `contributes.embed_renderers` list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbedRendererContribution {
-    /// File extensions this renderer claims (lowercase, without leading dot).
-    /// E.g., `["dot", "gv"]` for a Graphviz renderer.
-    pub extensions: Vec<String>,
-
-    /// Plugin script path (relative to the plugin directory) whose default
-    /// export is invoked for each matched embed. The function receives
-    /// `{ target_path, query, section, alias, site_root }` and must return
-    /// a string of HTML to splice into the page.
-    pub script: String,
-
-    /// Optional human-readable name for diagnostics and the settings UI.
-    #[serde(default)]
-    pub name: Option<String>,
 }
 
 /// Frontmatter schema contributed by a plugin.
@@ -520,9 +490,8 @@ impl PluginManifest {
         if self.capabilities.is_empty() {
             return;
         }
-        let contributes = self.contributes.get_or_insert_with(|| PluginContributes {
+        let contributes = self.contributes.get_or_insert(PluginContributes {
             frontmatter: None,
-            embed_renderers: Vec::new(),
             channel: None,
             deploy_target: None,
             processor: None,

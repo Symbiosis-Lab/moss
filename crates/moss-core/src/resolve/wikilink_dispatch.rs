@@ -3,7 +3,7 @@
 //! This module is the sole dispatcher for `[[…]]` / `![[…]]` events
 //! emitted by pulldown-cmark with `Options::ENABLE_WIKILINKS`. This
 //! crate's own AST visitor ([`mod@crate::ast::dispatch_wikilink_embeds`])
-//! calls [`dispatch_wikilink_embed_with_registry`] once per WikiLink-typed
+//! calls [`dispatch_wikilink_embed`] once per WikiLink-typed
 //! event, swallows the event range, and substitutes the renderer-
 //! produced HTML.
 //!
@@ -19,9 +19,10 @@
 //!
 //! # What this reuses
 //!
-//! - Extension routing goes through [`super::embed_renderer::lookup_renderer`]
-//!   (the same registry the pre-PR2 Stage 1 resolver used). No parallel
-//!   dispatcher.
+//! - Extension routing: three earlier claims (the markdown/notebook/table
+//!   pre-pass, [`synth_kind_for_ext`], and the image-extension check below)
+//!   cover every extension that resolves to HTML or a marker; anything left
+//!   over falls back to a plain file link (Obsidian parity).
 //! - Anchor / query splitting on `dest_url` mirrors the pre-PR2
 //!   `wikilinks::parse_wikilink_inner`'s `#` / `?` priority logic.
 //! - Width-token extraction uses [`crate::media::extract_width_from_alias`].
@@ -46,9 +47,7 @@ use crate::media::{
     MediaAttrs, Placement, Position,
 };
 
-use super::embed_renderer::{
-    lookup_renderer, EmbedRenderer, ParsedEmbed, RenderedEmbed, Sizing, IMAGE_EXTENSIONS,
-};
+use super::embed_renderer::{ParsedEmbed, Sizing, IMAGE_EXTENSIONS};
 use super::fuzzy_path::{resolve_reference, ResolvedRef};
 use super::title_params::TitleParams;
 use super::{Diagnostic, DiagnosticKind, LinkType, OutgoingLink};
@@ -100,9 +99,9 @@ pub struct WikilinkEmit {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// The shape of the dispatcher's emitted content. Mirrors
-/// [`super::embed_renderer::RenderedEmbed`] for embeds, plus a separate
-/// variant for non-embed wikilinks (`[[file]]`).
+/// The shape of the dispatcher's emitted content: one variant per embed
+/// renderer output shape, plus a separate variant for non-embed wikilinks
+/// (`[[file]]`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum EmitKind {
     /// Markdown-level text that downstream CommonMark will re-process.
@@ -121,12 +120,6 @@ pub enum EmitKind {
     /// the string for a leading `<figure`; the block-level (lone-paragraph)
     /// path treats it exactly like `Html`.
     HtmlFigure(String),
-    /// A marker comment for a post-pass resolver (notebook, table, plugin).
-    /// The marker's eventual resolution ([`crate::resolve::embeds::resolve_deferred_markers`])
-    /// substitutes text with no notion of where the marker sits, and may
-    /// itself be block-level (a `<table>`) — never known to be phrasing
-    /// content, so never spliced into a paragraph either.
-    Deferred(String),
     /// A standard markdown link string. Used for non-embed wikilinks
     /// (`[[file]]` rather than `![[file]]`).
     Link(String),
@@ -286,12 +279,11 @@ fn build_anchor(section: Option<&str>) -> String {
     }
 }
 
-/// Phase 3 PR1: Stage 2 entry point for wikilink dispatch.
+/// Phase 3: Stage 2 entry point for wikilink dispatch.
 ///
 /// Reads a parsed wikilink (the `dest_url` and pothole-text fields from
 /// pulldown-cmark's `Tag::Link { link_type: LinkType::WikiLink { has_pothole } }`
-/// or `Tag::Image { … LinkType::WikiLink … }`) and produces rendered output
-/// via the existing [`super::embed_renderer`] registry.
+/// or `Tag::Image { … LinkType::WikiLink … }`) and produces rendered output.
 ///
 /// # Arguments
 ///
@@ -300,17 +292,16 @@ fn build_anchor(section: Option<&str>) -> String {
 /// * `pothole` — the pothole text (everything after `|`), or `None` if
 ///   `has_pothole=false`.
 /// * `is_embed` — `true` for `![[…]]` (image-form), `false` for `[[…]]`.
-///   Routes embeds through the registry; routes plain wikilinks to a
+///   Routes embeds to a typed renderer; routes plain wikilinks to a
 ///   standard markdown link.
 /// * `graph` — content graph for path resolution.
 /// * `from_path` — calling file's path (for relative URL computation +
 ///   diagnostics).
 ///
-/// # Status (Phase 3 PR1, dormant)
-///
-/// This function compiles and is unit-tested, but no caller wires it in
-/// at runtime yet. PR2 enables `ENABLE_WIKILINKS` and adds the call from
-/// this crate's own `ast::dispatch_wikilink_embeds` visitor.
+/// This crate's own `ast::dispatch_wikilink_embeds` visitor is the sole
+/// runtime caller, and always passes `is_embed: true` — it walks only
+/// `![[…]]` image embeds, so [`dispatch_wikilink_form`]'s plain-wikilink
+/// branch stays unit-tested but dormant in a real build.
 pub fn dispatch_wikilink_embed(
     dest_url: &str,
     pothole: Option<&str>,
@@ -319,48 +310,6 @@ pub fn dispatch_wikilink_embed(
     from_path: &str,
     assets: &AssetSnapshot,
 ) -> WikilinkEmit {
-    dispatch_wikilink_embed_with_lookup(
-        dest_url,
-        pothole,
-        is_embed,
-        graph,
-        from_path,
-        assets,
-        &|ext| lookup_renderer(ext).map(|r| r as &dyn EmbedRenderer),
-    )
-}
-
-/// Like [`dispatch_wikilink_embed`] but threads a custom registry lookup.
-/// Used when the caller has plugin-registered renderers.
-pub fn dispatch_wikilink_embed_with_registry(
-    dest_url: &str,
-    pothole: Option<&str>,
-    is_embed: bool,
-    graph: &ContentGraph,
-    from_path: &str,
-    assets: &AssetSnapshot,
-    registry: &super::registry::RendererRegistry,
-) -> WikilinkEmit {
-    dispatch_wikilink_embed_with_lookup(
-        dest_url,
-        pothole,
-        is_embed,
-        graph,
-        from_path,
-        assets,
-        &|ext| registry.lookup(ext).map(|r| r as &dyn EmbedRenderer),
-    )
-}
-
-fn dispatch_wikilink_embed_with_lookup(
-    dest_url: &str,
-    pothole: Option<&str>,
-    is_embed: bool,
-    graph: &ContentGraph,
-    from_path: &str,
-    assets: &AssetSnapshot,
-    lookup: &dyn Fn(&str) -> Option<&dyn EmbedRenderer>,
-) -> WikilinkEmit {
     let split = split_dest_url(dest_url);
     let pothole_content = match pothole {
         None => PotholeContent::Empty,
@@ -368,7 +317,7 @@ fn dispatch_wikilink_embed_with_lookup(
     };
 
     if is_embed {
-        dispatch_embed_form(&split, pothole_content, graph, from_path, assets, lookup)
+        dispatch_embed_form(&split, pothole_content, graph, from_path, assets)
     } else {
         dispatch_wikilink_form(&split, pothole_content, graph, from_path)
     }
@@ -404,7 +353,6 @@ fn dispatch_embed_form(
     graph: &ContentGraph,
     from_path: &str,
     assets: &AssetSnapshot,
-    lookup: &dyn Fn(&str) -> Option<&dyn EmbedRenderer>,
 ) -> WikilinkEmit {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
@@ -663,18 +611,12 @@ fn dispatch_embed_form(
                 };
             }
 
-            let emit = match ext.as_deref().and_then(lookup) {
-                Some(r) => match r.render(&parsed) {
-                    RenderedEmbed::Inline(s) => EmitKind::Inline(s),
-                    RenderedEmbed::Html(s) => EmitKind::Html(s),
-                    RenderedEmbed::Deferred { marker } => EmitKind::Deferred(marker),
-                },
-                None => {
-                    // Fallback: plain file link (Obsidian parity for
-                    // unknown extensions).
-                    EmitKind::Inline(format!("[{}]({})", split.file, url))
-                }
-            };
+            // Every extension that resolves to a typed embed is already
+            // claimed above (the markdown/notebook/table pre-pass, the
+            // `synth_kind_for_ext` arm, or the image-extension arm just
+            // above). Whatever's left — unrecognized extensions — falls
+            // back to a plain file link (Obsidian parity).
+            let emit = EmitKind::Inline(format!("[{}]({})", split.file, url));
 
             WikilinkEmit {
                 output: emit,
@@ -955,8 +897,8 @@ enum SynthKind {
 /// which keeps its inline-markdown round-trip — and for deferred kinds
 /// (`md`/`ipynb`/`csv`/`tsv`) which still need moss-build's post-passes.
 ///
-/// The built-in renderers and their `EmbedRenderer::extensions()` slices
-/// were deleted as unreachable; `ext_kind::reference_kind_for_ext` is the
+/// The built-in per-extension renderers this used to delegate to were
+/// deleted as unreachable; `ext_kind::reference_kind_for_ext` is the
 /// single source of truth for this table now.
 fn synth_kind_for_ext(ext: &str) -> Option<SynthKind> {
     use crate::resolve::ext_kind::{reference_kind_for_ext, ExtKind};

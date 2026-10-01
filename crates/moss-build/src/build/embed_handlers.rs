@@ -1,18 +1,15 @@
-//! Marker-handler implementations for Deferred embed renderers.
+//! Marker-handler implementations for deferred embed resolution.
 //!
-//! Typed embed renderers in moss-core (Phase A–E) can't perform I/O. When a
-//! renderer needs file content (notebook rendering, CSV parsing, plugin
-//! scripts), it emits a `RenderedEmbed::Deferred { marker }` that the desktop
-//! app resolves in a post-pass via
+//! moss-core can't perform I/O. For an embed that needs file content
+//! (notebook rendering, CSV parsing), its resolve pre-pass emits a marker
+//! comment (`<!-- moss-embed-ipynb:<path> -->` / `<!-- moss-embed-table:<path> -->`)
+//! instead, which moss-build resolves in a post-pass via
 //! [`moss_core::resolve::embeds::resolve_deferred_markers`].
 //!
 //! This module builds a [`MarkerHandlers`] registry pre-populated with the
 //! built-in resolvers:
 //! - `moss-embed-ipynb:<path>` → `<iframe>` to the JupyterLite viewer page
 //! - `moss-embed-table:<path>` → `<table>` via `moss_core::csv_table`
-//!
-//! Plugin-registered handlers (for `moss-embed-plugin-<name>:` markers) are
-//! added by the desktop app's plugin runtime at pipeline init.
 
 use std::path::{Path, PathBuf};
 
@@ -332,7 +329,6 @@ mod tests {
     // site's root. Skipped silently when unset.
 
     use moss_core::content_graph::ContentGraphBuilder;
-    use moss_core::resolve::registry::RendererRegistry;
 
     /// In-repo minimal fixture, always present. Cargo runs tests from the
     /// crate root (`crates/moss-build/`), so this path is stable.
@@ -358,7 +354,6 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Analysis\n\n![[minimal.ipynb]]\n";
-        let registry = RendererRegistry::empty().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 
@@ -367,7 +362,6 @@ mod tests {
             md,
             &graph,
             &file_reader,
-            &registry,
             &handlers,
         );
 
@@ -404,7 +398,6 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Data\n\n![[minimal.csv]]\n";
-        let registry = RendererRegistry::empty().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 
@@ -413,7 +406,6 @@ mod tests {
             md,
             &graph,
             &file_reader,
-            &registry,
             &handlers,
         );
 
@@ -453,7 +445,6 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Test\n\n![[minimal.ipynb]]\n";
-        let registry = RendererRegistry::empty().build();
         // Handlers WITHOUT notebook support — marker must survive.
         let handlers = MarkerHandlers::new();
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
@@ -463,7 +454,6 @@ mod tests {
             md,
             &graph,
             &file_reader,
-            &registry,
             &handlers,
         );
 
@@ -497,7 +487,6 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Real notebook\n\n![[orbit-model.ipynb]]\n";
-        let registry = RendererRegistry::empty().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 
@@ -506,7 +495,6 @@ mod tests {
             md,
             &graph,
             &file_reader,
-            &registry,
             &handlers,
         );
 
