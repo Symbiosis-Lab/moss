@@ -178,6 +178,15 @@ impl ServedChild {
     }
 }
 
+/// A test that panics before its own `kill` would otherwise leave a watching
+/// server running after the test binary exits.
+impl Drop for ServedChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 /// Pulls `http://127.0.0.1:<port>` (or `http://localhost:<port>`) out of a
 /// line containing it, returning the port alone.
 #[allow(dead_code)]

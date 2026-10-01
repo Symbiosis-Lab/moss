@@ -35,8 +35,8 @@ use std::fmt;
 
 /// Directory every auto-generated OG card is written under, shared by
 /// [`ServedPath::for_og_card`] and the incremental render skip's card
-/// carry-forward (`build/render/blocking.rs`), which
-/// recognizes cards by this prefix alone.
+/// carry-forward (`build/render/blocking.rs`) and the media-settle re-render
+/// trigger (`build.rs`), both of which recognize cards by this prefix alone.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
 
 /// Reserved prefix for the email-fallback math PNGs. Append-only by design:

@@ -1617,25 +1617,6 @@ pub fn load_article_map_for_features(
     result
 }
 
-// extract_review_articles_from_map and extract_comment_articles_from_map have
-// been removed — the native process phase now parses article-map.json once via
-// load_article_map_for_features() and derives both review and comment lists by
-// filtering the resulting HashMap.
-
-
-
-/// Shared post-seal tail: persist → materialize → GC → stale-clean → advertise.
-///
-/// Called from two sites, both of them the normal build path: the detached
-/// seal task's `Ok(sealed)` arm, and the synchronous tail an
-/// `exits_after_build` run takes instead of detaching.
-///
-/// `stage_dir` is the directory to stale-clean after materialize —
-/// `.moss/build.nosync/staging`.
-///
-/// `is_pinned` is called by GC to skip generations currently in-flight.
-/// Pass `|g| s.is_generation_pinned(g)` when AppState is available, or
-/// `|_| false` as a safe fallback.
 /// Image/video output-variant paths that are NEW-or-CHANGED in `sealed`
 /// versus `previous`. Restricted to the image/video output buckets — the ones
 /// the preview iframe can srcset-swap; notebook outputs are excluded (no swap
@@ -2076,7 +2057,11 @@ async fn advertise_sealed(
 ///   `resolve_card_color` call site — grid_card.rs, grid_cells.rs,
 ///   folder_embed.rs, child_summary.rs — for a condition this rare), "newly
 ///   added" is the closest correlate this function's two existing inputs
-///   (the settle diff and the previous manifest) can compute.
+///   (the settle diff and the previous manifest) can compute. A share card
+///   under `_moss/og/` never counts: it is drawn by the render of the page it
+///   belongs to, from that page's own text, so no page baked anything from it
+///   before it existed. Its path is a content hash, so every `title:` edit
+///   produces a "new" one, and counting it cost a full re-render per edit.
 ///
 /// A no-op when nothing is watching `folder_path` (`ops::watch::worker::get`
 /// returns `None` for a deploy, CLI build, or plugin install — none of which
@@ -2099,7 +2084,9 @@ fn trigger_media_settle_rerender(
     };
     let needs_rerender = settled.iter().any(|a| {
         a.asset_type == "thumbnail"
-            || (a.asset_type == "image" && !previous.files.contains_key(&a.path))
+            || (a.asset_type == "image"
+                && !a.path.starts_with(crate::build::served_path::OG_CARD_PREFIX)
+                && !previous.files.contains_key(&a.path))
     });
     if !needs_rerender {
         return;
@@ -2247,6 +2234,24 @@ mod media_settle_rerender_tests {
             handle.slot_occupied(),
             "a brand-new image settle must enqueue a follow-up rebuild"
         );
+        worker::deregister(folder, &handle);
+    }
+
+    /// A share card is drawn by its own page's render, so a new one (every
+    /// `title:` edit makes one, its path being a content hash) is never media
+    /// another page baked a placeholder from.
+    #[test]
+    fn a_new_share_card_does_not_enqueue() {
+        let folder = "/tmp/media-settle-rerender-test-og-card";
+        let handle = worker::register(folder);
+
+        trigger_media_settle_rerender(
+            folder,
+            &[image("_moss/og/0123456789abcdef.png")],
+            Some(&SiteHashes::default()),
+        );
+
+        assert!(!handle.slot_occupied(), "a new share card must not trigger a full re-render");
         worker::deregister(folder, &handle);
     }
 
