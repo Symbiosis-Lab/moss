@@ -207,6 +207,17 @@ pub(crate) async fn handle_upload(
     // `..` segment survives into the traversal check rather than being
     // silently resolved away by it.
     let dir_for_target = project_root.join(&dir_rel).to_string_lossy().into_owned();
+    // The configured attachment folder may not exist until the first insert,
+    // so create it here. `validate_entry_path` runs first: it refuses `..` and
+    // anything outside the root, and rechecks the canonical form of the deepest
+    // EXISTING ancestor, so a symlink pointing out of the vault is refused
+    // before `create_dir_all` can create anything behind it.
+    if let Err(e) = crate::vault::fs::validate_entry_path(&project_root, &dir_for_target) {
+        return bad_request(&e);
+    }
+    if let Err(e) = std::fs::create_dir_all(&dir_for_target) {
+        return server_error(&format!("could not create '{dir_rel}': {e}"));
+    }
     let target = match crate::editor::copy_in::validate_copy_target(&project_root, &dir_for_target) {
         Ok(t) => t,
         Err(e) => return bad_request(&e),
@@ -459,6 +470,76 @@ mod tests {
             Ok(resp) => panic!("a dir outside the vault must 400; got {}", resp.status()),
             Err(e) => panic!("expected a 400, got transport error: {e}"),
         }
+
+        let _ = shutdown_tx.send(());
+    }
+
+    /// A `dir` that does not exist yet (an attachment folder before the first
+    /// insert) is created inside the vault and the upload lands in it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_dir_inside_the_vault_is_created() {
+        let (_vault, site_dir) = served_vault();
+        let vault_root = site_dir.ancestors().nth(3).unwrap().to_path_buf();
+        let ctx = InvokeCtx::standalone();
+        let (port, shutdown_tx) = start_server(ServeConfig {
+            invoke: Some(ctx.clone()),
+            kind: HostKind::Cli,
+            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64210)
+        })
+        .await
+        .expect("server should start");
+        let token = ctx.token().expect("start_server binds the served vault").to_string();
+
+        let (body, content_type) = multipart_body(
+            &[("dir", "assets/images")],
+            &[("file", "photo.jpg", b"jpegbytes")],
+        );
+        let resp = ureq::post(&format!("http://localhost:{port}/__moss/upload"))
+            .set(TOKEN_HEADER, &token)
+            .set("Content-Type", &content_type)
+            .timeout(std::time::Duration::from_secs(5))
+            .send_bytes(&body)
+            .expect("a missing dir inside the vault must be created");
+        assert_eq!(resp.status(), 200);
+        assert!(vault_root.join("assets/images/photo.jpg").exists());
+
+        let _ = shutdown_tx.send(());
+    }
+
+    /// A missing `dir` under a symlink that points outside the vault is 400,
+    /// and nothing is created behind the link.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_dir_under_an_escaping_symlink_is_400_and_creates_nothing() {
+        let (_vault, site_dir) = served_vault();
+        let vault_root = site_dir.ancestors().nth(3).unwrap().to_path_buf();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), vault_root.join("link")).unwrap();
+        let ctx = InvokeCtx::standalone();
+        let (port, shutdown_tx) = start_server(ServeConfig {
+            invoke: Some(ctx.clone()),
+            kind: HostKind::Cli,
+            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64211)
+        })
+        .await
+        .expect("server should start");
+        let token = ctx.token().expect("start_server binds the served vault").to_string();
+
+        let (body, content_type) = multipart_body(
+            &[("dir", "link/new/sub")],
+            &[("file", "photo.jpg", b"x")],
+        );
+        match ureq::post(&format!("http://localhost:{port}/__moss/upload"))
+            .set(TOKEN_HEADER, &token)
+            .set("Content-Type", &content_type)
+            .timeout(std::time::Duration::from_secs(5))
+            .send_bytes(&body)
+        {
+            Err(ureq::Error::Status(400, _)) => {}
+            Ok(resp) => panic!("an escaping dir must 400; got {}", resp.status()),
+            Err(e) => panic!("expected a 400, got transport error: {e}"),
+        }
+        assert!(!outside.path().join("new").exists(), "nothing may be created outside the vault");
 
         let _ = shutdown_tx.send(());
     }

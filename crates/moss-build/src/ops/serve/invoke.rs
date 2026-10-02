@@ -797,6 +797,7 @@ carrier! {
         list_versions => arm_list_versions,
         read_version => arm_read_version,
         reveal_history_store => arm_reveal_history_store,
+        resolve_attachment_dir => file_ops::arm_resolve_attachment_dir,
     }
 }
 
@@ -953,6 +954,33 @@ mod tests {
         refused(json!({ "path": "../outside.md" })).await;
         refused(json!({ "path": "/etc/passwd" })).await;
         refused(json!({ "path": dir.path().to_string_lossy() })).await; // the root itself
+    }
+
+    /// `resolve_attachment_dir` answers the configured folder for a page, the
+    /// default when none is configured, and refuses a page outside the vault.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resolve_attachment_dir_arm_reads_config_and_confines() {
+        let (dir, ctx) = scratch();
+        let ask = |p: &str| dispatch_authed_read(&ctx, "resolve_attachment_dir", json!({ "pageRelativePath": p }));
+
+        match ask("posts/a.md").await {
+            Some(Ok(v)) => assert_eq!(v, json!("posts"), "default is beside the page"),
+            other => panic!("expected the default dir, got {other:?}"),
+        }
+
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(
+            dir.path().join(".moss/config.toml"),
+            "[editor]\nattachment_folder = \"assets\"\n",
+        )
+        .unwrap();
+        match ask("posts/a.md").await {
+            Some(Ok(v)) => assert_eq!(v, json!("assets"), "bare value is root-relative"),
+            other => panic!("expected the configured dir, got {other:?}"),
+        }
+
+        assert!(matches!(ask("../outside.md").await, Some(Err(_))));
+        assert!(matches!(ask("/etc/passwd").await, Some(Err(_))));
     }
 
     // The allowlist-is-a-subset-of-the-registry gate lives app-side

@@ -20,7 +20,9 @@ use super::filesystem::{CopiedFile, CopyReport, ImportSkipReason, SkippedImport}
 /// dataless fail-fast policy on Sonoma+, and an `ENOENT` with a `.name.icloud`
 /// sibling on macOS 12-13. Everywhere else there is no fail-fast policy to
 /// recover from, so every error is what it says it is.
-pub(crate) fn skip_reason(src: &Path, err: &std::io::Error) -> ImportSkipReason {
+///
+/// A host uses this to classify its own copy failure the same way the shared loop does (cloud placeholder versus real error).
+pub fn skip_reason(src: &Path, err: &std::io::Error) -> ImportSkipReason {
     if crate::build::icloud::is_offline_not_absent(src, err) {
         ImportSkipReason::StillInCloud
     } else {
@@ -34,7 +36,9 @@ pub(crate) fn skip_reason(src: &Path, err: &std::io::Error) -> ImportSkipReason 
 /// prescribes, so a symlinked component inside the vault cannot point the copy
 /// outside it. Returns the validated (non-canonical) path so callers'
 /// relative-path math keeps the root's original spelling.
-pub(crate) fn validate_copy_target(
+///
+/// A host uses this to check a destination folder before handing it to [`copy_files_into`].
+pub fn validate_copy_target(
     project_root: &Path,
     target_dir: &str,
 ) -> Result<PathBuf, String> {
@@ -54,7 +58,9 @@ pub(crate) fn validate_copy_target(
 ///
 /// Comparison is by exact `file_name()` match — a user-named folder like
 /// `notes/.git-history/` still copies because its name is `.git-history`, not `.git`.
-pub(crate) const IMPORT_SKIP_DIRS: &[&str] = &[".moss", "node_modules", ".git"];
+///
+/// A host uses this to apply the same skip list when it walks a folder of its own.
+pub const IMPORT_SKIP_DIRS: &[&str] = &[".moss", "node_modules", ".git"];
 
 /// Recursively copy `src` (a directory) into `dst`, skipping entries whose
 /// `file_name()` appears in [`IMPORT_SKIP_DIRS`]. Returns the number of files
@@ -82,7 +88,9 @@ pub(crate) const IMPORT_SKIP_DIRS: &[&str] = &[".moss", "node_modules", ".git"];
 /// photo in a folder of two hundred must not cost the other 199, and a folder
 /// reported as a single failure tells the caller nothing about what did land.
 /// Returns the number of FILES copied.
-pub(crate) fn copy_dir_for_import(
+///
+/// A host uses this to copy a dropped folder with the same skip, symlink and deadline rules as [`copy_files_into`].
+pub fn copy_dir_for_import(
     src: &Path,
     dst: &Path,
     deadline: std::time::Instant,
@@ -176,7 +184,9 @@ pub(crate) fn copy_dir_for_import(
 /// Any other error passes straight through unchanged — waiting cannot fix a
 /// missing file or a permissions problem, and delaying that report only makes
 /// it worse.
-pub(crate) fn copy_file_into_vault(
+///
+/// A host uses this to copy a single file with the same cloud-materialization wait as [`copy_files_into`].
+pub fn copy_file_into_vault(
     src: &Path,
     dest: &Path,
     budget: std::time::Duration,
@@ -197,7 +207,9 @@ pub(crate) fn copy_file_into_vault(
 /// validated as a directory inside `project_root` (see
 /// [`validate_copy_target`]); this only decides what lands and what is
 /// reported back.
-pub(crate) fn copy_files_into(
+///
+/// A host uses this to land a list of OS paths in a validated target and get back the [`CopyReport`].
+pub fn copy_files_into(
     project_root: &Path,
     source_paths: &[String],
     target: &Path,

@@ -132,3 +132,27 @@ pub(super) async fn arm_undo_rename(ctx: &Session, args: Value) -> ArmResult {
     let r = crate::editor::rename_plan::undo_applied(&root, &a.applied).map_err(ArmError::Command)?;
     to_value(r)
 }
+
+/// `resolve_attachment_dir(pageRelativePath)` — the project-relative,
+/// forward-slash directory (`""` = project root) where an image dropped on
+/// that page belongs. Same request and response as the desktop command: the
+/// SAME `load_attachment_folder` + `attachment_dir_for_page` pair answers it.
+/// Unlike the desktop command it does not create the folder, because this sits
+/// on the read tier; the upload route creates its target when the first file
+/// lands. The page path is only ever a key into path arithmetic, but it is
+/// confined anyway so the arm refuses what every other path-taking arm refuses.
+pub(super) async fn arm_resolve_attachment_dir(ctx: &Session, args: Value) -> ArmResult {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct A {
+        page_relative_path: String,
+    }
+    let a: A = parse_args(args)?;
+    confine(ctx, &a.page_relative_path)?;
+    let root = project_root(ctx);
+    let raw = crate::build::site_config::load_attachment_folder(&root.to_string_lossy());
+    to_value(moss_core::attachment::attachment_dir_for_page(
+        &raw,
+        &a.page_relative_path.replace('\\', "/"),
+    ))
+}
