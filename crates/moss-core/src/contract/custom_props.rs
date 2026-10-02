@@ -256,6 +256,24 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         default: "#e9eff2",
         description: "First-paint background of the explorer's own pannable viewport, before the inlined world SVG's own identically-coloured water layer has loaded — never itself set independently of `.moss-place-map`'s own `--moss-place-water`, which already carries the site's light/dark values.",
     },
+    CustomProp {
+        name: "--moss-place-tile-opacity",
+        owner: "moss-places-tiles",
+        default: "0",
+        description: "Cross-fade opacity of the explorer's regional tile layer. Written per-frame by tiles.ts's `TileLayer.render` as the camera crosses the fade band short of the world layer's own detail ceiling — 0 outside the band, where `render` also clears every tile element from the DOM, so the property and the content agree. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
+    },
+    CustomProp {
+        name: "--moss-place-relief-strength",
+        owner: "[data-map-layer=\"relief\"]",
+        default: "1",
+        description: "Opacity of the relief and lighting map layers (read by both `[data-map-layer=\"relief\"]` and `[data-map-layer=\"lighting\"]`). Written per-frame by map.ts's `applyCamera`, fading the shading toward a floor past the world layer's own detail ceiling so dense relief does not compete with the tiles revealed at close zoom. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
+    },
+    CustomProp {
+        name: "--moss-place-river-scale",
+        owner: "[data-map-layer=\"rivers\"]",
+        default: "1",
+        description: "Scale applied to a river path's own baked stroke-width (`--river-w`, set once per path by map.ts's `prepareRiverWidths`), so rivers keep a constant on-screen width as `applyCamera` zooms the world layer instead of thickening with it. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
+    },
 ];
 
 /// A `data-*` attribute moss emits on an element that carries no `moss-*` class.
