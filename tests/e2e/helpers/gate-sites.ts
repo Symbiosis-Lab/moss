@@ -2585,6 +2585,24 @@ export const PLACES_EXPLORER_REAL_GATE: ScratchSiteSpec = {
       "2024-03-10",
       "  作者　[林二](/people/lin-er/)\n",
     ),
+    // `footer: true` is this fixture's only footer-worthy content (no
+    // footer.md, no RSS) — without it `strip_empty_footer` removes the
+    // `<footer>` element outright, and the synthetic root's own "the map's
+    // bottom edge meets the footer's top with no gap" gate (fix 1, design
+    // decision 7) would have nothing to measure against. `nav: false`
+    // keeps it out of the main nav — a bare top-level page there flips
+    // `has_content_folders`, which changed `places/kyoto/`'s own breadcrumb
+    // mode and broke an unrelated, pre-existing assertion the first time
+    // this page was added without it.
+    "about.md": `---
+title: About
+uid: "per004dd"
+footer: true
+nav: false
+---
+
+# About
+`,
     ".moss/config.toml": `schema_version = 6
 
 [site]

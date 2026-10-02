@@ -59,6 +59,7 @@ import {
   coverCamera,
   detailMaxZoom,
   fitPoints,
+  fitWork,
   MIN_ZOOM,
   screenScale,
   tileDetailMaxZoom,
@@ -402,29 +403,53 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     return { x: 0, y: top, width: viewport.width, height: bottom - top };
   }
 
-  /** The camera the current `scope` fits to, within `frame` — shared by the initial mount, the re-fit once the card row has real content (both below), and `setScope`'s own fit for every later scope change. */
+  /** Every point a work's own places project to — `selectWork`'s, `fitForScope`'s `article` branch's, and the mount-time initial fit's one shared source, so all three land on exactly the same camera for the same work (a multi-place work included: EVERY one of `work.places`, not just the first). */
+  function workPoints(id: string | null): Point[] {
+    const work = id ? worksById.get(id) : undefined;
+    return (work?.places ?? [])
+      .map((placeId) => placesById.get(placeId))
+      .filter((place): place is Place => place != null)
+      .filter(hasPoint)
+      .map((place) => project(place.lat, place.lng));
+  }
+
+  /** The camera the current `scope` fits to, within `frame` — shared by the initial mount, the re-fit once the card row has real content (both below), and `setScope`'s own fit for every later scope change. An `article` scope (the embed/full-page article locator) fits that one work's own places with `fitWork` — the same REGIONAL framing a marker or card click on that work lands at (`selectWork`, below), never the world's own detail ceiling. A plain `all` scope with a work already selected (the full-page `?article=` locator, which never sets a scope of its own — `state.ts`'s own doc: article is a selection, not a scope) fits that selection the same way, so the only page that ever reaches this branch with a selection still opens framed on it. */
   function fitForScope(viewport: Viewport, frame?: Rect): Camera {
-    if (scope.kind !== "place") return coverCamera(allPoints(), viewport, frame);
+    if (scope.kind === "article" || scope.kind !== "place") {
+      const points = workPoints(scope.kind === "article" ? scope.id : selectedId);
+      return points.length ? fitWorkCamera(points, viewport, frame && workFrame(viewport)) : coverCamera(allPoints(), viewport, frame);
+    }
     const points = pointsForWorks(options.places.works, options.places.places, scope);
     return points.length
       ? fitPoints(points, viewport, detailMaxZoom(viewport), frame)
       : coverCamera(allPoints(), viewport, frame);
   }
 
+  /** The collapsed embed is too small to give up any of itself to overlays, so a work's fit uses the whole frame there. */
+  function workFrame(viewport: Viewport): Rect | undefined {
+    return viewportEl.closest('[data-moss-places-embed-mode="collapsed"]') ? undefined : freeFrame(viewport);
+  }
+
+  /** A work's fit may go as deep as the tile ceiling only where tiles cover the fit's own target; elsewhere it stops at the world's detail ceiling, since deeper would only upscale the world image. */
+  function fitWorkCamera(points: Point[], viewport: Viewport, frame: Rect | undefined): Camera {
+    const deep = fitWork(points, viewport, frame, tileDetailMaxZoom(viewport, options.tileK));
+    return tileLayer.hasVisibleTiles(deep, viewport) ? deep : fitWork(points, viewport, frame, detailMaxZoom(viewport));
+  }
+
   function selectWork(id: string | null): void {
-    const next = selectedId === id ? null : id;
+    // On an article locator the article's own work is the page's subject: a
+    // click on its dot re-fits to it (the same fit it opened on) instead of
+    // toggling the selection off with the camera left wherever it was.
+    const keepSelected = scope.kind === "article" && scope.id === id;
+    const next = selectedId === id && !keepSelected ? null : id;
     selectedId = next;
     if (next) {
-      const work = worksById.get(next);
-      const points = (work?.places ?? [])
-        .map((placeId) => placesById.get(placeId))
-        .filter((place): place is Place => place != null)
-        .filter(hasPoint)
-        .map((place) => project(place.lat, place.lng));
+      const points = workPoints(next);
       if (points.length) {
         const viewport = getViewport();
-        camera = fitPoints(points, viewport, currentMaxZoom(viewport), freeFrame(viewport));
+        camera = fitWorkCamera(points, viewport, workFrame(viewport));
       }
+      const work = worksById.get(next);
       if (work) announce(work.title || strings.untitled);
     }
     urlState.writeSelection(selectedId);
@@ -443,10 +468,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     rowExclusionId = null;
     markerLayer.closeRing();
     urlState.writeScope(next);
-    const points = pointsForWorks(options.places.works, options.places.places, next);
     const viewport = getViewport();
-    const frame = freeFrame(viewport);
-    camera = points.length ? fitPoints(points, viewport, currentMaxZoom(viewport), frame) : coverCamera(allPoints(), viewport, frame);
+    camera = fitForScope(viewport, freeFrame(viewport));
     applyCamera(true);
   }
 
@@ -495,11 +518,18 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   // nothing. The re-fit right after that first call corrects this once the
   // row's real height is known.
   let camera: Camera = initial.camera ?? fitForScope(getViewport());
+  // An embed mounted while hidden fits against a 0x0 frame (a cover camera);
+  // the first real size, from the resize paths, re-fits it.
+  let fitPending = !initial.camera && (getViewport().width <= 0 || getViewport().height <= 0);
 
   // ---- camera application -------------------------------------------------
   function applyCamera(settled: boolean): void {
     const viewport = getViewport();
     if (viewport.width <= 0 || viewport.height <= 0) return;
+    if (fitPending) {
+      fitPending = false;
+      camera = fitForScope(viewport, freeFrame(viewport));
+    }
     // Never force a zoom OUT here: every path that actually zooms IN (wheel,
     // pinch, the capsule buttons, fitPoints/focusPoint) already clamps its
     // own candidate against `currentMaxZoom` at its own call site, before

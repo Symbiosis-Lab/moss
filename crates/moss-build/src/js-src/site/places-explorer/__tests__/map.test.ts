@@ -105,6 +105,22 @@ describe("mountPlacesMap — embed seams", () => {
     expect(cardIds).toContain("w1");
   });
 
+  test("an article mounted into a 0x0 frame is framed on the work once the frame gets a real size", () => {
+    history.replaceState(null, "", "/places/?article=w1");
+    const rect = (w: number, h: number) =>
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+        width: w, height: h, top: 0, left: 0, right: w, bottom: h, x: 0, y: 0, toJSON() {},
+      } as DOMRect);
+    let onResize: () => void = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(cb: () => void) { onResize = cb; } observe() {} disconnect() {} });
+    rect(0, 0);
+    mount();
+    rect(346, 231);
+    onResize();
+    const camera = readUrlState().camera!;
+    expect(camera.zoom).toBeGreaterThan(coverCamera([], { width: 346, height: 231 }).zoom * 3);
+  });
+
   test("refitScopeIfClipped re-fits the camera when the scope's own points fall outside a new, much narrower viewport", () => {
     history.replaceState(null, "", "/places/?place=p1");
     const { controller } = mount();
@@ -123,6 +139,26 @@ describe("mountPlacesMap — embed seams", () => {
     const p1 = project(10, 10);
     expect(after.camera!.x).toBeCloseTo(p1.x, 0);
     expect(after.camera!.y).toBeCloseTo(p1.y, 0);
+  });
+});
+
+describe("mountPlacesMap — a work's fit ceiling follows tile coverage", () => {
+  const PLACES = {
+    works: [{ id: "w1", title: "W1", byline: [], companions: [], places: ["p1"], date: "2024-01-01", description: "", cover: null, url: "/w1/" }],
+    places: [{ id: "p1", name: "P1", lat: 15, lng: 25, precision: "city", parent: null }],
+  } as any;
+  function fitZoom(tileCells: Array<[number, number]>): number {
+    history.replaceState(null, "", "/places/?article=w1");
+    const figure = document.createElement("figure");
+    document.body.append(figure);
+    mountPlacesMap(figure, { worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells, tileK: 4, tileBleed: 0.1, places: PLACES, lang: "en" });
+    return readUrlState().camera!.zoom;
+  }
+
+  test("a work whose cell has a tile reaches past the world ceiling; with no tiles the fit stops at it", () => {
+    const worldCeiling = detailMaxZoom(VIEWPORT);
+    expect(fitZoom([TILE_CELL])).toBeGreaterThan(worldCeiling + 0.1);
+    expect(fitZoom([])).toBeLessThanOrEqual(worldCeiling + 1e-2);
   });
 });
 

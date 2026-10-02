@@ -22,6 +22,27 @@ async function waitForSettled(page: Page): Promise<void> {
   await expect(page.locator(SETTLED)).toHaveCount(1, { timeout: 10000 });
 }
 
+// World geometry the live camera and the static poster share
+// (`projection.ts` WORLD_*; `geometry.rs` VIEWBOX_*/MIN_FRAME_DEGREES/LATITUDE_SHARE).
+const WORLD_W = 842.035;
+const WORLD_H = 480;
+const POSTER_VIEWBOX_H = 480;
+const POSTER_PX_PER_DEGREE = POSTER_VIEWBOX_H / (10 * 0.68);
+
+/** Visible longitude, in degrees, of an embed at the zoom its own URL records. */
+async function liveSpanDegrees(page: Page, embedUrl: string): Promise<number> {
+  const z = Number(new URL(embedUrl).searchParams.get("z"));
+  const box = (await page.locator(IFRAME).boundingBox())!;
+  const scale = z * Math.max(box.width / WORLD_W, box.height / WORLD_H);
+  return (box.width / scale / WORLD_W) * 360;
+}
+
+/** Longitude the static poster shows, from its own SVG: viewBox width over the build's design px/degree. */
+async function posterSpanDegrees(page: Page): Promise<number> {
+  const vbWidth = await page.locator(`${POSTER} svg`).first().evaluate((svg) => (svg as SVGSVGElement).viewBox.baseVal.width);
+  return vbWidth / POSTER_PX_PER_DEGREE;
+}
+
 /**
  * Activates the fullscreen/expand control — by keyboard on WebKit, by a
  * plain click everywhere else. Two independent WebKit limitations rule out
@@ -123,25 +144,26 @@ test.describe("style:map embed", () => {
     return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
   }
 
-  test("no pair of the embed's own controls overlap, collapsed", async ({ page }) => {
+  // The open-in-new-tab control is declined entirely for a places embed
+  // (`embed.ts`'s `setupImmersiveIframe(iframe, cb, false)`) — never
+  // emitted, so there is no second control left to overlap with anything;
+  // only the expand/collapse control remains beside the zoom controls.
+  test("no open-in-new-tab control exists beside the expand control, collapsed", async ({ page }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
-    const openBox = (await page.locator(".immersive-new-window-btn").boundingBox())!;
-    const expandBox = (await page.locator(".immersive-fullscreen-btn").boundingBox())!;
-    expect(intersects(openBox, expandBox)).toBe(false);
+    await expect(page.locator(".immersive-new-window-btn")).toHaveCount(0);
+    await expect(page.locator(".immersive-fullscreen-btn")).toHaveCount(1);
   });
 
-  test("no pair of the embed's own controls overlap, expanded", async ({ page, browserName }) => {
+  test("no open-in-new-tab control exists beside the expand control, expanded, and the expand control never overlaps the chip", async ({ page, browserName }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
     await clickFullscreenButton(page, browserName);
     await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await expect(page.locator(".immersive-new-window-btn")).toHaveCount(0);
     const chipBox = await page.frameLocator(IFRAME).locator(".moss-places-chip").boundingBox();
-    const openBoxExpanded = (await page.locator(".immersive-new-window-btn").boundingBox())!;
     const expandBoxExpanded = (await page.locator(".immersive-fullscreen-btn").boundingBox())!;
-    expect(intersects(openBoxExpanded, expandBoxExpanded)).toBe(false);
     if (chipBox) {
-      expect(intersects(chipBox, openBoxExpanded)).toBe(false);
       expect(intersects(chipBox, expandBoxExpanded)).toBe(false);
     }
   });
@@ -222,15 +244,10 @@ test.describe("style:map embed", () => {
     await expect(hint).not.toHaveClass(/moss-places-coop-hint--visible/, { timeout: 4000 });
   });
 
-  test("the expand control opens the full control set and the open-in-new-tab control points at the canonical URL", async ({ page, browserName }) => {
+  test("the expand control opens the full control set, with no open-in-new-tab control alongside it", async ({ page, browserName }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
-    const openLink = page.locator(".immersive-new-window-btn");
-    const openHref = await openLink.getAttribute("href");
-    const openUrl = new URL(openHref!);
-    expect(openUrl.pathname).toBe("/places/");
-    expect(openUrl.searchParams.get("place")).toBe("places/lisbon");
-    expect(openUrl.searchParams.has("embed")).toBe(false);
+    await expect(page.locator(".immersive-new-window-btn")).toHaveCount(0);
 
     await clickFullscreenButton(page, browserName);
     await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
@@ -325,13 +342,10 @@ test.describe("article locator embed", () => {
     await expect(frame.locator('[data-work-id="/lisbon-walk/"]')).toHaveCount(0);
   });
 
-  test("the open-in-new-tab control omits embed-only params", async ({ page }) => {
+  test("carries no open-in-new-tab control", async ({ page }) => {
     await page.goto("lisbon-walk/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
-    const openLink = page.locator(".immersive-new-window-btn");
-    const href = await openLink.getAttribute("href");
-    expect(href).toContain("article=%2Flisbon-walk%2F");
-    expect(href).not.toContain("embed=1");
+    await expect(page.locator(".immersive-new-window-btn")).toHaveCount(0);
   });
 
   test("the breadcrumb chip stays hidden while collapsed", async ({ page }) => {
@@ -379,6 +393,131 @@ test.describe("article locator embed", () => {
     // setScope), so the embedding article's own card — hidden above — is
     // no longer stuck excluded.
     await expect(frame.locator('[data-work-id="/lisbon-walk/"]')).toHaveCount(1);
+  });
+
+  // Fix: the locator used to open framed on the article's own place and
+  // then re-fit itself out to the continental cover camera once the card
+  // row's real height was known (`fitForScope`'s own "article" branch used
+  // to fall through to `coverCamera(allPoints())`, same as a plain `all`
+  // scope). `fitWork` (camera.ts) is the shared fix: a REGIONAL framing
+  // that the enabled zoom-out button proves is not the continental cover
+  // zoom, and the enabled zoom-in button proves is not the detail ceiling
+  // either — read, not asserted against a hand-picked number, so this gate
+  // can't go stale against a future retuning of either bound.
+  test("opens framed on the article's own place, at a regional zoom, and stays there after 3s", async ({ page }) => {
+    await page.goto("lisbon-walk/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    const embedFrame = page.frames().find((f) => f.url().includes("article=%2Flisbon-walk%2F"))!;
+    const zFirst = new URL(embedFrame.url()).searchParams.get("z");
+    expect(zFirst).not.toBeNull();
+
+    const innerFrame = page.frameLocator(IFRAME);
+    const zoomOutBtn = innerFrame.locator('.moss-places-control[data-control="zoom-out"]');
+    const zoomInBtn = innerFrame.locator('.moss-places-control[data-control="zoom-in"]');
+    await expect(zoomOutBtn).toBeEnabled(); // not the continental cover zoom
+    await expect(zoomInBtn).toBeEnabled(); // not the detail ceiling either
+
+    const marker = innerFrame.locator(".moss-places-marker");
+    await expect(marker).toHaveCount(1);
+    const markerBox = (await marker.boundingBox())!;
+    const frameBox = (await page.locator(IFRAME).boundingBox())!;
+    expect(markerBox.x).toBeGreaterThanOrEqual(frameBox.x);
+    expect(markerBox.y).toBeGreaterThanOrEqual(frameBox.y);
+    expect(markerBox.x + markerBox.width).toBeLessThanOrEqual(frameBox.x + frameBox.width);
+    expect(markerBox.y + markerBox.height).toBeLessThanOrEqual(frameBox.y + frameBox.height);
+
+    // Same framing as the static poster it replaces — not merely "not continental".
+    const poster = await posterSpanDegrees(page);
+    const live = await liveSpanDegrees(page, embedFrame.url());
+    expect(live / poster).toBeGreaterThan(0.5);
+    expect(live / poster).toBeLessThan(2);
+
+    await page.waitForTimeout(3000);
+    const zAfter = new URL(embedFrame.url()).searchParams.get("z");
+    expect(zAfter).toBe(zFirst);
+  });
+
+  // Fix 3: activating the article's own single-marker dot used to fit it
+  // through plain `fitPoints`, whose own near-zero span for a lone point
+  // drives the zoom all the way to the detail ceiling (`camera.ts`'s own
+  // doc on `fitPoints`) — "not a sensible level" either way: too tight to
+  // be regional. `selectWork` (map.ts) now shares the same `fitWork` the
+  // initial article scope uses.
+  test("a real click on the article's own dot re-fits it at a regional zoom — not continental, not the maximum", async ({ page }) => {
+    await page.goto("lisbon-walk/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    const frame = page.frameLocator(IFRAME);
+    const viewport = frame.locator(".moss-places-viewport");
+    const embedFrame = page.frames().find((f) => f.url().includes("article=%2Flisbon-walk%2F"))!;
+    const zoomOf = () => new URL(embedFrame.url()).searchParams.get("z");
+    const zInitial = zoomOf();
+
+    // Zoom away from the boot-time fit first (real keyboard input, works
+    // regardless of cooperative-gesture mode — gestures.ts's own doc), so
+    // the click's own re-fit below is an observable camera change.
+    await viewport.evaluate((el) => (el as HTMLElement).focus());
+    await page.keyboard.press("-");
+    await page.keyboard.press("-");
+    await page.keyboard.press("-");
+
+    const marker = frame.locator(".moss-places-marker");
+    const box = (await marker.boundingBox())!;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    // The article's own work opens already selected; a real click on its dot
+    // re-fits it rather than toggling the selection off.
+    await page.mouse.click(cx, cy);
+
+    await expect(marker).toHaveAttribute("data-selected", "true");
+    const zoomOutBtn = frame.locator('.moss-places-control[data-control="zoom-out"]');
+    const zoomInBtn = frame.locator('.moss-places-control[data-control="zoom-in"]');
+    await expect(zoomOutBtn).toBeEnabled(); // regional, not continental
+    await expect(zoomInBtn).toBeEnabled(); // regional, not the maximum zoom
+    // The same fit the article opened on, give or take the card row's
+    // height (the click's frame excludes it): well away from the zoomed-out
+    // level the three "-" presses left it at.
+    const spanBefore = await liveSpanDegrees(page, `http://x/?z=${zInitial}`);
+    await expect
+      .poll(async () => (await liveSpanDegrees(page, embedFrame.url())) / spanBefore)
+      .toBeGreaterThan(0.9);
+    await expect
+      .poll(async () => (await liveSpanDegrees(page, embedFrame.url())) / spanBefore)
+      .toBeLessThan(1.1);
+  });
+});
+
+// Fix 2, same on the full page: `?article=…` with no `embed=1` never sets a
+// `place` scope either (state.ts's own doc: article is a selection, not a
+// scope), so this is the only other page that ever reaches `fitForScope`'s
+// selection-aware branch.
+test.describe("full-page ?article= locator", () => {
+  test("opens framed on the article's own place, at a regional zoom, and stays there after 3s", async ({ page }) => {
+    await page.goto("places/?article=%2Flisbon-walk%2F", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute(
+      "data-moss-places-explorer-ready",
+      "ready",
+      { timeout: 10000 },
+    );
+    await page.waitForTimeout(300);
+    const zFirst = new URL(page.url()).searchParams.get("z");
+    expect(zFirst).not.toBeNull();
+
+    const zoomOutBtn = page.locator('.moss-places-control[data-control="zoom-out"]');
+    await expect(zoomOutBtn).toBeEnabled();
+    // A 1440 px page lands on the tile ceiling (about 18 degrees across), so
+    // zoom-in is legitimately disabled; regional is read from the span.
+    const box = (await page.locator(".moss-places-viewport").boundingBox())!;
+    const z = Number(zFirst);
+    const span = (box.width / (z * Math.max(box.width / WORLD_W, box.height / WORLD_H)) / WORLD_W) * 360;
+    expect(span).toBeGreaterThan(4);
+    expect(span).toBeLessThan(20);
+
+    // Neighbouring places are in view at this width; the article's own dot is the selected one.
+    await expect(page.locator('.moss-places-marker[data-selected="true"]')).toHaveCount(1);
+
+    await page.waitForTimeout(3000);
+    const zAfter = new URL(page.url()).searchParams.get("z");
+    expect(zAfter).toBe(zFirst);
   });
 });
 

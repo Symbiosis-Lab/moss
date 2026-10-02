@@ -868,7 +868,12 @@ fn generate_html_inner<'d>(
                     doc.source_path.clone().unwrap_or_else(|| format!("{}/index.md", folder_path))
                 };
 
-                let show_folder_children = !has_sidebar && doc.children.unwrap_or(true);
+                // An explorer root hosts no children/term listing at all
+                // (design decision 7, "the map is the page" — the reader
+                // finds places through the map and its own breadcrumb menu,
+                // never a list of place links below it); a nested place
+                // page is unaffected and keeps its article list.
+                let show_folder_children = !has_sidebar && doc.children.unwrap_or(true) && !is_explorer_root;
                 // A claimed sub-term's map (`term_listing`) and a real folder
                 // index's own place-namespace-root map are the same splice,
                 // under the same page-level `map: false` opt-out. The

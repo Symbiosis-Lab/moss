@@ -60,14 +60,14 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
     expect(iframe.getAttribute("src")).toBe("/places/?place=lisbon&embed=1");
   });
 
-  test("the iframe's data-open-url is the canonical URL, with the embed-only param stripped", () => {
+  test("the hydrated iframe carries no open-in-new-tab control — only the expand/collapse control", () => {
     const el = poster("/places/?place=lisbon&embed=1");
     initPlaceEmbeds();
     FakeIntersectionObserver.instances[0]!.trigger(el);
     const iframe = el.querySelector("iframe") as HTMLIFrameElement;
-    const openUrl = new URL(iframe.dataset.openUrl!, "http://localhost/");
-    expect(openUrl.searchParams.get("embed")).toBeNull();
-    expect(openUrl.searchParams.get("place")).toBe("lisbon");
+    expect(iframe.dataset.openUrl).toBeUndefined();
+    expect(el.querySelector(".immersive-new-window-btn")).toBeNull();
+    expect(el.querySelector(".immersive-fullscreen-btn")).not.toBeNull();
   });
 
   test("gives the hydrated iframe a title built from the poster's own data-embed-name, through this page's own locale copy", () => {

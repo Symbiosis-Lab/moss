@@ -251,9 +251,9 @@ export class TileLayer {
     this.options = options;
   }
 
-  /** Whether any of this layer's own cells are in view at `camera`/`viewport` — `map.ts`'s own detail-ceiling switch (`currentMaxZoom`) reads this rather than reaching into `availableTiles` itself. */
+  /** Whether any of this layer's own cells (manifest minus failed fetches) are in view at `camera`/`viewport` — `map.ts`'s own detail-ceiling switch (`currentMaxZoom`) reads this rather than reaching into `availableTiles` itself. */
   hasVisibleTiles(camera: Camera, viewport: Viewport): boolean {
-    return tilesForView(this.options.availableTiles, camera, viewport).length > 0;
+    return tilesForView(this.nonFailedManifestCells(), camera, viewport).length > 0;
   }
 
   /**

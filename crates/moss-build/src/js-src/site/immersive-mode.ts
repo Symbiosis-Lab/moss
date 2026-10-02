@@ -180,8 +180,22 @@ function wrapperAttrsFor(iframe: HTMLIFrameElement): { className: string; width:
  * rather than the real box. The places-explorer embed reads this to tell
  * its own iframe content when to switch gesture modes and re-fit its
  * camera, without this module needing to know anything about maps.
+ *
+ * `showOpenInNewTab` (default `true`) omits the open-in-new-tab control
+ * entirely when `false` — never emitted, not hidden by CSS — so only the
+ * expand/collapse control remains. The places-explorer embed is the one
+ * caller that passes `false`: a places map already has its own canonical,
+ * shareable URL affordance (the breadcrumb chip's own scope, and copying
+ * the page's own address bar once expanded), and the control's default
+ * top-left corner is the same one the chip claims once expanded — two
+ * unrelated DOM trees (this wrapper's, the iframe's own) landing on the
+ * same screen corner otherwise.
  */
-export function setupImmersiveIframe(iframe: HTMLIFrameElement, onFullscreenChange?: (fullscreen: boolean) => void): void {
+export function setupImmersiveIframe(
+  iframe: HTMLIFrameElement,
+  onFullscreenChange?: (fullscreen: boolean) => void,
+  showOpenInNewTab: boolean = true,
+): void {
   // Wrap iframe in container for button positioning and FLIP animation
   const wrapper = document.createElement("div");
   const attrs = wrapperAttrsFor(iframe);
@@ -196,23 +210,26 @@ export function setupImmersiveIframe(iframe: HTMLIFrameElement, onFullscreenChan
 
   // Anchor (not button) so tauri-plugin-opener intercepts the click in moss
   // preview; window.open is swallowed by WKWebview (Tauri issue #9912).
-  const newWindowBtn = document.createElement("a");
-  newWindowBtn.className = "immersive-new-window-btn";
-  newWindowBtn.setAttribute("aria-label", immersiveCopy().openInNewWindow);
-  newWindowBtn.target = "_blank";
-  newWindowBtn.rel = "noopener noreferrer";
-  newWindowBtn.href = iframeOpenUrl(iframe);
-  newWindowBtn.innerHTML = ICON_OPEN_NEW;
-
-  new MutationObserver(() => {
+  // `null` when `showOpenInNewTab` is false — every use below guards on it.
+  const newWindowBtn = showOpenInNewTab ? document.createElement("a") : null;
+  if (newWindowBtn) {
+    newWindowBtn.className = "immersive-new-window-btn";
+    newWindowBtn.setAttribute("aria-label", immersiveCopy().openInNewWindow);
+    newWindowBtn.target = "_blank";
+    newWindowBtn.rel = "noopener noreferrer";
     newWindowBtn.href = iframeOpenUrl(iframe);
-  }).observe(iframe, { attributes: true, attributeFilter: ["data-open-url"] });
+    newWindowBtn.innerHTML = ICON_OPEN_NEW;
+
+    new MutationObserver(() => {
+      newWindowBtn.href = iframeOpenUrl(iframe);
+    }).observe(iframe, { attributes: true, attributeFilter: ["data-open-url"] });
+  }
 
   // Move iframe into wrapper without removing from DOM tree (preserves iframe state)
   iframe.parentNode!.insertBefore(wrapper, iframe);
   wrapper.appendChild(iframe);
   wrapper.appendChild(button);
-  wrapper.appendChild(newWindowBtn);
+  if (newWindowBtn) wrapper.appendChild(newWindowBtn);
 
   let isFullscreen = false;
   let inlineRect: DOMRect | null = null;
@@ -251,12 +268,12 @@ export function setupImmersiveIframe(iframe: HTMLIFrameElement, onFullscreenChan
       wrapper.classList.add("fs-animating-enter");
       wrapper.style.transform = "";
       button.disabled = true;
-      newWindowBtn.setAttribute("aria-disabled", "true");
+      newWindowBtn?.setAttribute("aria-disabled", "true");
 
       afterTransition(wrapper, "transform", () => {
         wrapper.classList.remove("fs-animating-enter");
         button.disabled = false;
-        newWindowBtn.removeAttribute("aria-disabled");
+        newWindowBtn?.removeAttribute("aria-disabled");
       });
     });
   }
@@ -291,7 +308,7 @@ export function setupImmersiveIframe(iframe: HTMLIFrameElement, onFullscreenChan
     wrapper.style.transform =
       `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`;
     button.disabled = true;
-    newWindowBtn.setAttribute("aria-disabled", "true");
+    newWindowBtn?.setAttribute("aria-disabled", "true");
 
     afterTransition(wrapper, "transform", () => {
       wrapper.classList.remove("fs-animating-exit");
@@ -302,7 +319,7 @@ export function setupImmersiveIframe(iframe: HTMLIFrameElement, onFullscreenChan
       button.innerHTML = ICON_ENTER_FS;
       button.setAttribute("aria-label", immersiveCopy().enterFullscreen);
       button.disabled = false;
-      newWindowBtn.removeAttribute("aria-disabled");
+      newWindowBtn?.removeAttribute("aria-disabled");
     });
   }
 
@@ -319,7 +336,7 @@ export function setupImmersiveIframe(iframe: HTMLIFrameElement, onFullscreenChan
     toggleFullscreen();
   });
 
-  newWindowBtn.addEventListener("click", (e: MouseEvent) => {
+  newWindowBtn?.addEventListener("click", (e: MouseEvent) => {
     e.stopPropagation();
     if (newWindowBtn.getAttribute("aria-disabled") === "true") {
       e.preventDefault();

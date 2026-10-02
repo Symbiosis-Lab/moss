@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect } from "vitest";
-import { WORLD_WIDTH, WORLD_HEIGHT } from "../projection";
+import { WORLD_WIDTH, WORLD_HEIGHT, project } from "../projection";
 import {
   DETAIL_MAX_SCALE,
   MIN_ZOOM,
@@ -13,6 +13,7 @@ import {
   clampCamera,
   coverCamera,
   fitPoints,
+  fitWork,
   worldToScreen,
   screenToWorld,
 } from "../camera";
@@ -159,6 +160,79 @@ describe("fitPoints", () => {
     const unframed = fitPoints([point], viewport);
     const unframedScreenY = viewport.height / 2 + (point.y - unframed.y) * scale;
     expect(unframedScreenY).toBeCloseTo(viewport.height / 2);
+  });
+});
+
+describe("fitWork", () => {
+  test("a zero-size viewport (a hidden embed) yields a finite camera, never NaN", () => {
+    for (const viewport of [{ width: 0, height: 0 }, { width: 0, height: 231 }, { width: 346, height: 0 }]) {
+      const camera = fitWork([{ x: 300, y: 200 }], viewport);
+      expect(Number.isFinite(camera.x)).toBe(true);
+      expect(Number.isFinite(camera.y)).toBe(true);
+      expect(Number.isFinite(camera.zoom)).toBe(true);
+    }
+  });
+
+  test("a multi-place work still fits every one of its places inside the viewport", () => {
+    const viewport = { width: 1000, height: 600 };
+    const a = { x: 300, y: 200 };
+    const b = { x: 700, y: 360 };
+    const camera = fitWork([a, b], viewport);
+    const scale = screenScale(camera, viewport);
+    for (const point of [a, b]) {
+      const screenX = viewport.width / 2 + (point.x - camera.x) * scale;
+      const screenY = viewport.height / 2 + (point.y - camera.y) * scale;
+      expect(screenX).toBeGreaterThan(0);
+      expect(screenX).toBeLessThan(viewport.width);
+      expect(screenY).toBeGreaterThan(0);
+      expect(screenY).toBeLessThan(viewport.height);
+    }
+  });
+
+  test("a frame shorter than the viewport (a card row eating the bottom) still keeps the point out of the cropped band, same as fitPoints", () => {
+    const viewport = { width: 1000, height: 600 };
+    const frame = { x: 0, y: 0, width: 1000, height: 450 };
+    const point = { x: 500, y: 280 };
+    const framed = fitWork([point], viewport, frame);
+    const scale = screenScale(framed, viewport);
+    const screenY = viewport.height / 2 + (point.y - framed.y) * scale;
+    expect(screenY).toBeLessThan(frame.height);
+  });
+});
+
+describe("fitWork framing", () => {
+  type Cam = { x: number; y: number; zoom: number };
+  type Vp = { width: number; height: number };
+  const degreesWide = (camera: Cam, viewport: Vp) => (viewport.width / screenScale(camera, viewport) / WORLD_WIDTH) * 360;
+  const inside = (camera: Cam, viewport: Vp, p: { x: number; y: number }) => {
+    const s = worldToScreen(p, camera, viewport);
+    return s.x > 0 && s.x < viewport.width && s.y > 0 && s.y < viewport.height;
+  };
+  const a = project(26.7, 119.6);
+  const b = project(25.0, 121.3);
+  // The tile ceiling (k=4) itself caps how tight a 1440 px frame can go: 1440 / (7.21*560/480*4) world units is about 18.3 degrees.
+  const cases: [string, Vp, { x: number; y: number; width: number; height: number } | undefined, number][] = [
+    ["346x231 embed", { width: 346, height: 231 }, undefined, 16],
+    ["1440x776 with a card row", { width: 1440, height: 776 }, { x: 0, y: 0, width: 1440, height: 610 }, 19],
+  ];
+  for (const [name, viewport, frame, upper] of cases) {
+    test(`two places 2 degrees apart frame regionally in ${name}`, () => {
+      const camera = fitWork([a, b], viewport, frame);
+      const span = degreesWide(camera, viewport);
+      expect(span).toBeGreaterThan(4);
+      expect(span).toBeLessThan(upper);
+      expect(inside(camera, viewport, a) && inside(camera, viewport, b)).toBe(true);
+    });
+    test(`one place frames regionally in ${name}`, () => {
+      const span = degreesWide(fitWork([a], viewport, frame), viewport);
+      expect(span).toBeGreaterThan(4);
+      expect(span).toBeLessThan(upper);
+    });
+  }
+  test("a tiny free rectangle (overlays eating an embed) falls back to the whole viewport", () => {
+    const viewport = { width: 346, height: 231 };
+    const small = fitWork([a, b], viewport, { x: 0, y: 150, width: 346, height: 40 });
+    expect(small).toEqual(fitWork([a, b], viewport));
   });
 });
 

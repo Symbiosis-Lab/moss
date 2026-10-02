@@ -25,11 +25,15 @@
  *   implementation), no card for the article the embed is already inside,
  *   and a re-fit on every expand/collapse transition.
  *
- * The expand control and the open-in-new-tab control are BOTH the existing
- * immersive/fullscreen mechanism (`immersive-mode.ts`'s `setupImmersiveIframe`,
- * exported for exactly this reuse) — not reimplemented here. Its own
- * `onFullscreenChange` hook is what tells the iframe content when it has
- * actually been expanded or collapsed.
+ * The expand control is the existing immersive/fullscreen mechanism
+ * (`immersive-mode.ts`'s `setupImmersiveIframe`, exported for exactly this
+ * reuse) — not reimplemented here. Its own `onFullscreenChange` hook is what
+ * tells the iframe content when it has actually been expanded or collapsed.
+ * `setupImmersiveIframe`'s open-in-new-tab control is declined (its own
+ * `showOpenInNewTab` parameter, passed `false`) — a places embed has no
+ * canonical single-page URL the control's `data-open-url` would need to
+ * carry, and the control's default corner is the one the breadcrumb chip
+ * claims once expanded.
  *
  * The breadcrumb chip (`chip.ts`) is mounted by `map.ts` on every explorer,
  * this embed included, and needs no code here to work: it already reads
@@ -66,13 +70,6 @@ function prefersMinimalData(): boolean {
   return connection.effectiveType === "slow-2g" || connection.effectiveType === "2g";
 }
 
-/** The canonical, shareable URL a poster's own `data-hydrate-url` stands for — the same target, minus the embed-only `embed` param, for the expand control's open-in-new-tab link (`data-open-url`, read by `immersive-mode.ts`). */
-function canonicalUrlFor(hydrateUrl: string): string {
-  const url = new URL(hydrateUrl, location.href);
-  url.searchParams.delete("embed");
-  return url.href;
-}
-
 /**
  * Create the lazy iframe behind `poster`, wire the ready handshake, and
  * cross-fade it in once (and only once) the iframe's own explorer confirms
@@ -85,7 +82,6 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
   const iframe = document.createElement("iframe");
   iframe.className = "moss-places-embed-frame";
   iframe.setAttribute("aria-hidden", "true"); // the poster is the accessible figure until this settles
-  iframe.dataset.openUrl = canonicalUrlFor(hydrateUrl);
   // `data-embed-name` (`context.rs`'s `with_embed_hydration`) is the plain
   // place/article display name, never a finished sentence — this HOST page
   // may be a different locale than the embedded places root (a `style:map`
@@ -154,7 +150,7 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
     // `setupImmersiveIframe` (below) always wraps the iframe before this
     // timeout can ever fire, so by now its parent is always the wrapper it
     // built — never `poster` directly. Removing just the bare iframe would
-    // leave that wrapper (and its two now-dangling controls) behind, which
+    // leave that wrapper (and its now-dangling expand control) behind, which
     // is not "the poster exactly as it always was".
     (iframe.parentElement ?? iframe).remove();
   }, HYDRATE_TIMEOUT_MS);
@@ -180,9 +176,13 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
   // exist (it wraps relative to it), so `poster` is that temporary parent —
   // replaced, a line below, by the real wrapper it builds.
   poster.appendChild(iframe);
-  setupImmersiveIframe(iframe, (expanded) => {
-    iframe.contentWindow?.postMessage({ type: MODE_MESSAGE, expanded }, location.origin);
-  });
+  setupImmersiveIframe(
+    iframe,
+    (expanded) => {
+      iframe.contentWindow?.postMessage({ type: MODE_MESSAGE, expanded }, location.origin);
+    },
+    false, // no open-in-new-tab control on a places embed — only expand/collapse
+  );
   iframe.src = hydrateUrl;
 }
 

@@ -476,3 +476,46 @@ describe("Fullscreen API integration", () => {
     expect(button.getAttribute("aria-label")).toBe("Exit fullscreen");
   });
 });
+
+describe("setupImmersiveIframe's showOpenInNewTab parameter", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    document.body.className = "";
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+    document.body.className = "";
+  });
+
+  test("creates the open-in-new-tab control by default — every ordinary iframe (initImmersiveMode's own callers) is unaffected by the places embed's opt-out", () => {
+    createArticlePage();
+    const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+    setupImmersiveIframe(iframe);
+    expect(document.querySelector(".immersive-new-window-btn")).not.toBeNull();
+    expect(document.querySelector(".immersive-fullscreen-btn")).not.toBeNull();
+  });
+
+  test("omits the open-in-new-tab control entirely when passed false — never emitted, not hidden by CSS — leaving only the expand/collapse control", () => {
+    createArticlePage();
+    const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+    setupImmersiveIframe(iframe, undefined, false);
+    expect(document.querySelector(".immersive-new-window-btn")).toBeNull();
+    expect(document.querySelector(".immersive-fullscreen-btn")).not.toBeNull();
+  });
+
+  test("entering and exiting fullscreen with the control omitted never throws (every aria-disabled toggle on it is guarded)", async () => {
+    createArticlePage();
+    const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+    setupImmersiveIframe(iframe, undefined, false);
+    const button = document.querySelector(".immersive-fullscreen-btn") as HTMLElement;
+    button.click();
+    await flushMicrotasks();
+    expect(document.body.classList.contains("immersive-fs-active")).toBe(true);
+    button.click();
+    expect(() => {
+      const wrapper = document.querySelector(".immersive-iframe-wrapper") as HTMLElement;
+      wrapper.dispatchEvent(createTransitionEndEvent("transform"));
+    }).not.toThrow();
+  });
+});

@@ -280,21 +280,26 @@ impl PlaceMapRenderContext {
         } else {
             heading
         };
-        if !place_breadcrumb_html.is_empty() {
-            content_html.push('\n');
-            content_html.push_str(place_breadcrumb_html);
-        }
+        // An explorer root hosts no breadcrumb/children chrome and no
+        // member listing at all (design decision 7, "the map is the
+        // page" — the reader finds places through the map and its own
+        // breadcrumb menu, never a list of place links below it). A
+        // non-root synthetic index is unaffected and keeps all three.
         if !is_explorer_root {
+            if !place_breadcrumb_html.is_empty() {
+                content_html.push('\n');
+                content_html.push_str(place_breadcrumb_html);
+            }
             if let Some(map) = map_html.as_deref() {
                 content_html.push('\n');
                 content_html.push_str(map);
             }
-        }
-        content_html.push('\n');
-        content_html.push_str(article_list);
-        if !place_children_html.is_empty() {
             content_html.push('\n');
-            content_html.push_str(place_children_html);
+            content_html.push_str(article_list);
+            if !place_children_html.is_empty() {
+                content_html.push('\n');
+                content_html.push_str(place_children_html);
+            }
         }
         (is_explorer_root, content_html)
     }

@@ -110,6 +110,14 @@ article.container > figure[data-moss-places-explorer] {
      nothing had zeroed this before. The header's bottom edge and the map's
      top edge must coincide exactly. */
   margin-block-start: 0;
+  /* Same UA default on the trailing edge: unzeroed, it collapses through
+     `article.container`'s own empty bottom edge (no border/padding stops
+     it) and reopens the gap the rules below work to close. Safe to zero
+     unconditionally — on a root WITH an authored intro paragraph, sibling
+     margin collapse with that paragraph's own margin-block-start still
+     gives it the normal breathing room (collapse takes the larger of the
+     two, not zero plus the paragraph's). */
+  margin-block-end: 0;
   block-size: max(480px, calc(100svh - var(--moss-place-figure-top, 0px)));
 }
 
@@ -120,6 +128,32 @@ article.container > figure[data-moss-places-explorer] {
    plain `+`. */
 header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-content {
   border-block-end: none;
+}
+
+/* The explorer root hosts no children/term listing below the map (fixed
+   alongside `render/html.rs`'s `show_folder_children`/`render_explorer_folder_lead`
+   gates), so the figure's own hidden `<h1>` — out of flow via
+   `.visually-hidden`'s `position: absolute` — is the map's only sibling,
+   and nothing visible follows it inside `article.container`. The footer's
+   own divider (`footer.container::before` in site.css) must not draw a
+   second line a few rem below a map that already fills the viewport; the
+   map's bottom edge meets the footer's top with no gap instead. A root
+   with an authored intro paragraph keeps the divider — that visible text
+   is the footer's actual preceding sibling, not the map. */
+main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) + footer.container {
+  margin-block-start: 0;
+}
+main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) + footer.container::before {
+  border-block-start: none;
+  margin-block-end: 0;
+}
+/* The generic `article { margin-block-end: var(--moss-space-2xl) }` body-copy
+   rule (site.css) reaches this `<article>` too — it is one, `.container`
+   besides — and alone still leaves the footer's own removed margin nothing
+   to close: this is the other half of the gap, scoped to the same
+   no-authored-body condition as the footer rules above. */
+main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) > article.container {
+  margin-block-end: 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1114,28 +1148,6 @@ button.moss-places-chip-crumb {
   .moss-places-embed-frame {
     transition: none;
   }
-}
-
-/* The open-in-new-tab control (site.css's own `.immersive-new-window-btn`,
-   shared by every local immersive iframe on the site) defaults to top-left
-   — the SAME corner the breadcrumb chip claims once an embed is expanded
-   (`chip.ts`, mounted INSIDE the iframe's own document — two unrelated DOM
-   trees landing on the same screen corner). Regrouping it with the expand
-   control's own bottom-right corner, scoped to this embed's own wrapper via
-   `:has()` so every other immersive iframe on the site (notebooks, html
-   apps) keeps the unmodified top-left/bottom-right pairing — the chip only
-   ever exists inside a places embed. */
-.immersive-iframe-wrapper:has(> iframe.moss-places-embed-frame) > .immersive-new-window-btn {
-  top: auto;
-  left: auto;
-  bottom: 16px;
-  right: 60px;
-}
-.immersive-fs-active .immersive-iframe-wrapper:has(> iframe.moss-places-embed-frame) > .immersive-new-window-btn {
-  top: auto;
-  left: auto;
-  bottom: 24px;
-  right: 72px;
 }
 
 /* The cooperative-gesture hint (`map.ts`'s `showCooperativeHint`, wired

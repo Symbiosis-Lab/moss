@@ -121,10 +121,22 @@ for (const width of [1440, 390]) {
   });
 }
 
+// Design decision 7 also means no children/term listing below the root's
+// map: the reader finds places through the map and its own breadcrumb
+// menu, never a list of place links under it.
+test("the root has no children/term listing below the map", async ({ page }) => {
+  await page.goto("places/", { waitUntil: "domcontentloaded" });
+  const figure = page.locator(FIGURE);
+  await expect(figure).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+  const main = page.locator("main");
+  await expect(main.locator(".moss-cards-container")).toHaveCount(0);
+  await expect(main.locator(".moss-place-children")).toHaveCount(0);
+});
+
 // A nested place's own page (not the namespace root) is an ordinary term
 // page, unchanged by design decision 7: it keeps its heading and its
 // article list below its own map, same as before.
-test("a nested place page still has its own h1, above its map", async ({ page }) => {
+test("a nested place page still has its own h1, above its map, and still lists its articles", async ({ page }) => {
   await page.goto("places/kyoto/", { waitUntil: "domcontentloaded" });
   const h1 = page.locator("main h1").first();
   await expect(h1).toHaveCount(1);
@@ -132,4 +144,5 @@ test("a nested place page still has its own h1, above its map", async ({ page })
   const map = page.locator(".moss-place-map").first();
   const mapBox = (await map.boundingBox())!;
   expect(h1Box.y).toBeLessThan(mapBox.y);
+  await expect(page.locator("main .moss-cards-container")).not.toHaveCount(0);
 });

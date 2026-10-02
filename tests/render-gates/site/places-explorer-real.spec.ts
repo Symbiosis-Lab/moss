@@ -57,6 +57,24 @@ test("the synthetic root's own heading is visually hidden, with the map directly
   expect(Math.abs(figureTop - headerBottom)).toBeLessThan(1);
 });
 
+// Fix 1: a synthetic (config-only) root hosts no children/term listing —
+// same design-decision-7 rule as an authored root — and, since no authored
+// body separates them here, the map's bottom edge meets the footer's top
+// with no gap and no visible divider.
+test("the synthetic root has no listing below the map, and the footer's divider is not visible against it", async ({ page }) => {
+  await gotoReady(page);
+  const main = page.locator("main");
+  await expect(main.locator(".moss-cards-container")).toHaveCount(0);
+  await expect(main.locator(".moss-place-children")).toHaveCount(0);
+
+  const figureBox = (await page.locator("figure[data-moss-places-explorer]").boundingBox())!;
+  const footer = page.locator("footer.container");
+  const footerBox = (await footer.boundingBox())!;
+  expect(Math.abs(footerBox.y - (figureBox.y + figureBox.height))).toBeLessThanOrEqual(1);
+  const dividerStyle = await footer.evaluate((el) => getComputedStyle(el, "::before").borderTopStyle);
+  expect(dividerStyle).toBe("none");
+});
+
 // Defect 5 (same fixture, same page): the header names the section since
 // the heading above is hidden.
 test("the header breadcrumb names the section on the synthetic root", async ({ page }) => {

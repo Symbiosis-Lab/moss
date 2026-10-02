@@ -236,6 +236,8 @@ export function windowCenter(values: number[], width: number, fallbackMid: numbe
  * viewport would.
  */
 export function coverCamera(points: Point[], viewport: Viewport, frame: Rect = wholeViewport(viewport)): Camera {
+  // No area, no scale: the world's centre at the floor zoom (see `clampCamera`).
+  if (viewport.width <= 0 || viewport.height <= 0) return { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, zoom: MIN_ZOOM };
   const zoom = frameZoomFloor(viewport, frame);
   const scale = zoom * coverScale(viewport);
   const overflowX = overflow(WORLD_WIDTH, frame.width, scale);
@@ -289,5 +291,60 @@ export function fitPoints(
   const centerX = (minX + maxX) / 2 / viewportScale;
   const centerY = (minY + maxY) / 2 / viewportScale;
   const centered = centerOnFrame({ x: centerX, y: centerY }, viewport, frame, scale);
+  return clampCamera({ x: centered.x, y: centered.y, zoom }, viewport, maxZoom);
+}
+
+/**
+ * The smallest geographic span a work's fit shows, and the margin it pads the
+ * places' bounding box by — mirrored from the build's locator poster so the
+ * live map and the static poster it replaces open on the same framing
+ * (`geometry.rs`: `MIN_FRAME_DEGREES`, `FRAME_PADDING`). The minimum applies to longitude only: the poster's latitude share assumes a 3:2 canvas, and a wide live frame would otherwise stay height-bound and show far more than the poster.
+ */
+const WORK_MIN_SPAN_DEGREES = 10;
+const WORK_BOX_PADDING = 1.25;
+/** Breathing room per edge, as a share of the frame's smaller side. */
+const WORK_EDGE_PAD_FRACTION = 0.06;
+
+/**
+ * Fit one work's own places — the initial article scope, a marker click and
+ * a card click all share this one function. The bounding box is padded like
+ * the poster's frame and widened to a minimum span so a single place frames
+ * regionally instead of at the ceiling.
+ *
+ * `frame` (the card row/controls-free rectangle) is honoured only when it is
+ * at least half the viewport in each dimension; a smaller one would shrink
+ * the fit to a sliver, so the whole viewport is used. Callers that must
+ * ignore overlays entirely (the collapsed embed) pass no frame.
+ *
+ * Clamped only by `maxZoom` (callers pass the tile ceiling: tiles exist
+ * around every place), never raised to the cover floor beyond what
+ * `clampCamera` itself requires.
+ */
+export function fitWork(
+  points: Point[],
+  viewport: Viewport,
+  frame: Rect = wholeViewport(viewport),
+  maxZoom: number = tileDetailMaxZoom(viewport, 4),
+): Camera {
+  // A viewport with no area (an embed mounted while hidden) has no scale to
+  // fit against: 0/0 would reach `clamp` as NaN and poison x/y. The caller
+  // re-fits once the frame gets a real size.
+  if (points.length === 0 || viewport.width <= 0 || viewport.height <= 0) return coverCamera(points, viewport, frame);
+  const usable =
+    frame.width >= viewport.width / 2 && frame.height >= viewport.height / 2 ? frame : wholeViewport(viewport);
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minSpanX = (WORK_MIN_SPAN_DEGREES * WORLD_WIDTH) / 360;
+  const spanX = Math.max((Math.max(...xs) - Math.min(...xs)) * WORK_BOX_PADDING, minSpanX);
+  const spanY = (Math.max(...ys) - Math.min(...ys)) * WORK_BOX_PADDING;
+  const pad = Math.min(usable.width, usable.height) * WORK_EDGE_PAD_FRACTION;
+  const scale = Math.min((usable.width - pad * 2) / spanX, (usable.height - pad * 2) / spanY);
+  const zoom = clamp(Number.isFinite(scale) ? scale / coverScale(viewport) : MIN_ZOOM, MIN_ZOOM, maxZoom);
+  const centered = centerOnFrame(
+    { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 },
+    viewport,
+    usable,
+    zoom * coverScale(viewport),
+  );
   return clampCamera({ x: centered.x, y: centered.y, zoom }, viewport, maxZoom);
 }

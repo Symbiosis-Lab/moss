@@ -7963,13 +7963,16 @@ mod place_namespace_root_map_tests {
             html.contains("moss-place-map"),
             "a real folder index at a place namespace root must still get the term map: {html}"
         );
-        assert!(html.contains("Harbor Diary"), "the folder's own children must still list: {html}");
+        // An explorer root is only the map: the reader reaches places through
+        // the map and its breadcrumb menu, so the folder's own children are
+        // not listed under it. A nested place page keeps its list.
+        assert!(!html.contains("Harbor Diary"), "an explorer root must not list its children under the map: {html}");
         // Design decision 7, "the map is the page": an explorer root carries
         // no VISIBLE heading (the title stays out of the visible layout) but
         // still exactly one real `<h1>`, for screen-reader navigation, with
         // `.visually-hidden` doing the hiding rather than the heading's own
-        // absence. The map leads — the author's own intro and the
-        // auto-listed children both render BELOW it, not above.
+        // absence. The map leads — the author's own intro renders BELOW it,
+        // not above.
         let main_start = html.find("<main").expect("page has a <main>");
         let main = &html[main_start..];
         assert_eq!(main.matches("<h1").count(), 1, "an explorer root must carry exactly one <h1> in main: {html}");
@@ -7980,11 +7983,7 @@ mod place_namespace_root_map_tests {
         assert!(h1.contains("Places"), "the hidden <h1> must still carry the page title: {h1}");
         let map_pos = html.find("moss-place-map").unwrap();
         let intro_pos = html.find("Every place this site names").unwrap();
-        let children_pos = html.find("Harbor Diary").unwrap();
-        assert!(
-            map_pos < intro_pos && intro_pos < children_pos,
-            "the map must lead, with the intro above the children listing, both below it: {html}"
-        );
+        assert!(map_pos < intro_pos, "the map must lead, with the intro below it: {html}");
     }
 
     #[test]
