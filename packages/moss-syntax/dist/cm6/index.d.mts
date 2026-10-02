@@ -1,17 +1,10 @@
-import * as _codemirror_state0 from "@codemirror/state";
-import { EditorState, Extension, StateEffectType, StateField, Transaction } from "@codemirror/state";
 import { HighlightStyle } from "@codemirror/language";
-import { Decoration, DecorationSet, EditorView, ViewUpdate } from "@codemirror/view";
+import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
+import { EditorState, Extension, StateEffectType } from "@codemirror/state";
 import { Diagnostic } from "@codemirror/lint";
 
 //#region src/cm6/cm-active-lines.d.ts
-/** Returns the set of 1-based line numbers that contain any selection range.
- *  In source mode: every line of the document. Unfocused: none. */
-declare function getActiveLines(state: EditorState): Set<number>;
-/** Returns true if any line of the node range overlaps with active lines. */
-declare function isNodeActive(state: EditorState, from: number, to: number, activeLines: Set<number>): boolean;
-/** True when [from, to] touches any line a selection range is on. */
-declare function spanOnActiveLine(state: EditorState, from: number, to: number): boolean;
+
 /**
  * True if any selection range overlaps the closed interval [from, to].
  *
@@ -19,56 +12,11 @@ declare function spanOnActiveLine(state: EditorState, from: number, to: number):
  * `from` or `to` counts as touching, so a node revealed on edge contact is
  * editable. Strict operators are deliberately avoided — they cause the
  * "markers re-hide and trap the cursor outside the run" class of bugs.
- *
- * This is the inline (per-node) reveal predicate — the granular counterpart to
- * isNodeActive's per-line test. Used by cm-live-preview (Emphasis/Strong/
- * Strikethrough/InlineCode/Link/Wikilink) and cm-link-resolver (link feedback).
  */
 declare function nodeTouchesSelection(state: EditorState, from: number, to: number): boolean;
 //#endregion
-//#region src/cm6/cm-source-mode.d.ts
-/** Set source mode on/off. Effect-only transactions (no doc change) — the
- *  save state machine never sees a toggle. */
-declare const setSourceModeEffect: _codemirror_state0.StateEffectType<boolean>;
-declare const sourceModeField: StateField<boolean>;
-/** True when the document is in source mode. Safe on states without the
- *  field (non-markdown editors don't register it) — defaults to false. */
-declare function isSourceMode(state: EditorState): boolean;
-/**
- * True when this transaction flipped source mode. Decoration StateFields and
- * ViewPlugins gate their rebuilds on doc/selection changes; a toggle changes
- * neither, so every builder that reads the predicates must ALSO rebuild on
- * this — otherwise the mode switch would not repaint until the next keystroke.
- */
-declare function sourceModeChanged(tr: Transaction): boolean;
-/**
- * The one rebuild gate for every consumer of the reveal predicates: did this
- * transaction change anything getActiveLines / nodeTouchesSelection reads?
- * Doc, selection — and the mode flip and the editor gaining or losing focus,
- * which are effect-only and therefore invisible to the doc/selection checks
- * alone. Builders compose their own
- * extras (treeAdvanced, refsResolved) on top; they must never re-spell this
- * set, because a hand-written gate is how four consumers shipped stale
- * decorations across the flip (thermo review, 2026-09-01).
- */
-declare function revealInputsChanged(tr: Transaction): boolean;
-/** ViewUpdate-shaped twin of revealInputsChanged, for ViewPlugin update gates. */
-declare function revealInputsChangedIn(update: ViewUpdate): boolean;
-//#endregion
-//#region src/cm6/cm-editor-focus.d.ts
-/** The host's report that the user started or stopped working in the editor. */
-declare const setEditorFocusedEffect: _codemirror_state0.StateEffectType<boolean>;
-/** Install to make reveals follow focus. Starts unfocused, as a newly opened
- *  editor is until the user reaches into it. */
-declare const editorFocusField: StateField<boolean>;
-/** True when the host installed `editorFocusField` and the editor is not
- *  focused: no line is active and no node touches the selection. */
-declare function isRevealSuspended(state: EditorState): boolean;
-/** True when this transaction suspended or resumed reveals — effect-only, so
- *  invisible to the doc/selection checks alone. */
-declare function revealSuspensionChanged(tr: Transaction): boolean;
-//#endregion
 //#region src/cm6/cm-link-extract.d.ts
+
 interface ExtractedTarget {
   /** The link target text (URL path or wikilink page name). */
   target: string;
@@ -94,6 +42,7 @@ interface ExtractedTarget {
 declare function extractLinkTargets(state: EditorState): ExtractedTarget[];
 //#endregion
 //#region src/cm6/cm-image-extract.d.ts
+
 /**
  * True for the Lezer node names that mean "an asset embed": a standard
  * markdown image `![alt](url)` (`Image`) and a wikilink embed `![[file]]`
@@ -379,8 +328,6 @@ declare function mossHighlightExtension(): Extension;
 //#endregion
 //#region src/cm6/cm-shortcode-block.d.ts
 interface ShortcodeBlockStrings {
-  /** Tooltip on a resting tag whose named asset does not resolve. */
-  assetMissingHint: () => string;
   /** Inline label after a deprecated `---` cell divider. */
   legacyDividerLabel: () => string;
   /** Tooltip on that label. */
@@ -464,61 +411,7 @@ declare function legacyDividesCellsAt(lineFrom: number, subtree: ShortcodeBlockI
  * drift silently.
  */
 declare function topLevelLegacyDividerCount(state: EditorState): number;
-/**
- * Block-range activation — the editor-wide reveal contract: any selection
- * range TOUCHING [from, to] reveals the block's source. Matches the
- * selection-overlap activation tables and inline marks use (getActiveLines /
- * isNodeActive in cm-live-preview), so Cmd+A and multi-line drags reveal
- * shortcode fences like everything else. (Was head-only before, which made
- * shortcode blocks the one construct Cmd+A did not reveal.)
- */
-declare function isBlockActive(state: EditorState, b: ShortcodeBlockInfo): boolean;
-/**
- * A nameless block has no name to label the tag with, so the class list
- * IS the name — it's the only thing the author typed that identifies the
- * block. `{.tagline}` → "tagline"; `{.subscribe-card .wide}` →
- * "subscribe-card wide". Returns null when there's no class to show (an
- * attrs-only block with no class, which shouldn't normally occur but must
- * not crash the tag into a blank label).
- */
-declare function classListLabel(attrs: string): string | null;
-/** Params shown in the tag (on hover), for layout-ambiguous types. */
-declare function tagParams(attrs: string): string;
-/**
- * What a resting block should draw where its icon goes.
- *
- * - `{ url }` — the shortcode names an image that resolved; draw it.
- * - `'missing'` — it names a path nothing resolves to. This is the ONLY place
- *   that can be said: a resting block's source line is replaced, so the
- *   `.cm-asset-unresolved` underline the same target earns elsewhere is not
- *   on screen to be seen. Without this the tag would look identical whether
- *   the file existed or not, right up until publish refuses.
- * - `null` — no asset named, not resolved yet, or resolved to something with
- *   no still frame (video). Falls back to the glyph, which is never wrong.
- */
-type ShortcodeAsset = {
-  url: string;
-} | 'missing' | null;
-/** Resolve a shortcode's asset path to what its tag should draw. */
-type ResolveShortcodeAsset = (target: string) => ShortcodeAsset;
 interface ShortcodeBlockOptions {
-  /**
-   * Resolves a shortcode's asset path to a thumbnail. Omitted → every tag
-   * keeps its glyph, which is the pre-thumbnail behaviour exactly.
-   */
-  resolveAsset?: ResolveShortcodeAsset;
-  /**
-   * `cm-reference-resolver`'s "a batch of references resolved" effect, passed
-   * in rather than imported: that module reaches `../bindings`, and this one
-   * is kept off that import graph (same reason `asset-preview` declares its
-   * own envelope type, and the same shape `assetLintExtension` takes).
-   */
-  refsResolvedEffect?: StateEffectType<unknown>;
-  /**
-   * Host-injected UI strings (thunks; see `ShortcodeBlockStrings`). Missing
-   * entries fall back to the English defaults. moss passes `() => t('…')`
-   * so locale switches stay live; other hosts may pass nothing.
-   */
   strings?: Partial<ShortcodeBlockStrings>;
 }
 declare function shortcodeBlockExtension(opts?: ShortcodeBlockOptions): Extension;
@@ -677,16 +570,23 @@ declare function footnoteJumpTarget(state: EditorState, pos: number): FootnoteSi
  * with no footnotes, so the cost of the feature on an ordinary page is one
  * tree walk that matches nothing.
  */
-declare function footnoteDecorations(state: EditorState, activeLines: Set<number>): FootnoteDeco[];
+declare function footnoteDecorations(state: EditorState): FootnoteDeco[];
 /** Base styles, so the feature needs no edit to a stylesheet to work. */
 declare const footnoteTheme: Extension;
+/** Test-only seam onto the live plugin instance, so a test can read its
+ *  current decoration set without going through the DOM. Production code
+ *  never imports this, only the test file does. */
+declare const footnoteViewPluginForTest: ViewPlugin<{
+  decorations: DecorationSet;
+  update(update: ViewUpdate): void;
+  build(view: EditorView): DecorationSet;
+}, undefined>;
 /**
  * The extension: a ViewPlugin that decorates the visible document, plus the
- * base theme. Registered separately from cm-live-preview's plugin rather than
- * folded into it — the two produce disjoint ranges, and keeping this pass
- * standalone means the footnote feature is one file to read and one line to
- * remove.
+ * base theme. Registered separately from other syntax passes — the two
+ * produce disjoint ranges, and keeping this pass standalone means the
+ * footnote feature is one file to read and one line to remove.
  */
 declare function footnoteExtension(): Extension;
 //#endregion
-export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkValidationResult, LinkedEmbed, ParsedMark, ReferenceCacheRead, ResolveShortcodeAsset, ShortcodeAsset, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, classListLabel, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, editorFocusField, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, getActiveLines, imageNodeAtWidget, inShortcodeBody, isBlockActive, isCellDividerLine, isEmbedNode, isLegacyDividerLine, isNodeActive, isRevealSuspended, isSourceMode, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, revealInputsChanged, revealInputsChangedIn, revealSuspensionChanged, runLinkLintSource, setEditorFocusedEffect, setSourceModeEffect, shortcodeBlockExtension, shortcodeBodyRanges, sourceModeChanged, sourceModeField, spanOnActiveLine, tagParams, topLevelLegacyDividerCount, widthFromPipe };
+export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkValidationResult, LinkedEmbed, ParsedMark, ReferenceCacheRead, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, runLinkLintSource, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };

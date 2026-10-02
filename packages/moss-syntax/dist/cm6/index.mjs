@@ -1,106 +1,11 @@
 import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-CNckZosN.mjs";
-import { RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
+import { RangeSetBuilder, StateField } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
 import { linter } from "@codemirror/lint";
 
-//#region src/cm6/cm-editor-focus.ts
-/** The host's report that the user started or stopped working in the editor. */
-const setEditorFocusedEffect = StateEffect.define();
-/** Install to make reveals follow focus. Starts unfocused, as a newly opened
-*  editor is until the user reaches into it. */
-const editorFocusField = StateField.define({
-	create: () => false,
-	update(value, tr) {
-		for (const e of tr.effects) if (e.is(setEditorFocusedEffect)) value = e.value;
-		return value;
-	}
-});
-/** True when the host installed `editorFocusField` and the editor is not
-*  focused: no line is active and no node touches the selection. */
-function isRevealSuspended(state) {
-	return state.field(editorFocusField, false) === false;
-}
-/** True when this transaction suspended or resumed reveals — effect-only, so
-*  invisible to the doc/selection checks alone. */
-function revealSuspensionChanged(tr) {
-	return isRevealSuspended(tr.startState) !== isRevealSuspended(tr.state);
-}
-
-//#endregion
-//#region src/cm6/cm-source-mode.ts
-/** Set source mode on/off. Effect-only transactions (no doc change) — the
-*  save state machine never sees a toggle. */
-const setSourceModeEffect = StateEffect.define();
-const sourceModeField = StateField.define({
-	create: () => false,
-	update(value, tr) {
-		for (const e of tr.effects) if (e.is(setSourceModeEffect)) value = e.value;
-		return value;
-	}
-});
-/** True when the document is in source mode. Safe on states without the
-*  field (non-markdown editors don't register it) — defaults to false. */
-function isSourceMode(state) {
-	return state.field(sourceModeField, false) ?? false;
-}
-/**
-* True when this transaction flipped source mode. Decoration StateFields and
-* ViewPlugins gate their rebuilds on doc/selection changes; a toggle changes
-* neither, so every builder that reads the predicates must ALSO rebuild on
-* this — otherwise the mode switch would not repaint until the next keystroke.
-*/
-function sourceModeChanged(tr) {
-	return isSourceMode(tr.startState) !== isSourceMode(tr.state);
-}
-/**
-* The one rebuild gate for every consumer of the reveal predicates: did this
-* transaction change anything getActiveLines / nodeTouchesSelection reads?
-* Doc, selection — and the mode flip and the editor gaining or losing focus,
-* which are effect-only and therefore invisible to the doc/selection checks
-* alone. Builders compose their own
-* extras (treeAdvanced, refsResolved) on top; they must never re-spell this
-* set, because a hand-written gate is how four consumers shipped stale
-* decorations across the flip (thermo review, 2026-09-01).
-*/
-function revealInputsChanged(tr) {
-	return tr.docChanged || !!tr.selection || sourceModeChanged(tr) || revealSuspensionChanged(tr);
-}
-/** ViewUpdate-shaped twin of revealInputsChanged, for ViewPlugin update gates. */
-function revealInputsChangedIn(update) {
-	return update.docChanged || update.selectionSet || update.transactions.some((tr) => sourceModeChanged(tr) || revealSuspensionChanged(tr));
-}
-
-//#endregion
 //#region src/cm6/cm-active-lines.ts
-/** Returns the set of 1-based line numbers that contain any selection range.
-*  In source mode: every line of the document. Unfocused: none. */
-function getActiveLines(state) {
-	const lines = /* @__PURE__ */ new Set();
-	if (isSourceMode(state)) {
-		for (let l = 1; l <= state.doc.lines; l++) lines.add(l);
-		return lines;
-	}
-	if (isRevealSuspended(state)) return lines;
-	for (const range of state.selection.ranges) {
-		const startLine = state.doc.lineAt(range.from).number;
-		const endLine = state.doc.lineAt(range.to).number;
-		for (let l = startLine; l <= endLine; l++) lines.add(l);
-	}
-	return lines;
-}
-/** Returns true if any line of the node range overlaps with active lines. */
-function isNodeActive(state, from, to, activeLines) {
-	const startLine = state.doc.lineAt(from).number;
-	const endLine = state.doc.lineAt(to).number;
-	for (let l = startLine; l <= endLine; l++) if (activeLines.has(l)) return true;
-	return false;
-}
-/** True when [from, to] touches any line a selection range is on. */
-function spanOnActiveLine(state, from, to) {
-	return isNodeActive(state, from, to, getActiveLines(state));
-}
 /**
 * True if any selection range overlaps the closed interval [from, to].
 *
@@ -108,14 +13,8 @@ function spanOnActiveLine(state, from, to) {
 * `from` or `to` counts as touching, so a node revealed on edge contact is
 * editable. Strict operators are deliberately avoided — they cause the
 * "markers re-hide and trap the cursor outside the run" class of bugs.
-*
-* This is the inline (per-node) reveal predicate — the granular counterpart to
-* isNodeActive's per-line test. Used by cm-live-preview (Emphasis/Strong/
-* Strikethrough/InlineCode/Link/Wikilink) and cm-link-resolver (link feedback).
 */
 function nodeTouchesSelection(state, from, to) {
-	if (isSourceMode(state)) return true;
-	if (isRevealSuspended(state)) return false;
 	return state.selection.ranges.some((r) => from <= r.to && r.from <= to);
 }
 
@@ -879,20 +778,19 @@ function mossHighlightExtension() {
 * syntax tree and pairs Open↔Close fence markers with an arity stack, so
 * positions are always current for tr.state — no stale offsets, no glitches.
 *
-* Resting (cursor outside block): open fence → micro-tag widget (one-line-tall,
-* click-to-focus); body lines tinted (live-preview renders their inline
-* markdown); close fence → faint rule. Active (selection head within the paired
-* range): all lines raw for editing. Editing a line ABOVE the block does not
-* change range-overlap, so the block never toggles.
+* The document alone decides how a block renders, never the caret: every
+* fence hangs into the margin and is token-highlighted; body lines are
+* tinted; a `+++` cell divider hangs too. Editing a line ABOVE the block
+* does not change anything below it — there is nothing caret-driven left to
+* toggle.
 *
 * Large-doc caveat: syntaxTree(state) may be incomplete past the viewport for
 * very long docs. The parse worker extends the tree via effect-only
-* transactions; both fields rebuild on that advance (see `treeAdvanced`), so
+* transactions; the field rebuilds on that advance (see `treeAdvanced`), so
 * late-parsed blocks decorate as soon as the parse reaches them. We do not
 * assert whole-doc completeness at any single point in time.
 */
 const DEFAULT_STRINGS = {
-	assetMissingHint: () => "This file isn't in your folder. moss won't publish the site until it is.",
 	legacyDividerLabel: () => "old divider — use +++",
 	legacyDividerTooltip: () => "The grid still splits here, but --- is the old way to write a cell divider. Replace it with +++."
 };
@@ -1054,158 +952,6 @@ function topLevelLegacyDividerCount(state) {
 	return n;
 }
 /**
-* Block-range activation — the editor-wide reveal contract: any selection
-* range TOUCHING [from, to] reveals the block's source. Matches the
-* selection-overlap activation tables and inline marks use (getActiveLines /
-* isNodeActive in cm-live-preview), so Cmd+A and multi-line drags reveal
-* shortcode fences like everything else. (Was head-only before, which made
-* shortcode blocks the one construct Cmd+A did not reveal.)
-*/
-function isBlockActive(state, b) {
-	return nodeTouchesSelection(state, b.from, b.to);
-}
-const ICONS = {
-	grid: "▦",
-	hero: "◉",
-	gallery: "⊞",
-	buttons: "⊡",
-	subscribe: "✉",
-	recent: "◷"
-};
-/** Icon for a nameless `:::{.class}` block ("Pure-CSS region" in
-*  shortcode-grammar.md) — distinct from both the named-shortcode icons and
-*  the `‹/›` unknown-name fallback, since this isn't unknown, it just has no
-*  name to show. */
-const CLASS_REGION_ICON = "▢";
-const CLASS_TOKEN_RE = /\.[\w-]+/g;
-/**
-* A nameless block has no name to label the tag with, so the class list
-* IS the name — it's the only thing the author typed that identifies the
-* block. `{.tagline}` → "tagline"; `{.subscribe-card .wide}` →
-* "subscribe-card wide". Returns null when there's no class to show (an
-* attrs-only block with no class, which shouldn't normally occur but must
-* not crash the tag into a blank label).
-*/
-function classListLabel(attrs) {
-	const classes = attrs.match(CLASS_TOKEN_RE);
-	if (!classes || classes.length === 0) return null;
-	return classes.map((c) => c.slice(1)).join(" ");
-}
-const WIDTH_RE = /\b(wide|page|screen|full|body)\b/;
-/** Params shown in the tag (on hover), for layout-ambiguous types. */
-function tagParams(attrs) {
-	const parts = [];
-	const perLine = /\bper-line=([^\s"'{}]+)/.exec(attrs);
-	const cols = /\bcols=([^\s"'{}]+)/.exec(attrs);
-	if (perLine) parts.push(`per-line ${perLine[1]}`);
-	else if (cols) parts.push(`cols ${cols[1]}`);
-	else {
-		const positional = /^([^\s{][^\s]*)/.exec(attrs.trim());
-		if (positional && !WIDTH_RE.test(positional[1])) parts.push(positional[1]);
-	}
-	if (WIDTH_RE.test(attrs)) parts.push(WIDTH_RE.exec(attrs)[1]);
-	const brace = attrs.indexOf("{");
-	const img = brace === -1 ? null : parseAttrKvSpans(attrs.slice(brace))?.find((kv) => kv.key === "image");
-	if (img) {
-		const path = img.value.split("|")[0].trim();
-		if (path) parts.push(path.split("/").pop());
-	}
-	return parts.join("  ·  ");
-}
-/** Resolve the icon + label a resting block's tag shows. A named block
-*  (`:::grid`) shows its own icon and name; a nameless `:::{.class}` block
-*  (see `classListLabel`) shows the class-region icon and its class list. */
-function tagIconAndLabel(name, attrs) {
-	if (name === "") {
-		const classLabel = classListLabel(attrs);
-		if (classLabel) return {
-			icon: CLASS_REGION_ICON,
-			label: classLabel
-		};
-	}
-	return {
-		icon: ICONS[name] ?? "‹/›",
-		label: name
-	};
-}
-var MicroTagWidget = class extends WidgetType {
-	constructor(icon, label, params, bodyPos, asset, strings) {
-		super();
-		this.icon = icon;
-		this.label = label;
-		this.params = params;
-		this.bodyPos = bodyPos;
-		this.asset = asset;
-		this.strings = strings;
-	}
-	eq(o) {
-		return o.icon === this.icon && o.label === this.label && o.params === this.params && o.bodyPos === this.bodyPos && sameAsset(o.asset, this.asset);
-	}
-	toDOM() {
-		const el = document.createElement("span");
-		el.className = "cm-sc-tag";
-		el.appendChild(this.renderLeading());
-		const nm = document.createElement("span");
-		nm.className = "cm-sc-tag-nm";
-		nm.textContent = this.label;
-		el.appendChild(nm);
-		if (this.params) {
-			const at = document.createElement("span");
-			at.className = "cm-sc-tag-at";
-			at.textContent = this.params;
-			el.appendChild(at);
-		}
-		el.addEventListener("mousedown", (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			const view = EditorView.findFromDOM(el);
-			if (!view) return;
-			view.dispatch({
-				selection: { anchor: this.bodyPos },
-				scrollIntoView: true
-			});
-			view.focus();
-		});
-		return el;
-	}
-	/**
-	* The thumbnail, the missing-file marker, or the glyph — in that order of
-	* preference. All three occupy the same slot and the same box, so the tag
-	* stays exactly one line tall whichever one wins: a hero that resolves must
-	* not reflow the document relative to one that hasn't resolved yet.
-	*/
-	renderLeading() {
-		if (this.asset && this.asset !== "missing") {
-			const img = document.createElement("img");
-			img.className = "cm-sc-tag-thumb";
-			img.alt = "";
-			img.src = this.asset.url;
-			return img;
-		}
-		const ic = document.createElement("span");
-		ic.className = "cm-sc-tag-ic";
-		if (this.asset === "missing") {
-			ic.classList.add("cm-sc-tag-ic--missing");
-			ic.textContent = MISSING_ICON;
-			ic.setAttribute("data-tooltip", this.strings.assetMissingHint());
-			return ic;
-		}
-		ic.textContent = this.icon;
-		return ic;
-	}
-	ignoreEvent(e) {
-		return e.type !== "mousedown";
-	}
-};
-/** Widget identity for the asset slot — drives `eq`, hence DOM reuse. */
-function sameAsset(a, b) {
-	if (a === b) return true;
-	if (!a || !b || a === "missing" || b === "missing") return false;
-	return a.url === b.url;
-}
-/** Stands in for a thumbnail when the named file isn't there. */
-const MISSING_ICON = "⊘";
-/**
 * The note next to a `---` cell divider: it still works, but `+++` is the
 * spelling to use. Sits at the END of the divider line so the author reads
 * what they typed first and the correction second, and so it never competes
@@ -1246,22 +992,23 @@ var LegacyDividerHintWidget = class extends WidgetType {
 		return e.type !== "mousedown";
 	}
 };
-const REPLACE$1 = Decoration.replace({});
 const MARK_SC_DELIM = Decoration.mark({ class: "cm-sc-delim" });
+const MARK_SC_FENCE = Decoration.mark({ class: "cm-sc-delim cm-hang" });
 const MARK_SC_NAME = Decoration.mark({ class: "cm-sc-name" });
 const MARK_SC_ATTR_KEY = Decoration.mark({ class: "cm-sc-attr-key" });
 /**
-* Token marks for a revealed OPEN fence line (`:::name {k=v}`): colons and
-* braces muted, name in keyword weight, attr keys secondary, values plain.
-* Reuses the fence grammar's own regex and the attr parser — no second parser.
-* Marks are emitted left-to-right so the RangeSetBuilder stays sorted.
+* Token marks for an OPEN fence line (`:::name {k=v}`): the repeated fence
+* characters hang (`cm-hang`, moved to the margin by the `cm-hung` line
+* class), braces muted, name in keyword weight, attr keys secondary, values
+* plain. Reuses the fence grammar's own regex and the attr parser — no second
+* parser. Marks are emitted left-to-right so the RangeSetBuilder stays sorted.
 */
 function addOpenFenceTokenMarks(builder, ln) {
 	const m = SHORTCODE_OPEN_RE.exec(ln.text);
 	if (!isOpenMatch(m)) return;
 	const colonsFrom = ln.from + m[1].length;
 	const colonsTo = colonsFrom + m[2].length;
-	builder.add(colonsFrom, colonsTo, MARK_SC_DELIM);
+	builder.add(colonsFrom, colonsTo, MARK_SC_FENCE);
 	const nameLen = m[3]?.length ?? 0;
 	if (nameLen > 0) builder.add(colonsTo, colonsTo + nameLen, MARK_SC_NAME);
 	const brace = ln.text.indexOf("{", m[1].length + m[2].length + nameLen);
@@ -1273,22 +1020,15 @@ function addOpenFenceTokenMarks(builder, ln) {
 	const close = ln.text.lastIndexOf("}");
 	if (close > brace) builder.add(ln.from + close, ln.from + close + 1, MARK_SC_DELIM);
 }
-/** Token marks for a revealed CLOSE fence line (`:::`): the colons, muted. */
-function addCloseFenceTokenMarks(builder, ln) {
+/** Hangs the trimmed content of a line that is nothing but repeated fence
+*  characters — the closing `:::` or a `+++` cell divider. Both are "a line
+*  prefix with nothing after it", so the whole trimmed text is the hang. */
+function addHungLineMark(builder, ln) {
 	const indent = ln.text.length - ln.text.trimStart().length;
-	const colons = ln.text.trim().length;
-	if (colons > 0) builder.add(ln.from + indent, ln.from + indent + colons, MARK_SC_DELIM);
+	const len = ln.text.trim().length;
+	if (len > 0) builder.add(ln.from + indent, ln.from + indent + len, MARK_SC_FENCE);
 }
-/**
-* What a block's tag should draw in its icon slot. Null resolver (jsdom,
-* a read-only viewer, any editor built without `getFromFile`) → the glyph.
-*/
-function blockAsset(b, resolve) {
-	if (!resolve) return null;
-	const ref = shortcodeAssetRef(b.name, b.attrs);
-	return ref ? resolve(ref.target) : null;
-}
-function buildBlockDecorations(state, strings, resolve) {
+function buildBlockDecorations(state, strings) {
 	const builder = new RangeSetBuilder();
 	for (const top of collectShortcodeBlocks(state)) {
 		const subtree = flattenBlocks([top]);
@@ -1298,42 +1038,18 @@ function buildBlockDecorations(state, strings, resolve) {
 			openByStart.set(b.from, b);
 			closeByStart.set(b.closeFrom, b);
 		}
-		if (isBlockActive(state, top)) {
-			let pos$1 = state.doc.lineAt(top.from).from;
-			while (pos$1 <= top.to) {
-				const ln = state.doc.lineAt(pos$1);
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-active" }));
-				if (openByStart.has(ln.from)) addOpenFenceTokenMarks(builder, ln);
-				else if (closeByStart.has(ln.from)) addCloseFenceTokenMarks(builder, ln);
-				if (isLegacyDividerLine(ln.text) && legacyDividesCellsAt(ln.from, subtree)) builder.add(ln.to, ln.to, Decoration.widget({
-					widget: new LegacyDividerHintWidget(ln.from, strings),
-					side: 1
-				}));
-				if (ln.to + 1 > top.to) break;
-				pos$1 = ln.to + 1;
-			}
-			continue;
-		}
 		let pos = state.doc.lineAt(top.from).from;
 		while (pos <= top.to) {
 			const ln = state.doc.lineAt(pos);
-			const openB = openByStart.get(ln.from);
-			const closeB = closeByStart.get(ln.from);
-			if (openB) {
-				const bodyPos = Math.min(ln.to + 1, openB.to);
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-openrest" }));
-				const { icon, label } = tagIconAndLabel(openB.name, openB.attrs);
-				builder.add(ln.from, ln.from, Decoration.widget({
-					widget: new MicroTagWidget(icon, label, tagParams(openB.attrs), bodyPos, blockAsset(openB, resolve), strings),
-					side: -1
-				}));
-				if (ln.to > ln.from) builder.add(ln.from, ln.to, REPLACE$1);
-			} else if (closeB) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-closerest" }));
-				if (ln.to > ln.from) builder.add(ln.from, ln.to, REPLACE$1);
+			if (openByStart.has(ln.from)) {
+				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-fence cm-hung" }));
+				addOpenFenceTokenMarks(builder, ln);
+			} else if (closeByStart.has(ln.from)) {
+				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-fence cm-hung" }));
+				addHungLineMark(builder, ln);
 			} else if (isCellDividerLine(ln.text) && dividesCellsAt(ln.from, subtree)) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-divider" }));
-				if (ln.to > ln.from) builder.add(ln.from, ln.to, REPLACE$1);
+				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-divider cm-hung" }));
+				addHungLineMark(builder, ln);
 			} else if (isLegacyDividerLine(ln.text) && legacyDividesCellsAt(ln.from, subtree)) {
 				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-legacy-divider" }));
 				builder.add(ln.to, ln.to, Decoration.widget({
@@ -1358,45 +1074,21 @@ function treeAdvanced(tr) {
 	return syntaxTree(tr.state) != syntaxTree(tr.startState);
 }
 function shortcodeBlockField(opts) {
-	const { resolveAsset, refsResolvedEffect } = opts;
 	const strings = {
 		...DEFAULT_STRINGS,
 		...opts.strings
 	};
 	return StateField.define({
-		create: (state) => buildBlockDecorations(state, strings, resolveAsset),
+		create: (state) => buildBlockDecorations(state, strings),
 		update(value, tr) {
-			const resolved = refsResolvedEffect !== void 0 && tr.effects.some((e) => e.is(refsResolvedEffect));
-			if (!revealInputsChanged(tr) && !treeAdvanced(tr) && !resolved) return value;
-			return buildBlockDecorations(tr.state, strings, resolveAsset);
+			if (!tr.docChanged && !treeAdvanced(tr)) return value;
+			return buildBlockDecorations(tr.state, strings);
 		},
 		provide: (f) => EditorView.decorations.from(f)
 	});
 }
-function buildAtomicRanges(state) {
-	const builder = new RangeSetBuilder();
-	for (const top of collectShortcodeBlocks(state)) {
-		if (isBlockActive(state, top)) continue;
-		for (const b of flattenBlocks([top])) {
-			const openLine = state.doc.lineAt(b.from);
-			if (openLine.to > openLine.from) builder.add(openLine.from, openLine.to, REPLACE$1);
-		}
-	}
-	return builder.finish();
-}
-const atomicField = StateField.define({
-	create: buildAtomicRanges,
-	update(value, tr) {
-		if (!revealInputsChanged(tr) && !treeAdvanced(tr)) return value;
-		return buildAtomicRanges(tr.state);
-	}
-});
 function shortcodeBlockExtension(opts = {}) {
-	return [
-		shortcodeBlockField(opts),
-		atomicField,
-		EditorView.atomicRanges.of((view) => view.state.field(atomicField))
-	];
+	return [shortcodeBlockField(opts)];
 }
 
 //#endregion
@@ -1502,38 +1194,62 @@ function linkValidationExtension(opts) {
 	const lintSource = (view) => runLinkLintSource(view, opts.resolvedCache);
 	return { extension: [linter(lintSource, {
 		delay: 600,
-		needsRefresh: (update) => revealInputsChangedIn(update) || update.transactions.some((tr) => tr.effects.some((e) => e.is(opts.refsResolvedEffect)))
+		needsRefresh: (update) => update.docChanged || update.selectionSet || update.transactions.some((tr) => tr.effects.some((e) => e.is(opts.refsResolvedEffect)))
 	}), ViewPlugin.fromClass(class LinkDecorator {
 		constructor(view) {
 			this.decorations = buildLinkDecorations(view.state, opts.resolvedCache);
 		}
 		update(update) {
 			const batchLanded = update.transactions.some((tr) => tr.effects.some((e) => e.is(opts.refsResolvedEffect)));
-			if (revealInputsChangedIn(update) || update.viewportChanged || batchLanded) this.decorations = buildLinkDecorations(update.state, opts.resolvedCache);
+			if (update.docChanged || update.selectionSet || update.viewportChanged || batchLanded) this.decorations = buildLinkDecorations(update.state, opts.resolvedCache);
 		}
 	}, { decorations: (v) => v.decorations })] };
 }
 
 //#endregion
 //#region src/cm6/cm-footnote.ts
-const REPLACE = Decoration.replace({});
-/** The label, raised — `[^` and `]` are hidden, so this IS the marker. */
-const MARK_REF = Decoration.mark({ class: "cm-lp-footnote-ref" });
-/** The same treatment on a definition line, so marker and note read as a pair. */
-const MARK_DEF_LABEL = Decoration.mark({ class: "cm-lp-footnote-label" });
+/** A hung prefix's real characters, moved into the margin — never a bare
+*  hide, so the characters stay there and stay editable. */
+const MARK_HANG_DEF = Decoration.mark({ class: "cm-hang" });
+/** Marks the definition's first line as one whose prefix hangs — paired with
+*  `cm-hang` the way every other hung block prefix works. */
+const LINE_HUNG = Decoration.line({ class: "cm-hung" });
 /** "There is somewhere to go from here" — the editor's ONE followable-cursor
 *  class (`.cm-editor.cm-meta-held .cm-link-clickable`, editor.css), the same
 *  one links and embed cards wear.
 *
-*  It is emitted from OUTSIDE the reveal gate below, and that is the whole
-*  point: a footnote is just as followable with its `[^1]` showing as with it
-*  rendered, so an affordance derived from the rendering promised nothing in
-*  raw source while Cmd+click followed anyway. Followability is a fact about
-*  the document, not about what the cursor happens to be near. */
+*  Followability is a fact about the document, not about the caret, so it is
+*  applied unconditionally alongside the chip rather than derived from it. */
 const CLICKABLE = Decoration.mark({ class: "cm-link-clickable" });
 /** Always-on line tint marking a line as note rather than body prose. Applied
 *  to every line the definition spans — a note is a container, not a line. */
 const LINE_DEF = Decoration.line({ class: "cm-lp-footnote-def" });
+/** The reference's on-screen stand-in: a small chip carrying the label, at
+*  the baseline rather than raised (raising can grow the line box). One
+*  widget replaces the WHOLE `[^1]` — brackets and digit together — because a
+*  hide with nothing standing in for it leaves the positions just before and
+*  just after indistinguishable, which is the ambiguity this whole file
+*  exists to avoid. `eq` is keyed on the label text alone, so retyping
+*  elsewhere on the line reuses the same chip DOM node. */
+var FootnoteChipWidget = class extends WidgetType {
+	constructor(label) {
+		super();
+		this.label = label;
+	}
+	eq(other) {
+		return other.label === this.label;
+	}
+	toDOM() {
+		const span = document.createElement("span");
+		span.className = "cm-footnote-chip";
+		span.classList.add("cm-link-clickable");
+		span.textContent = this.label;
+		return span;
+	}
+	ignoreEvent() {
+		return false;
+	}
+};
 /** Direct children of `node` named `name`, in order. */
 function childrenNamed(node, name) {
 	const out = [];
@@ -1625,29 +1341,19 @@ function footnoteJumpTarget(state, pos) {
 * with no footnotes, so the cost of the feature on an ordinary page is one
 * tree walk that matches nothing.
 */
-function footnoteDecorations(state, activeLines) {
+function footnoteDecorations(state) {
 	const { definitions, firstRefs } = footnoteIndex(state);
 	const decos = [];
 	syntaxTree(state).iterate({ enter(node) {
 		if (node.name === "FootnoteRef") {
 			const label = childrenNamed(node.node, "FootnoteLabel")[0];
 			if (!label) return false;
-			if (!definitions.has(state.doc.sliceString(label.from, label.to))) return false;
+			const labelText = state.doc.sliceString(label.from, label.to);
+			if (!definitions.has(labelText)) return false;
 			decos.push({
 				from: node.from,
 				to: node.to,
-				deco: CLICKABLE
-			});
-			if (nodeTouchesSelection(state, node.from, node.to)) return false;
-			for (const mark of childrenNamed(node.node, "FootnoteMark")) decos.push({
-				from: mark.from,
-				to: mark.to,
-				deco: REPLACE
-			});
-			decos.push({
-				from: label.from,
-				to: label.to,
-				deco: MARK_REF
+				deco: Decoration.replace({ widget: new FootnoteChipWidget(labelText) })
 			});
 			return false;
 		}
@@ -1661,6 +1367,11 @@ function footnoteDecorations(state, activeLines) {
 					to: at,
 					deco: LINE_DEF
 				});
+				if (n === first) decos.push({
+					from: at,
+					to: at,
+					deco: LINE_HUNG
+				});
 			}
 			const label = childrenNamed(node.node, "FootnoteLabel")[0];
 			if (!label) return;
@@ -1671,16 +1382,10 @@ function footnoteDecorations(state, activeLines) {
 				to: chromeEnd,
 				deco: CLICKABLE
 			});
-			if (isNodeActive(state, node.from, chromeEnd, activeLines)) return;
-			for (const mark of childrenNamed(node.node, "FootnoteMark")) decos.push({
-				from: mark.from,
-				to: mark.to,
-				deco: REPLACE
-			});
-			decos.push({
-				from: label.from,
-				to: label.to,
-				deco: MARK_DEF_LABEL
+			if (chromeEnd > node.from) decos.push({
+				from: node.from,
+				to: chromeEnd,
+				deco: MARK_HANG_DEF
 			});
 			return;
 		}
@@ -1689,34 +1394,41 @@ function footnoteDecorations(state, activeLines) {
 }
 /** Base styles, so the feature needs no edit to a stylesheet to work. */
 const footnoteTheme = EditorView.baseTheme({
-	".cm-lp-footnote-ref, .cm-lp-footnote-label": {
-		verticalAlign: "super",
+	".cm-footnote-chip": {
 		fontSize: "0.72em",
 		color: "var(--moss-color-accent)"
 	},
 	".cm-lp-footnote-def": { color: "var(--moss-color-text-secondary)" }
 });
+const footnoteViewPlugin = ViewPlugin.fromClass(class {
+	constructor(view) {
+		this.decorations = this.build(view);
+	}
+	update(update) {
+		if (update.view.composing) {
+			this.decorations = this.decorations.map(update.changes);
+			return;
+		}
+		if (update.docChanged || update.viewportChanged || syntaxTree(update.state) !== syntaxTree(update.startState)) this.decorations = this.build(update.view);
+	}
+	build(view) {
+		const decos = footnoteDecorations(view.state);
+		return Decoration.set(decos.map((d) => d.deco.range(d.from, d.to)), true);
+	}
+}, { decorations: (v) => v.decorations });
+/** Test-only seam onto the live plugin instance, so a test can read its
+*  current decoration set without going through the DOM. Production code
+*  never imports this, only the test file does. */
+const footnoteViewPluginForTest = footnoteViewPlugin;
 /**
 * The extension: a ViewPlugin that decorates the visible document, plus the
-* base theme. Registered separately from cm-live-preview's plugin rather than
-* folded into it — the two produce disjoint ranges, and keeping this pass
-* standalone means the footnote feature is one file to read and one line to
-* remove.
+* base theme. Registered separately from other syntax passes — the two
+* produce disjoint ranges, and keeping this pass standalone means the
+* footnote feature is one file to read and one line to remove.
 */
 function footnoteExtension() {
-	return [ViewPlugin.fromClass(class {
-		constructor(view) {
-			this.decorations = this.build(view);
-		}
-		update(update) {
-			if (revealInputsChangedIn(update) || update.viewportChanged) this.decorations = this.build(update.view);
-		}
-		build(view) {
-			const decos = footnoteDecorations(view.state, getActiveLines(view.state));
-			return Decoration.set(decos.map((d) => d.deco.range(d.from, d.to)), true);
-		}
-	}, { decorations: (v) => v.decorations }), footnoteTheme];
+	return [footnoteViewPlugin, footnoteTheme];
 }
 
 //#endregion
-export { buildLinkDecorations, classListLabel, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, editorFocusField, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, getActiveLines, imageNodeAtWidget, inShortcodeBody, isBlockActive, isCellDividerLine, isEmbedNode, isLegacyDividerLine, isNodeActive, isRevealSuspended, isSourceMode, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, revealInputsChanged, revealInputsChangedIn, revealSuspensionChanged, runLinkLintSource, setEditorFocusedEffect, setSourceModeEffect, shortcodeBlockExtension, shortcodeBodyRanges, sourceModeChanged, sourceModeField, spanOnActiveLine, tagParams, topLevelLegacyDividerCount, widthFromPipe };
+export { buildLinkDecorations, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, runLinkLintSource, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };

@@ -150,7 +150,13 @@ export type CompletionPhase =
    */
   | { phase: 'heading'; syntax: 'wikilink' | 'inline'; page: string | null; query: string; from: number; to: number }
   /** An inline `[text](…)` target: source path, or the site with a leading `/`. */
-  | { phase: 'link'; query: string; from: number; to: number };
+  | { phase: 'link'; query: string; from: number; to: number }
+  /**
+   * After a `|` inside an OPEN embed target (`![[cover.png|5`): the author is
+   * typing a width percentage, not a free-text alias — only embeds get this
+   * treatment, since a non-embed `[[Page|Label]]` alias is free text.
+   */
+  | { phase: 'width'; query: string; from: number; to: number };
 
 // Matches an open, unclosed [[...]] (optionally embed-prefixed `![[`) ending at
 // the cursor: group 1 is the optional `!`, group 2 is the inner text after the
@@ -169,6 +175,11 @@ export function parseWikilinkPhase(lineText: string, cursorInLine: number): Comp
   const embed = m[1] === '!';
   const inner = m[2];
   const to = cursorInLine + wikilinkTailLength(lineText.slice(cursorInLine));
+  const pipe = inner.indexOf('|');
+  if (embed && pipe !== -1) {
+    const query = inner.slice(pipe + 1);
+    return { phase: 'width', query, from: cursorInLine - query.length, to };
+  }
   const hash = inner.indexOf('#');
   if (hash === -1) {
     return { phase: 'wikilink', embed, query: inner, from: cursorInLine - inner.length, to };

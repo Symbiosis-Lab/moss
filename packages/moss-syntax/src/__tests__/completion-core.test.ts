@@ -130,6 +130,16 @@ describe('parseWikilinkPhase', () => {
   });
 });
 
+describe('width phase', () => {
+  test('a pipe inside an OPEN embed target offers the width phase', () => {
+    expect(parseWikilinkPhase('![[cover.png|5', 14)).toEqual({ phase: 'width', query: '5', from: 13, to: 14 });
+  });
+
+  test('a pipe inside a non-embed wikilink stays the wikilink phase (aliases are free text, not width)', () => {
+    expect(parseWikilinkPhase('[[Page|Lab', 10)?.phase).toBe('wikilink');
+  });
+});
+
 describe('parseGalleryBodyLine — bare-path arm (image arm delegates)', () => {
   test('leading whitespace is not part of the query', () => {
     expect(parseGalleryBodyLine('  photo.j', 9))

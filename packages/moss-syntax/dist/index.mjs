@@ -182,6 +182,16 @@ function parseWikilinkPhase(lineText, cursorInLine) {
 	const embed = m[1] === "!";
 	const inner = m[2];
 	const to = cursorInLine + wikilinkTailLength(lineText.slice(cursorInLine));
+	const pipe = inner.indexOf("|");
+	if (embed && pipe !== -1) {
+		const query$1 = inner.slice(pipe + 1);
+		return {
+			phase: "width",
+			query: query$1,
+			from: cursorInLine - query$1.length,
+			to
+		};
+	}
 	const hash = inner.indexOf("#");
 	if (hash === -1) return {
 		phase: "wikilink",

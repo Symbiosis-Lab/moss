@@ -10,8 +10,6 @@
 // module exports a disjoint name set, so a flat re-export is unambiguous.
 
 export * from './cm-active-lines.js';
-export * from './cm-source-mode.js';
-export * from './cm-editor-focus.js';
 export * from './cm-link-extract.js';
 export * from './cm-image-extract.js';
 export * from './cm-criticmarkup.js';

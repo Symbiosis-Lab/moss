@@ -240,6 +240,16 @@ type CompletionPhase = {
   query: string;
   from: number;
   to: number;
+}
+/**
+ * After a `|` inside an OPEN embed target (`![[cover.png|5`): the author is
+ * typing a width percentage, not a free-text alias — only embeds get this
+ * treatment, since a non-embed `[[Page|Label]]` alias is free text.
+ */ | {
+  phase: 'width';
+  query: string;
+  from: number;
+  to: number;
 };
 /**
  * The wikilink phase at `cursorInLine`, or null when the cursor is not inside

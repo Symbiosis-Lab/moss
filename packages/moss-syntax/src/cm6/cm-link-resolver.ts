@@ -37,7 +37,6 @@ import { extractLinkTargets } from './cm-link-extract.js';
 import { isEmbedNode } from './cm-image-extract.js';
 import { syntaxTree } from '@codemirror/language';
 import { nodeTouchesSelection } from './cm-active-lines.js';
-import { revealInputsChangedIn } from './cm-source-mode.js';
 
 // ── Structural envelope type ──────────────────────────────────────────────────
 // The shape of moss's generated `EditorReferenceResolution` (bindings.ts, from
@@ -237,7 +236,7 @@ export function linkValidationExtension(opts: {
     // per-node suppression must lift once the cursor leaves the link, and the
     // source-mode flip suppresses every diagnostic at once.
     needsRefresh: (update) =>
-      revealInputsChangedIn(update) ||
+      update.docChanged || update.selectionSet ||
       update.transactions.some(tr =>
         tr.effects.some(e => e.is(opts.refsResolvedEffect))),
   });
@@ -262,7 +261,7 @@ export function linkValidationExtension(opts: {
         // refsResolvedEffect: dim marks appear when the batch lands.
         const batchLanded = update.transactions.some(tr =>
           tr.effects.some(e => e.is(opts.refsResolvedEffect)));
-        if (revealInputsChangedIn(update) || update.viewportChanged || batchLanded) {
+        if (update.docChanged || update.selectionSet || update.viewportChanged || batchLanded) {
           this.decorations = buildLinkDecorations(update.state, opts.resolvedCache);
         }
       }

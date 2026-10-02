@@ -14,6 +14,7 @@ pub mod asset_resolver;
 pub mod folder_index;
 pub mod links;
 pub mod page_source;
+pub mod reference_card;
 pub mod reference_resolver;
 pub mod takeover;
 pub mod url_index;
