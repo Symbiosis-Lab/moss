@@ -15,6 +15,7 @@ use crate::build::page::layout::LayoutConfig;
 use crate::build::page::page::generate_year_grouped_article_list;
 use crate::build::assets::paths::PathResolver;
 use crate::build::media::qr;
+use crate::build::markdown::body_plan::LocatorPlacement;
 use crate::build::page::shell::{
     ShellProcessor, ShellRegistry, ShellType, ShellVars,
 };
@@ -262,21 +263,20 @@ fn resolve_children_source_folder_path(children_source: &str, all_docs: &[Parsed
         .unwrap_or_else(|| stem.to_lowercase())
 }
 
-/// Article path only: insert the place-map locator into `body`, before its
-/// first text block, rather than the masthead (`BodyPlan::insert_before_text`).
-/// Shared by both places `is_article_page` can be true — homepage-as-article
-/// below, and the ordinary non-homepage branch further down.
+/// Insert the place-map locator into `body` at `placement` (a no-op for
+/// [`LocatorPlacement::Masthead`], which the masthead functions draw instead).
+/// Shared by the homepage branch and the ordinary non-homepage branch below.
 fn splice_body_locator(
     body: &mut crate::build::markdown::body_plan::BodyPlan,
     doc: &ParsedDocument,
     layout: &LayoutConfig,
-    is_article_page: bool,
+    placement: LocatorPlacement,
 ) {
-    if !is_article_page {
+    if placement == LocatorPlacement::Masthead {
         return;
     }
     if let Some(locator) = credits::render_place_locator(doc, layout) {
-        body.insert_before_text(locator);
+        body.insert_locator(locator, placement);
     }
 }
 
@@ -502,6 +502,16 @@ fn generate_html_inner<'d>(
     // Determine template type based on layout and content folders
     let shell_type = ShellRegistry::select_shell_type(doc, is_homepage, project.has_content_folders);
     let is_article_page = shell_type == ShellType::Article;
+    // Vertical pages put the locator after the opening text, every kind of
+    // page alike; horizontal articles float it before the text; the rest keep
+    // it in the masthead.
+    let locator_placement = if vertical_typesetting {
+        LocatorPlacement::AfterText
+    } else if is_article_page {
+        LocatorPlacement::BeforeText
+    } else {
+        LocatorPlacement::Masthead
+    };
 
     // True when the page should advertise a social share card + be indexed: a
     // real public page (not draft/slot_only). `listed: false` pages are still
@@ -544,14 +554,14 @@ fn generate_html_inner<'d>(
                 media_lookup,
                 resolved_typesetting,
             );
-            splice_body_locator(&mut body_plan, doc, layout_config, is_article_page);
+            splice_body_locator(&mut body_plan, doc, layout_config, locator_placement);
             let mut content = body_plan.to_html();
 
             // The homepage has no title of moss's own for the byline to sit
             // under; render/credits.rs says where it goes instead, and why a
             // `layout: article` homepage is the article path's page, not this one.
             if !is_article_page {
-                content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines);
+                content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement);
             }
 
             // Folder card <img> tags inherit width/height/loading/LQIP/color
@@ -626,7 +636,7 @@ fn generate_html_inner<'d>(
             // leaf's `split_at_lede` sees the locator as part of the body
             // it is splitting, same as any other segment, rather than
             // needing its own case.
-            splice_body_locator(&mut body, doc, layout_config, is_article_page);
+            splice_body_locator(&mut body, doc, layout_config, locator_placement);
             let mut content = body.to_html();
 
             // Check if this is a folder index page (any non-root index page).
@@ -722,7 +732,7 @@ fn generate_html_inner<'d>(
                 // below emits both. Same boolean as that gate, so "exactly one
                 // fires" reads off one variable. See render/credits.rs.
                 let folder_byline = (!is_article_page)
-                    .then(|| credits::render_page_masthead(doc, layout_config, emit_source_lines))
+                    .then(|| credits::render_page_masthead(doc, layout_config, emit_source_lines, locator_placement))
                     .unwrap_or_default();
                 if resolved_cover.is_some() && !is_article_layout && !is_explorer_root {
                     // Cover branch: folder_cover renders the cover-row with the
@@ -835,7 +845,7 @@ fn generate_html_inner<'d>(
                     // and lands the byline beside the real title inside it,
                     // the same as it would for an unwrapped page — one splice
                     // site for both shapes.
-                    content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines);
+                    content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement);
                 }
             }
 

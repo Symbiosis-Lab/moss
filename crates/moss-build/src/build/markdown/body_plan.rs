@@ -40,6 +40,19 @@ use moss_core::ast::{
     SubscribeShortcode,
 };
 
+/// Where a page's place-map locator goes, chosen once per page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocatorPlacement {
+    /// In the page masthead, after the byline: pages that are not articles.
+    Masthead,
+    /// In the body, immediately before the first text block, where the
+    /// horizontal float sits beside that text.
+    BeforeText,
+    /// In the body, immediately after the first text block, as a block of its
+    /// own: vertical typesetting, where the author's words are read first.
+    AfterText,
+}
+
 /// A page's emitted body, kept in the pieces the serializer produced it in.
 #[derive(Debug, Clone, Default)]
 pub struct BodyPlan {
@@ -61,6 +74,13 @@ pub struct BodyPlan {
     /// insertion lands at the very front, same place moss has always put a
     /// place-map locator on a body it cannot subdivide further.
     pub first_text_segments: usize,
+    /// How many LEADING segments end with the body's first text block: the
+    /// insertion point for a locator that follows the opening text (vertical
+    /// typesetting). Equal to [`first_text_segments`] when the body has no
+    /// text block.
+    ///
+    /// [`first_text_segments`]: BodyPlan::first_text_segments
+    pub after_first_text_segments: usize,
 }
 
 /// One piece of the emitted body.
@@ -183,6 +203,7 @@ impl BodyPlan {
             segments: vec![BodySegment::Html(html)],
             lede_segments: 1,
             first_text_segments: 0,
+            after_first_text_segments: 0,
         }
     }
 
@@ -260,14 +281,17 @@ impl BodyPlan {
         self.segments.insert(0, BodySegment::Html(html));
         self.lede_segments += 1;
         self.first_text_segments += 1;
+        self.after_first_text_segments += 1;
     }
 
-    /// Insert `html` immediately before the body's first text block (a
-    /// paragraph, list or blockquote) — the place-map locator's insertion
-    /// point, at [`first_text_segments`]. A leading heading, rule or media
-    /// block (figure, table, code block, another shortcode) stays above it
-    /// at full width, simply by virtue of coming first in the emitted HTML:
-    /// nothing before a float in source order is affected by it.
+    /// Insert the place-map locator `html` into the body at `placement`:
+    /// immediately before the body's first text block (a paragraph, list or
+    /// blockquote), or immediately after it. A leading heading, rule or media
+    /// block (figure, table, code block, another shortcode) stays above it at
+    /// full width, simply by virtue of coming first in the emitted HTML. A
+    /// body with no text block takes the very front either way, and the first
+    /// text block is a top-level one: a paragraph wrapped in a fenced div is
+    /// not recognised. [`LocatorPlacement::Masthead`] inserts nothing.
     ///
     /// `idx <= lede_segments` moves `lede_segments` the same way
     /// [`prepend_html`] always does: an insertion landing inside (or right
@@ -279,16 +303,25 @@ impl BodyPlan {
     ///
     /// No-op for an empty fragment, same guard [`prepend_html`] uses.
     ///
-    /// [`first_text_segments`]: BodyPlan::first_text_segments
     /// [`prepend_html`]: BodyPlan::prepend_html
-    pub fn insert_before_text(&mut self, html: String) {
+    pub fn insert_locator(&mut self, html: String, placement: LocatorPlacement) {
+        let after_text = match placement {
+            LocatorPlacement::Masthead => return,
+            LocatorPlacement::BeforeText => false,
+            LocatorPlacement::AfterText => true,
+        };
         if html.is_empty() {
             return;
         }
-        let idx = self.first_text_segments.min(self.segments.len());
+        let at = if after_text { self.after_first_text_segments } else { self.first_text_segments };
+        let idx = at.min(self.segments.len());
         self.segments.insert(idx, BodySegment::Html(html));
         if idx <= self.lede_segments {
             self.lede_segments += 1;
+        }
+        // A cut at or past an insertion in front of it moves with its segment.
+        if !after_text && self.after_first_text_segments >= idx {
+            self.after_first_text_segments += 1;
         }
     }
 }
@@ -420,6 +453,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     let mut buf = String::new();
     let mut lede_segments: Option<usize> = None;
     let mut first_text_segments: Option<usize> = None;
+    let mut after_first_text_segments: Option<usize> = None;
     let mut fnotes = moss_core::ast::footnotes::FootnoteCtx::for_document(&doc.blocks);
 
     for (i, block) in doc.blocks.iter().enumerate() {
@@ -430,6 +464,10 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
         if Some(i) == text_block_index {
             flush(&mut buf, &mut segments);
             first_text_segments = Some(segments.len());
+        }
+        if text_block_index.is_some_and(|t| i == t + 1) {
+            flush(&mut buf, &mut segments);
+            after_first_text_segments = Some(segments.len());
         }
         let meta = doc.block_meta.get(i).copied().unwrap_or_default();
         match block {
@@ -457,6 +495,10 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     // fixes `lede_segments` at the tail of real content; the footnote section
     // then always lands in its own segment, in the trailer.
     flush(&mut buf, &mut segments);
+    // A text block that ends the body has no following block to trigger the cut.
+    if text_block_index.is_some() && after_first_text_segments.is_none() {
+        after_first_text_segments = Some(segments.len());
+    }
     let lede_segments = lede_segments.unwrap_or(segments.len());
     // Unlike `lede_segments`, a body with no text block falls back to `0`
     // (the very front) rather than `segments.len()` — see
@@ -464,6 +506,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     // section is appended, for the same reason `lede_segments` is: the
     // about-to-be-flushed endnote segment must never count toward either cut.
     let first_text_segments = first_text_segments.unwrap_or(0);
+    let after_first_text_segments = after_first_text_segments.unwrap_or(first_text_segments);
     moss_core::ast::footnotes::render_section(hooks, &mut buf, &doc.blocks, &mut fnotes);
     flush(&mut buf, &mut segments);
 
@@ -471,6 +514,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
         segments,
         lede_segments,
         first_text_segments,
+        after_first_text_segments,
     }
 }
 

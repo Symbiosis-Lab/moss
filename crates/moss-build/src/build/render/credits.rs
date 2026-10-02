@@ -99,6 +99,8 @@
 //!    (`作者　陳遠山`) is preserved verbatim — rows are trimmed at the ends
 //!    only, never re-spaced in the middle.
 
+use crate::build::markdown::body_plan::LocatorPlacement;
+
 /// Render the byline block for an article, or `None` when there is nothing
 /// to show — the authored `byline:` rows, the automatic place line, or both.
 ///
@@ -128,17 +130,20 @@ pub fn render_byline_html(rows: &[String], emit_source_fm: bool, place_line: Opt
 /// line only — same `render_byline_html` call this makes, minus the
 /// locator — because the locator's article-page position is no longer
 /// fixed right after the place line: `render/html.rs` inserts it into the
-/// body itself, before the first text block, via
-/// `BodyPlan::insert_before_text`.
+/// body itself, via `BodyPlan::insert_locator`. The locator is drawn here
+/// only for [`LocatorPlacement::Masthead`].
 pub fn render_page_masthead(
     doc: &crate::build::types::ParsedDocument,
     layout: &crate::build::page::layout::LayoutConfig,
     emit_source_lines: bool,
+    placement: LocatorPlacement,
 ) -> String {
     let mut html = render_byline_html(&doc.byline, emit_source_lines, doc.place_line.as_deref())
         .unwrap_or_default();
-    if let Some(locator) = render_place_locator(doc, layout) {
-        html.push_str(&locator);
+    if placement == LocatorPlacement::Masthead {
+        if let Some(locator) = render_place_locator(doc, layout) {
+            html.push_str(&locator);
+        }
     }
     html
 }
@@ -148,7 +153,7 @@ pub fn render_page_masthead(
 /// asks for one, or the page names no place with coordinates — same
 /// resolution `render_page_masthead` folds in. A place page's own map is its
 /// term map, so it never also gets a locator. Exposed separately so the
-/// article path can place it in the BODY, via `BodyPlan::insert_before_text`,
+/// article path can place it in the BODY, via `BodyPlan::insert_locator`,
 /// rather than in the masthead.
 pub fn render_place_locator(
     doc: &crate::build::types::ParsedDocument,
@@ -168,8 +173,9 @@ pub fn splice_page_masthead(
     doc: &crate::build::types::ParsedDocument,
     layout: &crate::build::page::layout::LayoutConfig,
     emit_source_lines: bool,
+    placement: LocatorPlacement,
 ) -> String {
-    let masthead = render_page_masthead(doc, layout, emit_source_lines);
+    let masthead = render_page_masthead(doc, layout, emit_source_lines, placement);
     if masthead.is_empty() {
         content
     } else {

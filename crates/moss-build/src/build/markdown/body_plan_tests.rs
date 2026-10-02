@@ -380,7 +380,7 @@ fn insert_before_text_lands_between_a_heading_segment_and_the_paragraph() {
     let hooks = DefaultHooks::new();
     let doc = parse("## Section\n\nBody paragraph.\n");
     let mut plan = render_segmented(&doc, &hooks);
-    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
     let html = plan.to_html();
     let heading = html.find("<h2").expect("heading present");
     let locator = html.find("<!--LOCATOR-->").expect("locator present");
@@ -391,13 +391,68 @@ fn insert_before_text_lands_between_a_heading_segment_and_the_paragraph() {
     );
 }
 
+fn locator_order(md: &str, placement: LocatorPlacement) -> Vec<&'static str> {
+    let hooks = DefaultHooks::new();
+    let mut plan = render_segmented(&parse(md), &hooks);
+    plan.insert_locator("<!--LOCATOR-->".to_string(), placement);
+    let html = plan.to_html();
+    let mut found: Vec<(usize, &'static str)> = [("<h2", "heading"), ("<!--LOCATOR-->", "locator"), ("<p>First", "first"), ("<p>Second", "second")]
+        .iter()
+        .filter_map(|(needle, name)| html.find(needle).map(|at| (at, *name)))
+        .collect();
+    found.sort();
+    found.into_iter().map(|(_, name)| name).collect()
+}
+
+#[test]
+fn insert_locator_follows_the_first_text_block_only_when_asked() {
+    use LocatorPlacement::{AfterText, BeforeText};
+    let md = "## Section\n\nFirst paragraph.\n\nSecond paragraph.\n";
+    assert_eq!(locator_order(md, BeforeText), ["heading", "locator", "first", "second"]);
+    assert_eq!(locator_order(md, AfterText), ["heading", "first", "locator", "second"]);
+    // The opening text is also the last block.
+    assert_eq!(locator_order("First paragraph.\n", AfterText), ["first", "locator"]);
+    // No text block: the front in both modes.
+    assert_eq!(locator_order("## Section\n\n---\n", AfterText), ["locator", "heading"]);
+    assert_eq!(locator_order("## Section\n\n---\n", BeforeText), ["locator", "heading"]);
+}
+
+#[test]
+fn insert_locator_masthead_leaves_the_body_alone() {
+    assert_eq!(locator_order("First paragraph.\n", LocatorPlacement::Masthead), ["first"]);
+}
+
+/// The known limit: a fenced div is flattened into open tag, children, close
+/// tag, so a paragraph inside a div that opens the body IS the first text
+/// block, and the locator lands inside the div, before its closing tag.
+#[test]
+fn insert_locator_after_text_lands_inside_a_fenced_div_that_opens_the_body_known_limit() {
+    let hooks = DefaultHooks::new();
+    let mut plan = render_segmented(&parse("::: {.plate}\nFirst paragraph.\n:::\n\nSecond paragraph.\n"), &hooks);
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::AfterText);
+    let html = plan.to_html();
+    let at = |needle: &str| html.find(needle).unwrap_or_else(|| panic!("{needle} missing in {html}"));
+    assert!(at("<p>First") < at("<!--LOCATOR-->") && at("<!--LOCATOR-->") < at("</div>") && at("</div>") < at("<p>Second"), "{html}");
+}
+
+#[test]
+fn prepend_html_before_an_after_text_insert_keeps_the_locator_after_the_paragraph() {
+    let hooks = DefaultHooks::new();
+    let mut plan = render_segmented(&parse("First paragraph.\n\nSecond paragraph.\n"), &hooks);
+    plan.prepend_html("<!--TITLE-->".to_string());
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::AfterText);
+    let html = plan.to_html();
+    let at = |needle: &str| html.find(needle).unwrap_or_else(|| panic!("{needle} missing in {html}"));
+    assert!(at("<!--TITLE-->") < at("<p>First") && at("<p>First") < at("<!--LOCATOR-->") && at("<!--LOCATOR-->") < at("<p>Second"), "{html}");
+}
+
 #[test]
 fn insert_before_text_is_a_noop_for_an_empty_fragment() {
     let hooks = DefaultHooks::new();
     let doc = parse("## Section\n\nBody paragraph.\n");
     let before = render_segmented(&doc, &hooks).to_html();
     let mut plan = render_segmented(&doc, &hooks);
-    plan.insert_before_text(String::new());
+    plan.insert_locator(String::new(), LocatorPlacement::BeforeText);
     assert_eq!(plan.to_html(), before);
 }
 
@@ -406,7 +461,7 @@ fn insert_before_text_falls_back_to_the_front_with_no_text_block() {
     let hooks = DefaultHooks::new();
     let doc = parse("## Only a heading\n\n---\n");
     let mut plan = render_segmented(&doc, &hooks);
-    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
     let html = plan.to_html();
     assert!(
         html.starts_with("<!--LOCATOR-->"),
@@ -427,7 +482,7 @@ fn prepend_html_before_insert_before_text_still_lands_after_the_heading() {
     let doc = parse("## Section\n\nBody paragraph.\n");
     let mut plan = render_segmented(&doc, &hooks);
     plan.prepend_html("<h1 class=\"moss-article-title\">Title</h1>\n".to_string());
-    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
     let html = plan.to_html();
     let title = html.find("moss-article-title").expect("title present");
     let heading = html.find("<h2").expect("heading present");
@@ -452,7 +507,7 @@ fn insert_before_text_keeps_the_paragraph_and_locator_together_inside_the_lede()
     let doc = parse("## Section\n\nBody paragraph, the whole short intro.\n");
     let mut plan = render_segmented(&doc, &hooks);
     assert_eq!(plan.lede_segments, plan.segments.len(), "precondition: whole body is the lede");
-    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
     let (lead, trailer) = plan.split_at_lede();
     assert!(lead.contains("<!--LOCATOR-->"), "locator belongs in the lede: {lead}");
     assert!(lead.contains("Body paragraph"), "lead: {lead}");
@@ -468,7 +523,7 @@ fn insert_before_text_lands_in_the_trailer_when_the_text_block_is_released_past_
     let doc = parse(":::grid 2\n[A](a/)\n:::\n\nBody paragraph after the grid.\n");
     let mut plan = render_segmented(&doc, &hooks);
     assert_eq!(plan.lede_segments, 0, "precondition: the grid releases the lede immediately");
-    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
     let (lead, trailer) = plan.split_at_lede();
     assert_eq!(lead, "", "lede: {lead}");
     assert!(trailer.contains("<!--LOCATOR-->"), "trailer: {trailer}");

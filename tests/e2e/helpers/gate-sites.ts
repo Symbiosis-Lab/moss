@@ -1961,6 +1961,84 @@ location: "Lisbon"
 
 > Opening quote, directly after the masthead, with no heading before it.
 `,
+    // Vertical typesetting (page-level `typesetting:`): the locator is a
+    // column-block in the flow, not a float. `vertical-article` has a title
+    // and meta columns before the text; `vertical-front/` is a front page —
+    // a short body, then folder cards and a listing.
+    "vertical-article.md": `---
+title: Quiet Harbours
+uid: "pma007g"
+author: Ines Moreau
+date: 2026-03-14
+location: "Lisbon"
+typesetting: vertical
+---
+
+The ferry leaves before the light is fully up, and the first hour is only water and the sound of the engine.
+
+A second paragraph keeps the column going, so the page has more than one block of text after the opening.
+`,
+    // The locator inside a themed wrapper that centres its children along the
+    // column (a flex column with `align-items: center`): it must still start
+    // at the columns' top.
+    "vertical-plate.md": `---
+title: Plate Page
+uid: "pma013m"
+location: "Lisbon"
+typesetting: vertical
+---
+
+::: {.plate}
+![A photograph](photo.svg)
+
+Caption line under the photograph.
+:::
+
+Prose after the plate.
+`,
+    ".moss/theme/style.css": `body[data-typesetting="vertical"] .plate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+`,
+    "vertical-front/index.md": `---
+title: Harbour Notes
+uid: "pma008h"
+location: "Lisbon"
+typesetting: vertical
+---
+
+A short opening for the front page.
+`,
+    "vertical-front/north/index.md": `---
+title: North Quay
+uid: "pma009i"
+---
+
+Quay notes.
+`,
+    "vertical-front/south/index.md": `---
+title: South Quay
+uid: "pma010j"
+---
+
+More quay notes.
+`,
+    "vertical-front/tide-tables.md": `---
+title: Tide Tables
+uid: "pma011k"
+---
+
+Tables.
+`,
+    "vertical-front/lighthouse-log.md": `---
+title: Lighthouse Log
+uid: "pma012l"
+---
+
+A log.
+`,
     ".moss/config.toml": `schema_version = 6
 
 [site]

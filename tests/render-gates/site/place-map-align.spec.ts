@@ -17,6 +17,21 @@ import { test, expect } from "@playwright/test";
 const LOCATOR = ".moss-place-locator";
 const MAP = ".moss-place-map";
 
+// A located page's title is frontmatter metadata, not rendered markup, so the
+// body column's own box is the full-width reference: the article's content
+// box, without its padding.
+const CONTENT_BOX = `window.contentBox = (el) => {
+  const r = el.getBoundingClientRect();
+  const cs = getComputedStyle(el);
+  const left = r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
+  const right = r.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight);
+  return { left, width: right - left };
+};`;
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(CONTENT_BOX);
+});
+declare const contentBox: (el: Element) => { left: number; width: number };
+
 /** The FIRST match's own top edge — what the margin behaviour this gate
  * proves actually controls. A Range over the first text node would read a
  * few px lower still, inside the glyph box past the line's own half-leading;
@@ -29,8 +44,8 @@ async function blockTop(page: import("@playwright/test").Page, selector: string)
 async function fullColumnWidth(page: import("@playwright/test").Page, selector: string): Promise<void> {
   const { blockWidth, columnWidth } = await page.evaluate((sel) => {
     const block = document.querySelector(sel)!;
-    const column = document.querySelector("article.container > h1")!;
-    return { blockWidth: block.getBoundingClientRect().width, columnWidth: column.getBoundingClientRect().width };
+    const column = contentBox(document.querySelector("article.container")!);
+    return { blockWidth: block.getBoundingClientRect().width, columnWidth: column.width };
   }, selector);
   expect(
     Math.abs(blockWidth - columnWidth),
@@ -53,7 +68,7 @@ test("a heading-first body keeps the heading full width and aligns the map with 
     `map top ${mapTop} vs. paragraph top ${paragraphTop}`,
   ).toBeLessThanOrEqual(2);
 
-  const columnLeft = await page.locator("article.container > h1").evaluate((el) => el.getBoundingClientRect().left);
+  const columnLeft = await page.locator("article.container").evaluate((el) => contentBox(el).left);
   const paragraphLeft = await paragraph.evaluate((el) => el.getBoundingClientRect().left);
   expect(
     Math.abs(columnLeft - paragraphLeft),
@@ -85,7 +100,7 @@ test("a paragraph-first body flows beside the locator, top-aligned with its text
     `map top ${mapTop} vs. paragraph top ${paragraphTop}`,
   ).toBeLessThanOrEqual(2);
 
-  const columnLeft = await page.locator("article.container > h1").evaluate((el) => el.getBoundingClientRect().left);
+  const columnLeft = await page.locator("article.container").evaluate((el) => contentBox(el).left);
   const paragraphLeft = await firstBlock.evaluate((el) => el.getBoundingClientRect().left);
   expect(
     Math.abs(columnLeft - paragraphLeft),
@@ -111,7 +126,7 @@ test("a list-first body flows beside the locator, top-aligned with its text", as
     `map top ${mapTop} vs. list top ${listTop}`,
   ).toBeLessThanOrEqual(2);
 
-  const columnLeft = await page.locator("article.container > h1").evaluate((el) => el.getBoundingClientRect().left);
+  const columnLeft = await page.locator("article.container").evaluate((el) => contentBox(el).left);
   const listLeft = await firstBlock.evaluate((el) => el.getBoundingClientRect().left);
   expect(
     Math.abs(columnLeft - listLeft),
@@ -199,8 +214,8 @@ for (const fixture of ["heading-first", "paragraph-first", "media-first"]) {
 
     const widths = await page.evaluate(() => {
       const figure = document.querySelector(".moss-place-map")!;
-      const column = document.querySelector("article.container > h1")!;
-      return { figure: figure.getBoundingClientRect().width, column: column.getBoundingClientRect().width };
+      const column = contentBox(document.querySelector("article.container")!);
+      return { figure: figure.getBoundingClientRect().width, column: column.width };
     });
     expect(widths.figure / widths.column, `map ${widths.figure}px vs. column ${widths.column}px`).toBeCloseTo(1, 1);
 
@@ -214,4 +229,60 @@ for (const fixture of ["heading-first", "paragraph-first", "media-first"]) {
     });
     expect(mapBottom, `map bottom ${mapBottom} vs. paragraph top ${paragraphTop} — the map must sit above the text on mobile`).toBeLessThanOrEqual(paragraphTop);
   });
+}
+
+// ── Vertical typesetting ────────────────────────────────────────────────────
+// The locator is a block in the column flow, never a float: a float to the
+// inline end of a vertical-rl column lands at the column's BOTTOM and reaches
+// sideways across whatever follows. Judged on boxes, not on computed style, so
+// any CSS that gets there passes. Both an article (meta columns before the
+// text) and a front page (short body, then cards and a listing) must hold, at
+// desktop and phone width.
+for (const width of [1280, 390]) {
+  for (const fixture of ["vertical-article", "vertical-front", "vertical-plate"]) {
+    test(`vertical locator is an in-flow column block, top-aligned, overlapping nothing (${fixture}, ${width}px)`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`${fixture}/`, { waitUntil: "domcontentloaded" });
+      await expect(page.locator("body")).toHaveAttribute("data-typesetting", "vertical");
+
+      const facts = await page.evaluate((sel) => {
+        const locator = document.querySelector(sel)!;
+        const box = (el: Element) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        };
+        const siblings = [...locator.parentElement!.children]
+          .filter((el) => el !== locator)
+          .map((el) => ({ name: `${el.tagName.toLowerCase()}.${el.className}`, ...box(el) }))
+          .filter((b) => b.right - b.left > 0 && b.bottom - b.top > 0);
+        // The body (or the root) is whichever one scrolls; take the wider extent.
+        const extents = [document.body, document.documentElement].map((el) => {
+          const r = el.getBoundingClientRect();
+          const sl = el.scrollLeft;
+          return { left: Math.min(r.left, r.right - el.scrollWidth - sl), right: Math.max(r.right, r.right - sl) };
+        });
+        return {
+          locator: box(locator),
+          float: getComputedStyle(locator).float,
+          siblings,
+          extentLeft: Math.min(...extents.map((e) => e.left)),
+          extentRight: Math.max(...extents.map((e) => e.right)),
+        };
+      }, LOCATOR);
+
+      const L = facts.locator;
+      for (const s of facts.siblings) {
+        const overlaps = L.left < s.right - 0.5 && s.left < L.right - 0.5 && L.top < s.bottom - 0.5 && s.top < L.bottom - 0.5;
+        expect(overlaps, `locator ${JSON.stringify(L)} overlaps sibling ${s.name} ${JSON.stringify(s)}`).toBe(false);
+      }
+      // Reading order: the opening text first (it is to the right in vertical-rl), the map after it.
+      const opening = facts.siblings.find((sb) => sb.name.startsWith("p."))!;
+      expect(L.right, `locator right ${L.right} vs. opening text left ${opening.left}: the map follows the text`).toBeLessThanOrEqual(opening.left + 2);
+      const columnsTop = Math.min(...facts.siblings.map((s) => s.top));
+      expect(Math.abs(L.top - columnsTop), `locator top ${L.top} vs. columns' top ${columnsTop}`).toBeLessThanOrEqual(2);
+      expect(L.left, `locator left ${L.left} vs. scroll extent ${facts.extentLeft}`).toBeGreaterThanOrEqual(facts.extentLeft - 1);
+      expect(L.right, `locator right ${L.right} vs. scroll extent ${facts.extentRight}`).toBeLessThanOrEqual(facts.extentRight + 1);
+      expect(facts.float, "the locator is never floated in vertical typesetting").toBe("none");
+    });
+  }
 }

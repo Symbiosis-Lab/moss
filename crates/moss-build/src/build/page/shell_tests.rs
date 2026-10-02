@@ -2754,6 +2754,21 @@ fn test_css_place_map_stays_horizontal_under_vertical_typesetting() {
 }
 
 #[test]
+fn test_css_vertical_locator_is_a_block_not_a_float() {
+    // site.css floats the locator right, which in a vertical-rl column is the
+    // inline END: the bottom of the column, reaching sideways over the next
+    // columns. The vertical partial must unfloat it, and keep it at the
+    // columns' head inside a flex wrapper that centres its children.
+    let rule = get_css_rule(
+        &site_css_with_partials(),
+        r#"body[data-typesetting="vertical"] .moss-place-locator.moss-align-right"#,
+    )
+    .expect("vertical locator rule should exist");
+    assert!(rule.contains("float: none"), "locator must not float in vertical mode: {rule}");
+    assert!(rule.contains("align-self: flex-start"), "locator must stay at the columns' head: {rule}");
+}
+
+#[test]
 fn test_css_vertical_hides_mobile_menu() {
     let rule = get_css_rule(
         &site_css_with_partials(),

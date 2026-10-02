@@ -125,6 +125,25 @@ body[data-typesetting="vertical"] article {
   letter-spacing: 0.05em;
 }
 
+/* The place-map locator is a column-block in the flow, not a float. site.css
+   floats it to the "right", which beside horizontal text is the inline end
+   and here is the BOTTOM of a column: the box (kept horizontal-tb, so it is
+   22rem wide and ~15rem tall) then reaches sideways across the next
+   columns, a front page's cards included, and on an article it hangs below
+   the meta columns' top, aligned to nothing. Unfloated it takes its place
+   in the flow where the markup puts it, starts at the columns' top edge
+   like any other block, and at phone width sits at that same position
+   (site.css already makes it full width there). The gap to the next column
+   is the physical left margin `.moss-align-right` already sets; the bottom
+   margin it also sets is harmless. `align-self` keeps the head alignment
+   when a theme makes the locator's parent a flex column with centred items
+   (a figure wrapper that centres its caption on the column's midline would
+   otherwise centre the map too, 130px below the columns' top). */
+body[data-typesetting="vertical"] .moss-place-locator.moss-align-right {
+  float: none;
+  align-self: flex-start;
+}
+
 /* Width tokens (`|wide`, `|page`, `|screen`) are inert here. They widen a
    block past the measure, and the measure is already the whole column, so a
    band could only gain the container's inset — and a figure should stand in
