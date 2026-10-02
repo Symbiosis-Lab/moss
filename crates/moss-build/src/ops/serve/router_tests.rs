@@ -2325,6 +2325,38 @@ async fn read_carrier_validate_content_returns_diagnostics_for_a_bad_field() {
     let _ = shutdown_tx.send(());
 }
 
+/// `resolve_page_source` is on the authed-read tier: no token is a 401, and
+/// with one the site root resolves to the vault's home page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_carrier_resolve_page_source_is_token_gated_and_finds_the_home() {
+    let (vault, site_dir) = served_vault();
+    std::fs::write(vault.path().join("index.md"), "---\ntitle: Home\n---\nhi").unwrap();
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63950).await;
+
+    let url = format!("http://localhost:{}/__moss/read/resolve_page_source", port);
+    let body = serde_json::json!({ "urlPath": "" }).to_string();
+    match ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&body)
+    {
+        Err(ureq::Error::Status(401, _)) => {}
+        Ok(resp) => panic!("resolve_page_source must 401 without a token; got {}", resp.status()),
+        Err(e) => panic!("expected a 401, got transport error: {e}"),
+    }
+    let page: serde_json::Value = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&body)
+        .expect("200 with a token")
+        .into_json()
+        .expect("json");
+    assert!(page["source_path"].as_str().is_some_and(|p| p.ends_with("index.md")), "{page}");
+
+    let _ = shutdown_tx.send(());
+}
+
 /// The editor's boot reads are gated behind the SAME token as mutations, and a
 /// valid token boots the real editor payload. This is the security-relevant
 /// claim of the authed-read tier (the whole vault tree is reachable through it,

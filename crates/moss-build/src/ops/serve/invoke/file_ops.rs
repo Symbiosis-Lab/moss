@@ -156,3 +156,24 @@ pub(super) async fn arm_resolve_attachment_dir(ctx: &Session, args: Value) -> Ar
         &a.page_relative_path.replace('\\', "/"),
     ))
 }
+
+/// `resolve_page_source(urlPath)` — the source page that produces a served URL
+/// (the root for `""` or `"/"`). Same request and response as the desktop
+/// command; the SAME `editor::page_source::resolve_page_source` core answers
+/// both. A non-root URL is joined onto the vault by the core, so it goes
+/// through `confine` first and a `..` URL is refused like any escaping path.
+pub(super) async fn arm_resolve_page_source(ctx: &Session, args: Value) -> ArmResult {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct A {
+        url_path: String,
+    }
+    let a: A = parse_args(args)?;
+    let url = a.url_path.trim_start_matches('/');
+    if !url.is_empty() {
+        confine(ctx, url)?;
+    }
+    let page = crate::editor::page_source::resolve_page_source(url, &project_root(ctx))
+        .map_err(ArmError::Command)?;
+    to_value(page)
+}

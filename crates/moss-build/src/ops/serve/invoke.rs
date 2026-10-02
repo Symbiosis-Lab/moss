@@ -798,6 +798,7 @@ carrier! {
         read_version => arm_read_version,
         reveal_history_store => arm_reveal_history_store,
         resolve_attachment_dir => file_ops::arm_resolve_attachment_dir,
+        resolve_page_source => file_ops::arm_resolve_page_source,
     }
 }
 
@@ -981,6 +982,30 @@ mod tests {
 
         assert!(matches!(ask("../outside.md").await, Some(Err(_))));
         assert!(matches!(ask("/etc/passwd").await, Some(Err(_))));
+    }
+
+    /// `resolve_page_source` answers the root with the vault's home page, a
+    /// lossy-slug URL with its source, and refuses a URL that climbs out.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resolve_page_source_arm_resolves_home_and_confines() {
+        let (dir, ctx) = scratch();
+        std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\n---\nhi").unwrap();
+        let ask = |u: &str| dispatch_authed_read(&ctx, "resolve_page_source", json!({ "urlPath": u }));
+
+        for url in ["", "/"] {
+            match ask(url).await {
+                Some(Ok(v)) => {
+                    assert_eq!(v["is_dir"], json!(true), "{url:?}: {v}");
+                    assert!(v["source_path"].as_str().is_some_and(|p| p.ends_with("index.md")), "{v}");
+                }
+                other => panic!("expected the home page, got {other:?}"),
+            }
+        }
+        match ask("nothing/here/").await {
+            Some(Ok(v)) => assert_eq!(v["source_path"], json!(null)),
+            other => panic!("expected no source, got {other:?}"),
+        }
+        assert!(matches!(ask("../outside/").await, Some(Err(_))));
     }
 
     // The allowlist-is-a-subset-of-the-registry gate lives app-side

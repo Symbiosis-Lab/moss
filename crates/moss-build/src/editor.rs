@@ -12,6 +12,7 @@ pub mod content;
 pub mod copy_in;
 pub mod filesystem;
 pub mod frontmatter;
+pub mod page_source;
 // Reference-aware rename and delete: the pure text rewriting (`ref_rewrite`),
 // the resolver-driven plan/apply/undo engine (`rename_plan`), and the walk
 // that applies it (`ref_scan`). Crossed for `moss rename` (slice B4); the
