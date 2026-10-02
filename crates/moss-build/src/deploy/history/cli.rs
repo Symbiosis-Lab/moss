@@ -59,10 +59,8 @@ pub fn run(args: &[String]) -> i32 {
     // any build or guard runs — `--save` used to take it as literal label
     // text, so a mistyped site folder silently built and saved against
     // whatever `VaultRoot::containing` fell back to instead.
-    if let Some(path_arg) = parsed.path.as_deref() {
-        if let Some(message) = reject_non_site_directory(path_arg) {
-            return fail(&message, parsed.json);
-        }
+    if let Some(code) = reject_if_non_site_directory(parsed.path.as_deref(), parsed.json) {
+        return code;
     }
 
     let root = match &parsed.folder {
@@ -206,6 +204,20 @@ fn reject_non_site_directory(path_arg: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// `run`'s first guard, factored out so it can be proven on its own: `None`
+/// means proceed, `Some(code)` means `run` must return `code` immediately.
+/// Pure, unlike the guard that runs after it on the resolved `root`
+/// (`cli::site_guard::guard_cli_open`), which also refuses a directory it
+/// considers unsafe but only because of what the *caller's real cwd*
+/// happens to contain — a test of this check through `run` would pass for
+/// that unrelated reason the moment it lost its own refusal, rather than
+/// going red.
+fn reject_if_non_site_directory(path: Option<&str>, json: bool) -> Option<i32> {
+    let path_arg = path?;
+    let message = reject_non_site_directory(path_arg)?;
+    Some(fail(&message, json))
 }
 
 /// The one choke point that honors `--json` on a failure, matching how
@@ -971,42 +983,81 @@ mod tests {
     /// own label, and silently operate on whatever `VaultRoot::containing`
     /// fell back to instead of `<site>`. With the fix, a directory that
     /// already owns a `.moss/` is the site to act on, the same as `build
-    /// <folder>`, regardless of the caller's own working directory — this
-    /// test never changes it, which is the point: the absolute `<site>`
-    /// argument has to be enough on its own.
+    /// <folder>`, decided entirely by `split_positionals`/`is_site_folder`
+    /// and then resolved by `VaultRoot::resolve` — both pure, and the same
+    /// two steps every one of `run`'s five forms shares before they diverge,
+    /// so proving them once proves all five.
+    ///
+    /// Driven at that seam rather than through a real `--save`: `run_save`
+    /// reaches `headless_build_sealed`, which installs this crate's
+    /// process-wide, set-once plugin admission check
+    /// (`plugins::admission::install_check` — "the first caller wins and
+    /// later ones are dropped") and registers a folder session outside of
+    /// any Tokio runtime. A real `--save` here was tried first: it panicked
+    /// on the missing runtime, and skipping just that panic still left the
+    /// admission check wedged into its "headless, nothing approved" verdict
+    /// for the rest of the test binary, failing 19 unrelated tests across
+    /// `host_fns`, `plugins::manager`, `plugins::registry` and
+    /// `deploy::publish_setup` that rely on the documented default — "nothing
+    /// installed means nothing refused... every test binary"
+    /// (`plugins::admission`'s module doc). `deploy::one_shot`'s own hermetic
+    /// build test avoids the same trap with `PluginMode::Skip` and a
+    /// `#[tokio::test]` runtime; `headless_build_sealed` has no such seam to
+    /// give a caller, so a real save cannot be made hermetic here without
+    /// changing production behaviour.
     #[test]
-    fn save_and_list_accept_the_site_folder_as_an_argument() {
-        let (_dir, site) = tmp_site("save-list");
-        let site_str = site.to_str().unwrap().to_string();
+    fn a_site_folder_positional_is_recognized_as_the_folder_not_the_save_label() {
+        let (_dir, site) = tmp_site("resolve-folder");
+        // Canonicalized so the string fed in has no `..` for `resolve_input`
+        // to collapse — otherwise the assertion below would compare a
+        // canonicalized `root.path()` against a non-canonical literal.
+        let site_str = site.canonicalize().expect("canonicalize site dir").to_str().unwrap().to_string();
 
-        let save_exit = run(&[site_str.clone(), "--save".to_string(), "x".to_string(), "--json".to_string()]);
-        assert_eq!(save_exit, 0, "save must succeed with the site passed as an argument");
+        let parsed = ParsedArgs::parse(&[site_str.clone(), "--save".to_string(), "x".to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            parsed.folder.as_deref(),
+            Some(site_str.as_str()),
+            "a positional that already owns .moss/ must be read as the site, never swallowed as --save's label"
+        );
+        assert_eq!(parsed.path.as_deref(), Some("x"), "the real label after --save must still come through");
 
-        // The version must land in THIS site's own `.moss/history` — never
-        // some other root `VaultRoot::containing(".")` would have fallen
-        // back to, which is exactly how the real incident lost a
-        // pre-delivery snapshot while the command itself reported success.
-        let records = HistoryStore::in_vault(&site).list_records();
-        assert_eq!(records.len(), 1, "the version must be saved inside the named site");
-        assert_eq!(records[0].1.label.as_deref(), Some("x"));
-
-        let list_exit = run(&[site_str, "--json".to_string()]);
-        assert_eq!(list_exit, 0, "listing must succeed with the site passed as an argument");
+        // What `run` does with `parsed.folder` once it has it — never the
+        // `VaultRoot::containing(".")` fallback, which is how the real
+        // incident lost a pre-delivery snapshot while reporting success.
+        let root = VaultRoot::resolve(parsed.folder.as_deref().unwrap());
+        assert_eq!(
+            root.path().to_str(),
+            Some(site_str.as_str()),
+            "root must resolve to the named site, never a cwd-based fallback"
+        );
     }
 
     /// The other half of the same gap: a directory that is not a site (no
     /// `.moss/`) must be refused outright — never silently taken as a
     /// `--save` label and built/saved against the wrong root, which is what
     /// the unfixed code did (it never validated `--save`'s positional at
-    /// all). Checked before any build or guard runs, so this never touches
-    /// this test process's own working directory.
+    /// all).
+    ///
+    /// Calls [`reject_if_non_site_directory`] directly rather than `run`:
+    /// going through `run` resolves `root` with `VaultRoot::containing(".")`
+    /// whenever `folder` is `None` (true here, since `not_a_site` isn't
+    /// recognized as a folder either), and that fallback reads this test
+    /// process's REAL cwd — which, under `cargo test`, is littered with
+    /// other tests' leftover `.moss/` fixtures under `target/test-tmp/` and
+    /// trips `cli::site_guard::guard_cli_open`'s own unrelated refusal. That
+    /// coincidence was caught by ablating `reject_non_site_directory` to a
+    /// no-op and finding this test still green — refused, but by the wrong
+    /// guard, which means it was never exercising the one this test is
+    /// named for.
     #[test]
     fn save_refuses_a_non_site_directory_and_exits_nonzero() {
         let (_dir, not_a_site) = tmp_vault(); // never given a `.moss/`
         let path_str = not_a_site.to_str().unwrap().to_string();
 
-        let exit = run(&[path_str, "--save".to_string(), "--json".to_string()]);
-        assert_eq!(exit, 1, "a non-site directory must fail, not silently save elsewhere");
+        let exit = reject_if_non_site_directory(Some(&path_str), true);
+        assert_eq!(exit, Some(1), "a non-site directory must fail, not silently save elsewhere");
     }
 
     #[test]
