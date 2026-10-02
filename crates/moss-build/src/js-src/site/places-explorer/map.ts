@@ -1,16 +1,58 @@
 /**
- * map.ts — the controller: world SVG, DOM scaffold, and the camera
+ * map.ts — the controller: the world layer, DOM scaffold, and the camera
  * transform.
  *
  * Owns the one mutable `Camera` the whole explorer reads and writes
  * (`gestures.ts`, `markers.ts`'s callbacks, card selection, the URL layer)
  * and the single `applyCamera` that turns it into the `.moss-places-world`
- * CSS transform, the relief/river custom properties, and a re-render of
- * markers, tiles and cards. Regional tiles are `tiles.ts`'s own
- * `TileLayer`, constructed once here and driven by `applyCamera` the same
- * way `markers.ts`'s `MarkerLayer` is — everything else in this directory
- * is a module `mountPlacesMap` wires together, not a second place that
- * touches the DOM this one owns.
+ * CSS transform, the river custom property, and a re-render of markers,
+ * tiles and cards. Regional tiles are `tiles.ts`'s own `TileLayer`,
+ * constructed once here and driven by `applyCamera` the same way
+ * `markers.ts`'s `MarkerLayer` is — everything else in this directory is a
+ * module `mountPlacesMap` wires together, not a second place that touches
+ * the DOM this one owns.
+ *
+ * The world layer used to be the fetched world SVG, parsed and inlined
+ * live, with its filters (relief shading, the coast halo) re-run by the
+ * browser on every repaint of the pan/zoom transform above it — measured
+ * costing Chromium whole frames and WebKit whole SECONDS once a handful of
+ * regional tiles (each its own filtered document) were also on screen.
+ * Neither engine's cost was really about the FILTER's own parameters (a
+ * spike here halving blur radii changed nothing in WebKit); it was about a
+ * LIVE, filtered element sitting inside a transformed subtree. This file
+ * now builds that layer as a decoded, opaque `<img>` instead (`raster.ts`'s
+ * `splitMapSvg`/`rasterizeOrFallback`), composited once and then only ever
+ * moved by the SAME transform, with the world's own box permanently
+ * promoted to its own compositor layer (`places-explorer.css`) rather than
+ * only for the span of a gesture — nothing left for either engine to
+ * re-invalidate on a pan or a zoom click. `tiles.ts`'s `TileLayer` does the
+ * same for each regional tile.
+ *
+ * Two things the live SVG let CSS drive no longer can, because a
+ * rasterised resource has no access to the page's own custom properties:
+ * rivers (which must keep a constant ON-SCREEN width while the world
+ * scales under them) stay a separate, live, UNFILTERED overlay — cheap,
+ * since it is thin strokes, not fills with a shadow filter on every band —
+ * and the old continuous `--moss-place-relief-strength` fade (dimming
+ * relief/lighting toward a floor as the camera approached the tile-covered
+ * zoom range) is gone outright rather than reproduced. That fade's own
+ * denominator was the RAISED, tile-covered ceiling once any tile existed
+ * nearby (`tiles.ts`'s `hasVisibleTiles` — true almost everywhere a cover
+ * camera starts, since it sees the whole world) — so at the point the
+ * world's own un-raised ceiling is reached and tiles are fully faded in,
+ * the old strength had only dropped to roughly 0.83 of full, not the 0.2
+ * floor; the floor was only ever reached deep inside the RAISED range,
+ * where tiles already sit fully opaque over the world and hide it
+ * entirely. Baking the world at full strength and every tile at the floor
+ * (`raster.ts`'s `WORLD_RELIEF_STRENGTH`/`TILE_RELIEF_STRENGTH`) therefore
+ * tracks what a reader actually saw closely enough to keep: the one range
+ * where the world's own strength mattered (before any tile is visible at
+ * all) is a small, early fade the full-strength bake just skips, and the
+ * one range where it kept changing after that (deep in tile territory) was
+ * already invisible underneath an opaque tile. Recomputing the old
+ * continuous value for up to several dozen simultaneously-visible tiles on
+ * every settle was measured too costly to keep regardless — see this
+ * file's own perf numbers.
  */
 import {
   clampCamera,
@@ -27,19 +69,43 @@ import { ScopeChip } from "./chip";
 import { LabelLayer } from "./labels";
 import { MarkerLayer, pointsForWorks } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
+import { rasterizeOrFallback, splitMapSvg, WORLD_RELIEF_STRENGTH } from "./raster";
 import { inScope } from "./scope";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
-import { parseMapSvg, TileLayer } from "./tiles";
+import { TileLayer } from "./tiles";
 import * as urlState from "./state";
 import { hasPoint, type Camera, type LabelsData, type PlacesData, type Place, type Point, type Rect, type Scope, type Viewport } from "./types";
 
-/** Relief fades to this floor at the detail ceiling — the design's own tuned value, ported from the prototype's `RELIEF_STRENGTH_FLOOR`. */
-const RELIEF_STRENGTH_FLOOR = 0.2;
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
+/**
+ * The world raster stays sharp up to this many zoom-ones past the cover
+ * floor before it is left to go soft under whatever tiles cover that area
+ * — baking all the way to the world's own (let alone the tile-raised)
+ * ceiling would mean a raster several times the linear size of the
+ * viewport sitting in memory for the entire session just to cover a zoom
+ * level most views never reach. Named rather than inlined so the actual
+ * trade this makes is visible at the call site.
+ */
+const WORLD_RASTER_ZOOM_CAP = 1.6;
+/** Device pixel ratio honoured up to this for the world raster — a 3x phone gains nothing from tripling an already roomy budget. */
+const WORLD_RASTER_DPR_CAP = 2;
+/** A rebake only fires once the zoom that would drive it has grown past the last bake by this ratio — without a deadband, panning at a steady zoom (which never needs a sharper texture) would still schedule a decode on every settle. */
+const WORLD_RASTER_REBAKE_RATIO = 1.3;
+/**
+ * How long a settle waits with no FURTHER settle before a resolution
+ * rebake actually starts — several rapid zoom-in clicks each reset this,
+ * so only the final, truly-at-rest settle pays the decode cost, not every
+ * one that led to it. Measured load-bearing: three real, back-to-back
+ * clicks with no debounce each queued their own rebake, and the filter
+ * pipeline behind `img.decode()` for a full-canvas relief/lighting pass
+ * was slow enough in WebKit that the SECOND click's own rebake was still
+ * running when the THIRD click fired, delaying that click past a second —
+ * an ablation (removing the rebake call entirely) confirmed it as the
+ * cause, holding every other change fixed. Never applies to the very
+ * first bake (`scheduleWorldRebake`'s own check) — that one has nothing to
+ * debounce against, and the reader is waiting to see anything at all.
+ */
+const WORLD_REBAKE_DEBOUNCE_MS = 250;
 
 function buildControlButton(control: "zoom-in" | "zoom-out" | "reset", label: string): HTMLButtonElement {
   const button = document.createElement("button");
@@ -77,11 +143,17 @@ export interface PlacesMapController {
   setRowExclusion(workId: string | null): void;
 }
 
-/** Build the interactive layer in place of `figure`'s static `<svg>` child and wire every gesture, selection and scope path together. `null` (leaving the static figure untouched) when the fetched world SVG fails to parse. */
+/** Build the interactive layer in place of `figure`'s static `<svg>` child and wire every gesture, selection and scope path together. `null` (leaving the static figure untouched) when the fetched world SVG fails to parse. The world's own first raster decodes in the background (`rebakeWorld`) rather than gating this return — see that call's own comment. */
 export function mountPlacesMap(figure: HTMLElement, options: MountOptions): PlacesMapController | null {
   const strings = copyFor(options.lang);
-  const worldSvg = parseMapSvg(options.worldSvgText);
-  if (!worldSvg) return null;
+  const worldSplit = splitMapSvg(options.worldSvgText, WORLD_RELIEF_STRENGTH);
+  if (!worldSplit) return null;
+  // Pulled out of `worldSplit` by name, not read through it, so the closures
+  // below (defined once, called later — `rebakeWorld`'s own async body) see
+  // a type TypeScript can't widen back to nullable the way it does a field
+  // read off a captured `const` of an object type.
+  const worldBase = worldSplit.base;
+  const worldBaseMarkup = worldSplit.baseMarkup;
 
   // `--moss-place-figure-top` is the one number places-explorer.css cannot
   // derive on its own (see its own doc on the figure's `block-size`): the
@@ -104,11 +176,84 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   const worldEl = document.createElement("div");
   worldEl.className = "moss-places-world";
-  worldEl.append(worldSvg);
+  if (worldSplit.rivers) {
+    worldSplit.rivers.classList.add("moss-places-rivers");
+    worldEl.append(worldSplit.rivers);
+  }
 
   const tilesEl = document.createElement("div");
   tilesEl.className = "moss-places-tiles";
   worldEl.append(tilesEl);
+
+  // ---- world raster -------------------------------------------------------
+  // The world's own decoded surface: built once at mount (fired from the
+  // first settle below, not awaited — see that call's own comment) and
+  // re-decoded at a sharper size on a later settle, up to
+  // `WORLD_RASTER_ZOOM_CAP`, debounced by `scheduleWorldRebake` — never
+  // during a gesture, and never blocking one. `worldBakePromise` keeps two
+  // decodes from overlapping if two scheduled rebakes still somehow land
+  // close together, sharing the one in flight instead of racing a second.
+  let worldBakedZoom = 0;
+  let worldBakePromise: Promise<void> | null = null;
+  let worldSurfaceEl: HTMLImageElement | SVGSVGElement | null = null;
+  let worldRelease: () => void = () => {};
+  let worldRebakeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Resolves once the world raster is sharp enough for `zoom` — a no-op returning the already-resolved past bake once it is. */
+  function rebakeWorld(unitScale: number, zoom: number): Promise<void> {
+    if (worldBakePromise) return worldBakePromise;
+    const targetZoom = Math.min(Math.max(zoom, MIN_ZOOM), WORLD_RASTER_ZOOM_CAP);
+    if (worldBakedZoom > 0 && targetZoom <= worldBakedZoom * WORLD_RASTER_REBAKE_RATIO) return Promise.resolve();
+    worldBakePromise = (async () => {
+      try {
+        const dpr = Math.min(window.devicePixelRatio || 1, WORLD_RASTER_DPR_CAP);
+        const pixelWidth = WORLD_WIDTH * unitScale * targetZoom * dpr;
+        const pixelHeight = WORLD_HEIGHT * unitScale * targetZoom * dpr;
+        const surface = await rasterizeOrFallback(worldBaseMarkup, worldBase, pixelWidth, pixelHeight);
+        surface.el.classList.add("moss-places-world-surface");
+        // Always the very first child: whatever has already been inserted
+        // (the rivers overlay, the tiles container) stays on top of it,
+        // painted-order-wise, exactly like the fetched world SVG used to
+        // sit under both before this module existed.
+        worldEl.insertBefore(surface.el, worldEl.firstChild);
+        worldSurfaceEl?.remove();
+        worldRelease();
+        worldSurfaceEl = surface.el;
+        worldRelease = surface.release;
+        worldBakedZoom = targetZoom;
+      } finally {
+        worldBakePromise = null;
+      }
+    })();
+    return worldBakePromise;
+  }
+
+  /**
+   * Call on every settle instead of `rebakeWorld` directly. The very first
+   * bake (nothing to debounce against, and the reader is waiting to see
+   * anything at all) fires immediately; every later one waits
+   * `WORLD_REBAKE_DEBOUNCE_MS` with no further settle first, restarting the
+   * wait on each new one — see that constant's own doc for the rapid-click
+   * failure this debounce exists to prevent. `camera`/`getViewport` are
+   * read at the moment the timer actually fires, not when it was
+   * scheduled, so a camera that kept moving during the wait still bakes
+   * for where it ended up, not where it was when the timer was set.
+   */
+  function scheduleWorldRebake(): void {
+    const fire = (): void => {
+      worldRebakeTimer = null;
+      const viewport = getViewport();
+      if (viewport.width <= 0 || viewport.height <= 0) return;
+      const unitScale = screenScale({ x: 0, y: 0, zoom: 1 }, viewport);
+      void rebakeWorld(unitScale, camera.zoom);
+    };
+    if (worldBakedZoom === 0) {
+      fire();
+      return;
+    }
+    if (worldRebakeTimer !== null) clearTimeout(worldRebakeTimer);
+    worldRebakeTimer = setTimeout(fire, WORLD_REBAKE_DEBOUNCE_MS);
+  }
 
   // Above the map, below the markers — DOM order alone gives it that
   // stacking (no z-index needed, matching every sibling layer here), and
@@ -377,8 +522,6 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     worldEl.style.transform = `translate(calc(-50% + ${translateX}px), calc(-50% + ${translateY}px)) scale(${camera.zoom})`;
 
     const ceiling = currentMaxZoom(viewport);
-    const fade = ceiling > MIN_ZOOM ? clamp01((camera.zoom - MIN_ZOOM) / (ceiling - MIN_ZOOM)) : 0;
-    figure.style.setProperty("--moss-place-relief-strength", String(1 - fade * (1 - RELIEF_STRENGTH_FLOOR)));
     figure.style.setProperty("--moss-place-river-scale", String(Math.min(1, MIN_ZOOM / camera.zoom)));
 
     tileLayer.render(camera, viewport, unitScale);
@@ -393,12 +536,16 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     zoomOutBtn.disabled = camera.zoom <= MIN_ZOOM;
 
     if (settled) {
-      // The world layer is promoted to its own compositing layer only
-      // between `onGestureStart` and here — demoting it back on every
-      // settle forces a fresh rasterisation at the resting size/scale
-      // instead of resampling a composited texture rasterised for a
-      // different one, which is what reads blurry after a zoom out-then-in.
+      // `data-gesture` no longer drives the world layer's own compositor
+      // promotion (`places-explorer.css` promotes it permanently now — see
+      // that file's own comment for why), but it still gates the label
+      // layer's visibility below and the crispness gate's own assertion
+      // that a finished gesture clears it.
       worldEl.removeAttribute("data-gesture");
+      // Never during a gesture, and never blocking this settle: a sharper
+      // world texture is worth decoding once the camera stops moving, not
+      // worth stalling the frame that proves it stopped.
+      scheduleWorldRebake();
       const visibleIds = new Set(visiblePoints.map((point) => point.id));
       let rows = worksForRow(options.places.works, visibleIds, scopedIds, selectedId);
       if (rowExclusionId) rows = rows.filter((work) => work.id !== rowExclusionId);
@@ -513,6 +660,14 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     applyCamera(true);
   });
 
+  // The settle below starts the world's own first bake (`rebakeWorld`) in
+  // the background — deliberately NOT awaited here. Gating "ready" (and so
+  // the gesture handlers already wired above) on that decode was measured
+  // costing WebKit most of a second on top of an otherwise unchanged mount
+  // — exactly the interactive-delay the goal this module serves asks to
+  // avoid. The reader instead sees the viewport's own background colour
+  // for one brief moment (the same gap the static floor's own first-paint
+  // comment already covers) before the raster pops in.
   applyCamera(true);
   // The card row has real content now (this call's own `cardRow.render`),
   // so `freeFrame` can finally see its true height. Re-fit once against it

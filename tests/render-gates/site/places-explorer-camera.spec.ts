@@ -217,8 +217,17 @@ for (const [label, size] of [
     const png = await page.screenshot({ animations: "disabled" });
     const image = decodePng(png);
     const iceFillStr = await page.evaluate(() => {
-      const el = document.querySelector('[data-map-layer="ice"] path');
-      return el ? getComputedStyle(el).fill : null;
+      // The "ice" layer is now baked into the world raster (no longer a
+      // live `path` in the DOM — see raster.ts's `splitMapSvg`), so its
+      // colour has to come from the SAME custom property the SVG emitter
+      // bakes it from (`var(--moss-place-ice, ...)`, svg.rs's "ice" call)
+      // rather than a live element's computed style.
+      const probe = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      probe.setAttribute("fill", "var(--moss-place-ice, #fbfcfd)");
+      document.body.append(probe);
+      const fill = getComputedStyle(probe).fill;
+      probe.remove();
+      return fill;
     });
     const iceColor = iceFillStr ? (iceFillStr.match(/\d+/g) ?? []).map(Number) : null;
     // WebKit's own project (`devices['Desktop Safari']`) renders at 2x
@@ -372,7 +381,7 @@ test("regional tiles are absent at the world's own cover zoom and present past i
   // At rest the world layer alone carries the view — a tile would sit on
   // top of it as a visibly lighter rectangle (the bug this guards), not
   // merely an invisible one.
-  await expect(page.locator(".moss-places-tiles > svg")).toHaveCount(0);
+  await expect(page.locator(".moss-places-tiles > .moss-places-tile")).toHaveCount(0);
 
   // Lisbon (38.722N, 9.139W): a coastal fixture place whose own cell plus
   // its eight neighbours (`place_map::explorer::relevant_tiles`) are all
@@ -387,7 +396,7 @@ test("regional tiles are absent at the world's own cover zoom and present past i
     { timeout: 10000 },
   );
   await page.waitForTimeout(500); // tile fetch + position settle
-  const count = await page.locator(".moss-places-tiles > svg").count();
+  const count = await page.locator(".moss-places-tiles > .moss-places-tile").count();
   expect(count, "expected a regional tile past the world's own detail ceiling").toBeGreaterThan(0);
 });
 
@@ -460,7 +469,7 @@ async function loadAndFindAdjacentTilePairs(
   );
   await page.waitForTimeout(500); // tile fetches + position settle
 
-  const tileEls = page.locator(".moss-places-tiles > svg");
+  const tileEls = page.locator(".moss-places-tiles > .moss-places-tile");
   const count = await tileEls.count();
   expect(count, "expected multiple regional tiles in view at this zoom/pan").toBeGreaterThan(1);
   const rects: Array<{ x: number; y: number; width: number; height: number }> = [];
@@ -614,7 +623,7 @@ test("past the world ceiling, an open-sea tile boundary is pixel-continuous in b
 
   const rectByCell = async (cell: string) => {
     const rect = await page
-      .locator(`.moss-places-tiles > svg[data-moss-places-tile="${cell}"]`)
+      .locator(`.moss-places-tiles > .moss-places-tile[data-moss-places-tile="${cell}"]`)
       .boundingBox();
     if (!rect) throw new Error(`tile ${cell} not found in view`);
     return rect;
@@ -649,7 +658,18 @@ test("past the world ceiling, an open-sea tile boundary is pixel-continuous in b
   const clipBottom = Math.ceil(bottom);
   const xs: number[] = [];
   for (let dx = -8; dx <= 8; dx++) xs.push(edgeX + dx);
-  const clip = { x: xs[0], y: clipTop, width: xs[xs.length - 1] - xs[0] + 1, height: clipBottom - clipTop };
+  // The captured clip is wider than `xs`'s own span by this margin on every
+  // side: WebKit's `page.screenshot({ clip })` was measured reading its OWN
+  // boundary column as a sharp, ~15-unit-per-channel outlier regardless of
+  // where that boundary actually fell — moved by 110px across two otherwise
+  // identical captures, the outlier moved with it, landing within a px of
+  // the NEW edge both times, while real map content never produces a step
+  // that size. A clip-encoding artifact at the capture's own edge, not
+  // anything `xs[0]`/`xs[xs.length - 1]` need to be sampled AT; keeping
+  // every compared x safely inside the capture instead of ON its edge
+  // avoids it.
+  const CLIP_MARGIN = 20;
+  const clip = { x: xs[0] - CLIP_MARGIN, y: clipTop, width: xs[xs.length - 1] - xs[0] + 1 + 2 * CLIP_MARGIN, height: clipBottom - clipTop };
   const png = await page.screenshot({ clip, animations: "disabled" });
   const image = decodePng(png);
   const at = (x: number, y: number) => image.at(x - clip.x, y - clip.y);
@@ -774,7 +794,7 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
   await page.waitForTimeout(500); // tile fetch + position settle
 
   const rectByCell = async (cell: string) => {
-    const rect = await page.locator(`.moss-places-tiles > svg[data-moss-places-tile="${cell}"]`).boundingBox();
+    const rect = await page.locator(`.moss-places-tiles > .moss-places-tile[data-moss-places-tile="${cell}"]`).boundingBox();
     if (!rect) throw new Error(`tile ${cell} not found in view`);
     return rect;
   };
@@ -918,7 +938,7 @@ test("a tile's outer coverage edge carries its own fade; a shared inner edge car
   await page.waitForTimeout(500);
 
   const maskOf = (cell: string) =>
-    page.locator(`.moss-places-tiles > svg[data-moss-places-tile="${cell}"]`).evaluate((el) => getComputedStyle(el).maskImage);
+    page.locator(`.moss-places-tiles > .moss-places-tile[data-moss-places-tile="${cell}"]`).evaluate((el) => getComputedStyle(el).maskImage);
 
   // 16,12: no column-15 neighbour at this row (outside this fixture's own
   // relevant_tiles reach) — an outer edge on its own west side, its only

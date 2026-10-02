@@ -28,7 +28,8 @@
  *
  * Classes this directory creates dynamically (none exist in any emitted
  * Rust HTML, so the desktop repo's own class allowlist needs this list by
- * hand): moss-places-viewport, moss-places-world, moss-places-tiles,
+ * hand): moss-places-viewport, moss-places-world, moss-places-world-surface,
+ * moss-places-rivers, moss-places-tiles, moss-places-tile,
  * moss-places-labels, moss-places-label, moss-places-label-dot,
  * moss-places-markers, moss-places-marker, moss-places-ring-leg,
  * moss-places-ring-dot, moss-places-controls, moss-places-capsule,

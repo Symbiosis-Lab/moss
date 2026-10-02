@@ -171,24 +171,12 @@ test.describe("style:map embed", () => {
   });
 
   test("ctrl+wheel zooms the embedded map", async ({ page, browserName }) => {
-    // FIXME (WebKit only): a real wheel event's own effect — not input
-    // dispatch, and not our JS — stalls for ~15s here. Measured directly:
-    // a 3s requestAnimationFrame loop started right after settle gets its
-    // SECOND callback only after a ~15.0-15.5s gap (reproduced identically
-    // on the top-level page and on a trivial unrelated nested iframe with
-    // no places-explorer code at all, so it is not this feature's cost),
-    // while in the same window a raw `page.mouse.click()` resolves in
-    // ~20-30ms and a keyboard "+" press resolves in ~40-50ms (both proven
-    // below/alongside). The main thread is provably idle throughout — only
-    // wheel-event delivery (coalesced to the next compositor frame in every
-    // engine) waits on that same starved ~15s cadence. A raw
-    // `page.mouse.wheel()` in place of `.hover()` does not help (measured:
-    // still ~15s), so this is not `locator.hover()`'s own actionability
-    // wait either — it is wheel-to-compositor coupling specific to this
-    // WebKit/Playwright harness. Covered on WebKit with real input via the
-    // keyboard-zoom test right below, which exercises the identical
-    // `applyCamera`/URL-write path `zoomAt` shares with ctrl+wheel.
-    test.fixme(browserName === "webkit", "a real wheel event's own delivery stalls ~15s in this harness (main thread idle, measured) — see comment above and the keyboard-zoom test below");
+    // Previously fixme'd on WebKit: the ~15s wheel-delivery stall this
+    // comment used to describe was the same live-filtered-SVG repaint cost
+    // `map.ts`'s raster layers fixed (the main thread wasn't idle because
+    // of this gate's own input dispatch — it was busy re-running relief
+    // filters on every transform change). Passes for real now; see
+    // map.ts's own module doc for the numbers.
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
     const viewport = page.frameLocator(IFRAME).locator(".moss-places-viewport");
@@ -219,19 +207,8 @@ test.describe("style:map embed", () => {
   });
 
   test("a bare wheel over the collapsed embed shows a dismissing hint and still scrolls the page, rather than doing nothing silently", async ({ page, browserName }) => {
-    // FIXME (WebKit only): the same wheel-delivery stall as the ctrl+wheel
-    // test above (see its comment for the measurement) — not input dispatch,
-    // not an app re-render, main thread idle throughout. Unlike zoom, this
-    // behaviour (a plain wheel deferring to page scroll and surfacing a
-    // hint) has no keyboard equivalent to fall back to: the viewport's own
-    // keydown zoom is unconditional of cooperative mode precisely because a
-    // keyboard user was never the audience the hint exists for. The
-    // cooperative-mode branch itself (hint shown, setCamera not called, for
-    // a lone wheel/touch) is exercised without any engine-specific gap by
-    // gestures.test.ts's own jsdom unit tests ("a bare wheel ... reports the
-    // hint", "a lone touch drag is left for the page's own scroll"), which
-    // never touch a real compositor.
-    test.fixme(browserName === "webkit", "a real wheel event's own delivery stalls ~15s in this harness (main thread idle, measured) — see the ctrl+wheel test's comment; covered without a real browser by gestures.test.ts's unit tests");
+    // Previously fixme'd on WebKit for the same reason as the ctrl+wheel
+    // test above — resolved by the same fix; passes for real now.
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
     const scrollBefore = await page.evaluate(() => window.scrollY);
@@ -273,32 +250,35 @@ test.describe("style:map embed", () => {
     // figure, not just the chrome) with the data attribute alone still
     // reading "expanded". Waited against the FLIP enter transform settling
     // (the wrapper's own `fs-animating-enter` class, cleared by
-    // immersive-mode.ts's `afterTransition`), not just a fixed delay.
-    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    // immersive-mode.ts's `afterTransition`), not just a fixed delay. The
+    // class is added inside a `requestAnimationFrame` callback
+    // (immersive-mode.ts's `enterFullscreen`), one or more frames after this
+    // point, so waiting ONLY for its absence races the class's own
+    // addition: a poll landing before that rAF fires sees "no class" for
+    // the wrong reason and passes immediately, before the FLIP transform
+    // (let alone the transition it drives) has even started — measured
+    // landing mid-transform, iframe box far short of the viewport. Waiting
+    // for the class to be PRESENT first closes that race.
+    const wrapper = page.locator(".immersive-iframe-wrapper");
+    await expect(wrapper).toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await expect(wrapper).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
 
-    // FIXME (WebKit only): the HOST document's own layout box for the
-    // <iframe> element is stale here — `getComputedStyle(iframe)` already
-    // reports the correct post-transition `width: 1280px; height: 720px`,
-    // but `getBoundingClientRect()` (what `boundingBox()` below reads too)
-    // returns a smaller, inconsistent box regardless of whether the expand
-    // control was reached by mouse or by keyboard (confirmed both ways) —
-    // so this is not an input-dispatch quirk at all, unlike the other
-    // fixmes in this file. Cascade/style recalculation has run; an actual
-    // cross-document layout/compositor flush for the outer page has not.
-    // That flush is the same one `requestAnimationFrame`'s own second
-    // callback waits on in this harness (measured elsewhere in this
-    // project: ~15s, idle main thread throughout, reproduced even on a
-    // trivial nested iframe with no places-explorer code) — this is that
-    // same starvation surfacing through a different API. Every assertion
-    // above this point (href, embed mode, gesture mode, transition class)
-    // needs no cross-document geometry and passes reliably; only the final
-    // pixel-perfect sizing does not.
-    test.fixme(browserName === "webkit", "the host page's own getBoundingClientRect() for the <iframe> element is stale after the fullscreen transition in this harness — see comment above");
+    // Previously fixme'd on WebKit: the host document's own cross-document
+    // layout/compositor flush for the <iframe> element was starved by the
+    // same live-filtered-SVG repaint cost map.ts's raster layers fixed.
+    // Passes for real now. Read as a poll, not a one-shot box: `transitionend`
+    // (what the wait above keys off) was measured firing a frame or two
+    // before the host's own layout/paint for the now-full-size iframe
+    // actually committed — a few px short, settling within the poll's own
+    // short window right after.
     const viewportSize = page.viewportSize()!;
-    const iframeBox = (await page.locator(IFRAME).boundingBox())!;
     const SLACK = 4;
-    expect(iframeBox.width).toBeGreaterThanOrEqual(viewportSize.width - SLACK);
-    expect(iframeBox.height).toBeGreaterThanOrEqual(viewportSize.height - SLACK);
+    await expect
+      .poll(async () => (await page.locator(IFRAME).boundingBox())!.width, { timeout: 2000 })
+      .toBeGreaterThanOrEqual(viewportSize.width - SLACK);
+    await expect
+      .poll(async () => (await page.locator(IFRAME).boundingBox())!.height, { timeout: 2000 })
+      .toBeGreaterThanOrEqual(viewportSize.height - SLACK);
   });
 
   test("a real click on a marker inside the frame selects and zooms", async ({ page }) => {

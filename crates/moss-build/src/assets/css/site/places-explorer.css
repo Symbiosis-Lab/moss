@@ -165,17 +165,23 @@ header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-co
 
 /* Sized and transformed from JS (map.ts's applyCamera): width/height are the
    cover-scale box in CSS px, transform is translate+scale from the live
-   camera. will-change is added only for the span of an active gesture
-   (data-gesture, below) — permanently compositing this layer is what left a
-   zoomed-out-then-back-in map looking soft, resampling a texture rasterised
-   for a different scale instead of repainting fresh at rest. */
+   camera. will-change is permanent now, not scoped to an active gesture
+   (data-gesture, still set/cleared for the label-hiding rule further down):
+   the world layer's own content is a decoded raster plus a thin, unfiltered
+   rivers overlay (map.ts's module doc), neither of which has a live filter
+   left for a permanent compositor layer to force a soft re-rasterisation
+   of — the old comment's own concern (a zoomed-out-then-back-in map reading
+   blurry) applied to a live, filtered `<svg>` promoted only for a gesture's
+   span, not to a raster map.ts itself re-decodes at a sharper size on
+   settle. A measured win for Chromium specifically (see that file's doc):
+   without it, a filtered live SVG's own paint invalidation on every
+   transform change cost whole frames even before WebKit's own, larger cost
+   entered the picture. */
 .moss-places-world {
   position: absolute;
   top: 50%;
   left: 50%;
   transform-origin: center;
-}
-.moss-places-world[data-gesture] {
   will-change: transform;
 }
 
@@ -187,7 +193,7 @@ header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-co
    has to smooth the RISE through the band (the fall is already silent: by
    the time `render` clears the DOM, opacity has already ramped to 0), but
    guarding it is still correct for the reduced-motion reader regardless of
-   direction — the same reasoning the relief/lighting fade below applies. */
+   direction. */
 .moss-places-tiles {
   position: absolute;
   inset: 0;
@@ -199,64 +205,83 @@ header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-co
   }
 }
 
-/* site.css's own `.moss-place-map svg { inline-size: 100%; block-size: auto;
-   aspect-ratio: 3 / 2; }` is right for every per-page static figure (the
-   fixed 720x480, 3:2 canvas `geometry.rs`'s `VIEWBOX_WIDTH`/`VIEWBOX_HEIGHT`
-   draw every one of those at) but wrong for both layers below: a regional
-   tile's intrinsic size IS the exact rectangle `tiles.ts`'s `TileLayer`
-   positions it at (`PattersonProjection::for_tile`'s own
-   canvas_width/canvas_height — a different aspect ratio per cell, shorter
-   toward the poles), scaled only by its own `transform`. Stretching it to
-   100% of `.moss-places-tiles` (the whole world layer's own box) and
-   forcing 3:2 is what let a tile balloon to many times the viewport before
-   this rule, same specificity as the generic one but keyed on
-   `[data-moss-places-explorer]` so it always wins regardless of source
-   order. */
-[data-moss-places-explorer] .moss-places-tiles > svg {
-  inline-size: auto;
-  block-size: auto;
-  aspect-ratio: auto;
+/* Each regional tile is now a plain positioned wrapper (map.ts's module
+   doc): `tiles.ts`'s own `position()` sets left/top/transform-origin/
+   transform exactly as it always did, and sets this element's own
+   width/height directly from the tile's native SVG canvas size (a
+   different aspect ratio per cell, shorter toward the poles) — the same
+   intrinsic size a bare `<svg width height>` used to carry on its own, now
+   carried as an explicit style instead since a `<div>` has no viewBox of
+   its own to infer one from. */
+.moss-places-tile {
+  position: absolute;
 }
 
-/* The shared world SVG (`explorer::emit_world_svg`) is wider than the 3:2
-   canvas too — `geometry.rs`'s `world_viewbox_width()` is the full,
+/* The tile's own raster (an `<img>`, or the live, unrasterised SVG on the
+   progressive-enhancement fallback path — see raster.ts's
+   `rasterizeOrFallback`) fills that wrapper exactly; `display: block` drops
+   the inline-replaced baseline gap a bare `<img>` would otherwise leave
+   beneath it. Its rivers overlay (if any) fills the same box but stacks
+   OVER it by `position: absolute` instead of normal flow, so the pair
+   paints as one image rather than the overlay pushing a second row below. */
+.moss-places-tile > img {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+.moss-places-tile > .moss-places-rivers {
+  position: absolute;
+  inset: 0;
+}
+
+/* The world layer's own surface: site.css's `.moss-place-map svg {
+   inline-size: 100%; block-size: auto; aspect-ratio: 3 / 2; }` is right for
+   every per-page static figure (the fixed 720x480, 3:2 canvas
+   `geometry.rs`'s `VIEWBOX_WIDTH`/`VIEWBOX_HEIGHT` draw every one of those
+   at) but wrong here: the shared world SVG (`explorer::emit_world_svg`) is
+   wider than that — `geometry.rs`'s `world_viewbox_width()` is the full,
    uncropped Patterson extent (about 842 x 480, not 720 x 480), because this
    one copy is panned and zoomed across the whole globe at runtime rather
    than cropped once like a per-page map. Forcing the generic 3:2
    `aspect-ratio` onto it narrowed the content `map.ts`'s own `applyCamera`
-   already sized exactly via `worldEl.style.width`/`height`, which SVG's
-   default `preserveAspectRatio="xMidYMid meet"` then centred inside —
-   leaving an empty band above and below the actual map at rest. `100%` in
-   both axes (not `auto`, unlike a tile, which must keep its own aspect so
-   its viewBox and its cell rectangle still agree) fills exactly the box
-   `applyCamera` computed, no second aspect-ratio opinion layered on top. */
+   already sized exactly via `worldEl.style.width`/`height`. `100%` in both
+   axes fills exactly the box `applyCamera` computed, no second aspect-ratio
+   opinion layered on top; keyed on `[data-moss-places-explorer]` so it
+   always wins regardless of source order, the same specificity trick the
+   generic rule itself uses. `img` and `svg` share one selector: the surface
+   is whichever one `rasterizeOrFallback` actually produced. */
+[data-moss-places-explorer] .moss-places-world > img,
 [data-moss-places-explorer] .moss-places-world > svg {
   inline-size: 100%;
   block-size: 100%;
   aspect-ratio: auto;
 }
 
-/* Relief fades toward a floor past the detail ceiling (set on `figure` by
-   applyCamera), and rivers keep a constant ON-SCREEN width as the camera
-   zooms the world layer — both via the two custom properties applyCamera
-   writes, which `--river-w` (copied once per path from its own baked
-   stroke-width, map.ts's `prepareRiverWidths`) lets the second one scale
-   without flattening each river's own rank taper. `[data-map-layer]` is the
-   world/tile SVG's own emitter contract (`place_map/svg.rs`), not a class
-   this stylesheet owns — see that module's doc for the group shapes these
-   selectors read. */
-[data-moss-places-explorer] [data-map-layer="relief"],
-[data-moss-places-explorer] [data-map-layer="lighting"] {
-  opacity: var(--moss-place-relief-strength, 1);
+/* The world's own rivers overlay sits directly in `.moss-places-world`
+   (not inside a `.moss-places-tile` wrapper), so it needs the same
+   specificity guard against the generic `.moss-place-map svg` rule the
+   world surface rule above does. */
+[data-moss-places-explorer] .moss-places-world > .moss-places-rivers {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  aspect-ratio: auto;
 }
+
+/* Rivers keep a constant ON-SCREEN width as the camera zooms the world
+   layer, via the one custom property applyCamera still writes on every
+   settle: `--river-w` (copied once per path from its own baked
+   stroke-width, raster.ts's `splitMapSvg`) is what lets this scale without
+   flattening each river's own rank taper. `[data-map-layer="rivers"]` is
+   the emitter's own contract (`place_map/svg.rs`), not a class this
+   stylesheet owns — see that module's doc for the group shape this
+   selector reads. The relief/lighting fade this file used to drive the
+   same way is gone: see map.ts's own module doc for why dropping it is
+   safe, and raster.ts's `WORLD_RELIEF_STRENGTH`/`TILE_RELIEF_STRENGTH` for
+   where its old job landed instead. */
 [data-moss-places-explorer] [data-map-layer="rivers"] path {
   stroke-width: calc(var(--river-w, 1) * var(--moss-place-river-scale, 1));
-}
-@media (prefers-reduced-motion: no-preference) {
-  [data-moss-places-explorer] [data-map-layer="relief"],
-  [data-moss-places-explorer] [data-map-layer="lighting"] {
-    transition: opacity 150ms ease-out;
-  }
 }
 
 /* ---------------------------------------------------------------------------

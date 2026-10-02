@@ -263,16 +263,10 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Cross-fade opacity of the explorer's regional tile layer. Written per-frame by tiles.ts's `TileLayer.render` as the camera crosses the fade band short of the world layer's own detail ceiling — 0 outside the band, where `render` also clears every tile element from the DOM, so the property and the content agree. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
     },
     CustomProp {
-        name: "--moss-place-relief-strength",
-        owner: "[data-map-layer=\"relief\"]",
-        default: "1",
-        description: "Opacity of the relief and lighting map layers (read by both `[data-map-layer=\"relief\"]` and `[data-map-layer=\"lighting\"]`). Written per-frame by map.ts's `applyCamera`, fading the shading toward a floor past the world layer's own detail ceiling so dense relief does not compete with the tiles revealed at close zoom. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
-    },
-    CustomProp {
         name: "--moss-place-river-scale",
         owner: "[data-map-layer=\"rivers\"]",
         default: "1",
-        description: "Scale applied to a river path's own baked stroke-width (`--river-w`, set once per path by map.ts's `prepareRiverWidths`), so rivers keep a constant on-screen width as `applyCamera` zooms the world layer instead of thickening with it. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
+        description: "Scale applied to a river path's own baked stroke-width (`--river-w`, set once per path by raster.ts's `splitMapSvg`), so rivers keep a constant on-screen width as `applyCamera` zooms the world layer instead of thickening with it. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
     },
     CustomProp {
         name: "--moss-place-figure-top",

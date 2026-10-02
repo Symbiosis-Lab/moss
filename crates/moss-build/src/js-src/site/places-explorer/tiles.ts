@@ -1,6 +1,5 @@
 /**
- * tiles.ts — regional detail tiles: fetch, overlay, and the shared map-SVG
- * sanitiser.
+ * tiles.ts — regional detail tiles: fetch, overlay, and positioning.
  *
  * Mirrors `markers.ts`'s `MarkerLayer`: `TileLayer` owns exactly the tile
  * DOM/fetch lifecycle (which cells are already in flight, loaded, or
@@ -16,10 +15,25 @@
  * `markers.ts` draws between `MarkerLayer` (DOM) and
  * `pointsForWorks`/`clusters.ts` (pure) — so a test can exercise the
  * geometry without a camera or a DOM ever existing.
+ *
+ * Each loaded tile is a decoded raster `<img>` plus a small live rivers
+ * overlay (`raster.ts`'s `splitMapSvg`/`rasterize`) rather than the inline,
+ * filtered `<svg>` this file used to build directly — see `map.ts`'s module
+ * doc for why. Baked once at fetch time, at its own native resolution,
+ * never re-rasterised afterward: a tile's own canvas is already sized by
+ * the build (`k` times the world's own scale) for the deepest zoom it will
+ * ever be shown at, so nothing past the initial bake needs a sharper
+ * texture the way the world layer periodically does.
  */
 import { detailMaxZoom, screenScale } from "./camera";
 import { project } from "./projection";
+import { rasterizeOrFallback, splitMapSvg, TILE_RELIEF_STRENGTH } from "./raster";
 import type { Camera, Viewport } from "./types";
+
+/** Tile rasters are capped at this device pixel ratio — a tile's own build-time resolution already carries the real detail ceiling, so a 3x phone gains nothing from tripling it further. */
+const TILE_RASTER_DPR_CAP = 2;
+/** How many regional tiles may be mid-fetch/decode at once — see `TileLayer.drainQueue`'s own doc for the stall letting every visible cell start at once was measured causing. */
+const MAX_CONCURRENT_TILE_LOADS = 6;
 
 /** The last fraction of the world layer's own zoom range (`0`..`detailMaxZoom`, NOT the raised ceiling `hasVisibleTiles` unlocks) where the tile layer fades in. */
 const TILE_FADE_BAND = 0.2;
@@ -113,38 +127,6 @@ export function tilesForView(cells: Array<[number, number]>, camera: Camera, vie
   });
 }
 
-/** Give every `[data-map-layer="rivers"] path` its own `--river-w` custom property, copied once from its baked `stroke-width` attribute — the base `places-explorer.css` multiplies by `--moss-place-river-scale` on every camera settle, so a river's taper survives while its ON-SCREEN width stays constant as the reader zooms. */
-function prepareRiverWidths(svg: SVGElement): void {
-  svg.querySelectorAll<SVGElement>('[data-map-layer="rivers"] path[stroke-width]').forEach((path) => {
-    const width = path.getAttribute("stroke-width");
-    if (width) path.style.setProperty("--river-w", width);
-  });
-}
-
-/** Parse and sanitise a fetched map SVG (the world map or a regional tile): must be a real `<svg>` with no parser error; strips `<script>`/`<foreignObject>` and any `on*`/non-local `href` the source should never carry, the same defense-in-depth a fetched asset gets regardless of same-origin trust. `null` on anything that fails those checks. */
-export function parseMapSvg(markup: string): SVGElement | null {
-  const parsed = new DOMParser().parseFromString(markup, "image/svg+xml");
-  const svg = parsed.documentElement;
-  if (svg.localName !== "svg" || parsed.querySelector("parsererror")) return null;
-  parsed.querySelectorAll("script, foreignObject").forEach((node) => node.remove());
-  parsed.querySelectorAll("*").forEach((node) => {
-    for (const attribute of [...node.attributes]) {
-      const local = attribute.value.startsWith("#");
-      const dataImage = /^data:image\/(?:png|jpe?g|webp|svg\+xml);base64,[a-z\d+/=]+$/i.test(attribute.value);
-      if (/^on/i.test(attribute.name) || (["href", "xlink:href"].includes(attribute.name) && !local && !dataImage)) {
-        node.removeAttribute(attribute.name);
-      }
-    }
-  });
-  prepareRiverWidths(svg as unknown as SVGElement);
-  const imported = document.importNode(svg, true) as unknown as SVGElement;
-  imported.removeAttribute("role");
-  imported.removeAttribute("aria-label");
-  imported.setAttribute("focusable", "false");
-  imported.setAttribute("aria-hidden", "true");
-  return imported;
-}
-
 /**
  * Which of a tile's own two bled-toward-a-LOWER-index-neighbour edges (its
  * own west and south) must be clipped away because a real neighbour cell
@@ -193,13 +175,12 @@ const OUTER_FADE_WORLD_UNITS = 1.5;
  * The `mask-image` that fades a tile's own OUTER edges only — the sides
  * `tileClipInset` finds no real neighbour cell on — toward transparent,
  * leaving every edge shared with a real neighbour fully opaque: past the
- * site's own detail coverage, the world layer carries a frame at a coarser,
- * faded rendering of the same terrain (`map.ts`'s own relief-strength
- * fade), so a tile that stopped dead at its own nominal cell edge met it
- * with a hard tone step, same shape as the seam `tileClipInset` fixes but
- * deliberately placed rather than measured away — there is no second
- * tile's content to disagree with past a coverage edge, only the world's
- * own coarser one.
+ * site's own detail coverage, the world layer carries a frame at this
+ * tile's own geometry but no further detail past it, so a tile that
+ * stopped dead at its own nominal cell edge met it with a hard tone step,
+ * same shape as the seam `tileClipInset` fixes but deliberately placed
+ * rather than measured away — there is no second tile's content to
+ * disagree with past a coverage edge, only the world's own coarser one.
  *
  * One `linear-gradient` layer per outer edge — ordinarily at most two
  * (a corner of the site's own tile coverage, missing one of east/west and
@@ -248,11 +229,22 @@ export interface TileLayerOptions {
   bleed: number;
 }
 
+/** A fetched, decoded tile: the positioned wrapper div and the raster's own release callback (a no-op on the progressive-enhancement fallback — see `raster.ts`'s `rasterizeOrFallback`). */
+interface LoadedTile {
+  el: HTMLElement;
+  release: () => void;
+}
+
 /** The regional-tile DOM layer: fetches each cell's SVG once, caches the result (including a failure, so a 404 is never retried every frame), and keeps every loaded element positioned over its own cell as the camera moves. */
 export class TileLayer {
   private readonly container: HTMLElement;
   private readonly options: TileLayerOptions;
-  private readonly elements = new Map<string, SVGElement | "loading" | "failed">();
+  private readonly elements = new Map<string, LoadedTile | "loading" | "failed">();
+  /** Cells queued behind `MAX_CONCURRENT_TILE_LOADS`, each already marked "loading" in `elements` — a `clear()` landing while one waits here drops it from `elements` but not from this array, so `drainQueue` re-checks "still wanted?" before spending a slot on it, the same staleness guard `load` itself applies at its own two await points. */
+  private readonly queue: string[] = [];
+  private activeLoads = 0;
+  /** Bumped by `clear()`, captured by `load()` at its own start and re-checked after each of its two awaits — the per-cell `"loading"` sentinel alone cannot tell a load apart from a LATER load of the SAME cell: a `clear()` landing mid-fetch and a re-queue of the same key before the first `load()` resolves both see `"loading"`, so without this a stale load can still finish, append its own wrapper, and overwrite the fresh one's bookkeeping. A generation mismatch means "a clear() happened since I started" regardless of what the per-cell map currently says. */
+  private generation = 0;
 
   constructor(container: HTMLElement, options: TileLayerOptions) {
     this.container = container;
@@ -287,57 +279,112 @@ export class TileLayer {
       const existing = this.elements.get(key);
       if (existing === "loading" || existing === "failed") continue;
       if (existing) {
-        this.position(existing, x, y, unitScale);
+        this.position(existing.el, x, y, unitScale);
         continue;
       }
       this.elements.set(key, "loading");
-      void fetch(`${this.options.tilesBaseUrl}tile-${x}-${y}.svg`)
-        .then((response) => (response.ok ? response.text() : Promise.reject(new Error(String(response.status)))))
-        .then((text) => {
-          // A `clear()` between this fetch starting and now (the camera
-          // dropped back out of the fade band mid-flight) already dropped
-          // this key — finishing the append anyway would be exactly the DOM
-          // `clear()` exists to rule out below the band.
-          if (this.elements.get(key) !== "loading") return;
-          const svg = parseMapSvg(text);
-          if (!svg) throw new Error("invalid tile svg");
-          svg.dataset.mossPlacesTile = key;
-          svg.style.position = "absolute";
-          this.container.append(svg);
-          this.elements.set(key, svg);
-          this.position(svg, x, y, unitScale);
-          // This tile just became a real, DOM-present neighbour for up to
-          // four others — including, possibly, itself relative to ones
-          // already loaded — so both its own clip/mask and theirs need
-          // recomputing now, not at whatever later camera move happens to
-          // call `render()` again next.
-          this.applyClipAndMask(svg, x, y);
-          this.refreshNeighbourClipAndMask(x, y);
-        })
-        .catch(() => {
-          this.elements.set(key, "failed");
-          // A failed fetch is cached and never retried (this file's own
-          // doc above), so any loaded neighbour that was treating this
-          // cell as still-pending must now fade that shared edge instead
-          // of waiting forever for a tile that will never arrive.
-          this.refreshNeighbourClipAndMask(x, y);
-        });
+      this.queue.push(key);
+    }
+    this.drainQueue(unitScale);
+  }
+
+  /**
+   * Start loading queued cells up to `MAX_CONCURRENT_TILE_LOADS` at once —
+   * navigating straight to a deep zoom can put every one of ~38 tiles into
+   * the queue in the same `render()` call, and letting all of them fetch,
+   * decode and insert at once was measured landing their combined DOM work
+   * in a single frame, a stall this layer's whole point is to avoid. Each
+   * finished `load` (success or failure) re-calls this to pull the next
+   * one, so the pool stays full without this layer polling for work.
+   */
+  private drainQueue(unitScale: number): void {
+    while (this.activeLoads < MAX_CONCURRENT_TILE_LOADS) {
+      const key = this.queue.shift();
+      if (key === undefined) return;
+      if (this.elements.get(key) !== "loading") continue; // a clear() already dropped it
+      const [x, y] = key.split(",").map(Number);
+      this.activeLoads++;
+      void this.load(key, x, y, unitScale).finally(() => {
+        this.activeLoads--;
+        this.drainQueue(unitScale);
+      });
     }
   }
 
-  /** Remove every tile element this layer has added and forget its own fetch/load state, so a later `render()` re-fetches from scratch — the "no DOM" half of the fade-band contract above. */
+  /** Fetch, split, rasterise and position one cell — a method rather than an inline `.then()` chain so the "still wanted?" staleness check (a `clear()` landing mid-flight) reads the same way at both of its two await points. */
+  private async load(key: string, x: number, y: number, unitScale: number): Promise<void> {
+    const generation = this.generation;
+    try {
+      const response = await fetch(`${this.options.tilesBaseUrl}tile-${x}-${y}.svg`);
+      if (!response.ok) throw new Error(String(response.status));
+      const text = await response.text();
+      // The generation check catches what the per-cell sentinel alone
+      // cannot: a clear() + re-queue of this SAME cell while this call was
+      // awaiting, which resets the sentinel back to "loading" too.
+      if (generation !== this.generation || this.elements.get(key) !== "loading") return; // dropped out of the fade band mid-fetch
+      const split = splitMapSvg(text, TILE_RELIEF_STRENGTH);
+      if (!split) throw new Error("invalid tile svg");
+      const dpr = Math.min(window.devicePixelRatio || 1, TILE_RASTER_DPR_CAP);
+      const surface = await rasterizeOrFallback(split.baseMarkup, split.base, split.width * dpr, split.height * dpr);
+      if (generation !== this.generation || this.elements.get(key) !== "loading") {
+        surface.release();
+        return; // dropped out of the fade band while the raster decoded, or superseded by a clear() + re-queue
+      }
+      const wrapper = document.createElement("div");
+      wrapper.className = "moss-places-tile";
+      wrapper.dataset.mossPlacesTile = key;
+      wrapper.style.position = "absolute";
+      wrapper.style.width = `${split.width}px`;
+      wrapper.style.height = `${split.height}px`;
+      wrapper.append(surface.el);
+      if (split.rivers) {
+        split.rivers.classList.add("moss-places-rivers");
+        wrapper.append(split.rivers);
+      }
+      this.container.append(wrapper);
+      this.elements.set(key, { el: wrapper, release: surface.release });
+      this.position(wrapper, x, y, unitScale);
+      // This tile just became a real, DOM-present neighbour for up to four
+      // others — including, possibly, itself relative to ones already
+      // loaded — so both its own clip/mask and theirs need recomputing now,
+      // not at whatever later camera move happens to call `render()` again
+      // next.
+      this.applyClipAndMask(wrapper, x, y);
+      this.refreshNeighbourClipAndMask(x, y);
+    } catch {
+      // A stale generation's own failure must not stomp the CURRENT load's
+      // state — it may already be "loading" again under the new generation.
+      if (generation !== this.generation) return;
+      this.elements.set(key, "failed");
+      // A failed fetch is cached and never retried (this file's own doc
+      // above), so any loaded neighbour that was treating this cell as
+      // still-pending must now fade that shared edge instead of waiting
+      // forever for a tile that will never arrive.
+      this.refreshNeighbourClipAndMask(x, y);
+    }
+  }
+
+  /** Remove every tile element this layer has added and forget its own fetch/load state, so a later `render()` re-fetches from scratch — the "no DOM" half of the fade-band contract above. Bumps `generation` unconditionally, even with nothing to remove, so a `load()` already in flight (always tracked in `elements` by the time it runs — see `render()`) is invalidated regardless of this call's own early return. */
   private clear(): void {
+    this.generation++;
     if (this.elements.size === 0) return;
     for (const value of this.elements.values()) {
-      if (value !== "loading" && value !== "failed") value.remove();
+      if (value !== "loading" && value !== "failed") {
+        value.el.remove();
+        value.release();
+      }
     }
     this.elements.clear();
+    // Drops every still-queued key too — `drainQueue`'s own staleness check
+    // would skip them anyway (gone from `elements`), this just stops the
+    // array growing across repeated in/out-of-band-fade crossings over a
+    // long session.
+    this.queue.length = 0;
   }
 
   /** Only the transform — called on every `render()`, including a plain pan where nothing has loaded, failed, or been removed, so this must never touch `clip-path`/`mask-image` (see `applyClipAndMask`, called only on those load-state changes). */
-  private position(svg: SVGElement, x: number, y: number, unitScale: number): void {
+  private position(el: HTMLElement, x: number, y: number, unitScale: number): void {
     const { translateX, translateY, scale } = tileOverlayTransform(x, y, unitScale, this.options.k, this.options.bleed);
-    const el = svg as unknown as HTMLElement;
     el.style.left = "0";
     el.style.top = "0";
     el.style.transformOrigin = "0 0";
@@ -360,14 +407,8 @@ export class TileLayer {
     return this.options.availableTiles.filter(([cx, cy]) => this.elements.get(`${cx},${cy}`) !== "failed");
   }
 
-  /** Recompute and (re)apply `clip-path`/`mask-image` for `svg`, the tile at `(x, y)` — the only place either style is ever written, so the only way they change is a call here, never a plain `render()` pan. */
-  private applyClipAndMask(svg: SVGElement, x: number, y: number): void {
-    const el = svg as unknown as HTMLElement;
-    // `clip-path` on an SVG root with intrinsic width/height (no CSS
-    // width/height override here) operates in that SAME local/viewBox unit
-    // space `position()`'s own `scale(...)` then shrinks as a whole — so an
-    // inset in canvas units clips exactly the bled slice `tileClipInset`
-    // names, regardless of `unitScale`/zoom.
+  /** Recompute and (re)apply `clip-path`/`mask-image` for `el`, the tile wrapper at `(x, y)` — the only place either style is ever written, so the only way they change is a call here, never a plain `render()` pan. Both operate on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly (the same local/viewBox unit space an `<svg width height>` gave the old inline-tile element for free) — so an inset or fade distance in canvas units (`tileClipInset`/`tileEdgeMask`, both in units of `bleed * k`) lands in exactly the right place regardless of `unitScale`/zoom, and clips or fades the wrapper's raster AND its rivers overlay together as one composited unit. */
+  private applyClipAndMask(el: HTMLElement, x: number, y: number): void {
     const { bottom, left } = tileClipInset(x, y, this.loadedNeighbourCells(), this.options.k, this.options.bleed);
     el.style.clipPath = bottom > 0 || left > 0 ? `inset(0 0 ${bottom}px ${left}px)` : "";
     // Same local/viewBox unit space as the `clip-path` above — an edge this
@@ -387,7 +428,7 @@ export class TileLayer {
   private refreshNeighbourClipAndMask(x: number, y: number): void {
     for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
       const neighbour = this.elements.get(`${nx},${ny}`);
-      if (neighbour && neighbour !== "loading" && neighbour !== "failed") this.applyClipAndMask(neighbour, nx, ny);
+      if (neighbour && neighbour !== "loading" && neighbour !== "failed") this.applyClipAndMask(neighbour.el, nx, ny);
     }
   }
 }

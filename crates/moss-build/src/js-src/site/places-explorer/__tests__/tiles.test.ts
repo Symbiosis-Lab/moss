@@ -13,6 +13,18 @@ import { detailMaxZoom, MIN_ZOOM } from "../camera";
 import { WORLD_WIDTH, WORLD_HEIGHT } from "../projection";
 import { TileLayer, tileCellBounds, tileClipInset, tileEdgeMask, tileFadeOpacity, tileOverlayTransform, tilesForView } from "../tiles";
 
+// `rasterizeOrFallback` defaults to delegating to the real implementation
+// (the no-op jsdom fallback every other test in this file relies on), and
+// one test below overrides it twice, in sequence, to pin exactly when each
+// of two concurrent loads of the SAME cell resolves — the race the
+// generation-token fix in `TileLayer.load` exists to settle.
+const { rasterizeOrFallbackSpy } = vi.hoisted(() => ({ rasterizeOrFallbackSpy: vi.fn() }));
+vi.mock("../raster", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../raster")>();
+  rasterizeOrFallbackSpy.mockImplementation(actual.rasterizeOrFallback);
+  return { ...actual, rasterizeOrFallback: rasterizeOrFallbackSpy };
+});
+
 describe("tileCellBounds", () => {
   test("the world's own four corner cells sit at the canvas edges", () => {
     // x=0 is the westmost cell (-180..-170), y=0 the southmost (-90..-80).
@@ -363,5 +375,96 @@ describe("TileLayer — neighbour load state, not the manifest, drives clip and 
 
     expect(clipPathSets).toBe(0);
     expect(maskImageSets).toBe(0);
+  });
+});
+
+/**
+ * The race `TileLayer`'s own `generation` counter exists to settle: a
+ * `clear()` landing while a cell's `load()` is in flight, followed by a
+ * re-queue of that SAME cell, resets the per-cell sentinel back to
+ * `"loading"` — the one signal the pre-existing staleness checks relied on.
+ * Without the generation check, the ORIGINAL (pre-clear) load can still see
+ * `"loading"` and finish as though nothing happened, if it happens to
+ * resolve before the re-queued load does.
+ */
+describe("TileLayer — a clear()+re-queue of the same cell drops the stale load", () => {
+  const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>';
+  const BASE_URL = "/_moss/tiles/";
+  const VIEWPORT = { width: 1200, height: 700 };
+  const K = 4;
+  const BLEED = 0.1;
+  const CELL_BOUNDS = tileCellBounds(10, 5);
+  const IN_BAND_CAMERA = { x: (CELL_BOUNDS.minX + CELL_BOUNDS.maxX) / 2, y: (CELL_BOUNDS.minY + CELL_BOUNDS.maxY) / 2, zoom: detailMaxZoom(VIEWPORT) };
+  const BELOW_BAND_CAMERA = { ...IN_BAND_CAMERA, zoom: MIN_ZOOM };
+
+  function stubControllableFetch(): Map<string, { resolveOk: (text: string) => void }> {
+    const controllers = new Map<string, { resolveOk: (text: string) => void }>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        return new Promise((resolve) => {
+          controllers.set(url, { resolveOk: (text: string) => resolve({ ok: true, text: () => Promise.resolve(text) } as unknown as Response) });
+        });
+      }),
+    );
+    return controllers;
+  }
+
+  async function flush(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rasterizeOrFallbackSpy.mockClear();
+  });
+
+  test("a stale load that outlasts a clear()+re-queue releases its own surface and never appends; the fresh load wins", async () => {
+    const controllers = stubControllableFetch();
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[10, 5]], k: K, bleed: BLEED });
+    const url = `${BASE_URL}tile-10-5.svg`;
+
+    const staleRelease = vi.fn();
+    let resolveStaleRaster!: (surface: { el: Element; release: () => void }) => void;
+    const staleRasterPromise = new Promise<{ el: Element; release: () => void }>((resolve) => {
+      resolveStaleRaster = resolve;
+    });
+    const freshRelease = vi.fn();
+    const freshEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    freshEl.setAttribute("data-test-fresh", "");
+
+    // Call #1 (the stale, pre-clear load) pauses here until resolved below;
+    // call #2 (the re-queued load) resolves as soon as it's awaited.
+    rasterizeOrFallbackSpy.mockImplementationOnce(() => staleRasterPromise);
+    rasterizeOrFallbackSpy.mockImplementationOnce(async () => ({ el: freshEl, release: freshRelease }));
+
+    // Start the stale load: fetch is in flight.
+    layer.render(IN_BAND_CAMERA, VIEWPORT, 1);
+    controllers.get(url)!.resolveOk(TILE_SVG);
+    await flush(); // past both fetch awaits and into `await rasterizeOrFallback`, now paused on staleRasterPromise
+
+    // clear() (opacity drops to 0), then re-queue the SAME cell — a NEW
+    // fetch starts (overwriting `controllers`' entry for this url) but is
+    // not yet resolved, so the re-queued load is still just "loading".
+    layer.render(BELOW_BAND_CAMERA, VIEWPORT, 1);
+    layer.render(IN_BAND_CAMERA, VIEWPORT, 1);
+
+    // The STALE load's own rasterize resolves first, while the re-queued
+    // (fresh) load is still mid-fetch — the exact interleaving that lets a
+    // stale load see the per-cell sentinel read "loading" again.
+    resolveStaleRaster({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release: staleRelease });
+    await flush();
+
+    // Only now does the re-queued load's own fetch resolve.
+    controllers.get(url)!.resolveOk(TILE_SVG);
+    await flush();
+
+    const tiles = container.querySelectorAll('[data-moss-places-tile="10,5"]');
+    expect(tiles).toHaveLength(1); // never two wrappers for the same cell
+    expect(container.querySelector('[data-moss-places-tile="10,5"] [data-test-fresh]')).not.toBeNull(); // the fresh raster is the one shown
+    expect(staleRelease).toHaveBeenCalledTimes(1); // the stale surface is released, not left dangling
+    expect(freshRelease).not.toHaveBeenCalled(); // the fresh surface stays live, owned by the layer
   });
 });
