@@ -49,6 +49,7 @@ pub mod cadence;
 pub mod headless;
 pub mod reconcile;
 pub mod supervision;
+pub mod sweep;
 pub mod worker;
 
 /// Deliver one [`MossEvent`] to whatever frontend the host has — the typed
@@ -386,6 +387,12 @@ pub async fn start(config: WatchConfig) {
                                 // batch proves the stream is alive, even one
                                 // the pump goes on to suppress entirely.
                                 health.note_batch();
+                                // Test seam: a watcher that delivers but never
+                                // acts, so a process-level test can prove the
+                                // sweep alone reconciles a missed event.
+                                if std::env::var_os("MOSS_TEST_WATCH_BLIND").is_some() {
+                                    continue;
+                                }
                                 handle_debounced_batch(events, &folder_path, &emit, &dispatch).await;
                             }
                             Some(Err(errors)) => {

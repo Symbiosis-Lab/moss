@@ -146,9 +146,8 @@ fn main() {
                 serve: Default::default(),
                 start_watch: Box::new(|folder, plugins| {
                     Box::pin(async move {
-                        // No sweep here: the periodic disk-vs-baseline
-                        // backbone is app-side today; moss-cli's `--watch`
-                        // is watcher-only (see `ops/watch/headless.rs`).
+                        // `headless::start` runs the sweep beside the
+                        // watcher — see `ops/watch/headless.rs`.
                         moss_build::ops::watch::headless::start(
                             moss_build::ops::watch::headless::HeadlessWatchConfig {
                                 folder_path: folder,

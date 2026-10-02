@@ -10,20 +10,18 @@
 //! resolver — what remains is worker admission, the stage-lock probe, the
 //! content-hash gate and one `run_pipeline` call, all of which already live
 //! in this crate. Both headless hosts — the app binary's `moss build` arm
-//! (the desktop app's `start_file_watching_headless`, which
-//! adds the app-side sweep on top) and `moss-cli` — construct through here,
-//! so the CLI gaining `--watch` did not mint a second copy of these bodies.
+//! and `moss-cli` — construct through here, so the CLI gaining `--watch`
+//! did not mint a second copy of these bodies.
 //!
 //! What a host still decides arrives as [`HeadlessWatchConfig`] values: the
 //! [`HostPorts`] each rebuild runs with (both are `HostPorts::headless`; the
 //! two differ only in the `HostStore` — the app binary migrates `.moss` on
 //! disk, moss-cli in memory), and the rebuild's [`PluginMode`].
 //!
-//! Known headless gap, deliberate: the sweep — the periodic disk-vs-baseline
-//! backbone (`build_shell/watch/sweep.rs`) — is app-side today (it reads the
-//! app's manifest cache and emits folder-health events), so the app's
-//! headless arm runs it and moss-cli's watch is watcher-only until the sweep
-//! crosses.
+//! [`start`] also starts the folder's sweep (`ops/watch/sweep.rs`) beside the
+//! watcher, on the same `dispatch` closure — the disk-vs-baseline backbone
+//! that backstops a watcher stream dying silently is no longer app-only, so
+//! `moss build --watch` gets it too.
 
 use std::sync::Arc;
 
@@ -89,7 +87,26 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
     // system so vault-relative filtering does not judge the checkout's parent
     // directories or discard every event from a relative CLI argument.
     let folder_path = absolute_watch_root(&config.folder_path);
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    // The caller's sender stops BOTH the watcher and the sweep: this task
+    // relays it, cancelling the folder's session (which ends the sweep and
+    // frees its claim, so a resumed process starts a fresh one) and then
+    // handing the watcher its own shutdown. A dropped sender resolves the
+    // await too.
+    let (shutdown_tx, outer_rx) = tokio::sync::oneshot::channel::<()>();
+    let (inner_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let session = crate::system::folder_session::registry()
+        .get(&folder_path)
+        // Nothing registered a session: a standalone one, cancelled only by
+        // the relay below.
+        .unwrap_or_else(|| crate::system::folder_session::FolderSession::new(std::path::PathBuf::from(&folder_path)));
+    {
+        let session = session.clone();
+        tokio::spawn(async move {
+            let _ = outer_rx.await;
+            session.cancel.cancel();
+            let _ = inner_tx.send(());
+        });
+    }
 
     let emit: EventRelay = Arc::new(|event| crate::ops::serve::events::publish(&event));
     let dispatch: RebuildDispatch = {
@@ -132,15 +149,24 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
     let (_sender, always_live) =
         tokio::sync::watch::channel(crate::ops::watch::cadence::Cadence::Live);
     super::start(WatchConfig {
-        folder_path,
+        folder_path: folder_path.clone(),
         spawner: Arc::new(crate::build::ports::spawner::TokioSpawner),
         shutdown_rx,
         emit,
-        dispatch,
+        dispatch: dispatch.clone(),
         attempt,
         cadence: always_live,
     })
     .await;
+
+    // The correctness backbone beside the accelerator: same folder, same
+    // `dispatch` (so a sweep trigger takes the identical worker-slot →
+    // admission → content-hash-gate → build path a watcher trigger does),
+    // the carrier reporter for cloud-sync progress (a no-op today — nothing
+    // headless renders it yet, same as before this crossed). Started AFTER
+    // `super::start` so the worker it just registered is in place for the
+    // sweep's first stat pass.
+    super::sweep::start(session, dispatch, Arc::new(CarrierReporter)).await;
 
     shutdown_tx
 }
