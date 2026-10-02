@@ -161,11 +161,26 @@ test.describe("style:map embed", () => {
     await clickFullscreenButton(page, browserName);
     await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
     await expect(page.locator(".immersive-new-window-btn")).toHaveCount(0);
-    const chipBox = await page.frameLocator(IFRAME).locator(".moss-places-chip").boundingBox();
-    const expandBoxExpanded = (await page.locator(".immersive-fullscreen-btn").boundingBox())!;
-    if (chipBox) {
-      expect(intersects(chipBox, expandBoxExpanded)).toBe(false);
-    }
+    // The wrapper class clears before the iframe has finished resizing and
+    // the chip has been laid out inside it, so a single sample can catch
+    // either box mid-move (an intermittent WebKit failure). Wait until both
+    // hold still across two samples, then compare.
+    const chip = page.frameLocator(IFRAME).locator(".moss-places-chip");
+    const expand = page.locator(".immersive-fullscreen-btn");
+    await expect(chip).toBeVisible();
+    const sample = async () => JSON.stringify([await chip.boundingBox(), await expand.boundingBox()]);
+    let previous = "";
+    await expect
+      .poll(async () => {
+        const current = await sample();
+        const still = current === previous;
+        previous = current;
+        return still;
+      }, { timeout: 5000, intervals: [100] })
+      .toBe(true);
+    const chipBox = (await chip.boundingBox())!;
+    const expandBoxExpanded = (await expand.boundingBox())!;
+    expect(intersects(chipBox, expandBoxExpanded)).toBe(false);
   });
 
   test("collapsed mode runs cooperative gestures", async ({ page }) => {
@@ -329,6 +344,23 @@ test.describe("style:map embed", () => {
   });
 });
 
+test.describe("card links inside an embed", () => {
+  test("a real click on an opened card's link navigates the page, not the iframe", async ({ page }) => {
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    const frame = page.frameLocator(IFRAME);
+    const marker = frame.locator(".moss-places-marker");
+    await expect(marker).toHaveCount(1);
+    const box = (await marker.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    const read = frame.locator(".moss-places-card-read");
+    await expect(read).toBeVisible();
+    await expect(read).toHaveAttribute("target", "_top");
+    await read.click();
+    await expect(page).toHaveURL(/lisbon-walk\/$/);
+  });
+});
+
 test.describe("article locator embed", () => {
   test("scopes to the article's own work and keeps it off its own card row", async ({ page }) => {
     await page.goto("lisbon-walk/", { waitUntil: "domcontentloaded" });
@@ -340,6 +372,32 @@ test.describe("article locator embed", () => {
     // ...but its own card never shows in the row underneath, since the
     // reader is already reading it.
     await expect(frame.locator('[data-work-id="/lisbon-walk/"]')).toHaveCount(0);
+  });
+
+  test("an article with two places gets a clearly visible marker at each, and the camera fits both", async ({ page }) => {
+    await page.goto("fjord-crossing/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    const frame = page.frameLocator(IFRAME);
+    const markers = frame.locator(".moss-places-marker");
+    await expect(markers).toHaveCount(2);
+    const frameBox = (await page.locator(IFRAME).boundingBox())!;
+    for (const marker of await markers.all()) {
+      const box = (await marker.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(frameBox.x);
+      expect(box.y).toBeGreaterThanOrEqual(frameBox.y);
+      expect(box.x + box.width).toBeLessThanOrEqual(frameBox.x + frameBox.width);
+      expect(box.y + box.height).toBeLessThanOrEqual(frameBox.y + frameBox.height);
+      // Solid centre, not only a faint fade: the region marker's dot is opaque.
+      const dot = await marker.evaluate((el) => {
+        const style = getComputedStyle(el, "::before");
+        return { color: style.backgroundColor, shadow: style.boxShadow };
+      });
+      expect(dot.color).not.toMatch(/rgba\(.*, 0\)|transparent/);
+    }
+    // Region precision (Os) keeps the soft area around the dot.
+    await expect
+      .poll(async () => markers.evaluateAll((els) => els.filter((el) => getComputedStyle(el, "::before").boxShadow !== "none").length))
+      .toBe(1);
   });
 
   test("carries no open-in-new-tab control", async ({ page }) => {
@@ -362,37 +420,6 @@ test.describe("article locator embed", () => {
     const chip = page.frameLocator(IFRAME).locator(".moss-places-chip");
     await expect(chip).toBeVisible();
     await expect(chip).toContainText("This article");
-  });
-
-  test("a real click on the chip's first crumb widens the scope and brings back the embedding article's own card", async ({ page, browserName }) => {
-    await page.goto("lisbon-walk/", { waitUntil: "domcontentloaded" });
-    await waitForSettled(page);
-    const frame = page.frameLocator(IFRAME);
-    await expect(frame.locator(".moss-places-marker")).toHaveCount(1); // article scope: just this work
-    await expect(frame.locator('[data-work-id="/lisbon-walk/"]')).toHaveCount(0); // excluded from its own row
-
-    await clickFullscreenButton(page, browserName);
-    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
-    await expect(frame.locator(".moss-places-chip")).toBeVisible();
-
-    // Keyboard on WebKit, a plain click elsewhere — see
-    // clickFullscreenButton's own doc for why, which applies identically to
-    // this crumb button inside the same just-expanded iframe.
-    const firstCrumb = frame.locator(".moss-places-chip-crumb").first();
-    if (browserName === "webkit") {
-      await firstCrumb.evaluate((el) => (el as HTMLElement).focus());
-      await page.keyboard.press("Enter");
-    } else {
-      await firstCrumb.click();
-    }
-
-    // Scope widened to "all": every located work is back in view, no longer
-    // just this one article's...
-    await expect.poll(async () => frame.locator(".moss-places-marker").count()).toBeGreaterThan(1);
-    // ...and setScope clears the row exclusion along with it (map.ts's own
-    // setScope), so the embedding article's own card — hidden above — is
-    // no longer stuck excluded.
-    await expect(frame.locator('[data-work-id="/lisbon-walk/"]')).toHaveCount(1);
   });
 
   // Fix: the locator used to open framed on the article's own place and
@@ -483,6 +510,257 @@ test.describe("article locator embed", () => {
     await expect
       .poll(async () => (await liveSpanDegrees(page, embedFrame.url())) / spanBefore)
       .toBeLessThan(1.1);
+  });
+});
+
+test.describe("article scope switch (fullscreen locator embed)", () => {
+  const frameOf = (page: Page) => page.frameLocator(IFRAME);
+
+  /** A real click, or focus + Enter on WebKit — see clickFullscreenButton's own doc, which applies to any control inside the just-expanded iframe. */
+  async function activate(page: Page, browserName: string, target: ReturnType<ReturnType<typeof frameOf>["locator"]>): Promise<void> {
+    if (browserName === "webkit") {
+      await target.evaluate((el) => (el as HTMLElement).focus());
+      await page.keyboard.press("Enter");
+    } else {
+      await target.click();
+    }
+  }
+
+  async function openFullscreen(page: Page, browserName: string): Promise<void> {
+    await page.goto("fjord-crossing/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    await clickFullscreenButton(page, browserName);
+    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await expect(frameOf(page).locator(".moss-places-chip")).toBeVisible();
+  }
+
+  test("This article → All articles → This article: every article, then the one article's places, with the article's identity kept in the frame's URL", async ({ page, browserName }) => {
+    await openFullscreen(page, browserName);
+    const frame = frameOf(page);
+    const articleOption = frame.locator('.moss-places-chip-scope-option[data-scope="article"]');
+    const allOption = frame.locator('.moss-places-chip-scope-option[data-scope="all"]');
+    await expect(articleOption).toHaveAttribute("aria-current", "true");
+    await expect(frame.locator(".moss-places-marker")).toHaveCount(2);
+    await expect(frame.locator("[data-work-id]")).toHaveCount(0);
+
+    await activate(page, browserName, allOption);
+    await expect(allOption).toHaveAttribute("aria-current", "true");
+    await expect.poll(() => frame.locator(".moss-places-marker").count()).toBeGreaterThan(2);
+    await expect(frame.locator('.moss-places-marker[data-current="true"]').first()).toBeVisible();
+    await expect(frame.locator('[data-work-id="/fjord-crossing/"]')).toHaveCount(0); // never its own card
+
+    await activate(page, browserName, articleOption);
+    await expect(articleOption).toHaveAttribute("aria-current", "true");
+    await expect(frame.locator(".moss-places-marker")).toHaveCount(2);
+    await expect(frame.locator("[data-work-id]")).toHaveCount(0);
+    const embedFrame = page.frames().find((f) => f.url().includes("embed=1"))!;
+    expect(embedFrame.url()).toContain("article=");
+  });
+
+  test("a place scope picked under All articles survives a trip to This article and back", async ({ page, browserName }) => {
+    await openFullscreen(page, browserName);
+    const frame = frameOf(page);
+    const allOption = frame.locator('.moss-places-chip-scope-option[data-scope="all"]');
+    const articleOption = frame.locator('.moss-places-chip-scope-option[data-scope="article"]');
+    await activate(page, browserName, allOption);
+    await activate(page, browserName, allOption); // the chevron: opens the place menu
+    const items = frame.locator(".moss-places-chip-menu-item");
+    await expect(items.first()).toBeVisible();
+    await activate(page, browserName, items.first());
+    const terminal = frame.locator("[data-terminal]");
+    const placeName = (await terminal.textContent())!.trim();
+    expect(placeName).not.toBe("All articles");
+
+    await activate(page, browserName, articleOption);
+    await expect(frame.locator(".moss-places-chip-sep")).toHaveCount(0);
+    await activate(page, browserName, allOption);
+    await expect(frame.locator(".moss-places-chip-sep")).toHaveCount(1);
+    await expect(frame.locator("[data-terminal]")).toHaveText(placeName);
+  });
+
+  test("a reload of the frame with a place picked under All articles keeps the switch, the article's ring and its absence from the cards", async ({ page, browserName }) => {
+    await openFullscreen(page, browserName);
+    const frame = frameOf(page);
+    const allOption = frame.locator('.moss-places-chip-scope-option[data-scope="all"]');
+    await activate(page, browserName, allOption);
+    await activate(page, browserName, allOption); // the chevron: opens the place menu
+    await activate(page, browserName, frame.locator(".moss-places-chip-menu-item", { hasText: "Bergen" }));
+    await expect(frame.locator("[data-terminal]")).not.toHaveText("All articles");
+    await expect(frame.locator('.moss-places-marker[data-current="true"]').first()).toBeVisible();
+
+    const embedFrame = page.frames().find((f) => f.url().includes("embed=1"))!;
+    expect(embedFrame.url()).toContain("place=");
+    await embedFrame.evaluate(() => {
+      (window as unknown as { __beforeReload: boolean }).__beforeReload = true;
+      location.reload();
+    });
+    await expect.poll(() => embedFrame.evaluate(() => "__beforeReload" in window).catch(() => true)).toBe(false);
+    // The reloaded document starts collapsed (the host sends the mode once, on
+    // the toggle), so the chip is checked in the DOM, not for visibility.
+    await expect(frame.locator('.moss-places-chip-scope-option[data-scope="all"][aria-current="true"]')).toHaveCount(1);
+    await expect(frame.locator('.moss-places-marker[data-current="true"]').first()).toBeVisible();
+    await expect(frame.locator('[data-work-id="/fjord-crossing/"]')).toHaveCount(0);
+  });
+
+  test("collapsing while on All articles returns to This article; expanding again opens on it", async ({ page, browserName }) => {
+    await openFullscreen(page, browserName);
+    const frame = frameOf(page);
+    await activate(page, browserName, frame.locator('.moss-places-chip-scope-option[data-scope="all"]'));
+    await expect.poll(() => frame.locator(".moss-places-marker").count()).toBeGreaterThan(2);
+
+    // WebKit sometimes leaves keyboard focus inside the iframe, so the Enter
+    // meant for the host's exit control lands on the chip; press again until
+    // the page has actually left fullscreen.
+    await expect(async () => {
+      if (await page.locator("body.immersive-fs-active").count()) {
+        await page.evaluate(() => window.focus());
+        await clickFullscreenButton(page, browserName);
+      }
+      await expect(page.locator("body.immersive-fs-active")).toHaveCount(0, { timeout: 1500 });
+    }).toPass({ timeout: 10000 });
+    await expect(frame.locator(".moss-places-marker")).toHaveCount(2);
+
+    await clickFullscreenButton(page, browserName);
+    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await expect(frame.locator('.moss-places-chip-scope-option[data-scope="article"]')).toHaveAttribute("aria-current", "true");
+    await expect(frame.locator(".moss-places-marker")).toHaveCount(2);
+  });
+
+  test("pressing the checked All articles segment under a place scope widens and keeps focus on it", async ({ page, browserName }) => {
+    await openFullscreen(page, browserName);
+    const frame = frameOf(page);
+    const allOption = frame.locator('.moss-places-chip-scope-option[data-scope="all"]');
+    await activate(page, browserName, allOption);
+    await activate(page, browserName, allOption); // the chevron: opens the place menu
+    await activate(page, browserName, frame.locator(".moss-places-chip-menu-item", { hasText: "Bergen" }));
+    await expect(frame.locator(".moss-places-chip-sep")).toHaveCount(1);
+
+    await allOption.evaluate((el) => (el as HTMLElement).focus());
+    await page.keyboard.press("Enter");
+    await expect(frame.locator(".moss-places-chip-sep")).toHaveCount(0);
+    await expect(allOption).toBeFocused();
+  });
+
+  test("the keyboard operates the switch and focus stays on the pressed segment", async ({ page, browserName }) => {
+    await openFullscreen(page, browserName);
+    const frame = frameOf(page);
+    const allOption = frame.locator('.moss-places-chip-scope-option[data-scope="all"]');
+    await allOption.evaluate((el) => (el as HTMLElement).focus());
+    await page.keyboard.press("Enter");
+    await expect(allOption).toHaveAttribute("aria-current", "true");
+    await expect(allOption).toBeFocused();
+    await page.keyboard.press("Escape"); // closes nothing here; must not drop focus or the scope
+    await expect(allOption).toBeFocused();
+    const articleOption = frame.locator('.moss-places-chip-scope-option[data-scope="article"]');
+    // WebKit does not Tab to buttons by default, so focus is moved directly.
+    await articleOption.evaluate((el) => (el as HTMLElement).focus());
+    await page.keyboard.press("Space");
+    await expect(articleOption).toHaveAttribute("aria-current", "true");
+    await expect(articleOption).toBeFocused();
+  });
+});
+
+test.describe("chip beside the host's exit control (fullscreen locator embed)", () => {
+  async function expand(page: Page, browserName: string): Promise<void> {
+    await page.goto("fjord-crossing/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    await clickFullscreenButton(page, browserName);
+    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await expect(page.frameLocator(IFRAME).locator(".moss-places-chip")).toBeVisible();
+  }
+
+  test.describe("on a phone", () => {
+    test.use({ viewport: { width: 390, height: 844 } });
+    test("the chip keeps the full 306px cap and never lies under the control", async ({ page, browserName }) => {
+      await expand(page, browserName);
+      const chip = page.frameLocator(IFRAME).locator(".moss-places-chip");
+      // The widest the chip can get: stretch it and read what the cap leaves.
+      const cap = await chip.evaluate((el) => {
+        (el as HTMLElement).style.inlineSize = "2000px";
+        const width = el.getBoundingClientRect().width;
+        (el as HTMLElement).style.inlineSize = "";
+        return width;
+      });
+      expect(cap).toBe((await chip.evaluate(() => document.documentElement.clientWidth)) - 84); // 306 on a 390px frame
+      const control = (await page.locator(".immersive-fullscreen-btn").boundingBox())!;
+      await expect
+        .poll(async () => {
+          const box = (await chip.boundingBox())!;
+          return box.x < control.x + control.width && box.x + box.width > control.x && box.y < control.y + control.height && box.y + box.height > control.y;
+        })
+        .toBe(false);
+    });
+  });
+
+  test("in a right-to-left page the chip stays at the right edge, where its start is", async ({ page, browserName }) => {
+    await expand(page, browserName);
+    const frame = page.frameLocator(IFRAME);
+    await frame.locator("html").evaluate((el) => el.setAttribute("dir", "rtl"));
+    const chip = frame.locator(".moss-places-chip");
+    const frameBox = (await page.locator(IFRAME).boundingBox())!;
+    await expect.poll(async () => {
+      const box = (await chip.boundingBox())!;
+      return frameBox.x + frameBox.width - (box.x + box.width);
+    }).toBeLessThanOrEqual(20);
+  });
+});
+
+// Entering fullscreen used to re-frame the SAME geographic range at the new
+// size — `Camera.zoom` is relative to the viewport's own cover scale, so a
+// bigger viewport magnified the embed's view — and the world raster and the
+// regional tiles stayed baked for the small embed, so the magnified view was
+// soft. Now a resize keeps the scale and centre (the bigger viewport shows
+// more map), rasters are baked for the pixels they are shown at, and leaving
+// fullscreen returns to the embed's own range.
+test.describe("fullscreen embed", () => {
+  test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
+
+  /** The world raster's natural width and every regional tile on screen, as natural px over displayed device px (>= 1 is sharp). */
+  async function sharpness(page: Page, embedFrame: ReturnType<Page["frames"]>[number]) {
+    return embedFrame.evaluate(() => {
+      const viewport = document.querySelector(".moss-places-viewport")!.getBoundingClientRect();
+      const dpr = window.devicePixelRatio;
+      const world = document.querySelector<HTMLImageElement>(".moss-places-world-surface");
+      const tiles = [...document.querySelectorAll<HTMLImageElement>(".moss-places-tile > img")]
+        .map((img) => ({ img, box: img.getBoundingClientRect() }))
+        .filter(({ box }) => box.right > viewport.left && box.left < viewport.right && box.bottom > viewport.top && box.top < viewport.bottom)
+        .map(({ img, box }) => img.naturalWidth / (box.width * dpr));
+      return { worldWidth: world?.naturalWidth ?? 0, tiles };
+    });
+  }
+
+  test("fullscreen shows a wider range and re-bakes sharp; leaving returns to the embed's own range", async ({ page, browserName }) => {
+    await page.goto("lisbon-walk/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    const embedFrame = page.frames().find((f) => f.url().includes("article=%2Flisbon-walk%2F"))!;
+    const span = () => liveSpanDegrees(page, embedFrame.url());
+    const spanEmbed = await span();
+    const widthEmbed = (await page.locator(IFRAME).boundingBox())!.width;
+    const bakedEmbed = (await sharpness(page, embedFrame)).worldWidth;
+    expect(bakedEmbed).toBeGreaterThan(0);
+
+    await clickFullscreenButton(page, browserName);
+    await expect(page.locator(".immersive-iframe-wrapper")).toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    const widthFull = (await page.locator(IFRAME).boundingBox())!.width;
+
+    // The scale (px per degree) is kept, so the visible range grows with the
+    // viewport — not the same range magnified.
+    await expect.poll(span, { timeout: 5000 }).toBeGreaterThanOrEqual(spanEmbed * (widthFull / widthEmbed) * 0.9);
+    expect(widthFull / widthEmbed).toBeGreaterThan(1.3);
+
+    // Sharp at the new size: the world raster was baked again for the bigger
+    // viewport, and every tile on screen carries at least one natural pixel
+    // per displayed device pixel.
+    await expect.poll(async () => (await sharpness(page, embedFrame)).worldWidth, { timeout: 8000 }).toBeGreaterThan(bakedEmbed * 1.5);
+    await expect
+      .poll(async () => Math.min(1, ...(await sharpness(page, embedFrame)).tiles), { timeout: 8000 })
+      .toBeGreaterThanOrEqual(0.98);
+
+    await clickFullscreenButton(page, browserName);
+    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-exit/, { timeout: 4000 });
+    await expect.poll(span, { timeout: 5000 }).toBeLessThanOrEqual(spanEmbed * 1.15);
+    expect(await span()).toBeGreaterThanOrEqual(spanEmbed * 0.85);
   });
 });
 

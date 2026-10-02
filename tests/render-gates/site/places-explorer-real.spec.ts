@@ -117,8 +117,18 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     const figureBox = (await page.locator("figure[data-moss-places-explorer]").boundingBox())!;
     expect(Math.abs(figureBox.y + figureBox.height - viewport.height)).toBeLessThanOrEqual(1);
 
-    const cardsBox = (await page.locator(".moss-places-cards").boundingBox())!;
+    const cardsBox = await cardsBounds(page);
     expect(cardsBox.y + cardsBox.height).toBeLessThanOrEqual(viewport.height + 1);
+  });
+}
+
+/** The box the cards themselves cover. `.moss-places-cards` is a taller, click-through band an opened card grows up into, so its own box says nothing about what sits over the map. */
+async function cardsBounds(page: Page): Promise<{ x: number; y: number; width: number; height: number }> {
+  return page.locator(".moss-places-cards .moss-card").evaluateAll((cards) => {
+    const boxes = cards.map((card) => card.getBoundingClientRect());
+    const x = Math.min(...boxes.map((b) => b.left));
+    const y = Math.min(...boxes.map((b) => b.top));
+    return { x, y, width: Math.max(...boxes.map((b) => b.right)) - x, height: Math.max(...boxes.map((b) => b.bottom)) - y };
   });
 }
 
@@ -126,7 +136,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
 test("collapsed cards stay compact despite long multi-link bylines, with no raw markdown and no marker under the row", async ({ page }) => {
   await gotoReady(page);
 
-  const cardsBox = (await page.locator(".moss-places-cards").boundingBox())!;
+  const cardsBox = await cardsBounds(page);
   const mapBox = (await page.locator(".moss-places-viewport").boundingBox())!;
   expect(cardsBox.height).toBeLessThanOrEqual(mapBox.height * 0.26);
 

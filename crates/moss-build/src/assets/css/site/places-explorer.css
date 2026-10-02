@@ -251,6 +251,15 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   position: absolute;
 }
 
+/* The world surface and every tile raster are cut from one continuous map, so
+   a rounded corner on any of them leaves a four-pointed gap where four tiles
+   meet. The explorer sits inside `article`, whose `article img` rule rounds
+   every image by 6px (scaled up with the tile's own transform), so the
+   reset has to out-rank it. */
+.moss-places-viewport img {
+  border-radius: 0;
+}
+
 /* The tile's own raster (an `<img>`, or the live, unrasterised SVG on the
    progressive-enhancement fallback path — see raster.ts's
    `rasterizeOrFallback`) fills that wrapper exactly; `display: block` drops
@@ -453,11 +462,16 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   background: var(--moss-place-marker, #2d5a2d);
   border: 2px solid var(--moss-place-marker-casing, #fff);
 }
+/* A region or country keeps the dot — a bare fade alone was nearly
+   invisible on the map — and adds the soft area around it. */
 .moss-places-marker[data-precision="region"]::before,
 .moss-places-marker[data-precision="country"]::before {
-  inset: 2px;
-  border: 0;
-  background: radial-gradient(circle, color-mix(in srgb, var(--moss-place-marker, #2d5a2d) 55%, transparent) 0%, transparent 72%);
+  box-shadow: 0 0 0 9px color-mix(in srgb, var(--moss-place-marker, #2d5a2d) 22%, transparent);
+}
+/* The current article's marker (or the cluster holding it) while every
+   article is shown: a ring, distinct from the selected marker's heavier dot. */
+.moss-places-marker[data-current="true"]:not([data-selected="true"]) {
+  box-shadow: inset 0 0 0 2px var(--moss-place-marker-casing, #fff), inset 0 0 0 4px var(--moss-place-marker, #2d5a2d);
 }
 .moss-places-marker[data-selected="true"]::before {
   inset: 14px;
@@ -736,6 +750,23 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
      (not a clip on the container) is what keeps the row from overflowing. */
 }
 
+/* The host page's exit control sits at the top left of a fullscreen embed in
+   some engines (embed.ts measures it and sets the attribute). Where the chip
+   also starts at the left (LTR) it starts after the control, beside it; where
+   the page is too narrow for that, below it, at the ordinary start and cap. */
+[data-moss-places-embed-mode="expanded"][data-moss-places-host-control-top-left] .moss-places-chip:dir(ltr) {
+  inset-inline-start: 72px;
+  max-inline-size: calc(100% - 144px);
+}
+
+@media (max-width: 450px) {
+  [data-moss-places-embed-mode="expanded"][data-moss-places-host-control-top-left] .moss-places-chip:dir(ltr) {
+    inset-block-start: 72px;
+    inset-inline-start: 12px;
+    max-inline-size: calc(100% - 84px);
+  }
+}
+
 .moss-places-chip-trail {
   display: flex;
   align-items: center;
@@ -782,6 +813,65 @@ button.moss-places-chip-crumb {
 }
 .moss-places-chip-crumb[data-terminal] {
   font-weight: 600;
+}
+
+/* The "This article | All articles" switch: a segmented pair standing in
+   for the root crumb. The selected segment differs in weight and fill, not
+   colour alone. */
+.moss-places-chip-scope {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-block: -4px;
+  margin-inline-start: -6px;
+  padding: 2px;
+  border-radius: 14px; /* concentric with the chip's 18px at a 4px inset */
+  background: color-mix(in srgb, var(--moss-color-text) 7%, transparent);
+}
+.moss-places-chip-scope-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  font: inherit;
+  color: var(--moss-color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.moss-places-chip-scope-option[aria-current="true"] {
+  color: var(--moss-color-text);
+  font-weight: 600;
+  background: var(--moss-color-surface);
+  box-shadow: 0 0.5px 1.5px color-mix(in srgb, var(--moss-color-text) 22%, transparent);
+}
+/* 44px touch target without growing the chip */
+.moss-places-chip-scope-option::after {
+  content: "";
+  position: absolute;
+  inset: -11px 0;
+}
+@media (hover: hover) {
+  .moss-places-chip-scope-option:not([aria-current="true"]):hover {
+    color: var(--moss-color-accent);
+  }
+}
+.moss-places-chip-scope-option:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+}
+.moss-places-chip-scope + .moss-places-chip-sep,
+.moss-places-chip-scope + .moss-places-chip-collapsible,
+.moss-places-chip-scope + .moss-places-chip-ellipsis {
+  margin-inline-start: 2px;
+}
+.moss-places-chip-scope-option[aria-expanded="true"] .moss-places-chip-chevron {
+  transform: rotate(180deg);
 }
 
 .moss-places-chip-sep {
@@ -893,10 +983,17 @@ button.moss-places-chip-crumb {
   z-index: 3;
   inset-inline: 12px;
   inset-block-end: 12px;
+  /* The row is a fixed, tall band along the bottom and its cards sit on its
+     floor: an opened card grows UP inside the band, so nothing else (the
+     other cards, the map) moves or resizes when one opens. The band itself
+     lets pointer input through to the map; only the cards take it. */
+  block-size: min(36rem, calc(100% - 24px));
   display: flex;
+  align-items: flex-end;
   gap: 10px;
   overflow-x: auto;
-  overflow-y: visible;
+  overflow-y: hidden;
+  pointer-events: none;
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
   padding-block-end: 2px;
@@ -911,39 +1008,35 @@ button.moss-places-chip-crumb {
    `aria-current`, the selected card) is the whole animation — no height
    measured or set from JS. `overflow: hidden` on both the card and the
    detail element itself keeps the collapsed track's content from ever
-   painting outside a zero-height row.
-
-   The collapsed card is also capped to a fixed height — `max-block-size`
-   here is a backstop, not the primary bound: the real bound is the
-   contained CONTENT (the title/meta clamps below, the cover's own fixed
-   block-size), which keeps the select row's natural height under this
-   anyway for any realistic content. The cap exists for what clamping
-   cannot catch (a font-size override, a `line-clamp`-unaware engine) so a
-   long byline can never again inflate the row to "covers almost the whole
-   map" — the defect this whole block exists to keep from coming back. */
+   painting outside a zero-height row. A card keeps its width when opened,
+   so the cards after it do not slide sideways either. */
 .moss-places-cards .moss-card {
   flex: 0 0 auto;
-  inline-size: 240px;
+  inline-size: 15rem;
   max-inline-size: 80vw;
+  max-block-size: 100%;
+  /* site.css gives every `.moss-card` a 64px bottom margin; here it only
+     lifted the cards off the bottom edge and inflated the row. */
+  margin: 0;
+  pointer-events: auto;
   scroll-snap-align: start;
   display: grid;
+  /* `minmax(0, 1fr)`: a bare `auto` column grows to the widest unwrapped
+     line inside (the one-line meta), pushing the card's real content past
+     its own edge where `overflow: hidden` then clips it. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 0fr;
   border-radius: 12px;
   overflow: hidden;
   background: color-mix(in srgb, var(--moss-color-surface) 94%, transparent);
   box-shadow: var(--moss-elevation-1);
 }
-.moss-places-cards .moss-card:not([aria-current="true"]) {
-  max-block-size: 100px;
-}
 .moss-places-cards .moss-card[aria-current="true"] {
-  grid-template-rows: auto 1fr;
-  inline-size: 320px;
-  max-inline-size: 86vw;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 @media (prefers-reduced-motion: no-preference) {
   .moss-places-cards .moss-card {
-    transition: grid-template-rows 220ms ease-out, inline-size 220ms ease-out;
+    transition: grid-template-rows 220ms ease-out;
   }
 }
 
@@ -952,13 +1045,10 @@ button.moss-places-chip-crumb {
    button layout even when the author sets `display: block`, which this
    stylesheet cannot reach past with an author-level override on any OTHER
    property. Taking the button's layout mode over explicitly (column flex,
-   one child) replaces that centring with ordinary top alignment (the
-   default `justify-content: flex-start`) and keeps the row's own full-width
-   fill (the default cross-axis `align-items: stretch`) — so a card stretched
-   taller than its own content (`.moss-places-cards`' own `align-items:
-   stretch`, matching every card to its tallest sibling) leaves the slack
-   below the row instead of splitting it above and below, which is what
-   carried the cover to a different height on every card. */
+   one child) replaces that centring with ordinary top alignment. A
+   collapsed card is one fixed height, so every card in the row matches
+   whatever its title or byline holds; an opened card is as tall as its
+   content needs. */
 .moss-places-card-select {
   display: flex;
   flex-direction: column;
@@ -972,28 +1062,41 @@ button.moss-places-chip-crumb {
   text-align: start;
   cursor: pointer;
 }
+.moss-places-cards .moss-card:not([aria-current="true"]) .moss-places-card-select {
+  block-size: 5.75rem;
+  overflow: hidden;
+}
+/* This card is not a list-layout card, so nothing resets the `h3` margin
+   that site.css gives the title (48px on top, which would push it out of the
+   card under the clip); the row's own gap and padding are set here instead. */
 .moss-places-card-select .moss-card-row {
+  gap: 10px;
   padding: 10px;
 }
 .moss-places-card-select .moss-card-cover {
-  inline-size: 64px;
-  block-size: 64px;
-  flex: 0 0 64px;
+  inline-size: 4.5rem;
+  block-size: auto;
+  aspect-ratio: 4 / 3;
+  flex: 0 0 auto;
   align-self: flex-start;
   border-radius: 8px;
+  overflow: hidden;
 }
 .moss-places-card-select:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: -2px;
 }
 
-/* Collapsed card content, clamped: a two-line title and a ONE-line meter
+/* Collapsed card content, clamped: a two-line title and a ONE-line meta
    line (date and/or the first byline entry only — `cards.ts`'s own
-   `buildCard` never puts the full byline here) are what keep the select
-   row's natural height matching the 64px cover beside it, so the row never
-   grows past the `max-block-size` backstop above regardless of how long an
-   authored title or byline runs. */
+   `buildCard` never puts the full byline here), so the fixed collapsed
+   height above always holds them. */
 .moss-places-cards .moss-card-title {
+  margin: 0;
+  font-family: var(--moss-font-body);
+  font-size: var(--moss-size-sm);
+  font-weight: 600;
+  line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1019,16 +1122,36 @@ button.moss-places-chip-crumb {
 }
 .moss-places-cards .moss-card-meta {
   display: block;
+  margin: 0.25em 0 0;
+  font-size: var(--moss-size-xs);
+  line-height: 1.4;
+  color: var(--moss-color-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Everything the collapsed card hides, in full: the description is
+   un-clamped here (site.css clamps `.moss-card-description` to two lines for
+   a list card), and the region scrolls rather than clip if the band is too
+   short for it. */
 .moss-places-card-detail {
   min-block-size: 0;
-  max-block-size: 280px;
   overflow-y: auto;
   overflow-x: hidden;
+}
+.moss-places-card-detail .moss-card-description {
+  display: block;
+  max-block-size: none;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
+}
+.moss-places-card-detail .moss-card-meta {
+  margin: 0 0 0.5em;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 .moss-places-card-detail > * {
   padding-inline: 10px;

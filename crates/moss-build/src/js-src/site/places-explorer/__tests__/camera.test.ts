@@ -14,6 +14,7 @@ import {
   coverCamera,
   fitPoints,
   fitWork,
+  resizeCamera,
   worldToScreen,
   screenToWorld,
 } from "../camera";
@@ -253,5 +254,36 @@ describe("worldToScreen / screenToWorld", () => {
       expect(back.x).toBeCloseTo(point.x);
       expect(back.y).toBeCloseTo(point.y);
     }
+  });
+});
+
+describe("resizeCamera", () => {
+  const small = { width: 352, height: 235 };
+  const large = { width: 1440, height: 900 };
+
+  test("keeps the scale and centre, so a bigger viewport shows more of the world", () => {
+    const camera = { x: 700, y: 180, zoom: 20 };
+    const grown = resizeCamera(camera, small, large);
+    expect(screenScale(grown, large)).toBeCloseTo(screenScale(camera, small), 6);
+    expect(grown.x).toBe(camera.x);
+    expect(grown.y).toBe(camera.y);
+    // Wider viewport at the same scale: more world units across.
+    expect(large.width / screenScale(grown, large)).toBeGreaterThan(small.width / screenScale(camera, small));
+  });
+
+  test("is undone by resizing back", () => {
+    const camera = { x: 700, y: 180, zoom: 20 };
+    const back = resizeCamera(resizeCamera(camera, small, large), large, small);
+    expect(back.zoom).toBeCloseTo(camera.zoom, 6);
+  });
+
+  test("a camera at the cover floor stays there", () => {
+    expect(resizeCamera({ x: 421, y: 240, zoom: MIN_ZOOM }, large, small).zoom).toBe(MIN_ZOOM);
+  });
+
+  test("a viewport with no area leaves the camera alone", () => {
+    const camera = { x: 700, y: 180, zoom: 20 };
+    expect(resizeCamera(camera, { width: 0, height: 0 }, large)).toEqual(camera);
+    expect(resizeCamera(camera, small, { width: 0, height: 0 })).toEqual(camera);
   });
 });

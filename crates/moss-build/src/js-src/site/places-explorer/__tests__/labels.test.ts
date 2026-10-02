@@ -12,6 +12,7 @@ import {
   LABEL_AREA_BUDGET_PX2,
   LABEL_MIN_COUNT,
   placeLabels,
+  RIVER_REPEAT_MIN_PX,
   placeNameMatchesLabel,
   riverAnchor,
   riverOrientation,
@@ -48,6 +49,14 @@ describe("placeLabels — greedy priority placement with rectangle collisions", 
     const placed = placeLabels(candidates, { viewport: VIEWPORT, markers: [], reserved: [], ownPlace: NEVER_OWN });
     expect(placed.has("a")).toBe(true);
     expect(placed.has("b")).toBe(false);
+  });
+
+  test("a river's name repeats only once per long stretch: same-name anchors closer than RIVER_REPEAT_MIN_PX keep one", () => {
+    const river = (id: string, name: string, x: number): LabelCandidate => ({ id, kind: "river", name, priority: 0, screen: { x, y: 150 }, width: 30, height: 14 });
+    const wide = { width: 1400, height: 300 };
+    const candidates = [river("a", "Yangtze", 100), river("b", "Yangtze", 220), river("c", "Yangtze", 100 + RIVER_REPEAT_MIN_PX + 50), river("d", "Other", 150)];
+    const placed = placeLabels(candidates, { viewport: wide, markers: [], reserved: [], ownPlace: NEVER_OWN, minCount: 10 });
+    expect([...placed.keys()].sort()).toEqual(["a", "c", "d"]);
   });
 
   test("priority order decides which of two colliding candidates wins, independent of input array order", () => {

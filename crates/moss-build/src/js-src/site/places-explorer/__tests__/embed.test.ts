@@ -1,14 +1,14 @@
 /**
  * Tests for embed.ts's two halves: the host page's own lazy hydration
  * (`initPlaceEmbeds`) and the iframe content's own embed-mode switch
- * (`attachEmbedModeIfRequested`), plus the chip seam (`setEmbedScope`).
+ * (`attachEmbedModeIfRequested`).
  * `setupImmersiveIframe`'s own wrapping/controls are covered by
  * immersive-mode.test.ts; here it is only asserted that embed.ts calls it
  * on the still-`src`-less iframe, before the one real navigation — never
  * after, which would re-navigate an already-loaded iframe a second time.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { attachEmbedModeIfRequested, initPlaceEmbeds, setEmbedScope } from "../embed";
+import { attachEmbedModeIfRequested, initPlaceEmbeds } from "../embed";
 import type { PlacesMapController } from "../map";
 
 class FakeIntersectionObserver {
@@ -223,7 +223,8 @@ function fakeController(): PlacesMapController {
     setScope: vi.fn(),
     setCooperativeGestures: vi.fn(),
     refitScopeIfClipped: vi.fn(),
-    setRowExclusion: vi.fn(),
+    setCurrentArticle: vi.fn(),
+    setArticleMode: vi.fn(),
     viewportEl: document.createElement("div"),
   };
 }
@@ -252,7 +253,7 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     expect(controller.setCooperativeGestures).toHaveBeenCalledWith(true);
     expect(figure.getAttribute("data-moss-places-embed-mode")).toBe("collapsed");
     expect(controller.setScope).not.toHaveBeenCalled();
-    expect(controller.setRowExclusion).not.toHaveBeenCalled();
+    expect(controller.setCurrentArticle).not.toHaveBeenCalled();
   });
 
   test("marks the document so this page's own chrome (header/nav/footer) hides itself — the embed is never meant to show it", () => {
@@ -261,12 +262,20 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     expect(document.documentElement.hasAttribute("data-moss-embed")).toBe(true);
   });
 
-  test("an article-scoped embed (the locator) scopes to that work and excludes it from the row", () => {
+  test("an article-scoped embed (the locator) scopes to that work and names it the current article", () => {
     history.replaceState(null, "", "/places/?article=w1&embed=1");
     const controller = fakeController();
     attachEmbedModeIfRequested(controller, document.createElement("figure"));
     expect(controller.setScope).toHaveBeenCalledWith({ kind: "article", id: "w1" });
-    expect(controller.setRowExclusion).toHaveBeenCalledWith("w1");
+    expect(controller.setCurrentArticle).toHaveBeenCalledWith("w1");
+  });
+
+  test("an embed reloaded with a place picked under All articles keeps the article's identity and leaves the place scope alone", () => {
+    history.replaceState(null, "", "/places/?article=w1&place=x&embed=1");
+    const controller = fakeController();
+    attachEmbedModeIfRequested(controller, document.createElement("figure"));
+    expect(controller.setCurrentArticle).toHaveBeenCalledWith("w1");
+    expect(controller.setScope).not.toHaveBeenCalled();
   });
 
   test("posts the ready message to the parent frame", () => {
@@ -293,6 +302,18 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     expect(controller.setCooperativeGestures).toHaveBeenLastCalledWith(true);
   });
 
+  test("the host's report of its exit control's corner reaches the figure as an attribute, and clears on collapse", () => {
+    history.replaceState(null, "", "/places/?article=w1&embed=1");
+    const figure = document.createElement("figure");
+    attachEmbedModeIfRequested(fakeController(), figure);
+    const send = (data: object) =>
+      window.dispatchEvent(new MessageEvent("message", { data: { type: "moss-places-embed-mode", ...data }, origin: location.origin, source: window.parent }));
+    send({ expanded: true, controlAtTopLeft: true });
+    expect(figure.hasAttribute("data-moss-places-host-control-top-left")).toBe(true);
+    send({ expanded: true, controlAtTopLeft: false });
+    expect(figure.hasAttribute("data-moss-places-host-control-top-left")).toBe(false);
+  });
+
   test("a same-origin mode message from a window other than window.parent is ignored", () => {
     history.replaceState(null, "", "/places/?place=lisbon&embed=1");
     const controller = fakeController();
@@ -312,12 +333,16 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     expect(figure.getAttribute("data-moss-places-embed-mode")).toBe("collapsed");
     expect(controller.setCooperativeGestures).not.toHaveBeenCalled();
   });
-});
 
-describe("setEmbedScope — the chip's own seam", () => {
-  test("forwards to the controller's own setScope — clearing the row exclusion on a scope change is setScope's own job (map.test.ts), not this seam's", () => {
+  test("collapsing returns the map to the current article, expanding does not touch the switch", () => {
+    history.replaceState(null, "", "/places/?article=w1&embed=1");
     const controller = fakeController();
-    setEmbedScope(controller, { kind: "place", id: "lisbon" });
-    expect(controller.setScope).toHaveBeenCalledWith({ kind: "place", id: "lisbon" });
+    attachEmbedModeIfRequested(controller, document.createElement("figure"));
+    const send = (expanded: boolean) =>
+      window.dispatchEvent(new MessageEvent("message", { data: { type: "moss-places-embed-mode", expanded }, origin: location.origin, source: window.parent }));
+    send(true);
+    expect(controller.setArticleMode).not.toHaveBeenCalled();
+    send(false);
+    expect(controller.setArticleMode).toHaveBeenCalledWith(true);
   });
 });

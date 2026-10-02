@@ -38,10 +38,8 @@
  * The breadcrumb chip (`chip.ts`) is mounted by `map.ts` on every explorer,
  * this embed included, and needs no code here to work: it already reads
  * scope and the selected work directly, so an expanded locator embed shows
- * "All › This article" with no embed-specific chip logic at all.
- * `setEmbedScope` (below) is the one seam it calls to widen or dig into
- * scope from inside an EXPANDED embed — this module builds no chip UI of
- * its own. The collapsed embed hides the chip entirely (CSS, keyed off
+ * "All › This article" with no embed-specific chip logic at all; this module
+ * builds no chip UI of its own. The collapsed embed hides the chip entirely (CSS, keyed off
  * `data-moss-places-embed-mode`, in `places-explorer.css`) — there is no
  * room for it in the small collapsed frame, and nothing to widen from
  * before the reader has asked to expand.
@@ -49,7 +47,6 @@
 import { setupImmersiveIframe } from "../immersive-mode";
 import type { PlacesMapController } from "./map";
 import { copyFor } from "./strings";
-import type { Scope } from "./types";
 
 const READY_MESSAGE = "moss-places-embed-ready";
 const MODE_MESSAGE = "moss-places-embed-mode";
@@ -179,7 +176,10 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
   setupImmersiveIframe(
     iframe,
     (expanded) => {
-      iframe.contentWindow?.postMessage({ type: MODE_MESSAGE, expanded }, location.origin);
+      // Where the host put its exit control is measured, not inferred from the engine: the chip inside the frame has to start clear of it.
+      const control = iframe.parentElement?.querySelector(".immersive-fullscreen-btn")?.getBoundingClientRect();
+      const controlAtTopLeft = expanded && !!control && control.left < window.innerWidth / 2 && control.top < window.innerHeight / 2;
+      iframe.contentWindow?.postMessage({ type: MODE_MESSAGE, expanded, controlAtTopLeft }, location.origin);
     },
     false, // no open-in-new-tab control on a places embed — only expand/collapse
   );
@@ -268,11 +268,14 @@ export function attachEmbedModeIfRequested(controller: PlacesMapController, figu
   // `readUrlState`, read by `mountPlacesMap` itself) — only an
   // `article=`-scoped embed (the locator) needs anything extra: it scopes
   // the little map to exactly that work's own point(s), the same view the
-  // static locator already drew, and keeps that work off its own card row
-  // (the reader is already reading it).
-  if (!place && article) {
-    controller.setScope({ kind: "article", id: article });
-    controller.setRowExclusion(article);
+  // static locator already drew. The chip then offers "This article | All
+  // articles" (`setCurrentArticle`), and the article stays off its own card
+  // row (the reader is already reading it).
+  if (article) {
+    // `place=` rides along once a place was picked under "All articles"; the
+    // article's identity must survive a reload of that state too.
+    if (!place) controller.setScope({ kind: "article", id: article });
+    controller.setCurrentArticle(article);
   }
 
   window.addEventListener("message", (event) => {
@@ -283,11 +286,14 @@ export function attachEmbedModeIfRequested(controller: PlacesMapController, figu
     // expects; this is that same symmetry on the child side — the only
     // sender this page should ever act on is its own hosting frame.
     if (event.source !== window.parent) return;
-    const data = event.data as { type?: unknown; expanded?: unknown } | null;
+    const data = event.data as { type?: unknown; expanded?: unknown; controlAtTopLeft?: unknown } | null;
     if (!data || data.type !== MODE_MESSAGE) return;
     const expanded = Boolean(data.expanded);
     figure.setAttribute("data-moss-places-embed-mode", expanded ? "expanded" : "collapsed");
+    figure.toggleAttribute("data-moss-places-host-control-top-left", Boolean(data.controlAtTopLeft));
     controller.setCooperativeGestures(!expanded);
+    // The collapsed frame has no chip to return from "all articles" with.
+    if (!expanded) controller.setArticleMode(true);
     controller.refitScopeIfClipped();
   });
 
@@ -295,19 +301,4 @@ export function attachEmbedModeIfRequested(controller: PlacesMapController, figu
   // host page's own lazy-hydration wrapper (`buildIframe` above) it may
   // cross-fade the iframe over the static poster now.
   window.parent.postMessage({ type: READY_MESSAGE }, location.origin);
-}
-
-/**
- * The seam the breadcrumb chip (`chip.ts`, mounted by `map.ts` on every
- * explorer including this embed) calls to widen or dig into scope from
- * inside an EXPANDED embed. A straight pass-through to the mounted map's own
- * `setScope`, which already clears `setRowExclusion`'s own "no card for the
- * article I'm already reading" on any scope change — once a reader has
- * widened past their own article, showing it in the row like any other
- * result is exactly what "widen" means. Kept as its own named export, not
- * inlined at the one call site, so the embed's own doc (above) has one
- * function to point at as "this is what the chip calls."
- */
-export function setEmbedScope(controller: PlacesMapController, scope: Scope): void {
-  controller.setScope(scope);
 }

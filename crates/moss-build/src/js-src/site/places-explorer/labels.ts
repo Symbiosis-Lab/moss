@@ -23,7 +23,7 @@ import { worldToScreen } from "./camera";
 import { CLUSTER_DISTANCE, clusterVisible } from "./clusters";
 import { langBucket } from "../subscribe/i18n";
 import { project } from "./projection";
-import { worldCentroid, type WorkPoint } from "./markers";
+import { workIdOf, worldCentroid, type WorkPoint } from "./markers";
 import type { Camera, LabelPoint, LabelRiver, LabelsData, LanguageLabels, Place, Point, Rect, Viewport, Work } from "./types";
 
 export type LabelKind = "city" | "range" | "peak" | "river";
@@ -37,6 +37,8 @@ const LABEL_GAP = 6;
 const MARKER_COINCIDENCE_PX = 20;
 /** Gap from a marker's own edge once a city label has to clear it, wider than the plain `LABEL_GAP` a label in open water uses. */
 const MARKER_CLEAR_GAP = 26;
+/** A river's name is built once per polyline the data carries, so a long river has many anchors; a second label of the same name closer than this (screen px) to one already placed is dropped, leaving the name once per long stretch. */
+export const RIVER_REPEAT_MIN_PX = 400;
 const LABEL_KIND_ORDER: Record<LabelKind, number> = { city: 0, peak: 1, range: 2, river: 3 };
 
 const EMPTY_LANGUAGE_LABELS: LanguageLabels = { cities: [], ranges: [], peaks: [], rivers: [] };
@@ -225,6 +227,7 @@ export function placeLabels(candidates: LabelCandidate[], options: PlaceLabelsOp
   );
 
   const results = new Map<string, PlacedLabel>();
+  const riverAnchors = new Map<string, Point[]>();
   for (const candidate of ordered) {
     if (results.size >= budget) break;
     const anchor = candidate.screen;
@@ -255,6 +258,11 @@ export function placeLabels(candidates: LabelCandidate[], options: PlaceLabelsOp
       const box = candidateBox(anchor, candidate.width, candidate.height, "center", 0);
       if (!withinStage(box, viewport)) continue;
       if (placed.some((existing) => boxesOverlap(box, existing))) continue;
+      if (candidate.kind === "river") {
+        const same = riverAnchors.get(candidate.name) ?? [];
+        if (same.some((other) => Math.hypot(other.x - anchor.x, other.y - anchor.y) < RIVER_REPEAT_MIN_PX)) continue;
+        riverAnchors.set(candidate.name, [...same, anchor]);
+      }
       placed.push(box);
       results.set(candidate.id, { id: candidate.id, position: "center", box, dot: null });
     }
@@ -372,7 +380,7 @@ export class LabelLayer {
     const byId = new Map(points.map((point) => [point.id, point]));
     return clusterVisible(points, camera.zoom, CLUSTER_DISTANCE).map((cluster) => {
       const members = cluster.ids.map((id) => byId.get(id)).filter((point): point is WorkPoint => point != null);
-      return { screen: worldToScreen(worldCentroid(members), camera, viewport), workIds: cluster.ids };
+      return { screen: worldToScreen(worldCentroid(members), camera, viewport), workIds: members.map(workIdOf) };
     });
   }
 

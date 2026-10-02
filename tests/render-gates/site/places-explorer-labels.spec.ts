@@ -102,8 +102,10 @@ for (const theme of ["light", "dark"] as const) {
     const labelBoxes = await boxesOf(labels);
     const markerBoxes = await boxesOf(page.locator(".moss-places-marker"));
     const controlsBox = await page.locator(".moss-places-controls").boundingBox();
-    const cardsBox = await page.locator(".moss-places-cards").boundingBox();
-    const reserved = [...markerBoxes, ...(controlsBox ? [controlsBox] : []), ...(cardsBox && cardsBox.width > 0 && cardsBox.height > 0 ? [cardsBox] : [])];
+    // The cards themselves: `.moss-places-cards` is a taller, click-through band an opened card grows up into, so its own box covers most of the map.
+    const cardBoxes = await boxesOf(page.locator(".moss-places-cards .moss-card"));
+    expect(cardBoxes.length, "expected cards in the row at the world cover camera").toBeGreaterThan(0);
+    const reserved = [...markerBoxes, ...(controlsBox ? [controlsBox] : []), ...cardBoxes];
 
     assertNoneOverlap(labelBoxes, `${theme}: labels vs labels`);
     assertNoCrossOverlap(labelBoxes, reserved, `${theme}: labels vs markers/controls/cards`);

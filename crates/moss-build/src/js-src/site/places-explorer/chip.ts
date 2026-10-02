@@ -11,22 +11,24 @@
  * way to change scope, only a third surface that reaches the one mechanism
  * `scope.ts`/`state.ts` already own.
  *
- * Precedence between the three things a crumb trail can show, matching the
- * design: a selected work collapses the trail to exactly `all > This
- * article`, regardless of place scope or an open ring (the same "survives
- * independent of the ring" precedence `cards.ts`'s own `worksForRow` already
- * gives a selection over a ring's row restriction) — the chip never shows
- * two terminal states at once. Short of a selection, an open ring appends
- * one more, non-widenable crumb after the scope's own trail (`scope.ts`'s
- * `crumbs`, reused whole, never re-derived here); the crumb just before it
- * is what closes the ring, because clicking ANY non-terminal crumb calls
- * `setScope` on its own (possibly unchanged) scope, and `setScope` already
- * closes the ring as its first step (`map.ts`) — no ring-specific click
- * handling exists in this file at all.
+ * When the map has a current article (`currentArticleId`: the embed's own
+ * article, `embed.ts`), the root crumb becomes a two-segment switch, "This
+ * article | All articles"; the place trail and the place menu continue only
+ * after "All articles". An open ring appends one more, non-widenable crumb
+ * after the scope's own trail (`scope.ts`'s `crumbs`, reused whole, never
+ * re-derived here); the crumb just before it is what closes the ring,
+ * because clicking ANY non-terminal crumb calls `setScope` on its own
+ * (possibly unchanged) scope, and `setScope` already closes the ring as its
+ * first step (`map.ts`) — no ring-specific click handling exists in this
+ * file at all. A selected card is a selection, not a scope: it never
+ * changes the trail.
  */
 import { childrenOf, crumbs as scopeCrumbs, type ScopeChild } from "./scope";
 import { worksHereLabel, type PlacesStrings } from "./strings";
 import type { Place, Scope, Work } from "./types";
+
+const SCOPE_OPTION = "moss-places-chip-scope-option";
+const CRUMB = "moss-places-chip-crumb";
 
 const CHEVRON_SVG =
   '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" ' +
@@ -34,7 +36,7 @@ const CHEVRON_SVG =
 
 export interface DisplayCrumb {
   label: string;
-  /** Widen target. `null` only on the trail's own terminal crumb (current scope, the selected work, or an open ring's own trailing crumb) — every crumb before it always carries one. */
+  /** Widen target. `null` only on the trail's own terminal crumb (current scope or an open ring's own trailing crumb) — every crumb before it always carries one. */
   target: Scope | null;
 }
 
@@ -45,24 +47,17 @@ function labelForScope(scope: Scope, places: Place[], strings: PlacesStrings): s
 }
 
 /**
- * The chip's crumb trail for the current scope/selection/ring state. Pure —
+ * The chip's crumb trail for the current scope/ring state. Pure —
  * no DOM, no callbacks — so narrowing/widening and the menu's own item list
  * can be tested without mounting the map.
  */
 export function deriveCrumbs(
   scope: Scope,
   places: Place[],
-  selectedWork: Work | null,
   ringCount: number | null,
   strings: PlacesStrings,
   lang: string,
 ): DisplayCrumb[] {
-  if (selectedWork) {
-    return [
-      { label: strings.chipAll, target: { kind: "all" } },
-      { label: strings.chipThisArticle, target: null },
-    ];
-  }
   const trail: DisplayCrumb[] = scopeCrumbs(scope, places).map((crumb) => ({
     label: labelForScope(crumb, places, strings),
     target: crumb,
@@ -79,11 +74,11 @@ export function deriveCrumbs(
 export interface ChipCallbacks {
   /** Widen or narrow — the one scope-change entry point this module ever calls (`map.ts`'s own `setScope`, which already closes any open ring). */
   setScope(scope: Scope): void;
-  /** Clear the selected work; called only when widening away from the `This article` crumb. */
-  selectWork(id: string | null): void;
+  /** Switch between the current article alone (`true`) and every article (`false`) — `map.ts`'s own `setArticleMode`, which keeps the "all" side's scope and camera for the way back. */
+  setArticleMode(articleOnly: boolean): void;
   /** Exempt a place's own works from the marker layer's dimming while a menu item is hovered/focused, `null` to lift it — the SAME `data-dimmed` attribute a bloomed ring already uses. */
   highlightPlace(placeId: string | null): void;
-  /** Called right after the dig-down menu actually opens or closes (never on a `closeMenu()` call that found nothing open) — map.ts's own hook to re-run `reservedLabelRects()` and the label layer against it, the one thing opening or closing this menu changes that is not already one of `render()`'s own four keyed inputs (scope/selection/ring/locale), so nothing else in this module's own render path would otherwise re-run it. */
+  /** Called right after the dig-down menu actually opens or closes (never on a `closeMenu()` call that found nothing open) — map.ts's own hook to re-run `reservedLabelRects()` and the label layer against it, the one thing opening or closing this menu changes that is not already one of `render()`'s own four keyed inputs (scope/ring/locale), so nothing else in this module's own render path would otherwise re-run it. */
   menuToggled(): void;
 }
 
@@ -99,8 +94,8 @@ export class ScopeChip {
   private focusIndex = -1;
   /** A key of the last inputs `render()` actually drew, so an unrelated camera settle (pan/zoom/resize, none of which touch scope, selection, ring count or locale) is a no-op instead of tearing down an open menu or a focused crumb. `null` until the first render. */
   private lastRenderKey: string | null = null;
-  /** Set right before a dig-down menu item's click calls `setScope`, which synchronously reaches back into `render()` through `map.ts`'s own settle path — tells that render to land focus on the new trail's terminal crumb instead of leaving it on the menu item `replaceChildren` just removed. */
-  private focusTerminalOnNextRender = false;
+  /** Set right before a click calls `setScope`/`setArticleMode`, which synchronously reaches back into `render()` through `map.ts`'s own settle path — the CSS selector of the element that render must focus, instead of leaving focus on the element `replaceChildren` just removed. */
+  private focusOnNextRender: string | null = null;
 
   constructor(container: HTMLElement, callbacks: ChipCallbacks, strings: PlacesStrings, lang: string) {
     this.container = container;
@@ -131,45 +126,88 @@ export class ScopeChip {
    * every other settle a no-op: the open menu, and whatever has focus,
    * survive untouched.
    */
-  render(scope: Scope, places: Place[], works: Work[], selectedWork: Work | null, ringCount: number | null): void {
-    const key = JSON.stringify([scope, selectedWork?.id ?? null, ringCount, this.lang]);
+  render(scope: Scope, places: Place[], works: Work[], ringCount: number | null, currentArticleId: string | null): void {
+    // One article on the site means both segments would show the same thing: no switch.
+    const switchable = currentArticleId != null && works.length > 1;
+    const key = JSON.stringify([scope, switchable, ringCount, this.lang]);
     if (key === this.lastRenderKey) return;
     this.lastRenderKey = key;
 
     this.closeMenu();
-    const crumbList = deriveCrumbs(scope, places, selectedWork, ringCount, this.strings, this.lang);
-    const terminalIsScope = selectedWork == null && ringCount == null;
+    const crumbList = deriveCrumbs(scope, places, ringCount, this.strings, this.lang);
+    const terminalIsScope = ringCount == null;
     const children = terminalIsScope ? childrenOf(scope, places, works) : [];
 
     const trail = document.createElement("div");
     trail.className = "moss-places-chip-trail";
 
-    if (crumbList.length === 1) {
-      // The root crumb is both the trail's first and its only one — still
-      // needs its own chevron/menu wiring when top-level places exist.
-      trail.append(terminalIsScope ? this.buildTerminalScope(crumbList[0], children) : this.buildLeaf(crumbList[0]));
+    if (switchable && scope.kind === "article") {
+      trail.append(this.buildScopeGroup(this.buildAllOption(), true));
     } else {
-      trail.append(this.buildWidenCrumb(crumbList[0]));
-      const middle = crumbList.slice(1, -1);
-      if (middle.length > 0) {
-        const collapsible = document.createElement("span");
-        collapsible.className = "moss-places-chip-collapsible";
-        for (const crumb of middle) {
-          collapsible.append(this.buildSeparator(), this.buildWidenCrumb(crumb));
+      // In the switch, the root crumb is the "All articles" segment; otherwise a crumb as ever.
+      const option = switchable;
+      const root = crumbList.length === 1
+        ? this.buildTerminalScope(crumbList[0], children, option)
+        : this.buildWidenCrumb(crumbList[0], option);
+      trail.append(option ? this.buildScopeGroup(root, false) : root);
+      if (crumbList.length > 1) {
+        const middle = crumbList.slice(1, -1);
+        if (middle.length > 0) {
+          const collapsible = document.createElement("span");
+          collapsible.className = "moss-places-chip-collapsible";
+          for (const crumb of middle) {
+            collapsible.append(this.buildSeparator(), this.buildWidenCrumb(crumb));
+          }
+          trail.append(collapsible);
+          trail.append(this.buildEllipsisToggle(collapsible));
         }
-        trail.append(collapsible);
-        trail.append(this.buildEllipsisToggle(collapsible));
+        trail.append(this.buildSeparator());
+        const last = crumbList[crumbList.length - 1];
+        trail.append(terminalIsScope ? this.buildTerminalScope(last, children) : this.buildLeaf(last));
       }
-      trail.append(this.buildSeparator());
-      const last = crumbList[crumbList.length - 1];
-      trail.append(terminalIsScope ? this.buildTerminalScope(last, children) : this.buildLeaf(last));
     }
 
     this.container.replaceChildren(trail);
-    if (this.focusTerminalOnNextRender) {
-      this.focusTerminalOnNextRender = false;
-      this.container.querySelector<HTMLElement>(".moss-places-chip-crumb[data-terminal]")?.focus();
+    if (this.focusOnNextRender) {
+      this.container.querySelector<HTMLElement>(this.focusOnNextRender)?.focus();
+      this.focusOnNextRender = null;
     }
+  }
+
+  /** The two-segment switch: "This article" then `allOption`; whichever is the current scope carries `aria-current`. */
+  private buildScopeGroup(allOption: HTMLElement, articleIsCurrent: boolean): HTMLElement {
+    const group = document.createElement("div");
+    group.className = "moss-places-chip-scope";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", this.strings.chipScopeGroup);
+    const article = document.createElement("button");
+    article.type = "button";
+    article.className = SCOPE_OPTION;
+    article.dataset.scope = "article";
+    article.textContent = this.strings.chipThisArticle;
+    if (articleIsCurrent) article.setAttribute("aria-current", "true");
+    else {
+      article.addEventListener("click", () => {
+        this.focusOnNextRender = '[data-scope="article"]';
+        this.callbacks.setArticleMode(true);
+      });
+    }
+    group.append(article, allOption);
+    return group;
+  }
+
+  /** The "All articles" segment while the article alone is shown: a plain button back to every article. */
+  private buildAllOption(): HTMLElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = SCOPE_OPTION;
+    button.dataset.scope = "all";
+    button.textContent = this.strings.chipAll;
+    button.addEventListener("click", () => {
+      this.focusOnNextRender = '[data-scope="all"]';
+      this.callbacks.setArticleMode(false);
+    });
+    return button;
   }
 
   private buildSeparator(): HTMLElement {
@@ -193,37 +231,47 @@ export class ScopeChip {
     return span;
   }
 
-  private buildWidenCrumb(crumb: DisplayCrumb): HTMLElement {
+  /** `option`: the crumb is the "All articles" segment of the switch rather than a plain crumb. */
+  private buildWidenCrumb(crumb: DisplayCrumb, option = false): HTMLElement {
     if (!crumb.target) return this.buildLeaf(crumb);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "moss-places-chip-crumb";
+    button.className = option ? SCOPE_OPTION : CRUMB;
+    if (option) this.markAllOption(button);
     button.textContent = crumb.label;
     const target = crumb.target;
     button.addEventListener("click", () => {
       this.closeMenu();
-      if (target.kind === "all") this.callbacks.selectWork(null);
+      if (option) this.focusOnNextRender = '[data-scope="all"]';
       this.callbacks.setScope(target);
     });
     return button;
   }
 
-  private buildTerminalScope(crumb: DisplayCrumb, children: ScopeChild[]): HTMLElement {
-    if (children.length === 0) return this.buildLeaf(crumb);
+  private markAllOption(button: HTMLElement): void {
+    button.dataset.scope = "all";
+    button.setAttribute("aria-current", "true");
+  }
+
+  private buildTerminalScope(crumb: DisplayCrumb, children: ScopeChild[], option = false): HTMLElement {
+    if (children.length === 0 && !option) return this.buildLeaf(crumb);
 
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "moss-places-chip-crumb";
+    button.className = option ? SCOPE_OPTION : CRUMB;
+    if (option) this.markAllOption(button);
     button.dataset.terminal = "";
     button.id = `moss-places-chip-trigger-${Math.random().toString(36).slice(2, 8)}`;
-    button.setAttribute("aria-haspopup", "menu");
-    button.setAttribute("aria-expanded", "false");
     const label = document.createElement("span");
     label.textContent = crumb.label;
+    button.append(label);
+    if (children.length === 0) return button;
+    button.setAttribute("aria-haspopup", "menu");
+    button.setAttribute("aria-expanded", "false");
     const chevron = document.createElement("span");
     chevron.className = "moss-places-chip-chevron";
     chevron.innerHTML = CHEVRON_SVG;
-    button.append(label, chevron);
+    button.append(chevron);
     button.addEventListener("click", () => {
       if (this.menuEl) this.closeMenu();
       else this.openMenu(button, children);
@@ -275,7 +323,7 @@ export class ScopeChip {
       count.textContent = `(${new Intl.NumberFormat(this.lang).format(child.count)})`;
       item.append(name, count);
       item.addEventListener("click", () => {
-        this.focusTerminalOnNextRender = true;
+        this.focusOnNextRender = "[data-terminal]";
         this.closeMenu();
         this.callbacks.setScope({ kind: "place", id: child.place.id });
       });

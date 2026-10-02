@@ -23,6 +23,17 @@ test("the static figure is replaced by the interactive layer once ready", async 
   await expect(figure.locator(".moss-places-status")).toHaveCount(1);
 });
 
+// Tile rasters are cut from one continuous map: a rounded corner on any of
+// them (the article's own `article img` radius) leaves a gap where four meet.
+test("the map's raster images keep square corners", async ({ page }) => {
+  await page.goto("places/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(FIGURE)).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+  const images = page.locator(".moss-places-viewport img");
+  expect(await images.count()).toBeGreaterThan(0);
+  const radii = await images.evaluateAll((els) => els.map((el) => getComputedStyle(el).borderRadius));
+  expect(radii.every((radius) => radius === "0px"), `border radii: ${radii.join(", ")}`).toBe(true);
+});
+
 // The fixture's own "Faro Notes" (gate-sites.ts's `placesExplorerSparseWork`)
 // carries none of byline/date/description/cover — `places_data.rs` omits all
 // four from the wire for a work with none of them, which once crashed the

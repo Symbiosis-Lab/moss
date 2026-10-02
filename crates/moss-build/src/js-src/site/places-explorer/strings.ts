@@ -32,8 +32,14 @@ export interface PlacesStrings {
   readArticle: string;
   /** The scope chip's root crumb — every other crumb widens toward this. */
   chipAll: string;
-  /** The scope chip's terminal crumb when a work is selected, replacing the place chain entirely. */
+  /** The scope chip's "this article" segment (the article scope's own crumb). */
   chipThisArticle: string;
+  /** `aria-label` on the "This article | All articles" switch's group. */
+  chipScopeGroup: string;
+  /** Live-region text once the switch shows only the current article. */
+  scopeThisArticle: string;
+  /** Live-region text once the switch shows every article. */
+  scopeAllArticles: string;
   /** `aria-label` on the phone-width "…" button that reveals the trail's collapsed middle crumbs in place. */
   chipShowHidden: string;
   /** `{name}` placeholder, filled with the embed's own place or article display name (`data-embed-name`, Rust-emitted, never translated — it is a proper noun) — the `title` on a `style:map`/locator embed's lazily-hydrated iframe (`embed.ts`'s `buildIframe`). */
@@ -57,6 +63,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     readArticle: "Read article",
     chipAll: "All articles",
     chipThisArticle: "This article",
+    chipScopeGroup: "Which articles to show",
+    scopeThisArticle: "Showing only this article.",
+    scopeAllArticles: "Showing all articles.",
     chipShowHidden: "Show hidden places",
     mapEmbedTitle: "Map: {name}",
     cooperativeHint: "Hold {key} and scroll to zoom the map",
@@ -75,6 +84,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     readArticle: "阅读原文",
     chipAll: "全部文章",
     chipThisArticle: "本文",
+    chipScopeGroup: "显示哪些文章",
+    scopeThisArticle: "只显示本文。",
+    scopeAllArticles: "已显示全部文章。",
     chipShowHidden: "显示隐藏地点",
     mapEmbedTitle: "地图：{name}",
     cooperativeHint: "按住 {key} 滚动以缩放地图",
@@ -93,6 +105,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     readArticle: "閱讀原文",
     chipAll: "全部文章",
     chipThisArticle: "本文",
+    chipScopeGroup: "顯示哪些文章",
+    scopeThisArticle: "只顯示本文。",
+    scopeAllArticles: "已顯示全部文章。",
     chipShowHidden: "顯示隱藏地點",
     mapEmbedTitle: "地圖：{name}",
     cooperativeHint: "按住 {key} 捲動以縮放地圖",

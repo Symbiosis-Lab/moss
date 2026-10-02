@@ -35,35 +35,28 @@ const works: Work[] = [portoSteps, portoTram, coimbraLibrary, bragaCathedral];
 
 describe("deriveCrumbs", () => {
   test("root: just the 'all' crumb, not itself a widen target", () => {
-    expect(deriveCrumbs({ kind: "all" }, places, null, null, strings, "en")).toEqual([
+    expect(deriveCrumbs({ kind: "all" }, places, null, strings, "en")).toEqual([
       { label: "All articles", target: null },
     ]);
   });
 
   test("a top-level place: 'all' widens, the place is terminal", () => {
-    expect(deriveCrumbs({ kind: "place", id: "places/portugal" }, places, null, null, strings, "en")).toEqual([
+    expect(deriveCrumbs({ kind: "place", id: "places/portugal" }, places, null, strings, "en")).toEqual([
       { label: "All articles", target: { kind: "all" } },
       { label: "Portugal", target: null },
     ]);
   });
 
   test("a nested place: 'all' and the parent both widen, the child is terminal", () => {
-    expect(deriveCrumbs({ kind: "place", id: "places/porto" }, places, null, null, strings, "en")).toEqual([
+    expect(deriveCrumbs({ kind: "place", id: "places/porto" }, places, null, strings, "en")).toEqual([
       { label: "All articles", target: { kind: "all" } },
       { label: "Portugal", target: { kind: "place", id: "places/portugal" } },
       { label: "Porto", target: null },
     ]);
   });
 
-  test("a selected work collapses the trail to 'all > This article', regardless of the place scope underneath it", () => {
-    expect(deriveCrumbs({ kind: "place", id: "places/porto" }, places, portoSteps, null, strings, "en")).toEqual([
-      { label: "All articles", target: { kind: "all" } },
-      { label: "This article", target: null },
-    ]);
-  });
-
   test("an open ring appends one more non-widenable crumb; the crumb before it keeps its own widen target", () => {
-    expect(deriveCrumbs({ kind: "place", id: "places/porto" }, places, null, 2, strings, "en")).toEqual([
+    expect(deriveCrumbs({ kind: "place", id: "places/porto" }, places, 2, strings, "en")).toEqual([
       { label: "All articles", target: { kind: "all" } },
       { label: "Portugal", target: { kind: "place", id: "places/portugal" } },
       { label: "Porto", target: { kind: "place", id: "places/porto" } },
@@ -75,7 +68,7 @@ describe("deriveCrumbs", () => {
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const VIEWPORT = { width: 1200, height: 800 };
 
-function mount() {
+function mount(articlePlaces: { works: Work[]; places: Place[] } = { works, places }, embedArticle: string | null = null) {
   const figure = document.createElement("figure");
   document.body.append(figure);
   const controller = mountPlacesMap(figure, {
@@ -84,10 +77,15 @@ function mount() {
     tileCells: [],
     tileK: 4,
     tileBleed: 0.1,
-    places: { works, places },
+    places: articlePlaces,
     lang: "en",
   });
   expect(controller).not.toBeNull();
+  if (embedArticle) {
+    // What `attachEmbedModeIfRequested` does for `?article=…&embed=1`.
+    controller!.setScope({ kind: "article", id: embedArticle });
+    controller!.setCurrentArticle(embedArticle);
+  }
   return figure;
 }
 
@@ -234,5 +232,105 @@ describe("the mounted chip", () => {
     ellipsis.click();
     expect(ellipsis.getAttribute("aria-expanded")).toBe("false");
     expect(collapsible.hasAttribute("data-expanded")).toBe(false);
+  });
+});
+
+describe("the article scope switch", () => {
+  // Two places an ocean apart, so the one article cannot cluster into a single marker.
+  const kyoto: Place = { id: "places/kyoto", name: "Kyoto", precision: "city", lat: 35, lng: 135.7 };
+  const twoPlaces = work("two-places", "Two Places", ["places/porto", "places/kyoto"], "2024-06-01");
+  const data = { works: [...works, twoPlaces], places: [...places, kyoto] };
+
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      width: VIEWPORT.width, height: VIEWPORT.height, top: 0, left: 0, right: VIEWPORT.width, bottom: VIEWPORT.height, x: 0, y: 0, toJSON() {},
+    } as DOMRect);
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no network in tests"))));
+    history.replaceState(null, "", "/places/?article=two-places&embed=1");
+  });
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    history.replaceState(null, "", "/places/");
+  });
+
+  const option = (figure: HTMLElement, which: "article" | "all") =>
+    figure.querySelector<HTMLButtonElement>(`.moss-places-chip-scope-option[data-scope="${which}"]`)!;
+  const markerCount = (figure: HTMLElement) => figure.querySelectorAll(".moss-places-marker").length;
+
+  test("the root crumb is a labelled two-segment group with 'This article' current, and no place trail yet", () => {
+    const figure = mount(data, "two-places");
+    const group = figure.querySelector(".moss-places-chip-scope")!;
+    expect(group.getAttribute("role")).toBe("group");
+    expect(group.getAttribute("aria-label")).toBe("Which articles to show");
+    expect(option(figure, "article").getAttribute("aria-current")).toBe("true");
+    expect(option(figure, "all").hasAttribute("aria-current")).toBe(false);
+    expect(figure.querySelector(".moss-places-chip-sep")).toBeNull();
+    expect(markerCount(figure)).toBe(2); // one per place of the article
+  });
+
+  test("All articles shows every article with the place menu on its chevron; This article returns, and focus stays on the pressed segment", () => {
+    const figure = mount(data, "two-places");
+    option(figure, "all").click();
+    expect(document.activeElement).toBe(option(figure, "all"));
+    expect(option(figure, "all").getAttribute("aria-current")).toBe("true");
+    expect(option(figure, "all").getAttribute("aria-haspopup")).toBe("menu");
+    expect(figure.querySelector('[data-current="true"]')).not.toBeNull();
+    expect(figure.querySelector(".moss-places-status")!.textContent).toBe("Showing all articles.");
+    expect(figure.querySelectorAll("[data-work-id]")).not.toHaveLength(0);
+    expect(figure.querySelector('[data-work-id="two-places"]')).toBeNull(); // never its own card
+
+    option(figure, "article").click();
+    expect(document.activeElement).toBe(option(figure, "article"));
+    expect(option(figure, "article").getAttribute("aria-current")).toBe("true");
+    expect(markerCount(figure)).toBe(2);
+    expect(figure.querySelector(".moss-places-status")!.textContent).toBe("Showing only this article.");
+    expect(location.search).toContain("article=two-places"); // the embed's identity survives the round trip
+  });
+
+  test("leaving All articles remembers its place scope and camera, and This article → All articles restores both", () => {
+    const figure = mount(data, "two-places");
+    option(figure, "all").click();
+    option(figure, "all").click(); // opens the place menu
+    figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!.click(); // into Portugal
+    const before = readUrlState();
+    expect(before.scope).toEqual({ kind: "place", id: "places/portugal" });
+
+    option(figure, "article").click();
+    expect(readUrlState().scope).toEqual({ kind: "all" });
+    expect(readUrlState().camera!.zoom).not.toBeCloseTo(before.camera!.zoom, 1);
+
+    option(figure, "all").click();
+    const after = readUrlState();
+    expect(after.scope).toEqual({ kind: "place", id: "places/portugal" });
+    expect(after.camera!.x).toBeCloseTo(before.camera!.x, 1);
+    expect(after.camera!.y).toBeCloseTo(before.camera!.y, 1);
+    expect(after.camera!.zoom).toBeCloseTo(before.camera!.zoom, 1);
+    expect(figure.querySelector(".moss-places-chip-crumb[data-terminal]")!.textContent).toBe("Portugal");
+  });
+
+  test("inside All articles, the checked segment widens back from a place scope like the root crumb did", () => {
+    const figure = mount(data, "two-places");
+    option(figure, "all").click();
+    option(figure, "all").click();
+    figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!.click();
+    option(figure, "all").click();
+    expect(readUrlState().scope).toEqual({ kind: "all" });
+    expect(option(figure, "all").getAttribute("aria-current")).toBe("true");
+  });
+
+  test("a selected card on a plain page gets no switch and no 'This article' crumb", () => {
+    history.replaceState(null, "", "/places/?article=porto-steps");
+    const figure = mount(data);
+    expect(figure.querySelector(".moss-places-chip-scope")).toBeNull();
+    expect(figure.textContent).not.toContain("This article");
+    expect(figure.querySelector(".moss-places-chip")!.textContent).toContain("All articles");
+  });
+
+  test("a site with one article offers no switch", () => {
+    const only = { works: [twoPlaces], places: data.places };
+    const figure = mount(only, "two-places");
+    expect(figure.querySelector(".moss-places-chip-scope")).toBeNull();
   });
 });

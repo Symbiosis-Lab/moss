@@ -8,7 +8,7 @@
  * under an in-flight gesture.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { coverCamera, detailMaxZoom, screenScale, tileDetailMaxZoom } from "../camera";
+import { coverCamera, detailMaxZoom, resizeCamera, screenScale, tileDetailMaxZoom, worldToScreen } from "../camera";
 import { mountPlacesMap } from "../map";
 import { project } from "../projection";
 import { readUrlState } from "../state";
@@ -61,7 +61,7 @@ describe("mountPlacesMap — embed seams", () => {
     places: [{ id: "p1", name: "P1", lat: 10, lng: 10, precision: "city", parent: null }],
   } as any;
 
-  function mount() {
+  function mount(places: any = PLACES) {
     const figure = document.createElement("figure");
     document.body.append(figure);
     const controller = mountPlacesMap(figure, {
@@ -70,16 +70,16 @@ describe("mountPlacesMap — embed seams", () => {
       tileCells: [],
       tileK: 4,
       tileBleed: 0.1,
-      places: PLACES,
+      places,
       lang: "en",
     })!;
     return { figure, controller };
   }
 
-  test("setRowExclusion drops one work's own card from the row without touching its marker selection", () => {
+  test("setCurrentArticle drops that work's own card from the row without touching its marker selection", () => {
     history.replaceState(null, "", "/places/?article=w1");
     const { figure, controller } = mount();
-    controller.setRowExclusion("w1");
+    controller.setCurrentArticle("w1");
     const cardIds = [...figure.querySelectorAll("[data-work-id]")].map((el) => el.getAttribute("data-work-id"));
     expect(cardIds).not.toContain("w1");
     expect(cardIds).toContain("w2");
@@ -87,22 +87,22 @@ describe("mountPlacesMap — embed seams", () => {
     expect(marker).not.toBeNull();
   });
 
-  test("setRowExclusion(null) restores the excluded work's card", () => {
+  test("setCurrentArticle(null) restores the work's card", () => {
     history.replaceState(null, "", "/places/?article=w1");
     const { figure, controller } = mount();
-    controller.setRowExclusion("w1");
-    controller.setRowExclusion(null);
+    controller.setCurrentArticle("w1");
+    controller.setCurrentArticle(null);
     const cardIds = [...figure.querySelectorAll("[data-work-id]")].map((el) => el.getAttribute("data-work-id"));
     expect(cardIds).toContain("w1");
   });
 
-  test("setScope clears a standing row exclusion — a reader who widens scope via the chip sees the excluded work's card again", () => {
-    history.replaceState(null, "", "/places/?article=w1");
+  test("the current article stays off the row after widening scope — in both modes", () => {
+    history.replaceState(null, "", "/places/?article=w1&embed=1");
     const { figure, controller } = mount();
-    controller.setRowExclusion("w1");
+    controller.setCurrentArticle("w1");
     controller.setScope({ kind: "all" });
     const cardIds = [...figure.querySelectorAll("[data-work-id]")].map((el) => el.getAttribute("data-work-id"));
-    expect(cardIds).toContain("w1");
+    expect(cardIds).not.toContain("w1");
   });
 
   test("an article mounted into a 0x0 frame is framed on the work once the frame gets a real size", () => {
@@ -119,6 +119,98 @@ describe("mountPlacesMap — embed seams", () => {
     onResize();
     const camera = readUrlState().camera!;
     expect(camera.zoom).toBeGreaterThan(coverCamera([], { width: 346, height: 231 }).zoom * 3);
+  });
+
+  test("leaving All articles re-fits the article to the frame it is resized to afterwards, not the fullscreen scale", () => {
+    history.replaceState(null, "", "/places/?article=w1&embed=1");
+    const size = (w: number, h: number) =>
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+        width: w, height: h, top: 0, left: 0, right: w, bottom: h, x: 0, y: 0, toJSON() {},
+      } as DOMRect);
+    let onResize: () => void = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(cb: () => void) { onResize = cb; } observe() {} disconnect() {} });
+    // Two places far enough apart that the fit is bound by the frame, not by the zoom ceiling.
+    const twoPlaces = {
+      works: [{ ...PLACES.works[0], places: ["p1", "p2"] }, PLACES.works[1]],
+      places: [...PLACES.places, { id: "p2", name: "P2", lat: 40, lng: 60, precision: "city", parent: null }],
+    };
+    size(1440, 900);
+    const { controller } = mount(twoPlaces);
+    controller.setScope({ kind: "article", id: "w1" });
+    controller.setCurrentArticle("w1");
+    controller.setArticleMode(false);
+    // The collapse message arrives while the frame is still fullscreen-sized; the host resizes it afterwards.
+    controller.setArticleMode(true);
+    size(346, 231);
+    onResize();
+    const fresh = coverCamera([], { width: 346, height: 231 });
+    const camera = readUrlState().camera!;
+    expect(camera.zoom).toBeGreaterThan(fresh.zoom);
+    // The same camera a page that mounted at the small size would have.
+    document.body.innerHTML = "";
+    history.replaceState(null, "", "/places/?article=w1");
+    mount(twoPlaces);
+    expect(camera.zoom).toBeCloseTo(readUrlState().camera!.zoom, 5);
+  });
+
+  test("switching to This article by the chip keeps the reader's pan and zoom through the next resize", () => {
+    history.replaceState(null, "", "/places/?article=w1&embed=1");
+    const size = (w: number, h: number) =>
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+        width: w, height: h, top: 0, left: 0, right: w, bottom: h, x: 0, y: 0, toJSON() {},
+      } as DOMRect);
+    let onResize: () => void = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(cb: () => void) { onResize = cb; } observe() {} disconnect() {} });
+    size(800, 500);
+    const { controller } = mount();
+    controller.setCurrentArticle("w1");
+    controller.setArticleMode(false);
+    document.querySelector<HTMLElement>('.moss-places-chip [data-scope="article"]')!.click();
+    keyboardPan(controller.viewportEl, "ArrowRight", 3);
+    const before = readUrlState().camera!;
+    size(700, 500);
+    onResize();
+    const after = readUrlState().camera!;
+    const expected = resizeCamera(before, { width: 800, height: 500 }, { width: 700, height: 500 });
+    expect(after.zoom).toBeCloseTo(expected.zoom, 1);
+    expect(after.x).toBeCloseTo(expected.x, 0);
+    expect(after.y).toBeCloseTo(expected.y, 0);
+  });
+
+  test("the saved All articles view comes back at the same scale after the viewport changed size in between", () => {
+    history.replaceState(null, "", "/places/?article=w1&embed=1&p=patterson&z=3&x=400&y=200");
+    const size = (w: number, h: number) =>
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+        width: w, height: h, top: 0, left: 0, right: w, bottom: h, x: 0, y: 0, toJSON() {},
+      } as DOMRect);
+    size(1440, 900);
+    const { controller } = mount();
+    controller.setCurrentArticle("w1");
+    controller.setArticleMode(true);
+    size(800, 500);
+    controller.setArticleMode(false);
+    const expected = resizeCamera({ x: 400, y: 200, zoom: 3 }, { width: 1440, height: 900 }, { width: 800, height: 500 });
+    expect(readUrlState().camera!.zoom).toBeCloseTo(expected.zoom, 1);
+  });
+
+  test("the card row counts a work as in view when only a later place of it is", () => {
+    vi.useFakeTimers();
+    const twoPlaces = {
+      works: [{ ...PLACES.works[0], places: ["p1", "p2"] }],
+      places: [...PLACES.places, { id: "p2", name: "P2", lat: 40, lng: 60, precision: "city", parent: null }],
+    };
+    history.replaceState(null, "", "/places/");
+    const { figure, controller } = mount(twoPlaces);
+    controller.setScope({ kind: "article", id: "w1" });
+    const camera = readUrlState().camera!;
+    const second = worldToScreen(project(40, 60), camera, VIEWPORT);
+    wheelZoomIn(controller.viewportEl, second.x, second.y, 40);
+    vi.advanceTimersByTime(1000);
+    // The work's first place has scrolled out; only its second is in view.
+    const first = worldToScreen(project(10, 10), readUrlState().camera!, VIEWPORT);
+    expect(first.x < -22 || first.x > VIEWPORT.width + 22 || first.y < -22 || first.y > VIEWPORT.height + 22).toBe(true);
+    expect(figure.querySelector('[data-work-id="w1"]')).not.toBeNull();
+    vi.useRealTimers();
   });
 
   test("refitScopeIfClipped re-fits the camera when the scope's own points fall outside a new, much narrower viewport", () => {

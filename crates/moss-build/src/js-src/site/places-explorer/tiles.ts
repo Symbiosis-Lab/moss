@@ -17,21 +17,21 @@
  * geometry without a camera or a DOM ever existing.
  *
  * Each loaded tile is a decoded raster `<img>` plus a small live rivers
- * overlay (`raster.ts`'s `splitMapSvg`/`rasterize`) rather than the inline,
- * filtered `<svg>` this file used to build directly — see `map.ts`'s module
- * doc for why. Baked once at fetch time, at its own native resolution,
- * never re-rasterised afterward: a tile's own canvas is already sized by
- * the build (`k` times the world's own scale) for the deepest zoom it will
- * ever be shown at, so nothing past the initial bake needs a sharper
- * texture the way the world layer periodically does.
+ * overlay (`raster.ts`'s `splitMapSvg`/`rasterize`). A raster is baked for the
+ * density its tile is shown at (up to a size cap) and re-baked, through the
+ * same concurrency limit as loads, when that density moves away from it.
  */
 import { detailMaxZoom, screenScale } from "./camera";
 import { project } from "./projection";
-import { rasterizeOrFallback, splitMapSvg, TILE_RELIEF_STRENGTH } from "./raster";
+import { rasterizeOrFallback, splitMapSvg, TILE_RELIEF_STRENGTH, type MapSvgSplit } from "./raster";
 import type { Camera, Viewport } from "./types";
 
 /** Tile rasters are capped at this device pixel ratio — a tile's own build-time resolution already carries the real detail ceiling, so a 3x phone gains nothing from tripling it further. */
 const TILE_RASTER_DPR_CAP = 2;
+/** No tile raster is ever decoded wider or taller than this many pixels — the cost of a sharp bake grows with the square of the zoom, and a phone's canvas budget does not. */
+const TILE_RASTER_MAX_SIDE = 4096;
+/** A tile re-rasterises only once the CSS px per canvas px it needs has moved away from what its raster was baked for by this ratio, up or down — the same deadband the world raster uses, so a steady zoom never schedules a decode, and a raster decoded for fullscreen is released once the view is small again. */
+const TILE_REBAKE_RATIO = 1.3;
 /** How many regional tiles may be mid-fetch/decode at once — see `TileLayer.drainQueue`'s own doc for the stall letting every visible cell start at once was measured causing. */
 const MAX_CONCURRENT_TILE_LOADS = 6;
 
@@ -113,10 +113,10 @@ export function tileOverlayTransform(
 const TILE_VIEW_PAD = 20;
 
 /** Which of `cells` intersect the current view, world-space. Pure — no fetch, no DOM, so a view can be tested without a camera ever existing (the vitest suite passes a plain `Camera`/`Viewport` pair). */
-export function tilesForView(cells: Array<[number, number]>, camera: Camera, viewport: Viewport): Array<[number, number]> {
+export function tilesForView(cells: Array<[number, number]>, camera: Camera, viewport: Viewport, pad: number = TILE_VIEW_PAD): Array<[number, number]> {
   const scale = screenScale(camera, viewport);
-  const halfW = viewport.width / 2 / scale + TILE_VIEW_PAD;
-  const halfH = viewport.height / 2 / scale + TILE_VIEW_PAD;
+  const halfW = viewport.width / 2 / scale + pad;
+  const halfH = viewport.height / 2 / scale + pad;
   const left = camera.x - halfW;
   const right = camera.x + halfW;
   const top = camera.y - halfH;
@@ -233,6 +233,12 @@ export interface TileLayerOptions {
 interface LoadedTile {
   el: HTMLElement;
   release: () => void;
+  /** Kept so a sharper raster is a decode, not a second fetch. */
+  split: MapSvgSplit;
+  /** CSS px per canvas px the current raster was actually baked for (after the size cap). */
+  bakedDensity: number;
+  /** A re-bake of this tile is queued or decoding. */
+  rebaking: boolean;
 }
 
 /** The regional-tile DOM layer: fetches each cell's SVG once, caches the result (including a failure, so a 404 is never retried every frame), and keeps every loaded element positioned over its own cell as the camera moves. */
@@ -242,9 +248,17 @@ export class TileLayer {
   private readonly elements = new Map<string, LoadedTile | "loading" | "failed">();
   /** Cells queued behind `MAX_CONCURRENT_TILE_LOADS`, each already marked "loading" in `elements` — a `clear()` landing while one waits here drops it from `elements` but not from this array, so `drainQueue` re-checks "still wanted?" before spending a slot on it, the same staleness guard `load` itself applies at its own two await points. */
   private readonly queue: string[] = [];
+  /** Loaded tiles waiting for a slot to re-bake; loads go first, since an empty cell costs the reader more than a soft one. */
+  private readonly rebakeQueue: string[] = [];
   private activeLoads = 0;
   /** Bumped by `clear()`, captured by `load()` at its own start and re-checked after each of its two awaits — the per-cell `"loading"` sentinel alone cannot tell a load apart from a LATER load of the SAME cell: a `clear()` landing mid-fetch and a re-queue of the same key before the first `load()` resolves both see `"loading"`, so without this a stale load can still finish, append its own wrapper, and overwrite the fresh one's bookkeeping. A generation mismatch means "a clear() happened since I started" regardless of what the per-cell map currently says. */
   private generation = 0;
+  /** CSS px per canvas px the tiles are shown at right now (`unitScale / k * zoom`) — what a raster must be baked for to be sharp. */
+  private density = 1;
+  /** World units to CSS px at the latest `render()`. A tile finishing its fetch after the viewport changed size (an embed switching layout right after mount) must be placed with THIS, not the value in force when it was queued. */
+  private unitScale = 1;
+  /** Keys of the tiles actually on screen right now (the loaded set also holds a margin of neighbours). Only these are baked sharp: a raster at full density is far larger than the screen it serves, so spending it on every neighbour would cost memory for nothing. */
+  private onScreen = new Set<string>();
 
   constructor(container: HTMLElement, options: TileLayerOptions) {
     this.container = container;
@@ -266,7 +280,9 @@ export class TileLayer {
    * see `map.ts`'s `applyCamera`), the SAME px space the world layer's own
    * internal layout uses.
    */
-  render(camera: Camera, viewport: Viewport, unitScale: number): void {
+  render(camera: Camera, viewport: Viewport, unitScale: number, settled = false): void {
+    this.unitScale = unitScale;
+    this.density = (unitScale / this.options.k) * camera.zoom;
     const opacity = tileFadeOpacity(camera, viewport);
     this.container.style.setProperty("--moss-place-tile-opacity", String(opacity));
     if (opacity <= 0) {
@@ -274,6 +290,7 @@ export class TileLayer {
       return;
     }
     const visible = tilesForView(this.options.availableTiles, camera, viewport);
+    this.onScreen = new Set(tilesForView(visible, camera, viewport, 0).map(([x, y]) => `${x},${y}`));
     for (const [x, y] of visible) {
       const key = `${x},${y}`;
       const existing = this.elements.get(key);
@@ -285,7 +302,15 @@ export class TileLayer {
       this.elements.set(key, "loading");
       this.queue.push(key);
     }
-    this.drainQueue(unitScale);
+    // Every loaded tile, not only the visible ones: a tile left outside the view when the frame shrinks must give its large raster back too.
+    if (settled) {
+      for (const [key, entry] of this.elements) {
+        if (entry === "loading" || entry === "failed" || entry.rebaking || !this.needsRebake(key, entry)) continue;
+        entry.rebaking = true;
+        this.rebakeQueue.push(key);
+      }
+    }
+    this.drainQueue();
   }
 
   /**
@@ -297,22 +322,34 @@ export class TileLayer {
    * finished `load` (success or failure) re-calls this to pull the next
    * one, so the pool stays full without this layer polling for work.
    */
-  private drainQueue(unitScale: number): void {
+  private drainQueue(): void {
     while (this.activeLoads < MAX_CONCURRENT_TILE_LOADS) {
       const key = this.queue.shift();
-      if (key === undefined) return;
+      if (key === undefined) break;
       if (this.elements.get(key) !== "loading") continue; // a clear() already dropped it
       const [x, y] = key.split(",").map(Number);
-      this.activeLoads++;
-      void this.load(key, x, y, unitScale).finally(() => {
-        this.activeLoads--;
-        this.drainQueue(unitScale);
-      });
+      this.run(this.load(key, x, y));
+    }
+    // Re-bakes decode as large as loads do, so they take slots from the same pool.
+    while (this.activeLoads < MAX_CONCURRENT_TILE_LOADS) {
+      const key = this.rebakeQueue.shift();
+      if (key === undefined) return;
+      const entry = this.elements.get(key);
+      if (!entry || entry === "loading" || entry === "failed") continue; // a clear() already dropped it
+      this.run(this.rebake(key, entry));
     }
   }
 
+  private run(job: Promise<void>): void {
+    this.activeLoads++;
+    void job.finally(() => {
+      this.activeLoads--;
+      this.drainQueue();
+    });
+  }
+
   /** Fetch, split, rasterise and position one cell — a method rather than an inline `.then()` chain so the "still wanted?" staleness check (a `clear()` landing mid-flight) reads the same way at both of its two await points. */
-  private async load(key: string, x: number, y: number, unitScale: number): Promise<void> {
+  private async load(key: string, x: number, y: number): Promise<void> {
     const generation = this.generation;
     try {
       const response = await fetch(`${this.options.tilesBaseUrl}tile-${x}-${y}.svg`);
@@ -324,8 +361,7 @@ export class TileLayer {
       if (generation !== this.generation || this.elements.get(key) !== "loading") return; // dropped out of the fade band mid-fetch
       const split = splitMapSvg(text, TILE_RELIEF_STRENGTH);
       if (!split) throw new Error("invalid tile svg");
-      const dpr = Math.min(window.devicePixelRatio || 1, TILE_RASTER_DPR_CAP);
-      const surface = await rasterizeOrFallback(split.baseMarkup, split.base, split.width * dpr, split.height * dpr);
+      const { surface, baked } = await this.bake(split, this.onScreen.has(key) ? this.density : 1);
       if (generation !== this.generation || this.elements.get(key) !== "loading") {
         surface.release();
         return; // dropped out of the fade band while the raster decoded, or superseded by a clear() + re-queue
@@ -342,8 +378,8 @@ export class TileLayer {
         wrapper.append(split.rivers);
       }
       this.container.append(wrapper);
-      this.elements.set(key, { el: wrapper, release: surface.release });
-      this.position(wrapper, x, y, unitScale);
+      this.elements.set(key, { el: wrapper, release: surface.release, split, bakedDensity: baked, rebaking: false });
+      this.position(wrapper, x, y, this.unitScale);
       // This tile just became a real, DOM-present neighbour for up to four
       // others — including, possibly, itself relative to ones already
       // loaded — so both its own clip/mask and theirs need recomputing now,
@@ -364,6 +400,47 @@ export class TileLayer {
     }
   }
 
+  /** CSS px per canvas px a raster of `split` can actually be baked for when `density` is wanted: never below 1, never past the size cap. */
+  private bakeableDensity(split: MapSvgSplit, density: number): number {
+    const dpr = Math.min(window.devicePixelRatio || 1, TILE_RASTER_DPR_CAP);
+    return Math.min(Math.max(1, density), TILE_RASTER_MAX_SIDE / (Math.max(split.width, split.height) * dpr));
+  }
+
+  /** Decode `split` at the pixel size a tile shown at `density` CSS px per canvas px needs, and return the density that size actually gives. */
+  private async bake(split: MapSvgSplit, density: number) {
+    const dpr = Math.min(window.devicePixelRatio || 1, TILE_RASTER_DPR_CAP);
+    const baked = this.bakeableDensity(split, density);
+    const surface = await rasterizeOrFallback(split.baseMarkup, split.base, split.width * baked * dpr, split.height * baked * dpr);
+    return { surface, baked };
+  }
+
+  /** A tile is swapped for a smaller raster only once the density the view needs has fallen, so one that merely left the view keeps its raster for the pan back; an off-screen one is never baked sharper, since nothing shows it. */
+  private needsRebake(key: string, entry: LoadedTile): boolean {
+    const wanted = this.bakeableDensity(entry.split, this.density);
+    return (this.onScreen.has(key) && wanted > entry.bakedDensity * TILE_REBAKE_RATIO) || wanted < entry.bakedDensity / TILE_REBAKE_RATIO;
+  }
+
+  /** Swap a loaded tile's raster for one baked for the density needed now, without refetching. A `clear()` landing mid-decode drops this one. */
+  private async rebake(key: string, entry: LoadedTile): Promise<void> {
+    const generation = this.generation;
+    let result;
+    try {
+      result = await this.bake(entry.split, this.density);
+    } catch {
+      entry.rebaking = false;
+      return;
+    }
+    entry.rebaking = false;
+    if (generation !== this.generation || this.elements.get(key) !== entry) {
+      result.surface.release();
+      return;
+    }
+    entry.el.firstElementChild?.replaceWith(result.surface.el);
+    entry.release();
+    entry.release = result.surface.release;
+    entry.bakedDensity = result.baked;
+  }
+
   /** Remove every tile element this layer has added and forget its own fetch/load state, so a later `render()` re-fetches from scratch — the "no DOM" half of the fade-band contract above. Bumps `generation` unconditionally, even with nothing to remove, so a `load()` already in flight (always tracked in `elements` by the time it runs — see `render()`) is invalidated regardless of this call's own early return. */
   private clear(): void {
     this.generation++;
@@ -380,6 +457,7 @@ export class TileLayer {
     // array growing across repeated in/out-of-band-fade crossings over a
     // long session.
     this.queue.length = 0;
+    this.rebakeQueue.length = 0;
   }
 
   /** Only the transform — called on every `render()`, including a plain pan where nothing has loaded, failed, or been removed, so this must never touch `clip-path`/`mask-image` (see `applyClipAndMask`, called only on those load-state changes). */

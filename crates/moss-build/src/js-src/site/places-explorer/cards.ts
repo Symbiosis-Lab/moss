@@ -220,6 +220,7 @@ export class CardRow {
         const item = document.createElement("li");
         const link = document.createElement("a");
         link.href = companion.url;
+        openInTopWhenEmbedded(link);
         link.textContent = companion.title;
         item.append(link);
         companions.append(item);
@@ -230,10 +231,17 @@ export class CardRow {
     const read = document.createElement("a");
     read.className = "moss-places-card-read";
     read.href = work.url;
+    openInTopWhenEmbedded(read);
     read.textContent = this.strings.readArticle;
     detail.append(read);
     return detail;
   }
+}
+
+/** Inside an embed's iframe a card's link must load in the page the reader is on, not replace the map inside its own frame. */
+function openInTopWhenEmbedded(link: HTMLAnchorElement): void {
+  // Read from the URL, not `data-moss-embed`: the cards are built at mount, before `embed.ts` sets that attribute.
+  if (new URLSearchParams(location.search).get("embed") === "1") link.target = "_top";
 }
 
 function prefersReducedMotion(): boolean {

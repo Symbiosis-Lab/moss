@@ -65,8 +65,9 @@ export function writeCamera(camera: Camera): void {
   history.replaceState(history.state, "", url);
 }
 
-/** Write (or clear) the selected work. */
+/** Write (or clear) the selected work. In an embed `article=` is the host page's identity for the iframe — which article it is the map of — so a selection there lives in memory only. */
 export function writeSelection(articleId: string | null): void {
+  if (new URLSearchParams(location.search).get("embed") === "1") return;
   const url = new URL(location.href);
   if (articleId) url.searchParams.set("article", articleId);
   else url.searchParams.delete("article");

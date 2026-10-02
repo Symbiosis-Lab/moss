@@ -70,6 +70,7 @@ test.describe("desktop, light", () => {
     expect(labels).toEqual([
       "Portugal(3)",
       "Arequipa(1)",
+      "Bergen(1)",
       "Cusco(1)",
       "Faro(1)",
       "Iquitos(1)",
@@ -78,9 +79,18 @@ test.describe("desktop, light", () => {
       "Lisbon(1)",
       "Lisbon Harbor(1)",
       "Nara(1)",
+      "Os(1)",
       "Osaka(1)",
       "Tokyo(1)",
     ]);
+  });
+
+  test("a selected card is a selection, not a scope: the chip keeps 'All articles' and gains no 'This article' crumb or switch", async ({ page }) => {
+    await gotoReady(page, "?article=%2Fporto-steps%2F");
+    await expect(page.locator('.moss-places-marker[data-selected="true"]')).toHaveCount(1);
+    await expect(page.locator(".moss-places-chip-scope")).toHaveCount(0);
+    await expect(page.locator(".moss-places-chip")).not.toContainText("This article");
+    await expect(trigger(page)).toContainText("All articles");
   });
 
   test("ArrowDown moves focus; Escape closes the menu and refocuses the crumb", async ({ page }) => {
@@ -257,6 +267,6 @@ test.describe("dark theme", () => {
     await expect(page.locator(".moss-places-chip")).toBeVisible();
     await trigger(page).click();
     await expect(page.locator('.moss-places-chip-menu[role="menu"]')).toBeVisible();
-    await expect(menuItems(page)).toHaveCount(12);
+    await expect(menuItems(page)).toHaveCount(14);
   });
 });

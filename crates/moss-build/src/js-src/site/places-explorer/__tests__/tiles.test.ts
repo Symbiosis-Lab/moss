@@ -71,6 +71,15 @@ describe("tilesForView", () => {
     expect(visible).not.toEqual(expect.arrayContaining([[35, 17]]));
   });
 
+  test("a zero pad keeps only cells that touch the view, not the loaded margin around it", () => {
+    const bounds = tileCellBounds(10, 5);
+    const camera = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2, zoom: 40 };
+    const viewport = { width: 800, height: 500 };
+    const neighbours: Array<[number, number]> = [[10, 5], [11, 5]];
+    expect(tilesForView(neighbours, camera, viewport)).toEqual(neighbours);
+    expect(tilesForView(neighbours, camera, viewport, 0)).toEqual([[10, 5]]);
+  });
+
   test("an empty cell list selects nothing, however wide the view", () => {
     const camera = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, zoom: 1 };
     const viewport = { width: 1200, height: 700 };
@@ -466,5 +475,101 @@ describe("TileLayer — a clear()+re-queue of the same cell drops the stale load
     expect(container.querySelector('[data-moss-places-tile="10,5"] [data-test-fresh]')).not.toBeNull(); // the fresh raster is the one shown
     expect(staleRelease).toHaveBeenCalledTimes(1); // the stale surface is released, not left dangling
     expect(freshRelease).not.toHaveBeenCalled(); // the fresh surface stays live, owned by the layer
+  });
+});
+
+describe("TileLayer — re-bakes follow the density needed, within the same concurrency limit as loads", () => {
+  const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"></svg>';
+  const BASE_URL = "/_moss/tiles/";
+  const VIEWPORT = { width: 1200, height: 700 };
+  const K = 4;
+  // A block of cells all on screen at the detail ceiling.
+  const CELLS: Array<[number, number]> = [8, 9, 10, 11].flatMap((x) => [4, 5].map((y) => [x, y] as [number, number]));
+  const CAMERA = {
+    x: (tileCellBounds(9, 5).minX + tileCellBounds(10, 5).maxX) / 2,
+    y: (tileCellBounds(9, 5).minY + tileCellBounds(9, 5).maxY) / 2,
+    zoom: detailMaxZoom(VIEWPORT),
+  };
+  /** `unitScale` that makes the layer's density (`unitScale / K * zoom`) equal `density` at CAMERA. */
+  const unitScaleFor = (density: number) => (density * K) / CAMERA.zoom;
+
+  function stubFetch(): void {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: () => Promise.resolve(TILE_SVG) }) as unknown as Response));
+  }
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  /** Loads every cell at `density` and lets the layer settle. */
+  async function loaded(density: number) {
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: CELLS, k: K, bleed: 0.1 });
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(density), true);
+    await flush();
+    expect(container.querySelectorAll(".moss-places-tile")).toHaveLength(CELLS.length);
+    return layer;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rasterizeOrFallbackSpy.mockReset();
+  });
+
+  test("no more than the load limit of re-bakes decode at once", async () => {
+    stubFetch();
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
+    const layer = await loaded(2);
+    rasterizeOrFallbackSpy.mockClear();
+    let inFlight = 0;
+    let peak = 0;
+    const gates: Array<() => void> = [];
+    rasterizeOrFallbackSpy.mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      inFlight--;
+      return { el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} };
+    });
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(10), true);
+    await flush();
+    expect(peak).toBeGreaterThan(0);
+    while (gates.length) {
+      gates.shift()!();
+      await flush();
+    }
+    expect(peak).toBeLessThanOrEqual(6);
+    expect(rasterizeOrFallbackSpy).toHaveBeenCalledTimes(CELLS.length);
+  });
+
+  test("a tile already baked at the size cap is not decoded again when the density grows further", async () => {
+    stubFetch();
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
+    const layer = await loaded(500); // the 100px canvas caps at 4096 / 100 = 40.96
+    rasterizeOrFallbackSpy.mockClear();
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(900), true);
+    await flush();
+    expect(rasterizeOrFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  test("a raster is baked smaller again once the density needed falls well below it", async () => {
+    stubFetch();
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
+    const layer = await loaded(20);
+    rasterizeOrFallbackSpy.mockClear();
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(4), true);
+    await flush();
+    expect(rasterizeOrFallbackSpy).toHaveBeenCalledTimes(CELLS.length);
+    expect(rasterizeOrFallbackSpy.mock.calls[0][2]).toBeCloseTo(400, 0); // 100 canvas px at density 4, dpr 1
+  });
+
+  test("a tile that leaves the view and returns at the same density is not decoded again", async () => {
+    stubFetch();
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
+    const layer = await loaded(20);
+    rasterizeOrFallbackSpy.mockClear();
+    layer.render({ ...CAMERA, x: CAMERA.x + 5000 }, VIEWPORT, unitScaleFor(20), true);
+    await flush();
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(20), true);
+    await flush();
+    expect(rasterizeOrFallbackSpy).not.toHaveBeenCalled();
   });
 });

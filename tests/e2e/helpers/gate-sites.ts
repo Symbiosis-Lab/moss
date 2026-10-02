@@ -2364,6 +2364,23 @@ The hero above is Lisbon's own map, full-bleed.
     // cluster — reusing a located work's exact coordinates here would quietly
     // mint a second one.
     "faro-notes.md": placesExplorerSparseWork("pex014nn", "Faro Notes", "Faro"),
+    // Two places far from every other work and a few tens of km apart: at the
+    // article's own framing they sit closer than the cluster distance, and
+    // still get one marker each.
+    "fjord-crossing.md": `---
+title: Fjord Crossing
+uid: "pex015oo"
+location:
+  - "Bergen"
+  - "Os"
+date: 2023-09-01
+description: "A short note from the fjords."
+---
+
+# Fjord Crossing
+
+A short note from the fjords.
+`,
     ".moss/config.toml": `schema_version = 6
 
 [site]
@@ -2374,7 +2391,17 @@ locator = "align-right"
 type = "place"
 fields = ["location"]
 `,
-    ".moss/places.toml": `["Lisbon"]
+    ".moss/places.toml": `["Bergen"]
+lat = 60.3913
+lng = 5.3221
+precision = "city"
+
+["Os"]
+lat = 60.19
+lng = 5.47
+precision = "region"
+
+["Lisbon"]
 lat = 38.722
 lng = -9.139
 precision = "exact"

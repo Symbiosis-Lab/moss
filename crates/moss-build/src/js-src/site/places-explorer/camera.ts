@@ -138,6 +138,22 @@ export function screenScale(camera: Camera, viewport: Viewport): number {
   return camera.zoom * coverScale(viewport);
 }
 
+/**
+ * The camera for `to` that shows the same scale (CSS px per world unit) and
+ * centre `camera` showed at `from`. `Camera.zoom` is relative to the
+ * viewport's own cover scale, so a bare resize with the zoom untouched
+ * silently re-frames the SAME geographic range at the new size: an embed
+ * entering fullscreen got a magnified copy of its small view, not more map.
+ * Keeping the scale instead lets a bigger viewport simply show more. A
+ * camera already at the cover floor stays there (the whole-world view must
+ * not turn into a zoomed-in one when the viewport shrinks).
+ */
+export function resizeCamera(camera: Camera, from: Viewport, to: Viewport): Camera {
+  if (from.width <= 0 || from.height <= 0 || to.width <= 0 || to.height <= 0) return camera;
+  if (camera.zoom <= MIN_ZOOM) return camera;
+  return { ...camera, zoom: (camera.zoom * coverScale(from)) / coverScale(to) };
+}
+
 /** The zoom multiplier at which `screenScale` reaches `DETAIL_MAX_SCALE` for this viewport. */
 export function detailMaxZoom(viewport: Viewport): number {
   return DETAIL_MAX_SCALE / coverScale(viewport);

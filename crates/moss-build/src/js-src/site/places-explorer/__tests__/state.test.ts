@@ -58,6 +58,13 @@ describe("write round trip", () => {
     expect(new URL(location.href).searchParams.has("article")).toBe(false);
   });
 
+  test("inside an embed writeSelection leaves article= alone: it is the host's identity for the frame", () => {
+    history.replaceState(null, "", "/places/?article=host-article&embed=1");
+    writeSelection(null);
+    writeSelection("another");
+    expect(new URL(location.href).searchParams.get("article")).toBe("host-article");
+  });
+
   test("writeScope round-trips a place scope and clears back to all", () => {
     writeScope({ kind: "place", id: "porto" });
     expect(readUrlState().scope).toEqual({ kind: "place", id: "porto" });

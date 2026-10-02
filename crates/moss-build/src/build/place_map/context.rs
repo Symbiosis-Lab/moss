@@ -399,14 +399,18 @@ impl PlaceMapRenderContext {
     /// untouched either way: a reader with JavaScript off, or whose
     /// hydration fetch fails, sees exactly the figure this always drew.
     ///
-    /// A no-op — the plain static figure — when the explorer is off
+    /// A no-op — the plain static figure — when the figure carries a route
+    /// (`data-map-route`), when the explorer is off
     /// (`should_inject_places_explorer`'s own flag, captured as
     /// `self.explorer`), or when [`Self::with_explorer_handshake`] already
     /// claimed this exact figure: the namespace root's own `style:map`
     /// embed stays the full in-place upgrade target it already was,
     /// rather than two hydration paths competing for one element.
     fn with_embed_hydration(&self, svg: String, scope_query: &str, name: &str) -> String {
-        if !self.explorer || svg.contains("data-moss-places-explorer") {
+        // A figure that draws a route stays the static figure: the live map
+        // draws no route yet, and once it settles it covers the figure, so
+        // upgrading would silently drop the line and its numbered badges.
+        if !self.explorer || svg.contains("data-moss-places-explorer") || svg.contains("data-map-route=") {
             return svg;
         }
         // allow:served-path-url-construct (the place-typed namespace root's

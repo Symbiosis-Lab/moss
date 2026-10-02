@@ -16,7 +16,8 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 
-const MAP_SVG = ".moss-place-locator svg";
+// The static figure's own svg, not any svg inside the locator: a live-map embed adds a fullscreen button whose icon is an svg too.
+const MAP_SVG = ".moss-place-locator figure > svg";
 const ROUTE_LINE = '[data-map-route="line"]';
 const MARKER_LAYER = '[data-map-layer="marker"]';
 const ROUTE_LEADER = '[data-map-route="leader"]';
@@ -153,7 +154,7 @@ for (const [device, viewport] of [
       await page.setViewportSize(viewport);
       await setTheme(page, theme);
       const order = await page.evaluate(({ line, markers }) => {
-        const svg = document.querySelector(".moss-place-locator svg")!;
+        const svg = document.querySelector(".moss-place-locator figure > svg")!;
         const nodes = [...svg.querySelectorAll("*")];
         return {
           line: nodes.findIndex((n) => n.matches(line)),
@@ -163,6 +164,16 @@ for (const [device, viewport] of [
       expect(order.line, "route line must exist").toBeGreaterThanOrEqual(0);
       expect(order.markers, "marker layer must exist").toBeGreaterThanOrEqual(0);
       expect(order.line, `line (${order.line}) must come before markers (${order.markers})`).toBeLessThan(order.markers);
+    });
+
+    test(`a locator that draws a route is never upgraded to a live map — ${device}, ${theme}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await setTheme(page, theme);
+      // Hydration only ever wraps a figure the build marked for it, so the
+      // markup alone decides: no mark, no upgrade, however long one waits.
+      await expect(page.locator(".moss-place-locator iframe")).toHaveCount(0);
+      await expect(page.locator(".moss-place-locator [data-moss-place-embed]")).toHaveCount(0);
+      await expect(page.locator(`.moss-place-locator ${ROUTE_LINE}`)).toBeVisible();
     });
 
     test(`the offset badge carries a leader back to its stop — ${device}, ${theme}`, async ({ page }) => {

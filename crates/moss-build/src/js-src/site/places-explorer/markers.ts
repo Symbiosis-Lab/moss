@@ -2,7 +2,8 @@
  * markers.ts — one marker per in-scope work, clustered by proximity, and
  * the coincident-cluster ring.
  *
- * Placement: a work's FIRST place (`work.places[0]`) only — the same
+ * Placement: a work's FIRST place (`work.places[0]`) only (an `article`
+ * scope draws every place of that one work) — the same
  * one-dot-per-work choice `places.<hash>.json` itself already made at build
  * time (`place_map/places_data.rs`'s module doc), so this module never has
  * to decide among a work's several places on its own. A work with no
@@ -40,6 +41,13 @@ import { worksHereLabel } from "./strings";
 /** One in-scope work, projected to its own first place. */
 export interface WorkPoint extends IdPoint {
   precision: Precision;
+  /** The work this point belongs to when `id` is not the work's own id: an article scope draws one point per place of that one work, and each extra place needs a distinct `id` to cluster by. */
+  workId?: string;
+}
+
+/** The work a point stands for. */
+export function workIdOf(point: WorkPoint): string {
+  return point.workId ?? point.id;
 }
 
 const PRECISION_COARSENESS: Record<Precision, number> = { exact: 0, city: 1, region: 2, country: 3 };
@@ -51,12 +59,21 @@ function coarsestPrecision(precisions: Precision[]): Precision {
   "exact" as Precision);
 }
 
-/** In-scope works, each projected to its own first resolvable place. Pure — no DOM, no camera. */
+/** In-scope works, each projected to its own first resolvable place — or, under an `article` scope, every resolvable place of that one work. Pure — no DOM, no camera. */
 export function pointsForWorks(works: Work[], places: Place[], scope: Scope): WorkPoint[] {
   const byId = new Map(places.map((place) => [place.id, place]));
   const points: WorkPoint[] = [];
   for (const work of works) {
     if (!inScope(work, places, scope)) continue;
+    if (scope.kind === "article") {
+      work.places.forEach((placeId, index) => {
+        const own = byId.get(placeId);
+        if (!own || !hasPoint(own)) return;
+        const at = project(own.lat, own.lng);
+        points.push({ id: index === 0 ? work.id : `${work.id}#${index}`, workId: work.id, x: at.x, y: at.y, precision: own.precision });
+      });
+      continue;
+    }
     const place = byId.get(work.places[0] ?? "");
     // A grouping node (no coordinates) is never a work's own resolved
     // place — `places_data.rs` only ever puts one of those in `places`,
@@ -168,10 +185,13 @@ export class MarkerLayer {
   }
 
   /** Repaint every marker (and the ring, if one is open) for the current camera/viewport/scope/selection. */
-  render(points: WorkPoint[], camera: Camera, viewport: Viewport, selectedId: string | null, works: Map<string, Work>): void {
+  render(points: WorkPoint[], camera: Camera, viewport: Viewport, selectedId: string | null, works: Map<string, Work>, currentId: string | null = null): void {
     this.lastPoints = points;
     this.lastCamera = camera;
-    const clusters = clusterVisible(points, camera.zoom, CLUSTER_DISTANCE);
+    // An article scope draws one point per place of one work: those never merge.
+    const clusters = new Set(points.map(workIdOf)).size === 1
+      ? points.map((point) => ({ ids: [point.id], screen: { x: point.x, y: point.y } }))
+      : clusterVisible(points, camera.zoom, CLUSTER_DISTANCE);
 
     // A pan/zoom can re-cluster the bloomed group's own coordinate into (or
     // out of) another cluster — fold the ring back first, same guard the
@@ -192,7 +212,7 @@ export class MarkerLayer {
         continue;
       }
       seenMarkerKeys.add(key);
-      this.renderMarker(key, cluster, byId, camera, viewport, selectedId, works);
+      this.renderMarker(key, cluster, byId, camera, viewport, selectedId, works, currentId);
     }
 
     // A cluster from a previous render that no longer exists this one
@@ -222,6 +242,7 @@ export class MarkerLayer {
     viewport: Viewport,
     selectedId: string | null,
     works: Map<string, Work>,
+    currentId: string | null,
   ): void {
     const members = cluster.ids.map((id) => byId.get(id)).filter((point): point is WorkPoint => point != null);
     const screen = worldToScreen(worldCentroid(members), camera, viewport);
@@ -248,14 +269,17 @@ export class MarkerLayer {
     button.style.left = `${screen.x}px`;
     button.style.top = `${screen.y}px`;
     button.dataset.precision = coarsestPrecision(members.map((member) => member.precision));
-    if (cluster.ids.length > 1) button.dataset.count = String(cluster.ids.length);
+    const workIds = new Set(members.map(workIdOf));
+    if (workIds.size > 1) button.dataset.count = String(workIds.size);
     else delete button.dataset.count;
-    if (cluster.ids.some((id) => id === selectedId)) button.dataset.selected = "true";
+    if (selectedId != null && workIds.has(selectedId)) button.dataset.selected = "true";
     else delete button.dataset.selected;
-    const dimmedByHighlight = this.highlightIds != null && !cluster.ids.some((id) => this.highlightIds!.has(id));
+    if (currentId != null && workIds.has(currentId)) button.dataset.current = "true";
+    else delete button.dataset.current;
+    const dimmedByHighlight = this.highlightIds != null && !members.some((member) => this.highlightIds!.has(workIdOf(member)));
     if (this.ring || dimmedByHighlight) button.dataset.dimmed = "";
     else delete button.dataset.dimmed;
-    button.setAttribute("aria-label", this.labelFor(cluster.ids, works));
+    button.setAttribute("aria-label", this.labelFor([...workIds], works));
   }
 
   private renderRing(
@@ -358,8 +382,9 @@ export class MarkerLayer {
   }
 
   private activate(cluster: ProximityCluster, members: WorkPoint[]): void {
-    if (members.length <= 1) {
-      this.callbacks.selectWork(cluster.ids[0] ?? null);
+    const workIds = [...new Set(members.map(workIdOf))];
+    if (workIds.length <= 1) {
+      this.callbacks.selectWork(workIds[0] ?? null);
       return;
     }
     const ceiling = this.callbacks.maxZoom();

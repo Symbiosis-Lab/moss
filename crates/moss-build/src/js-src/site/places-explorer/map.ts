@@ -61,6 +61,7 @@ import {
   fitPoints,
   fitWork,
   MIN_ZOOM,
+  resizeCamera,
   screenScale,
   tileDetailMaxZoom,
   worldToScreen,
@@ -68,7 +69,7 @@ import {
 import { CardRow, worksForRow } from "./cards";
 import { ScopeChip } from "./chip";
 import { LabelLayer } from "./labels";
-import { MarkerLayer, pointsForWorks } from "./markers";
+import { MarkerLayer, pointsForWorks, workIdOf } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
 import { rasterizeOrFallback, splitMapSvg, WORLD_RELIEF_STRENGTH } from "./raster";
 import { inScope } from "./scope";
@@ -140,8 +141,10 @@ export interface PlacesMapController {
   setCooperativeGestures(enabled: boolean): void;
   /** Re-clamp is already automatic on every resize (the `ResizeObserver`/`window.resize` listeners below re-run `applyCamera`, which re-clamps zoom/pan around the UNCHANGED camera centre). What is not automatic: a resize that changes the viewport's aspect ratio sharply enough — the embed's own expand/collapse transition, far larger than an ordinary window resize — can leave the current scope's own points outside the new frame even though the camera centre didn't move. Call after such a transition settles; a no-op when every in-scope point is still in view. */
   refitScopeIfClipped(): void;
-  /** Exclude one work's own card from the row regardless of scope or selection — the article locator embed's "no card for the article already being read" rule, the marker itself is unaffected (it still shows `data-selected` when that work is also the current selection). `null` clears it; defaults to no exclusion. */
-  setRowExclusion(workId: string | null): void;
+  /** Name the article this map is the embed of: it never appears in the card row (the reader is already reading it), its marker carries `data-current` while every article is shown, and the chip offers the "This article | All articles" switch. `null` clears it; defaults to none. */
+  setCurrentArticle(workId: string | null): void;
+  /** Show only the current article (`true`) or every article (`false`). Leaving "all" remembers its scope and camera, and coming back restores both. A no-op without a current article. */
+  setArticleMode(articleOnly: boolean): void;
 }
 
 /** Build the interactive layer in place of `figure`'s static `<svg>` child and wire every gesture, selection and scope path together. `null` (leaving the static figure untouched) when the fetched world SVG fails to parse. The world's own first raster decodes in the background (`rebakeWorld`) rather than gating this return — see that call's own comment. */
@@ -194,7 +197,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   // during a gesture, and never blocking one. `worldBakePromise` keeps two
   // decodes from overlapping if two scheduled rebakes still somehow land
   // close together, sharing the one in flight instead of racing a second.
-  let worldBakedZoom = 0;
+  /** CSS px per world unit the current raster was baked for (`unitScale * zoom`), NOT the zoom alone: `zoom` is relative to the viewport's own cover scale, so the same zoom means a 4x larger raster once an embed goes fullscreen. */
+  let worldBakedScale = 0;
   let worldBakePromise: Promise<void> | null = null;
   let worldSurfaceEl: HTMLImageElement | SVGSVGElement | null = null;
   let worldRelease: () => void = () => {};
@@ -204,7 +208,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   function rebakeWorld(unitScale: number, zoom: number): Promise<void> {
     if (worldBakePromise) return worldBakePromise;
     const targetZoom = Math.min(Math.max(zoom, MIN_ZOOM), WORLD_RASTER_ZOOM_CAP);
-    if (worldBakedZoom > 0 && targetZoom <= worldBakedZoom * WORLD_RASTER_REBAKE_RATIO) return Promise.resolve();
+    const targetScale = unitScale * targetZoom;
+    if (worldBakedScale > 0 && targetScale <= worldBakedScale * WORLD_RASTER_REBAKE_RATIO) return Promise.resolve();
     worldBakePromise = (async () => {
       try {
         const dpr = Math.min(window.devicePixelRatio || 1, WORLD_RASTER_DPR_CAP);
@@ -221,7 +226,9 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
         worldRelease();
         worldSurfaceEl = surface.el;
         worldRelease = surface.release;
-        worldBakedZoom = targetZoom;
+        worldBakedScale = targetScale;
+        // A settle that landed mid-bake got this promise back and has already spent its debounce, so nothing else re-checks the scale it saw.
+        scheduleWorldRebake();
       } finally {
         worldBakePromise = null;
       }
@@ -248,7 +255,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       const unitScale = screenScale({ x: 0, y: 0, zoom: 1 }, viewport);
       void rebakeWorld(unitScale, camera.zoom);
     };
-    if (worldBakedZoom === 0) {
+    if (worldBakedScale === 0) {
       fire();
       return;
     }
@@ -310,8 +317,12 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   let scope: Scope = initial.scope;
   let selectedId: string | null = initial.articleId;
   let scopedIds: Set<string> | null = null;
-  /** `setRowExclusion`'s own state — see that method's doc. */
-  let rowExclusionId: string | null = null;
+  /** `setCurrentArticle`'s own state — see that method's doc. */
+  let currentArticleId: string | null = null;
+  /** The "all" side of the article switch, saved when leaving it, with the viewport its camera was framed in (`Camera.zoom` is relative to that viewport's cover scale). */
+  let savedAll: { scope: Scope; camera: Camera; viewport: Viewport } | null = null;
+  /** Set when the article is re-framed before the host has resized the frame (the embed's collapse): the next real size change re-fits instead of keeping the fullscreen scale. */
+  let refitOnResize = false;
 
   function allPoints(): Point[] {
     return pointsForWorks(options.places.works, options.places.places, { kind: "all" });
@@ -369,9 +380,24 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       if (box.width <= 0 || box.height <= 0) return null;
       return { x: box.x - origin.x, y: box.y - origin.y, width: box.width, height: box.height };
     };
+    // The card row's own box is a tall, mostly empty band an opened card
+    // grows up into; what it covers is the cards themselves.
+    // An opened card is left out while any collapsed one is there: fits are
+    // framed against the resting row, not against the card that happens to be open.
+    const cards = [...cardsEl.children];
+    const resting = cards.filter((card) => card.getAttribute("aria-current") !== "true");
+    const cardRects = (resting.length ? resting : cards).map(relative).filter((rect): rect is Rect => rect != null);
+    const cardsBox = cardRects.length
+      ? {
+          x: Math.min(...cardRects.map((r) => r.x)),
+          y: Math.min(...cardRects.map((r) => r.y)),
+          width: Math.max(...cardRects.map((r) => r.x + r.width)) - Math.min(...cardRects.map((r) => r.x)),
+          height: Math.max(...cardRects.map((r) => r.y + r.height)) - Math.min(...cardRects.map((r) => r.y)),
+        }
+      : null;
     return [
       relative(controlsEl),
-      relative(cardsEl),
+      cardsBox,
       relative(chipEl),
       relative(chipEl.querySelector(".moss-places-chip-menu")),
     ].filter((rect): rect is Rect => rect != null);
@@ -457,19 +483,14 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     cardRow.revealSelected(selectedId);
   }
 
-  function setScope(next: Scope): void {
+  /** `restored`: a camera to keep instead of the fit `next` would get. */
+  function setScope(next: Scope, restored?: Camera): void {
     scope = next;
     scopedIds = null;
-    // A row exclusion only means "the reader is already reading this one" —
-    // true only while scope still frames the work that set it. Once scope
-    // changes (the chip's own crumb click included, since it calls this same
-    // function), keeping that work's card hidden would be a stale leftover
-    // rather than the thing the exclusion was for.
-    rowExclusionId = null;
     markerLayer.closeRing();
     urlState.writeScope(next);
     const viewport = getViewport();
-    camera = fitForScope(viewport, freeFrame(viewport));
+    camera = restored ?? fitForScope(viewport, freeFrame(viewport));
     applyCamera(true);
   }
 
@@ -499,7 +520,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     // makes the rest of this a no-op (scope/selection/ring/locale are
     // exactly what opening or closing the menu never changes), so the
     // open menu this is called FROM survives its own trigger untouched.
-    { setScope, selectWork, highlightPlace, menuToggled: () => applyCamera(true) },
+    { setScope, setArticleMode: (articleOnly) => setArticleMode(articleOnly, false), highlightPlace, menuToggled: () => applyCamera(true) },
     strings,
     options.lang,
   );
@@ -520,12 +541,15 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   let camera: Camera = initial.camera ?? fitForScope(getViewport());
   // An embed mounted while hidden fits against a 0x0 frame (a cover camera);
   // the first real size, from the resize paths, re-fits it.
+  /** The viewport size `camera` was last applied at; see `onResize`. */
+  let lastViewport: Viewport = { width: 0, height: 0 };
   let fitPending = !initial.camera && (getViewport().width <= 0 || getViewport().height <= 0);
 
   // ---- camera application -------------------------------------------------
   function applyCamera(settled: boolean): void {
     const viewport = getViewport();
     if (viewport.width <= 0 || viewport.height <= 0) return;
+    lastViewport = viewport;
     if (fitPending) {
       fitPending = false;
       camera = fitForScope(viewport, freeFrame(viewport));
@@ -554,13 +578,13 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const ceiling = currentMaxZoom(viewport);
     figure.style.setProperty("--moss-place-river-scale", String(Math.min(1, MIN_ZOOM / camera.zoom)));
 
-    tileLayer.render(camera, viewport, unitScale);
+    tileLayer.render(camera, viewport, unitScale, settled);
 
     const visiblePoints = pointsForWorks(options.places.works, options.places.places, scope).filter((point) => {
       const screen = worldToScreen(point, camera, viewport);
       return screen.x >= -22 && screen.x <= viewport.width + 22 && screen.y >= -22 && screen.y <= viewport.height + 22;
     });
-    markerLayer.render(visiblePoints, camera, viewport, selectedId, worksById);
+    markerLayer.render(visiblePoints, camera, viewport, selectedId, worksById, currentArticleId);
 
     zoomInBtn.disabled = camera.zoom >= ceiling;
     zoomOutBtn.disabled = camera.zoom <= MIN_ZOOM;
@@ -576,14 +600,13 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       // world texture is worth decoding once the camera stops moving, not
       // worth stalling the frame that proves it stopped.
       scheduleWorldRebake();
-      const visibleIds = new Set(visiblePoints.map((point) => point.id));
+      const visibleIds = new Set(visiblePoints.map(workIdOf));
       let rows = worksForRow(options.places.works, visibleIds, scopedIds, selectedId);
-      if (rowExclusionId) rows = rows.filter((work) => work.id !== rowExclusionId);
+      if (currentArticleId) rows = rows.filter((work) => work.id !== currentArticleId);
       cardRow.render(rows, options.places.places, selectedId);
       labelLayer.render(visiblePoints, camera, viewport, worksById, placesById, reservedLabelRects());
       urlState.writeCamera(camera);
-      const selectedWork = selectedId ? (worksById.get(selectedId) ?? null) : null;
-      scopeChip.render(scope, options.places.places, options.places.works, selectedWork, markerLayer.ringCount());
+      scopeChip.render(scope, options.places.places, options.places.works, markerLayer.ringCount(), currentArticleId);
     }
   }
 
@@ -656,9 +679,25 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     }
   }
 
-  function setRowExclusion(workId: string | null): void {
-    rowExclusionId = workId;
+  function setCurrentArticle(workId: string | null): void {
+    currentArticleId = workId;
     applyCamera(true);
+  }
+
+  /** `deferRefit` arms the re-fit for the next resize: only the embed's collapse message wants it (the host resizes the frame right after), a chip click is followed by no resize. */
+  function setArticleMode(articleOnly: boolean, deferRefit: boolean): void {
+    if (!currentArticleId || articleOnly === (scope.kind === "article")) return;
+    if (articleOnly) {
+      savedAll = { scope, camera, viewport: getViewport() };
+      selectedId = currentArticleId;
+      setScope({ kind: "article", id: currentArticleId });
+      refitOnResize = deferRefit;
+    } else {
+      // Every article shows no selection: the current one is marked by its own ring instead.
+      selectedId = null;
+      setScope(savedAll?.scope ?? { kind: "all" }, savedAll ? resizeCamera(savedAll.camera, savedAll.viewport, getViewport()) : undefined);
+    }
+    announce(articleOnly ? strings.scopeThisArticle : strings.scopeAllArticles);
   }
 
   zoomInBtn.addEventListener("click", () => {
@@ -679,15 +718,32 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     applyCamera(true);
   });
 
+  // A resize keeps the scale (px per degree) and centre, so a bigger
+  // viewport shows more map rather than the same range magnified
+  // (`resizeCamera`'s own doc). `lastViewport` is the size the camera was
+  // last applied at — updated by `applyCamera` itself, so a camera fitted
+  // for a new size is never "resized" a second time by the observer callback
+  // that follows it.
+  function onResize(): void {
+    const viewport = getViewport();
+    const resized = viewport.width !== lastViewport.width || viewport.height !== lastViewport.height;
+    if (refitOnResize && resized && viewport.width > 0 && viewport.height > 0) {
+      refitOnResize = false;
+      camera = fitForScope(viewport, freeFrame(viewport));
+    } else {
+      camera = resizeCamera(camera, lastViewport, viewport);
+    }
+    applyCamera(true);
+  }
   if (typeof ResizeObserver === "function") {
-    new ResizeObserver(() => applyCamera(true)).observe(viewportEl);
+    new ResizeObserver(onResize).observe(viewportEl);
   }
   // The header's own height can change with the viewport width (nav
   // wrapping to a second row, the breadcrumb fold) — re-measure the
   // figure's offset before every resize's own re-fit, not just at mount.
   window.addEventListener("resize", () => {
     syncFigureOffset();
-    applyCamera(true);
+    onResize();
   });
 
   // The settle below starts the world's own first bake (`rebakeWorld`) in
@@ -710,5 +766,5 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     camera = fitForScope(viewport, freeFrame(viewport));
     applyCamera(true);
   }
-  return { setScope, viewportEl, setCooperativeGestures, refitScopeIfClipped, setRowExclusion };
+  return { setScope, viewportEl, setCooperativeGestures, refitScopeIfClipped, setCurrentArticle, setArticleMode: (articleOnly) => setArticleMode(articleOnly, articleOnly) };
 }
