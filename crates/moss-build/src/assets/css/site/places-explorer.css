@@ -88,16 +88,17 @@ html[data-moss-embed] main article.container > figure[data-moss-places-explorer]
    requiring the renderer to also emit `data-width="screen"` on a figure
    that already carries its own handshake attributes.
 
-   Height: `100svh` floored at 480px, not `100svh` minus the header's own
-   rendered height — CSS has no way to subtract one flex sibling's height
-   from another's without either a fixed magic number (wrong the moment a
-   site's nav wraps to a second or third row, which this gate's own fixture
-   does) or a JS measurement this stylesheet doesn't have. Since the figure
-   sits in normal flow BELOW the header, giving it a full `100svh` of its
-   own means its bottom edge lands at `headerHeight + 100svh` down the
-   page — at or past the viewport's own bottom edge on first load either
-   way, which is what "reaches the viewport bottom" asks for; the cost is a
-   header's worth of extra page height before the footer, not a shortfall. */
+   Height: `100svh` minus this figure's own current top offset, floored at
+   480px — the map fills the viewport BELOW the header, not a header's
+   worth past its bottom. CSS alone cannot subtract one flex sibling's
+   height from another's (no fixed constant survives a site's nav wrapping
+   to a second or third row, which this gate's own fixture does), so
+   `map.ts`'s `syncFigureOffset` writes the one number it needs —
+   `--moss-place-figure-top`, this figure's own `getBoundingClientRect().top`
+   — at mount and on every resize. A collapsed heading/no-script build (the
+   custom property unset) falls back to the OLD behaviour: a full `100svh`,
+   its bottom a header's height past the viewport's own — worse than
+   subtracting, never worse than before this fix. */
 article.container > figure[data-moss-places-explorer] {
   inline-size: 100cqi;
   max-inline-size: none;
@@ -109,7 +110,7 @@ article.container > figure[data-moss-places-explorer] {
      nothing had zeroed this before. The header's bottom edge and the map's
      top edge must coincide exactly. */
   margin-block-start: 0;
-  block-size: max(480px, 100svh);
+  block-size: max(480px, calc(100svh - var(--moss-place-figure-top, 0px)));
 }
 
 /* The header rule a hand-authored full-width hero already removes when it
@@ -851,7 +852,16 @@ button.moss-places-chip-crumb {
    `aria-current`, the selected card) is the whole animation — no height
    measured or set from JS. `overflow: hidden` on both the card and the
    detail element itself keeps the collapsed track's content from ever
-   painting outside a zero-height row. */
+   painting outside a zero-height row.
+
+   The collapsed card is also capped to a fixed height — `max-block-size`
+   here is a backstop, not the primary bound: the real bound is the
+   contained CONTENT (the title/meta clamps below, the cover's own fixed
+   block-size), which keeps the select row's natural height under this
+   anyway for any realistic content. The cap exists for what clamping
+   cannot catch (a font-size override, a `line-clamp`-unaware engine) so a
+   long byline can never again inflate the row to "covers almost the whole
+   map" — the defect this whole block exists to keep from coming back. */
 .moss-places-cards .moss-card {
   flex: 0 0 auto;
   inline-size: 240px;
@@ -863,6 +873,9 @@ button.moss-places-chip-crumb {
   overflow: hidden;
   background: color-mix(in srgb, var(--moss-color-surface) 94%, transparent);
   box-shadow: var(--moss-elevation-1);
+}
+.moss-places-cards .moss-card:not([aria-current="true"]) {
+  max-block-size: 100px;
 }
 .moss-places-cards .moss-card[aria-current="true"] {
   grid-template-rows: auto 1fr;
@@ -905,6 +918,7 @@ button.moss-places-chip-crumb {
 }
 .moss-places-card-select .moss-card-cover {
   inline-size: 64px;
+  block-size: 64px;
   flex: 0 0 64px;
   align-self: flex-start;
   border-radius: 8px;
@@ -914,9 +928,48 @@ button.moss-places-chip-crumb {
   outline-offset: -2px;
 }
 
+/* Collapsed card content, clamped: a two-line title and a ONE-line meter
+   line (date and/or the first byline entry only — `cards.ts`'s own
+   `buildCard` never puts the full byline here) are what keep the select
+   row's natural height matching the 64px cover beside it, so the row never
+   grows past the `max-block-size` backstop above regardless of how long an
+   authored title or byline runs. */
+.moss-places-cards .moss-card-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* The expanded card is the one place this title is reused unclamped: same
+   element (`cards.ts` never builds a second title node for the detail
+   region), so a long title that the collapsed clamp above cuts off still
+   reads in full once the reader opens the card — `cards.ts` also carries
+   the full title into the select button's own accessible name for the
+   collapsed state, since this is the only place a reader who can't expand
+   (or hasn't yet) could otherwise see it. `display: block` drops the
+   `-webkit-box` layout mode the clamp above needs; `line-clamp`/
+   `-webkit-line-clamp` alone do nothing once that mode is gone, but
+   resetting both keeps this rule legible as the clamp's own mirror. */
+.moss-places-cards .moss-card[aria-current="true"] .moss-card-title {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
+}
+.moss-places-cards .moss-card-meta {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .moss-places-card-detail {
   min-block-size: 0;
-  overflow: hidden;
+  max-block-size: 280px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .moss-places-card-detail > * {
   padding-inline: 10px;

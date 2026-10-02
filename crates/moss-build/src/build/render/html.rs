@@ -301,6 +301,18 @@ fn namespace_root_map_notice(source_path: &str) -> String {
     format!("{source_path}: supplies this page's intro; the place map composes below it")
 }
 
+/// Whether `doc` is a places-explorer root, for an `Option<&ParsedDocument>`
+/// (the nav breadcrumb's own shape, built before the match arm below ever
+/// unwraps `doc`) rather than [`PlaceMapRenderContext::is_explorer_root_for_doc`]'s
+/// bare `&ParsedDocument` — a thin `Option` adapter so the breadcrumb and
+/// that match arm's own heading/map placement still read the identical
+/// answer, not two separately inlined copies of it.
+fn is_explorer_root_doc(doc: Option<&ParsedDocument>, layout_config: &LayoutConfig) -> bool {
+    doc.is_some_and(|d| {
+        layout_config.place_maps.as_ref().is_some_and(|maps| maps.is_explorer_root_for_doc(d))
+    })
+}
+
 fn generate_html_inner<'d>(
     doc: Option<&ParsedDocument>,
     all_docs: &'d [ParsedDocument],
@@ -449,12 +461,16 @@ fn generate_html_inner<'d>(
         nav_builder
     };
 
-    // Compute breadcrumb segments if the page qualifies
+    // Compute breadcrumb segments if the page qualifies. Forced on for a
+    // places-explorer root regardless of the site's own breadcrumb setting:
+    // its `<h1>` is `.visually-hidden` (design decision 7), so with no other
+    // visible title anywhere in the page, the breadcrumb is the only thing
+    // left to name the section at all.
     let nav_builder = if let Some(d) = doc {
-        if let Some(segments) = compute_breadcrumb_segments(d, all_docs, &site_title, project.has_content_folders) {
-            nav_builder.with_breadcrumb(segments)
-        } else {
-            nav_builder
+        let force_breadcrumb = is_explorer_root_doc(doc, layout_config);
+        match compute_breadcrumb_segments(d, all_docs, &site_title, project.has_content_folders, force_breadcrumb) {
+            Some(segments) => nav_builder.with_breadcrumb(segments, force_breadcrumb),
+            None => nav_builder,
         }
     } else {
         nav_builder
@@ -667,9 +683,9 @@ fn generate_html_inner<'d>(
             // authored body (prepended below rather than appended). See
             // `PlaceMapRenderContext::is_explorer_root`'s own doc for the
             // condition; a claimed sub-term listing keeps its ordinary
-            // visible heading either way.
-            let is_explorer_root = layout_config.place_maps.as_ref()
-                .is_some_and(|maps| maps.is_explorer_root(is_folder_index, doc.is_place_namespace_root, doc.map == Some(false)));
+            // visible heading either way. `is_explorer_root_doc` is the same
+            // decision the breadcrumb above already forced itself on with.
+            let is_explorer_root = is_explorer_root_doc(Some(doc), layout_config);
 
             // Wrap content in book-open layout with cover on the left (before
             // placeholder pass so LQIP attributes are added to the cover <img>).

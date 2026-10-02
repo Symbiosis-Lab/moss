@@ -103,6 +103,20 @@ fn synthetic_places_root_gets_the_explorer_bundle_and_handshake() {
         .expect("data-tiles attribute must have a value");
     let tiles_path = out.join(tiles_url.trim_start_matches('/'));
     assert!(tiles_path.exists(), "data-tiles URL {} must point to an existing file at {}", tiles_url, tiles_path.display());
+
+    // Design decision 7, "the map is the page", applies to a synthetic root
+    // exactly as it does to an authored one: no visible heading, the map
+    // directly under the site header. A site whose places root is declared
+    // only in `.moss/config.toml` (no `places/index.md`) must get the same
+    // `<h1 class="… visually-hidden">` treatment as the authored-root gate
+    // fixture, not a plain visible folder title.
+    let main_start = places_html.find("<main").expect("page has a <main>");
+    let main = &places_html[main_start..];
+    assert_eq!(main.matches("<h1").count(), 1, "the synthetic explorer root must carry exactly one <h1> in main: {places_html}");
+    let h1_start = main.find("<h1").unwrap();
+    let h1_end = main[h1_start..].find("</h1>").unwrap() + h1_start + "</h1>".len();
+    let h1 = &main[h1_start..h1_end];
+    assert!(h1.contains("visually-hidden"), "the synthetic explorer root's own <h1> must be visually hidden: {h1}");
 }
 
 /// `explorer = false` on the place-typed kind must suppress both the bundle

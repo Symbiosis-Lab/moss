@@ -38,6 +38,14 @@ pub struct NavigationBuilder<'a> {
     current_page_url: Option<&'a str>,
     lang: Language,
     breadcrumb_segments: Option<Vec<BreadcrumbSegment>>,
+    /// Render the trail's own `is_current` segment instead of the ordinary
+    /// skip (`breadcrumb.rs`'s `nav_left_html`) — an explorer root's only
+    /// use (`render/html.rs`/`render/blocking.rs`, both via `is_explorer_root`).
+    /// Every other page relies on its own visible `<h1>` to say "you are
+    /// here" and would show its own title twice if this were ever on by
+    /// default; an explorer root's `<h1>` is `.visually-hidden` (design
+    /// decision 7), so the breadcrumb is the only thing left to say it.
+    breadcrumb_current_visible: bool,
     /// Translations for the current page (for nav language toggle)
     translations: Vec<TranslationLink>,
     /// Language of the current page — the INTERFACE language, so it picks nav
@@ -84,6 +92,7 @@ impl<'a> NavigationBuilder<'a> {
             current_page_url,
             lang,
             breadcrumb_segments: None,
+            breadcrumb_current_visible: false,
             translations: Vec::new(),
             current_lang: lang,
             current_lang_tag: lang.as_bcp47_attr().to_string(),
@@ -120,8 +129,20 @@ impl<'a> NavigationBuilder<'a> {
 
     /// Set breadcrumb segments for this navigation.
     /// When set, the site name in `.nav-left` is replaced with a breadcrumb trail.
-    pub fn with_breadcrumb(mut self, segments: Vec<BreadcrumbSegment>) -> Self {
+    ///
+    /// `force_current_visible` is the SAME `force` an explorer-root caller
+    /// already passed to [`compute_breadcrumb_segments`] to get `segments`
+    /// in the first place — one switch, not two kept manually in sync. It
+    /// used to be a separate chained `.with_breadcrumb_current_visible()`
+    /// call every explorer-root call site had to remember to add right
+    /// after this one; a caller that set one and not the other (compute the
+    /// segments with `force: true` but forget the builder call, or vice
+    /// versa) would have gotten a trail whose own "current page" segment
+    /// disagreed with whether its heading was hidden. See the
+    /// `breadcrumb_current_visible` field doc for what it does.
+    pub fn with_breadcrumb(mut self, segments: Vec<BreadcrumbSegment>, force_current_visible: bool) -> Self {
         self.breadcrumb_segments = Some(segments);
+        self.breadcrumb_current_visible = force_current_visible;
         self
     }
 
@@ -556,13 +577,20 @@ pub fn titlecase_segment(segment: &str) -> String {
 /// Returns `Some(segments)` when breadcrumbs should be shown, `None` otherwise.
 ///
 /// Breadcrumbs are shown when:
-/// 1. The homepage has `breadcrumb: true` (site-wide enable)
+/// 1. The homepage has `breadcrumb: true` (site-wide enable), OR `force` is set
 /// 2. The current page has NOT set `breadcrumb: false` (per-page override)
 /// 3. The page's effective depth > 0 (homepages don't get breadcrumbs)
 ///
 /// The first segment is always the site name linking home.
 /// The last segment is the current page as plain text (not a link).
 /// Middle segments link to their folder's index page.
+///
+/// `force`: an explorer root (design decision 7, "the map is the page") draws
+/// its own `<h1>` `.visually-hidden` — with no other visible title anywhere
+/// in the page, a site that otherwise keeps breadcrumbs off (nav items cover
+/// orientation everywhere else) would name the section nowhere at all. `true`
+/// only for that one page shape; every other rule above still applies on top
+/// of it (a page-level `breadcrumb: false` still opts out).
 ///
 /// **Translation roots**: A folder whose index page is a translation of the site
 /// homepage (linked via `translationKey` or stem convention) is transparent in
@@ -573,6 +601,7 @@ pub fn compute_breadcrumb_segments(
     all_docs: &[ParsedDocument],
     site_title: &str,
     has_content_folders: bool,
+    force: bool,
 ) -> Option<Vec<BreadcrumbSegment>> {
     // Parse URL path into folder parts
     let parts: Vec<&str> = doc.url_path.split('/').collect();
@@ -614,15 +643,16 @@ pub fn compute_breadcrumb_segments(
         .find(|d| d.url_path == "index.html")
         .and_then(|d| d.breadcrumb);
 
-    let breadcrumb_enabled = match homepage_breadcrumb {
-        Some(true) => true,
-        Some(false) => false,
-        None => {
-            // Auto-enable when no nav items exist
-            let has_nav_items = has_nav_items(all_docs, has_content_folders);
-            !has_nav_items
-        }
-    };
+    let breadcrumb_enabled = force
+        || match homepage_breadcrumb {
+            Some(true) => true,
+            Some(false) => false,
+            None => {
+                // Auto-enable when no nav items exist
+                let has_nav_items = has_nav_items(all_docs, has_content_folders);
+                !has_nav_items
+            }
+        };
 
     if !breadcrumb_enabled {
         return None;

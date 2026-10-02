@@ -2509,6 +2509,127 @@ precision = "exact"
   },
 };
 
+// ── Places explorer: a realistic root ─────────────────────────────────────
+// Four shapes a short, English, authored-root fixture (PLACES_EXPLORER_GATE
+// above) never exercises, one richer site rather than four narrow ones (the
+// standing "keep the number of fixture sites small" rule):
+//   1. A SYNTHETIC root — no "places/index.md" anywhere, the places
+//      namespace declared only in `.moss/config.toml` and reached only
+//      through works' own `location:` fields.
+//   2. Long, multi-link markdown bylines — several contributors, each a
+//      `[Name](url)` link, the shape a real credits line is actually
+//      authored in, not a bare string.
+//   3. A three-level hierarchy (Japan -> Kansai -> Kyoto) whose MIDDLE rung
+//      (Kansai, a region) has no work of its own — only Kyoto, a city
+//      under it, does — and whose TOP rung (Japan) has no gazetteer row at
+//      all, a name-only grouping level reachable solely by Kansai's own
+//      `parent =` reference.
+//   4. The whole site in zh-Hant, the language bucket the label layer's
+//      CJK rung draws from. Tokyo and Osaka sit at their REAL Natural
+//      Earth coordinates (confirmed against the embedded pack, same as
+//      PLACES_EXPLORER_LABELS_GATE above) so the labels assertion exercises
+//      the real pack, not a stub.
+// Served by playwright/places-explorer-real.config.ts.
+function placesExplorerRealWork(uid: string, title: string, location: string, date: string, bylineBlock: string, cover?: string): string {
+  const coverLine = cover ? `\ncover: ${cover}` : "";
+  return `---
+title: ${title}
+uid: "${uid}"
+location: "${location}"
+date: ${date}
+byline: |
+${bylineBlock}${coverLine}
+---
+
+# ${title}
+
+A short note from ${title}.
+`;
+}
+
+export const PLACES_EXPLORER_REAL_GATE: ScratchSiteSpec = {
+  name: "places-explorer-real-gate",
+  files: {
+    "cover.svg": PLACES_EXPLORER_COVER_SVG,
+    // A raster cover — `syntheticBusyImage` produces a real PNG, not an
+    // SVG. Every other covered fixture in this file (PLACES_EXPLORER_GATE
+    // included) uses an SVG cover, which `resolve_cover` always resolved
+    // correctly: the raster `.webp`-guessing bug this fixture pins never
+    // had a PNG/JPEG cover anywhere in the suite to fail on.
+    "cover.png": syntheticBusyImage(200, 140),
+    // No "places/index.md" — defect 1's own shape: the root is synthesized
+    // from the term index alone.
+    //
+    // The title is long CJK text, not "Kyoto Garden" — the collapsed card's
+    // two-line clamp needs a title that actually overflows it to pin the
+    // clamp/unclamp split; a short English title never would have.
+    "kyoto-garden.md": placesExplorerRealWork(
+      "per001aa",
+      "京都一座隱藏在竹林深處的古老庭園與其悠長的歷史故事",
+      "Kyoto",
+      "2024-04-15",
+      "  作者　[黃毛](/people/huang-mao/)\n  編輯　[蘇美智](/people/su-meizhi/)\n  首發媒體　[遠聲媒體](https://example.org/a)\n",
+      "cover.png",
+    ),
+    "tokyo-crossing.md": placesExplorerRealWork(
+      "per002bb",
+      "Tokyo Crossing",
+      "Tokyo",
+      "2024-04-01",
+      "  作者　[周一](/people/zhou-yi/)\n",
+    ),
+    "osaka-market.md": placesExplorerRealWork(
+      "per003cc",
+      "Osaka Market",
+      "Osaka",
+      "2024-03-10",
+      "  作者　[林二](/people/lin-er/)\n",
+    ),
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "zh-hant"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+title = "地點"
+`,
+    ".moss/places.toml": `["Kyoto"]
+lat = 35.0116
+lng = 135.7681
+precision = "city"
+parent = "Kansai"
+
+["Kansai"]
+lat = 34.75
+lng = 135.5
+precision = "region"
+parent = "Japan"
+
+# Japan itself has NO row here — only Kansai's "parent = Japan" link names
+# it. This is fix 2's own shape: a grouping level with no gazetteer entry
+# at all, reachable solely by reference, which used to leave Kyoto/Kansai
+# stuck at the top level instead of nested under it.
+
+# Real Natural Earth populated-place coordinates (confirmed against the
+# embedded pack — see PLACES_EXPLORER_LABELS_GATE above), own gazetteer
+# names, no parent: the labels assertion needs real pack entries at these
+# exact points to exist, not a fixture-only name.
+["Tokyo"]
+lat = 35.687
+lng = 139.749
+precision = "exact"
+
+["Osaka"]
+lat = 34.752
+lng = 135.458
+precision = "exact"
+`,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── Overlay text needs a panel, and a hero grows to fit it ───────────────────
 // A real decoded image this time, not a hand-set `data-hero-tone` — the panel
 // colour comes from `color_extract::panel_background`, which reads the

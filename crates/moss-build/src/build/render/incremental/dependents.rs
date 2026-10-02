@@ -165,7 +165,12 @@ pub fn breadcrumb_ancestor_descendants(
     documents
         .iter()
         .filter(|d| d.url_path != folder.url_path && d.url_path.starts_with(&prefix))
-        .filter(|d| compute_breadcrumb_segments(d, documents, "", has_content_folders).is_some())
+        // `force: d.is_place_namespace_root` — an explorer root's breadcrumb
+        // is forced on independent of the site's own setting (`components/
+        // nav.rs`'s own doc), so a descendant that happens to be one must be
+        // treated as showing a trail today even when the site-wide answer
+        // alone would have said no.
+        .filter(|d| compute_breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some())
         .filter_map(|d| d.source_path.clone())
         .collect()
 }

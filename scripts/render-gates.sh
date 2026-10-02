@@ -83,6 +83,7 @@ GATES_BUILD=(
   places-explorer-labels
   places-explorer-chip
   places-explorer-embed
+  places-explorer-real
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

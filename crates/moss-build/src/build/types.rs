@@ -262,12 +262,16 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_names: Option<String>,
-    /// True for a real folder-index page sitting exactly at a place-typed
-    /// term namespace root (e.g. a real `places/index.md`, no `place_page:`
-    /// claim) — set once in `build::terms::derive_terms` from
-    /// `TermIndex::place_namespace_roots`, the same "render layer cannot see
-    /// `TermIndex`" reasoning as `term_sections` above. Gates the term-map
-    /// splice in `render/html.rs`: such a page's own intro no longer wins
+    /// True for a folder-index page sitting exactly at a place-typed term
+    /// namespace root — an authored `places/index.md` with no `place_page:`
+    /// claim, or a synthetic one when no such file exists. An authored page
+    /// is flagged once in `build::terms::derive_terms` from
+    /// `TermIndex::place_namespace_roots` (the same "render layer cannot see
+    /// `TermIndex`" reasoning as `term_sections` above); a synthetic page is
+    /// flagged inline by `render::blocking::synthetic_folder_doc`, from the
+    /// same `TermIndex`, because it is constructed after that pass already
+    /// ran. Gates the term-map splice AND the explorer root's hidden-heading
+    /// treatment in `render/html.rs`: such a page's own intro no longer wins
     /// outright over the map the unclaimed synthetic root would have shown.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]

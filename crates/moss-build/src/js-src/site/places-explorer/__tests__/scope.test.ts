@@ -102,4 +102,90 @@ describe("childrenOf", () => {
   test("an article scope has no children", () => {
     expect(childrenOf({ kind: "article", id: "alpha-piece" }, places, works)).toEqual([]);
   });
+
+  test("a place whose declared parent names no entry in `places` is treated as top-level, not dropped", () => {
+    // `places_data.rs` can only emit an ancestor the gazetteer has
+    // coordinates for (`fold_ancestors`'s own doc); a place whose immediate
+    // parent has none still carries the dangling id. The menu must still
+    // offer it rather than silently losing it.
+    const orphan: Place = { id: "places/gamma", name: "Gamma", parent: "places/nowhere", precision: "city", lat: 1, lng: 1 };
+    const orphanWork = work("gamma-piece", ["places/gamma"]);
+    const children = childrenOf({ kind: "all" }, [...places, orphan], [...works, orphanWork]);
+    expect(children.map((child) => child.place.id)).toContain("places/gamma");
+  });
+});
+
+describe("a three-level hierarchy whose middle place has no work of its own", () => {
+  // Country -> Region -> City, with the work located only at City. Region
+  // (the middle place) still gets its own entry in `places`
+  // (`places_data.rs`'s `fold_ancestors`) but no work ever names it
+  // directly — exactly the 31-of-56 shape a real site had.
+  const country2: Place = { id: "places/arcadia", name: "Arcadia", precision: "country", lat: 20, lng: 20 };
+  const region: Place = { id: "places/midland", name: "Midland", parent: "places/arcadia", precision: "region", lat: 20.1, lng: 20.1 };
+  const city: Place = { id: "places/leafburg", name: "Leafburg", parent: "places/midland", precision: "city", lat: 20.2, lng: 20.2 };
+  const places3: Place[] = [country2, region, city];
+  const cityWork = work("leafburg-piece", ["places/leafburg"]);
+  const works3: Work[] = [cityWork];
+
+  test("the root menu offers the top-level country, with the leaf's count rolled all the way up", () => {
+    const children = childrenOf({ kind: "all" }, places3, works3);
+    expect(children.map((child) => child.place.id)).toEqual(["places/arcadia"]);
+    expect(children[0].count).toBe(1);
+  });
+
+  test("digging into the country reveals the work-less region, with the same rolled-up count", () => {
+    const children = childrenOf({ kind: "place", id: "places/arcadia" }, places3, works3);
+    expect(children.map((child) => child.place.id)).toEqual(["places/midland"]);
+    expect(children[0].count).toBe(1);
+  });
+
+  test("digging into the region reveals the leaf city", () => {
+    const children = childrenOf({ kind: "place", id: "places/midland" }, places3, works3);
+    expect(children.map((child) => child.place.id)).toEqual(["places/leafburg"]);
+    expect(children[0].count).toBe(1);
+  });
+
+  test("the country scope includes the leaf's work two hops down", () => {
+    expect(inScope(cityWork, places3, { kind: "place", id: "places/arcadia" })).toBe(true);
+  });
+});
+
+describe("a grouping node with no coordinates of its own", () => {
+  // `places_data.rs`'s `fold_ancestors` emits one of these for an ancestor
+  // it had to invent — no gazetteer row at all, or a row with no
+  // coordinates — purely so the chip menu can still dig through it.
+  // `lat`/`lng`/`precision` are absent (see `types.ts`'s own `Place` doc),
+  // which none of `inScope`/`crumbs`/`childrenOf` ever reads: this pins
+  // that the whole scope module works off `id`/`name`/`parent` alone and
+  // never needs a point to walk, group or count through one.
+  const country3: Place = { id: "places/borealia", name: "Borealia" };
+  const region3: Place = { id: "places/tundra", name: "Tundra", parent: "places/borealia" };
+  const city3: Place = { id: "places/frostport", name: "Frostport", parent: "places/tundra", precision: "city", lat: 60, lng: 60 };
+  const places4: Place[] = [country3, region3, city3];
+  const frostportWork = work("frostport-piece", ["places/frostport"]);
+  const works4: Work[] = [frostportWork];
+
+  test("it appears in the root menu with the rolled-up count", () => {
+    const children = childrenOf({ kind: "all" }, places4, works4);
+    expect(children.map((child) => child.place.id)).toEqual(["places/borealia"]);
+    expect(children[0].count).toBe(1);
+  });
+
+  test("digging into it reveals the next grouping node, still coordinate-less", () => {
+    const children = childrenOf({ kind: "place", id: "places/borealia" }, places4, works4);
+    expect(children.map((child) => child.place.id)).toEqual(["places/tundra"]);
+    expect(children[0].place.lat).toBeUndefined();
+  });
+
+  test("the scope reaches the leaf's work through two coordinate-less hops", () => {
+    expect(inScope(frostportWork, places4, { kind: "place", id: "places/borealia" })).toBe(true);
+  });
+
+  test("the breadcrumb trail names it like any other place", () => {
+    expect(crumbs({ kind: "place", id: "places/tundra" }, places4)).toEqual([
+      { kind: "all" },
+      { kind: "place", id: "places/borealia" },
+      { kind: "place", id: "places/tundra" },
+    ]);
+  });
 });

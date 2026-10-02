@@ -33,7 +33,7 @@ import {
 } from "./clusters";
 import { project } from "./projection";
 import { inScope } from "./scope";
-import type { Camera, Place, Point, Precision, Scope, Viewport, Work } from "./types";
+import { hasPoint, type Camera, type Place, type Point, type Precision, type Scope, type Viewport, type Work } from "./types";
 import type { PlacesStrings } from "./strings";
 import { worksHereLabel } from "./strings";
 
@@ -58,7 +58,11 @@ export function pointsForWorks(works: Work[], places: Place[], scope: Scope): Wo
   for (const work of works) {
     if (!inScope(work, places, scope)) continue;
     const place = byId.get(work.places[0] ?? "");
-    if (!place) continue;
+    // A grouping node (no coordinates) is never a work's own resolved
+    // place — `places_data.rs` only ever puts one of those in `places`,
+    // never in a `WorkEntry`'s own `places` ids — but the type can't say
+    // that on its own, so this still narrows rather than asserting past it.
+    if (!place || !hasPoint(place)) continue;
     const projected = project(place.lat, place.lng);
     points.push({ id: work.id, x: projected.x, y: projected.y, precision: place.precision });
   }

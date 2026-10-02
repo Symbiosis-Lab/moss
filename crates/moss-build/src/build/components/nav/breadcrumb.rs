@@ -33,6 +33,30 @@ impl<'a> NavigationBuilder<'a> {
                 let mut parts = Vec::new();
                 for segment in segments {
                     if segment.is_current {
+                        // Ordinarily skipped — "you are here" is already
+                        // the page's own visible `<h1>`, so repeating the
+                        // title here would say it twice. `force`d on only
+                        // for an explorer root, whose `<h1>` is hidden (see
+                        // `breadcrumb_current_visible`'s own doc): render it
+                        // as the trail's own unlinked, `aria-current="page"`
+                        // terminal crumb, reusing the same label markup/
+                        // `data-trail-crumb` handle every other crumb gets.
+                        if self.breadcrumb_current_visible {
+                            // `breadcrumb-current` — not just `breadcrumb-segment` —
+                            // is what lets site.css's legibility/fold rules tell
+                            // this crumb apart from the real last ANCESTOR
+                            // segment: with this one forced on, it is the trail's
+                            // true last child, so a selector keyed on mere
+                            // position would now hit this span instead (see
+                            // `.breadcrumb-segment:last-child`'s own doc in
+                            // site.css). Same pattern the nav island already
+                            // uses for its own always-visible current crumb
+                            // (`island.rs`'s `moss-nav-island-current`).
+                            parts.push(format!(
+                                r#"<span class="breadcrumb-segment breadcrumb-current" aria-current="page" data-trail-crumb><span class="breadcrumb-label">{}</span></span>"#,
+                                segment.title
+                            ));
+                        }
                         continue;
                     }
                     let is_home = segment.url == home_path;

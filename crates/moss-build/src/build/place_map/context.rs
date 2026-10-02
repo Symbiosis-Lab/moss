@@ -211,6 +211,94 @@ impl PlaceMapRenderContext {
         is_folder_index && is_place_namespace_root && !map_disabled
     }
 
+    /// [`Self::is_explorer_root`], reading its three signals off `doc`
+    /// itself rather than making every caller re-derive `is_folder_index`
+    /// by hand — `render/html.rs`'s own authored-page path and
+    /// `render/blocking.rs`'s synthetic-folder path both reach this exact
+    /// decision from a `ParsedDocument`, and used to each inline a slightly
+    /// different copy of the same folder-index predicate (one of the two
+    /// read it correctly; the other always passed a hardcoded `false`,
+    /// which is what shipped a visible heading on a places root with no
+    /// authored index page). The predicate is the same one
+    /// `render/html.rs`'s own folder-index detection already uses
+    /// elsewhere in that file.
+    pub fn is_explorer_root_for_doc(&self, doc: &crate::build::types::ParsedDocument) -> bool {
+        let is_folder_index = doc.kind == moss_core::PageKind::Folder
+            && doc.url_path.ends_with("/index.html")
+            && doc.url_path != "index.html";
+        self.is_explorer_root(is_folder_index, doc.is_place_namespace_root, doc.map == Some(false))
+    }
+
+    /// Compose a SYNTHETIC term-listing folder's lead content whole: the
+    /// (possibly `.visually-hidden`) heading, this key's own map in
+    /// explorer-root order, the place breadcrumb/children chrome, and the
+    /// member list — everything `render/blocking.rs`'s synthetic-folder
+    /// path (no authored `ParsedDocument` backs it) used to assemble
+    /// inline, one `is_explorer_root` check at a time. Returns the decision
+    /// alongside the composed HTML because the caller still needs it for
+    /// its own breadcrumb-forcing, below this composition.
+    ///
+    /// `render/html.rs`'s AUTHORED-folder path never calls this: an
+    /// authored page's cover/byline/body interleave with the heading and
+    /// map across a much longer stretch of that file (a cover row, a
+    /// claimed-term splice, the children listing), not the flat
+    /// heading-then-map-then-chrome shape a synthetic index always has —
+    /// it reaches the same `is_explorer_root` decision via
+    /// [`Self::is_explorer_root_for_doc`] instead, and splices its own map
+    /// in at its own call site.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_explorer_folder_lead<'a>(
+        maps: Option<&Self>,
+        is_place_namespace_root: bool,
+        map_disabled: bool,
+        page_title: &str,
+        folder: &str,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+        page_path: &str,
+        place_breadcrumb_html: &str,
+        article_list: &str,
+        place_children_html: &str,
+    ) -> (bool, String) {
+        let is_explorer_root = maps.is_some_and(|m| m.is_explorer_root(true, is_place_namespace_root, map_disabled));
+        let heading = crate::build::components::folder_title::render(page_title, false, is_explorer_root);
+        // No `ParsedDocument` backs this synthetic folder index, so there is
+        // no frontmatter to carry a `route: true` from — this listing's map
+        // is always an aggregate anyway, which `render_term_map` never draws
+        // a route on regardless.
+        let map_html = maps.and_then(|m| m.render_term_map(folder, members, page_path, 0, false, false));
+        // Breadcrumb/children are spliced in only when non-empty, each on
+        // its own line — an empty string here must not add a byte to a
+        // non-place site's output, which the byte-identity witness treats
+        // as a build regression exactly the same as any other.
+        let mut content_html = if is_explorer_root {
+            // The map leads, same as `render/html.rs`'s explorer-root
+            // branch — the hidden heading and breadcrumb follow it rather
+            // than sitting above it.
+            let mut s = map_html.clone().unwrap_or_default();
+            s.push_str(&heading);
+            s
+        } else {
+            heading
+        };
+        if !place_breadcrumb_html.is_empty() {
+            content_html.push('\n');
+            content_html.push_str(place_breadcrumb_html);
+        }
+        if !is_explorer_root {
+            if let Some(map) = map_html.as_deref() {
+                content_html.push('\n');
+                content_html.push_str(map);
+            }
+        }
+        content_html.push('\n');
+        content_html.push_str(article_list);
+        if !place_children_html.is_empty() {
+            content_html.push('\n');
+            content_html.push_str(place_children_html);
+        }
+        (is_explorer_root, content_html)
+    }
+
     /// `is_embed` is true only for a `style:map` body embed
     /// (`folder_embed.rs`'s dispatch) — a page's own primary map (a real or
     /// synthesized place term page's own figure, `render/html.rs` and

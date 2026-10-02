@@ -1835,8 +1835,8 @@ header:has(+ .moss-hero) .main-nav {
    before anything else. Never wraps to a second line internally (that would
    produce a 3-row nav: site-name+partial-breadcrumb / rest-of-breadcrumb /
    nav-links). The clip removes residue after `flex-shrink` has done its job —
-   e.g., when the parent-page segment (last-child, min-width: 5em) still can't
-   fit. Below ~320px the site name itself may be clipped.
+   e.g., when the parent-page segment (the last ancestor anchor, min-width:
+   5em) still can't fit. Below ~320px the site name itself may be clipped.
 
    `clip` rather than `hidden` for the same reason as
    `.moss-nav-island-trail`: `hidden` makes a scroll container, and a hover
@@ -1958,7 +1958,13 @@ header:has(+ .moss-hero) .main-nav {
      minimally truncated — most contextual piece of info
    - Middle segments shrink first with ellipsis — less contextual
    moss skips the current page in segments (see nav.rs:106-108), so the
-   last .breadcrumb-segment IS the parent page. */
+   last .breadcrumb-segment anchor IS the parent page — EXCEPT on an
+   explorer root (places-explorer), where breadcrumb.rs forces the current
+   page back on as an extra, unlinked `<span class="breadcrumb-segment
+   breadcrumb-current">` crumb after it. That span, not the parent-page
+   anchor, is then the trail's actual last child — see
+   `a.breadcrumb-segment:last-of-type` below for how the rules still find
+   the right one. */
 .breadcrumb-separator {
   flex-shrink: 0;
   margin: 0 0.35em;
@@ -1995,10 +2001,9 @@ header:has(+ .moss-hero) .main-nav {
   white-space: nowrap;
 }
 
-/* Parent-page segment (last): shrinks 5× slower than the middle segments so it
-   stays legible; it only truncates once they have collapsed to their "…".
-   :last-child is safe because nav.rs always emits breadcrumb-segment as
-   the trailing element (parts joined with separator).
+/* Parent-page segment (last ANCESTOR, not necessarily the last child — see
+   above): shrinks 5× slower than the middle segments so it stays legible;
+   it only truncates once they have collapsed to their "…".
    min-inline-size: 5em ≈ 5 characters: preserves a recognizable fragment of the
    parent page name even when the segment is squeezed to its minimum.
 
@@ -2008,8 +2013,26 @@ header:has(+ .moss-hero) .main-nav {
    items sum to at least 1; once the middles freeze at their floor the parent is
    the only one left, and a lone 0.2 made the browser absorb 20% of the overflow
    and let the rest run off the edge — the parent segment stayed full width and
-   spilled past the viewport instead of ellipsizing. A lone 1 absorbs all of it. */
-.breadcrumb-segment:last-child {
+   spilled past the viewport instead of ellipsizing. A lone 1 absorbs all of it.
+
+   `a.breadcrumb-segment:last-of-type`, not a bare `:last-child`: every
+   ancestor/home segment is an `<a>`, but an explorer root's forced-visible
+   current crumb is an unlinked `<span class="breadcrumb-segment
+   breadcrumb-current">` appended after it (breadcrumb.rs) — a real last
+   CHILD sharing the same class, but a different TAG. `:last-of-type`
+   counts siblings of the same tag name, so it finds the last `<a>`
+   regardless of a trailing `<span>`; a bare `:last-child` would instead
+   match that span (or nothing at all), leaving the actual parent-page
+   segment with no legibility floor — the invariant this rule exists for.
+
+   Scoped to `.nav-left` (the masthead trail only): `.breadcrumb-segment`
+   is also the class the island's own trail reuses, and a bare
+   `a.breadcrumb-segment:last-of-type` would newly out-specify that trail's
+   own "ancestors never truncate" rule (`.moss-nav-island-trail
+   .breadcrumb-segment`) for ITS last ancestor `<a>` too — a regression the
+   old `:last-child` form never risked, since the island's last CHILD is
+   always its own current `<span>`, never an ancestor. */
+.nav-left a.breadcrumb-segment:not(.breadcrumb-current):last-of-type {
   flex-shrink: 1;
   min-inline-size: 5em;
 }
@@ -2031,7 +2054,7 @@ header:has(+ .moss-hero) .main-nav {
    their "…" through the same `min-inline-size: 1.4em` that governs them on a laptop
    window narrowed to the same measure. */
 @media (max-width: 32rem) {
-  .breadcrumb-segment:last-child {
+  .nav-left a.breadcrumb-segment:not(.breadcrumb-current):last-of-type {
     min-inline-size: 3em;
   }
 
@@ -2044,11 +2067,16 @@ header:has(+ .moss-hero) .main-nav {
    its first measurement), the masthead folds like the island instead of
    ellipsising: a middle segment either fits whole or folds whole into the
    `…` levels button — half an ancestor name tells the reader nothing. Only
-   the last segment (the parent page) keeps its ellipsis ladder above, floor
-   and all. Everything above this block is therefore the no-script base
-   state, not dead code: with JS off the attribute is never set and the
-   shipped ellipsis behaviour is exactly what renders. */
-.nav-left[data-fold-managed] .breadcrumb-segment:not(:last-child) {
+   the last ANCESTOR segment (the parent page) keeps its ellipsis ladder
+   above, floor and all. Everything above this block is therefore the
+   no-script base state, not dead code: with JS off the attribute is never
+   set and the shipped ellipsis behaviour is exactly what renders.
+
+   `a.breadcrumb-segment:not(:last-of-type)` — same reasoning as the
+   legibility rule above: an explorer root's unlinked current-page crumb is
+   a trailing `<span>`, excluded here by tag (`a.`) rather than position, so
+   it never gets folded as if it were a middle ancestor either. */
+.nav-left[data-fold-managed] a.breadcrumb-segment:not(.breadcrumb-current):not(:last-of-type) {
   flex-shrink: 0;
   min-inline-size: 0;
 }
@@ -3320,8 +3348,10 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
    how wide the trail WOULD be before deciding what to drop.
 
    Selector depth is load-bearing: the current crumb also carries
-   `.breadcrumb-segment`, so this has to out-specify both the rule right above
-   and the masthead's `.breadcrumb-segment:last-child`. */
+   `.breadcrumb-segment`, so this has to out-specify the rule right above.
+   (It no longer also has to out-specify a masthead rule: the masthead's own
+   last-ancestor legibility rule is scoped to `.nav-left`, which this trail
+   is not inside.) */
 .moss-nav-island-trail .moss-nav-island-current {
   color: var(--moss-color-text);
   font-weight: 600;

@@ -32,7 +32,7 @@ import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
 import { parseMapSvg, TileLayer } from "./tiles";
 import * as urlState from "./state";
-import type { Camera, LabelsData, PlacesData, Place, Point, Rect, Scope, Viewport } from "./types";
+import { hasPoint, type Camera, type LabelsData, type PlacesData, type Place, type Point, type Rect, type Scope, type Viewport } from "./types";
 
 /** Relief fades to this floor at the detail ceiling — the design's own tuned value, ported from the prototype's `RELIEF_STRENGTH_FLOOR`. */
 const RELIEF_STRENGTH_FLOOR = 0.2;
@@ -82,6 +82,19 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   const strings = copyFor(options.lang);
   const worldSvg = parseMapSvg(options.worldSvgText);
   if (!worldSvg) return null;
+
+  // `--moss-place-figure-top` is the one number places-explorer.css cannot
+  // derive on its own (see its own doc on the figure's `block-size`): the
+  // header's rendered height, which varies with viewport width (nav
+  // wrapping) and content (a folding breadcrumb), so CSS floors the
+  // figure's height at `100svh` minus THIS figure's own current top
+  // offset rather than at a guessed constant. Read at mount and again on
+  // every resize (below) — a stale value is what used to push the card
+  // row below the fold at rest.
+  function syncFigureOffset(): void {
+    figure.style.setProperty("--moss-place-figure-top", `${figure.getBoundingClientRect().top}px`);
+  }
+  syncFigureOffset();
 
   const viewportEl = document.createElement("div");
   viewportEl.className = "moss-places-viewport";
@@ -178,7 +191,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     {
       fitPoints(points) {
         const viewport = getViewport();
-        camera = fitPoints(points, viewport, currentMaxZoom(viewport));
+        camera = fitPoints(points, viewport, currentMaxZoom(viewport), freeFrame(viewport));
         applyCamera(true);
       },
       focusPoint(point, zoom) {
@@ -218,6 +231,41 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     ].filter((rect): rect is Rect => rect != null);
   }
 
+  /**
+   * The inner rectangle every camera fit (the initial cover, a scope
+   * change, a selection, a ring opening) frames points INTO, instead of the
+   * whole viewport — the same three overlays `reservedLabelRects` already
+   * reports, generalized from "don't draw a label here" to "don't frame a
+   * marker here". A reserved rect counts against the TOP edge when its own
+   * vertical centre sits in the viewport's top half (the chip, the
+   * controls), against the BOTTOM edge otherwise (the card row); this is a
+   * band subtraction, not a general rectangle-minus-rectangles cutout, which
+   * is all three overlays ever need since none of them sits mid-viewport.
+   * Falls back to the whole viewport if the bands would invert (a viewport
+   * too short for both reserved bands at once — better an occasional
+   * marker-under-overlay than a negative-size fit).
+   */
+  function freeFrame(viewport: Viewport): Rect {
+    let top = 0;
+    let bottom = viewport.height;
+    for (const rect of reservedLabelRects()) {
+      const center = rect.y + rect.height / 2;
+      if (center < viewport.height / 2) top = Math.max(top, rect.y + rect.height);
+      else bottom = Math.min(bottom, rect.y);
+    }
+    if (bottom <= top) return { x: 0, y: 0, width: viewport.width, height: viewport.height };
+    return { x: 0, y: top, width: viewport.width, height: bottom - top };
+  }
+
+  /** The camera the current `scope` fits to, within `frame` — shared by the initial mount, the re-fit once the card row has real content (both below), and `setScope`'s own fit for every later scope change. */
+  function fitForScope(viewport: Viewport, frame?: Rect): Camera {
+    if (scope.kind !== "place") return coverCamera(allPoints(), viewport, frame);
+    const points = pointsForWorks(options.places.works, options.places.places, scope);
+    return points.length
+      ? fitPoints(points, viewport, detailMaxZoom(viewport), frame)
+      : coverCamera(allPoints(), viewport, frame);
+  }
+
   function selectWork(id: string | null): void {
     const next = selectedId === id ? null : id;
     selectedId = next;
@@ -226,10 +274,11 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       const points = (work?.places ?? [])
         .map((placeId) => placesById.get(placeId))
         .filter((place): place is Place => place != null)
+        .filter(hasPoint)
         .map((place) => project(place.lat, place.lng));
       if (points.length) {
         const viewport = getViewport();
-        camera = fitPoints(points, viewport, currentMaxZoom(viewport));
+        camera = fitPoints(points, viewport, currentMaxZoom(viewport), freeFrame(viewport));
       }
       if (work) announce(work.title || strings.untitled);
     }
@@ -251,7 +300,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     urlState.writeScope(next);
     const points = pointsForWorks(options.places.works, options.places.places, next);
     const viewport = getViewport();
-    camera = points.length ? fitPoints(points, viewport, currentMaxZoom(viewport)) : coverCamera(allPoints(), viewport);
+    const frame = freeFrame(viewport);
+    camera = points.length ? fitPoints(points, viewport, currentMaxZoom(viewport), frame) : coverCamera(allPoints(), viewport, frame);
     applyCamera(true);
   }
 
@@ -294,11 +344,12 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   // world ceiling (never `currentMaxZoom`, which reads `camera` — not yet
   // initialized here): no tile has had a chance to matter before the first
   // real `applyCamera(true)` call right below re-clamps against it.
-  let camera: Camera = initial.camera ?? (() => {
-    if (scope.kind !== "place") return coverCamera(allPoints(), getViewport());
-    const points = pointsForWorks(options.places.works, options.places.places, scope);
-    return points.length ? fitPoints(points, getViewport()) : coverCamera(allPoints(), getViewport());
-  })();
+  // No `frame` here: the card row has not rendered anything yet (the first
+  // `applyCamera(true)` call, at the bottom of this function, is what
+  // populates it), so `freeFrame` would read it as empty and reserve
+  // nothing. The re-fit right after that first call corrects this once the
+  // row's real height is known.
+  let camera: Camera = initial.camera ?? fitForScope(getViewport());
 
   // ---- camera application -------------------------------------------------
   function applyCamera(settled: boolean): void {
@@ -446,15 +497,33 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   resetBtn.addEventListener("click", () => {
     markerLayer.closeRing();
     scopedIds = null;
-    camera = coverCamera(allPoints(), getViewport());
+    const viewport = getViewport();
+    camera = coverCamera(allPoints(), viewport, freeFrame(viewport));
     applyCamera(true);
   });
 
   if (typeof ResizeObserver === "function") {
     new ResizeObserver(() => applyCamera(true)).observe(viewportEl);
   }
-  window.addEventListener("resize", () => applyCamera(true));
+  // The header's own height can change with the viewport width (nav
+  // wrapping to a second row, the breadcrumb fold) — re-measure the
+  // figure's offset before every resize's own re-fit, not just at mount.
+  window.addEventListener("resize", () => {
+    syncFigureOffset();
+    applyCamera(true);
+  });
 
   applyCamera(true);
+  // The card row has real content now (this call's own `cardRow.render`),
+  // so `freeFrame` can finally see its true height. Re-fit once against it
+  // — never for a saved camera from the URL, which already won above and
+  // must keep winning — so "at rest" never leaves a marker under the row
+  // the very first camera guess, made before anything had rendered into
+  // it, could not have known to avoid.
+  if (!initial.camera) {
+    const viewport = getViewport();
+    camera = fitForScope(viewport, freeFrame(viewport));
+    applyCamera(true);
+  }
   return { setScope, viewportEl, setCooperativeGestures, refitScopeIfClipped, setRowExclusion };
 }

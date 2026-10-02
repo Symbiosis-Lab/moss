@@ -8,9 +8,13 @@ import { pointsForWorks } from "../markers";
 import { project } from "../projection";
 import type { Place, Work } from "../types";
 
-const LISBON: Place = { id: "places/lisbon", name: "Lisbon", precision: "city", lat: 38.72, lng: -9.14 };
-const PORTO: Place = { id: "places/porto", name: "Porto", precision: "city", lat: 41.15, lng: -8.61 };
-const COUNTRY: Place = { id: "places/portugal", name: "Portugal", precision: "country", lat: 39.5, lng: -8.0 };
+// No `: Place` annotation — these three always carry real coordinates, and
+// `project(LISBON.lat, LISBON.lng)` below needs TS to know that (the
+// interface's `lat`/`lng` are optional, absent on a grouping node — see
+// `types.ts`'s own doc); the inferred literal type keeps them definite.
+const LISBON = { id: "places/lisbon", name: "Lisbon", precision: "city", lat: 38.72, lng: -9.14 } as const satisfies Place;
+const PORTO = { id: "places/porto", name: "Porto", precision: "city", lat: 41.15, lng: -8.61 } as const satisfies Place;
+const COUNTRY = { id: "places/portugal", name: "Portugal", precision: "country", lat: 39.5, lng: -8.0 } as const satisfies Place;
 const PLACES = [LISBON, PORTO, COUNTRY];
 
 function work(id: string, places: string[]): Work {

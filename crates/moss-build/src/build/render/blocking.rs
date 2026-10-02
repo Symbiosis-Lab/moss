@@ -164,6 +164,15 @@ fn synthetic_folder_doc(
         moss_core::heading::filename_text(display_leaf)
     };
     let hidden_root = term_root.then_some(false);
+    // `terms::derive_terms` flags a REAL index's `is_place_namespace_root`
+    // before this folder's synthetic doc even exists — both synthesis
+    // blocks below push into `documents` after that pass already ran, so a
+    // synthetic root was never visited by it. Set the same flag here
+    // instead, from the same `TermIndex` the real pass reads, so a places
+    // root declared only in `.moss/config.toml` reaches `is_explorer_root`
+    // exactly like an authored one, not a visible title on one path and a
+    // hidden one on the other.
+    let is_place_root = term_index.place_namespace_roots().any(|ns| ns == folder);
     ParsedDocument {
         label: title.clone(),
         title,
@@ -175,6 +184,7 @@ fn synthetic_folder_doc(
         clean_stem: folder_leaf.to_string(),
         nav: hidden_root,
         listed: hidden_root,
+        is_place_namespace_root: is_place_root,
         ..Default::default()
     }
 }
@@ -1172,7 +1182,7 @@ pub fn generate_blocking_content_for_build(
         // `render_term_map` bakes into a namespace root's figure can never
         // name a file this build doesn't also write.
         if let Some(ctx) = site_config.place_maps.take() {
-            let json = crate::build::place_map::places_data::emit_places_data(&documents, &ctx, site_config.math);
+            let json = crate::build::place_map::places_data::emit_places_data(&documents, &ctx, site_config.math, &dir_overrides);
             let hash = compute_content_hash(&json);
             site_config.place_maps = Some(ctx.with_explorer_places_hash(hash));
         }
@@ -2440,36 +2450,25 @@ pub fn generate_blocking_content_for_build(
             // nav item — there is no title to suppress here. Do not add an
             // `is_nav_bar_item` guard using the document list at this site.
             //
-            // No `data-source-fm="title"` either: there is no markdown file
-            // behind this heading, so a click on it in the editor preview has
-            // no `title` field to point at. Annotating it would promise a
-            // destination that does not exist.
+            // No `data-source-fm="title"` either: no markdown file backs
+            // this heading, so a click on it in the editor preview has no
+            // `title` field to point at.
             //
-            // Breadcrumb/children are spliced in only when non-empty, each on
-            // its own line — an empty string here must not add a byte to a
-            // non-place site's output, which the byte-identity witness (task
-            // A0) treats as a build regression exactly the same as any other.
-            let mut content_html = crate::build::components::folder_title::render(&page_title, false, false);
-            if !place_breadcrumb_html.is_empty() {
-                content_html.push('\n');
-                content_html.push_str(&place_breadcrumb_html);
-            }
-            // No `ParsedDocument` backs this synthetic folder index (see
-            // above), so there is no frontmatter to carry a `route: true`
-            // from — this listing's map is always an aggregate anyway, which
-            // `render_term_map` never draws a route on regardless.
-            if let Some(map) = layout_config.place_maps.as_ref().and_then(|maps| {
-                maps.render_term_map(folder, all_docs_refs.iter().copied(), &auto_url_path, 0, false, false)
-            }) {
-                content_html.push('\n');
-                content_html.push_str(&map);
-            }
-            content_html.push('\n');
-            content_html.push_str(&article_list);
-            if !place_children_html.is_empty() {
-                content_html.push('\n');
-                content_html.push_str(&place_children_html);
-            }
+            // Heading/map ordering (design decision 7, "the map is the
+            // page") lives in `render_explorer_folder_lead`, shared with
+            // `is_explorer_root_for_doc` (`render/html.rs`'s authored path).
+            let (is_explorer_root, mut content_html) = crate::build::place_map::PlaceMapRenderContext::render_explorer_folder_lead(
+                layout_config.place_maps.as_ref(),
+                folder_doc.is_place_namespace_root,
+                folder_doc.map == Some(false),
+                &page_title,
+                folder,
+                all_docs_refs.iter().copied(),
+                &auto_url_path,
+                &place_breadcrumb_html,
+                &article_list,
+                &place_children_html,
+            );
 
             let path_resolver = {
                 let pr = match css_version.as_str() {
@@ -2518,8 +2517,9 @@ pub fn generate_blocking_content_for_build(
                 &documents,
                 &localized_site_name,
                 project_structure.has_content_folders,
+                is_explorer_root,
             ) {
-                Some(segments) => nav_builder.with_breadcrumb(segments),
+                Some(segments) => nav_builder.with_breadcrumb(segments, is_explorer_root),
                 None => nav_builder,
             };
 

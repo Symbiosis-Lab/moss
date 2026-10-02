@@ -198,17 +198,29 @@ for (const [label, size] of [
     // itself was never wrong. Sample a short run of points a couple of px
     // inside each of `.moss-places-viewport`'s own four edges instead: real
     // map content — coastline, shading, the graticule of rivers and relief —
-    // is never perfectly flat across more than a few px, so a run with zero
-    // variance is the figure's own flat CSS background
-    // (`--moss-place-water`) still showing through, not drawn content.
+    // is almost always visibly textured across more than a few px, so a run
+    // with zero variance is normally the figure's own flat CSS background
+    // (`--moss-place-water`) still showing through, not drawn content — EXCEPT
+    // the polar ice sheet, the one real map feature drawn as a single flat
+    // fill with no internal texture (`places_data`'s own "ice" layer,
+    // `var(--moss-place-ice)`); a camera framed far enough south legitimately
+    // puts a solid band of it at an edge, so the loop below resolves that
+    // layer's own colour once and treats a flat run matching it as content,
+    // not a gap.
     // The BOTTOM edge is clamped to the browser viewport's own height, not
-    // `viewportBox`'s: the figure's CSS height is `max(480px, 100svh)`,
-    // deliberately reaching past the visible viewport once a header
-    // precedes it (this file's own `100svh`-floored height comment) — past
-    // that line is unrendered page, outside what `page.screenshot()`
-    // without `fullPage` even captures, not a band this check is about.
+    // `viewportBox`'s: the figure's CSS height is `100svh` minus its own top
+    // offset floored at 480px (`places-explorer.css`'s own doc on
+    // `--moss-place-figure-top`), which can still floor past the visible
+    // window on a header tall enough — past that line is unrendered page,
+    // outside what `page.screenshot()` without `fullPage` even captures, not
+    // a band this check is about.
     const png = await page.screenshot({ animations: "disabled" });
     const image = decodePng(png);
+    const iceFillStr = await page.evaluate(() => {
+      const el = document.querySelector('[data-map-layer="ice"] path');
+      return el ? getComputedStyle(el).fill : null;
+    });
+    const iceColor = iceFillStr ? (iceFillStr.match(/\d+/g) ?? []).map(Number) : null;
     // WebKit's own project (`devices['Desktop Safari']`) renders at 2x
     // device pixel ratio — the PNG is twice `size`'s own CSS-px dimensions
     // — while every coordinate above is in CSS px (`boundingBox()`'s own
@@ -241,7 +253,14 @@ for (const [label, size] of [
       const samples = points.map((p) => image.at(Math.round(p.x * dpr), Math.round(p.y * dpr)));
       const reds = samples.map((s) => s[0]);
       const variance = Math.max(...reds) - Math.min(...reds);
-      expect(variance, `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content: ${JSON.stringify(samples)}`).toBeGreaterThan(0);
+      const isFlatIce =
+        variance === 0 &&
+        iceColor != null &&
+        samples.every((s) => Math.abs(s[0] - iceColor[0]) <= 2 && Math.abs(s[1] - iceColor[1]) <= 2 && Math.abs(s[2] - iceColor[2]) <= 2);
+      expect(
+        variance > 0 || isFlatIce,
+        `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content: ${JSON.stringify(samples)}`,
+      ).toBe(true);
     }
   });
 }
@@ -416,8 +435,10 @@ interface AdjacentPair {
   bottom: number;
 }
 
-/** Navigate to a deep Lisbon-area zoom past the world ceiling, where regional tiles exist, and return every horizontally-adjacent pair of tile rects' shared edge — throwing if any two rects overlap on both axes (a tile placed outside its own cell). */
-async function loadAndFindAdjacentTilePairs(page: import("@playwright/test").Page): Promise<{ pairs: AdjacentPair[]; viewportSize: { width: number; height: number } }> {
+/** Navigate to a deep Lisbon-area zoom past the world ceiling, where regional tiles exist, and return every horizontally-adjacent pair of tile rects' shared edge — throwing if any two rects overlap on both axes (a tile placed outside its own cell). Also returns the explorer figure's own visible rect: this gate's fixture carries an unusually tall, multi-row header, so a shared edge can sit well above the figure's own top (still inside the page, per `boundingBox()`, but inside the HEADER, not the map) — a caller comparing pixels needs the figure's own bounds, not just the page's. */
+async function loadAndFindAdjacentTilePairs(
+  page: import("@playwright/test").Page,
+): Promise<{ pairs: AdjacentPair[]; viewportSize: { width: number; height: number }; figureRect: { x: number; y: number; width: number; height: number } }> {
   const viewport = { width: 1280, height: 800 };
   await page.setViewportSize(viewport);
 
@@ -486,7 +507,8 @@ async function loadAndFindAdjacentTilePairs(page: import("@playwright/test").Pag
     }
   }
   expect(pairs.length, "expected at least one pair of horizontally adjacent tiles").toBeGreaterThan(0);
-  return { pairs, viewportSize: page.viewportSize()! };
+  const figureRect = (await page.locator(".moss-place-map[data-moss-places-explorer]").boundingBox())!;
+  return { pairs, viewportSize: page.viewportSize()!, figureRect };
 }
 
 test("past the world ceiling, regional tiles overlay the world with no gap or overlap", async ({ page }) => {
@@ -502,21 +524,30 @@ test("past the world ceiling, regional tiles overlay the world with no gap or ov
 // would miss. Tracked as a known gap rather than masked.
 test("past the world ceiling, the coast at a tile boundary is pixel-continuous", async ({ page, browserName }) => {
   test.skip(browserName === "webkit", "page.screenshot hangs at this deep-zoom state in WebKit — see comment above");
-  const { pairs, viewportSize } = await loadAndFindAdjacentTilePairs(page);
+  const { pairs, viewportSize, figureRect } = await loadAndFindAdjacentTilePairs(page);
 
-  // The widest shared edge actually ON SCREEN, clamped to the viewport
-  // BEFORE comparing — a robust pick over "the first pair found", which
-  // can be a sliver too thin to clip a screenshot from, and over the raw
-  // (unclamped) edge length, which can prefer a pair most of whose own
-  // length sits above or below the fold over one that is smaller on paper
-  // but fully visible (measured: the explorer root's own page layout
-  // moves the whole tile grid up or down the page — e.g. design decision
-  // 7 removing its heading — and an unclamped comparison silently started
-  // picking a mostly off-screen pair instead).
-  const onScreenHeight = (pair: AdjacentPair) => Math.min(viewportSize.height, pair.bottom) - Math.max(0, pair.top);
+  // The widest shared edge actually ON SCREEN, clamped to the FIGURE'S own
+  // visible rect before comparing — a robust pick over "the first pair
+  // found", which can be a sliver too thin to clip a screenshot from, and
+  // over the raw (unclamped) edge length, which can prefer a pair most of
+  // whose own length sits above or below the fold over one that is smaller
+  // on paper but fully visible (measured: the explorer root's own page
+  // layout moves the whole tile grid up or down the page — e.g. design
+  // decision 7 removing its heading — and an unclamped comparison silently
+  // started picking a mostly off-screen pair instead). Clamping to the page
+  // viewport's own `[0, height]` isn't enough on this gate's fixture: its
+  // unusually tall, wrapping header pushes the figure's own top well past
+  // page y=0, so a page-relative clamp alone still admits a pair whose span
+  // reaches up into the HEADER — sampling nav text and background there,
+  // not map content (`boundingBox()` ignores the viewport's own
+  // `overflow: hidden` clip, same reasoning as the row-boundary test
+  // below).
+  const visibleTop = Math.max(0, figureRect.y);
+  const visibleBottom = Math.min(viewportSize.height, figureRect.y + figureRect.height);
+  const onScreenHeight = (pair: AdjacentPair) => Math.min(visibleBottom, pair.bottom) - Math.max(visibleTop, pair.top);
   const widest = pairs.reduce((best, pair) => (onScreenHeight(pair) > onScreenHeight(best) ? pair : best));
-  const top = Math.max(0, widest.top);
-  const bottom = Math.min(viewportSize.height, widest.bottom);
+  const top = Math.max(visibleTop, widest.top);
+  const bottom = Math.min(visibleBottom, widest.bottom);
   const edgeX = Math.min(Math.max(widest.edgeX, 20), viewportSize.width - 20);
 
   // The coast at a tile boundary is continuous: sample pixels a couple of

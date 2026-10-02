@@ -11,14 +11,35 @@
 /** A gazetteer entry's privacy tier — the one `places.toml` precision this project's Rust side serializes as a lowercase string. */
 export type Precision = "exact" | "city" | "region" | "country";
 
-/** One resolved place. `parent`, when present, is another place's `id` — one hop only, never a full ancestor chain. */
+/**
+ * One resolved place. `parent`, when present, is another place's `id` —
+ * one hop only, never a full ancestor chain.
+ *
+ * `precision`/`lat`/`lng` are absent on a GROUPING node:
+ * `places_data.rs`'s `fold_ancestors` emits one for an ancestor it had to
+ * invent (no gazetteer row at all, or a row with no coordinates) purely so
+ * the chip menu can still dig through it — reachable only by `parent`
+ * reference, never a point on the map. No reader in this directory ever
+ * needs to tell the two no-coordinate shapes apart, only whether a point
+ * exists at all (`lat`/`lng` present) before projecting one: `pointsForWorks`
+ * and `selectWork` (markers.ts / map.ts) only ever read a WORK's own first
+ * place, which `places_data.rs` only ever resolves to one with real
+ * coordinates — a grouping node is never a work's own place — so neither
+ * needs a guard of its own; `scope.ts`/`chip.ts` never read these three
+ * fields at all, working purely off `id`/`name`/`parent`.
+ */
 export interface Place {
   id: string;
   name: string;
   parent?: string;
-  precision: Precision;
-  lat: number;
-  lng: number;
+  precision?: Precision;
+  lat?: number;
+  lng?: number;
+}
+
+/** Narrows `place` to one with real coordinates (and therefore a real `precision` — `places_data.rs` never sets one without the other) to project — the ordinary case for anything a WORK resolves to; false only for a grouping node (see {@link Place}'s own doc), which every caller that reaches one only ever does through its `id`/`name`/`parent`, never a point. */
+export function hasPoint(place: Place): place is Place & { lat: number; lng: number; precision: Precision } {
+  return place.lat !== undefined && place.lng !== undefined;
 }
 
 /** A work's companion page: folded into the work's own card, never its own dot. */

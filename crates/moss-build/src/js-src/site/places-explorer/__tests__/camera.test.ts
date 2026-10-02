@@ -45,6 +45,32 @@ describe("coverCamera", () => {
     const centred = coverCamera([], viewport);
     expect(camera.y).toBeGreaterThan(centred.y);
   });
+
+  test("a frame narrower than the viewport raises zoom enough to re-centre on it without opening a gap", () => {
+    const viewport = { width: 1000, height: 600 };
+    // At this viewport, zoom=1 exactly covers the HEIGHT axis with zero
+    // slack (480 world units * (600/480) scale = 600 = the viewport
+    // height) — so centring on a shorter frame's own middle is only
+    // possible at all by raising the zoom past the plain cover floor.
+    const frame = { x: 0, y: 0, width: 1000, height: 450 };
+    const framed = coverCamera([], viewport, frame);
+    expect(framed.zoom).toBeGreaterThan(MIN_ZOOM);
+
+    // The world point this camera draws at the VIEWPORT's own middle must
+    // be the one that sits at the FRAME's middle instead — i.e. the point
+    // 75 screen px (the gap between the two centres) above the viewport's
+    // own vertical middle must map to true world-space y=WORLD_HEIGHT/2.
+    const scale = screenScale(framed, viewport);
+    const frameMiddleScreenY = frame.y + frame.height / 2;
+    const worldAtFrameMiddle = framed.y + (frameMiddleScreenY - viewport.height / 2) / scale;
+    expect(worldAtFrameMiddle).toBeCloseTo(WORLD_HEIGHT / 2, 5);
+
+    // Still no visible gap at the REAL viewport's own top/bottom edges.
+    const worldTopScreenY = viewport.height / 2 + (0 - framed.y) * scale;
+    const worldBottomScreenY = viewport.height / 2 + (WORLD_HEIGHT - framed.y) * scale;
+    expect(worldTopScreenY).toBeLessThanOrEqual(1e-6);
+    expect(worldBottomScreenY).toBeGreaterThanOrEqual(viewport.height - 1e-6);
+  });
 });
 
 describe("detailMaxZoom / screenScale", () => {
@@ -115,6 +141,24 @@ describe("fitPoints", () => {
     const viewport = { width: 1000, height: 600 };
     const camera = fitPoints([{ x: 500, y: 280 }], viewport);
     expect(camera.zoom).toBe(detailMaxZoom(viewport));
+  });
+
+  test("a frame shorter than the viewport (a card row eating the bottom) keeps points out of the cropped band", () => {
+    // The map is 1000x600; a card row reserves the bottom 150px, leaving a
+    // 450px-tall free rectangle starting at the top. A point fit against
+    // that frame must land ABOVE the reserved band, not centred in the
+    // full viewport the way a frame-less fit would place it.
+    const viewport = { width: 1000, height: 600 };
+    const frame = { x: 0, y: 0, width: 1000, height: 450 };
+    const point = { x: 500, y: 280 };
+    const framed = fitPoints([point], viewport, detailMaxZoom(viewport), frame);
+    const scale = screenScale(framed, viewport);
+    const screenY = viewport.height / 2 + (point.y - framed.y) * scale;
+    expect(screenY).toBeLessThan(frame.height);
+    // Without a frame the same point centres in the full viewport instead.
+    const unframed = fitPoints([point], viewport);
+    const unframedScreenY = viewport.height / 2 + (point.y - unframed.y) * scale;
+    expect(unframedScreenY).toBeCloseTo(viewport.height / 2);
   });
 });
 

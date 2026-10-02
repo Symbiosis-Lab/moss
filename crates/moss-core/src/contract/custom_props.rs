@@ -274,6 +274,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         default: "1",
         description: "Scale applied to a river path's own baked stroke-width (`--river-w`, set once per path by map.ts's `prepareRiverWidths`), so rivers keep a constant on-screen width as `applyCamera` zooms the world layer instead of thickening with it. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
     },
+    CustomProp {
+        name: "--moss-place-figure-top",
+        owner: "article.container > figure[data-moss-places-explorer]",
+        default: "0px",
+        description: "The explorer root figure's own rendered top offset in px — the header's rendered height, a layout measurement CSS cannot take on its own. Written by map.ts's `syncFigureOffset` at mount and on resize so the figure's `block-size` can subtract it, filling the viewport below the header exactly instead of reaching a header's worth past it. Not a theme hook: a hand-set value is overwritten on the next resize.",
+    },
 ];
 
 /// A `data-*` attribute moss emits on an element that carries no `moss-*` class.

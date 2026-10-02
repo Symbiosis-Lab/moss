@@ -1450,9 +1450,14 @@ fn build_inner(
     // companions have theirs filled in) — the same document set every render
     // above just used.
     if let Some(context) = place_maps_for_places_data.as_ref() {
-        if let Err(e) =
-            crate::build::place_map::places_data::emit(&documents, context, math, &stage_dir, &mut pending)
-        {
+        if let Err(e) = crate::build::place_map::places_data::emit(
+            &documents,
+            context,
+            math,
+            &stage_dir,
+            &mut pending,
+            &background_ctx.dir_overrides,
+        ) {
             log::warn!("Failed to emit places-explorer data: {e}");
         }
     }

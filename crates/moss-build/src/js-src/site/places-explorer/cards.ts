@@ -136,6 +136,14 @@ export class CardRow {
     const select = document.createElement("button");
     select.type = "button";
     select.className = "moss-places-card-select";
+    // The visible title inside is clamped to two lines while collapsed
+    // (places-explorer.css) — this is the one place a reader who can't see
+    // the rest (or a screen reader, which reads the clamped DOM text same
+    // as any other) is told the whole thing without having to open the
+    // card first. Always set, not only while collapsed: it stays accurate
+    // once expanded too, and the title is then also visible in full
+    // (unclamped, same element), so there's nothing to keep in sync.
+    select.setAttribute("aria-label", work.title || this.strings.untitled);
     select.addEventListener("click", () => this.callbacks.selectWork(work.id));
 
     const row = document.createElement("div");
@@ -146,10 +154,17 @@ export class CardRow {
     title.className = "moss-card-title";
     title.textContent = work.title || this.strings.untitled;
     body.append(title);
-    if (work.byline.length) {
+    // One compact meta line — date and/or the first byline entry, each
+    // clamped to a single line by CSS — never the full byline: a work with
+    // several linked contributors used to print its whole credit line here
+    // with nothing to stop it wrapping, which is what made an ordinary
+    // card hundreds of px tall. The full byline moves to the expanded
+    // detail below, alongside everything else collapsed hides.
+    const metaText = [work.date, work.byline[0]].filter(Boolean).join(" · ");
+    if (metaText) {
       const meta = document.createElement("span");
       meta.className = "moss-card-meta";
-      meta.textContent = work.byline.join(" · ");
+      meta.textContent = metaText;
       body.append(meta);
     }
     row.append(body);
@@ -180,6 +195,16 @@ export class CardRow {
       description.className = "moss-card-description";
       description.textContent = work.description;
       detail.append(description);
+    }
+
+    // The full byline — every contributor, not just the collapsed meta
+    // line's first — only here, where expanding is itself the reader's
+    // request to see more.
+    if (work.byline.length) {
+      const byline = document.createElement("p");
+      byline.className = "moss-card-meta";
+      byline.textContent = work.byline.join(" · ");
+      detail.append(byline);
     }
 
     const placeNames = work.places.map((id) => this.placesById.get(id)?.name).filter((name): name is string => Boolean(name));
