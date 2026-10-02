@@ -19,6 +19,32 @@ export interface GestureCallbacks {
   onGestureStart(): void;
   /** The current detail ceiling (zoom units) — the world ceiling, or the raised tile ceiling once the camera has tiles in view. */
   maxZoom(): number;
+  /**
+   * True while this map should run cooperative gestures, for a small
+   * embed sharing its page with the reader's own scroll: a single-finger
+   * TOUCH drag is left alone (the page scrolls natively) instead of
+   * panning the map, and two fingers pan the camera in addition to
+   * pinch-zooming it. Mouse/pen dragging, and ctrl/⌘+wheel zoom, are
+   * unaffected either way — only a lone touch defers to the page.
+   * Queried on every pointer event rather than fixed at attach time, so
+   * the embed's own expand/collapse transition needs no re-attachment —
+   * only the full explorer page omits this (there is no page scroll to
+   * share with), the same as every call site below treats an absent
+   * callback as "never cooperative".
+   */
+  cooperative?(): boolean;
+  /**
+   * A bare wheel (no ctrl/⌘) over a COOPERATIVE viewport — the one gesture
+   * this module deliberately leaves alone so the page keeps scrolling
+   * normally (see the wheel listener's own comment). Called on every such
+   * event, same as every other callback here; map.ts's own implementation
+   * is what dedupes to "only the first time" and owns the hint's own
+   * lifecycle (`cooperative?()` must already read true for this to ever
+   * fire — see the wheel listener below). Never called when not
+   * cooperative: the full explorer page's own bare-wheel scroll has no
+   * hint to show.
+   */
+  cooperativeHint?(): void;
 }
 
 const KEYBOARD_STEP = 32;
@@ -52,20 +78,26 @@ function zoomAt(viewport: HTMLElement, callbacks: GestureCallbacks, factor: numb
 
 /** Attaches every pan/zoom gesture this module owns to `viewport`. Listeners live as long as the element does — the same boot-and-forget wiring every other site runtime uses. */
 export function attachGestures(viewport: HTMLElement, callbacks: GestureCallbacks): void {
-  const pointers = new Map<number, { x: number; y: number }>();
+  const pointers = new Map<number, { x: number; y: number; type: string }>();
   let drag: { id: number; startX: number; startY: number; cameraX: number; cameraY: number } | null = null;
   let pinch: { distance: number; midpoint: Point } | null = null;
+
+  const isCooperative = (): boolean => callbacks.cooperative?.() ?? false;
+  /** A lone touch, in cooperative mode, is the one pointer left for the page's own scroll rather than claimed as a map drag. */
+  const isDeferredTouch = (pointerType: string): boolean => pointerType === "touch" && isCooperative();
 
   viewport.addEventListener("pointerdown", (event) => {
     if (event.target instanceof Element && event.target.closest("button, a")) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    viewport.setPointerCapture(event.pointerId);
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
     if (pointers.size === 1) {
+      if (isDeferredTouch(event.pointerType)) return;
+      viewport.setPointerCapture(event.pointerId);
       const camera = callbacks.getCamera();
       drag = { id: event.pointerId, startX: event.clientX, startY: event.clientY, cameraX: camera.x, cameraY: camera.y };
       viewport.setAttribute("data-dragging", "");
     } else if (pointers.size === 2) {
+      viewport.setPointerCapture(event.pointerId);
       drag = null;
       viewport.removeAttribute("data-dragging");
       const [a, b] = [...pointers.values()];
@@ -75,11 +107,34 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
 
   viewport.addEventListener("pointermove", (event) => {
     if (!pointers.has(event.pointerId)) return;
-    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
     if (pointers.size >= 2 && pinch) {
       const [a, b] = [...pointers.values()];
       const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const midpoint: Point = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       callbacks.onGestureStart();
+      if (isCooperative()) {
+        // Two fingers pan AND pinch together: translate by the midpoint's
+        // own movement (same math as the single-pointer drag below,
+        // anchored at the pinch midpoint instead of one finger) before the
+        // existing distance-based zoom runs, so neither motion is lost to
+        // the other inside one frame. Only the cooperative path tracks a
+        // moving midpoint; the plain pinch below still zooms anchored at
+        // its ORIGINAL midpoint, unchanged.
+        event.preventDefault();
+        const camera = callbacks.getCamera();
+        const viewportSize = callbacks.getViewport();
+        const scale = screenScale(camera, viewportSize);
+        const dx = (midpoint.x - pinch.midpoint.x) / scale;
+        const dy = (midpoint.y - pinch.midpoint.y) / scale;
+        if (dx !== 0 || dy !== 0) {
+          callbacks.setCamera(clampCamera({ x: camera.x - dx, y: camera.y - dy, zoom: camera.zoom }, viewportSize, panMaxZoom(camera, callbacks)));
+        }
+        zoomAt(viewport, callbacks, distance / pinch.distance, midpoint.x, midpoint.y);
+        pinch.distance = distance;
+        pinch.midpoint = midpoint;
+        return;
+      }
       zoomAt(viewport, callbacks, distance / pinch.distance, pinch.midpoint.x, pinch.midpoint.y);
       pinch.distance = distance;
       return;
@@ -111,11 +166,17 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
     if (pointers.size === 1) {
       // One finger lifted out of a pinch: resume panning with the other,
       // anchored at its current screen position rather than restarting the
-      // whole gesture from here.
+      // whole gesture from here — unless that remaining finger is itself a
+      // cooperative-mode touch, which defers to the page's own scroll the
+      // same as a lone touch always does in that mode.
       const [[id, point]] = pointers;
-      const camera = callbacks.getCamera();
-      drag = { id, startX: point.x, startY: point.y, cameraX: camera.x, cameraY: camera.y };
-      viewport.setAttribute("data-dragging", "");
+      if (isDeferredTouch(point.type)) {
+        viewport.removeAttribute("data-dragging");
+      } else {
+        const camera = callbacks.getCamera();
+        drag = { id, startX: point.x, startY: point.y, cameraX: camera.x, cameraY: camera.y };
+        viewport.setAttribute("data-dragging", "");
+      }
     } else {
       viewport.removeAttribute("data-dragging");
     }
@@ -129,11 +190,19 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
   // every OS regardless of platform, so this one listener covers an explicit
   // zoom key AND a pinch gesture delivered this way. A bare wheel is left
   // alone: the explorer is the page's own main content, not a small aside,
-  // so the reader's ordinary page scroll must keep working.
+  // so the reader's ordinary page scroll must keep working. A COOPERATIVE
+  // viewport (the collapsed embed) is a small aside sharing a page with the
+  // reader's own scroll, so a bare wheel there is ambiguous rather than
+  // obviously "scroll the page" — `cooperativeHint` is map.ts's own one-time
+  // nudge toward the modifier key, never a behaviour change: the event is
+  // still left alone either way, so the page still scrolls.
   viewport.addEventListener(
     "wheel",
     (event) => {
-      if (!event.ctrlKey && !event.metaKey) return;
+      if (!event.ctrlKey && !event.metaKey) {
+        if (isCooperative()) callbacks.cooperativeHint?.();
+        return;
+      }
       event.preventDefault();
       callbacks.onGestureStart();
       zoomAt(viewport, callbacks, event.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP, event.clientX, event.clientY);

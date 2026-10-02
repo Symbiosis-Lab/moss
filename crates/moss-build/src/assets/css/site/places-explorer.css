@@ -24,6 +24,47 @@
   --moss-places-explorer: 1;
 }
 
+/* `?embed=1`: this is still the full places-root page, just loaded into a
+   small hydrated iframe (embed.ts's own lazy iframe, always kept at
+   opacity 0 until its content posts ready — so hiding chrome here, rather
+   than earlier, causes no visible flash; nothing outside this iframe's own
+   document is ever shown with its chrome on). Without this, the site's own
+   header/nav/footer/colophon render crammed into whatever small box the
+   poster gave the iframe, instead of just the map the embed exists to
+   show. `data-moss-embed` is set by embed.ts's own `attachEmbedModeIfRequested`,
+   never by Rust — this partial ships only on the places root anyway (same
+   gate as the explorer itself), so it is the right place for the rule to
+   live rather than site.css, which every page would otherwise carry it on
+   for a flag that only this one page ever sets. */
+html[data-moss-embed] header,
+html[data-moss-embed] footer,
+html[data-moss-embed] .moss-colophon,
+html[data-moss-embed] .moss-nav-island {
+  display: none;
+}
+/* The places root's own `<h1>`/intro content (if any) sits in the same
+   `article.container` as the explorer figure, ABOVE it — fine on the full
+   page, where there is a whole viewport's height to share, but inside a
+   small embed it just pushes the figure (already sized to its own
+   `100svh` by design decision 7 below) down past the iframe's own box.
+   The explorer figure is the ENTIRE embed; everything else in the
+   article is the full page's own framing, not the embed's. */
+html[data-moss-embed] main article.container > :not(figure[data-moss-places-explorer]) {
+  display: none;
+}
+/* Design decision 7 below floors the full page's own figure at 480px tall
+   so a short viewport still gets a usable map — exactly wrong for a small
+   collapsed embed, which wants to fill whatever (possibly much shorter)
+   box the poster gave its iframe, not overflow past it. `100svh` alone,
+   with no floor, is the iframe's own full height either way: collapsed,
+   that IS the small box; expanded (fullscreen), it is the screen, already
+   well past 480px, so this is a no-op there. The extra `main` ancestor in
+   this selector (vs. the plain rule below) only exists to outrank it on
+   specificity, not to reach further. */
+html[data-moss-embed] main article.container > figure[data-moss-places-explorer] {
+  block-size: 100svh;
+}
+
 /* ---------------------------------------------------------------------------
    Design decision 7: "the map is the page". `[data-moss-places-explorer]`
    is set ONLY on the places namespace root's own figure
@@ -102,6 +143,15 @@ header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-co
 }
 .moss-places-viewport[data-dragging] {
   cursor: grabbing;
+}
+/* The collapsed embed's cooperative-gesture mode (embed.ts's own
+   `setCooperativeGestures`): a lone touch is left for the PAGE's own
+   vertical scroll instead of panning the map, so the viewport's own
+   touch-action must allow it — `gestures.ts` only ever claims a second
+   touch (ctrl/⌘+wheel and pinch/two-finger pan still work, neither of
+   which `pan-y` disables). */
+.moss-places-viewport[data-gesture-mode="cooperative"] {
+  touch-action: pan-y;
 }
 .moss-places-viewport:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
@@ -597,6 +647,14 @@ header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-co
    (`map.ts`'s `setScope`, `chip.ts`'s own module doc).
    --------------------------------------------------------------------------- */
 
+/* A collapsed embed (`embed.ts`'s own `data-moss-places-embed-mode`) has no
+   room for the chip and nothing to widen from before the reader expands it
+   — hidden there, and shown again the moment the expand control flips this
+   attribute to "expanded". */
+[data-moss-places-embed-mode="collapsed"] .moss-places-chip {
+  display: none;
+}
+
 .moss-places-chip {
   position: absolute;
   z-index: 4;
@@ -922,6 +980,116 @@ button.moss-places-chip-crumb {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Embeds: a style:map card or an article's own locator, hydrated to a live
+   map behind its static poster (embed.ts). `[data-moss-place-embed]` and
+   `[data-hydrate-url]` are the one exception to this file's own module
+   doc — they are Rust-emitted attributes (`folder_embed.rs`'s `style:map`
+   dispatch, `place_map/context.rs`'s `render_locator`), not runtime-created
+   selectors. The poster itself stays exactly the plain `.moss-place-map`
+   figure it always was: the no-JS floor, and the loading state, in one.
+   --------------------------------------------------------------------------- */
+
+/* `aspect-ratio` (not a height read off either child) is what makes the
+   poster and the live frame cover the EXACT same box: every map canvas this
+   crate ever draws, locator or listing, is the fixed 720x480 (3:2) SVG_WIDTH
+   x SVG_HEIGHT, the same ratio site.css's own generic `.moss-place-map svg`
+   rule already assumes for the no-JS case. Giving the FIGURE itself that
+   ratio (rather than letting the static svg's own `block-size: auto`
+   establish the figure's height, with the frame then reading that same
+   computed height back via `block-size: 100%`) removes the indirection
+   entirely: both children size against one definite box the figure sets up
+   on its own, so neither can end up a pixel off from the other. `overflow:
+   hidden` is what makes the one `border-radius` below ALSO apply to the
+   static poster, which carries none of its own — needed as soon as the
+   frame is sized exactly to the figure (unlike before, nothing left the
+   poster peeking past a frame that was a few pixels smaller). */
+.moss-place-map[data-moss-place-embed] {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.moss-place-map[data-moss-place-embed] > svg {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+}
+.moss-places-embed-frame {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms ease;
+}
+.moss-places-embed-frame--settled {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-places-embed-frame {
+    transition: none;
+  }
+}
+
+/* The open-in-new-tab control (site.css's own `.immersive-new-window-btn`,
+   shared by every local immersive iframe on the site) defaults to top-left
+   — the SAME corner the breadcrumb chip claims once an embed is expanded
+   (`chip.ts`, mounted INSIDE the iframe's own document — two unrelated DOM
+   trees landing on the same screen corner). Regrouping it with the expand
+   control's own bottom-right corner, scoped to this embed's own wrapper via
+   `:has()` so every other immersive iframe on the site (notebooks, html
+   apps) keeps the unmodified top-left/bottom-right pairing — the chip only
+   ever exists inside a places embed. */
+.immersive-iframe-wrapper:has(> iframe.moss-places-embed-frame) > .immersive-new-window-btn {
+  top: auto;
+  left: auto;
+  bottom: 16px;
+  right: 60px;
+}
+.immersive-fs-active .immersive-iframe-wrapper:has(> iframe.moss-places-embed-frame) > .immersive-new-window-btn {
+  top: auto;
+  left: auto;
+  bottom: 24px;
+  right: 72px;
+}
+
+/* The cooperative-gesture hint (`map.ts`'s `showCooperativeHint`, wired
+   through `gestures.ts`'s own `cooperativeHint` callback): a brief,
+   non-blocking nudge the first time a reader wheels a collapsed embed
+   without the zoom modifier held. `position: absolute` so it never reserves
+   layout space (no shift when it appears or is removed), `pointer-events:
+   none` so it never steals the gesture it is explaining. */
+.moss-places-coop-hint {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 12px;
+  margin: 0 auto;
+  width: fit-content;
+  max-inline-size: calc(100% - 24px);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: var(--moss-read-caption);
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+.moss-places-coop-hint--visible {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-places-coop-hint {
+    transition: none;
+  }
 }
 
 }

@@ -134,14 +134,59 @@ export function initImmersiveMode(): void {
   }
 }
 
+/** The float classes an embedded iframe itself may carry (`placement_attrs`'s `align_class`, moss-core). */
+const CARRIED_ALIGN_CLASSES = ["moss-align-left", "moss-align-right"];
+
+/**
+ * The wrapper's own class/width, copied from the iframe it is about to
+ * enclose. Previously a hardcoded `"immersive-iframe-wrapper"` literal that
+ * dropped the iframe's own float class and `data-width` — so a floated embed
+ * (a `style:map` locator, `|wide|`, …) snapped back to the column's full
+ * width the moment it got wrapped for the fullscreen control, even though
+ * the iframe inside the wrapper still carried the class. The content-width
+ * and float CSS escapes are both direct-child selectors
+ * (`article.container > [data-width]` among them — see
+ * `render::placement`'s own module doc), so copying onto the OUTER wrapper
+ * is what keeps either escape reachable once the iframe is a grandchild of
+ * `article.container` instead of a direct child.
+ */
+function wrapperAttrsFor(iframe: HTMLIFrameElement): { className: string; width: string | null } {
+  const carried = CARRIED_ALIGN_CLASSES.filter((cls) => iframe.classList.contains(cls));
+  return {
+    className: ["immersive-iframe-wrapper", ...carried].join(" "),
+    width: iframe.getAttribute("data-width"),
+  };
+}
+
 /**
  * Wrap a single LOCAL iframe with its own fullscreen + open-in-new-tab controls
  * and independent FLIP fullscreen state. All handlers close over THIS iframe.
+ *
+ * Exported so a runtime that creates its own iframes after page load (the
+ * places-explorer embed's lazy-hydrated iframe, never a static `src` in the
+ * emitted HTML) can reuse the exact same wrapping/controls rather than a
+ * second implementation — `initImmersiveMode`'s own DOM-structure gate
+ * (`main > article.container > iframe`) only ever finds iframes present at
+ * `DOMContentLoaded`, which a lazily-created one by definition is not.
+ *
+ * `onFullscreenChange`, when given, fires exactly when `isFullscreen` below
+ * actually flips — on enter, immediately (the wrapper's own box is already
+ * its fullscreen size at that point, the FLIP "Last" step; only the visual
+ * transform animates afterwards), on exit, once the exit animation's own
+ * `afterTransition` has restored the wrapper to its inline box. Both are
+ * exactly when the iframe's own internal `window` would see its layout
+ * viewport actually change size — never mid-transform, when
+ * `getBoundingClientRect` would still read the compensating transform
+ * rather than the real box. The places-explorer embed reads this to tell
+ * its own iframe content when to switch gesture modes and re-fit its
+ * camera, without this module needing to know anything about maps.
  */
-function setupImmersiveIframe(iframe: HTMLIFrameElement): void {
+export function setupImmersiveIframe(iframe: HTMLIFrameElement, onFullscreenChange?: (fullscreen: boolean) => void): void {
   // Wrap iframe in container for button positioning and FLIP animation
   const wrapper = document.createElement("div");
-  wrapper.className = "immersive-iframe-wrapper";
+  const attrs = wrapperAttrsFor(iframe);
+  wrapper.className = attrs.className;
+  if (attrs.width) wrapper.setAttribute("data-width", attrs.width);
 
   const button = document.createElement("button");
   button.type = "button";
@@ -185,6 +230,7 @@ function setupImmersiveIframe(iframe: HTMLIFrameElement): void {
     // FLIP: Last -- apply fullscreen state
     document.body.classList.add("immersive-fs-active");
     isFullscreen = true;
+    onFullscreenChange?.(true);
     button.innerHTML = ICON_EXIT_FS;
     button.setAttribute("aria-label", immersiveCopy().exitFullscreen);
 
@@ -252,6 +298,7 @@ function setupImmersiveIframe(iframe: HTMLIFrameElement): void {
       wrapper.style.transform = "";
       document.body.classList.remove("immersive-fs-active");
       isFullscreen = false;
+      onFullscreenChange?.(false);
       button.innerHTML = ICON_ENTER_FS;
       button.setAttribute("aria-label", immersiveCopy().enterFullscreen);
       button.disabled = false;

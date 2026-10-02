@@ -139,4 +139,27 @@ describe("initPlacesExplorer", () => {
 
     expect(figure.getAttribute("data-moss-places-explorer-ready")).toBe("ready");
   });
+
+  test("a second call on an already-mounting figure is a no-op — WebKit has been seen firing DOMContentLoaded twice for an iframe-loaded copy of this page", async () => {
+    document.body.innerHTML = handshakeFigure();
+    stubSuccessfulFetch();
+    const first = initPlacesExplorer();
+    const second = initPlacesExplorer(); // fired before the first call's fetch even resolves
+    await Promise.all([first, second]);
+    expect(fetch).toHaveBeenCalledTimes(3); // world + places + tiles, exactly once (no labels attr on this handshake)
+    const figure = document.querySelector<HTMLElement>("[data-moss-places-explorer]")!;
+    expect(figure.getAttribute("data-moss-places-explorer-ready")).toBe("ready");
+    expect(figure.querySelectorAll(".moss-places-viewport")).toHaveLength(1);
+  });
+
+  test("fetches every handshake URL with force-cache — each one is content-hashed, so a cached response is always correct to reuse", async () => {
+    document.body.innerHTML = handshakeFigure();
+    stubSuccessfulFetch();
+    await initPlacesExplorer();
+    const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [, init] of calls) {
+      expect((init as RequestInit).cache).toBe("force-cache");
+    }
+  });
 });

@@ -36,6 +36,10 @@ export interface PlacesStrings {
   chipThisArticle: string;
   /** `aria-label` on the phone-width "…" button that reveals the trail's collapsed middle crumbs in place. */
   chipShowHidden: string;
+  /** `{name}` placeholder, filled with the embed's own place or article display name (`data-embed-name`, Rust-emitted, never translated — it is a proper noun) — the `title` on a `style:map`/locator embed's lazily-hydrated iframe (`embed.ts`'s `buildIframe`). */
+  mapEmbedTitle: string;
+  /** `{key}` placeholder, filled with the platform's own zoom-modifier key name (`⌘` / `Ctrl`) — the cooperative-gesture hint shown the first time a reader wheels over a collapsed embed without it held. */
+  cooperativeHint: string;
 }
 
 const STRINGS: Record<Lang, PlacesStrings> = {
@@ -54,6 +58,8 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     chipAll: "All articles",
     chipThisArticle: "This article",
     chipShowHidden: "Show hidden places",
+    mapEmbedTitle: "Map: {name}",
+    cooperativeHint: "Hold {key} and scroll to zoom the map",
   },
   "zh-hans": {
     map: "地图。使用方向键平移，加号及减号缩放。",
@@ -70,6 +76,8 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     chipAll: "全部文章",
     chipThisArticle: "本文",
     chipShowHidden: "显示隐藏地点",
+    mapEmbedTitle: "地图：{name}",
+    cooperativeHint: "按住 {key} 滚动以缩放地图",
   },
   "zh-hant": {
     map: "地圖。使用方向鍵平移，加號及減號縮放。",
@@ -86,6 +94,8 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     chipAll: "全部文章",
     chipThisArticle: "本文",
     chipShowHidden: "顯示隱藏地點",
+    mapEmbedTitle: "地圖：{name}",
+    cooperativeHint: "按住 {key} 捲動以縮放地圖",
   },
 };
 

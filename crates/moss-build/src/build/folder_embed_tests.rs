@@ -2812,7 +2812,16 @@ fn place_map_embed_emits_svg_with_placement_and_caption() {
         "![[/places/kyoto/|style:map|align-right 40%|Kyoto map]]\n",
         &docs,
     );
-    assert!(out.starts_with(r#"<div class="moss-place-map-frame moss-align-right" style="width:40%"><figure class="moss-place-map""#), "got: {out}");
+    // The figure also carries the embed-hydration handshake now
+    // (`style:map` is always an embed, never a page's own primary map) —
+    // `data-moss-place-embed`/`data-hydrate-url` land BEFORE `class=`, the
+    // same splice point `locator.rs`'s own `data-map-locator-profile` uses.
+    assert!(
+        out.starts_with(
+            r#"<div class="moss-place-map-frame moss-align-right" style="width:40%"><figure data-moss-place-embed data-hydrate-url="/places/?place=places/kyoto&embed=1" data-embed-name="Kyoto" class="moss-place-map""#
+        ),
+        "got: {out}"
+    );
     assert!(out.contains("data-map-location=\"Kyoto\""), "got: {out}");
     assert!(out.trim_end().ends_with("</figure><div class=\"moss-place-map-caption\">Kyoto map</div></div>"), "got: {out}");
     assert!(!out.contains("moss-cards-container"), "map style must replace the listing: {out}");

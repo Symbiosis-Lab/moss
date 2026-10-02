@@ -8274,7 +8274,16 @@ main > article.container > .immersive-iframe-wrapper > iframe {
   overflow: hidden;
 }
 
-.immersive-fs-active main > article.container > .immersive-iframe-wrapper {
+/* `main article.container .immersive-iframe-wrapper` (a descendant
+   combinator, not `main > article.container > .immersive-iframe-wrapper`'s
+   direct-child chain): most wrapped iframes ARE a direct child of the
+   article, but the places explorer's own embed wraps one several levels
+   deeper (`article.container > .moss-place-locator > figure > wrapper`, or
+   `> .moss-place-map-frame > figure > wrapper` for a style:map embed) —
+   `setupImmersiveIframe` is exported precisely so that reuse works, and a
+   direct-child-only selector would leave its wrapper never actually
+   reaching fixed/fullscreen positioning below. */
+.immersive-fs-active main article.container .immersive-iframe-wrapper {
   position: fixed;
   inset: 0;
   z-index: 10000;
@@ -8288,7 +8297,7 @@ main > article.container > .immersive-iframe-wrapper > iframe {
 
 /* !important: beats HTML width/height/border attributes on the <iframe> element,
    which become inline-style-equivalent and cannot be overridden otherwise. */
-.immersive-fs-active main > article.container > .immersive-iframe-wrapper > iframe {
+.immersive-fs-active main article.container .immersive-iframe-wrapper > iframe {
   position: absolute;
   inset: 0;
   width: 100% !important;
@@ -8307,7 +8316,14 @@ main > article.container > .immersive-iframe-wrapper > iframe {
   transition: opacity 200ms ease;
 }
 
-.immersive-fs-active main > article.container > *:not(.immersive-iframe-wrapper) {
+/* `:not(.immersive-iframe-wrapper):not(:has(.immersive-iframe-wrapper))`:
+   hide a direct child of the article UNLESS it either IS the wrapper (the
+   common case) or CONTAINS it somewhere inside (the places embed's own
+   deeper nesting, same reasoning as the wrapper's own rule above) — a bare
+   `:not(.immersive-iframe-wrapper)` only ever excluded the first case, so
+   the embed's whole containing figure (not equal to, but holding, the
+   wrapper) was hidden right along with the rest of the article. */
+.immersive-fs-active main > article.container > *:not(.immersive-iframe-wrapper):not(:has(.immersive-iframe-wrapper)) {
   opacity: 0;
   pointer-events: none;
   transition: opacity 200ms ease;
@@ -8320,7 +8336,7 @@ body:not(.immersive-fs-active) > .moss-colophon {
   transition: opacity 200ms ease 100ms;
 }
 
-body:not(.immersive-fs-active) main > article.container > *:not(.immersive-iframe-wrapper) {
+body:not(.immersive-fs-active) main > article.container > *:not(.immersive-iframe-wrapper):not(:has(.immersive-iframe-wrapper)) {
   transition: opacity 200ms ease 100ms;
 }
 
@@ -8417,7 +8433,7 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   .immersive-fs-active > header,
   .immersive-fs-active > footer,
   .immersive-fs-active > .moss-colophon,
-  .immersive-fs-active main > article.container > *:not(.immersive-iframe-wrapper) {
+  .immersive-fs-active main > article.container > *:not(.immersive-iframe-wrapper):not(:has(.immersive-iframe-wrapper)) {
     transition: none !important;
   }
 

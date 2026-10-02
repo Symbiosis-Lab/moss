@@ -37,7 +37,7 @@
         "crates/moss-core/src/ast/render.rs": 1000,
         "crates/moss-core/src/ast/resolve_urls.rs": 1000,
         "crates/moss-core/src/ast/shortcode_extract.rs": 1700,
-        "crates/moss-core/src/contract/components.rs": 4300,
+        "crates/moss-core/src/contract/components.rs": 4400,
         "crates/moss-core/src/frontmatter_typed.rs": 1200,
         "crates/moss-core/src/render/image.rs": 1100,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,
@@ -103,7 +103,8 @@
         "crates/moss-core/src": 39,
         "crates/moss-core/src/ast": 24,
         "crates/moss-core/src/resolve": 16,
-        "crates/moss-build/src/ops/serve": 18
+        "crates/moss-build/src/ops/serve": 18,
+        "crates/moss-build/src/js-src/site/places-explorer": 16
       },
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",

@@ -52,6 +52,80 @@ function keyboardPan(viewportEl: HTMLElement, key: string, times: number): void 
   }
 }
 
+describe("mountPlacesMap — embed seams", () => {
+  const PLACES = {
+    works: [
+      { id: "w1", title: "W1", byline: [], companions: [], places: ["p1"], date: "2024-01-01", description: "", cover: null, url: "/w1/" },
+      { id: "w2", title: "W2", byline: [], companions: [], places: ["p1"], date: "2024-01-02", description: "", cover: null, url: "/w2/" },
+    ],
+    places: [{ id: "p1", name: "P1", lat: 10, lng: 10, precision: "city", parent: null }],
+  } as any;
+
+  function mount() {
+    const figure = document.createElement("figure");
+    document.body.append(figure);
+    const controller = mountPlacesMap(figure, {
+      worldSvgText: WORLD_SVG,
+      tilesBaseUrl: "/_moss/map.abc/",
+      tileCells: [],
+      tileK: 4,
+      tileBleed: 0.1,
+      places: PLACES,
+      lang: "en",
+    })!;
+    return { figure, controller };
+  }
+
+  test("setRowExclusion drops one work's own card from the row without touching its marker selection", () => {
+    history.replaceState(null, "", "/places/?article=w1");
+    const { figure, controller } = mount();
+    controller.setRowExclusion("w1");
+    const cardIds = [...figure.querySelectorAll("[data-work-id]")].map((el) => el.getAttribute("data-work-id"));
+    expect(cardIds).not.toContain("w1");
+    expect(cardIds).toContain("w2");
+    const marker = figure.querySelector('[data-selected="true"]');
+    expect(marker).not.toBeNull();
+  });
+
+  test("setRowExclusion(null) restores the excluded work's card", () => {
+    history.replaceState(null, "", "/places/?article=w1");
+    const { figure, controller } = mount();
+    controller.setRowExclusion("w1");
+    controller.setRowExclusion(null);
+    const cardIds = [...figure.querySelectorAll("[data-work-id]")].map((el) => el.getAttribute("data-work-id"));
+    expect(cardIds).toContain("w1");
+  });
+
+  test("setScope clears a standing row exclusion — a reader who widens scope via the chip sees the excluded work's card again", () => {
+    history.replaceState(null, "", "/places/?article=w1");
+    const { figure, controller } = mount();
+    controller.setRowExclusion("w1");
+    controller.setScope({ kind: "all" });
+    const cardIds = [...figure.querySelectorAll("[data-work-id]")].map((el) => el.getAttribute("data-work-id"));
+    expect(cardIds).toContain("w1");
+  });
+
+  test("refitScopeIfClipped re-fits the camera when the scope's own points fall outside a new, much narrower viewport", () => {
+    history.replaceState(null, "", "/places/?place=p1");
+    const { controller } = mount();
+    // Shrink the viewport drastically (the embed's own collapse) and move
+    // the camera off to a corner that leaves p1's marker far outside the
+    // new frame — the shape of damage an aspect-ratio-changing resize can
+    // do that the ordinary re-clamp (same centre, new ceiling) does not fix.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 160, height: 120, top: 0, left: 0, right: 160, bottom: 120, x: 0, y: 0, toJSON() {},
+    } as DOMRect);
+    controller.refitScopeIfClipped();
+    const after = readUrlState();
+    expect(after.camera).not.toBeNull();
+    // A successful re-fit lands the camera back near p1's own projected
+    // point (lat 10, lng 10) rather than wherever the pre-shrink camera sat.
+    const p1 = project(10, 10);
+    expect(after.camera!.x).toBeCloseTo(p1.x, 0);
+    expect(after.camera!.y).toBeCloseTo(p1.y, 0);
+  });
+});
+
 describe("mountPlacesMap — the applyCamera re-clamp never forces a zoom-out on a pan", () => {
   test("panning off a tile patch, after zooming in on it past the world ceiling, keeps the zoom", () => {
     const figure = document.createElement("figure");

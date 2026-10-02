@@ -67,6 +67,14 @@ export interface MountOptions {
 export interface PlacesMapController {
   /** The scope seam: `all` or `place` this landing, the breadcrumb chip's own dig-down included. Re-fits the camera and re-renders. */
   setScope(scope: Scope): void;
+  /** The element gestures attach to and `getBoundingClientRect` sizes against — exposed so `embed.ts` can toggle cooperative-gesture mode and observe resizes without map.ts knowing anything about embeds. */
+  readonly viewportEl: HTMLElement;
+  /** Switch `gestures.ts` between its ordinary mode (a lone touch pans the map, the only mode the full explorer page ever uses) and cooperative mode (a lone touch defers to the page's own scroll; two fingers pan as well as pinch) — see `gestures.ts`'s own `GestureCallbacks.cooperative` doc. Also reflects the mode onto the viewport as `data-gesture-mode="cooperative"` for `places-explorer.css`'s own `touch-action` rule. */
+  setCooperativeGestures(enabled: boolean): void;
+  /** Re-clamp is already automatic on every resize (the `ResizeObserver`/`window.resize` listeners below re-run `applyCamera`, which re-clamps zoom/pan around the UNCHANGED camera centre). What is not automatic: a resize that changes the viewport's aspect ratio sharply enough — the embed's own expand/collapse transition, far larger than an ordinary window resize — can leave the current scope's own points outside the new frame even though the camera centre didn't move. Call after such a transition settles; a no-op when every in-scope point is still in view. */
+  refitScopeIfClipped(): void;
+  /** Exclude one work's own card from the row regardless of scope or selection — the article locator embed's "no card for the article already being read" rule, the marker itself is unaffected (it still shows `data-selected` when that work is also the current selection). `null` clears it; defaults to no exclusion. */
+  setRowExclusion(workId: string | null): void;
 }
 
 /** Build the interactive layer in place of `figure`'s static `<svg>` child and wire every gesture, selection and scope path together. `null` (leaving the static figure untouched) when the fetched world SVG fails to parse. */
@@ -143,6 +151,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   let scope: Scope = initial.scope;
   let selectedId: string | null = initial.articleId;
   let scopedIds: Set<string> | null = null;
+  /** `setRowExclusion`'s own state — see that method's doc. */
+  let rowExclusionId: string | null = null;
 
   function allPoints(): Point[] {
     return pointsForWorks(options.places.works, options.places.places, { kind: "all" });
@@ -231,6 +241,12 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   function setScope(next: Scope): void {
     scope = next;
     scopedIds = null;
+    // A row exclusion only means "the reader is already reading this one" —
+    // true only while scope still frames the work that set it. Once scope
+    // changes (the chip's own crumb click included, since it calls this same
+    // function), keeping that work's card hidden would be a stale leftover
+    // rather than the thing the exclusion was for.
+    rowExclusionId = null;
     markerLayer.closeRing();
     urlState.writeScope(next);
     const points = pointsForWorks(options.places.works, options.places.places, next);
@@ -333,7 +349,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       // different one, which is what reads blurry after a zoom out-then-in.
       worldEl.removeAttribute("data-gesture");
       const visibleIds = new Set(visiblePoints.map((point) => point.id));
-      const rows = worksForRow(options.places.works, visibleIds, scopedIds, selectedId);
+      let rows = worksForRow(options.places.works, visibleIds, scopedIds, selectedId);
+      if (rowExclusionId) rows = rows.filter((work) => work.id !== rowExclusionId);
       cardRow.render(rows, options.places.places, selectedId);
       labelLayer.render(visiblePoints, camera, viewport, worksById, placesById, reservedLabelRects());
       urlState.writeCamera(camera);
@@ -342,7 +359,39 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     }
   }
 
+  // ---- cooperative-gesture hint --------------------------------------------
+  // Shown at most once per mount: a bare wheel over the collapsed embed does
+  // nothing (`gestures.ts` leaves it for the page's own scroll), which reads
+  // as "broken" rather than "scroll normally, hold a key to zoom" without
+  // this nudge. `aria-live="polite"` announces it without interrupting
+  // whatever the reader is doing; it never reserves layout space (`position:
+  // absolute`, places-explorer.css) and auto-dismisses either way, instantly
+  // under reduced motion (the CSS transition itself is the only thing that
+  // media query turns off — the dismiss timer is unconditional).
+  const COOPERATIVE_HINT_MODIFIER = /Mac|iPhone|iPad|iPod/.test(
+    (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? navigator.userAgent ?? "",
+  )
+    ? "⌘"
+    : "Ctrl";
+  let cooperativeHintShown = false;
+  function showCooperativeHint(): void {
+    if (cooperativeHintShown) return;
+    cooperativeHintShown = true;
+    const hint = document.createElement("p");
+    hint.className = "moss-places-coop-hint";
+    hint.setAttribute("role", "status");
+    hint.setAttribute("aria-live", "polite");
+    hint.textContent = strings.cooperativeHint.replace("{key}", COOPERATIVE_HINT_MODIFIER);
+    viewportEl.append(hint);
+    requestAnimationFrame(() => hint.classList.add("moss-places-coop-hint--visible"));
+    window.setTimeout(() => {
+      hint.classList.remove("moss-places-coop-hint--visible");
+      window.setTimeout(() => hint.remove(), 400);
+    }, 2600);
+  }
+
   // ---- gestures ------------------------------------------------------------
+  let cooperativeGestures = false;
   attachGestures(viewportEl, {
     getCamera: () => camera,
     getViewport,
@@ -353,7 +402,36 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     onSettle: () => applyCamera(true),
     onGestureStart: () => worldEl.setAttribute("data-gesture", ""),
     maxZoom: () => currentMaxZoom(getViewport()),
+    cooperative: () => cooperativeGestures,
+    cooperativeHint: showCooperativeHint,
   });
+
+  function setCooperativeGestures(enabled: boolean): void {
+    cooperativeGestures = enabled;
+    if (enabled) viewportEl.dataset.gestureMode = "cooperative";
+    else delete viewportEl.dataset.gestureMode;
+  }
+
+  function refitScopeIfClipped(): void {
+    const viewport = getViewport();
+    if (viewport.width <= 0 || viewport.height <= 0) return;
+    const points = pointsForWorks(options.places.works, options.places.places, scope);
+    if (!points.length) return;
+    const MARGIN = 22; // matches applyCamera's own visiblePoints margin
+    const clipped = points.some((point) => {
+      const screen = worldToScreen(point, camera, viewport);
+      return screen.x < -MARGIN || screen.x > viewport.width + MARGIN || screen.y < -MARGIN || screen.y > viewport.height + MARGIN;
+    });
+    if (clipped) {
+      camera = fitPoints(points, viewport, currentMaxZoom(viewport));
+      applyCamera(true);
+    }
+  }
+
+  function setRowExclusion(workId: string | null): void {
+    rowExclusionId = workId;
+    applyCamera(true);
+  }
 
   zoomInBtn.addEventListener("click", () => {
     const viewport = getViewport();
@@ -378,5 +456,5 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   window.addEventListener("resize", () => applyCamera(true));
 
   applyCamera(true);
-  return { setScope };
+  return { setScope, viewportEl, setCooperativeGestures, refitScopeIfClipped, setRowExclusion };
 }

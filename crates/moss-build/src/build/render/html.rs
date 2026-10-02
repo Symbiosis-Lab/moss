@@ -868,7 +868,7 @@ fn generate_html_inner<'d>(
                 let map_key = term_listing.or(root_map_key).filter(|_| doc.map != Some(false));
                 if let Some(map) = map_key.and_then(|key| {
                     layout_config.place_maps.as_ref().and_then(|maps| {
-                        maps.render_term_map(key, all_docs.iter(), &doc.url_path, 1, doc.route)
+                        maps.render_term_map(key, all_docs.iter(), &doc.url_path, 1, doc.route, false)
                     })
                 }) {
                     if doc.is_place_namespace_root && term_listing.is_none() {

@@ -16,6 +16,16 @@
  * fetches resolve and the world SVG parses; a failed fetch (or malformed
  * SVG) leaves it untouched and throws nothing.
  *
+ * This same module is also what boots when this bundle is loaded a SECOND
+ * way: as the small embed `embed.ts`'s own lazy iframe points at (a
+ * `style:map` card, an article's own locator), where this page's URL
+ * carries `embed=1` — `attachEmbedModeIfRequested` below switches the
+ * freshly-mounted controller into that presentation. The HOST page side of
+ * that same embed (finding and lazily hydrating the posters) is
+ * `initPlaceEmbeds`, called unconditionally alongside this module's own
+ * boot since the two are independent: a page can carry an embed poster, the
+ * explorer root figure, both, or neither.
+ *
  * Classes this directory creates dynamically (none exist in any emitted
  * Rust HTML, so the desktop repo's own class allowlist needs this list by
  * hand): moss-places-viewport, moss-places-world, moss-places-tiles,
@@ -27,18 +37,35 @@
  * moss-places-chip-collapsible, moss-places-chip-ellipsis,
  * moss-places-chip-menu, moss-places-chip-menu-item,
  * moss-places-chip-menu-count, moss-places-cards, moss-places-card-select,
- * moss-places-card-detail, moss-places-card-read, moss-places-status.
+ * moss-places-card-detail, moss-places-card-read, moss-places-status,
+ * moss-places-embed-frame.
  */
 import { mountPlacesMap } from "./map";
+import { attachEmbedModeIfRequested, initPlaceEmbeds } from "./embed";
 import { normalizePlacesData, type LabelsData, type PlacesDataWire } from "./types";
 
 export {};
 
-/** Same-origin fetch, matching every other site runtime's own asset-loading guard (`search.ts`'s `loadPagefind`, the source prototype's `fetchLocalAsset`) — the handshake's URLs are always this build's own output, never a third party. */
+/**
+ * Same-origin fetch, matching every other site runtime's own asset-loading
+ * guard (`search.ts`'s `loadPagefind`, the source prototype's
+ * `fetchLocalAsset`) — the handshake's URLs are always this build's own
+ * output, never a third party.
+ *
+ * `cache: "force-cache"`: every caller's URL is content-hashed
+ * (`world.<hash>.svg`, `places.<hash>.json`, `tiles.json` under the same
+ * `_moss/map.<hash>/` directory) — a changed byte is a changed URL, so a
+ * cached response is correct to reuse unconditionally rather than only
+ * when a server's own `Cache-Control` says so. This is what makes "pay
+ * once per visit" (a second located-article page's own embed never
+ * re-fetches `world.svg`) hold regardless of what the HOSTING server
+ * sends — a bare static file server included, which a render gate's own
+ * scratch site is.
+ */
 async function fetchLocal(url: string): Promise<Response> {
   const parsed = new URL(url, location.href);
   if (parsed.origin !== location.origin) throw new Error("places explorer assets must be same-origin");
-  const response = await fetch(parsed.href, { credentials: "same-origin" });
+  const response = await fetch(parsed.href, { credentials: "same-origin", cache: "force-cache" });
   if (!response.ok) throw new Error(`asset HTTP ${response.status}`);
   return response;
 }
@@ -54,6 +81,16 @@ interface TileIndex {
 export async function initPlacesExplorer(root: ParentNode = document): Promise<void> {
   const figure = root.querySelector<HTMLElement>("[data-moss-places-explorer]");
   if (!figure) return;
+  // Idempotency guard: WebKit has been observed firing `DOMContentLoaded`
+  // twice for a document loaded into an embed's own lazily-created iframe
+  // (never for a plain top-level navigation to this same page) — a second
+  // `mountPlacesMap` on an already-mounting figure would replace its DOM out
+  // from under the first run mid-flight, which is what surfaced as a render
+  // gate's `hover()` call hanging forever (the element it resolved kept
+  // getting torn down and rebuilt). This attribute is the one piece of
+  // state every call shares, so checking it before touching anything else
+  // makes a second, redundant call a no-op regardless of why it happened.
+  if (figure.dataset.mossPlacesExplorerReady) return;
   figure.setAttribute("data-moss-places-explorer-ready", "pending");
 
   const worldUrl = figure.dataset.world;
@@ -94,7 +131,12 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
       tilesBaseUrl,
       lang: document.documentElement.lang,
     });
-    if (controller) figure.setAttribute("data-moss-places-explorer-ready", "ready");
+    if (controller) {
+      figure.setAttribute("data-moss-places-explorer-ready", "ready");
+      // A no-op unless THIS page's own URL carries embed=1 — see embed.ts's
+      // own doc for why that is the same places root page, not a second one.
+      attachEmbedModeIfRequested(controller, figure);
+    }
     // A parse failure leaves `data-moss-places-explorer-ready="pending"` and
     // the static figure untouched — the same "nothing throws" floor a fetch
     // failure gets, below.
@@ -103,4 +145,11 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => void initPlacesExplorer());
+document.addEventListener("DOMContentLoaded", () => {
+  void initPlacesExplorer();
+  // Independent of the explorer root above: a `style:map` embed or an
+  // article's own locator poster can appear on a page that carries no
+  // `[data-moss-places-explorer]` figure at all (an ordinary article), and
+  // a no-op on a page that carries neither.
+  initPlaceEmbeds();
+});

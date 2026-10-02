@@ -91,7 +91,12 @@ struct PlaceEntry {
 /// `_moss/previews.json` emitter uses, so a raw `.html`-suffixed
 /// `url_path` (if one ever reaches here) normalizes the same way a hover
 /// preview's key does.
-fn page_url(url_path: &str) -> String {
+///
+/// `pub(crate)`: `context.rs`'s `render_locator` calls this directly to
+/// compute the SAME id this module gives a work's own `Work.id` below, so
+/// the article locator embed's `article=` URL param can never drift from
+/// what `places.<hash>.json` actually keys works by.
+pub(crate) fn page_url(url_path: &str) -> String {
     let permalink = format!("/{}", url_path.trim_start_matches('/'));
     let pretty = to_pretty_url(&permalink);
     format!("/{}", pretty.trim_start_matches('/'))

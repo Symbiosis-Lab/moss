@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { initImmersiveMode } from "../immersive-mode";
+import { initImmersiveMode, setupImmersiveIframe } from "../immersive-mode";
 
 /** jsdom doesn't have TransitionEvent -- create a minimal substitute */
 function createTransitionEndEvent(propertyName: string): Event {
@@ -171,6 +171,34 @@ describe("initImmersiveMode", () => {
     document.body.innerHTML = `<main><article class="container"><iframe src="//cdn.example.com/x.html"></iframe></article></main>`;
     initImmersiveMode();
     expect(document.querySelector(".immersive-iframe-wrapper")).toBeNull();
+  });
+
+  test("copies the iframe's own align class onto the wrapper", () => {
+    document.body.innerHTML = `
+      <main><article class="container">
+        <iframe class="moss-align-right" src="./app/index.html"></iframe>
+      </article></main>`;
+    initImmersiveMode();
+    const wrapper = document.querySelector(".immersive-iframe-wrapper")!;
+    expect(wrapper.classList.contains("moss-align-right")).toBe(true);
+    expect(wrapper.classList.contains("immersive-iframe-wrapper")).toBe(true);
+  });
+
+  test("copies the iframe's own data-width onto the wrapper", () => {
+    document.body.innerHTML = `
+      <main><article class="container">
+        <iframe class="moss-align-right" data-width="wide" src="./app/index.html"></iframe>
+      </article></main>`;
+    initImmersiveMode();
+    const wrapper = document.querySelector(".immersive-iframe-wrapper")!;
+    expect(wrapper.getAttribute("data-width")).toBe("wide");
+  });
+
+  test("carries no align class onto the wrapper when the iframe has none", () => {
+    createArticlePage();
+    initImmersiveMode();
+    const wrapper = document.querySelector(".immersive-iframe-wrapper")!;
+    expect(wrapper.className).toBe("immersive-iframe-wrapper");
   });
 });
 
@@ -415,6 +443,21 @@ describe("Fullscreen API integration", () => {
 
     expect(document.body.classList.contains("immersive-fs-active")).toBe(false);
     expect(button.getAttribute("aria-label")).toBe("Enter fullscreen");
+  });
+
+  test("onFullscreenChange fires true on enter and false on exit", async () => {
+    createArticlePage();
+    const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+    const onFullscreenChange = vi.fn();
+    setupImmersiveIframe(iframe, onFullscreenChange);
+
+    const button = document.querySelector(".immersive-fullscreen-btn") as HTMLElement;
+    button.click();
+    await flushMicrotasks();
+    expect(onFullscreenChange).toHaveBeenLastCalledWith(true);
+
+    button.click(); // exit — fullscreenElement is mocked null, so this is the CSS-only path
+    expect(onFullscreenChange).toHaveBeenLastCalledWith(false);
   });
 
   test("graceful fallback when requestFullscreen is undefined", async () => {

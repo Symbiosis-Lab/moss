@@ -175,7 +175,12 @@ impl PlaceMapRenderContext {
         let options = super::SvgMapOptions::new(page_path, ordinal, &first.display, precision);
         match super::emit_locator(&self.maps, &target, options) {
             Ok(locator) => {
-                let svg = locator.svg;
+                // The article id `places.<hash>.json` keys THIS page's own
+                // work by (`places_data::page_url`, the same pretty-URL
+                // transform) — so `embed.ts`'s `article=` scope can never
+                // misread a page's own work.
+                let article = super::places_data::page_url(page_path);
+                let svg = self.with_embed_hydration(locator.svg, &format!("article={article}"), &first.display);
                 Some(format!(r#"<div class="moss-place-locator moss-align-right">{svg}</div>"#))
             }
             Err(error) => {
@@ -206,6 +211,12 @@ impl PlaceMapRenderContext {
         is_folder_index && is_place_namespace_root && !map_disabled
     }
 
+    /// `is_embed` is true only for a `style:map` body embed
+    /// (`folder_embed.rs`'s dispatch) — a page's own primary map (a real or
+    /// synthesized place term page's own figure, `render/html.rs` and
+    /// `render/blocking.rs`'s own call sites) passes `false`: that figure
+    /// is the page's own content, not a reference to it, and stays exactly
+    /// the static-until-the-root-upgrades-it figure it already was.
     pub fn render_term_map<'a>(
         &self,
         key: &str,
@@ -213,6 +224,7 @@ impl PlaceMapRenderContext {
         page_path: &str,
         ordinal: usize,
         route: bool,
+        is_embed: bool,
     ) -> Option<String> {
         if !self.is_place_key(key) { return None; }
         let members = members.into_iter();
@@ -227,8 +239,20 @@ impl PlaceMapRenderContext {
             self.aggregate(key, label, members)
         };
         apply_route_gate(&mut target, page_path);
+        // The same label `emit_svg`'s own aria-label derives (`target.aggregate_name`
+        // for a listing, else the first marked place's own display name) —
+        // computed again here rather than threaded out of `emit_svg`, since
+        // it is one cheap expression and `emit_svg`'s signature is shared by
+        // every other caller in this crate.
+        let embed_name = target
+            .aggregate_name
+            .clone()
+            .or_else(|| target.places.first().map(|place| place.display.clone()))
+            .unwrap_or_else(|| key.to_string());
         let svg = target.has_coordinates().then(|| super::emit_svg(&self.maps, &target, page_path, ordinal))?;
-        Some(self.with_explorer_handshake(key, svg))
+        let svg = self.with_explorer_handshake(key, svg);
+        let svg = if is_embed { self.with_embed_hydration(svg, &format!("place={key}"), &embed_name) } else { svg };
+        Some(svg)
     }
 
     /// Splice the places-explorer handshake attributes onto the figure's
@@ -253,18 +277,71 @@ impl PlaceMapRenderContext {
             return svg;
         };
         let places = crate::build::served_path::ServedPath::for_places_data_hashed(places_hash);
-        svg.replacen(
-            "<figure class=\"moss-place-map\"",
+        Self::splice_figure_attrs(
+            svg,
             &format!(
-                "<figure class=\"moss-place-map\" data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-labels=\"{}\" data-scope=\"{}\"",
+                "data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-labels=\"{}\" data-scope=\"{}\"",
                 world.to_relative_url(),
                 tiles.to_relative_url(),
                 places.to_relative_url(),
                 labels.to_relative_url(),
                 self.namespace,
             ),
-            1,
         )
+    }
+
+    /// Splice the embed-hydration handshake onto a figure's opening tag: a
+    /// `data-moss-place-embed` flag and a `data-hydrate-url` pointing at the
+    /// places root, carrying `scope_query` (`place=<key>` for a `style:map`
+    /// embed, `article=<url>` for the article locator) plus `embed=1` — the
+    /// two attributes `places-explorer/embed.ts`'s host-page half reads to
+    /// build its own lazy iframe. The static figure underneath is
+    /// untouched either way: a reader with JavaScript off, or whose
+    /// hydration fetch fails, sees exactly the figure this always drew.
+    ///
+    /// A no-op — the plain static figure — when the explorer is off
+    /// (`should_inject_places_explorer`'s own flag, captured as
+    /// `self.explorer`), or when [`Self::with_explorer_handshake`] already
+    /// claimed this exact figure: the namespace root's own `style:map`
+    /// embed stays the full in-place upgrade target it already was,
+    /// rather than two hydration paths competing for one element.
+    fn with_embed_hydration(&self, svg: String, scope_query: &str, name: &str) -> String {
+        if !self.explorer || svg.contains("data-moss-places-explorer") {
+            return svg;
+        }
+        // allow:served-path-url-construct (the place-typed namespace root's
+        // own page — not a hashed asset, so `ServedPath` has no constructor
+        // for it; the same bare `format!("/{}/", key)` `terms.rs`'s own
+        // `term_url` builds a root link with).
+        let root = format!("/{}/", self.namespace);
+        // `data-embed-name`: the plain place/article display name — never a
+        // full sentence — so `places-explorer/embed.ts`'s host-page half can
+        // compose the hydrated iframe's own accessible `title` through its
+        // OWN localised copy (`strings.ts`), the same way every other piece
+        // of runtime UI text in this explorer is localised. Baking a finished
+        // English sentence in here instead would leave every other locale's
+        // embed with an English-only iframe title.
+        Self::splice_figure_attrs(
+            svg,
+            &format!(
+                "data-moss-place-embed data-hydrate-url=\"{root}?{scope_query}&embed=1\" data-embed-name=\"{}\"",
+                escape_attr(name),
+            ),
+        )
+    }
+
+    /// Splice `attrs` right after a figure's opening tag name — the one
+    /// place both handshakes above touch it, so they can never disagree
+    /// about where attributes land. Anchored on the bare `<figure `, not
+    /// `<figure class="moss-place-map"` (what `with_explorer_handshake`
+    /// used before this helper existed): a locator's SVG already carries
+    /// `data-map-locator-profile`, spliced in by `locator.rs` BEFORE
+    /// `class=`, by the time `with_embed_hydration` runs on it, and a
+    /// class-anchored pattern would silently miss that case. Safe for
+    /// `with_explorer_handshake` too — it never runs on locator output, so
+    /// nothing ever sits between `<figure ` and `class=` there either way.
+    fn splice_figure_attrs(svg: String, attrs: &str) -> String {
+        svg.replacen("<figure ", &format!("<figure {attrs} "), 1)
     }
 
     fn aggregate<'a>(
@@ -520,6 +597,20 @@ impl PlaceMapTarget {
     pub fn marker_places(&self) -> impl Iterator<Item = &ResolvedPlace> {
         self.places.iter().filter(|place| place.point().is_some())
     }
+}
+
+/// Escape a plain display name for use inside a double-quoted HTML
+/// attribute value — `svg.rs`'s own `xml_escape` is `pub(super)` to that
+/// module alone, and threading a cross-module export through for one short
+/// attribute here is not worth it; every other renderer touching HTML output
+/// in this crate carries the same small local copy (`media.rs`,
+/// `embed_handlers.rs`, `markdown/html_post.rs`, …).
+fn escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn find_record<'a>(
@@ -833,7 +924,7 @@ mod tests {
     fn root_map_carries_the_explorer_handshake_when_everything_is_ready() {
         let context = ready_root_context();
         let docs = [located_doc("Harbor")];
-        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false).unwrap();
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false, false).unwrap();
         assert!(html.contains("data-moss-places-explorer"), "{html:.200}");
         assert!(html.contains("data-world=\"/_moss/map.abc123/world.svg\""), "{html:.200}");
         assert!(html.contains("data-tiles=\"/_moss/map.abc123/tiles.json\""), "{html:.200}");
@@ -847,7 +938,7 @@ mod tests {
         let context = ready_root_context();
         let docs = [located_doc("Harbor East")];
         let html = context
-            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false)
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false, false)
             .unwrap();
         assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
     }
@@ -856,7 +947,7 @@ mod tests {
     fn explorer_off_leaves_the_root_map_untouched() {
         let context = ready_root_context().with_explorer(false);
         let docs = [located_doc("Harbor")];
-        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false).unwrap();
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false, false).unwrap();
         assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
     }
 
@@ -867,7 +958,78 @@ mod tests {
             .with_explorer(true)
             .with_map_assets_hash("abc123".into());
         let docs = [located_doc("Harbor")];
-        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false).unwrap();
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false, false).unwrap();
         assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
+    }
+
+    // -- style:map embed hydration (is_embed: true) -----------------------
+
+    #[test]
+    fn a_sub_place_style_map_embed_carries_the_embed_hydration_handshake() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor East")];
+        let html = context
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false, true)
+            .unwrap();
+        assert!(html.contains("data-moss-place-embed"), "{html:.200}");
+        assert!(html.contains(r#"data-hydrate-url="/places/?place=places/harbor&embed=1""#), "{html:.200}");
+        assert!(html.contains(r#"data-embed-name="Harbor""#), "{html:.200}");
+        // Never BOTH handshakes on one figure.
+        assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
+    }
+
+    #[test]
+    fn a_root_style_map_embed_keeps_the_explorer_handshake_not_the_embed_one() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor")];
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false, true).unwrap();
+        assert!(html.contains("data-moss-places-explorer"), "{html:.200}");
+        assert!(!html.contains("data-moss-place-embed"), "{html:.200}");
+    }
+
+    #[test]
+    fn a_style_map_embed_carries_no_hydration_when_the_explorer_is_off() {
+        let context = ready_root_context().with_explorer(false);
+        let docs = [located_doc("Harbor East")];
+        let html = context
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false, true)
+            .unwrap();
+        assert!(!html.contains("data-moss-place-embed"), "{html:.200}");
+    }
+
+    #[test]
+    fn a_pages_own_primary_map_never_carries_the_embed_hydration() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor East")];
+        let html = context
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false, false)
+            .unwrap();
+        assert!(!html.contains("data-moss-place-embed"), "{html:.200}");
+    }
+
+    #[test]
+    fn render_locator_carries_the_embed_hydration_scoped_to_its_own_article() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        )
+        .with_explorer(true)
+        .with_map_assets_hash("abc123".into())
+        .with_explorer_places_hash("def456".into());
+        let html = context.render_locator(&["Harbor".into()], false, "story/index.html", 0).unwrap();
+        assert!(html.contains("data-moss-place-embed"), "{html}");
+        assert!(html.contains(r#"data-hydrate-url="/places/?article=/story/&embed=1""#), "{html}");
+        assert!(html.contains(r#"data-embed-name="Harbor""#), "{html}");
+    }
+
+    #[test]
+    fn render_locator_carries_no_embed_hydration_when_the_explorer_is_off() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        )
+        .with_explorer(false);
+        let html = context.render_locator(&["Harbor".into()], false, "story/index.html", 0).unwrap();
+        assert!(!html.contains("data-moss-place-embed"), "{html}");
     }
 }

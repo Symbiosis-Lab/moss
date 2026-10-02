@@ -2459,7 +2459,7 @@ pub fn generate_blocking_content_for_build(
             // from — this listing's map is always an aggregate anyway, which
             // `render_term_map` never draws a route on regardless.
             if let Some(map) = layout_config.place_maps.as_ref().and_then(|maps| {
-                maps.render_term_map(folder, all_docs_refs.iter().copied(), &auto_url_path, 0, false)
+                maps.render_term_map(folder, all_docs_refs.iter().copied(), &auto_url_path, 0, false, false)
             }) {
                 content_html.push('\n');
                 content_html.push_str(&map);

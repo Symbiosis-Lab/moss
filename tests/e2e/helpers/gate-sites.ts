@@ -2323,6 +2323,34 @@ title: Places
 
 Every work this site locates, gathered on one map.
 `,
+    // A style:map embed (task 6, "the embed's own build side"): a non-root
+    // place, so this figure gets the embed-hydration handshake rather than
+    // the root's own in-place explorer upgrade.
+    "lisbon-overview.md": `---
+title: Lisbon overview
+---
+
+![[/places/lisbon/|style:map]]
+`,
+    // The hero (task 6, step 10): style:map with the existing \`screen\`
+    // placement, as the page's first block — a dedicated page, not
+    // places/index.md itself, so this gate never depends on whatever that
+    // page's own heading does. Targets a sub-place (Lisbon), not the bare
+    // namespace root: a root-targeted \`style:map\` embed resolves its
+    // listing through the SAME folder-children selector an ordinary
+    // folder embed uses (\`select_children_by_slug\`), which finds no
+    // direct children for the bare root in this fixture (every located
+    // work claims its OWN place key via \`also_in\`, never the namespace
+    // root itself) — a pre-existing gap outside this task's scope, noted
+    // in the report rather than fixed here.
+    "hero.md": `---
+title: World
+---
+
+![[/places/lisbon/|style:map|screen]]
+
+The hero above is Lisbon's own map, full-bleed.
+`,
     "lisbon-walk.md": placesExplorerWork("pex001aa", "Lisbon Walk", "Lisbon", "2024-06-10"),
     "lisbon-harbor-light.md": placesExplorerWork("pex002bb", "Lisbon Harbor Light", "Lisbon Harbor", "2024-06-05"),
     "porto-steps.md": placesExplorerWork("pex003cc", "Porto Steps", "Porto", "2024-05-20"),
@@ -2345,6 +2373,7 @@ Every work this site locates, gathered on one map.
 
 [site]
 lang = "en"
+locator = "align-right"
 
 [terms.places]
 type = "place"

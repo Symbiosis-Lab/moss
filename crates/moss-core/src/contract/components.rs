@@ -3817,6 +3817,24 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 default: "",
                 description: "The place-typed kind's namespace key (`places`, or whatever a declared kind named it).",
             },
+            DataAttr {
+                name: "data-moss-place-embed",
+                values: &[],
+                default: "",
+                description: "Presence-only. Set on a `style:map` embed's own figure, or an article's locator figure, when the explorer is on — never alongside `data-moss-places-explorer` on the same figure. `places-explorer/embed.ts` reads this (and `data-hydrate-url`) to build its own lazy iframe behind the static figure.",
+            },
+            DataAttr {
+                name: "data-hydrate-url",
+                values: &[],
+                default: "",
+                description: "The places root's own URL, scoped by `place=<key>` (a `style:map` embed) or `article=<url>` (the locator's own hosting page) and carrying `embed=1`. Present only alongside `data-moss-place-embed`.",
+            },
+            DataAttr {
+                name: "data-moss-places-embed-mode",
+                values: &["collapsed", "expanded"],
+                default: "collapsed",
+                description: "Runtime-set, inside the hydrated iframe only: whether the embed is showing its small collapsed presentation or has been expanded through the immersive/fullscreen control. Absent on the full places root page and on the static (unhydrated) figure.",
+            },
         ],
         example_html: r#"<figure class="moss-place-map" role="img" aria-label="Map of Kyoto, city precision"><svg aria-hidden="true"></svg></figure>"#,
         example_markdown: r#"![[/places/kyoto/|style:map]]"#,
@@ -3871,6 +3889,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         parent: "moss-place-map",
         data_attrs: &[
             DataAttr { name: "data-dragging", values: &[], default: "", description: "Presence-only, set for the duration of a pointer-drag pan gesture." },
+            DataAttr { name: "data-gesture-mode", values: &["cooperative"], default: "", description: "Set by the embed's own `setCooperativeGestures` while collapsed: a lone touch defers to the page's own scroll instead of panning, and `places-explorer.css`'s own `touch-action: pan-y` rule lets it. Absent on the full explorer page and on an expanded embed." },
         ],
         example_html: r#"<div class="moss-places-viewport" tabindex="0" role="application" aria-label="Map. Use arrow keys to pan, plus and minus to zoom."></div>"#,
         example_markdown: "",
@@ -4192,6 +4211,54 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "1",
         description: "Visually-hidden polite live region announcing scope and selection changes — never pan or zoom, and never a visible status line.",
+    },
+    // Embeds: `places-explorer/embed.ts`'s own lazy-hydrated iframe, behind
+    // a `style:map` or locator poster. Created by that runtime, like the
+    // rest of this section — `data-moss-place-embed`/`data-hydrate-url`
+    // above, on `moss-place-map`, are the one exception (Rust-emitted).
+    ComponentEntry {
+        class: "moss-places-embed-frame",
+        kind: "instance",
+        parent: "moss-place-map",
+        data_attrs: &[],
+        example_html: r#"<iframe class="moss-places-embed-frame" src="/places/?place=places/kyoto&embed=1"></iframe>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The lazy-hydrated iframe `embed.ts` creates behind a `style:map`/locator poster once it nears the viewport (or on tap, under Save-Data). Transparent and non-interactive until it cross-fades in.",
+    },
+    ComponentEntry {
+        class: "moss-places-embed-frame--settled",
+        kind: "instance",
+        parent: "moss-places-embed-frame",
+        data_attrs: &[],
+        example_html: r#"<iframe class="moss-places-embed-frame moss-places-embed-frame--settled" src="/places/?place=places/kyoto&embed=1"></iframe>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "Added once the iframe's own explorer posts back ready: cross-fades it over the static poster. Never added at all when the fetch fails or times out — the poster stays exactly as it was.",
+    },
+    ComponentEntry {
+        class: "moss-places-coop-hint",
+        kind: "instance",
+        parent: "moss-places-viewport",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-places-coop-hint" role="status" aria-live="polite">Hold ⌘ and scroll to zoom the map</p>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "`map.ts`'s one-time nudge toward the zoom modifier: appended to the viewport the first time a reader wheels a COOPERATIVE (collapsed-embed) map without it held, since a bare wheel there deliberately does nothing — `gestures.ts` leaves it for the page's own scroll. Never appears on the full explorer page, which has no competing scroll to defer to.",
+    },
+    ComponentEntry {
+        class: "moss-places-coop-hint--visible",
+        kind: "instance",
+        parent: "moss-places-coop-hint",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-places-coop-hint moss-places-coop-hint--visible" role="status" aria-live="polite">Hold ⌘ and scroll to zoom the map</p>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "Added one frame after the hint mounts (so its own opacity transition runs) and removed a couple of seconds later as the hint auto-dismisses — never left present once dismissed.",
     },
 ];
 
