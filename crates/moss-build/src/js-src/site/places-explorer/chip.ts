@@ -83,6 +83,8 @@ export interface ChipCallbacks {
   selectWork(id: string | null): void;
   /** Exempt a place's own works from the marker layer's dimming while a menu item is hovered/focused, `null` to lift it — the SAME `data-dimmed` attribute a bloomed ring already uses. */
   highlightPlace(placeId: string | null): void;
+  /** Called right after the dig-down menu actually opens or closes (never on a `closeMenu()` call that found nothing open) — map.ts's own hook to re-run `reservedLabelRects()` and the label layer against it, the one thing opening or closing this menu changes that is not already one of `render()`'s own four keyed inputs (scope/selection/ring/locale), so nothing else in this module's own render path would otherwise re-run it. */
+  menuToggled(): void;
 }
 
 /** The breadcrumb chip: crumb trail, the terminal crumb's digging-down menu, and the phone-width collapse (CSS-driven; see places-explorer.css). */
@@ -314,6 +316,7 @@ export class ScopeChip {
       firstItem.tabIndex = 0;
       firstItem.focus();
     }
+    this.callbacks.menuToggled();
   }
 
   private moveFocus(delta: number): void {
@@ -335,5 +338,6 @@ export class ScopeChip {
     this.menuTrigger?.setAttribute("aria-expanded", "false");
     this.menuTrigger = null;
     this.callbacks.highlightPlace(null);
+    this.callbacks.menuToggled();
   }
 }

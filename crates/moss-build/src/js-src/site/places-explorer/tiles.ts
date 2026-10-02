@@ -145,6 +145,100 @@ export function parseMapSvg(markup: string): SVGElement | null {
   return imported;
 }
 
+/**
+ * Which of a tile's own two bled-toward-a-LOWER-index-neighbour edges (its
+ * own west and south) must be clipped away because a real neighbour cell
+ * sits there — the fix for a faint but real line measured along both axes
+ * of the `2 * bleed` overlap two adjacent tiles deliberately leave at their
+ * shared edge (`tileOverlayTransform`): sampling pixel rows/columns across a
+ * real tile pair showed BOTH a west- and a south-bleeding slice reading a
+ * few colour units off its own tile's flat surroundings — reproducible with
+ * the neighbour and the world layer each hidden in turn, so neither a
+ * two-copy disagreement nor the world layer showing through explains it —
+ * while the SAME tile's own east/north-bleeding slice (the opposite
+ * direction) never did. Whatever in the per-cell source data or its
+ * rendering makes a west/south bleed less trustworthy than an east/north
+ * one, never drawing it is strictly safer than drawing it on top: this
+ * function always keeps a tile's bleed toward a HIGHER-index neighbour
+ * (east, north) and clips the slice it bled toward a LOWER-index one (west,
+ * south) whenever that neighbour cell actually exists, so of any two
+ * adjacent tiles exactly one — always the lower-index one, bleeding
+ * forward — draws their shared strip. A cell with no neighbour in a given
+ * direction (the outer perimeter of this site's tile coverage) keeps that
+ * edge's own bleed unclipped, same as before: nothing to prefer away from
+ * there, and `tileFadeOpacity`'s cross-fade still needs it to close the
+ * sub-pixel seam against the bare world layer past it.
+ */
+export function tileClipInset(
+  x: number,
+  y: number,
+  availableTiles: Array<[number, number]>,
+  k: number,
+  bleed: number,
+): { bottom: number; left: number } {
+  const has = (cx: number, cy: number): boolean => availableTiles.some(([ax, ay]) => ax === cx && ay === cy);
+  const insetUnits = bleed * k;
+  return {
+    // Larger y is further north (`tile_frame`'s own `center_latitude`), so
+    // the south (lower-index) neighbour is (x, y - 1).
+    bottom: has(x, y - 1) ? insetUnits : 0,
+    left: has(x - 1, y) ? insetUnits : 0,
+  };
+}
+
+/** How far, in canvas units (world units times `k`, the SAME unit `tileClipInset` returns), the outer edge of a tile's own covered region fades toward the bare world layer past it — a cell about 23 world units wide, so this is a short distance against it, not a redraw of the whole tile. */
+const OUTER_FADE_WORLD_UNITS = 1.5;
+
+/**
+ * The `mask-image` that fades a tile's own OUTER edges only — the sides
+ * `tileClipInset` finds no real neighbour cell on — toward transparent,
+ * leaving every edge shared with a real neighbour fully opaque: past the
+ * site's own detail coverage, the world layer carries a frame at a coarser,
+ * faded rendering of the same terrain (`map.ts`'s own relief-strength
+ * fade), so a tile that stopped dead at its own nominal cell edge met it
+ * with a hard tone step, same shape as the seam `tileClipInset` fixes but
+ * deliberately placed rather than measured away — there is no second
+ * tile's content to disagree with past a coverage edge, only the world's
+ * own coarser one.
+ *
+ * One `linear-gradient` layer per outer edge — ordinarily at most two
+ * (a corner of the site's own tile coverage, missing one of east/west and
+ * one of north/south; `relevant_tiles`' own 3x3-per-place neighbourhood
+ * means a cell is never missing BOTH neighbours on the same axis unless
+ * two separate places' own coverage areas happen not to touch there
+ * either) — composited with
+ * `intersect` (Porter-Duff source-in, chained) rather than the `add`
+ * default: `add` would UNION each gradient's own opaque region, so a
+ * corner tile's south-fading layer would paint its own (un-faded) east
+ * edge back to full opacity — the opposite of what two independent fades
+ * meeting at a corner should do. `intersect` instead keeps a pixel only as
+ * opaque as the DARKEST (most-faded) layer covering it, so a corner's two
+ * fades compose the way two independent dimmers would. `null` when the
+ * tile has no outer edge at all (every side has a real neighbour) — the
+ * common case past a site's own first ring of tiles, which keeps its own
+ * `mask-image` unset rather than carrying a no-op one.
+ */
+export function tileEdgeMask(
+  x: number,
+  y: number,
+  availableTiles: Array<[number, number]>,
+  k: number,
+): string | null {
+  const has = (cx: number, cy: number): boolean => availableTiles.some(([ax, ay]) => ax === cx && ay === cy);
+  const fade = `${OUTER_FADE_WORLD_UNITS * k}px`;
+  const opaque = "black";
+  const clear = "transparent";
+  const layers: string[] = [];
+  if (!has(x - 1, y)) layers.push(`linear-gradient(to right, ${clear}, ${opaque} ${fade})`);
+  if (!has(x + 1, y)) layers.push(`linear-gradient(to left, ${clear}, ${opaque} ${fade})`);
+  // Larger y is further north (`tile_frame`'s own `center_latitude`): the
+  // top of a tile's own canvas (CSS "to bottom" fades FROM the top edge)
+  // is its north side, so a missing NORTH neighbour is `(x, y + 1)`.
+  if (!has(x, y + 1)) layers.push(`linear-gradient(to bottom, ${clear}, ${opaque} ${fade})`);
+  if (!has(x, y - 1)) layers.push(`linear-gradient(to top, ${clear}, ${opaque} ${fade})`);
+  return layers.length > 0 ? layers.join(", ") : null;
+}
+
 export interface TileLayerOptions {
   tilesBaseUrl: string;
   availableTiles: Array<[number, number]>;
@@ -212,9 +306,21 @@ export class TileLayer {
           this.container.append(svg);
           this.elements.set(key, svg);
           this.position(svg, x, y, unitScale);
+          // This tile just became a real, DOM-present neighbour for up to
+          // four others — including, possibly, itself relative to ones
+          // already loaded — so both its own clip/mask and theirs need
+          // recomputing now, not at whatever later camera move happens to
+          // call `render()` again next.
+          this.applyClipAndMask(svg, x, y);
+          this.refreshNeighbourClipAndMask(x, y);
         })
         .catch(() => {
           this.elements.set(key, "failed");
+          // A failed fetch is cached and never retried (this file's own
+          // doc above), so any loaded neighbour that was treating this
+          // cell as still-pending must now fade that shared edge instead
+          // of waiting forever for a tile that will never arrive.
+          this.refreshNeighbourClipAndMask(x, y);
         });
     }
   }
@@ -228,6 +334,7 @@ export class TileLayer {
     this.elements.clear();
   }
 
+  /** Only the transform — called on every `render()`, including a plain pan where nothing has loaded, failed, or been removed, so this must never touch `clip-path`/`mask-image` (see `applyClipAndMask`, called only on those load-state changes). */
   private position(svg: SVGElement, x: number, y: number, unitScale: number): void {
     const { translateX, translateY, scale } = tileOverlayTransform(x, y, unitScale, this.options.k, this.options.bleed);
     const el = svg as unknown as HTMLElement;
@@ -235,5 +342,52 @@ export class TileLayer {
     el.style.top = "0";
     el.style.transformOrigin = "0 0";
     el.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+  }
+
+  /** Cell keys of this layer's own tiles that are actually loaded and in the DOM right now — the "neighbour exists" `tileClipInset` needs: clipping toward a neighbour is only ever correct once that neighbour is itself drawing the shared strip, never merely listed in the static manifest (a neighbour still `"loading"`, or forever `"failed"` since a failure is never retried, would otherwise leave the shared strip undrawn by either tile). */
+  private loadedNeighbourCells(): Array<[number, number]> {
+    const loaded: Array<[number, number]> = [];
+    for (const [key, value] of this.elements) {
+      if (value === "loading" || value === "failed") continue;
+      const [cx, cy] = key.split(",").map(Number);
+      loaded.push([cx, cy]);
+    }
+    return loaded;
+  }
+
+  /** The manifest's own cells, minus any that have already `"failed"` to load — the "neighbour exists at all" `tileEdgeMask` needs for its outer-edge fade: a cell the manifest never listed and a cell whose fetch permanently failed read the same way here, both absent, so either one fades the shared edge instead of ending it hard. A cell still `"loading"` (or not yet attempted) stays present — it may yet load, so its edge is not treated as outer. */
+  private nonFailedManifestCells(): Array<[number, number]> {
+    return this.options.availableTiles.filter(([cx, cy]) => this.elements.get(`${cx},${cy}`) !== "failed");
+  }
+
+  /** Recompute and (re)apply `clip-path`/`mask-image` for `svg`, the tile at `(x, y)` — the only place either style is ever written, so the only way they change is a call here, never a plain `render()` pan. */
+  private applyClipAndMask(svg: SVGElement, x: number, y: number): void {
+    const el = svg as unknown as HTMLElement;
+    // `clip-path` on an SVG root with intrinsic width/height (no CSS
+    // width/height override here) operates in that SAME local/viewBox unit
+    // space `position()`'s own `scale(...)` then shrinks as a whole — so an
+    // inset in canvas units clips exactly the bled slice `tileClipInset`
+    // names, regardless of `unitScale`/zoom.
+    const { bottom, left } = tileClipInset(x, y, this.loadedNeighbourCells(), this.options.k, this.options.bleed);
+    el.style.clipPath = bottom > 0 || left > 0 ? `inset(0 0 ${bottom}px ${left}px)` : "";
+    // Same local/viewBox unit space as the `clip-path` above — an edge this
+    // tile shares with a real, LOADED neighbour is never also one of its
+    // own OUTER edges (manifest-present and not failed), so the two never
+    // fight over the same side.
+    const mask = tileEdgeMask(x, y, this.nonFailedManifestCells(), this.options.k);
+    el.style.maskImage = mask ?? "";
+    el.style.webkitMaskImage = mask ?? "";
+    if (mask) {
+      el.style.maskComposite = "intersect";
+      el.style.webkitMaskComposite = "source-in";
+    }
+  }
+
+  /** Re-run `applyClipAndMask` for each of `(x, y)`'s own up-to-four loaded neighbours — called whenever `(x, y)` itself finishes loading or fails, the two moments that can change what a NEIGHBOUR should draw at the shared edge, independent of any camera move. */
+  private refreshNeighbourClipAndMask(x: number, y: number): void {
+    for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
+      const neighbour = this.elements.get(`${nx},${ny}`);
+      if (neighbour && neighbour !== "loading" && neighbour !== "failed") this.applyClipAndMask(neighbour, nx, ny);
+    }
   }
 }

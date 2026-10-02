@@ -191,7 +191,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   const cardRow = new CardRow(cardsEl, { selectWork }, strings);
   const labelLayer = new LabelLayer(labelsEl, options.labels, options.lang);
 
-  /** Boxes a label must never cover beyond the markers themselves, in viewport-relative CSS px — the zoom controls, the breadcrumb scope chip, and the card row. `:empty` card rows collapse to zero size on their own (`places-explorer.css`), so an empty one reserves nothing without a separate check here. */
+  /** Boxes a label must never cover beyond the markers themselves, in viewport-relative CSS px — the zoom controls, the breadcrumb scope chip, the card row, and the chip's own dig-down menu while it is open. `:empty` card rows collapse to zero size on their own (`places-explorer.css`), so an empty one reserves nothing without a separate check here; a closed menu is simply absent from the DOM, the same "not there, so nothing to measure" shape. The menu is `chip.ts`'s own `<div class="moss-places-chip-menu">`, an absolutely-positioned CHILD of `chipEl` appended outside its own trail (see chip.ts's `openMenu`) — `chipEl`'s own `getBoundingClientRect()` covers only the trail's box, never a child positioned outside it, so the menu needs its own entry here rather than being already included in `relative(chipEl)`. */
   function reservedLabelRects(): Rect[] {
     const origin = viewportEl.getBoundingClientRect();
     const relative = (el: Element | null): Rect | null => {
@@ -200,9 +200,12 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       if (box.width <= 0 || box.height <= 0) return null;
       return { x: box.x - origin.x, y: box.y - origin.y, width: box.width, height: box.height };
     };
-    return [relative(controlsEl), relative(cardsEl), relative(chipEl)].filter(
-      (rect): rect is Rect => rect != null,
-    );
+    return [
+      relative(controlsEl),
+      relative(cardsEl),
+      relative(chipEl),
+      relative(chipEl.querySelector(".moss-places-chip-menu")),
+    ].filter((rect): rect is Rect => rect != null);
   }
 
   function selectWork(id: string | null): void {
@@ -253,7 +256,19 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     applyCamera(false);
   }
 
-  const scopeChip = new ScopeChip(chipEl, { setScope, selectWork, highlightPlace }, strings, options.lang);
+  const scopeChip = new ScopeChip(
+    chipEl,
+    // `applyCamera(true)` re-runs the label layer against a freshly-read
+    // `reservedLabelRects()` — the one way a label clear of every OTHER
+    // reserved box still gets hidden once the menu opens over it, and
+    // shown again once it closes; `scopeChip.render()`'s own key guard
+    // makes the rest of this a no-op (scope/selection/ring/locale are
+    // exactly what opening or closing the menu never changes), so the
+    // open menu this is called FROM survives its own trigger untouched.
+    { setScope, selectWork, highlightPlace, menuToggled: () => applyCamera(true) },
+    strings,
+    options.lang,
+  );
 
   // The saved camera (`?p=patterson&z&x&y`) always wins over a scope fit —
   // a reader who panned/zoomed and copied the link gets exactly that view

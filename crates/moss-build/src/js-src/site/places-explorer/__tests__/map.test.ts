@@ -12,7 +12,7 @@ import { coverCamera, detailMaxZoom, screenScale, tileDetailMaxZoom } from "../c
 import { mountPlacesMap } from "../map";
 import { project } from "../projection";
 import { readUrlState } from "../state";
-import type { LabelsData } from "../types";
+import type { LabelsData, Place, Work } from "../types";
 
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const VIEWPORT = { width: 800, height: 500 };
@@ -160,5 +160,79 @@ describe("mountPlacesMap — the label layer actually reserves the breadcrumb ch
     const labelEl = figure.querySelector<HTMLElement>(".moss-places-label[data-kind='city']");
     expect(labelEl).not.toBeNull();
     expect(labelEl!.hidden).toBe(true);
+  });
+
+  test("a city label under the OPEN dig-down menu is hidden too, and returns once the menu closes", () => {
+    const viewport = { width: 800, height: 600 };
+    // The chip's own trail stays small and top-left, nowhere near the
+    // city's own (viewport-centred, see the camera below) candidate
+    // positions — only the MENU'S box is generous enough to reach them,
+    // the same shape the sibling test above gives the chip for its own
+    // assertion, so only the menu's own reservation can be what hides it.
+    const chipRect = { x: 10, y: 10, width: 120, height: 30 };
+    const menuRect = { x: 275, y: 175, width: 250, height: 250 };
+    const cityPoint = project(10, 20);
+
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const el = this as HTMLElement;
+      if (el.classList.contains("moss-places-viewport")) return rect(0, 0, viewport.width, viewport.height);
+      if (el.classList.contains("moss-places-chip-menu")) return rect(menuRect.x, menuRect.y, menuRect.width, menuRect.height);
+      if (el.classList.contains("moss-places-chip")) return rect(chipRect.x, chipRect.y, chipRect.width, chipRect.height);
+      if (el.classList.contains("moss-places-label")) return rect(0, 0, 60, 20);
+      return rect(0, 0, 0, 0);
+    });
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no network in tests"))));
+    // Centred on the city's own world point, same as the sibling test
+    // above — its unreserved anchor is the viewport centre, which the
+    // menu's own box is generous enough to reach from every one of a
+    // label's four candidate positions, the same reasoning that test's own
+    // chipRect comment gives.
+    history.replaceState(null, "", `/places/?p=patterson&z=4&x=${cityPoint.x}&y=${cityPoint.y}`);
+
+    const figure = document.createElement("figure");
+    document.body.append(figure);
+    const labels: LabelsData = {
+      languages: ["en"],
+      en: { cities: [{ name: "Testopolis", lat: 10, lng: 20, rank: 0 }], ranges: [], peaks: [], rivers: [] },
+    };
+    const place: Place = { id: "p1", name: "Place One", precision: "city", lat: 1, lng: 1 };
+    const work: Work = { id: "w1", title: "Work One", url: "/w1", byline: [], places: ["p1"], companions: [] };
+    const controller = mountPlacesMap(figure, {
+      worldSvgText: WORLD_SVG,
+      tilesBaseUrl: "/_moss/map.abc/",
+      tileCells: [],
+      tileK: 4,
+      tileBleed: 0.1,
+      places: { works: [work], places: [place] },
+      labels,
+      lang: "en",
+    });
+    expect(controller).not.toBeNull();
+
+    const labelEl = figure.querySelector<HTMLElement>(".moss-places-label[data-kind='city']");
+    expect(labelEl).not.toBeNull();
+    // Closed menu: the viewport centre is clear, so the label is free to
+    // land on its own anchor (this is the dead-selector regression the
+    // sibling test above already guards — re-asserted here only as the
+    // baseline the next assertion's own change is measured against).
+    expect(labelEl!.hidden).toBe(false);
+
+    const trigger = figure.querySelector<HTMLButtonElement>(".moss-places-chip-crumb[data-terminal]");
+    expect(trigger).not.toBeNull();
+    // Opening the menu touches none of the four inputs `render()` keys on
+    // (scope/selection/ring/locale), so nothing in the chip's own render
+    // path would otherwise re-run `reservedLabelRects()` for it —
+    // `chip.ts`'s own `menuToggled()` callback (wired to `applyCamera(true)`
+    // in `map.ts`) is what the click below actually has to reach for the
+    // label to react at all; this is the regression this test guards.
+    trigger!.click();
+    expect(figure.querySelector(".moss-places-chip-menu")).not.toBeNull();
+    expect(labelEl!.hidden).toBe(true);
+
+    const openMenu = figure.querySelector<HTMLElement>(".moss-places-chip-menu");
+    const menuItem = openMenu?.querySelector<HTMLElement>(".moss-places-chip-menu-item");
+    menuItem?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    expect(figure.querySelector(".moss-places-chip-menu")).toBeNull();
+    expect(labelEl!.hidden).toBe(false);
   });
 });

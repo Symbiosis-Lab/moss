@@ -189,6 +189,29 @@ test.describe("desktop, light", () => {
       expect(rectsOverlap(chipBox, labelBox)).toBe(false);
     }
   });
+
+  // The menu's own glass material is translucent (places-explorer.css), so
+  // a label hidden behind the chip's own trail but not behind the wider
+  // dig-down menu would still read through it — this is the real-browser
+  // counterpart to map.test.ts's own mounted check, covering the actual
+  // CSS and real label layout neither of those exercises.
+  test("no map label intersects the open dig-down menu", async ({ page }) => {
+    await gotoReady(page);
+    await trigger(page).click();
+    const menu = page.locator('.moss-places-chip-menu[role="menu"]');
+    await expect(menu).toBeVisible();
+    const menuBox = (await menu.boundingBox())!;
+    const labelBoxes = await page.locator(".moss-places-label").evaluateAll((els) =>
+      els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      }),
+    );
+    expect(labelBoxes.length).toBeGreaterThan(0);
+    for (const labelBox of labelBoxes) {
+      expect(rectsOverlap(menuBox, labelBox)).toBe(false);
+    }
+  });
 });
 
 test.describe("phone, 390px", () => {

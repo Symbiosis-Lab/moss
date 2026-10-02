@@ -559,16 +559,17 @@ test("past the world ceiling, the coast at a tile boundary is pixel-continuous",
  * the browser entirely avoids it rather than working around it per test.
  * The camera is the same `z=18`/`p=patterson` one `places-explorer-ring.spec.ts` uses — Lisbon
  * is close enough east that its own regional tiles (cells 16 and 17 of row
- * 13) are already loaded. y=600..620 was measured, at this exact camera and
- * viewport, as a dead-flat open-water band on both sides of the seam for
- * x=640..665 — unlike most of the rest of this row, which carries a real,
- * genuinely non-flat sea-floor shadow close enough to the cell boundary that
- * a tight tolerance would flag it as a false positive. Every x in that band
- * is sampled, one px apart, rather than two fixed offsets either side of the
- * seam: the pre-fix defect was a single misplaced column (the wrong cell's
- * own content bleeding in from its neighbour's bucket), not a gradient, and
- * its exact column shifts by a px or two with unrelated geometry changes —
- * two fixed sample points already missed it once in this file's own history.
+ * 13) are already loaded. The actual flat open-water rows are found at run
+ * time (scanned from the two tiles' own rects, not hardcoded), after a
+ * fixed `y=600..620`/`x=640..665` band this test used to hardcode went
+ * stale once an unrelated page-layout change moved the figure — the row
+ * finder below exists for exactly that reason. Every x in the found band
+ * is sampled, one px apart, rather than two fixed offsets either side of
+ * the seam: the pre-fix defect was a single misplaced column (the wrong
+ * cell's own content bleeding in from its neighbour's bucket), not a
+ * gradient, and its exact column shifts by a px or two with unrelated
+ * geometry changes — two fixed sample points already missed it once in
+ * this file's own history.
  */
 test("past the world ceiling, an open-sea tile boundary is pixel-continuous in both engines", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -587,41 +588,328 @@ test("past the world ceiling, an open-sea tile boundary is pixel-continuous in b
     if (!rect) throw new Error(`tile ${cell} not found in view`);
     return rect;
   };
-  const [west, east] = await Promise.all([rectByCell("16,13"), rectByCell("17,13")]);
+  const [west, east, figure] = await Promise.all([
+    rectByCell("16,13"),
+    rectByCell("17,13"),
+    page.locator(".moss-place-map[data-moss-places-explorer]").boundingBox(),
+  ]);
+  if (!figure) throw new Error("explorer figure not found");
+  const viewportSize = page.viewportSize()!;
 
-  // VIEWPORT-absolute, not a fraction of the tile element's own (mostly
-  // off-screen) bounding box: `west`/`east` both reach from y=-413ish (the
-  // boundingClientRect of an element clipped by an `overflow: hidden`
-  // ancestor still reports its full, untruncated box) to about y=586 — the
-  // explorer root has no heading above the figure (`render/html.rs`'s
-  // `is_explorer_root`), so this is higher up the page than it would be
-  // with one. 465/475/485 is a measured dead-flat open-water band on both
-  // sides of the seam at this exact camera and viewport, same as the
-  // comment on the test above.
   const edgeX = Math.round((west.x + west.width + east.x) / 2);
-  const ys = [465, 475, 485];
+  // The vertical span this test can draw a conclusion from: inside BOTH
+  // tiles' own boxes (an element clipped by an `overflow: hidden` ancestor
+  // still reports its full, untruncated `boundingClientRect`), inside the
+  // figure's own drawn area, and inside the viewport — then a further
+  // margin in from every one of those so a candidate row never sits right
+  // at a tile's own bleed edge. Fixed absolute y's (465/475/485, this
+  // test's own prior form) read a measured flat band at ONE page layout —
+  // a sibling fixture's header gaining a line wraps the whole figure down
+  // the page and silently starts sampling whatever used to be there
+  // instead, which is what derives this span from the tiles' own rects
+  // instead.
+  const MARGIN = 20;
+  const top = Math.max(west.y, east.y, figure.y, 0) + MARGIN;
+  const bottom = Math.min(west.y + west.height, east.y + east.height, figure.y + figure.height, viewportSize.height) - MARGIN;
+  if (bottom <= top) throw new Error(`no usable vertical span between the two tiles: top=${top} bottom=${bottom}`);
+
+  // One screenshot over the whole candidate band, decoded once.
+  const clipTop = Math.floor(top);
+  const clipBottom = Math.ceil(bottom);
   const xs: number[] = [];
   for (let dx = -8; dx <= 8; dx++) xs.push(edgeX + dx);
-  const points = ys.flatMap((y) => xs.map((x) => ({ x, y })));
-
-  const clip = { x: edgeX - 10, y: 460, width: 20, height: 30 };
+  const clip = { x: xs[0], y: clipTop, width: xs[xs.length - 1] - xs[0] + 1, height: clipBottom - clipTop };
   const png = await page.screenshot({ clip, animations: "disabled" });
   const image = decodePng(png);
-  const pixels = points.map((p) => image.at(Math.round(p.x - clip.x), Math.round(p.y - clip.y)));
+  const at = (x: number, y: number) => image.at(x - clip.x, y - clip.y);
 
-  // Per RGBA channel, 0-255 — the pre-fix seam measured a 20-50 step at its
-  // one misplaced column; ordinary anti-aliasing noise measured under 2.
-  const TOLERANCE = 4;
-  for (let s = 0; s < ys.length; s++) {
-    const row = pixels.slice(s * xs.length, (s + 1) * xs.length);
-    const baseline = row[0]; // x = edgeX - 8, comfortably inside the flat band either fix leaves alone
-    for (let i = 1; i < row.length; i++) {
+  // Per RGBA channel, 0-255. The pre-fix seam (before `TileSelection`
+  // selected one bucket per tile and `TILE_BLEED` grew) measured a 20-50
+  // step at its one misplaced column; this file's own history tightened
+  // that to 4 once that fix landed. Tightened again, to 1, once the
+  // TOP-OF-STACK tile at this shared edge stopped being whichever one's
+  // async fetch happened to resolve last (`tiles.ts`'s `tileClipInset` —
+  // see the row-boundary test below, whose own ablation is what actually
+  // proves this bound): ordinary anti-aliasing noise alone measures under
+  // 1 here, so 1 is a real bound, not a loosened one picked to pass.
+  const TOLERANCE = 1;
+  // Whether EVERY x in the compared span reads within TOLERANCE of the
+  // span's own west end, at row `y` — i.e. whether `y` is itself a row
+  // this test could use at all, checked with the exact comparison the real
+  // assertion below makes, not a proxy region beside it: a proxy a few px
+  // further out missed a genuine (if small) local variation once already,
+  // because "flat a few px away" doesn't imply "flat exactly here" for sea
+  // texture this fine-grained. A real seam, unlike sea texture, runs the
+  // full height where the two tiles meet — so scanning for rows where this
+  // already holds can't quietly skip past the defect it exists to catch;
+  // a widespread seam leaves NO row anywhere in range passing it.
+  const isContinuousRow = (y: number): boolean => {
+    const baseline = at(xs[0], y);
+    for (let i = 1; i < xs.length; i++) {
+      const sample = at(xs[i], y);
+      for (let channel = 0; channel < 4; channel++) {
+        if (Math.abs(sample[channel] - baseline[channel]) > TOLERANCE) return false;
+      }
+    }
+    return true;
+  };
+
+  // Scanned outward from the vertical centre of the available span, not
+  // from its top edge: a tile's own bleed/coverage perimeter (near the top
+  // or bottom of this span) is more likely to carry real terrain detail
+  // than its middle, the same reasoning `relevant_tiles` growing outward
+  // FROM a place relies on elsewhere in this file. Up to 3 rows, kept at
+  // least ROW_GAP apart — the spread the old hardcoded 465/475/485 (10px
+  // apart) gave this test, so a defect confined to one narrow y band isn't
+  // missed by relying on a single row.
+  const ROW_GAP = 10;
+  const centre = Math.round((clipTop + clipBottom) / 2);
+  const rows: number[] = [];
+  for (let d = 0; centre - d >= clipTop || centre + d < clipBottom; d++) {
+    if (rows.length >= 3) break;
+    for (const y of d === 0 ? [centre] : [centre - d, centre + d]) {
+      if (y < clipTop || y >= clipBottom) continue;
+      if ((rows.length === 0 || rows.every((r) => Math.abs(r - y) >= ROW_GAP)) && isContinuousRow(y)) rows.push(y);
+    }
+  }
+  expect(rows.length, `no continuous open-water row found in [${top}, ${bottom})`).toBeGreaterThan(0);
+
+  for (const y of rows) {
+    const baseline = at(xs[0], y); // x = edgeX - 8, comfortably inside the flat band either fix leaves alone
+    for (let i = 1; i < xs.length; i++) {
+      const sample = at(xs[i], y);
       for (let channel = 0; channel < 4; channel++) {
         expect(
-          Math.abs(row[i][channel] - baseline[channel]),
-          `y=${ys[s]} x=${xs[i]} channel ${channel}: ${row[i]} vs baseline ${baseline} at x=${xs[0]}`,
+          Math.abs(sample[channel] - baseline[channel]),
+          `y=${y} x=${xs[i]} channel ${channel}: ${sample} vs baseline ${baseline} at x=${xs[0]}`,
         ).toBeLessThanOrEqual(TOLERANCE);
       }
     }
+  }
+});
+
+/**
+ * A tile ROW boundary (two vertically-stacked tiles, not the column pair
+ * the test above covers) carried a defect of its own: a scanline a few px
+ * south of the shared edge read a few colour units brighter than the exact
+ * same fill a few px further south still — over open water AND over land,
+ * the "a horizontal line across land and sea" a reader actually saw.
+ * Isolating it (hiding each tile in turn, hiding the world layer
+ * underneath) placed it inside the NORTH tile's own bleed, the slice it
+ * draws DOWN past its own nominal south edge into its southern neighbour's
+ * territory — reproducing with the southern neighbour hidden just as
+ * readily as with it present, so this was never two tiles disagreeing on
+ * one feature's shape; it was the north tile's own south-bleeding slice
+ * reading wrong regardless of what (if anything) sat under it.
+ * `tiles.ts`'s `tileClipInset` stops that slice from ever being drawn: a
+ * tile keeps the OPPOSITE bleed (north, into whichever neighbour sits
+ * there) because measuring the same way along that edge found nothing
+ * wrong with it — so of the two tiles meeting at a row boundary, only the
+ * SOUTH one ever draws their shared strip now.
+ *
+ * Checked as continuity within the south tile's own content, not as
+ * agreement between the two tiles' own colours: a reader comparing this
+ * row boundary to the COLUMN one above might expect the same "both sides
+ * read alike" shape, but a tile's own shadow/halo shading genuinely
+ * strengthens toward a nearby coastline, so two full 10-degree cells can
+ * legitimately differ in their own flat colour well away from the seam —
+ * measured true at this very camera, where the north cell sits closer to
+ * the mapped coastline than the south one. What must never differ is the
+ * south tile's OWN reading close to the boundary against its OWN reading
+ * well inside it, now that only the south tile ever draws there.
+ *
+ * Two cells, column 16 (open water for most of its height) and column 17
+ * (land, fully inside Portugal at this camera), share the SAME row
+ * boundary at this camera/viewport — so one screenshot, one edge y, proves
+ * both halves of "land and sea" at once. The x's actually compared are
+ * found at run time (scanned from each tile's own rect for a column that
+ * reads smooth well south of the tested band — no coastline, no sharp
+ * relief contour, no road/river line crossing it), not a fixed list: this
+ * test used to hardcode `seaXs`/`landXs` as absolute page x's, which read
+ * flat/smooth at one page layout only and went stale the same way the
+ * column test's own fixed y's did. The land side's real, if gentle, relief
+ * shading is what the smoothness scan is for — it steers clear of a sharp
+ * contour (a genuine gradient in the terrain, not a seam) without needing
+ * a human to have already measured where one sits.
+ */
+test("past the world ceiling, a tile row boundary is pixel-continuous over open water and over land", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("places/?p=patterson&z=18&x=399.6415&y=144.8651", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute(
+    "data-moss-places-explorer-ready",
+    "ready",
+    { timeout: 10000 },
+  );
+  await page.waitForTimeout(500); // tile fetch + position settle
+
+  const rectByCell = async (cell: string) => {
+    const rect = await page.locator(`.moss-places-tiles > svg[data-moss-places-tile="${cell}"]`).boundingBox();
+    if (!rect) throw new Error(`tile ${cell} not found in view`);
+    return rect;
+  };
+  // Column 16, row 12 (south) / row 13 (north): open water. Column 17, same
+  // two rows: land. Both pairs share one edge y (same latitude boundary) —
+  // only the sea pair's own box is read for that, the land pair's edge
+  // agrees with it by construction (both are the row 12/13 boundary).
+  const [sea12, sea13, land12, figure] = await Promise.all([
+    rectByCell("16,12"),
+    rectByCell("16,13"),
+    rectByCell("17,12"),
+    page.locator(".moss-place-map[data-moss-places-explorer]").boundingBox(),
+  ]);
+  if (!figure) throw new Error("explorer figure not found");
+  const edgeY = Math.round((sea13.y + sea13.height + sea12.y) / 2);
+
+  // Row 12's (the south tile's) own bleed: a few px past the edge, where
+  // the pre-fix defect actually sat (`TILE_BLEED * TILE_K` is under a
+  // canvas unit, comfortably inside this span at this zoom). Every
+  // CONSECUTIVE pair inside it is compared, rather than one fixed offset
+  // against one far "interior" row: land's own relief shading drifts
+  // gradually over this span (measured a few colour units across it, on
+  // real terrain — not a seam) while the pre-fix defect was a single row
+  // jumping away from its immediate neighbour, so only an adjacent-row
+  // comparison stays blind to the first and sensitive to the second.
+  const bleedTop = edgeY + 1;
+  const bleedBottom = edgeY + 9;
+
+  // Fixed absolute x's (this test's own prior form: seaXs/landXs lists)
+  // read a measured-flat/measured-smooth span at ONE page layout — a
+  // sibling fixture's own header gaining a line shifts the whole figure
+  // and silently starts sampling whatever used to be there instead. Both
+  // column ranges are derived from the tiles' own rects instead, clamped
+  // to the figure and the viewport.
+  const viewportSize = page.viewportSize()!;
+  const columnRange = (tile: { x: number; width: number }) => ({
+    left: Math.max(tile.x, figure.x, 0) + 4,
+    right: Math.min(tile.x + tile.width, figure.x + figure.width, viewportSize.width) - 4,
+  });
+  const seaRange = columnRange(sea12);
+  const landRange = columnRange(land12);
+
+  const clipTop = bleedTop - 1;
+  const clipBottom = bleedBottom + 1;
+  const minX = Math.floor(Math.min(seaRange.left, landRange.left));
+  const maxX = Math.ceil(Math.max(seaRange.right, landRange.right));
+  const clip = { x: minX, y: clipTop, width: maxX - minX, height: clipBottom - clipTop };
+  const png = await page.screenshot({ clip, animations: "disabled", scale: "css" });
+  const image = decodePng(png);
+  const at = (x: number, y: number) => image.at(Math.round(x - clip.x), Math.round(y - clip.y));
+
+  // Per RGBA channel — the measured pre-fix step was 7-12 at every land x
+  // and 7-8 at every sea x, between its one bad row and its own immediate
+  // neighbour; ordinary adjacent-row noise within the same tile's own flat
+  // fill measured under 1.
+  const TOLERANCE = 1;
+  // Whether column `x` reads continuous across the WHOLE tested bleed
+  // band — the exact comparison the real assertion below makes, not a
+  // proxy region at a different y: a proxy a tile's own content doesn't
+  // actually share with the tested band (checked a fixed distance away,
+  // assuming nearby pixels behave alike) missed a genuine difference once
+  // already, since sea/land texture varies enough over even a few tens of
+  // px that "smooth over there" doesn't imply "smooth right here". A real
+  // seam, unlike texture, runs the full width of the tile's own bleed — so
+  // scanning for columns where this already holds can't quietly skip past
+  // the defect it exists to catch; a widespread seam leaves NO column
+  // anywhere in range passing it.
+  const isContinuousColumn = (x: number): boolean => {
+    for (let y = bleedTop; y < bleedBottom; y++) {
+      const a = at(x, y);
+      const b = at(x, y + 1);
+      for (let channel = 0; channel < 4; channel++) {
+        if (Math.abs(a[channel] - b[channel]) > TOLERANCE) return false;
+      }
+    }
+    return true;
+  };
+  function findColumns(range: { left: number; right: number }, count: number, gap: number): number[] {
+    const found: number[] = [];
+    for (let x = Math.ceil(range.left); x < range.right && found.length < count; x++) {
+      if ((found.length === 0 || x - found[found.length - 1] >= gap) && isContinuousColumn(x)) found.push(x);
+    }
+    return found;
+  }
+
+  // Counts/gaps matched to this test's own prior hardcoded lists: 6 sea
+  // columns spread 80px apart (50..550), 5 land columns spread 10px apart
+  // (750..820).
+  const seaXs = findColumns(seaRange, 6, 80);
+  const landXs = findColumns(landRange, 5, 10);
+  expect(seaXs.length, `no continuous sea column found in [${seaRange.left}, ${seaRange.right})`).toBeGreaterThan(0);
+  expect(landXs.length, `no continuous land column found in [${landRange.left}, ${landRange.right})`).toBeGreaterThan(0);
+
+  for (const [label, xs] of [["sea", seaXs], ["land", landXs]] as const) {
+    for (const x of xs) {
+      for (let y = bleedTop; y < bleedBottom; y++) {
+        const a = at(x, y);
+        const b = at(x, y + 1);
+        for (let channel = 0; channel < 4; channel++) {
+          expect(
+            Math.abs(a[channel] - b[channel]),
+            `${label} x=${x}: y=${y} ${JSON.stringify(a)} vs y=${y + 1} ${JSON.stringify(b)} channel ${channel}`,
+          ).toBeLessThanOrEqual(TOLERANCE);
+        }
+      }
+    }
+  }
+});
+
+/**
+ * Past a site's own tile coverage, the detailed regional layer meets the
+ * world layer's own coarser, pre-faded rendering of the same terrain at a
+ * straight line — the cell edge nothing populates past. Softened by fading
+ * each covered tile's own OUTER edges (the ones `tiles.ts`'s `tileEdgeMask`
+ * finds no real neighbour cell on) toward transparent over a short
+ * distance, via `mask-image`, never touching an edge a tile shares with a
+ * real neighbour — `tileClipInset`'s own territory, proven elsewhere, and
+ * this gate's own second half checks the two never collide.
+ *
+ * Checked at the DOM/style level, not by chasing a pixel step: this
+ * fixture's own geography keeps real relief/sea-floor detail well inside
+ * its tile coverage (`relevant_tiles` grows outward FROM a place, so the
+ * coverage perimeter lands in comparatively plain terrain) — sampling
+ * pixels right at the one on-screen outer edge this camera reaches
+ * measured byte-identical colour on both sides of it, proving nothing
+ * about whether a mask is even applied. `getComputedStyle` reads what the
+ * browser actually resolved the CSS to, which is what `tileEdgeMask`
+ * promises: present and naming the right side on an outer edge, absent on
+ * a shared one.
+ */
+test("a tile's outer coverage edge carries its own fade; a shared inner edge carries none", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Panned a little west of the ring camera: column 16's own WEST edge (no
+  // column 15 tile at this row) lands on screen, not off it.
+  await page.goto("places/?p=patterson&z=18&x=394&y=144.8651", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute(
+    "data-moss-places-explorer-ready",
+    "ready",
+    { timeout: 10000 },
+  );
+  await page.waitForTimeout(500);
+
+  const maskOf = (cell: string) =>
+    page.locator(`.moss-places-tiles > svg[data-moss-places-tile="${cell}"]`).evaluate((el) => getComputedStyle(el).maskImage);
+
+  // 16,12: no column-15 neighbour at this row (outside this fixture's own
+  // relevant_tiles reach) — an outer edge on its own west side, its only
+  // one; east (17,12), north (16,13) and south (16,11) are all real cells.
+  // `tileEdgeMask` fades a missing WEST neighbour with `to right` (it reads
+  // toward the tile's own content, away from the missing side) — checking
+  // only "contains a gradient" would pass just as well for a mask fading
+  // the wrong edge (`to left`/`to top`/`to bottom` all "contain gradient"
+  // too), so this reads the resolved direction, not merely its presence.
+  const outer = await maskOf("16,12");
+  expect(outer, "16,12 has a real outer edge (no 15,12) and must fade it").not.toBe("none");
+  expect(outer, "the missing neighbour is WEST (15,12) — the fade must read `to right`, toward the tile's own content").toContain("to right");
+
+  // 16,13: the same column-15 gap gives it one outer edge too, on its own
+  // west side; east (17,13), north (16,14) and south (16,12) are all real.
+  const mixed = await maskOf("16,13");
+  expect(mixed, "16,13's own outer edge is also its WEST side (no 15,13)").toContain("to right");
+
+  // 17,12 / 17,13: fully interior at this camera (16 to the west, 18 to
+  // the east, 11/14 north/south all present) — no outer edge on any side.
+  for (const cell of ["17,12", "17,13"]) {
+    const mask = await maskOf(cell);
+    expect(mask, `${cell} has every neighbour at this camera — no outer edge to fade`).toBe("none");
   }
 });
