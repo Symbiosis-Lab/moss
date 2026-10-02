@@ -192,6 +192,7 @@ pub fn copy_file_into_vault(
     budget: std::time::Duration,
 ) -> std::io::Result<u64> {
     if budget.is_zero() {
+        // allow:raw_write copies a user's file into the vault, not build output; an evicted source is handled by the retry below
         return std::fs::copy(src, dest).inspect_err(|e| {
             if crate::build::icloud::is_offline_not_absent(src, e) {
                 crate::build::cloud_readiness::request_download(src);
@@ -199,6 +200,7 @@ pub fn copy_file_into_vault(
         });
     }
     crate::build::cloud_readiness::retry_after_materialize(src, budget, || {
+        // allow:raw_write copies a user's file into the vault, not build output; an evicted source is retried by the wrapper
         std::fs::copy(src, dest)
     })
 }

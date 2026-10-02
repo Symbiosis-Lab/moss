@@ -151,10 +151,12 @@ pub(crate) async fn handle_upload(
         // itself must stay exactly as uploaded, because `copy_files_into`
         // reads it back off the staged path to name the result.
         let slot = staging.path().join(source_paths.len().to_string());
+        // allow:raw_write a slot inside the OS-temp staging dir this request just minted, never build output
         if let Err(e) = std::fs::create_dir_all(&slot) {
             return server_error(&format!("could not stage the upload: {e}"));
         }
         let staged_path = slot.join(&filename);
+        // allow:raw_write a fresh temp file in the staging slot, never dataless and never build output
         let mut staged_file = match std::fs::File::create(&staged_path) {
             Ok(f) => f,
             Err(e) => return server_error(&format!("could not stage the upload: {e}")),
@@ -215,6 +217,7 @@ pub(crate) async fn handle_upload(
     if let Err(e) = crate::vault::fs::validate_entry_path(&project_root, &dir_for_target) {
         return bad_request(&e);
     }
+    // allow:raw_write the attachment folder is the user's vault, not the regenerable build tree
     if let Err(e) = std::fs::create_dir_all(&dir_for_target) {
         return server_error(&format!("could not create '{dir_rel}': {e}"));
     }
@@ -244,6 +247,7 @@ struct StagingDir(PathBuf);
 impl StagingDir {
     fn new() -> std::io::Result<Self> {
         let path = std::env::temp_dir().join(format!("moss-upload-{}", uuid::Uuid::new_v4().simple()));
+        // allow:raw_write a uniquely named directory under the OS temp dir, never build output
         std::fs::create_dir_all(&path)?;
         Ok(Self(path))
     }
@@ -255,6 +259,7 @@ impl StagingDir {
 
 impl Drop for StagingDir {
     fn drop(&mut self) {
+        // allow:raw_write removes the OS-temp staging dir this request created, never build output
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
