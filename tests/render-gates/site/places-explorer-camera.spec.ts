@@ -9,6 +9,7 @@
  *   npx playwright test -c playwright/places-explorer-camera.config.ts
  */
 import { test, expect, type Page } from "@playwright/test";
+import { inflateSync } from "node:zlib";
 
 async function gotoReady(page: Page): Promise<void> {
   await page.goto("places/", { waitUntil: "domcontentloaded" });
@@ -70,6 +71,85 @@ async function samplePixelsAt(page: Page, png: Buffer, points: Array<{ x: number
   );
 }
 
+/**
+ * Decode an 8-bit, non-interlaced RGB or RGBA `page.screenshot()` PNG
+ * entirely in Node — `zlib.inflateSync` (built in) for the compressed IDAT
+ * stream, then the PNG spec's own scanline unfilter, by hand rather than a
+ * dependency (see {@link samplePixelsAt}'s own doc on why this file avoids
+ * one). Exists only for the WebKit path below: an in-page `Image`/`canvas`
+ * decode (what `samplePixelsAt` uses, and what every OTHER test in this
+ * file relies on) was measured hanging in WebKit once several regional
+ * tiles are loaded, independent of clip size — this sidesteps that engine
+ * entirely by never asking a page to decode anything.
+ */
+function decodePng(png: Buffer): { width: number; height: number; at: (x: number, y: number) => [number, number, number, number] } {
+  if (png.toString("ascii", 1, 4) !== "PNG") throw new Error("not a PNG");
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let colorType = 0;
+  const idatChunks: Buffer[] = [];
+  while (offset < png.length) {
+    const length = png.readUInt32BE(offset);
+    const type = png.toString("ascii", offset + 4, offset + 8);
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      const bitDepth = data.readUInt8(8);
+      colorType = data.readUInt8(9);
+      const interlace = data.readUInt8(12);
+      if (bitDepth !== 8 || interlace !== 0) throw new Error(`unsupported PNG: bitDepth=${bitDepth} interlace=${interlace}`);
+    } else if (type === "IDAT") {
+      idatChunks.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += 12 + length; // length + type(4) + data + crc(4)
+  }
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : (() => { throw new Error(`unsupported PNG colorType ${colorType}`); })();
+  const raw = inflateSync(Buffer.concat(idatChunks));
+  const stride = width * channels;
+  const pixels = Buffer.alloc(height * stride);
+  const paeth = (a: number, b: number, c: number): number => {
+    const p = a + b - c;
+    const pa = Math.abs(p - a);
+    const pb = Math.abs(p - b);
+    const pc = Math.abs(p - c);
+    if (pa <= pb && pa <= pc) return a;
+    return pb <= pc ? b : c;
+  };
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * (stride + 1);
+    const filterType = raw[rowStart];
+    const prevRow = y > 0 ? pixels.subarray((y - 1) * stride, y * stride) : null;
+    for (let i = 0; i < stride; i++) {
+      const x = raw[rowStart + 1 + i];
+      const a = i >= channels ? pixels[y * stride + i - channels] : 0; // left
+      const b = prevRow ? prevRow[i] : 0; // above
+      const c = prevRow && i >= channels ? prevRow[i - channels] : 0; // upper-left
+      let value: number;
+      switch (filterType) {
+        case 0: value = x; break;
+        case 1: value = x + a; break;
+        case 2: value = x + b; break;
+        case 3: value = x + Math.floor((a + b) / 2); break;
+        case 4: value = x + paeth(a, b, c); break;
+        default: throw new Error(`unsupported PNG filter type ${filterType}`);
+      }
+      pixels[y * stride + i] = value & 0xff;
+    }
+  }
+  return {
+    width,
+    height,
+    at: (x: number, y: number) => {
+      const i = y * stride + x * channels;
+      return [pixels[i], pixels[i + 1], pixels[i + 2], channels === 4 ? pixels[i + 3] : 255];
+    },
+  };
+}
+
 /** The Patterson (2014) cylindrical projection `projection.ts` implements, reimplemented here from the published polynomial rather than imported — the cross-check that module's own doc describes, so a drift between the build's runtime and this gate would fail loudly instead of cancelling out. */
 function pattersonProject(latitude: number, longitude: number): { x: number; y: number } {
   const K1 = 1.0148;
@@ -107,6 +187,62 @@ for (const [label, size] of [
     expect(worldBox.y).toBeLessThanOrEqual(viewportBox.y + 1);
     expect(worldBox.x + worldBox.width).toBeGreaterThanOrEqual(viewportBox.x + viewportBox.width - 1);
     expect(worldBox.y + worldBox.height).toBeGreaterThanOrEqual(viewportBox.y + viewportBox.height - 1);
+
+    // The box check above cannot see a mismatch INSIDE the world layer's own
+    // box: `.moss-places-world`'s CSS width/height is set exactly by
+    // `map.ts`'s `applyCamera`, but the `<svg>` child it wraps can still
+    // render at a different size than that box (a stray `aspect-ratio`
+    // fighting the box's own ratio) and get letterboxed by SVG's own
+    // default `preserveAspectRatio` — a flat, undrawn band at the world
+    // layer's own top, invisible to a bounding-box assertion since the DIV
+    // itself was never wrong. Sample a short run of points a couple of px
+    // inside each of `.moss-places-viewport`'s own four edges instead: real
+    // map content — coastline, shading, the graticule of rivers and relief —
+    // is never perfectly flat across more than a few px, so a run with zero
+    // variance is the figure's own flat CSS background
+    // (`--moss-place-water`) still showing through, not drawn content.
+    // The BOTTOM edge is clamped to the browser viewport's own height, not
+    // `viewportBox`'s: the figure's CSS height is `max(480px, 100svh)`,
+    // deliberately reaching past the visible viewport once a header
+    // precedes it (this file's own `100svh`-floored height comment) — past
+    // that line is unrendered page, outside what `page.screenshot()`
+    // without `fullPage` even captures, not a band this check is about.
+    const png = await page.screenshot({ animations: "disabled" });
+    const image = decodePng(png);
+    // WebKit's own project (`devices['Desktop Safari']`) renders at 2x
+    // device pixel ratio — the PNG is twice `size`'s own CSS-px dimensions
+    // — while every coordinate above is in CSS px (`boundingBox()`'s own
+    // unit); Chromium's project stays 1x, so this scale is 1 there and a
+    // no-op. Every sample point below is scaled by it, once, at the point
+    // of indexing into the decoded image.
+    const dpr = image.width / size.width;
+    const inset = 2;
+    const run = 40;
+    const bottomY = Math.min(viewportBox.y + viewportBox.height, size.height) - 1 - inset;
+    const edges: Record<string, Array<{ x: number; y: number }>> = {
+      top: Array.from({ length: run }, (_, i) => ({
+        x: Math.round(viewportBox.x + (viewportBox.width * (i + 1)) / (run + 1)),
+        y: Math.round(viewportBox.y + inset),
+      })),
+      bottom: Array.from({ length: run }, (_, i) => ({
+        x: Math.round(viewportBox.x + (viewportBox.width * (i + 1)) / (run + 1)),
+        y: Math.round(bottomY),
+      })),
+      left: Array.from({ length: run }, (_, i) => ({
+        x: Math.round(viewportBox.x + inset),
+        y: Math.round(viewportBox.y + inset + ((bottomY - viewportBox.y - inset) * (i + 1)) / (run + 1)),
+      })),
+      right: Array.from({ length: run }, (_, i) => ({
+        x: Math.round(viewportBox.x + viewportBox.width - 1 - inset),
+        y: Math.round(viewportBox.y + inset + ((bottomY - viewportBox.y - inset) * (i + 1)) / (run + 1)),
+      })),
+    };
+    for (const [edgeName, points] of Object.entries(edges)) {
+      const samples = points.map((p) => image.at(Math.round(p.x * dpr), Math.round(p.y * dpr)));
+      const reds = samples.map((s) => s[0]);
+      const variance = Math.max(...reds) - Math.min(...reds);
+      expect(variance, `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content: ${JSON.stringify(samples)}`).toBeGreaterThan(0);
+    }
   });
 }
 
@@ -322,10 +458,11 @@ async function loadAndFindAdjacentTilePairs(page: import("@playwright/test").Pag
   // not a tuned fudge factor: two world units of bleed (one on each
   // neighbour) at the tile's own native screen scale — the ceiling this
   // zoom band stays under (`tileDetailMaxZoom`, `camera.ts`) —
-  // 2 * 0.1 * (8.4117 * 4) is about 6.7px; a real misplacement (the wrong
-  // cell entirely, or the pre-fix bug) overshoots that by a cell's width,
-  // not a few px.
-  const TOLERANCE = 10;
+  // 2 * 0.5 * (8.4117 * 4) is about 33.6px, including where two tiles only
+  // touch at a shared CORNER (each bleeds into the other on both axes
+  // there); a real misplacement (the wrong cell entirely, or the pre-fix
+  // bug) overshoots that by a cell's width, not a few tens of px.
+  const TOLERANCE = 40;
   const MARGIN = 4; // px pulled in from the shared edge's own start/end so the sampled column stays inside both tiles, not right at a corner.
   const pairs: AdjacentPair[] = [];
   for (let i = 0; i < rects.length; i++) {
@@ -367,10 +504,17 @@ test("past the world ceiling, the coast at a tile boundary is pixel-continuous",
   test.skip(browserName === "webkit", "page.screenshot hangs at this deep-zoom state in WebKit — see comment above");
   const { pairs, viewportSize } = await loadAndFindAdjacentTilePairs(page);
 
-  // The widest shared edge in view, clamped to stay on-page — a robust pick
-  // over "the first pair found", which can be a sliver too thin to clip a
-  // screenshot from.
-  const widest = pairs.reduce((best, pair) => (pair.bottom - pair.top > best.bottom - best.top ? pair : best));
+  // The widest shared edge actually ON SCREEN, clamped to the viewport
+  // BEFORE comparing — a robust pick over "the first pair found", which
+  // can be a sliver too thin to clip a screenshot from, and over the raw
+  // (unclamped) edge length, which can prefer a pair most of whose own
+  // length sits above or below the fold over one that is smaller on paper
+  // but fully visible (measured: the explorer root's own page layout
+  // moves the whole tile grid up or down the page — e.g. design decision
+  // 7 removing its heading — and an unclamped comparison silently started
+  // picking a mostly off-screen pair instead).
+  const onScreenHeight = (pair: AdjacentPair) => Math.min(viewportSize.height, pair.bottom) - Math.max(0, pair.top);
+  const widest = pairs.reduce((best, pair) => (onScreenHeight(pair) > onScreenHeight(best) ? pair : best));
   const top = Math.max(0, widest.top);
   const bottom = Math.min(viewportSize.height, widest.bottom);
   const edgeX = Math.min(Math.max(widest.edgeX, 20), viewportSize.width - 20);
@@ -400,6 +544,84 @@ test("past the world ceiling, the coast at a tile boundary is pixel-continuous",
         Math.abs(left[channel] - right[channel]),
         `sample ${s} channel ${channel}: left=${left} right=${right} (no step wider than the line's own width should appear across the seam)`,
       ).toBeLessThanOrEqual(24);
+    }
+  }
+});
+
+/**
+ * An open-sea tile boundary, unlike the coastline one above, carries no real
+ * texture to blur the comparison against — so this holds a tolerance tight
+ * enough to catch a residual seam the coastline test's own 24-wide band
+ * would miss, and runs in BOTH engines by reading pixels with {@link
+ * decodePng} rather than {@link samplePixelsAt}: the in-page decode that
+ * function needs hangs in WebKit at this exact deep-zoom, many-tile state
+ * (the coastline test above skips WebKit for that reason), and sidestepping
+ * the browser entirely avoids it rather than working around it per test.
+ * The camera is the same `z=18`/`p=patterson` one `places-explorer-ring.spec.ts` uses — Lisbon
+ * is close enough east that its own regional tiles (cells 16 and 17 of row
+ * 13) are already loaded. y=600..620 was measured, at this exact camera and
+ * viewport, as a dead-flat open-water band on both sides of the seam for
+ * x=640..665 — unlike most of the rest of this row, which carries a real,
+ * genuinely non-flat sea-floor shadow close enough to the cell boundary that
+ * a tight tolerance would flag it as a false positive. Every x in that band
+ * is sampled, one px apart, rather than two fixed offsets either side of the
+ * seam: the pre-fix defect was a single misplaced column (the wrong cell's
+ * own content bleeding in from its neighbour's bucket), not a gradient, and
+ * its exact column shifts by a px or two with unrelated geometry changes —
+ * two fixed sample points already missed it once in this file's own history.
+ */
+test("past the world ceiling, an open-sea tile boundary is pixel-continuous in both engines", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("places/?p=patterson&z=18&x=399.6415&y=144.8651", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute(
+    "data-moss-places-explorer-ready",
+    "ready",
+    { timeout: 10000 },
+  );
+  await page.waitForTimeout(500); // tile fetch + position settle
+
+  const rectByCell = async (cell: string) => {
+    const rect = await page
+      .locator(`.moss-places-tiles > svg[data-moss-places-tile="${cell}"]`)
+      .boundingBox();
+    if (!rect) throw new Error(`tile ${cell} not found in view`);
+    return rect;
+  };
+  const [west, east] = await Promise.all([rectByCell("16,13"), rectByCell("17,13")]);
+
+  // VIEWPORT-absolute, not a fraction of the tile element's own (mostly
+  // off-screen) bounding box: `west`/`east` both reach from y=-413ish (the
+  // boundingClientRect of an element clipped by an `overflow: hidden`
+  // ancestor still reports its full, untruncated box) to about y=586 — the
+  // explorer root has no heading above the figure (`render/html.rs`'s
+  // `is_explorer_root`), so this is higher up the page than it would be
+  // with one. 465/475/485 is a measured dead-flat open-water band on both
+  // sides of the seam at this exact camera and viewport, same as the
+  // comment on the test above.
+  const edgeX = Math.round((west.x + west.width + east.x) / 2);
+  const ys = [465, 475, 485];
+  const xs: number[] = [];
+  for (let dx = -8; dx <= 8; dx++) xs.push(edgeX + dx);
+  const points = ys.flatMap((y) => xs.map((x) => ({ x, y })));
+
+  const clip = { x: edgeX - 10, y: 460, width: 20, height: 30 };
+  const png = await page.screenshot({ clip, animations: "disabled" });
+  const image = decodePng(png);
+  const pixels = points.map((p) => image.at(Math.round(p.x - clip.x), Math.round(p.y - clip.y)));
+
+  // Per RGBA channel, 0-255 — the pre-fix seam measured a 20-50 step at its
+  // one misplaced column; ordinary anti-aliasing noise measured under 2.
+  const TOLERANCE = 4;
+  for (let s = 0; s < ys.length; s++) {
+    const row = pixels.slice(s * xs.length, (s + 1) * xs.length);
+    const baseline = row[0]; // x = edgeX - 8, comfortably inside the flat band either fix leaves alone
+    for (let i = 1; i < row.length; i++) {
+      for (let channel = 0; channel < 4; channel++) {
+        expect(
+          Math.abs(row[i][channel] - baseline[channel]),
+          `y=${ys[s]} x=${xs[i]} channel ${channel}: ${row[i]} vs baseline ${baseline} at x=${xs[0]}`,
+        ).toBeLessThanOrEqual(TOLERANCE);
+      }
     }
   }
 });

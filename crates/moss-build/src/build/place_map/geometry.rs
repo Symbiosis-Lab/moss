@@ -39,6 +39,17 @@ pub enum FrameTier {
     Tile,
 }
 
+impl FrameTier {
+    /// `svg.rs`'s own `wide` heuristic (`Projection::is_wide`) conflates a
+    /// regional tile's narrow 10-degree span with a genuinely wide frame —
+    /// see that call site's own comment — so both it and
+    /// `TileSelection::for_frame`'s tile branch need this same check; one
+    /// method keeps them from drifting into two different spellings of it.
+    pub fn is_tile(self) -> bool {
+        self == FrameTier::Tile
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProjectedPoint {
     pub longitude: f64,
@@ -317,7 +328,7 @@ pub(crate) const TILE_K: f64 = 4.0;
 /// instead of a gap. Exposed to the runtime through `tiles.json`'s own
 /// `bleed` field, the same way `k` is — see `tiles.ts`'s
 /// `tileOverlayTransform`.
-pub(crate) const TILE_BLEED: f64 = 0.1;
+pub(crate) const TILE_BLEED: f64 = 0.2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PattersonProjection {
@@ -857,6 +868,27 @@ impl TileSelection {
         if frame.tier == FrameTier::World {
             return Self {
                 tiles: pack.tiles.iter().map(|tile| (tile.x, tile.y)).collect(),
+            };
+        }
+        if frame.tier.is_tile() {
+            // Exactly the cell `explorer::tile_frame` built this frame
+            // around — never its neighbours, even the sliver the margin
+            // below would otherwise reach into. A fine-tier feature whose
+            // real extent spans several cells is registered once per
+            // intersecting bucket at pack-build time (the same contract the
+            // Local/Wide/World branches below already lean on), each
+            // bucket's own copy independently simplified — close enough
+            // that two neighbouring copies of the same coastline agree to
+            // drawing precision, but not pixel-for-pixel identical. A
+            // regional tile draws from ONE bucket only, so it never
+            // composites two slightly different copies of the same feature
+            // into one canvas; a Local/Wide frame's own equirectangular crop
+            // has no bucket of its own to stay inside, so it still reaches
+            // across the margin below for whichever tiles its wider view
+            // touches.
+            let cell = (tile_x(frame.center_longitude), tile_y(frame.center_latitude));
+            return Self {
+                tiles: pack.tiles.iter().map(|tile| (tile.x, tile.y)).filter(|&xy| xy == cell).collect(),
             };
         }
         let (west, east, south, north) = FlatProjection::new(frame).visible_bounds();

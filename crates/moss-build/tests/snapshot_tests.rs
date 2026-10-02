@@ -766,7 +766,7 @@ fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
             .expect("tiles.json must be {k, bleed, cells}");
     assert_eq!(index.cells.len(), tile_count, "tiles.json must list exactly the tiles actually emitted");
     assert_eq!(index.k, 4.0, "tiles.json's k must match the build's own TILE_K");
-    assert_eq!(index.bleed, 0.1, "tiles.json's bleed must match the build's own TILE_BLEED");
+    assert_eq!(index.bleed, 0.2, "tiles.json's bleed must match the build's own TILE_BLEED");
 }
 
 /// The places root and a parent place's listing mark every place their

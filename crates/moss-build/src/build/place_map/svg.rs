@@ -209,7 +209,7 @@ pub(super) fn render_svg(
     // `TILE_K`-multiplied one. A tile is always exactly a 10-degree cell —
     // the same span a `Local` frame never trips `is_wide` for — so it never
     // gets the world map's rank/layer thinning either.
-    let is_tile = target.frame.as_ref().is_some_and(|frame| frame.tier == FrameTier::Tile);
+    let is_tile = target.frame.as_ref().is_some_and(|frame| frame.tier.is_tile());
     let wide = !is_tile && projection.as_ref().is_some_and(Projection::is_wide);
     let wide_locator = writer.locator_profile.is_some() && wide;
     let grouped = target.frame.as_ref().map(|frame| {

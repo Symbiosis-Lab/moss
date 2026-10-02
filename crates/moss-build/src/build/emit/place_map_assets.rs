@@ -75,7 +75,16 @@ struct TileIndex<'a> {
 /// every edge, so its declared size (and `tiles.json`'s new `bleed` field)
 /// both changed — a pre-existing site's cached tiles were rendered one
 /// `TILE_BLEED` narrower and must not survive the upgrade unrendered.
-pub const GENERATOR_VERSION: u32 = 3;
+/// 4: `TileSelection::for_frame`'s own `FrameTier::Tile` case now draws a
+/// regional tile from the ONE pack bucket matching its own cell, instead of
+/// every bucket a wider margin reached into — a fine feature registered in
+/// several buckets at pack-build time was drawing two independently
+/// simplified copies of itself across the shared edge, visible as a seam —
+/// and `TILE_BLEED` widened from 0.1 to 0.2 world units to also close the
+/// sub-pixel disagreement that same seam was partly made of. Neither change
+/// touches the compiled-in pack bytes, so a pre-existing site's cached
+/// tiles would otherwise keep serving the seam forever.
+pub const GENERATOR_VERSION: u32 = 4;
 
 /// The hash naming this build's `_moss/map.<hash>/` directory: the pack's
 /// own fingerprint (its source manifest digest, from the embedded
@@ -333,6 +342,29 @@ mod tests {
         buf.extend_from_slice(&context.pack_fingerprint());
         buf.extend_from_slice(&(GENERATOR_VERSION + 1).to_le_bytes());
         buf.extend_from_slice(context.labels_bytes());
+        let bumped = compute_binary_hash(&buf);
+        assert_ne!(first, bumped);
+    }
+
+    /// `assets_hash` (above) only renames the served directory; the per-asset
+    /// `cache_key` is the OTHER thing a generator change must move, since
+    /// that is what `emit`'s own `transforms.get(&cache_key)` looks a tile up
+    /// under (see this module's own doc). A generator-version bump that
+    /// moved one but not the other would still serve a stale render: the new
+    /// directory would exist, but an asset whose bytes changed only because
+    /// the DRAWING logic changed (not the pack fingerprint) would hit a
+    /// cache entry carrying the OLD bytes under an unmoved key.
+    #[test]
+    fn cache_key_changes_with_generator_version() {
+        let context = place_map::PlaceMapContext::embedded().unwrap();
+        let first = Asset::World.cache_key(&context);
+        // Same simulation the hash test above uses: the real constant cannot
+        // change at test time, so hash with a different version directly,
+        // matching `cache_key`'s own byte layout.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&context.pack_fingerprint());
+        buf.extend_from_slice(&(GENERATOR_VERSION + 1).to_le_bytes());
+        buf.push(0);
         let bumped = compute_binary_hash(&buf);
         assert_ne!(first, bumped);
     }
