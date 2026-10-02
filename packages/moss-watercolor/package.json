@@ -1,0 +1,57 @@
+{
+  "name": "@symbiosis-lab/moss-watercolor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A reusable watercolor-wash transition: a WebGL2 shallow-water pigment simulation (Curtis et al. 1997), its recording-and-playback layer for a three-phase scene transition, and a host utility that paces the sim's clock toward a caller-supplied goal",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    },
+    "./engine": {
+      "import": "./dist/engine/index.mjs",
+      "types": "./dist/engine/index.d.mts"
+    },
+    "./paper": {
+      "import": "./dist/paper/index.mjs",
+      "types": "./dist/paper/index.d.mts"
+    },
+    "./model": {
+      "import": "./dist/model/index.mjs",
+      "types": "./dist/model/index.d.mts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch --no-clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "moss",
+    "watercolor",
+    "webgl",
+    "canvas",
+    "transition"
+  ],
+  "author": "Guo Liu",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "tsdown": "^0.18.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

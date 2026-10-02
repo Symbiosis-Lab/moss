@@ -13,7 +13,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-export const DEFAULT_BUILD_DIR = resolve(HERE, '..', 'site', '.moss', 'build', 'current');
+export const DEFAULT_BUILD_DIR = resolve(HERE, '..', 'site', '.moss', 'build.nosync', 'current');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',

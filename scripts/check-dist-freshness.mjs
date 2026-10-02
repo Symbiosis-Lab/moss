@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // check-dist-freshness.mjs — refuses a commit that stages a change under
-// packages/moss-syntax/src or packages/moss-api/src (or their build config)
-// without also rebuilding the committed dist/ that ships from it.
+// one of PACKAGES' own src/ (or its build config) without also rebuilding
+// the committed dist/ that ships from it.
 //
 // The only other gate that catches a stale dist is pr.yml's "Package
 // artifacts are up to date" step, which runs solely on a pull request to
@@ -38,6 +38,17 @@ const PACKAGES = [
       'packages/moss-api/tsdown.config.ts',
       'packages/moss-api/tsconfig.json',
       'packages/moss-api/package.json',
+    ],
+  },
+  {
+    label: 'moss-watercolor',
+    filterName: '@symbiosis-lab/moss-watercolor',
+    distPath: 'packages/moss-watercolor/dist',
+    triggers: [
+      'packages/moss-watercolor/src/',
+      'packages/moss-watercolor/tsdown.config.ts',
+      'packages/moss-watercolor/tsconfig.json',
+      'packages/moss-watercolor/package.json',
     ],
   },
 ];

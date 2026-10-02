@@ -293,17 +293,32 @@ jobs:
       - name: Typecheck moss-syntax (source + tests)
         run: cd packages/moss-syntax && pnpm run typecheck
 
+      - name: Typecheck moss-watercolor (source + tests)
+        run: cd packages/moss-watercolor && pnpm run typecheck
+
       - name: Package artifacts are up to date
         run: |
           pnpm --filter @symbiosis-lab/moss-api run build
           pnpm --filter @symbiosis-lab/moss-syntax run build
-          if ! git diff --exit-code -- packages/moss-api/dist packages/moss-syntax/dist; then
-            echo "::error::Package artifacts are stale. Run the moss-api and moss-syntax builds and commit dist/."
+          pnpm --filter @symbiosis-lab/moss-watercolor run build
+          if ! git diff --exit-code -- packages/moss-api/dist packages/moss-syntax/dist packages/moss-watercolor/dist; then
+            echo "::error::Package artifacts are stale. Run the moss-api, moss-syntax and moss-watercolor builds and commit dist/."
+            exit 1
+          fi
+
+      - name: Landing's vendored moss-watercolor build is up to date
+        run: |
+          node scripts/build-site-watercolor.mjs
+          if ! git diff --exit-code -- site/vendor/moss-watercolor; then
+            echo "::error::site/vendor/moss-watercolor/moss-watercolor.js is stale. Run scripts/build-site-watercolor.mjs and commit it."
             exit 1
           fi
 
       - name: Test moss-syntax
         run: cd packages/moss-syntax && npx vitest run
+
+      - name: Test moss-watercolor
+        run: cd packages/moss-watercolor && npx vitest run
 
       - name: Test moss npm wrapper
         run: cd packages/moss && npm test
