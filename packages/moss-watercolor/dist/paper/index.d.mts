@@ -1,2 +1,3 @@
-import { n as PaperOptions, r as createPaper, t as Paper } from "../default-Cs3xymcD.mjs";
-export { type Paper, type PaperOptions, createPaper };
+import { n as PaperOptions, r as createPaper, t as Paper } from "../default-C3ovSwFn.mjs";
+import { C as PressSpec, S as PresetName, T as latticeCell, _ as FeltSpec, a as toEngineChannels, b as PRESET_TARGETS, c as resamplePaper, d as Field, f as PaperSheet, g as DensityClosure, h as Grid, i as enginePaper, l as generatePaper, m as bulkPorosity, n as ENGINE_SPANS, o as closureFor, p as Tensor, r as ENGINE_TEXEL, s as fitDensityClosure, t as CSS_PX, u as validateGrid, v as FibreType, w as isFine, x as PaperRecipe, y as PRESETS } from "../index-CD27AxS_.mjs";
+export { CSS_PX, DensityClosure, ENGINE_SPANS, ENGINE_TEXEL, FeltSpec, FibreType, Field, Grid, PRESETS, PRESET_TARGETS, Paper, PaperOptions, PaperRecipe, PaperSheet, PresetName, PressSpec, Tensor, bulkPorosity, closureFor, createPaper, enginePaper, fitDensityClosure, generatePaper, isFine, latticeCell, resamplePaper, toEngineChannels, validateGrid };

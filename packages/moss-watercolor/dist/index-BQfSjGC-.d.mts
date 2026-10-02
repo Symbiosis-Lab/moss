@@ -1,4 +1,4 @@
-import { t as Paper } from "./default-Cs3xymcD.mjs";
+import { t as Paper } from "./default-C3ovSwFn.mjs";
 
 //#region src/engine/preset.d.ts
 interface WatercolorPreset {

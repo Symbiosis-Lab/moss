@@ -19,9 +19,9 @@ var MossWatercolor = (() => {
   };
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-  // packages/moss-watercolor/src/index.ts
-  var index_exports = {};
-  __export(index_exports, {
+  // <stdin>
+  var stdin_exports = {};
+  __export(stdin_exports, {
     DEFAULT_PHASE_BOUNDS: () => DEFAULT_PHASE_BOUNDS,
     DEFAULT_PRESET: () => DEFAULT_PRESET,
     DIAG_VIEWS: () => DIAG_VIEWS,
@@ -368,15 +368,20 @@ void main(){
     return Math.ceil(recordingSteps(preset) / preset.recEvery) + 1;
   }
 
-  // packages/moss-watercolor/src/paper/default.ts
-  function createPaper({ width = 256, height = 256, seed = 90210 } = {}) {
+  // packages/moss-watercolor/src/paper/random.ts
+  function seededRandom(seed) {
     let a0 = seed;
-    const rnd = () => {
+    return () => {
       a0 = a0 + 1831565813 | 0;
       let t = Math.imul(a0 ^ a0 >>> 15, 1 | a0);
       t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
+  }
+
+  // packages/moss-watercolor/src/paper/default.ts
+  function createPaper({ width = 256, height = 256, seed = 90210 } = {}) {
+    const rnd = seededRandom(seed);
     const lattice = (n) => {
       const g = new Float32Array(n * n);
       for (let i = 0; i < g.length; i++) g[i] = rnd();
@@ -890,5 +895,5 @@ void main(){
     if (phase === "out" || phase === "mix" && smooth(outEnd, inStart, p) < 0.5) return { from, to: next, p };
     return { from: to, to: next, p: outEnd * incoming };
   }
-  return __toCommonJS(index_exports);
+  return __toCommonJS(stdin_exports);
 })();

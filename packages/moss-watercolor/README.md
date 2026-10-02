@@ -15,7 +15,7 @@ A dispersion is recorded once per print (`pair`/`record`), budgeted across frame
 ## Layers
 
 - **`./engine`** -- `createSim(options)`, the solver and its recording-and-playback methods (`setPrints`, `reset`, `step`, `draw`, `probe`, `pair`, `record`, `recorded`, `show`, `free`, `play`, `onContextLost`, `dispose`). Returns `null` without WebGL2 + `EXT_color_buffer_float`. Also exports `DEFAULT_PRESET` (every paper/fluid timing constant the solver reads) and `advance` (the host utility: paces a sim's clock toward a goal, however that goal is produced -- scroll, a timer, a test driving it by hand. This package has no opinion on which).
-- **`./paper`** -- `createPaper(options)`, the generated paper texture (tileable value noise: r relief, g absorbency, b fibre, a pore). A fixed default seed makes two calls reproduce the same sheet bit-for-bit.
+- **`./paper`** -- `createPaper(options)`, the generated paper texture (tileable value noise: r relief, g absorbency, b fibre, a pore). A fixed default seed makes two calls reproduce the same sheet bit-for-bit. It also exports the physical paper generator, described under "Paper" below.
 - **`./model`** -- `phaseOf` and `retarget`, the three-phase leg as pure functions of `p`, independent of the engine, with `DEFAULT_PHASE_BOUNDS` read from `DEFAULT_PRESET`. `retarget(from, to, p, next)` redirects an in-flight transition without a visual jump, in the terms the engine's `play()` draws it (outgoing recording at `p / playOut`, incoming recording at `(1 - p) / (1 - playIn)`, blended by `smooth(playOut, playIn, p)`): in the out phase, and in the first half of the mix, it keeps `from` and swaps the destination; from the second half of the mix on, and in the in phase, the old destination is what is on screen, so it becomes the new source at the matching position. Retargeting back to `from` returns the reverse leg, `{ from: to, to: from, p }` with `p` mapped through the bounds so the same picture stays on screen.
 - **`.`** -- re-exports all three.
 
@@ -49,6 +49,26 @@ sim.show(pair, true, 0.5); // records up to one frame's budget, then plays p=0.5
 ```
 
 The consumer owns the clock or scroll position; nothing in this package decides how `p` or `t` advances.
+
+## Paper
+
+The default paper is seeded noise with no physical meaning. The paper module can instead grow a sheet the way a papermaker does: it drops fibres onto a periodic tile until the grammage is reached, lets them drape over each other, presses a felt pattern into the top and compacts the sheet, then works out porosity, permeability, the size of the pores, the pressure needed to enter them and how fast water wicks, all in SI units (metres, kilograms, seconds, pascals; grammage in kg/m², so 300 g/m² is `0.3`).
+
+Five presets are fitted to published numbers: `cotton-rough`, `cotton-cold-press` and `cotton-hot-press` (300 g/m² cotton rag), and `xuan-unsized` and `xuan-sized` (a Pteroceltis and rice-straw blend). The names are generic and no preset claims to be a particular brand. Porosity of each preset is fitted to its target and the other quantities are predictions; the unsized xuan pore diameter is the known miss.
+
+`generatePaper(recipe, { width, height, cell }, seed)` returns the full `PaperSheet`. A cell must sit on the recipe's deposit lattice (`latticeCell(recipe)`, half the narrowest fibre) or be a coarser size the recipe carries a fitted closure for; anything else throws a `RangeError` that says what to change. `toEngineChannels(sheet)` encodes a sheet as the engine's four-channel texture, and `enginePaper(recipe)` does both at the engine's own scale (256 texels, a texel being two CSS pixels at true size). `ENGINE_SPANS` gives the physical range each channel's bytes stand for, which is how to decode the texture; relief is thickness about the sheet's mean (the mean is not stored) and fibre is log10 of the mean in-plane permeability in m². Channel a is 128 everywhere. A paper handed to `createSim` must be 256 by 256.
+
+```ts
+import { createSim } from "@symbiosis-lab/moss-watercolor/engine";
+import { enginePaper, PRESETS } from "@symbiosis-lab/moss-watercolor/paper";
+
+const paper = enginePaper(PRESETS["cotton-cold-press"]);
+const sim = createSim({ canvas, texW: 820, texH: 780, divisor: 2, rect: () => canvas.getBoundingClientRect(), paper });
+```
+
+The default paper is unchanged: nothing uses the generator until a host passes its output as `paper`. Doing so changes how washes behave, because the engine was tuned against noise statistics and the physical fields have different ones. The generator is not part of the landing's vendored bundle, which carries only the engine, the model and the default paper.
+
+To inspect a sheet, run `pnpm exec vite packages/moss-watercolor/lab` from the repository root and open `/paper.html`. The lab shows lit relief and every derived field, a histogram and a spectrum, and the run against its literature values. To refit a preset after changing the model, run `FIT_PAPER=1 pnpm -C packages/moss-watercolor exec vitest run src/paper/__tests__/literature.test.ts`, which prints the values to paste into `recipe.ts`.
 
 ## Requirements
 

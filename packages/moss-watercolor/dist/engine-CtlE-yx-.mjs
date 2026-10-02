@@ -1,5 +1,5 @@
 import { a as smooth, i as clamp01, n as recordingFrameCount, r as recordingSteps, t as DEFAULT_PRESET } from "./preset-CSJVYHhn.mjs";
-import { t as createPaper } from "./default-D3yqzjlz.mjs";
+import { t as createPaper } from "./default-CV2Smisg.mjs";
 
 //#region src/engine/shaders.ts
 const V = `#version 300 es

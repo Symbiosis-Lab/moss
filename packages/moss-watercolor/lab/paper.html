@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper lab</title>
+<style>
+  :root { --bg: #f7f5f1; --ink: #2c2825; --line: #ddd8cf; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1a1816; --ink: #ece8e1; --line: #3a3530; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+  main { display: grid; grid-template-columns: minmax(240px, 300px) 1fr; gap: 16px; }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; display: grid; gap: 6px; }
+  label { display: grid; grid-template-columns: 1fr 96px; gap: 8px; align-items: center; }
+  input, select, button { font: inherit; }
+  canvas { width: 100%; image-rendering: pixelated; border: 1px solid var(--line); border-radius: 4px; }
+  .plots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  td, th { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; }
+</style>
+<main>
+  <form id="controls">
+    <fieldset>
+      <label>Preset <select name="preset"></select></label>
+      <label>Grammage (g/m²) <input name="grammage" type="number" step="any"></label>
+      <label>Flexibility T_f <input name="flexibility" type="number" step="any"></label>
+      <label>Flocculation p <input name="flocculation" type="number" step="0.05" min="0.05" max="1"></label>
+      <label>Machine bias κ <input name="machineBias" type="number" step="0.5" min="0"></label>
+      <label>Imprint depth (µm) <input name="imprintDepth" type="number" step="any"></label>
+      <label>Felt conformity (mm) <input name="conformity" type="number" step="any"></label>
+      <label>Compaction <input name="compaction" type="number" step="0.01" min="0.3" max="1"></label>
+      <label>Polish length (mm) <input name="polishLength" type="number" step="any"></label>
+      <label>Polish strength <input name="polishStrength" type="number" step="0.05" min="0" max="1"></label>
+      <label>Contact angle (°) <input name="contactAngle" type="number" step="1" min="0" max="180"></label>
+      <label>Tile (cells) <select name="size"><option>256</option><option selected>512</option><option>1024</option></select></label>
+      <label>Cell (µm) <input name="cell" type="number" step="any"></label>
+      <label>Seed <input name="seed" type="number" value="1"></label>
+      <button>Generate</button>
+    </fieldset>
+    <p id="status" role="status"></p>
+  </form>
+  <section>
+    <label>View <select id="view">
+      <option value="relief">Lit relief</option><option value="grammage">Grammage</option><option value="porosity">Porosity</option>
+      <option value="permeability">Permeability</option><option value="orientation">Orientation</option>
+      <option value="entryPressure">Entry pressure</option><option value="washburn">Washburn coefficient</option>
+    </select></label>
+    <canvas id="field"></canvas>
+    <div class="plots"><canvas id="histogram" width="400" height="160"></canvas><canvas id="spectrum" width="400" height="160"></canvas></div>
+    <table id="stats"></table>
+  </section>
+</main>
+<script type="module" src="./paper-lab.ts"></script>
