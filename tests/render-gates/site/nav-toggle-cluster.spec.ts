@@ -5,43 +5,29 @@
  * the emitted HTML:
  *
  *   1. The three `.nav-icons` children (search button, language toggle, theme
- *      button) lay out at the SAME height — the 2.25rem box. Search used to be
- *      the only one with that box, so it rendered taller and heavier than its
- *      siblings. Only layout answers this: the heights come from three
- *      different rules in two different stylesheets.
+ *      button) lay out at the SAME height — the 2.25rem box. The heights come
+ *      from three different rules in two different stylesheets, so only
+ *      layout can confirm they agree.
  *
- *   2. `.nav-search-btn` has NO resting background. It used to carry a
- *      permanent `--moss-color-surface` fill, which over a hero image read as a
- *      bright disc and made search the loudest element in the nav. The pill is
- *      a hover affordance now. `background: none` computing to transparent is a
+ *   2. `.nav-search-btn` has NO resting background — the pill is a hover
+ *      affordance only. `background: none` computing to transparent is a
  *      cascade question across two stylesheets, so it needs the engine; the
  *      radius that makes it a pill does not, and is asserted in Rust.
  *
  *   3. `.moss-search__seam` — the hairline under the search input — paints
- *      `--moss-border-light`, NOT the accent. It was `--moss-color-accent-quiet`
- *      once, which put a green rule under a field that is always focused and
- *      read as a focus underline. Fixed in 51ddaa0ec, when the rule still lived
- *      in site.css; 21b9af407 then moved it into this partial carrying the
- *      fixed value. Nothing covered it either time. Note that neither commit
- *      has shipped — the newest tag is v0.7.24 and search is unreleased — so a
- *      site still showing the green rule is running a moss that predates the
- *      fix, not hitting a regression.
- *      Custom-property resolution through `var()` is exactly what jsdom cannot
- *      do, and the seam only exists after the overlay is opened by the runtime.
+ *      `--moss-border-light`, NOT the accent: a green rule there would sit
+ *      under a field that is always focused and read as a focus underline.
+ *      Custom-property resolution through `var()` is exactly what jsdom
+ *      cannot do, and the seam only exists after the overlay is opened by
+ *      the runtime.
  *
  *   4. When a long breadcrumb pushes `.nav-right` onto row 2, the links sit at
- *      the START edge and the toggle cluster at the END edge. This is the one
- *      assertion here that is about the OTHER group boundary, and it is the
- *      only way to catch a specific regression shape: `.nav-right`'s
- *      `flex: 1 1 auto` and `.nav-icons`'s `margin-inline-start: auto` used to
- *      live inside `@media (max-width: 32rem)`, so the same overflow got edge
- *      alignment on a phone and a clumped-right group on a wide screen. Both
- *      are unconditional now and key off whether nav-right actually wrapped —
- *      which only a layout engine can tell you, because it depends on measured
- *      text width, not on a breakpoint. (Do not "simplify" this to
- *      `flex: 1 1 100%`: that forces the wrap even when the content fits, and
- *      split minimal-nav sites across two rows. See the "Edge alignment" block
- *      in site.css.)
+ *      the START edge and the toggle cluster at the END edge — the only way
+ *      to catch this: whether nav-right actually wrapped depends on measured
+ *      text width, not a breakpoint, so only a layout engine can tell you.
+ *      (Do not "simplify" this to `flex: 1 1 100%`: that forces the wrap even
+ *      when the content fits, and splits minimal-nav sites across two rows.
+ *      See the "Edge alignment" block in site.css.)
  *
  * The fixture turns search on via `[site].search`.
  *

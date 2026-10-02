@@ -3,11 +3,10 @@
 //!
 //! ## Why this exists
 //!
-//! Commands were only half the seam. The desktop app's platform listener had a
-//! working Tauri branch and a documented no-op browser branch, so outside the
-//! desktop shell every subscriber was silently dead — no rebuild notice, no
-//! task toast, no failure report. Silently, because a subscription that never
-//! fires looks exactly like a quiet system.
+//! Outside the desktop shell there is no Tauri bus, so without this stream every
+//! subscriber would be silently dead — no rebuild notice, no task toast, no
+//! failure report — and a subscription that never fires looks exactly like a
+//! quiet system.
 //!
 //! ## One publisher per carrier, by construction
 //!

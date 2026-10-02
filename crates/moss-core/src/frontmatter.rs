@@ -61,7 +61,7 @@ pub struct FrontmatterSpan {
 /// The first non-field line ends the simplified search, so a later `---` is a
 /// thematic break, a `:::grid` cell separator, or a line of a quoted YAML
 /// example — never a delimiter. Asking the weaker question ("is there a `---`
-/// at the top level?") is what made the original bug destructive: uid stamping
+/// at the top level?") is what makes a false positive destructive: uid stamping
 /// **writes its answer back to the author's file**, so a false positive splices
 /// `uid:` into the middle of their prose.
 ///
@@ -69,9 +69,9 @@ pub struct FrontmatterSpan {
 ///
 /// - A first line that starts with `---` but is not exactly `---` — `----`
 ///   (a thematic break) or `---yaml` — is NOT an opening delimiter, and the
-///   document does not fall through to the simplified branch either. It used to:
-///   [`parse`] read `----\nprose\n---\n` as a frontmatter block, failed to
-///   deserialize `prose` as a mapping, and `render_body()` then dropped
+///   document does not fall through to the simplified branch either. Otherwise
+///   [`parse`] would read `----\nprose\n---\n` as a frontmatter block, fail to
+///   deserialize `prose` as a mapping, and `render_body()` would drop
 ///   everything above the `---`.
 /// - Content whose first *non-whitespace* is `---` but which does not open on
 ///   `---` — a leading blank line, or an indented `   ---` (a legal CommonMark

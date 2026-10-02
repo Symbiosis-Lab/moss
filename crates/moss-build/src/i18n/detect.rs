@@ -444,13 +444,9 @@ pub(crate) fn site_language_vote(texts: &[&str]) -> Option<Language> {
 /// content-detected language (only when the vault has real prose to base it on)
 /// → English.
 ///
-/// The last rung used to be the user's SYSTEM/OS locale: a signal-less vault
-/// inherited whatever language the machine happened to be set to, which is
-/// why a Chinese author's "Published with moss" colophon rendered in English
-/// on an English-locale Mac — the OS knows nothing about what the author
-/// writes. English is now the explicit no-signal value instead: moss states
-/// its own default rather than guessing from the laptop it happens to be
-/// running on.
+/// English is the explicit no-signal value rather than the OS locale: the OS
+/// knows nothing about what the author writes, so moss states its own default
+/// instead of guessing from the laptop it happens to be running on.
 ///
 /// ## Why a code and not a `Language`
 ///
@@ -466,8 +462,8 @@ pub(crate) fn site_language_vote(texts: &[&str]) -> Option<Language> {
 /// tag to every reader instead of quietly meaning what it says.
 /// Callers that need the enum (the render path, deciding `<html lang>`) map it
 /// themselves and fall back to English there, where a missing translation is
-/// what the fallback actually means. Returning `Language` here collapsed both
-/// jobs onto the three languages moss ships and lost `fr` on the way out.
+/// what the fallback actually means. Returning `Language` here would collapse
+/// both jobs onto the languages moss ships and lose `fr`.
 pub fn resolve_site_default_lang(
     explicit: Option<&str>,
     homepage_file: Option<&str>,

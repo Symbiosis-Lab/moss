@@ -1,5 +1,5 @@
 /**
- * Render gate for Task 2.5: the --moss-color-ui-accent seam (quiet-chrome opt-in).
+ * Render gate: the --moss-color-ui-accent seam (quiet-chrome opt-in).
  *
  * Runs tests/render-gates/cascade/ui-accent-seam.spec.ts in BOTH chromium and
  * webkit, against two sites — because the seam is only visible as a difference:
@@ -23,10 +23,8 @@
  * Both sites are scaffolded and built by `buildScratchSite` below, at
  * config-parse time. That is deliberate and not a `globalSetup`: playwright
  * starts `webServer` BEFORE `globalSetup`, so a site built in `globalSetup`
- * does not exist yet when `webServer.cwd` is needed. This config used to
- * work around that by carrying its own inline copy of the fixture and the
- * build — a third copy, which had already drifted from the other two.
- * See tests/e2e/helpers/scratch-site.ts.
+ * does not exist yet when `webServer.cwd` is needed. See
+ * tests/e2e/helpers/scratch-site.ts.
  *
  * Prereq: `cargo build -p moss-cli` must have produced target/debug/moss-cli.
  *

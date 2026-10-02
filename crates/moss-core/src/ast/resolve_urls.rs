@@ -1,12 +1,9 @@
 //! Typed URL resolution: walk a [`Document`] and classify every
 //! [`Url::Unresolved`] into a [`Url::Resolved`] with the right [`UrlKind`].
 //!
-//! One typed visitor replaces the two line-level "Stage 1" regex passes it was
-//! migrated from (`markdown_refs` for bare-filename image refs,
-//! `markdown_links` for standard `[text](url)` links), both deleted after
-//! parity was proven. Two properties
-//! come from the AST rather than from code here: `Inline::Image::src` (always
-//! an asset URL) is structurally distinct from `Inline::Link::url` (may be a
+//! One typed visitor does the classification. Two properties come from the
+//! AST rather than from code here: `Inline::Image::src` (always an asset
+//! URL) is structurally distinct from `Inline::Link::url` (may be a
 //! markdown target), and code is never visited by [`visit_urls_mut`], so no
 //! fence tracking is needed.
 //!
@@ -18,11 +15,11 @@
 //!
 //! ## OutgoingLink contract
 //!
-//! [`UrlResolution::outgoing`] carries the same load-bearing shape (target_path,
-//! link_type, document-order sequence) the deleted passes produced. It uses
-//! parsed inline text for `display_text` where they used the raw source between
-//! `[` and `]`; `display_text` has no production consumer, so the divergence is
-//! non-breaking (see `link_wrapping_image_target_path`).
+//! [`UrlResolution::outgoing`] carries a load-bearing shape (target_path,
+//! link_type, document-order sequence). `display_text` holds parsed inline
+//! text rather than the raw source between `[` and `]`; it has no production
+//! consumer, so that divergence is non-breaking (see
+//! `link_wrapping_image_target_path`).
 
 use super::document::Document;
 use super::node::{Block, Inline};

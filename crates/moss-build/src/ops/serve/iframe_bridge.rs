@@ -268,11 +268,8 @@ to{background-color:transparent}}\
 /// clearance of its own — no body padding, no `scroll-padding-top`. The
 /// served document is byte-identical for a preview and a real web visit.
 ///
-/// The `moss-shell-frame` class described below is still injected but is
-/// now **inert**: `site.css` defines no rules for it. It is retained so
-/// this change stays trivially revertable; removing the marker middleware
-/// and the topology check is follow-up work. The historical
-/// two-mechanism design was:
+/// The `moss-shell-frame` class is still injected by both mechanisms below,
+/// but `site.css` defines no rules for it, so it has no visible effect:
 ///
 ///   1. **Server-side, before first paint (primary path):** when the
 ///      request URL carries the `__moss_shell` query param (the SHELL_MARKER
@@ -315,8 +312,7 @@ to{background-color:transparent}}\
 /// topology check (running inside the nested iframe) confirms it's not
 /// shell-mounted and skips the class-add path. **Result: nested iframes
 /// have no class, no padding, no flash, no inverse-flash. Chrome geometry
-/// cannot leak in.** This was the load-bearing guarantee that motivated
-/// the topology check originally; it survives intact.
+/// cannot leak in.**
 ///
 /// # Real-browser parity
 ///
@@ -328,14 +324,11 @@ to{background-color:transparent}}\
 ///
 /// # No chrome-height constant here
 ///
-/// This used to emit `scroll-padding-top: 48px` so anchor targets cleared the
-/// floating titlebar, duplicating `system::utils::TITLEBAR_HEIGHT` and the
-/// `.moss-shell-frame body { padding-top }` literal in `site.css` (history:
-/// 48 → 38 → 52 → 48). The shell now insets the preview iframe below the
-/// chrome, so the iframe's viewport top *is* the first visible row: an anchor
-/// scrolled to y=0 lands fully visible, and scroll padding would push it down
-/// by a titlebar's height for no reason. The constant lives in exactly one
-/// place again — do not reintroduce it here.
+/// The shell insets the preview iframe below the chrome, so the iframe's
+/// viewport top *is* the first visible row: an anchor scrolled to y=0 lands
+/// fully visible, and scroll padding would push it down by a titlebar's height
+/// for no reason. The height constant (`system::utils::TITLEBAR_HEIGHT`) lives
+/// in exactly one place — do not duplicate it here.
 ///
 /// `site.css` does set a root `scroll-padding-top`, and that is a different
 /// constant for a different piece of chrome: the site's own floating nav
@@ -486,9 +479,6 @@ fn find_class_attr(tag_inner: &str) -> Option<usize> {
 /// Rewriting the attribute on an inactive form does not make the form active —
 /// `artalk.ts` reads and submits the URL as a fetch destination, but the section's
 /// inactive class is set at render time and not re-examined during submission.
-/// Verified by reading `render_comment_section` in `build/features/comment/render.rs`:
-/// the `active` flag controls which section tag is emitted (with or without
-/// `moss-service-inactive`), and once baked that class does not change at runtime.
 ///
 /// Only one form per page is expected (single `#moss-comment-form` id). If somehow
 /// multiple forms are present, only the first occurrence is rewritten (the `find`

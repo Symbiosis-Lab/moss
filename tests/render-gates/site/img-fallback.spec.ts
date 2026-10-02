@@ -12,19 +12,18 @@
 // TWO INVARIANTS LIVE HERE, and only a real engine can check either:
 //
 //  1. IDENTITY SURVIVES. The placeholder swaps `src` on the SAME <img> rather
-//     than replacing it. An earlier version replaced the failed <img>/<picture>
-//     with a new <span>, silently dropping class/id/attributes and breaking
-//     every context-specific CSS rule keyed on the tag (.site-logo,
-//     .moss-hero img, .moss-card-cover > img) — precisely the cases the
-//     placeholder exists to cover.
+//     than replacing the element: replacing it would silently drop class/id/
+//     attributes and break every context-specific CSS rule keyed on the tag
+//     (.site-logo, .moss-hero img, .moss-card-cover > img) — precisely the
+//     cases the placeholder exists to cover.
 //
 //  2. IT IS REVERSIBLE. When the asset lands, the real image must paint with NO
-//     RELOAD. An earlier version dropped `srcset` and DELETED the <picture>'s
-//     <source> children, which left the preview's URL-keyed asset swap
-//     nothing to match: a pending image that errored once stayed a blueprint
-//     grid until the user reloaded by hand, however many asset-ready events
-//     arrived. jsdom cannot answer this — it does not fetch, decode, or run
-//     source-set selection — so the assertion belongs here.
+//     RELOAD. That depends on keeping `srcset` and the <picture>'s <source>
+//     children intact, so the preview's URL-keyed asset swap has something to
+//     match — dropping them would strand a pending image as a blueprint grid
+//     until the user reloaded by hand. jsdom cannot answer this — it does not
+//     fetch, decode, or run source-set selection — so the assertion belongs
+//     here.
 //
 // Reads the BUILT bundle, which is what the preview server injects verbatim.
 // The injection point itself is pinned by a Rust test elsewhere — the

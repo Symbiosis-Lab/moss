@@ -9,11 +9,9 @@
 //! | [`crate::ast::plain_text::inlines_to_plain_text`] | `&[Inline]` | after parse | [`super::extract`]'s autocomplete label |
 //!
 //! What they must NOT do is disagree about what a piece of content looks
-//! like as text. They did: `collect_heading_text` in `ast/parser.rs` and
-//! `inlines_to_text` in `extract_headings.rs` were independent `match`
-//! arms over independent enums, so a heading's slug and its autocomplete
-//! label could drift apart — which is exactly what the July 2026 math
-//! cluster found (`$f*g$` came out of one and `$fg$` out of the other).
+//! like as text: two independent `match` arms over independent enums can
+//! drift, so a heading's slug and its autocomplete label disagree on the
+//! same math span (`$f*g$` from one, `$fg$` from the other).
 //!
 //! So: **one policy, two adapters.** [`crate::ast::plain_text::TextAtom`] is
 //! the vocabulary the policy speaks; `push_atom` IS the policy and is the
@@ -22,13 +20,10 @@
 //! (or a line break, or code) looks like in plain text is a one-line edit in
 //! one function, and both surfaces move together by construction.
 //!
-//! The `&[Inline]` half of the policy (and its adapter,
-//! [`crate::ast::plain_text::inlines_to_plain_text`]) moved to
-//! `ast/plain_text.rs` once a third non-heading consumer
-//! (`build::page::meta::extract_description`) appeared — exactly the
-//! trigger that module's promotion doc comment named in advance. This
-//! module keeps only [`events_to_text`], the mid-parse event-stream half
-//! that has no AST to walk yet.
+//! The `&[Inline]` half of the policy lives in
+//! [`crate::ast::plain_text::inlines_to_plain_text`]. This module keeps only
+//! [`events_to_text`], the mid-parse event-stream half that has no AST to
+//! walk yet.
 //!
 //! ## The one difference that remains, and why it is not a bug to fix here
 //!

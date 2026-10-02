@@ -129,17 +129,12 @@ impl Default for ParseConfig {
 /// **The** pulldown-cmark option set moss parses markdown with.
 ///
 /// Every parser construction site in the repo must call this rather than
-/// hand-assembling its own `Options` — moss previously had five independent
-/// `Options` blocks (typed AST, newsletter ×2, `llms_txt`, the markdown
-/// pipeline), and each one that drifted became a surface where the same
-/// document parsed differently depending on which output it was headed for.
-/// A site that legitimately needs a different set calls this and then adjusts
-/// the one option, so the divergence reads as an explicit delta at the call
-/// site instead of being invisibly re-hand-rolled. There is no such delta
-/// today: this comment used to cite the newsletter walker omitting
-/// `ENABLE_FOOTNOTES`, which stopped being true when email gained footnote
-/// arms — with the bit off, CommonMark reads `[^x]: <url>` as a link reference
-/// definition and deletes the note outright.
+/// hand-assembling its own `Options`: a site that drifts parses the same
+/// document differently depending on which output it is headed for. A site
+/// that legitimately needs a different set calls this and then adjusts the
+/// one option, so the divergence reads as an explicit delta at the call
+/// site. Dropping `ENABLE_FOOTNOTES`, for example, makes CommonMark read
+/// `[^x]: <url>` as a link reference definition and delete the note outright.
 ///
 /// `math` gates `ENABLE_MATH` (`$…$` / `$$…$$` → [`Event::InlineMath`] /
 /// [`Event::DisplayMath`]). It is a parameter rather than part of the base
@@ -940,13 +935,9 @@ fn parse_block_with_tag(
 /// paragraph and it stays as [`Block::Paragraph`].
 ///
 /// **Empty-alt guard:** if the matched image has an empty alt (decorative
-/// image), the paragraph is NOT promoted. This mirrors production's
-/// `transform_events` implicit-figure pass which gates on non-empty alt
-/// (a `<figure>` whose caption duplicates a missing alt would be useless
-/// for assistive tech and adds visual noise). The empty-alt image stays
-/// as `<p><img></p>`, matching the production byte shape for the same
-/// input — verified via the parity probe's `other` category on a real
-/// site's CJK fixtures (image-only paragraphs with empty alt).
+/// image), the paragraph is NOT promoted: a `<figure>` whose caption
+/// duplicates a missing alt would be useless for assistive tech and adds
+/// visual noise. The empty-alt image stays as `<p><img></p>`.
 ///
 /// On qualification, returns `Ok(Block::Figure { image, caption })`. For a
 /// standard-markdown image the caption renders the alt as INLINE MARKDOWN
@@ -954,8 +945,7 @@ fn parse_block_with_tag(
 /// `` `code` `` and typeset math survive, built from the image's parsed
 /// inline children (`events`/`para_start` re-parse the alt event span). The
 /// `alt=` attribute stays the flat plain-text source. A plain-text alt (no
-/// inline markup) keeps the flat single-[`Inline::Text`] caption, byte-
-/// identical to before, so only captions that actually carry markup change.
+/// inline markup) keeps the flat single-[`Inline::Text`] caption.
 ///
 /// On disqualification, returns `Err(original_inlines)` so the caller
 /// can fall back to constructing the standard `Block::Paragraph` without
@@ -1420,37 +1410,33 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                     }
                     i += 1;
                 }
-                // PR3.5 (2026-05-28): for wikilink images (`![[file]]` /
-                // `![[file|pothole]]`), pulldown-cmark synthesizes text
-                // events that aren't always author-intended alt:
+                // For wikilink images (`![[file]]` / `![[file|pothole]]`),
+                // pulldown-cmark synthesizes text events that aren't always
+                // author-intended alt:
                 //   - `![[logo.png]]` → text "logo.png" (synthesized from
-                //     dest); production treats as empty alt.
+                //     dest); treated as empty alt.
                 //   - `![[logo.png|contain center]]` → text "contain center"
-                //     (display-attrs); production classifies as styling,
-                //     NOT alt.
+                //     (display-attrs); classified as styling, NOT alt.
                 //   - `![[logo.png|width=400]]` → text "width=400" (typed
-                //     params); production classifies as params, NOT alt.
+                //     params); classified as params, NOT alt.
                 //   - `![[logo.png|My caption]]` → text "My caption";
                 //     genuine alt.
                 //
-                // Without this classification, PR3's Block::Figure
-                // detection (Wave 1) promotes wikilink-image paragraphs
-                // with synth-derived "alt" to Figure with bogus
-                // figcaptions ("logo.png", "contain center"). Match
-                // production's transform_events wikilink-dispatch by
-                // running the same classifiers (`is_all_display_keywords`
-                // + `parse_pothole_params`) here.
+                // Without this classification, `Block::Figure` detection
+                // would promote wikilink-image paragraphs with synth-derived
+                // "alt" to Figure with bogus figcaptions. The same
+                // classifiers (`is_all_display_keywords` +
+                // `parse_pothole_params`) run here.
                 //
-                // PR7a-flip-core-B (2026-05-28): preserve the ORIGINAL
-                // pothole text on `Inline::Image.wikilink_pothole`
-                // BEFORE alt-classification consumes it.
-                // `dispatch_wikilink_embeds` needs the raw pothole to
-                // route `![[v.mp4|width=400]]` → typed video synth with
-                // the `width=400` param intact (alt-classification would
-                // erase it). The pothole is the substring after `|`;
-                // pulldown-cmark gives us the synthesized text, so we
-                // strip the dest synth case (text == dest_url ⇒ no
-                // pothole) and otherwise carry the trimmed alt.
+                // The ORIGINAL pothole text is preserved on
+                // `Inline::Image.wikilink_pothole` BEFORE alt-classification
+                // consumes it: `dispatch_wikilink_embeds` needs the raw
+                // pothole to route `![[v.mp4|width=400]]` → typed video synth
+                // with the `width=400` param intact. The pothole is the
+                // substring after `|`; pulldown-cmark gives us the
+                // synthesized text, so we strip the dest synth case
+                // (text == dest_url ⇒ no pothole) and otherwise carry the
+                // trimmed alt.
                 let is_wikilink_image =
                     matches!(link_type, pulldown_cmark::LinkType::WikiLink { .. });
                 let wikilink_pothole: Option<String> = if is_wikilink_image {
@@ -1605,8 +1591,8 @@ fn collect_item_blocks(
     (out, i)
 }
 
-/// Phase 4 PR4: detect a callout marker inside a blockquote and, if
-/// found, assemble the entire `Block::Callout` (with body blocks).
+/// Detect a callout marker inside a blockquote and, if found, assemble the
+/// entire `Block::Callout` (with body blocks).
 ///
 /// `start` is the event index AFTER `Start(BlockQuote)`. Returns
 /// `Some((Block::Callout, end_index))` where `end_index` is the event
@@ -1614,22 +1600,19 @@ fn collect_item_blocks(
 /// caller can compute the advance. Returns `None` for plain
 /// blockquotes (no `[!type]` marker on the first paragraph).
 ///
-/// Detection rule (shape-spec § 1):
+/// Detection rule:
 /// - The first event must be `Start(Tag::Paragraph)`.
 /// - The leading `Event::Text` run (before the first `SoftBreak` or
 ///   any non-Text inline event) must match `[!<kind>]`, optionally
 ///   followed by `+` or `-` for foldable callouts, optionally followed
 ///   by space + inline title.
 /// - The kind is canonicalized via [`CalloutKind::from_raw`]; unknown
-///   kinds fall back to [`CalloutKind::Note`]. (Diagnostic threading
-///   is a Phase 4 followup — `validation::Diagnostic` is scoped to
-///   frontmatter validation today.)
+///   kinds fall back to [`CalloutKind::Note`] with no diagnostic.
 ///
 /// Why detection runs on events (not parsed children): the inline
-/// parser collapses `SoftBreak` events into `Inline::Text` (in PR4.5,
-/// emitting `"\n"` to match pulldown-cmark's `push_html`), which makes
-/// the marker-line vs body-line boundary an embedded `\n` rather than a
-/// distinct AST node. Working at the event layer preserves the
+/// parser collapses `SoftBreak` events into `Inline::Text("\n")`, which
+/// makes the marker-line vs body-line boundary an embedded `\n` rather
+/// than a distinct AST node. Working at the event layer preserves the
 /// SoftBreak boundary so we can split "title" (before SoftBreak) from
 /// "body" (after SoftBreak) correctly.
 fn detect_and_assemble_callout(
@@ -1974,8 +1957,8 @@ fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<Stri
 /// 2. The walk is inside a shortcode body. `footnotes::collect_definitions`
 ///    stops at shortcode bodies, so a `[^x]: …` written inside a `:::grid`
 ///    cell is never collected, never numbered, and never hoisted — it renders
-///    in the cell. Bucketing it as an endnote numbered a grid heading after
-///    the body even though it renders before it.
+///    in the cell. Bucketing it as an endnote would number a grid heading
+///    after the body even though it renders before it.
 #[derive(Clone, Copy)]
 struct HoistScope<'a> {
     /// Labels the document's `FootnoteIndex` owns, in endnote order.

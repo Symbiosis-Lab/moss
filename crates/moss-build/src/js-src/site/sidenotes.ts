@@ -8,8 +8,7 @@
  * reflowing for free on resize, font-scale change and print. Once every note
  * has a margin twin, the endnote list at the article's foot retires
  * (`moss-footnotes-cloned`, display:none under the same media scope that
- * shows the margin) — the design's rule that a reader meets each note exactly
- * once. The retirement is atomic: one unclonable note and the class never
+ * shows the margin) — a reader meets each note exactly once. The retirement is atomic: one unclonable note and the class never
  * lands, so the list stays and nothing is lost.
  *
  * Narrow (no gutter): the endnote list at the page bottom IS the interface —

@@ -13,8 +13,7 @@
  * contenteditable — e.g. a site's search box). WebKit's editable menu carries
  * Paste, which no shell-rendered menu can offer (the clipboard belongs to the
  * focused webview), so suppressing there would take a capability away and
- * give nothing back. Same reasoning as the known-deferred editor-undo item in
- * the decision doc.
+ * give nothing back.
  *
  * Coordinates are the iframe's own viewport CSS px (event.clientX/Y). The
  * shell translates them into shell-viewport coordinates using the iframe

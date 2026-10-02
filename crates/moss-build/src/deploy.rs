@@ -342,30 +342,28 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// would be a second opinion about the same question, free to disagree with the
 /// site that was actually built.
 ///
-/// Absent means "no build in this session", not "clean" — and since 2026-08-29
-/// a headless build records its verdict here too, so the CLI is refused on the
-/// same evidence the app is.
+/// Absent means "no build in this session", not "clean"; a headless build
+/// records its verdict here too, so the CLI is refused on the same evidence
+/// the app is.
 ///
-/// A second rule joined 2026-09-16, alongside this one rather than as a
-/// separate gate function: a generation can seal before a video it dispatched
-/// (or that video's poster) has finished encoding, and a publish landing in
-/// that window used to ship a page referencing bytes this build never wrote.
-/// `build::manifest::link_audit::dead_links_among_promises` — run on every
-/// seal via `build.rs`'s `record_promise_gate` — is what tells that case
-/// apart from an ordinary missing file: it is this build's OWN still-pending
-/// promise, not something broken. Distinct wording, `in_flight_refusal_text`:
-/// "fix this" would be the wrong thing to tell an author about a video moss
-/// itself hasn't finished encoding yet.
+/// Also refused: a generation can seal before a video it dispatched (or that
+/// video's poster) has finished encoding, and a publish landing in that
+/// window would otherwise ship a page referencing bytes this build never
+/// wrote. `build::manifest::link_audit::dead_links_among_promises` — run on
+/// every seal via `build.rs`'s `record_promise_gate` — is what tells that
+/// case apart from an ordinary missing file: it is this build's OWN
+/// still-pending promise, not something broken. Distinct wording,
+/// `in_flight_refusal_text`: "fix this" would be the wrong thing to tell an
+/// author about a video moss itself hasn't finished encoding yet.
 ///
-/// A third rule joined 2026-09-17, alongside the revision that deleted
-/// `pipeline::should_publish`: a structural source (a page, `config.toml`, the
-/// user stylesheet) this build could not read now has somewhere real to fall
-/// back to, so a build built without one is no longer refused the SCREEN — see
+/// Also refused: a structural source (a page, `config.toml`, the user
+/// stylesheet) this build could not read falls back to last-known content
+/// instead of refusing the SCREEN outright — see
 /// `PipelineRunOutput::stale_sources`. The publish it might go on to make is
-/// still built on last-arrived content for whatever it carried forward, and
-/// that is what THIS rule refuses: not because the site is wrong, but because
-/// shipping it without saying so would let a source stay stale indefinitely
-/// with no signal that anything needed attention.
+/// still built on that carried-forward content, and that is what THIS rule
+/// refuses: not because the site is wrong, but because shipping it without
+/// saying so would let a source stay stale indefinitely with no signal that
+/// anything needed attention.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
     let records = crate::system::build_records::records();
     if let Some(projection) = records.publish_preflight(folder_path) {
@@ -560,22 +558,17 @@ mod stale_copy_tests {
 /// What every publish needs before it can start: the site it publishes to, and
 /// the key it signs with.
 ///
-/// `Ok(None)` is `NeedsSetup`, and since C4g it means one specific thing: the
-/// folder has no environment set, so moss will not mint a site for it. A folder
+/// `Ok(None)` is `NeedsSetup`, meaning one specific thing: the folder has no
+/// environment set, so moss will not mint a site for it. A folder
 /// that HAS one and no `site_id` yet is registered here rather than refused —
 /// the first publish is a step of the route, not a route of its own, and
 /// putting it here is what lets both drivers and both binaries reach it.
 /// `requested_site_id` is `--site-id=<name>`; without it the name is derived
 /// from the folder.
 ///
-/// One owner since C4f, when the second driver arrived. Both
-/// [`prebuilt::run_prebuilt_deploy`] and [`push::run_hosted_deploy`] opened
-/// with the same four steps in the same order, and the twin had already
-/// drifted before it was noticed: only the app asked
-/// [`preflight_publish_inputs`], so `moss deploy --prebuilt` on an evicted
-/// iCloud folder reported the raw `Resource deadlock avoided` that the
-/// identity-file bug was closed for. A gate added to a publish now goes in one place, which is
-/// the property that failure cost.
+/// One owner for both [`prebuilt::run_prebuilt_deploy`] and
+/// [`push::run_hosted_deploy`], so a gate added to a publish goes in exactly
+/// one place rather than two call sites that can drift apart.
 ///
 /// The last gate here is [`refuse_stale_copy`], skipped when `overwrite_newer`
 /// (`--overwrite-newer`) is set. Both callers are `moss deploy` routes; the
@@ -592,8 +585,7 @@ mod stale_copy_tests {
 ///
 /// `Err` is not `false`. An evicted `.moss/config.toml` fails to parse, and
 /// answering that with "you never ran `moss env`" sends the author to fix a
-/// thing that is not wrong — the identity-file bug's shape, one file over. The read's own
-/// error carries what happened.
+/// thing that is not wrong. The read's own error carries what happened.
 ///
 /// Pure and separate from [`resolve_publish_inputs`] so a test can assert it
 /// without entering a function that, if the gate regressed, would go on to call

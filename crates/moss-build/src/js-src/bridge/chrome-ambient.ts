@@ -1,10 +1,9 @@
 /**
  * Chrome ambient sampling — the iframe half.
  *
- * Insetting the preview iframe below the floating titlebar fixed a
- * nine-time-recurring geometry bug but cost the glass its content: the pill's
- * `backdrop-filter` now blurs the shell's flat container background, because
- * there are no page pixels above the iframe's top edge any more.
+ * The preview iframe is inset below the floating titlebar, so the pill's
+ * `backdrop-filter` blurs the shell's flat container background: there are no
+ * page pixels above the iframe's top edge.
  *
  * This puts the site's colour back into the chrome without putting the app's
  * geometry back into the site. We sample a horizontal strip of the page near

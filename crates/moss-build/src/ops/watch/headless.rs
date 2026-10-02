@@ -2,16 +2,13 @@
 //! `build --serve --watch`, and the process-global content-hash stash they
 //! read.
 //!
-//! Extracted at slice C1 of the 2026-08-28 preview-server relocation plan.
-//! W1 crossed the *driver* (`ops/watch.rs`) and left the rebuild bodies
-//! host-side, because on the GUI they are managed-state glue. Headless they
-//! are not: with no shell there is no `RebuildState`, no publish freeze (a
-//! headless process cannot deploy), no progress channel and no live-port
-//! resolver — what remains is worker admission, the stage-lock probe, the
-//! content-hash gate and one `run_pipeline` call, all of which already live
-//! in this crate. Both headless hosts — the app binary's `moss build` arm
-//! and `moss-cli` — construct through here, so the CLI gaining `--watch`
-//! did not mint a second copy of these bodies.
+//! On the GUI the rebuild bodies are managed-state glue and stay host-side
+//! (the driver is `ops/watch.rs`). Headless there is no `RebuildState`, no
+//! publish freeze (a headless process cannot deploy), no progress channel and
+//! no live-port resolver — what remains is worker admission, the stage-lock
+//! probe, the content-hash gate and one `run_pipeline` call. Both headless
+//! hosts — the app binary's `moss build` arm and `moss-cli` — construct
+//! through here, so there is one copy of these bodies.
 //!
 //! What a host still decides arrives as [`HeadlessWatchConfig`] values: the
 //! [`HostPorts`] each rebuild runs with (both are `HostPorts::headless`; the

@@ -5,8 +5,8 @@
 //!
 //! 1. **"What URL does `《河灣》第一期 — 邊界.md` publish at?"** moss's slug
 //!    rules strip punctuation and keep CJK, which is the right behavior and
-//!    completely undiscoverable — the only way to find out used to be to build
-//!    and go read the emitted directory tree.
+//!    completely undiscoverable — the only way to find out is to build and read
+//!    the emitted directory tree.
 //! 2. **"Why is this article missing from the index?"** There are FOUR
 //!    different ways a file stops showing up in a listing, and they hide it
 //!    from different places: `draft:` (hidden everywhere, plus `noindex`),

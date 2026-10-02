@@ -8,26 +8,12 @@
  *
  * ## Why this is called from the config and not from `globalSetup`
  *
- * Playwright starts `webServer` BEFORE `globalSetup`. Seven configs were wired
- * the other way round: `globalSetup` built the site and wrote its path to a
- * sentinel file, and the config read that sentinel — at parse time, one whole
- * phase earlier — to set `webServer.cwd`. On any machine that had run the gate
- * before, the stale sentinel made it look like it worked. From a clean
- * checkout all seven died with `spawn /bin/sh ENOENT`, which is Node reporting
- * a `cwd` that does not exist. `ui-accent-seam.config.ts` had already hit this
- * and worked around it by pasting a third copy of the build inline.
- *
- * Building here, synchronously, at config-parse time, is what that workaround
- * was reaching for. It also deletes the sentinel files and the `*_SERVE_DIR`
- * env vars outright: the built path is now just a value in the same process
- * that needs it. Everything below is deliberately sync (`execSync`, `fs`) so a
- * config can call it without top-level await.
- *
- * Before 2026-08-04 this routine was copy-pasted into seven `*-global-setup.ts`
- * files — ~1,100 lines of which the fixtures were maybe 200. All seven carried
- * their own `resolveBuiltDir`, and all seven still probed `.moss/build/site/`,
- * a path that has been empty since the generations migration. A bug in that
- * lookup had seven places to be fixed and no place to be tested.
+ * Playwright starts `webServer` BEFORE `globalSetup`, so a site built in
+ * `globalSetup` does not exist yet when the config reads its path to set
+ * `webServer.cwd` (a missing cwd surfaces as `spawn /bin/sh ENOENT`). Building
+ * here, synchronously, at config-parse time avoids that: the built path is a
+ * value in the same process that needs it. Everything below is deliberately
+ * sync (`execSync`, `fs`) so a config can call it without top-level await.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -262,14 +248,9 @@ export function findLinkHref(html: string, pattern: RegExp): string | null {
  * seek at-or-past EOF, so the poster comes out 0 bytes and the built page
  * serves `poster="…thumb.jpg"` as a 404. That silent failure doesn't just
  * cost a poster: WebKit ignores it, but Chromium resolves a `<video>`'s
- * `aspect-ratio: auto` from the poster image's own natural size, not the
- * decoded video frame, whenever a `poster` attribute is present — so a
- * broken poster made Chromium fall back to the CSS's placeholder 16:9 ratio
- * even after the video itself had fully decoded (`readyState` 4,
- * `videoWidth`/`videoHeight` correct). Confirmed by comparing a 1-second and
- * a 2-second clip through a real `moss-cli build`, isolated Playwright
- * launches, both engines: only the 1-second clip's build leaves a dead
- * `clip.thumb.jpg` link and only its Chromium run reports the wrong ratio.
+ * `aspect-ratio: auto` from the poster image's own natural size whenever a
+ * `poster` attribute is present — so a broken poster makes Chromium fall back
+ * to the CSS's placeholder 16:9 ratio even after the video has fully decoded.
  *
  * Cached under `target/test-tmp/fixtures/` keyed by dimensions, on the same
  * reasoning as `buildScratchSite`'s build-stamp cache: Playwright parses each

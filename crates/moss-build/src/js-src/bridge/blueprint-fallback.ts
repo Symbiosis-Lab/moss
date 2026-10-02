@@ -31,9 +31,8 @@
  * IntersectionObserver: the animated rAF (`startBlueprintGrid`, which owns its
  * own particles/rAF/ResizeObserver/mousemove per call) runs ONLY while the
  * cover is on-screen and is fully torn down when it scrolls off — so N covers
- * never mean N live rAF loops, only the visible few. A single shared driver was
- * considered but rejected: reusing `startBlueprintGrid` keeps ONE source of
- * truth for the animation, and teardown-on-hidden already bounds the live cost.
+ * never mean N live rAF loops, only the visible few. Reusing `startBlueprintGrid`
+ * keeps ONE source of truth for the animation.
  *
  * prefers-reduced-motion
  * ----------------------

@@ -569,20 +569,19 @@ floating_nav = true
 // can answer:
 //
 //   1. a plain `:::grid 3` — collapses to ONE track below 768px;
-//   2. a ratio `:::grid 2 1:2` — collapses too. It used to carry an inline
-//      `style="grid-template-columns:1fr 2fr"`, which outranks every rule in
-//      every stylesheet, so the collapse could not reach it at any width. The
-//      ratio now rides as `--moss-grid-ratio`, and the desktop assertion (2:1
-//      track widths) is what proves the variable still drives the layout;
+//   2. a ratio `:::grid 2 1:2` — collapses too. The ratio rides as
+//      `--moss-grid-ratio` (an inline `grid-template-columns` would outrank
+//      every stylesheet rule and block the collapse), and the desktop
+//      assertion (2:1 track widths) proves the variable still drives the
+//      layout;
 //   3. a two-cell grid whose cells hold the SAME image written two ways — a
 //      wikilink embed and a markdown image. One authorial intent, so the two
 //      cells must present the same box.
 //
-// `implicit_figure = false`, because that is the site setting the two spellings
-// used to disagree about: moss honoured it for `![alt](tile.svg)` and ignored
-// it for `![[tile.svg]]`, so the wikilink cell kept a `<figure
-// class="moss-image">` the other cell did not have — and every theme rule
-// keyed on `.moss-image` then reached one cell of the pair.
+// `implicit_figure = false`: the setting must apply to both `![alt](tile.svg)`
+// and `![[tile.svg]]`, or one cell keeps a `<figure class="moss-image">` the
+// other lacks and every theme rule keyed on `.moss-image` reaches only one
+// cell of the pair.
 //
 // `{.no-cards}` on the third grid: without it a cell that is a single internal
 // link is replaced wholesale by a rendered collection card, and the image the
@@ -751,8 +750,7 @@ implicit_figure = false
 // the image, which only exists with moss's default `implicit_figure` (unset
 // — true here), unlike GRID_MOBILE_COLLAPSE_GATE above, which turns it off to
 // test the plain-`<p>` shape instead — this gate cannot reuse that site. An
-// external whole-cell image link takes a different path entirely since
-// bbb3c0a5: it renders as `a.moss-card[data-external]`, and its cover fills
+// external whole-cell image link takes a different path entirely: it renders as `a.moss-card[data-external]`, and its cover fills
 // via `.moss-card-cover`'s flex-stretch + `aspect-ratio` box instead of the
 // `.moss-grid-card` rule — both shapes are exercised by this gate's fixture.
 // Both writing modes matter: under vertical typesetting the inline axis is
@@ -1179,12 +1177,9 @@ Body text under the section heading.
 
 // ── The quote card actually paints the page's cover ──────────────────────────
 // A reader selects a sentence, taps Share, and gets a PNG whose top 140pt is
-// the article's own photograph. For two months it was a blank band instead:
-// `findCoverSource()` looked for `.article-cover img`, a class moss has never
-// emitted, and every test stayed green because the only test that covered it
-// built that element itself in jsdom. It asserted the author's belief about
-// moss's markup rather than moss's markup, and jsdom can neither fetch, decode
-// nor paint, so nothing in that suite could have noticed.
+// the article's own photograph. A jsdom test that builds the cover element
+// itself asserts the author's belief about moss's markup rather than moss's
+// markup, and jsdom can neither fetch, decode nor paint.
 //
 // So the gate has to go all the way to pixels: select text, click Share, read
 // the image the browser produced back through a canvas, and sample it. Only an

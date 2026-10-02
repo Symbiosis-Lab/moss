@@ -60,14 +60,9 @@
  *   blank + `    - item`    → a LIST inside the note
  *   blank + `plain para`    → the note ends; `plain para` is top-level
  *
- * This grammar used to claim only the marker line, and the continuation then
- * parsed as whatever it looked like standing alone. That was not a cosmetic
- * limit: a line indented four spaces looks exactly like an indented code
- * block, so the author who indents CAREFULLY got a monospace code box in the
- * editor where their site renders note prose — the same "editor and build
- * disagree about what this is" defect the original footnote bug was.
- *
- * So `FootnoteDefinition` is a composite block whose continuation rule is
+ * A line indented four spaces looks exactly like an indented code block, so
+ * claiming only the marker line would make the editor and the build disagree
+ * about what a continuation is. So `FootnoteDefinition` is a composite block whose continuation rule is
  * `ListItem`'s, with `CONTINUATION_INDENT` in place of the marker width.
  * Four is fixed rather than derived from the label, because that is what
  * pulldown does — `[^a-very-long-label]:` still continues at four spaces.

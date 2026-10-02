@@ -7,49 +7,11 @@
 //! module. Regex post-passes are reserved for non-markdown-origin attribute
 //! injection only.
 //!
-//! # Migration state (post-Step-7, 2026-05-16)
-//!
-//! Steps 1-7 of the structural-html-emission migration are complete:
-//! - Step 1: extracted `synthesize_image_html`
-//! - Step 2: routed markdown `Tag::Image` events
-//! - Step 3: routed `:::hero` shortcode image
-//! - Step 4: routed link-preview favicon
-//! - Step 6: routed every cover image path (folder cards, child summary
-//!   cards, folder index hero, photo/video gallery thumbnails) through
-//!   `render_cover_html`
-//! - Step 7: retired `wrap_img_in_picture` (the structural part of the
-//!   legacy regex post-pass). The synthesizer now owns every `<picture>`
-//!   wrap in moss output. `add_image_placeholder_attributes` survives as
-//!   the attribute-injection seam for the documented carve-outs (see
-//!   below).
-//!
 //! The byte-shape contract is captured by snapshot tests at the bottom of
-//! this file. They are the line of defense against accidental output
-//! drift; any future change to attribute order, quoting, or whitespace
-//! must update them deliberately.
-//!
-//! Later steps will:
-//! - Step 8: switch `MarkdownStandalone` to a `<figure class="moss-image">`
-//!   wrapper (breaking change for user themes — staged separately)
-//! - Add AVIF `<source>` lines once the image pipeline produces AVIF
-//! - Drop the inline LQIP `style=` in favor of a wrapper CSS custom prop
-//!
-//! # Step-8 contract: synthesizer owns the outer `<figure>` (planned)
-//!
-//! `transform_events` currently wraps the synthesizer's `MarkdownStandalone`
-//! output in its own `<figure>` for the three caption-pattern branches
-//! (image+emphasis, separate-emphasis, implicit-figure). After Step 8 the
-//! synthesizer emits `<figure class="moss-image">` itself; if `transform_events`
-//! still wraps, the output will be `<figure><figure class="moss-image">...</figure>
-//! <figcaption>...</figcaption></figure>` — invalid double-wrap.
-//!
-//! The Step-8 contract: caption flows into the synthesizer via
-//! `MarkdownStandalone { caption: Option<&str> }` (or a richer
-//! `CaptionMarkdown` for emphasis-in-caption support), and the three
-//! caption-pattern branches collapse into a single `Event::Html(
-//! synthesize_image_html(..., MarkdownStandalone { caption }))` emission.
-//! The `<figcaption>` becomes the synthesizer's responsibility, NOT
-//! `transform_events`.
+//! this file; any change to attribute order, quoting, or whitespace must
+//! update them deliberately. The synthesizer owns every `<picture>` wrap in
+//! moss output; `add_image_placeholder_attributes` is only the
+//! attribute-injection seam for the carve-outs below.
 //!
 //! # Carve-outs: bare `<img>` emitters not routed through the synthesizer
 //!
@@ -78,17 +40,14 @@
 //!   input, the markdown HTML is opaque to the synthesizer and gets only
 //!   the additive attribute injection pass.
 //!
-//! Photography/video gallery thumbnails — previously a carve-out — were
-//! folded into the synthesizer in Step 7's commit. The **review colophon
-//! cover** (`build/features/review.rs::render_colophon`) — also previously
-//! a carve-out — was folded in 2026-05-16. Both use
-//! `ImageContext::FolderCardCover` (container-bounded thumbnail semantics).
+//! Photography/video gallery thumbnails and the review colophon cover
+//! (`build/features/review.rs::render_colophon`) go through the synthesizer
+//! with `ImageContext::FolderCardCover` (container-bounded thumbnail
+//! semantics).
 //!
-//! These four remaining carve-outs are flagged here so future maintenance
-//! does not drop their attribute injection. Step 7 retired the structural
-//! part of the regex (`wrap_img_in_picture`); the surviving
-//! `add_image_placeholder_attributes` provides additive attrs only for
-//! these bare-img paths.
+//! The four carve-outs above are flagged so future maintenance does not drop
+//! their attribute injection: `add_image_placeholder_attributes` provides
+//! additive attrs only, for these bare-img paths.
 
 use crate::asset_paths::{
     deployed_width, is_ladder_source_ext, is_scroll_shape, is_webp_source_ext, ladder_rungs,
@@ -298,18 +257,14 @@ pub struct ImageRenderOptions<'a> {
 ///
 /// `assets` is the [`AssetSnapshot`] holding pre-fetched per-path dimensions,
 /// LQIP data URIs, dominant colors, and registered variant kinds (WebP/AVIF).
-/// Phase 1 of the unified-image-emission migration (2026-05-25) replaced the
-/// prior `Option<&MediaDimensionLookup>` parameter with this typed contract —
-/// `MediaDimensionLookup` still populates the snapshot in `pipeline.rs`'s
-/// `build_asset_snapshot` boundary, but the synthesizer no longer probes it
-/// directly. Callers that don't have a populated snapshot (test/fragment-
-/// render paths) pass `&AssetSnapshot::new()`; the synthesizer then emits
-/// fallback dims (800×600) and no LQIP/color style.
+/// Callers that don't have a populated snapshot (test/fragment-render paths)
+/// pass `&AssetSnapshot::new()`; the synthesizer then emits fallback dims
+/// (800×600) and no LQIP/color style.
 ///
 /// `context` and `options` describe the call site. `Favicon` short-circuits
 /// to a 16×16 bare `<img>` (no manifest, no LQIP, no `<picture>`).
 ///
-/// Byte-shape contract (preserved through Phase 1's data-source switch):
+/// Byte-shape contract:
 ///
 /// - With no `<picture>` wrap (non-raster):
 ///   `<img src="X" width="W" height="H" loading="lazy" style="…" alt="Y" />`
@@ -328,10 +283,8 @@ pub fn synthesize_image_html(
     options: &ImageRenderOptions<'_>,
 ) -> String {
     // Favicon short-circuit: hardcoded 16×16, no snapshot lookup, no <picture>.
-    // Matches the current emission shape in
-    // `build/markdown/typed_renderers.rs::render_link_preview`. `assets` is
-    // intentionally unused — favicons are UI affordances that never
-    // participate in the variant manifest.
+    // `assets` is intentionally unused — favicons are UI affordances that
+    // never participate in the variant manifest.
     if matches!(context, ImageContext::Favicon) {
         let class_attr = options
             .class
@@ -345,16 +298,12 @@ pub fn synthesize_image_html(
         );
     }
 
-    // Phase 2 scaffold (filled by Phase 2 carve-out agents): the three former
-    // bare-<img> carve-outs become first-class synthesizer contexts. Each
-    // short-circuits before synthesize_inner (which assumes the standard
-    // <picture>/LQIP/dims pipeline that's wrong for these elements).
-    // Site-logo short-circuit (Phase 2B carve-out): bare `<img>` with
+    // The site logo short-circuits before synthesize_inner (which assumes the
+    // standard <picture>/LQIP/dims pipeline): bare `<img>` with
     // `class="site-logo"`, no `<picture>`, no LQIP, no `loading="lazy"` —
     // the logo is above-the-fold; CSS handles sizing
     // (`.site-logo { height: 1.8em }`). Attribute order
-    // (`class`, `src`, `alt`, `aria-hidden`) preserves the pre-Phase-2
-    // byte shape emitted by `nav.rs::generate_navigation`.
+    // (`class`, `src`, `alt`, `aria-hidden`) is part of the byte shape.
     if matches!(context, ImageContext::SiteLogo) {
         // `extra_attrs` rides directly after `class` (the editor preview's
         // `data-source-fm="logo"` annotation); `None` keeps the byte shape.
@@ -486,18 +435,16 @@ pub fn synthesize_image_html(
 /// for the raw-HTML media branch of `emit_standalone_figure_image`
 /// without duplicating the wrapper byte shape. The synthesizer is the
 /// single source of truth for `<figure class="moss-image">` — when the
-/// wrapper class evolves (e.g. `moss-image moss-image--auto` per the
-/// Step-8 spec), only this function changes.
+/// wrapper class evolves, only this function changes.
 pub fn wrap_in_figure(
     inner_html: &str,
     caption: Option<&str>,
     width: Option<&str>,
 ) -> String {
-    // 3-arg shorthand kept for the raw-HTML media branch in
+    // 3-arg shorthand for the raw-HTML media branch in
     // pipeline.rs::emit_standalone_figure_image (wikilink display-keyword
-    // images that don't carry moss: title params — no align / extra
-    // classes / extra attrs). Delegates to the canonical wrapper so the
-    // byte shape stays defined in exactly one place.
+    // images with no align / extra classes / extra attrs). Delegates to the
+    // canonical wrapper so the byte shape is defined in one place.
     let empty_classes: &[String] = &[];
     let empty_attrs: BTreeMap<String, String> = BTreeMap::new();
     wrap_in_figure_full(inner_html, caption, width, None, empty_classes, &empty_attrs)

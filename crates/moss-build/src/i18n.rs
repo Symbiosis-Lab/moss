@@ -207,13 +207,11 @@ pub fn clean_stem_only(filename_stem: &str) -> String {
 /// 4. Site default language (passed in)
 ///
 /// A document's language is a pure function of its path plus its
-/// frontmatter — it no longer reads the document's own body at all. There
-/// used to be a fifth rung here that called `detect::detect_language` on
-/// `content` directly, per page, on every build; a content edit could flip
-/// it, which fed a fingerprint and forced a full site render over a typo
-/// fix. It is gone.
+/// frontmatter — it never reads the document's own body. Per-page content
+/// detection would let a typo fix flip the language, feed a fingerprint, and
+/// force a full site render.
 ///
-/// `ancestor_lang` is precomputed by the caller and is now a RICHER slot
+/// `ancestor_lang` is precomputed by the caller and is a RICHER slot
 /// than its name alone suggests: it's `Some` either because the folder is
 /// literally *named* after a language (via
 /// [`path::ancestor_lang_from_path`]), or because the folder carries no
@@ -221,7 +219,7 @@ pub fn clean_stem_only(filename_stem: &str) -> String {
 /// in the scan/reduce phase (`build::scan::page_map::folder_lang`) —
 /// content detection still happens, just upstream of this function and
 /// keyed to the folder's file *set* rather than any one page's bytes, so it
-/// no longer moves on a body edit. This function does not need to know
+/// does not move on a body edit. This function does not need to know
 /// which case it's in; both are "the folder says so," stronger than the
 /// site default. Pass `None` when the caller has neither (e.g. most unit
 /// tests, in-memory previews).

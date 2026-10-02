@@ -3,11 +3,10 @@
 //! One question, one answer: "what are the OTHER languages of THIS page,
 //! and where is each?" — framed from the current page's point of view.
 //!
-//! Consolidates what used to be two divergent producers (per-article
-//! `translations` vs. a verbatim copy of the root homepage's `translations`).
-//! The homepage-copy fallback inherited the homepage's POV — on a site whose
-//! root is Chinese, the root homepage lists "EN" as its alternate, so an
-//! English page that borrowed that list showed "EN / EN". This module always
+//! Borrowing the root homepage's `translations` verbatim would inherit the
+//! homepage's POV — on a site whose root is Chinese, the root homepage lists
+//! "EN" as its alternate, so an English page that borrowed that list would
+//! show "EN / EN". This module always
 //! subtracts the current language and points each remaining language at its
 //! real entry point. Mirrors the current-lang discipline in
 //! `build_hreflang_link_tags` (page/meta.rs).

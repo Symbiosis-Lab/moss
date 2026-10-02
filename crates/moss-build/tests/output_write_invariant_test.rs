@@ -1,20 +1,14 @@
 //! Sync test: no raw file write inside this crate's build tree may land in the
 //! regenerable output tree without going through `build::io_utils`.
 //!
-//! Twin of the desktop app's `output_write_invariant_test.rs` — that file's
-//! `SOURCE_ROOTS` had narrowed to only `../open/crates/moss-build/src`, so
-//! this is the wholly-open half moved here verbatim, minus the
-//! desktop-relative path math.
-//!
 //! ## Why this exists
 //!
 //! `.moss/build.nosync/` lives inside the vault, so the sync client is free to evict
 //! moss's own output. `std::fs::write` opens with `O_WRONLY|O_CREAT|O_TRUNC`,
 //! and `O_TRUNC` *requires* materialization — against a cloud-evicted
 //! (`SF_DATALESS`) destination, under the process-wide fail-fast policy, it
-//! returns `EDEADLK`. Measured directly, alongside the two facts that make a
-//! fix possible: `unlink` and `rename` over a dataless file both succeed,
-//! because neither touches data extents.
+//! returns `EDEADLK`. `unlink` and `rename` over a dataless file both
+//! succeed, because neither touches data extents.
 //!
 //! **Under `.moss/build.nosync/`, dataless is absent**, and every write into
 //! that tree goes through `build::io_utils`, which writes to a temp sibling

@@ -1,4 +1,4 @@
-//! `moss history` — the CLI form of publish history (slice 2).
+//! `moss history` — the CLI form of publish history.
 //! One row in [`crate::cli::commands::cli_commands`], on `OWN_HELP` because it
 //! parses its own flags. Lives beside [`super::store`]/[`super::record`]/
 //! [`super::restore`]/[`super::timeline`] rather than under `cli/`, which is

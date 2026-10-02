@@ -1,12 +1,10 @@
 //! The per-folder rebuild worker: a capacity-1 request slot drained by one
 //! dedicated task per watched folder.
 //!
-//! Phase 1a ("Piece 2 — a rebuild path that cannot wedge"). Before this, every producer
-//! of a rebuild — the watcher's select loop, the target reconciler, the cloud
-//! supervisor, the publish thaw — awaited the ENTIRE build inline through
-//! `trigger_rebuild_with_lock`, so one wedged build parked event processing,
-//! reconciliation and shutdown for the life of the process. Now producers
-//! enqueue and return; the worker builds one at a time.
+//! Every producer of a rebuild — the watcher's select loop, the target
+//! reconciler, the cloud supervisor, the publish thaw — enqueues and returns
+//! rather than awaiting the build inline, so one wedged build cannot park event
+//! processing, reconciliation and shutdown. The worker builds one at a time.
 //!
 //! ## The primitive
 //!
@@ -37,8 +35,7 @@ use futures::FutureExt;
 use crate::build::BuildTrigger;
 
 /// How long the worker waits before re-trying admission when the folder's
-/// stage-write lock is held (design doc, Piece 2: "Re-admission is try-lock,
-/// not pile-up … it retries next tick"). The common holder is a prior
+/// stage-write lock is held (re-admission is try-lock, not pile-up). The common holder is a prior
 /// generation's seal tail, which releases without poking the slot — so the
 /// retry must be timer-driven, not poke-driven, or a parked request could
 /// outlive the contention that parked it.

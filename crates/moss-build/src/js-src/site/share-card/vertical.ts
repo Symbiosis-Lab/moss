@@ -13,22 +13,16 @@
  * both the quote's and the meta's columns, independent of the card's total
  * height.
  *
- * The columns are drawn glyph by glyph, not by the engine: `canvas.style.
- * writingMode`/`textOrientation` used to carry this (relying on the browser
- * to lay `fillText` out vertically before a quarter-turn `ctx.rotate` stood
- * the column up), but a canvas 2D context is never laid out — the style
- * only matters where a renderer chooses to special-case it, and one major
- * engine does not. There the run drew flat, and the *whole line* still got
- * rotated a quarter turn, so every character came out sideways instead of
- * upright: correct column direction, wrong glyph orientation, on exactly the
- * engine nobody had checked. `drawUprightColumn` (below) replaces the trick
- * with `tokenize()`'s own token boundaries — the ones `wrapText` already
- * wraps by — walked one at a time down the column: a CJK glyph draws
- * upright at its own advance, a run of anything else (Latin, digits) rotates
- * as one sideways unit, and a CJK punctuation mark shifts toward the
+ * The columns are drawn glyph by glyph, not by the engine: a canvas 2D context
+ * is never laid out, so `canvas.style.writingMode`/`textOrientation` only
+ * works where a renderer special-cases it, and one major engine does not.
+ * `drawUprightColumn` (below) walks `tokenize()`'s own token boundaries — the
+ * ones `wrapText` already wraps by — one at a time down the column: a CJK glyph
+ * draws upright at its own advance, a run of anything else (Latin, digits)
+ * rotates as one sideways unit, and a CJK punctuation mark shifts toward the
  * top-right of its cell the way vertical typesetting sets it. `measureText`
- * still gives the column advance, so `wrapText`'s kinsoku wrapping is
- * unchanged — only how a wrapped line paints changed.
+ * still gives the column advance, so `wrapText`'s kinsoku wrapping applies
+ * unchanged.
  *
  * Contract: takes `text` and, when `options.blocks` is given (long mode, a
  * real selection), wraps the quote from those blocks instead of from `text`

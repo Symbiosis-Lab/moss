@@ -84,11 +84,10 @@ impl Drop for PublishGuard {
     }
 }
 
-/// Run `body` only if no other publish is running (2026-07-21 incident: two
-/// full deploys, `160608cc` and `53283b5b` 12s apart, each shipped the same 761
-/// files and reported into one UI counter, so the on-screen count jumped around
-/// while ~1522 uploads and two builds pegged the CPU). Rejecting rather than
-/// coalescing is deliberate: the user learns their newer edits were NOT shipped.
+/// Run `body` only if no other publish is running — two concurrent deploys
+/// double the upload and build load and race on the same progress counter.
+/// Rejecting rather than coalescing is deliberate: the user learns their
+/// newer edits were NOT shipped.
 ///
 /// Holding the guard also **freezes the build** for the duration;
 /// the thaw on drop pokes every folder's rebuild worker so frozen-out
@@ -107,23 +106,18 @@ impl Drop for PublishGuard {
 ///
 /// ## The guard owns the publish's terminal stage
 ///
-/// Every publish enters the stage machine through a SHARED door —
-/// `MossEvent::DeployWaitingForBuild`, emitted from `build_shell::wait_for_in_flight_work`,
-/// which is generic build machinery — but the only exits used to be hand-written
-/// inside the seta bodies. The plugin path (an OnionPress publish) tripped the
-/// shared entrance and had no exit at all, so the panel sat on
-/// "Waiting for build… rebuild paused" forever after a publish that had in fact
-/// succeeded, and the nav-pill hairline never completed.
+/// Every publish enters the stage machine through a shared door —
+/// `MossEvent::DeployWaitingForBuild`, emitted from
+/// `build_shell::wait_for_in_flight_work`, which is generic build machinery —
+/// so the terminal stage is emitted HERE too, at the one choke point every
+/// publish passes through, instead of at each body's return sites. One
+/// entrance, one exit, both owned by shared code.
 ///
-/// So the terminal stage is emitted HERE, at the one choke point every publish
-/// passes through, instead of at each body's return sites. One entrance, one
-/// exit, both owned by shared code.
-///
-/// This also makes a carve-out that used to be comment-enforced structural: a
-/// publish rejected as a duplicate must NOT emit `Failed`, because no work
-/// started and the in-flight publish owns the panel — marking it failed would
-/// mark the OTHER one failed. `try_acquire` returns `Err` before `body.await`,
-/// so a rejected duplicate returns above the emit and cannot reach it.
+/// This also makes structural a carve-out that matters: a publish rejected as
+/// a duplicate must NOT emit `Failed`, because no work started and the
+/// in-flight publish owns the panel — marking it failed would mark the OTHER
+/// one failed. `try_acquire` returns `Err` before `body.await`, so a rejected
+/// duplicate returns above the emit and cannot reach it.
 pub async fn with_publish_guard<T, F: std::future::Future<Output = Result<T, String>>>(
     sink: &Arc<dyn DeploySink>,
     body: F,

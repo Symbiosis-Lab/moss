@@ -1,4 +1,4 @@
-//! Phase 3: Stage 2 entry point for wikilink embed dispatch.
+//! Entry point for wikilink embed dispatch.
 //!
 //! This module is the sole dispatcher for `[[…]]` / `![[…]]` events
 //! emitted by pulldown-cmark with `Options::ENABLE_WIKILINKS`. This
@@ -7,37 +7,22 @@
 //! event, swallows the event range, and substitutes the renderer-
 //! produced HTML.
 //!
-//! # History
+//! Extension routing: three claims (the markdown/notebook/table pre-pass,
+//! [`synth_kind_for_ext`], and the image-extension check below) cover every
+//! extension that resolves to HTML or a marker; anything left over falls
+//! back to a plain file link (Obsidian parity). Anchor/query splitting on
+//! `dest_url` splits at whichever of `#` / `?` comes first. Width-token extraction uses
+//! [`crate::media::extract_width_from_alias`].
 //!
-//! - **PR1 (`c2fbdd593`)**: this module landed as a dormant API alongside
-//!   the dispatch arm shape in `transform_events` (also dormant — gated
-//!   by the absence of `ENABLE_WIKILINKS`).
-//! - **PR2 (this change)**: enabled `ENABLE_WIKILINKS` at every
-//!   `Parser::new_ext` site, wired the dispatcher closure into
-//!   `transform_events`, and deleted the prior Stage 1 string-rewriter
-//!   (`crates/moss-core/src/resolve/wikilinks.rs`, ~2155 LOC).
-//!
-//! # What this reuses
-//!
-//! - Extension routing: three earlier claims (the markdown/notebook/table
-//!   pre-pass, [`synth_kind_for_ext`], and the image-extension check below)
-//!   cover every extension that resolves to HTML or a marker; anything left
-//!   over falls back to a plain file link (Obsidian parity).
-//! - Anchor / query splitting on `dest_url` mirrors the pre-PR2
-//!   `wikilinks::parse_wikilink_inner`'s `#` / `?` priority logic.
-//! - Width-token extraction uses [`crate::media::extract_width_from_alias`].
-//!
-//! # What's new
-//!
-//! - [`parse_pothole_params`] reads the pothole text (the `bar` in
-//!   `[[foo|bar]]`) and classifies it as one of:
+//! [`parse_pothole_params`] reads the pothole text (the `bar` in
+//! `[[foo|bar]]`) and classifies it as one of:
 //!   * empty — no pothole
 //!   * width-token — Obsidian `[[img.jpg|400]]` shorthand
 //!   * params — `width=400 align=left` (every-token-K=V rule)
 //!   * alias — plain display text
 //!
-//!   The every-token-K=V rule (locked by arch review) prevents free-text
-//!   captions like `alt text=cover` from being mis-parsed as `text=cover`.
+//! The every-token-K=V rule prevents free-text captions like
+//! `alt text=cover` from being mis-parsed as `text=cover`.
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;

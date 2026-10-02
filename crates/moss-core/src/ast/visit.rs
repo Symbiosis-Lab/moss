@@ -325,9 +325,9 @@ pub fn has_scroll_row_recursive(doc: &Document) -> bool {
 /// Gates the `callouts` site stylesheet partial: a build whose every page
 /// answers `false` here never ships `assets/css/site/callouts.css`. The
 /// query is a lowering of the typed tree, never a scan of emitted HTML —
-/// see NORTH-STAR "parse once, lower to many".
+/// parse once, lower to many.
 ///
-/// # The four shapes it matches
+/// # Shapes beyond `Block::Callout`
 ///
 /// The gate is only as complete as the typed tree, and three documented paths
 /// reach a `class="callout"` element without a `Block::Callout`:

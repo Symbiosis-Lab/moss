@@ -1,17 +1,6 @@
 #!/usr/bin/env node
-// ratchet.mjs — shrink-only architecture ratchet for THIS tree (the public
-// open repo), ported from the desktop repo's scripts/ratchet.mjs.
+// ratchet.mjs — shrink-only architecture ratchet for this repo. Three rows:
 //
-// Once the desktop repo can no longer scan `open/crates` / `open/packages`
-// (the flip retires the submodule), the size/marker debt those roots used to
-// carry has to be ratcheted here instead, by this tree's own copy of the same
-// three rows. Only the machinery those three rows need is ported — the
-// desktop file also arms ~20 other rows (CSS selectors, raw `.emit(`, seam
-// width, moss-seta payment call sites, …) that have no meaning in this repo
-// and are not carried over.
-//
-// Row letters match the desktop file's own numbering, kept for continuity
-// with docs that already cite them:
 //   (a) prod_lines_per_file — files over 800 prod lines (Rust counted
 //                             #[cfg(test)]-aware) need a banded ceiling; any
 //                             file over 1000 additionally needs a written
@@ -23,14 +12,10 @@
 //   (e) mirror_markers      — "keep in sync" / "must match" / "mirror of"
 //                             comment markers
 //
-// Roots: the desktop rows scanned `open/crates` (+ `open/packages` for a/b
-// only — mirror_markers never scanned packages) as one of several
-// independently-checked roots. Here, with `open/` gone, that is simply this
-// repo's own `crates/*/src` and `packages/*/src` — the `open/` prefix
-// dropped, nothing else added: the desktop repo's other roots have no
-// equivalent here and stay in its own copies of these rows.
+// Roots: this repo's own `crates/*/src` and `packages/*/src` (rows a/b);
+// mirror_markers never scanned packages.
 //
-// Commands (same shape as desktop's):
+// Commands:
 //   node scripts/ratchet.mjs check           exit 0 green / 1 red
 //   node scripts/ratchet.mjs tighten [--path <file>]...   lower baseline; NEVER raises
 //   node scripts/ratchet.mjs accept <row> <reason> --path <file> [--path <file>]...
@@ -50,22 +35,14 @@
 //                                             an unregenerated block is red
 //
 // `--path` (repeatable) is required by `accept` for a per-path row (a, b): it
-// names exactly which entries the reason covers. A pathless accept that swept
-// every violation in a row used to be how this worked, and it is why two
-// landings (d16e5ff, 4fdb3cb) had to hand-edit their accepts[] entries after
-// the fact — a reason written for one file's growth had silently also
-// accepted every other over-baseline file's growth in the same row. A named
-// path that is not over its baseline is an error, and nothing is written.
-// Paths are spelled as in the baseline (root-relative, `/`-separated); `./`
-// and absolute spellings under --root are folded to it.
+// names exactly which entries the reason covers, so a reason written for one
+// file's growth cannot silently accept another file's growth in the same row.
+// A named path that is not over its baseline is an error, and nothing is
+// written. Paths are spelled as in the baseline (root-relative,
+// `/`-separated); `./` and absolute spellings under --root are folded to it.
 //
 // Row (a) values are CEILINGS, not raw counts: always a multiple of 100.
-// `accept`/`tighten` compute it as `ceil(lines / 100) * 100`. This absorbed
-// the accepts[] log that used to live in the baseline JSON (below) — row (a)
-// was raised 577 times in 70 days and never refused once, and the array grew
-// from 276 to ~10,000 lines doing nothing but recording that. The pressure
-// row (a) applies is real (61 files over 800 lines fell to 35 under it); the
-// per-raise JSON bookkeeping was the part not worth its cost.
+// `accept`/`tighten` compute it as `ceil(lines / 100) * 100`.
 //
 // A banded ceiling only ever says "this file may not grow past here" — it
 // never says anyone looked at a file that is already over 1000 lines and
@@ -81,12 +58,9 @@
 // "Known debt" list is generated from this map (`docs` command, below) so it
 // reports exactly what the baseline says, never a hand-copied snapshot of it.
 //
-// Baseline: scripts/ratchet-baseline.open.json, next to this script. Its
-// `accepts[]` array is retired as of this comment — git history keeps every
-// record already in it (last commit where the array is still written:
-// 93a9f1030bee6c08c3136c24970795e40e913058); `accept` no longer appends to it,
-// and the reason for a raise lives in the commit message's trailer instead
-// (see `verify-accepts` above).
+// Baseline: scripts/ratchet-baseline.open.json, next to this script. The
+// reason for a raise lives in the commit message's trailer (see
+// `verify-accepts` above).
 //
 // A reason `accept`/`verify-accepts` will actually take must clear
 // `reasonIsWeak`'s floor: >=15 characters, and not just the row name, the
@@ -99,22 +73,21 @@
 // branch, and the auto-generated "Merge branch …" message is never the
 // place to re-justify it. This machinery (the constants and every function
 // from `SCALAR_TRAILER_KEY` through `verifyAccepts`, plus `isMidMerge` and
-// `baselineFileNames`) is copied verbatim from the private repo's own copy
-// of this script (2026-09-21 joint review), so an agent moving between the
-// two repos meets one tool.
+// `baselineFileNames`) is shared with the other repos' copies of this script, so an
+// agent moving between repos meets one tool.
 //
 // Self-checks (run at the start of every `check`; any failure = red):
 //   1. every baseline row has a disposition, matches the row table below;
 //   2. stale baseline entries (path no longer on disk) go red — fix with `tighten`;
 //   2b. children_per_dir: any dir at/over 30 direct children needs a written
 //       reason in the baseline's children_per_dir.oversized{} (NORTH-STAR's
-//       "mandatory split" line) — ported because it is row (b)'s own machinery,
-//       not a separate row.
+//       "mandatory split" line) — it is row (b)'s own machinery, not a
+//       separate row.
 //   2c. prod_lines_per_file: any file over 1000 prod lines needs a written
-//       reason in the baseline's prod_lines_per_file.oversized{} — ported
-//       from row (b)'s same-shaped check (2b) rather than a fresh one. An
-//       oversized{} entry whose file has dropped to 1000 lines or under, or
-//       no longer exists, is reported stale — fix by deleting the entry.
+//       reason in the baseline's prod_lines_per_file.oversized{}, the same
+//       shape as check 2b. An oversized{} entry whose file has dropped to
+//       1000 lines or under, or no longer exists, is reported stale — fix by
+//       deleting the entry.
 //   3. row (a) stale-high: a baseline ceiling >=100 above a file's actual
 //      current lines means banding headroom has drifted into unreviewed
 //      slack — fix with `tighten`. A gap under 100 is ordinary banding
@@ -125,18 +98,15 @@
 //      ARCHITECTURE.md next to this script's repo root (e.g. the test
 //      suite's throwaway trees) — nothing to check against.
 //
-// Counting notes carried over verbatim from the desktop file:
+// Counting notes:
 //   - Rust prod lines = total lines minus brace-matched `#[cfg(test)]`-attributed
 //     items. Braces counted per line, best-effort (no string-literal parsing).
 //   - mirror_markers is a substring count; comment mentions count. That is a
 //     feature for tripwires (forces a look), not a parser bug.
 //   - children_per_dir ignores dotfiles, __tests__ dirs and *.test.ts files.
 //
-// Row (b)'s append-only-directory exemption is NOT implemented here: this
-// row only ever scans `crates/*/src` and `packages/*/src` (see the roots
-// below), and neither is an append-only directory, so this baseline has
-// never had an entry for the exemption to apply to.
-
+// Row (b)'s append-only-directory exemption is NOT implemented here: neither
+// scanned root is an append-only directory.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

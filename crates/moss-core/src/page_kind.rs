@@ -18,11 +18,8 @@
 //!
 //! # Why an enum, not a bool
 //!
-//! The previous model used `is_index: bool` and inferred the rest from
-//! context. That made the children-listing filter impossible to get right.
-//! A third `Asset` variant (synthetic per-image pages) existed until the
-//! image-as-page feature was removed in 2026-07; nothing produced it, so it
-//! was dropped rather than left as an unreachable state.
+//! `is_index: bool` and inferring the rest from context made the
+//! children-listing filter impossible to get right.
 
 use serde::{Deserialize, Serialize};
 

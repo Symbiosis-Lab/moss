@@ -1,13 +1,10 @@
 //! 3D model-viewer embed synthesizer.
 //!
-//! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
-//! source URL, and an [`AssetSnapshot`]. Emits final `<model-viewer>` HTML —
-//! preserving the shape moss-core's pre-Phase-0 3D-model renderer used to
-//! emit before Phase 0's Stage 1 migration (that renderer's own `render()`
-//! was unreachable dead code by the time it was removed; the byte shape
-//! lives on here, which is the actual live path).
+//! Receives a [`TitleParams`] (already parsed from the wikilink pothole),
+//! the source URL, and an [`AssetSnapshot`]. Emits final `<model-viewer>`
+//! HTML.
 //!
-//! Source byte shape (pre-Phase-0, see commit `689d975e9^`):
+//! Output byte shape:
 //!
 //! ```text
 //! <model-viewer class="moss-embed" data-type="3d"{data-width} src="{src}"
@@ -20,8 +17,8 @@
 //! `{style}` is ` style="width:W"` or ` style="width:W;height:H"` when
 //! sizing params are present, empty otherwise.
 //!
-//! Stage 2 reads the boolean flags (`camera-controls`, `auto-rotate`, `ar`)
-//! from [`TitleParams`] — when the wikilink grammar surfaces them as
+//! The boolean flags (`camera-controls`, `auto-rotate`, `ar`) come from
+//! [`TitleParams`] — when the wikilink grammar surfaces them as
 //! `param=true` they appear as bare attributes on the element.
 
 use crate::asset_snapshot::AssetSnapshot;

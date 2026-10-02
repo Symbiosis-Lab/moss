@@ -130,12 +130,10 @@ pub fn to_webp(source: &str) -> String {
 /// (png/jpg/jpeg/webp). Single source of truth for the ladder-membership
 /// **GATE** — the "does this extension take part at all?" question, distinct
 /// from the "which rung WIDTHS exist?" question [`ladder_rungs`] answers (whose
-/// own doc enumerates the ladder-DERIVATION sites). Phase B (Task 12) lifted
-/// webp's participation by editing ONLY this predicate, so every gate site
-/// picked up webp in lockstep.
+/// own doc enumerates the ladder-DERIVATION sites). Changing the predicate
+/// changes every gate site in lockstep.
 ///
-/// GATE SITES — the six `is_ladder_source_ext(` production callers
-/// (grep-verified 2026-07-23), each deciding png/jpg/jpeg/webp participation:
+/// GATE SITES — the six `is_ladder_source_ext(` production callers, each deciding png/jpg/jpeg/webp participation:
 /// 1. **emission** — `is_raster_original` (`render/image.rs`);
 /// 2. **registration** — the rung loop in `generate_blocking_content`
 ///    (`build/render/blocking.rs`);
@@ -148,8 +146,7 @@ pub fn to_webp(source: &str) -> String {
 /// 6. **`should_skip`'s AlreadySmall carve-out** — `raster_with_picture`
 ///    (`build/media/image.rs`).
 ///
-/// These six are the "six census sites" named in the design doc and
-/// MIGRATION-STATE. NOTE: `encode_rungs` is NOT a gate site — it is a
+/// NOTE: `encode_rungs` is NOT a gate site — it is a
 /// [`ladder_rungs`] DERIVATION consumer (it computes the rung SET, it does not
 /// gate on extension). A maintainer adding a new participating format updates
 /// THIS list; one adding a rung-set derivation updates [`ladder_rungs`]' census.
@@ -174,7 +171,7 @@ pub fn to_webp(source: &str) -> String {
 /// # use moss_core::asset_paths::is_ladder_source_ext;
 /// assert!(is_ladder_source_ext("png"));
 /// assert!(is_ladder_source_ext("JPG"));
-/// assert!(is_ladder_source_ext("webp")); // joined the ladder in Phase B (Task 12)
+/// assert!(is_ladder_source_ext("webp")); // webp participates in the ladder
 /// ```
 pub fn is_ladder_source_ext(ext: &str) -> bool {
     matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
@@ -337,7 +334,7 @@ fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
 /// Which ladder rungs exist for a source of `natural_w`×`natural_h` px.
 ///
 /// DETERMINISTIC-AGREEMENT CONTRACT — the ladder-DERIVATION census: the
-/// `ladder_rungs(` production callers (grep-verified 2026-07-23). Keep this
+/// `ladder_rungs(` production callers. Keep this
 /// list current; every set-agreement site derives ladder membership from the
 /// same scan-derived inputs. These answer "which rung WIDTHS exist?"; the
 /// separate participation GATE ("does this extension take part at all?") is the
@@ -350,8 +347,7 @@ fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
 ///    candidates appear in HTML;
 /// 2. **registration** — blocking.rs's rung loop promises each rung URL via
 ///    `set_source_passthrough` + `set_pending`;
-/// 3. **encode** — `encode_rungs` (build/media/rungs.rs, extracted from image.rs
-///    at Task 10.5) derives the same ladder from oriented dims on the
+/// 3. **encode** — `encode_rungs` (build/media/rungs.rs) derives the same ladder from oriented dims on the
 ///    full-encode and warm-cache paths; `convert_single_image`'s `ladder_len`
 ///    (build/media/image.rs) reads the same call to keep the oriented original
 ///    alive for the rung re-encode;
@@ -370,8 +366,7 @@ fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
 ///
 /// A rung is emitted in HTML iff it is registered iff it is encoded. Never
 /// add an input here that one of these sites cannot supply (e.g. encode
-/// outcomes, cache state) — that is the parallel-oracle bug class deleted
-/// 2026-05-20 (see build/media/image.rs:297-310).
+/// outcomes, cache state) — that is the parallel-oracle bug class.
 ///
 /// EXIF-ORIENTATION AGREEMENT (canonical; the pipeline sites back-reference
 /// here). The "same scan-derived dims on every site" premise holds
@@ -381,11 +376,9 @@ fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
 /// orientation through the SAME `read_exif_orientation` the encode side's
 /// `decode_oriented` uses — so the dims scan feeds emission/registration/sweep/
 /// heal equal encode's oriented dims byte-for-byte and the two ladders cannot
-/// diverge. (Before the 2026-07-23 scan-swap fix — design follow-up #1 — scan's
-/// orientation read was JPEG-GATED, so an EXIF-rotated png/webp stored the
-/// UNswapped header dims and could strand an emitted-but-never-encoded rung →
-/// publish-404, preview degrading to the placeholder via the unresolved-promise
-/// sweep.) Do NOT re-gate scan's swap to jpeg-only, and do NOT "fix" any future
+/// diverge. Gating that read to jpeg would let an EXIF-rotated png/webp store
+/// the UNswapped header dims and strand an emitted-but-never-encoded rung →
+/// publish-404. Do NOT re-gate scan's swap to jpeg-only, and do NOT "fix" any future
 /// divergence by narrowing the encode side: the encoder strips EXIF, so a base
 /// that isn't oriented at encode time ships stored sideways (visibly rotated).
 ///
@@ -401,7 +394,7 @@ fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
 /// through the same encode path and inherit the same flattening —
 /// consistent by construction, no 404 risk.
 ///
-/// ANIMATED-FLAG AGREEMENT (Phase B, Task 12). Only ONE of the five sites
+/// ANIMATED-FLAG AGREEMENT. Only ONE of the five sites
 /// passes a non-`false` flag: **emission** passes the scan-derived
 /// `assets.is_animated(src)` for webp sources (an animated webp → empty
 /// ladder → bare `<img>`, no srcset). The four pipeline sites (registration,
@@ -423,7 +416,7 @@ fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
 /// input to this function — e.g. copying the Y1 sized-raster APNG
 /// verbatim-keep guard (build/media/image.rs ~line 830) onto rung encodes —
 /// would create emitted-but-never-encoded rungs, i.e. the non-recoverable
-/// chosen-`<source>` 404. Task 5 must NOT copy that guard.
+/// chosen-`<source>` 404. Do NOT copy that guard.
 ///
 /// A rung is a WIDTH contract (`asset_paths::to_webp_rung`'s `wN`, checked
 /// exactly by `validate_webp_output`), so its OTHER edge is always
@@ -556,8 +549,7 @@ pub const LADDER_MIN_RUNG_SPACING: f64 = 1.5;
 ///
 /// The **top rung is also the delivery ceiling**. There is deliberately no
 /// second `max_video_bitrate_kbps` knob beside this table: two independent
-/// statements of how good the best version gets is the overlap that step 1 of
-/// the archive doc deleted, and re-introducing it here would rebuild it. The
+/// statements of how good the best version gets would overlap. The
 /// hosting-budget knobs that narrow a source's ladder (`max_size_mb`,
 /// `hls_max_file_mb`) pick a LOWER rung off this table; the HLS ladder's own
 /// source-bitrate clamp ([`video_ladder_rungs_within`]) goes one step further
@@ -653,9 +645,8 @@ impl SourceBitrate {
 ///    regardless — and, being the only rung left, a caller reads that result
 ///    the same way it already reads an empty-but-for-width one: not a
 ///    ladder, just the progressive file.
-/// 2. **The per-file byte budget**, exactly as before this clamp existed,
-///    except the check now runs against each rung's EFFECTIVE bitrate (the
-///    clamp above, when one applied) rather than the table's — that is what
+/// 2. **The per-file byte budget**, checked against each rung's EFFECTIVE
+///    bitrate (the clamp above, when one applied) rather than the table's — that is what
 ///    ffmpeg will actually be asked for, and so what the file will actually
 ///    weigh. A rung the table's own bitrate would have pushed over budget can
 ///    still fit once clamped.
@@ -669,8 +660,7 @@ impl SourceBitrate {
 /// [`video_ladder_audio_kbps_is_non_decreasing`]) — and clamping only ever
 /// lowers a rung's effective bitrate, so that ordering survives the clamp too.
 ///
-/// `source_bitrate` skips the clamp entirely — today's pre-clamp behavior —
-/// only when [`SourceBitrate::for_clamp`] finds neither figure known.
+/// `source_bitrate` skips the clamp entirely only when [`SourceBitrate::for_clamp`] finds neither figure known.
 ///
 /// Returns an owned `Vec`, not a `&'static` slice: a clamped rung's bitrate is
 /// not one of the table's own values, so the result is no longer a literal
@@ -681,8 +671,8 @@ impl SourceBitrate {
 ///
 /// Never empty, for the same reason [`video_ladder_rungs`] never is: an
 /// over-budget or over-bitrate bottom rung still ships, because a file too
-/// big or too soft beats a video nobody can watch. No `has_audio` input,
-/// unchanged from before this clamp: a rung's audio check is implied by its
+/// big or too soft beats a video nobody can watch. No `has_audio` input:
+/// a rung's audio check is implied by its
 /// video check ([`video_ladder_video_kbps_exceeds_audio_kbps`]), and
 /// clamping — which only ever lowers `video_kbps`, never `audio_kbps` —
 /// cannot undo that.

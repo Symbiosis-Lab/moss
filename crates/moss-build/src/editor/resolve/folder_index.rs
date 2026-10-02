@@ -5,8 +5,8 @@
 //!
 //! The build decides `![[/X/]]` in URL space: `BuildFolderIndex::
 //! dir_has_markdown_index` asks whether any document's `url_path` is
-//! `slug(X)/index.html`. That document set has two halves, and the editor's old
-//! filesystem answer could see neither:
+//! `slug(X)/index.html`. That document set has two halves, and a filesystem
+//! answer can see neither:
 //!
 //! 1. **Source-backed folder-index docs.** `評選/評選.md` carrying `url: awards`
 //!    in its frontmatter is served at `awards/index.html`. `![[/awards/]]`

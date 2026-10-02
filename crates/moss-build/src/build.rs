@@ -1760,22 +1760,17 @@ pub(crate) struct SealGuards {
 /// stale link to a deleted page, an external host, a deliberately unbuilt
 /// draft, an optional variant nothing ever dispatched, or a permanently
 /// failed encode (which drops out of `pending_keys()` the moment it fails) —
-/// stays advisory-only, exactly as it already was; see the false-refusal
-/// cases pinned in `link_audit_tests.rs`.
+/// stays advisory-only; see the false-refusal cases pinned in
+/// `link_audit_tests.rs`.
 ///
-/// This closes a race rather than narrowing it: `FolderSession::has_ui_bound`
-/// / `wait_for_in_flight_work` (the desktop shell's own build-shell module)
-/// can still observe "no in-flight work" in
-/// the gap between a video's own `end_ui_bound()` and the follow-up
-/// rebuild's admission — that gap is unaffected by this change. What changes
-/// is that a publish landing in it can no longer ship a page whose asset it
-/// promised and did not deliver, because the promise recorded here outlives
-/// the counter's timing. `has_ui_bound`/`wait_for_in_flight_work` keep their
-/// job as a UX/perf wait (skip a redundant upload, show the "waiting for
-/// background tasks" spinner) for three consumers this change does not touch
-/// and does not need to: the window-close handler, the CLI's post-build wait
-/// (`build/cli_output.rs`'s `finish_cli_build`), and the preview server's
-/// own 600s wait (desktop `preview/commands.rs`).
+/// `FolderSession::has_ui_bound` / `wait_for_in_flight_work` can observe "no
+/// in-flight work" in the gap between a video's own `end_ui_bound()` and the
+/// follow-up rebuild's admission. A publish landing in that gap still cannot
+/// ship a page whose asset it promised and did not deliver, because the promise
+/// recorded here outlives the counter's timing. Those two keep their job as a
+/// UX/perf wait (skip a redundant upload, show the "waiting for background
+/// tasks" spinner) for the window-close handler, the CLI's post-build wait
+/// (`finish_cli_build`), and the preview server's wait.
 fn record_promise_gate(
     stage_dir: &std::path::Path,
     sealed: &crate::build::manifest::SealedManifest,

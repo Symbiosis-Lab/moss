@@ -45,8 +45,8 @@ impl MossSetaClient {
     /// create time, so per-chunk PATCH and complete POST do not repeat it.
     ///
     /// Before creating a session it asks the server whether it already holds
-    /// one for this file and generation, and resumes it — invariant I2, "every
-    /// attempt strictly advances". Costs one small GET per chunked file, which
+    /// one for this file and generation, and resumes it, so every attempt
+    /// strictly advances. Costs one small GET per chunked file, which
     /// is cheap against a file large enough to be chunked at all.
     pub async fn upload_file_chunked(
         &self,

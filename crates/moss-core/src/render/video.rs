@@ -1,11 +1,10 @@
 //! Video embed synthesizer.
 //!
-//! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
+//! Receives a [`TitleParams`] (already parsed from the wikilink pothole), the
 //! source URL, and an [`AssetSnapshot`]. Emits final `<video>` HTML at the
-//! typed-data boundary — including every attribute the legacy
-//! `add_video_placeholder_attributes` regex used to inject.
+//! typed-data boundary, including every placeholder attribute.
 //!
-//! # Authoritative byte shape (Phase 2E parity)
+//! # Authoritative byte shape
 //!
 //! ```html
 //! <video class="moss-embed moss-embed-video" src="URL.mp4"
@@ -15,13 +14,9 @@
 //! ```
 //!
 //! - Single `src=` attribute on `<video>` (no nested `<source>` child) —
-//!   load-bearing for the surviving `add_video_placeholder_attributes`
-//!   regex pass (preserved until PR3 of Phase 2E). The regex's skip guard
-//!   at `placeholder.rs:435` triggers on `data-placeholder-src`, making
-//!   the post-pass a no-op for synthesizer-emitted videos.
-//!   Source: moss-core's pre-Phase-0 video renderer (that renderer's own
-//!   `render()` was unreachable dead code by the time it was removed; the
-//!   byte shape lives on here, which is the actual live path).
+//!   load-bearing for the `add_video_placeholder_attributes` regex pass,
+//!   whose skip guard triggers on `data-placeholder-src`, making the
+//!   post-pass a no-op for synthesizer-emitted videos.
 //! - `controls playsinline preload="metadata"` emitted on the **default**
 //!   branch. `playsinline` keeps playback in the page on iOS instead of
 //!   handing the video to the fullscreen AVKit player; both branches carry
@@ -42,23 +37,17 @@
 //!   The iframe-bridge listens for `moss-asset-ready` and swaps `poster`
 //!   in when the thumbnail lands.
 //!
-//! # `.mov` → `.mp4` source-extension swap (moved from placeholder.rs)
+//! # `.mov` → `.mp4` source-extension swap
 //!
 //! moss converts `.mov` source files to `.mp4` during build, so a raw
-//! `.mov` reference in the rendered HTML would 404. Pre-Phase-0 this swap
-//! lived in `placeholder.rs::add_video_placeholder_attributes` as a regex
-//! post-pass. Phase 1's typed-data-boundary architecture moves it here:
-//! the synthesizer is the single source of truth for the URL that ends up
-//! in `<video src=>`.
+//! `.mov` reference in the rendered HTML would 404. The synthesizer is the
+//! single source of truth for the URL that ends up in `<video src=>`.
 //!
 //! # Multi-source HLS form
 //!
 //! This synthesizer emits `<video><source>…</video>` when — and only when —
-//! the snapshot says an HLS ladder is registered for the source. It was
-//! previously documented as never emitting that shape, with the note that a
-//! callsite wanting it "must NOT route through this synthesizer". Extending
-//! the contract here rather than adding a second emitter is the deliberate
-//! choice: `synthesize_image_html` already owns both the bare `<img>` and the
+//! the snapshot says an HLS ladder is registered for the source. There is
+//! deliberately no second emitter: `synthesize_image_html` already owns both the bare `<img>` and the
 //! multi-source `<picture>` form and picks between them on the same snapshot,
 //! and a second video emitter would mean two owners of `poster`, the sizing
 //! rules, the ambient-loop branch and the `.mov` swap — four things that have

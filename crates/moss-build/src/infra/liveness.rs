@@ -3,12 +3,9 @@
 //! # Why this exists
 //!
 //! Invariant **I1**: *no deadline in the publish path may be a function of the
-//! total amount of work.* The deadline it replaces, `DEPLOY_TIMEOUT = 900 s`, was exactly
-//! that: on 2026-08-04 a tester's 57.66 MB site over a ~50 KB/s uplink needed
-//! ~1142 s of pure transfer, so the publish was impossible *before it started*
-//! and was killed at second 900 while transferring steadily. Its own doc comment
-//! said its purpose was to "fire on a stall"; this module implements that
-//! literally instead of approximating it with a total-work budget.
+//! total amount of work.* A fixed total-work deadline makes a large site on a
+//! slow uplink impossible *before it starts*, and kills it mid-transfer while it
+//! is still making steady progress. This module fires on a stall instead.
 //!
 //! # The shape
 //!
@@ -37,9 +34,8 @@
 //! kinds instead of accepting any `MossEvent`.
 //!
 //! The clock lives here rather than app-side because the seta client bumps it
-//! from every retry boundary and every uploaded chunk, and that client crossed
-//! over. Only the Tauri event listener that feeds it build progress
-//! stayed behind, in `deploy::activity`.
+//! from every retry boundary and every uploaded chunk. Only the Tauri event
+//! listener that feeds it build progress lives app-side, in `deploy::activity`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;

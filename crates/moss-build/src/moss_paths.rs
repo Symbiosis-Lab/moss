@@ -67,10 +67,10 @@
 //!
 //! **Cloud-sync friendly, minus the regenerable parts.** Config, identity,
 //! plugins and `data/` sync via iCloud, Dropbox, or Google Drive — that is the
-//! portability mechanism across machines. `build/` is asked not to: on one
-//! iCloud vault it was 12.3 GB of a 15.6 GB folder, produced ~1700 conflict
-//! copies, and holds the bytes "optimize storage" zeroes by shared inode (the
-//! 0-byte-stub class `hardlink_invariant_test` guards). The ask is the
+//! portability mechanism across machines. `build/` is asked not to: left
+//! syncing, it can dominate the folder, produce many conflict copies, and hold
+//! the bytes "optimize storage" zeroes by shared inode (the 0-byte-stub class
+//! `hardlink_invariant_test` guards). The ask is the
 //! `com.apple.fileprovider.ignore#P` xattr, set at build start by
 //! `exclude_dirs_from_cloud_sync` — and it is only an ask. File Provider
 //! extensions (Google Drive, Dropbox) read it as "do not sync". iCloud Drive
@@ -81,8 +81,8 @@
 //! either direction. So the tree is split by what "download and wait" can
 //! mean. `cache/` — the content-addressed store, `objects/` and
 //! `transforms/` — is the same bytes on every machine and every blob carries
-//! its checksum, so it syncs with the folder and is waited for (the
-//! shared-cache amendment; `ObjectStore::ready_blob`). Everything else lives
+//! its checksum, so it syncs with the folder and is waited for
+//! (`ObjectStore::ready_blob`). Everything else lives
 //! under `build.nosync/` — the suffix iCloud honours unconditionally — is
 //! marked for File Provider as well, and is never relied on to be excluded:
 //! the build holds that root by a directory handle
@@ -130,7 +130,7 @@
 //!
 //! The render phase emits `/_moss/theme/style.css` and `/_moss/theme/script.js`
 //! from the two canonical entry points; everything else in `theme/` mirrors
-//! through unchanged. There is no longer a reserved-name skip list.
+//! through unchanged.
 //!
 //! ## Plugin Filesystem Access
 //!
@@ -639,27 +639,19 @@ impl MossPaths {
     ///
     /// Safe to call multiple times — uses `create_dir_all` internally.
     ///
-    /// Deliberately `cfg(test)`: production never called it. The build creates
+    /// Deliberately `cfg(test)`: production never calls it. The build creates
     /// what it needs where it needs it, and the owner of site-output writes is
-    /// `build::io_utils` (atomic temp+rename). A per-build path-claim registry
-    /// (`StageWriter`, M6b) was proposed alongside it but was never
-    /// built; the correctness gap it was later invoked for (a concurrent
-    /// build racing the shared staging tree between seal and ship) shipped
-    /// instead as content-addressed manifest entries.
-    /// Wiring this up instead would install a second, weaker writer for a
-    /// concern that already has a designated owner — and it failed the
-    /// three-question gate outright at zero production callers.
+    /// `build::io_utils` (atomic temp+rename).
     ///
-    /// Ten tests across four modules use it to stand up a `.moss` skeleton
+    /// Tests across several modules use it to stand up a `.moss` skeleton
     /// before creating generations, so it earns its keep as a fixture; it just
     /// should not pretend to be production API.
     ///
-    /// Seven of those ten now live in the app crate, on the far side of the
-    /// crate split, and a plain `#[cfg(test)]` is invisible to them — it arms
-    /// only while *this* crate's own tests compile. The `test-fixtures` feature
-    /// is what carries the gate across the crate line: the desktop app enables it
-    /// from `[dev-dependencies]` only, so a production build still cannot see
-    /// this method and the argument above is unchanged.
+    /// Some of those tests live in the app crate, where a plain `#[cfg(test)]`
+    /// is invisible — it arms only while *this* crate's own tests compile. The
+    /// `test-fixtures` feature carries the gate across the crate line: the
+    /// desktop app enables it from `[dev-dependencies]` only, so a production
+    /// build still cannot see this method.
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
         let dirs = [

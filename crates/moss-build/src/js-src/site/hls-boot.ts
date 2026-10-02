@@ -19,18 +19,11 @@
  * versions that then fail to play, so trusting it first would leave those
  * viewers stalled with a player available and unused.
  *
- * **What that costs, measured.** The chunk is 183 kb brotli / 187 kb gzip off
- * the wire (2026-08-30, `scratch-pad.mosspub.com`). An iPhone still pays none
- * of it — no MSE, so it takes the native path — but a browser that *does* take
- * this path on a slow link pays it before the first frame: driven under CDP at
- * 120 kbps, Chromium reached a first frame at 33.7 s where the same ladder on
- * iOS native showed one at 2.6 s. Roughly twelve of those seconds are this
- * file.
- *
- * The ~50 kb this comment used to claim was hls.js's *light* build, which the
- * ladder's two audio rendition groups ruled out: light sets `USE_ALT_AUDIO =
+ * **Cost.** The chunk is ~185 kb over the wire. A browser with native HLS pays
+ * none of it, but one that takes this path pays it before the first frame.
+ * It is hls.js's full build, not the *light* one: light sets `USE_ALT_AUDIO =
  * false` and cannot resolve an `EXT-X-MEDIA` group, so it would play the
- * ladder silently. The number outlived the plan it came from.
+ * ladder's two audio rendition groups silently.
  */
 
 const HLS_TYPE = "application/vnd.apple.mpegurl";

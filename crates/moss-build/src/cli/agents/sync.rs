@@ -1,23 +1,14 @@
-//! Keep a project's coding-agent guidance current, with no install step.
-//!
-//! ## The journey this replaces
-//!
-//! Before: open the launcher, notice a hint, click "Connect your AI agent",
-//! approve a Touch ID prompt for a `/usr/local/bin` symlink, and receive a copy
-//! of the skill in `~/.claude/skills/moss/` — machine-scoped, so it drifts from
-//! the binary the moment either updates, and invisible to any agent that has no
-//! skill mechanism. Now: nothing. Open the folder in whatever agent you use and
-//! it is already oriented.
+//! Keep a project's coding-agent guidance current, with no install step: open
+//! the folder in whatever agent you use and it is already oriented.
 //!
 //! ## Where things go, and why there
 //!
 //! Every path here is either the agent's own config directory or moss's. None
 //! of it is the author's prose — the site folder is their writing, and moss
 //! keeps its state in `.moss/` precisely so a folder of markdown stays a folder
-//! of markdown. moss no longer writes anything into the author's folder itself
-//! — the root `AGENTS.md` pointer this module used to write there was retired
-//! in favor of a one-line human prompt pointing an agent at
-//! `.moss/agents/SKILL.md` directly (see `docs/authoring/agent-prompts.md`).
+//! of markdown. moss writes nothing into the author's folder itself; a
+//! one-line human prompt points an agent at `.moss/agents/SKILL.md` directly
+//! (see `docs/authoring/agent-prompts.md`).
 //!
 //! | target | when | why there |
 //! |---|---|---|
@@ -32,11 +23,9 @@
 //! a moss other than the one that wrote it. See
 //! [`skill_package::render_pointer`] for what that buys and what it costs.
 //!
-//! The stamped copy this replaces was already refreshed on every full build, so
-//! it drifted only in the window between a moss upgrade and the next build —
-//! but a copy that [`write_managed`] declines to refresh is frozen permanently
-//! and announces that to nobody, and every file written by a moss older than
-//! the stamp itself is in exactly that state.
+//! A copy that [`write_managed`] declines to refresh is frozen permanently and
+//! announces that to nobody; every file written by a moss older than the stamp
+//! itself is in exactly that state.
 //!
 //! Gemini CLI is **not** covered: its default context filename is `GEMINI.md`,
 //! and moss does not write one. Adding it would mean a second file in the
@@ -73,14 +62,11 @@
 //!
 //! ## Nothing here deletes
 //!
-//! This module has never removed a file, and that still matters even though it
-//! no longer writes into the author's folder: an `AGENTS.md` moss wrote at the
-//! root of a site folder under the old, now-retired setting (shipped in
-//! v0.8.0) is left exactly where it is. moss has no way to know whether an
-//! agent in that folder still depends on it, and `remove_file` has no undo —
-//! no trash, no backup, no diff to review. Every data-loss finding across two
-//! independent reviews of this module was a removal, and each fix was another
-//! rule about when deleting is safe. Not deleting has no such rules.
+//! This module never removes a file: an `AGENTS.md` moss wrote at the root of a
+//! site folder under a retired setting is left exactly where it is. moss has no
+//! way to know whether an agent in that folder still depends on it, and
+//! `remove_file` has no undo — no trash, no backup, no diff to review. Not
+//! deleting has no such failure mode.
 
 use std::path::{Path, PathBuf};
 
@@ -298,8 +284,8 @@ fn is_inside(root: &Path, path: &Path) -> bool {
 /// absolute path of the binary that wrote it ([`cli_binding`]), so committing
 /// one commits a path that exists on exactly one machine, and a second checkout
 /// gets guidance pointing at a moss that was never there. Un-ignored, `git
-/// status` also gained six untracked files nobody created, which `git add -A`
-/// swept straight in.
+/// status` also shows untracked files nobody created, which `git add -A`
+/// sweeps straight in.
 ///
 /// moss never touches the project's root `.gitignore` — a folder of markdown
 /// may not even be a repo, and if it is, that file is the author's. It writes
@@ -313,11 +299,11 @@ fn is_inside(root: &Path, path: &Path) -> bool {
 /// the right thing for everyone else on the repo.
 /// Whether `existing` already keeps `pattern` out of commits.
 ///
-/// Same flaw as `.moss/.gitignore` had (`infra::moss_paths::already_excluded`):
-/// exact string equality does not recognize the user's own, broader spelling of
-/// the rule, so moss appended a redundant line to a file the author maintains —
-/// `.cursor/rules/.gitignore` is theirs, not moss's. A bare `*` already ignores
-/// everything here, and a leading `/` is the same pattern anchored.
+/// Exact string equality would not recognize the user's own, broader spelling of
+/// the rule, and moss would append a redundant line to a file the author
+/// maintains (`.cursor/rules/.gitignore` is theirs, not moss's). A bare `*`
+/// already ignores everything here, and a leading `/` is the same pattern
+/// anchored.
 ///
 /// Comments and `!` lines are skipped. Wildcards beyond a bare `*` are not
 /// matched — moss carries no glob matcher, and the conservative answer appends
@@ -405,8 +391,7 @@ fn write_managed(root: &Path, path: &Path, content: &str) -> Result<Option<bool>
 /// `/…/moss (deleted)` into every project's pointer file — a path an agent
 /// cannot execute, embedded in the one file whose entire job is naming a path
 /// an agent can execute. Checking `exists()` covers both spellings of gone
-/// without having to enumerate them. Found by an agent-surface audit,
-/// 2026-08-06.
+/// without having to enumerate them.
 pub fn bundled_cli_path() -> PathBuf {
     usable_cli_path(std::env::current_exe().ok())
 }

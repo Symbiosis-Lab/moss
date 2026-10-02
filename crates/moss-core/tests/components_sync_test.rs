@@ -1,30 +1,20 @@
 //! Source-scanner sync tests for the moss component contract, open half.
 //!
-//! Open-half twin of three checks in the desktop app's
-//! `components_sync_test.rs`:
+//! Checks that only need files inside this repository (site.css,
+//! `COMPONENTS`, `CUSTOM_PROPS`, `tokens.json`, and this crate's own source
+//! tree) belong here.
 //!
-//! 1. `css_selectors_match_components_table` — desktop's version "only
-//!    touches open files (site.css + `COMPONENTS`) and could move wholesale."
-//!    Moved here outright.
-//! 2. `emitter_classes_match_components_table` — desktop's `EMITTER_ROOTS`
-//!    scans its own build tree and `open/crates/moss-core/src`
-//!    independently for class-emission call sites against the same
-//!    `COMPONENTS` table. This is the moss-core half; the desktop half keeps
-//!    scanning its own build tree.
-//! 3. `every_escape_hatch_is_declared` — custom_props.rs's own doc comment
-//!    and the module doc on `components_sync_test.rs` both referred to this
-//!    test as already enforced "in the desktop app's `components_sync_test.rs`",
-//!    but it only reads open files (every shipped `.css` under
-//!    `moss-build/src/assets/css`, `CUSTOM_PROPS`, `tokens.json`) and had
-//!    never actually been written anywhere — a hook nothing declares was
-//!    exactly the failure the table exists to catch, and nothing was
-//!    catching it. Written here rather than assumed present, 2026-09-29.
+//! 1. `css_selectors_match_components_table`.
+//! 2. `emitter_classes_match_components_table` — scans
+//!    `crates/moss-core/src` for class-emission call sites against the
+//!    `COMPONENTS` table.
+//! 3. `every_escape_hatch_is_declared` — reads every shipped `.css` under
+//!    `moss-build/src/assets/css` plus `CUSTOM_PROPS` and `tokens.json`.
 //!
-//! Not carried here: `site_js_selectors_match_components_table` (reads
-//! the frontend site tree, a desktop-tree path outside this row's classification),
-//! `every_declared_custom_prop_is_read` / `nav_width_is_a_custom_prop_not_a_token`
-//! (not named by this row — though they also only read open files, they are
-//! a separate concern this landing-order step does not cover).
+//! Not carried here: `site_js_selectors_match_components_table` (needs the
+//! frontend site tree), `every_declared_custom_prop_is_read` and
+//! `nav_width_is_a_custom_prop_not_a_token` (a separate concern from this
+//! file's three checks).
 
 use moss_core::contract::components::{Status, COMPONENTS};
 use moss_core::contract::custom_props::CUSTOM_PROPS;

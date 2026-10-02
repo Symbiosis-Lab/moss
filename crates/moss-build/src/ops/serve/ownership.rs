@@ -1,11 +1,10 @@
 //! Which process, on this machine, is serving a given folder right now.
 //!
 //! Two moss processes can be pointed at the same site folder — the desktop
-//! app and a CLI build an editor plugin spawns, say — and until this module
-//! existed neither could tell. Each one mints its own token, binds its own
-//! port, and the second simply shadows the first's work with no way for
-//! anything to notice. This is the record that lets a second process find
-//! the first instead of racing it: one owner per folder per machine,
+//! app and a CLI build an editor plugin spawns, say. Each mints its own token
+//! and binds its own port, so without a shared record the second silently
+//! shadows the first. This is the record that lets a second process find the
+//! first instead of racing it: one owner per folder per machine,
 //! advertised the moment a server binds and retracted the moment it stops.
 //!
 //! Two files per folder, both named by [`folder_id`] (the same hash

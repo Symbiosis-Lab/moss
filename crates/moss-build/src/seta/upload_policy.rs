@@ -2,10 +2,9 @@
 //! when one times out.
 //!
 //! Pure arithmetic over numbers — no I/O, no reqwest, no tokio. `client.rs`
-//! owns transport; this owns the sizing decisions transport has to obey. The
-//! split exists because these numbers are the whole substance of the
-//! 2026-08-03 publish failure and they deserve to be readable and directly
-//! testable rather than buried as constants in a 900-line HTTP client.
+//! owns transport; this owns the sizing decisions transport has to obey, kept
+//! here so they are readable and directly testable rather than buried as
+//! constants in a large HTTP client.
 //!
 //! # The constraint these numbers answer to
 //!
@@ -15,16 +14,8 @@
 //! sees a truncated body. Nothing about the file is wrong; it was simply too
 //! big to send in the time allowed, **at the share of bandwidth it was given**.
 //!
-//! That last clause is the part moss got wrong. The old code routed by file
-//! size alone (`>20 MB` → chunked) while running 20 uploads concurrently. Size
-//! cannot predict duration when the divisor is a variable.
-//!
-//! # The measurement
-//!
-//! A live vault, 2026-08-03: 33.46 MB moved in 242 s, i.e. an aggregate
-//! uplink of **~135 KB/s (1.11 Mbps)**. An 8.91 MB mp3 sharing that link 20
-//! ways could not finish in 125 s and killed the whole 160-file, 49.6 MB
-//! deploy — three times, because retry replayed the identical strategy.
+//! Routing by file size alone while running many uploads concurrently cannot
+//! work: size cannot predict duration when the divisor is a variable.
 //!
 //! # The bound, and which quantity is which
 //!
@@ -39,34 +30,33 @@
 //! is what divides the link.
 //!
 //! Which concurrency, though, is a **target vs. clamp** split, and getting it
-//! wrong in either direction has a measured cost (2026-08-27, Shanghai):
+//! wrong in either direction has a measured cost:
 //!
 //! * **target** — a request is sized for the concurrency *actually in flight*
 //!   ([`Throughput::in_flight`]), so it takes [`TARGET_REQUEST_SECONDS`] at the
 //!   share of the link it is really getting. Dividing by the ceiling
-//!   unconditionally — the model this replaced — sized every request of a
-//!   one-file-in-flight deploy 3x too small, pinning a 99.9 MB video to the
-//!   256 KiB floor: 262 requests where ~66 would do, each paying a TLS round
-//!   trip, a schnorr signature and a server-side `getUsedBytes` walk before a
-//!   byte of body counted.
+//!   unconditionally sizes every request of a one-file-in-flight deploy several
+//!   times too small, pinning a large video to the size floor: many times more
+//!   requests than needed, each paying a TLS round trip, a schnorr signature
+//!   and a server-side `getUsedBytes` walk before a byte of body counted.
 //! * **clamp** — the target alone is unsafe, because admission is not frozen
 //!   while a request is in flight: a request sized as if it owns the link,
 //!   with two more files admitted after it, takes 3x its planned time —
-//!   135 s against the 125 s [`EDGE_BUDGET`], and Cloudflare answers 524. So
+//!   past the 125 s [`EDGE_BUDGET`], and Cloudflare answers 524. So
 //!   every request is clamped at `bytes_per_sec * EDGE_BUDGET / limit`: the
 //!   largest request that still completes inside the edge deadline even if
 //!   the window fills to its current concurrency ceiling immediately after
 //!   this request was sized.
 //!
 //! The ceiling itself is **adaptive** ([`Throughput::effective_limit`]),
-//! because on the Shanghai path above aggregate bandwidth is a *function of*
-//! concurrency, not a fixed pie it divides: one stream measured 36,707 B/s
-//! and four measured 188,877 B/s aggregate, each individually faster than the
-//! lone stream. The limit starts at [`LIMIT_START`] and moves on measured
-//! aggregate goodput — up while adding a connection kept paying, down when
-//! goodput falls or the transient-failure rate climbs — bounded by
-//! [`LIMIT_MIN`]/[`LIMIT_MAX`] so it can never grow into the memory or edge
-//! guardrails, which cap different quantities and stay hard.
+//! because on some paths aggregate bandwidth is a *function of*
+//! concurrency, not a fixed pie it divides: one stream can be far slower than
+//! four combined, each individually faster than the lone stream. The limit
+//! starts at [`LIMIT_START`] and moves on measured aggregate goodput — up while
+//! adding a connection kept paying, down when goodput falls or the
+//! transient-failure rate climbs — bounded by [`LIMIT_MIN`]/[`LIMIT_MAX`] so it
+//! can never grow into the memory or edge guardrails, which cap different
+//! quantities and stay hard.
 //!
 //! Two different bandwidths appear in this module and conflating them is how
 //! the bound gets silently violated, so they are named here once:
@@ -86,41 +76,34 @@
 //! test file pins the real bound — `limit * plan_request_size(..) / r` against
 //! [`EDGE_BUDGET`] — across a sweep of measured rates, occupancies and limits.
 //!
-//! # Why the sizes below are derived and not constants (2026-08-04)
+//! # Why the sizes below are derived and not constants
 //!
-//! One day after the numbers above were calibrated, the same tester measured
-//! **~50 KB/s** — 2.7x below the "floor". A constant calibrated to one
-//! observation cannot bound a quantity that varies by orders of magnitude
-//! between users and by multiples within a session; every recalibration buys
-//! until the next slower user.
+//! A constant calibrated to one observation cannot bound a quantity that varies
+//! by orders of magnitude between users and by multiples within a session;
+//! every recalibration buys until the next slower user.
 //!
-//! The sharpest consequence was on the *single-PUT* path, which has no
-//! chunking, no `escalate_down` and no resume: a 3.9 MB file just under the
-//! old fixed 4 MiB routing threshold needs ~156 s at 25 KB/s against a 150 s
-//! [`UPLOAD_REQUEST_TIMEOUT`], so it could never succeed at any retry count.
+//! The sharpest consequence is on the *single-PUT* path, which has no
+//! chunking, no `escalate_down` and no resume: a file just under a fixed
+//! routing threshold can need longer than [`UPLOAD_REQUEST_TIMEOUT`] on a slow
+//! link, so it could never succeed at any retry count.
 //!
-//! So request size is now *predicted from measured throughput*
+//! So request size is *predicted from measured throughput*
 //! ([`plan_request_size`]) and the routing threshold is that same number
 //! ([`needs_chunking`]) — one number, so there is no second one to keep
-//! consistent. [`escalate_down`] stays: it is the reactive half, applied after
+//! consistent. [`escalate_down`] is the reactive half, applied after
 //! a request has already failed.
 //!
-//! # Why the seed is derived from a size and not from a bandwidth (2026-08-04, second pass)
+//! # Why the seed is derived from a size and not from a bandwidth
 //!
-//! The first implementation of the above seeded [`Throughput`] with the
-//! measured 135 KB/s and left the plan to work it out. It did:
-//! `135 KB/s x 45 s = 6.07 MB`, which clamps to [`CHUNK_SIZE_MAX`] — so the
-//! **first request of every publish was the 4 MiB maximum**, and the design's
-//! own `INITIAL_CHUNK_SIZE = 1 MiB` ("start small and grow from measurement
-//! rather than discovering the link is slow by burning a 150 s timeout") was
-//! never actually implemented. Any seed at or above ~93 KB/s saturates the
-//! plan, so the seed was doing nothing except hiding that.
+//! Seeding [`Throughput`] with a measured bandwidth and leaving the plan to
+//! work it out saturates the plan: any seed at or above ~93 KB/s clamps to
+//! [`CHUNK_SIZE_MAX`], so the **first request of every publish** would be the
+//! 4 MiB maximum, defeating the intent of [`INITIAL_REQUEST_SIZE`] — start
+//! small and grow from measurement rather than discover a slow link by
+//! burning a 150 s timeout.
 //!
 //! The seed is therefore derived from [`INITIAL_REQUEST_SIZE`] — the size we
-//! want the first request to be — rather than from a bandwidth guess whose
-//! only effect was to saturate. The 135 KB/s figure keeps its place above as
-//! provenance for [`LIMIT_START`] and the edge-budget arithmetic; it is no
-//! longer a starting *value*.
+//! want the first request to be — rather than from a bandwidth guess.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

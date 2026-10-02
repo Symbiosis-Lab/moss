@@ -133,8 +133,6 @@ fn generate_failed_svg(error: &str) -> String {
 /// when the iframe-bridge sideband signals the asset is ready and mutates
 /// the matching `<source srcset>` to trigger fresh source-set selection
 /// (HTML spec § reacting-to-dom-mutations).
-///
-/// Pattern: explicit promise model.
 pub fn handle_asset_request(
     request_path: &str,
     asset_registry: &crate::types::assets::AssetRegistry,

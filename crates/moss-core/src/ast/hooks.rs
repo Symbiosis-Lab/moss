@@ -10,20 +10,12 @@
 //! ~80% case; overrides handle site-specific concerns (asset path
 //! rewriting, classname injection, etc).
 //!
-//! # Architectural prior art
+//! # Prior art
 //!
 //! `RenderHooks` is moss's port of Hugo's render-hooks pattern
 //! ([`markup/goldmark/render_hooks.go`](https://github.com/gohugoio/hugo/blob/master/markup/goldmark/render_hooks.go)).
-//! In Hugo, `hookedRenderer` IS Goldmark's `NodeRenderer` — hooks fire
-//! during the AST walk, every CommonMark-native attribute reaches the hook
-//! (e.g. `linkContext.Title`), and the template owns rendering decisions.
-//!
-//! Cross-SSG research (2026-05-27) confirms this is the canonical shape:
-//! every AST-bearing SSG (Hugo, Markdoc, mdast/remark, Pandoc, comrak,
-//! recent mdBook) carries every parser-emitted attribute (including link
-//! title) through to the renderer. Dropping fields the parser saw is
-//! universally regarded as Gatsby's mistake — lossy AST forces consumers
-//! into a plugin ecosystem they wouldn't need if the AST were faithful.
+//! Hooks fire during the AST walk and every CommonMark-native attribute
+//! reaches the hook, so the consumer owns rendering decisions.
 
 use super::grid_parts::GridParts;
 use super::shortcode::{GridShortcode, Shortcode};
@@ -45,32 +37,17 @@ pub trait RenderHooks {
     /// **orthogonal** — a wikilink that resolves to an asset-newtab target
     /// emits BOTH `class="wikilink"` AND `target="_blank" rel="noopener"`.
     ///
-    /// # `is_wikilink` parameter (PR7a-flip-core-A)
+    /// # `is_wikilink` parameter
     ///
-    /// Phase 4 PR7a-flip-core-A (2026-05-28) added `is_wikilink: bool` to
-    /// the signature. Before this change, the renderer had to synthesize
-    /// a wikilink-kinded `ResolvedUrl` to coax the hook into emitting
-    /// `class="wikilink"` — a lossy workaround that fused two orthogonal
-    /// concerns (URL kind + wikilink syntax discriminator) into a single
-    /// field. The flag carries pulldown-cmark's `LinkType::WikiLink`
-    /// discriminator faithfully into the renderer, matching how every
-    /// AST-bearing SSG threads its parse-time link metadata through
-    /// (Hugo's `linkContext.Type`, Markdoc, mdast's `Resource`).
+    /// The flag carries pulldown-cmark's `LinkType::WikiLink` discriminator
+    /// into the renderer, keeping two orthogonal concerns (URL kind and
+    /// wikilink syntax) in separate fields.
     ///
-    /// # Title parameter (PR8 — scheduled)
+    /// # Title parameter
     ///
-    /// This signature is still missing the `title: Option<&str>` parameter
-    /// that CommonMark links can carry (`[text](href "title")`). Title is
-    /// silently dropped today through the AST render path. Invisible
-    /// because production HTML still comes from `pulldown_cmark::html::push_html`
-    /// (events carry title natively); becomes a regression the moment
-    /// PR7a flips production to `render_document`.
-    ///
-    /// PR8 restores `title: Option<&str>` alongside other `RenderHooks`
-    /// signature changes (`ResolvedUrl` private-constructor lockdown).
-    /// Every comparable AST-bearing SSG passes title to its render hook
-    /// (Hugo's `linkContext.Title`, Markdoc, mdast's `Resource.title`,
-    /// comrak, Pandoc).
+    /// This signature does not carry the `title: Option<&str>` that
+    /// CommonMark links can have (`[text](href "title")`); the title is
+    /// dropped on the AST render path.
     fn render_link(
         &self,
         out: &mut String,
@@ -401,23 +378,18 @@ pub trait RenderHooks {
                 // `--moss-hero-mobile-bg`/`--moss-hero-mobile-color` CSS custom
                 // properties — those require `dominant_color` from the scan
                 // cache which is not available in moss-core (zero-I/O invariant).
-                // Before PR7a-flip-core-B promotes `render_document` as the sole
-                // Hero rendering path, this arm must either be updated or
-                // callers must use `PipelineHooks` to get full mobile attrs.
-                // Tracked as a future HeroRenderContext refactor.
+                // Callers needing the mobile attrs must use `PipelineHooks`;
+                // this arm is not the sole Hero rendering path.
                 //
-                // Phase 4 PR1 (2026-05-27): the inner `<img>` is now
-                // emitted via [`crate::render::image::synthesize_image_html`]
-                // instead of a bare `<img>` literal so the `img_contract_test`
-                // invariant ("every <img> is synth-emitted or a documented
-                // carve-out") holds when `render_document` runs through
-                // `DefaultHooks`. When the impl carries a snapshot
-                // (`gallery_assets()` is `Some`) the synth uses
-                // `ImageContext::Hero` (full `<picture>`/dims/LQIP byte
-                // shape); without a snapshot it falls back to the
-                // `ImageContext::HeroBare` carve-out — the
-                // legitimate "before set_pending" path where no variant
-                // can be promised.
+                // The inner `<img>` is emitted via
+                // [`crate::render::image::synthesize_image_html`] so the
+                // `img_contract_test` invariant ("every <img> is synth-emitted
+                // or a documented carve-out") holds under `DefaultHooks`.
+                // With a snapshot (`gallery_assets()` is `Some`) the synth
+                // uses `ImageContext::Hero` (full `<picture>`/dims/LQIP byte
+                // shape); without one it falls back to the
+                // `ImageContext::HeroBare` carve-out, where no variant can
+                // be promised.
                 let mut class_attr = String::from("moss-hero");
                 if !args.classes.is_empty() {
                     class_attr.push(' ');
@@ -858,27 +830,16 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         self.grid_cell_sizes.borrow_mut().pop();
     }
 
-    /// Phase 4 PR1 (2026-05-27): when the impl carries an `AssetSnapshot`
-    /// (production path via [`DefaultHooks::with_snapshot`]), route the
-    /// inline `Inline::Image` emission through
-    /// [`crate::render::image::synthesize_image_html`] with
+    /// When the impl carries an `AssetSnapshot` (production path via
+    /// [`DefaultHooks::with_snapshot`]), route the inline `Inline::Image`
+    /// emission through [`crate::render::image::synthesize_image_html`] with
     /// [`crate::render::image::ImageContext::MarkdownInline`] — produces
     /// `<picture><img></picture>` for raster originals (with dims, LQIP,
-    /// `loading="lazy"`) WITHOUT `<figure>` wrap. The figure wrap is
-    /// PR3's territory: `Block::Figure { image, caption }` is the typed
-    /// variant emitted for image-only paragraphs, and its renderer uses
-    /// `MarkdownStandalone` to apply the `<figure class="moss-image">`
-    /// wrap.
-    ///
-    /// **PR1 v2 correction (2026-05-27 post-Wave-0.5 parity probe):** an
-    /// earlier PR1 iteration used `MarkdownStandalone` here, which wrapped
-    /// EVERY inline image in `<figure>` even when the paragraph carried
-    /// sibling content (image + italic caption text + prose). The parity
-    /// probe surfaced 9 false-positive divergences (a real site's CJK
-    /// articles with image+caption-inline patterns) where the AST emitted
-    /// `<figure>` and production correctly did not. Fix: use
-    /// `MarkdownInline` here; let PR3's `Block::Figure` own the figure
-    /// wrap for the legitimate image-only-paragraph case.
+    /// `loading="lazy"`) WITHOUT `<figure>` wrap. The figure wrap belongs to
+    /// `Block::Figure { image, caption }`, emitted for image-only paragraphs,
+    /// whose renderer uses `MarkdownStandalone`; using it here would wrap
+    /// every inline image in `<figure>`, even when the paragraph carries
+    /// sibling content.
     ///
     /// Without a snapshot, fall back to [`push_bare_img`] — the same shape
     /// the trait default emits (test / fragment-render paths). Production
@@ -886,9 +847,7 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
     ///
     /// `title` is the CommonMark image title — emitted as a `title=""`
     /// HTML attribute on the rendered `<img>` (or `<picture>`'s inner
-    /// `<img>`). Per cross-SSG research (2026-05-27), every AST-bearing
-    /// SSG carries title through to the renderer; dropping = Gatsby's
-    /// mistake.
+    /// `<img>`).
     /// Snapshot-aware figure-inner image. `img_style` (fit/position from a
     /// parameterized wikilink embed) flows through
     /// `ImageRenderOptions.extra_attrs` onto the inner `<img>`; the

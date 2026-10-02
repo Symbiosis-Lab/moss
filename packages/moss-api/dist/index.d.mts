@@ -316,8 +316,7 @@ interface TaskHandle {
  * Awaiting pulse) surfaces the task. Plugin authors do NOT pick the
  * surface; they just describe what they're doing and why.
  *
- * Preferred over `reportProgress()` for new code. The legacy API stays
- * supported until a later phase sweeps the remaining call sites.
+ * Preferred over `reportProgress()` for new code.
  *
  * @example
  * const task = await startTask("Importing 42 articles", {
@@ -975,11 +974,8 @@ declare function openBrowserWithHtml(html: string): Promise<void>;
  * // <button onclick="window.mossApi.close()">Cancel</button>
  * ```
  *
- * **Why migrate:**
- * - Explicit browser lifecycle control (no magic auto-close)
- * - No hidden event listeners (`moss:browser-form-submit`, `moss:browser-form-cancel`)
- * - Simpler mental model: open, use, close
- * - Matches modern plugin patterns (see Matters plugin)
+ * The replacement has an explicit lifecycle (open, use, close) and no hidden
+ * event listeners.
  *
  * Note: This deprecated function still listens for `moss:browser-form-submit` and
  * `moss:browser-form-cancel` events for backward compatibility. New code should use
@@ -1337,8 +1333,7 @@ declare function rejectSecret(key: string, options?: {
  * — you cannot write another plugin's secret, the same way you cannot read one.
  *
  * An empty `value` erases the key — that is how you sign a user out, and moss
- * then reports nothing stored for the slot. Earlier releases stored the empty
- * string literally, so a signed-out account went on showing as connected.
+ * then reports nothing stored for the slot.
  *
  * Why here and not in your own plugin folder: `.moss/plugins/` is inside the
  * user's repo and is not gitignored, so a token you keep yourself is a token

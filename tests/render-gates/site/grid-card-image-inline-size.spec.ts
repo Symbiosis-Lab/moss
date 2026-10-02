@@ -1,18 +1,18 @@
 /**
  * A grid-card image must fill the card's inline axis, in both writing modes.
  *
- * The two whole-cell link-card shapes take different code paths to that
- * result since bbb3c0a5 unified external links into the page-card shell:
- *  - the internal cell (`a.moss-grid-card[data-kind="link"]`, still the
- *    pre-existing shape) fills via `.moss-grid-card :is(.moss-image,
- *    picture, img) { inline-size: 100% }` (site.css) — a logical property,
- *    so it reads as the card's inline axis in either writing mode.
- *  - the external cell (`a.moss-card[data-external]`, bbb3c0a5's unified
- *    shell) has no `.moss-grid-card` figure at all; its cover is
- *    `.moss-card-cover`, a flex item that stretches to the card's cross
- *    (inline) axis and whose `> img` fills it with physical `width: 100%;
- *    height: 100%` inside an `aspect-ratio` box — same end result, reached
- *    through flex stretch instead of a logical `inline-size` declaration.
+ * The two whole-cell link-card shapes take different code paths to the same
+ * result:
+ *  - the internal cell (`a.moss-grid-card[data-kind="link"]`) fills via
+ *    `.moss-grid-card :is(.moss-image, picture, img) { inline-size: 100% }`
+ *    (site.css) — a logical property, so it reads as the card's inline axis
+ *    in either writing mode.
+ *  - the external cell (`a.moss-card[data-external]`) has no
+ *    `.moss-grid-card` figure at all; its cover is `.moss-card-cover`, a flex
+ *    item that stretches to the card's cross (inline) axis and whose `> img`
+ *    fills it with physical `width: 100%; height: 100%` inside an
+ *    `aspect-ratio` box — same end result, reached through flex stretch
+ *    instead of a logical `inline-size` declaration.
  *
  * The source image here is deliberately tinier (40×30) than any card, so
  * nothing about the assertion depends on a real `sizes="auto"` lazy fetch
@@ -23,13 +23,10 @@
  * Under vertical typesetting (`writing-mode: vertical-rl`) the inline axis
  * is the box's physical HEIGHT, not its width — and the base rule the
  * internal cell's image has to outrank (`article figure:not(.video-figure)
- * img`) sets a PHYSICAL `height: auto`, which is the inline axis there.
- * Both pages are checked here, not just one, and an `expect.soft` per card
- * means a regression on either card shape still shows every card that
- * broke, not just the first.
- *
- * Both shapes are checked: a regression scoped to one card shape is still
- * visible on the other here.
+ * img`) sets a PHYSICAL `height: auto`, which is the inline axis there. Both
+ * pages are checked here, and an `expect.soft` per card means a regression
+ * on either card shape still shows every card that broke, not just the
+ * first.
  *
  * Site: tests/e2e/helpers/gate-sites.ts → GRID_CARD_IMAGE_INLINE_SIZE_GATE, a
  * dedicated site rather than a reuse of GRID_MOBILE_COLLAPSE_GATE: that one

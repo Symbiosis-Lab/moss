@@ -1,10 +1,9 @@
 //! WHICH folder is the vault root, and what is it CALLED.
 //!
-//! One owner for project-root identity. Before this module the answer was derived at 69
-//! sites by 8 independent resolvers and 6 disagreeing basename algorithms; `moss build .`
-//! and `moss build /abs/path/site` built *different sites* from the same folder because
-//! `Path::new(".").file_name()` is `None` and the empty root name demoted the self-named
-//! home (`site/site.md`) off `/`.
+//! One owner for project-root identity. Independent resolvers disagree: `moss build .`
+//! and `moss build /abs/path/site` would build *different sites* from the same folder,
+//! because `Path::new(".").file_name()` is `None` and the empty root name demotes the
+//! self-named home (`site/site.md`) off `/`.
 //!
 //! Three jobs, three entry points — deliberately NOT one function:
 //!   * [`resolve_input`] — "the user typed a string; make it a real absolute path". The only
@@ -14,7 +13,7 @@
 //!
 //! Not this module's job: "is this path INSIDE the vault?" (`vault::fs::validate_entry_path`),
 //! canonical registry KEYS (plugin manager / preview server / folder session), and OS-input
-//! decoding (`system::path_extractor`, which CALLS this module and rides M5 to `platform/`).
+//! decoding (`system::path_extractor`, which CALLS this module).
 //!
 //! ## The absolute-path contract
 //!

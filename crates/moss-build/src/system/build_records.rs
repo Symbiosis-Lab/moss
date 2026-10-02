@@ -4,32 +4,22 @@
 //!
 //! These two records — the last build's in-memory content hashes and its
 //! publish-preflight verdict — are what moss shares *between builds of the same
-//! folder*. Until 2026-08-29 they were fields on `AppState`, reached through
-//! `app.manage`, so the only process that could write or read them was one
-//! with a `tauri::AppHandle`. The headless arms of the host seam were
-//! therefore no-ops, with two measured consequences:
-//!
-//! - `moss build --serve --watch` had no race-free refresh baseline, so every
-//!   rebuild diffed against the asynchronously-sealed `hashes.json` and
-//!   suppressed refreshes for edits that had in fact changed the output.
-//! - No CLI-driven test could observe any state moss shares between builds,
-//!   which is why the CLI and the app drifted apart unfalsifiably.
+//! folder*. They live in process-global state rather than in app state, so a
+//! headless host (the CLI) reads and writes them the same way the app does:
+//! `moss build --serve --watch` gets a race-free refresh baseline instead of
+//! diffing against the asynchronously-sealed `hashes.json`, and a CLI-driven
+//! test can observe state moss shares between builds.
 //!
 //! Neither record has a Tauri type in it, and neither describes a *window* —
-//! they describe a *folder*, on the folder's own timeline. Same reasoning that
-//! moved `FolderSessionRegistry` out on 2026-08-24; this module is its
-//! sibling. Being process-global is also what deletes the divergence rather
-//! than relocating it: there is no second arm for a headless host to answer
-//! differently, because the host is not asked.
+//! they describe a *folder*, on the folder's own timeline. There is no second
+//! arm for a headless host to answer differently, because the host is not
+//! asked.
 //!
-//! Keyed by folder path string after normalization — this module normalizes all
-//! callers' input so keys are consistent regardless of path-separator style. Before
-//! normalization, callers had to remember to normalize themselves, which was
-//! unreliable on Windows where a path can mix separators (one source yields
-//! backslashes, another forward slashes). A raw-string reader and a canonicalized
-//! writer could produce mismatched keys, leaving build verdicts unreadable to
-//! later callers. The module now owns the normalization, every caller lands on the
-//! same key automatically.
+//! Keyed by folder path string after normalization — this module owns the
+//! normalization, so keys are consistent regardless of path-separator style. A
+//! path can mix separators on Windows (one source yields backslashes, another
+//! forward slashes), and a raw-string reader and a canonicalized writer would
+//! otherwise produce mismatched keys, leaving build verdicts unreadable.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;

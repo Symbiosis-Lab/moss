@@ -7,14 +7,10 @@
 //! has to know which byte ranges are *inert*: regions where author text that
 //! merely looks like syntax must be left completely alone.
 //!
-//! Every one of those scanners used to carry its own private answer, and each
-//! private answer was a different subset of the truth. The one that only knew
-//! about fenced code blocks let through a regression: a `:::gallery` written
-//! inside an authored `<!-- TODO … -->` block was extracted as a live
-//! shortcode, which spliced a sentinel into the middle of the comment,
-//! destroyed the comment's own `-->`, and made every paragraph *after* the
-//! comment vanish from the built page. Consolidating on one scanner is what
-//! stops that class of bug from being re-derivable.
+//! A scanner with an incomplete or inconsistent definition of inert regions
+//! can extract shortcode-like syntax out of an HTML comment, corrupting the
+//! comment and silently dropping every paragraph after it in the built page.
+//! Consolidating on one scanner closes that class of bug.
 //!
 //! # What counts as inert
 //!
@@ -34,10 +30,9 @@
 //!
 //! The scan walks bytes, matching only ASCII (`` ` ``, `<`, `-`, `>`, space,
 //! tab, newline). No byte of a multi-byte UTF-8 sequence is ever ASCII, so
-//! every offset this module produces lands on a char boundary — the property
-//! that hand-rolled byte loops in this codebase have repeatedly failed to
-//! preserve (see the `html_prefix_is_balanced` panic on CJK prose from an
-//! earlier regression).
+//! every offset this module produces lands on a char boundary — a property
+//! hand-rolled byte loops in this codebase have repeatedly failed to
+//! preserve.
 //!
 //! # Which shape do I want?
 //!
@@ -53,7 +48,7 @@
 //! Not yet consolidated onto this module (each still carries a fence-only
 //! scan): [`crate::resolve::block_refs`], [`crate::ast::editor_scan`], and
 //! moss-build's `build::scan::scan`. They should move here as they are next
-//! touched. [`crate::resolve::md_extract`] moved here 2026-08-03.
+//! touched.
 
 use std::ops::Range;
 

@@ -15,19 +15,13 @@
 //! and publishes what it sealed, registering it first if this is the folder's
 //! first publish.
 //!
-//! The hosted route arrived at C4f and is why this binary stopped saying
-//! "building it needs the moss app"; first-publish registration crossed at
-//! C4g, which is why `--site-id` stopped saying it too. The plugin route was
-//! the last one to say it, and stopped at P2b — no route needs a window now,
-//! which is why the app's `intercept` never returns.
+//! No route needs a window, which is why the app's `intercept` never returns.
 //!
 //! Plugins in the deploy build need consent, and `--allow-plugins` is the
 //! consent here that it is for `moss build`: without it a plugin the app has
 //! allowed runs and one nobody allowed is refused, so its content is missing
-//! from what gets published. The flag used to be named by that refusal and
-//! not accepted by this command, which left the reader a dead end; `moss build
-//! --allow-plugins <folder>` first is still the way to see the decision before
-//! it reaches a live site.
+//! from what gets published. `moss build --allow-plugins <folder>` first is the
+//! way to see the decision before it reaches a live site.
 //!
 //! Exit codes:
 //!   0  published

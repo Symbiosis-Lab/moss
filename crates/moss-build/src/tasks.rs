@@ -4,16 +4,13 @@
 //! contract. This module owns Layer 1 only — the in-process types, the
 //! per-`(WindowId, TaskScope)` registry, the plugin-task router, and the
 //! wire-snapshot type that flows to frontend renderers via `MossEvent`.
-//! Layer 2 (plugin-facing TS API, Tauri command bridge) lands in T8a per
-//! the onboarding dispatch plan.
+//! Layer 2 (plugin-facing TS API, Tauri command bridge) lives elsewhere.
 //!
-//! ## Wire bridge (added in T2, 2026-05-28)
+//! ## Wire bridge
 //!
-//! T1 deliberately deferred the frontend event bridge because `PanelTask`
-//! contains `Instant` (not `Serialize`). T2 needs *some* event source for
-//! the Ambient renderer, so we advance the deferred scope by one step: a
-//! sibling `PanelTaskWire` struct strips the non-serializable fields and
-//! becomes the payload of `MossEvent::PanelTaskUpdate`. The registry
+//! `PanelTask` contains `Instant` (not `Serialize`), so a sibling
+//! `PanelTaskWire` struct strips the non-serializable fields and is the
+//! payload of `MossEvent::PanelTaskUpdate`. The registry
 //! itself owns an optional emitter installed via `set_emitter` (and
 //! removed via `clear_emitter`) at startup; mutating methods on
 //! `TaskHandle` re-emit a fresh wire snapshot to the frontend after
@@ -26,7 +23,7 @@
 
 //! Pure-Rust callers (tests, non-Tauri code paths) keep using
 //! `TaskRegistry::spawn` / `with_progress`, which carry no emitter and
-//! mutate the registry without emitting — same behavior as before T2.
+//! mutate the registry without emitting.
 //!
 //! The router (`route_plugin_task`) is exhaustive over the closed
 //! `(PluginHook, TriggerContext)` cross product — 24 rows, no wildcard.
@@ -532,13 +529,10 @@ impl PanelTask {
         matches!(self.state, TaskState::Awaiting { .. })
     }
 
-    /// The renderer surface this Job belongs to — **computed, never stored**
-    /// (Step 3 Phase 6 R5; design §3 "tone/surface/display become functions
-    /// the renderer computes"). Replaces the old stored `tone` field: a Job is
-    /// a producer-agnostic value, and the *window* owns presentation.
+    /// The renderer surface this Job belongs to — **computed, never stored**:
+    /// a Job is a producer-agnostic value, and the *window* owns presentation.
     ///
-    /// Precedence (most-specific first), reproducing what `route_plugin_task`
-    /// and the internal producers encoded into the old stored field:
+    /// Precedence (most-specific first):
     ///
     /// 1. **Awaiting state → `Awaiting`.** The one interrupt — it needs *her*
     ///    action. State-driven so the moment a Job enters `Awaiting` the wire

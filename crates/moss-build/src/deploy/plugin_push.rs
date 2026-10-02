@@ -3,16 +3,14 @@
 //! The third of moss's three publish drivers — [`super::prebuilt`] uploads a
 //! directory another tool built, [`super::push`] builds and ships to moss's
 //! own hosting, and this one builds and hands the result to whichever plugin
-//! `[hooks] deploy` names. It is the last one that needed a window, and it
-//! needed one only because nobody had written it: the plugin RUNTIME crossed
-//! over, so `HostPorts::plugins` already yields a manager whose
-//! `execute_deploy` is pure moss-build (track P slice P2b).
+//! `[hooks] deploy` names. `HostPorts::plugins` yields a manager whose
+//! `execute_deploy` is pure moss-build.
 //!
 //! Shaped like [`super::push::run_hosted_deploy`] on purpose — resolve, build,
 //! gate, then an inner body over what the build produced — because the app's
 //! `deploy_site_body` enters that inner body with a build a watcher already
 //! made, and a driver that interleaved its resolution with its work could not
-//! be entered twice. It does, since track P slice P3: below
+//! be entered twice. Below
 //! [`run_plugin_deploy_inner`] there is one plugin publish in moss, and the
 //! only difference between clicking Publish and typing `moss deploy` is which
 //! preamble got the folder built.
@@ -29,8 +27,7 @@
 //! `resume_publish_verification` derives its work from `metadata.generation`
 //! (`stack_serving::verify::pending_verification`) while `record_publish`
 //! deliberately never writes `last_verified_generation`, so opening the folder
-//! in the app afterwards arms verification on what the terminal shipped
-//! (track P slice P4).
+//! in the app afterwards arms verification on what the terminal shipped.
 //!
 //! `resolve_publish_inputs` is deliberately absent. It is the seta
 //! registration path, and calling it here would mint a moss-hosted site for a

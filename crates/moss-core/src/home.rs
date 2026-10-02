@@ -359,8 +359,7 @@ pub fn detect_home_file_in_folder_marked<'a>(
 ///   frontmatter `title:` (callers that read frontmatter directly, e.g.
 ///   `resolve_site_name`) or the pipeline's already-resolved `doc.title` (the
 ///   render sites). For an index home with no `title:`, the resolved candidate
-///   is the folder name (post the root-aware fix); for a genuine `title:` it
-///   is that title. `None`/empty when unavailable.
+///   is the folder name; for a genuine `title:` it is that title. `None`/empty when unavailable.
 /// - `folder_name`: the project's root folder basename — the structural
 ///   fallback.
 ///
@@ -371,8 +370,7 @@ pub fn detect_home_file_in_folder_marked<'a>(
 ///    is a bare stem fallback (equals the folder-name fallback, or is itself a
 ///    raw index stem like "index"/"readme") → `folder_name`. This is the
 ///    STRUCTURAL guard: it keys off the FILENAME being an index home, so a page
-///    GENUINELY titled "Index" in a non-index file is NOT suppressed (the old
-///    value-string `is_index_stem(title)` heuristic mis-fired on that).
+///    GENUINELY titled "Index" in a non-index file is NOT suppressed.
 /// 3. Otherwise → the candidate title (a genuine user-chosen title, including a
 ///    `title:` set on an index home).
 pub fn site_name(

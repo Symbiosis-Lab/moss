@@ -961,9 +961,7 @@ import { installContextMenu } from "./context-menu";
     }, 100);
   }, { passive: true });
 
-  // ============================================================
-  // Scroll-coordination protocol (iframe ↔ shell)
-  // ============================================================
+  // Scroll-coordination protocol (iframe ↔ shell).
   // The parent shell paints the fake scrollbar (chrome). This iframe is
   // the single source of scroll truth: it reports scroll geometry to the
   // shell and accepts scroll-to commands. The shell never reads scroll
@@ -983,9 +981,7 @@ import { installContextMenu } from "./context-menu";
   //     event fires our reporter, closing the loop.
   //
   // `gen` (navigation generation): a counter the shell uses to drop
-  // late messages after the iframe navigates. iframe-resizer #847 is
-  // the canonical bug class this prevents.
-  // ============================================================
+  // late messages after the iframe navigates.
 
   let _scrollGen = 0;
   let _scrollRafScheduled = false;

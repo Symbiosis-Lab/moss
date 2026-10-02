@@ -1,5 +1,5 @@
 //! The preview server — one Axum server, two hosts (desktop GUI and headless
-//! CLI), crossed from the app crate at S1 of the relocation.
+//! CLI).
 //!
 //! # The `/__moss/*` HTTP contract
 //!
@@ -59,9 +59,6 @@
 //! until both are set. Which carrier a given moss instance mounts is governed
 //! by a one-carrier-per-instance rule: the routes exist only when the host
 //! threads an `InvokeCtx` into [`ServeConfig`].
-//!
-//! No behavioral change crossed with the code: this module doc is the contract
-//! statement the relocation plan called for.
 //!
 //! ## Module layout
 //! - `router` — Axum router construction, [`ServeConfig`]/[`start_server`], middleware stack
@@ -156,11 +153,9 @@ pub struct HeadlessServe {
 /// stops accepting new connections while the OS backlog still completes TCP
 /// handshakes — connections accepted at the TCP level that get no HTTP
 /// response), so hold it for the life of the serve and `send(())` on the way
-/// out. Until slice C1 this function `mem::forget`ed the sender because every
-/// caller exited via `std::process::exit`; the CLI driver now blocks on
-/// ctrl-C and shuts down deliberately (`ops::run_headless_build`), and the
-/// one caller that still cannot send — an in-process test build — forgets it
-/// at its own site (`events/host_ports.rs`, app crate).
+/// out. The CLI driver blocks on ctrl-C and shuts down deliberately
+/// (`ops::run_headless_build`); the one caller that cannot send — an
+/// in-process test build — forgets it at its own site.
 ///
 /// `serve` carries everything a host decides about the server — see
 /// [`HeadlessServe`]. [`HeadlessServe::default`] is the loopback-only server a

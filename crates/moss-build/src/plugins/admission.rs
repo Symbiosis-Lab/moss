@@ -40,10 +40,9 @@ use super::types::PluginManifest;
 /// implementation and it owns its own process-wide state.
 ///
 /// It takes the whole manifest and the directory it was read from, because
-/// the refusal has more than one ground. Narrowing it to id+version once cost
-/// a second seam when the version floor needed enforcing at the same point;
-/// the directory is what the consent record is keyed by, and what says
-/// whether these are the exact bytes moss shipped.
+/// the refusal has more than one ground; the directory is what the consent
+/// record is keyed by, and what says whether these are the exact bytes moss
+/// shipped.
 pub type AdmissionCheck = fn(&PluginManifest, &Path) -> Option<String>;
 
 static CHECK: OnceLock<AdmissionCheck> = OnceLock::new();

@@ -442,13 +442,11 @@ async fn a_fatal_failure_still_deletes_the_session() {
 
 /// **The escalation ladder must be walked on a link that is actually slow.**
 ///
-/// Its one previous test drove a mock that answered 524 *instantly*, which is
-/// the only regime where the old gate could pass: `allows_another_attempt`
+/// A mock that answers 524 *instantly* cannot exercise it: `allows_another_attempt`
 /// requires `futile_elapsed + UPLOAD_REQUEST_TIMEOUT <= UPLOAD_RETRY_BUDGET`,
 /// so with real 150 s timeouts three failures spend 450 s of the 600 s window
-/// and the *first* rung is the last. `escalate_down` fired only when failures
-/// were free — never on the slow link it was written for. There was no test in
-/// which escalation happened at all.
+/// and the *first* rung is the last. Escalation only fires on a link where
+/// failures cost real time.
 ///
 /// So the mock has to make each PATCH *expensive*: it reads the request, then
 /// jumps the clock past the client's own request timeout, which is what a
@@ -470,9 +468,7 @@ async fn a_fatal_failure_still_deletes_the_session() {
 /// client's 150 s `UPLOAD_REQUEST_TIMEOUT` *before* the mock had read the
 /// request off the socket. reqwest checks its overall timeout before it checks
 /// the response, so the request then failed without the mock ever seeing it,
-/// `sizes` stayed empty, and the first assertion below read `None`. That is the
-/// macOS-only failure seen in CI; measured here, 123 of 200 loopback requests
-/// issued through reqwest under `start_paused` timed out spuriously.
+/// `sizes` stayed empty, and the first assertion below read `None`.
 ///
 /// So: **do not put `start_paused` back on this test, and do not widen the
 /// freeze.** Freezing only once the request is recorded means the one thing the

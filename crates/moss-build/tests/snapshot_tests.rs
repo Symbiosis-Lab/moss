@@ -2,12 +2,10 @@
 //!
 //! These tests verify that moss build produces consistent, deterministic output.
 //!
-//! Moved here from the desktop app's `snapshot_tests.rs`
-//! so a render change and its fixture refresh land in one commit, in the repo that
-//! owns the pipeline. Fixture sites are a COPY of the private repo's
-//! `tests/fixtures/<site>` — several of those (`basic-site`, `media-site`,
-//! `hooks-site` at least) are also read by the private repo's `build_parity_test.rs`
-//! and stay there; see that repo's phase-B plan before deleting anything.
+//! The suite lives in the repo that owns the pipeline, so a render change and
+//! its fixture refresh land in one commit. Some fixture names (`basic-site`,
+//! `media-site`, `hooks-site` at least) are also read by other test suites —
+//! check before deleting any of them.
 //!
 //! ## Test Strategy
 //! - **Full content comparison** for HTML files (with normalization)
@@ -29,14 +27,10 @@
 //! `$TMPDIR/moss_snapshot_test_<uuid>/` directory before building, so
 //! concurrent tests cannot share `.moss/build.nosync/` state via the fixture
 //! input path. Tests are safe to run with the default `--test-threads`
-//! value (number of logical CPUs).
-//!
-//! The early observed flakiness (Extra/Missing file across runs) was caused
-//! by stale expected-output snapshots that diverged from the current build
-//! output after code changes, not by an actual concurrency bug. Re-run
+//! value (number of logical CPUs). Re-run
 //! `SNAPSHOTS=overwrite cargo test -p moss-build --test snapshot_tests -- --test-threads=1`
-//! any time you change output-affecting code to bring the expected directory
-//! back in sync.
+//! after changing output-affecting code to bring the expected directory back
+//! in sync.
 //!
 //! ### Env-var discipline
 //!
@@ -685,7 +679,7 @@ fn snapshot_places_route_site() {
 /// the explorer's later task will actually serve, so it is pinned here the
 /// same way `svg.rs`'s own `the_world_map_stays_under_its_inline_budget`
 /// pins the places-root aggregate map: measured at landing (this commit)
-/// and allowed only to shrink without a thermo-reviewed reason for growth.
+/// and allowed only to shrink without a reviewed reason for growth.
 ///
 /// Measured at landing, on the `places-site` fixture: world.svg = 89,077
 /// brotli bytes (up from 83,325 — the explorer's world SVG now carries its

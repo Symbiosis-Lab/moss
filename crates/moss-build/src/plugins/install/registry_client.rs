@@ -19,10 +19,9 @@
 //! in app data, so a plugin that arrived with a shared folder does not run
 //! until they say so.
 //!
-//! Named `registry_client` rather than `registry` because
-//! `plugins/registry.rs` — the catalog — migrates into this directory later,
-//! and two files called
-//! "registry" meaning different things is how the next reader loses.
+//! Named `registry_client` rather than `registry` because `plugins/registry.rs`
+//! is the catalog, and two files called "registry" meaning different things is
+//! how the next reader loses.
 
 pub mod approval;
 pub mod artifact;

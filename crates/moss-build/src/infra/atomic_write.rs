@@ -5,14 +5,12 @@
 //! rename is atomic on every filesystem moss runs on, so a reader either sees
 //! the whole old file or the whole new one — never a truncated middle. That
 //! matters most for files whose partial read is a security answer rather than
-//! a nuisance: the registry kill list is the case that motivated pulling this
-//! together.
+//! a nuisance, such as the registry kill list.
 //!
 //! **The temp name is unique per write, and that is the part worth stating.**
-//! The four hand-rolled copies this replaces all used a fixed `<name>.tmp`, so
-//! two concurrent writers renamed each other's half-written bytes into place.
-//! For the registry that overlap is routine rather than exotic — refresh fires
-//! on app launch and again on catalog open.
+//! A fixed `<name>.tmp` lets two concurrent writers rename each other's
+//! half-written bytes into place. For the registry that overlap is routine
+//! rather than exotic — refresh fires on app launch and again on catalog open.
 //!
 //! The temp file is flushed with `sync_all` before the rename, so a crash
 //! cannot commit the rename ahead of the bytes it names. The parent directory

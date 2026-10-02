@@ -6,7 +6,7 @@
 //! settings modal, and every writer lives in the app crate.
 //! What ships here is the **reader**, because the CLI reads config too and
 //! `moss-cli` cannot depend on the app crate (`scripts/check-crate-dag.mjs`
-//! rule 4). Ownership did not move; the reader's home did.
+//! rule 4).
 //!
 //! # What is here, and what deliberately is not
 //!
@@ -14,8 +14,8 @@
 //! key up. Not here: opening the file. That read is eviction-aware on macOS
 //! (an iCloud-evicted config must never read as "absent", or a default is
 //! written over the user's settings), and the code that proves absence from an
-//! error lives in the build tree's cloud modules, which do not cross into this
-//! crate until a later step. So a caller reads the bytes however its platform
+//! error lives in the build tree's cloud modules (`build::cloud_readiness`),
+//! not here. So a caller reads the bytes however its platform
 //! requires and hands the string to [`ConfigFile::parse`]:
 //!
 //! - the app reads through `build::cloud_readiness` (see
@@ -25,8 +25,7 @@
 //!   that is the whole story**. It is not the whole story on macOS, which
 //!   moss-cli ships on: an iCloud-evicted config returns `NotFound` there, and
 //!   a CLI that believed it would build the user's site with every setting at
-//!   its default. The CLI needs the eviction-aware read too — which is one more
-//!   reason that cluster crosses the crate line at step 4.
+//!   its default. The CLI needs the eviction-aware read too.
 //!
 //! Splitting it this way is also what keeps this module honest about a core
 //! rule: **advanced users hand-edit this file.** Nothing here can

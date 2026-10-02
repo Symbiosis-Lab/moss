@@ -9,14 +9,8 @@
 //! `toml::to_string_pretty`, which regenerates the whole file from a value tree
 //! that never held any of it.
 //!
-//! On 2026-08-07 that cost a real user four lines of hand-written comment
-//! explaining a setting, silently, during a schema migration that changed
-//! nothing in the section the comment was in. This module is the fix: it edits
-//! the user's bytes in place instead of re-emitting them.
-//!
-//! It is the TOML counterpart of the rule the project already follows for
-//! frontmatter ("YAML round-trip fidelity" in `.claude/CLAUDE.md`): replace the
-//! part you meant to change, leave every other byte alone.
+//! This module edits the user's bytes in place instead of re-emitting them:
+//! replace the part you meant to change, leave every other byte alone.
 //!
 //! # The mechanism
 //!

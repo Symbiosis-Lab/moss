@@ -7,25 +7,17 @@
  * adds CSS and script the static build never ships — the divider-drag
  * cheap-reflow style, the comment-form preview shim, the asset-placeholder
  * script, and more. All of it is meant to be invisible: a page should look
- * and measure the same in the preview iframe as it does published. It has
- * not always been:
+ * and measure the same in the preview iframe as it does published. Three
+ * known ways it hasn't been:
  *
- *  - `PREVIEW_CHEAP_REFLOW_STYLE` sets `content-visibility: auto` plus a
- *    `contain-intrinsic-size: auto none auto 600px` fallback on article
- *    media, so an off-screen figure skips layout cheaply during a divider
- *    drag. A `:::grid N {scroll}` row lays its cards on ONE shared grid row
- *    track (`grid-auto-flow: column`); a card currently outside the row's own
- *    visible area fell back to the 600px placeholder HEIGHT, and because the
- *    cards share one track, that height became every card's height, not just
- *    the off-screen one — measured once as a 669px preview row against a
- *    269px published one. Fixed by scoping the selector away from
- *    `.moss-grid[data-scroll]` content entirely (be18a723).
- *  - The one-value form of the same rule (`auto 600px`, applying to BOTH
- *    axes) made an off-screen figure report a 600px intrinsic WIDTH too;
- *    inside a `.moss-grid` whose tracks are `repeat(N, 1fr)`, that width
- *    became each track's automatic minimum and blew a 3-column grid out to
- *    600px per column. Fixed by moving to the two-value form (`auto none
- *    auto 600px` — see the const's own doc comment in iframe_bridge.rs).
+ *  - `PREVIEW_CHEAP_REFLOW_STYLE`'s `content-visibility: auto` fallback
+ *    sizes an off-screen element from a shared `contain-intrinsic-size`
+ *    placeholder; inside a `:::grid N {scroll}` row, whose cards share one
+ *    grid-row track, one off-screen card's placeholder height became every
+ *    card's height.
+ *  - The same fallback's one-value form applied to BOTH axes, so an
+ *    off-screen figure's placeholder WIDTH became a `.moss-grid`'s automatic
+ *    track minimum too, blowing out the whole grid.
  *  - Other preview-only padding/geometry regressions of the same shape have
  *    shown up before as dead space that only ever existed in the preview.
  *
@@ -37,21 +29,12 @@
  * that later media start off-screen — between the two servers, in both
  * engines, at desktop and mobile widths, AFTER a full scroll pass.
  *
- * Only after, not before: measured directly while writing this gate, a
- * page's FIRST paint diverges from the static build on every off-screen
- * article figure, wrapping-grid cell, and embed, not just scroll-row cards —
- * `content-visibility: auto`'s placeholder height is showing on anything
- * that has never been laid out yet, which is the feature working as
- * designed (it is what makes a divider-drag cheap), not a bug. A full
- * top-to-bottom, every-scroller pass is what a real visit eventually
- * amounts to; measuring once everything has had a chance to be laid out at
- * least once is the point at which "the same as static" is an honest claim
- * to check. The be18a723 regression this gate was built to catch is a real
- * counter-example that still shows up at that point: the shared grid-row
- * track's last few cards (the ones that land off-screen again once the row
- * scrolls back to rest) never picked up a correct height — confirmed by
- * reverting be18a723's selector change locally, rebuilding moss-cli, and
- * running this gate: it failed naming exactly those cards, on both engines.
+ * Measuring after a full pass, not before, matters: a page's FIRST paint
+ * diverges from the static build on every off-screen figure, grid cell, and
+ * embed, because `content-visibility: auto`'s placeholder is still showing —
+ * the feature working as designed (it's what makes a divider-drag cheap),
+ * not a bug. Only once everything has been laid out at least once is "the
+ * same as static" an honest claim to check.
  *
  * Both servers build the SAME source fixture
  * (tests/e2e/helpers/gate-sites.ts → PREVIEW_PARITY_GATE): the static one is

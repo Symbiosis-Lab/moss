@@ -294,8 +294,7 @@ pub enum Block {
     ThematicBreak,
     /// Image-only paragraph promoted to a typed figure.
     ///
-    /// Detected by the parser's `Tag::Paragraph` arm (Phase 4 PR3,
-    /// 2026-05-27): a paragraph that contains exactly one
+    /// Detected by the parser's `Tag::Paragraph` arm: a paragraph that contains exactly one
     /// [`Inline::Image`] modulo whitespace text and line breaks. The
     /// renderer emits `<figure class="moss-image">…<figcaption>…</figcaption></figure>`,
     /// wrapping the image hook's output and appending the caption when
@@ -311,12 +310,10 @@ pub enum Block {
     ///
     /// The figure-level display params (`width`, `align`, `class_names`,
     /// `img_style`) are populated only when a figure originates from a
-    /// parameterized wikilink embed (`![[photo.jpg|wide cover]]`) — the
-    /// image-embed synth-collapse routes such embeds through this typed
-    /// node so width/fit/position/align survive (previously dropped by the
-    /// markdown round-trip). The CommonMark `![](url)` promotion path
-    /// (`try_promote_to_figure`) leaves them at their defaults, so its
-    /// rendered output is byte-identical to before the collapse.
+    /// parameterized wikilink embed (`![[photo.jpg|wide cover]]`), which is
+    /// routed through this typed node so width/fit/position/align survive.
+    /// The CommonMark `![](url)` promotion path (`try_promote_to_figure`)
+    /// leaves them at their defaults.
     Figure {
         image: Inline,
         caption: Option<Vec<Inline>>,

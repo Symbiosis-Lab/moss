@@ -387,14 +387,12 @@ fn resolve_plugin_project_path(
 /// Shared body for read_site_file — called by the Tauri command and the engine
 /// arm (so QuickJS plugins can read built-site bytes, not just webview callers).
 ///
-/// Reads `current_ptr()`, which the seal's materialize phase now debounces
+/// Reads `current_ptr()`, which the seal's materialize phase debounces
 /// (`build::seal_phase`) rather than updating on every build — safe here
-/// specifically because a plugin's own read of this path happens from its
-/// deploy hook, which runs only after the publish path has already forced a
-/// synchronous seal (`build::seal_phase::settle`) so `current_ptr()` matches
-/// the generation being published. A caller reaching this outside that
-/// window would see whatever generation last materialized, same as before
-/// this stage — the debounce widens that window, it does not create it.
+/// because a plugin's deploy hook runs only after the publish path has forced
+/// a synchronous seal (`build::seal_phase::settle`), so `current_ptr()`
+/// matches the generation being published. A caller outside that window sees
+/// whatever generation last materialized.
 pub async fn read_site_file_impl(
     project_path: &str,
     relative_path: &str,

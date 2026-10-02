@@ -17,12 +17,10 @@
 /// rename changes the site name, which rotates EVERY OG-card filename — so
 /// they are never evidence of a wipe. New setas already exclude them from
 /// `remove` at the response boundary; we filter again here as defense in
-/// depth against older servers that send the list unfiltered (2026-07-22
-/// incident: 158 rotated OG cards counted as removals → "remove 158 of 169
-/// (93%)" blocked a healthy publish of a 366-file live site, true fraction
-/// 43%). The filter only affects this guard's signal — actual file removal
-/// happens implicitly via the server's generation swap at commit, so nothing
-/// about what gets deleted changes.
+/// depth against older servers that send the list unfiltered. The filter
+/// only affects this guard's signal — actual file removal happens implicitly
+/// via the server's generation swap at commit, so nothing about what gets
+/// deleted changes.
 ///
 /// Decision, after filtering (`content_remove` = non-`_moss/` removals):
 ///   - `server_total` present AND consistent (a total smaller than the
@@ -32,9 +30,8 @@
 ///     manifest-collapse signature — the new build is less than half the
 ///     live site AND (`content_remove >= MIN_ABS` OR the collapse is extreme,
 ///     manifest under a quarter of the live site). The extreme clause keeps
-///     small sites (< MIN_ABS content pages) as protected as the pre-rework
-///     guard, whose raw removal count was inflated past MIN_ABS by `_moss/`
-///     rotations. Site-wide churn (rename: manifest ≈ live) and mass
+///     small sites (< MIN_ABS content pages) protected too. Site-wide churn
+///     (rename: manifest ≈ live) and mass
 ///     slug-reorgs (manifest still full-size) pass; the real catastrophe
 ///     (empty/stale manifest) is caught.
 ///   - `server_total` absent (older setas): derive the live count from the

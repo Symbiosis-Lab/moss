@@ -9,16 +9,14 @@
  * legible over whatever is behind it (see the app's own `chrome-theme.ts`).
  * This module reads that colour inside the page and posts it up.
  *
- * WHY IT LIVES IN THE BRIDGE. It used to live in `js-src/site/link-preview.ts`,
- * which ships as `preview.js` only when `[site].link_preview` is true. That made
- * an *app chrome* mechanism a hostage of a *content* preference: with the flag
- * off, the site's own moon toggle repainted the page and told the shell nothing,
- * so the shell kept the colour it had measured under the old theme. A stale
- * colour is not inert — `applyChromeTheme()` prefers any non-null colour over
- * the shell's intended theme — so the chrome wedged on the wrong pole until the
- * next rebuild. The bridge is injected into every previewed page unconditionally
- * (the app's own preview iframe-bridge module), which is where a mechanism the
- * chrome depends on belongs.
+ * WHY IT LIVES IN THE BRIDGE. `js-src/site/link-preview.ts` ships as
+ * `preview.js` only when `[site].link_preview` is true, which would make an
+ * *app chrome* mechanism depend on a *content* preference: with the flag off,
+ * the site's own moon toggle would repaint the page and tell the shell nothing.
+ * A stale colour is not inert — `applyChromeTheme()` prefers any non-null colour
+ * over the shell's intended theme — so the chrome would wedge on the wrong pole
+ * until the next rebuild. The bridge is injected into every previewed page
+ * unconditionally, which is where a mechanism the chrome depends on belongs.
  *
  * The `data-theme` observer and settle re-read are `onThemeSettled`
  * (theme-settled.ts), shared with chrome-ambient and site-accent.

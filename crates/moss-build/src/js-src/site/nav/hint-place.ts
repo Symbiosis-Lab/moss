@@ -6,9 +6,8 @@
  * for every static choice: a start-anchored pill on a right-edge host runs off
  * the viewport, an end-anchored one on a left-edge host does the same in the
  * other direction, and a mid-bar host with a long hint — the island's `…`
- * button, whose hint is the whole folded trail — can crop either way. Two
- * one-off edge-flips had already accumulated before the third case arrived,
- * which is the tell that the anchor should never have been per-case.
+ * button, whose hint is the whole folded trail — can crop either way. The
+ * anchor therefore cannot be chosen per case.
  *
  * So: on hover or focus entry, measure the pill and the host once and set a
  * per-host offset (`--moss-hint-x`) that lands the pill inside the viewport,

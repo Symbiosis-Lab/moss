@@ -1,5 +1,5 @@
 /**
- * Render gate for Task 2.5: the --moss-color-ui-accent seam.
+ * Render gate: the --moss-color-ui-accent seam.
  *
  * Two sites, because the seam only exists as a difference between them:
  *

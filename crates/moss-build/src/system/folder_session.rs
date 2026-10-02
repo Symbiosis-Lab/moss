@@ -63,8 +63,7 @@ pub struct FolderSession {
     /// or deleting stale entries in — that same directory, producing a
     /// generation that gets silently promoted to `current` despite being a
     /// torn mix of two builds' content (or directly deleting a live-served
-    /// file out from under a request). This is the root cause resolved by
-    /// the seal-persist-race-404 fix.
+    /// file out from under a request).
     ///
     /// Deliberately narrower than `ui_bound`: it is held only across the
     /// fast synchronous stage-writing span (through notebook processing),
@@ -79,15 +78,10 @@ pub struct FolderSession {
     /// minting a fresh, unrelated `Mutex`. The lock's whole job is
     /// serializing writes to a physical directory (`stage_dir`) that does
     /// not change identity across a reopen — only the session (cancellation,
-    /// UI-bound counter) does. Before this shared it, a build that started
-    /// under the PRIOR session and was still running (unkillable —
-    /// `spawn_blocking`, see the worker's `OverdueWatchdog` doc) held the old
-    /// `Mutex`, while any build admitted under the NEW session — including
-    /// the reopened folder's own first build — acquired a brand-new, wholly
-    /// unrelated one: two pipelines writing `stage_dir` with no exclusion
-    /// between them, the same failure class part 1 of the open-double-build
-    /// fix closed for the pre-worker window, reachable here instead via a
-    /// reopen. See `tests::reopen_shares_the_stage_write_lock` below.
+    /// UI-bound counter) does. A fresh `Mutex` per session would let a build
+    /// still running under the prior session and a build admitted under the
+    /// new one write `stage_dir` with no exclusion between them at all. See
+    /// `tests::reopen_shares_the_stage_write_lock` below.
     stage_write_lock: Arc<Mutex<()>>,
     /// The sweep's "project unavailable" verdict (watcher-reliability design,
     /// 2026-08-18, "Root-gone is a verdict, not a mechanism"): consecutive
@@ -211,10 +205,7 @@ impl FolderSession {
     ///    task. This eliminates a race where a synchronous consumer
     ///    (`spawn_blocking` runner that never yields) could observe `false`
     ///    on its first `Ordering::SeqCst` load because the bridge task
-    ///    hadn't been polled yet. Was the root cause of a batched-test
-    ///    flake in 2026-05; the test continued to pass in isolation
-    ///    because lighter scheduler load happened to poll the bridge in
-    ///    time.
+    ///    hadn't been polled yet.
     /// 2. **Async bridge.** Spawns a task that awaits `cancelled().await`
     ///    and stores `true` when the token fires — handles the
     ///    "cancelled DURING run" case (folder switch mid-conversion,

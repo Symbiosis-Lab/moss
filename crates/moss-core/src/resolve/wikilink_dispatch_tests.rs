@@ -274,34 +274,27 @@ fn dispatch_anchor_wikilink_preserves_section_in_href() {
 
 // --- build_anchor / dispatch_wikilink_form (`[[…]]` text-link) -------
 //
-// SCOPE WARNING — read before trusting these as link-path coverage.
+// SCOPE WARNING: the three tests below drive `dispatch_wikilink_embed(...,
+// is_embed: false, ..)`, the `dispatch_wikilink_form` branch and its
+// `build_anchor` helper. That branch is dormant in the live build: the sole
+// production caller, `crate::ast::dispatch_wikilink_embeds`, hard-codes
+// `is_embed: true`. Plain `[[Page#Heading]]` text links arrive as
+// `Inline::Link { is_wikilink: true }` and are resolved by
+// `crate::ast::resolve_urls`, whose `slug_wikilink_suffix` does the
+// `#Heading → #heading` slugging.
 //
-// The three tests below drive `dispatch_wikilink_embed(..., is_embed:
-// false, ..)`, i.e. the `dispatch_wikilink_form` branch and its
-// `build_anchor` helper. That branch is the ONLY caller of `build_anchor`,
-// and in the LIVE build it is DORMANT: the sole production caller of this
-// dispatcher — the AST visitor `crate::ast::dispatch_wikilink_embeds`
-// (`ast/dispatch_wikilink_embeds.rs`) — hard-codes `is_embed: true`
-// (it only walks `![[…]]` image-embed `Inline::Image` nodes). Plain
-// `[[Page#Heading]]` TEXT links never reach this function in production;
-// they arrive as `Inline::Link { is_wikilink: true }` and are resolved
-// by `crate::ast::resolve_urls`, whose `slug_wikilink_suffix` performs
-// the user-facing `#Heading → #heading` slugging.
+// The real guards for text-link slugging live in
+// `crates/moss-core/src/ast/resolve_urls.rs`:
+//   - wikilink_cross_page_fragment_is_slugged
+//   - wikilink_same_page_fragment_is_slugged
+//   - markdown_link_fragment_stays_raw_not_slugged
+//   - wikilink_block_ref_keeps_id_raw
+//   - wikilink_cjk_fragment_preserved
+//   - slug_wikilink_suffix_preserves_query
 //
-// ==> The REAL guards for `[[Page#Heading]]` text-link slugging live in
-//     `crates/moss-core/src/ast/resolve_urls.rs`:
-//       - wikilink_cross_page_fragment_is_slugged
-//       - wikilink_same_page_fragment_is_slugged
-//       - markdown_link_fragment_stays_raw_not_slugged
-//       - wikilink_block_ref_keeps_id_raw
-//       - wikilink_cjk_fragment_preserved
-//       - slug_wikilink_suffix_preserves_query
-//
-// These three tests are kept because `build_anchor` is real code worth
-// locking (it mirrors `slug_wikilink_suffix`, and a plugin/CLI caller
-// could pass `is_embed: false`), NOT because they cover the live link
-// path. Their names are deliberately `build_anchor_*` so a future reader
-// is not misled into thinking text-link resolution is guarded here.
+// These tests lock `build_anchor` (it mirrors `slug_wikilink_suffix`, and a
+// plugin/CLI caller could pass `is_embed: false`); they do not cover the live
+// link path, hence the `build_anchor_*` names.
 
 #[test]
 fn build_anchor_slugs_section_fragment() {

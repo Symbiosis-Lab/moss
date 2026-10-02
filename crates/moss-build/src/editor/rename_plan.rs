@@ -1,14 +1,11 @@
 //! Resolver-driven rename/move planning and application.
 //!
-//! `rename_entry_with_refs_core` used to rewrite references by pattern-matching
-//! their raw text against the renamed entry's old/new path — a hand-picked
-//! subset of the rules the real resolver (`classify_reference` /
-//! `resolve_asset_ref`) already knows, so any reference the resolver accepted
-//! through a route the pattern-matcher didn't know (a folder's self-named
-//! note reached by its bare filename, a suffix-fallback match, …) went stale
-//! silently after a rename.
-//!
-//! This module makes the invariant explicit instead: a rename/move never
+//! Pattern-matching a reference's raw text against the renamed entry's
+//! old/new path covers only a hand-picked subset of the rules the real
+//! resolver (`classify_reference` / `resolve_asset_ref`) knows, so a reference
+//! the resolver accepts through another route (a folder's self-named note
+//! reached by its bare filename, a suffix-fallback match, …) would go stale
+//! silently after a rename. So the invariant is explicit: a rename/move never
 //! changes what a reference resolves to, modulo mapping old paths to new
 //! ones. For every reference: resolve it against the PRE-move tree; if it
 //! still resolves to the mapped target from its POST-move location, leave it
@@ -22,8 +19,8 @@
 //! modal, and CLI dry-runs). `apply_planned_moves` is the only place that
 //! performs I/O.
 //!
-//! `rename_entry_with_refs_core` — the existing public entry point used by
-//! both the app's rename command and `moss rename` — is now a one-element
+//! `rename_entry_with_refs_core` — the public entry point used by
+//! both the app's rename command and `moss rename` — is a one-element
 //! wrapper: `plan_moves` + `apply_planned_moves` for a batch of exactly one.
 
 mod path_list_folder_index;
@@ -232,16 +229,15 @@ fn relative_root_path(from_dir: &str, to_path: &str) -> String {
 //
 // Standard `![alt](path)` image syntax and structural spans (gallery/hero
 // bodies, frontmatter asset fields) are genuinely `resolve_asset_ref`'s:
-// confirmed via `resolve_urls.rs`'s `resolve_image_urls` (Phase 1), which
-// drives `resolve_asset_ref` off a `ContentGraph`-backed `AssetIndex` the
-// same way `GraphAssetIndex` here does. Embed wikilink syntax
-// (`![[x]]`/`![[x|attrs]]`) is grouped with assets deliberately, not because
-// it is provably `resolve_asset_ref`-routed for every target kind, but
-// because a folder embed specifically (`![[folder/]]`) IS —
-// `crates/moss-build/src/build/folder_embed.rs` calls `classify_reference`
-// directly for that marker — and because no divergence has been proven for
-// the non-folder embed case; a follow-up should re-verify that assumption
-// the same way this fix verified the link/wikilink one.
+// `resolve_urls.rs`'s `resolve_image_urls` drives `resolve_asset_ref` off a
+// `ContentGraph`-backed `AssetIndex` the same way `GraphAssetIndex` here does.
+// Embed wikilink syntax (`![[x]]`/`![[x|attrs]]`) is grouped with assets
+// deliberately, not because it is provably `resolve_asset_ref`-routed for
+// every target kind, but because a folder embed specifically (`![[folder/]]`)
+// IS — `crates/moss-build/src/build/folder_embed.rs` calls
+// `classify_reference` directly for that marker — and because no divergence is
+// known for the non-folder embed case; re-verify that assumption if one shows
+// up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefRoute {
     /// `resolve_asset_ref` via `classify_reference` — standard image syntax,

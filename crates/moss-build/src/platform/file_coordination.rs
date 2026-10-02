@@ -15,9 +15,8 @@
 //! 4 MiB-aligned window, leaving the file dataless; iCloud does not adopt it and
 //! always sends the whole file. Coordination removes the difference — it asks
 //! for the file, not for a range, so every provider sends all of it in one
-//! round trip. Measured on a real evicted Drive file, 8,594,307 bytes: the
-//! coordinated call alone, **with no read inside the accessor block**, returned
-//! in 4.26 s with the flag cleared and every block resident.
+//! round trip: the coordinated call alone, **with no read inside the accessor
+//! block**, returns with the flag cleared and every block resident.
 //!
 //! # Why it is confined to one caller
 //!

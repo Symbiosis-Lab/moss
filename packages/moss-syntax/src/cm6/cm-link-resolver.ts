@@ -26,9 +26,8 @@
 // there is noise while they type. A sibling link on the same line keeps its
 // feedback. (Matches the per-node reveal contract — cm-live-preview header.)
 //
-// The old `resolve_links` RPC + `ResolveLinksFn` + the four shared caches were
-// removed in Task 12 — every consumer (lint, hover, cmd-click nav, image render)
-// now reads the ONE shared reference cache.
+// Every consumer (lint, hover, cmd-click nav, image render) reads the ONE
+// shared reference cache.
 
 import { ViewPlugin, ViewUpdate, EditorView, Decoration, DecorationSet } from '@codemirror/view';
 import { Extension, RangeSetBuilder, type EditorState, type StateEffectType } from '@codemirror/state';

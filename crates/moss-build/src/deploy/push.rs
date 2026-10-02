@@ -711,11 +711,7 @@ async fn push_site_inner_impl(
 ///
 /// The build is synchronous and one-shot (`exits_after_build`), so the seal
 /// happens inline and [`super::one_shot::build_and_seal`] has the manifest by the time
-/// it returns. That last clause was false when this function was
-/// first written: the inline seal arm hardcoded `LogAnnouncer` and discarded
-/// `host.announcer`, so every hosted deploy failed with "the build sealed no
-/// generation" while a unit test of the wrapper passed. Both arms now use the
-/// host's own announcer, and
+/// it returns. Both seal arms use the host's own announcer, and
 /// [`tests::a_one_shot_build_hands_its_manifest_to_the_host_announcer`] drives
 /// the pipeline rather than the wrapper, because a test that constructs its own
 /// collaborator cannot see that nobody calls it. A build that produced no seal is a build that did
@@ -731,8 +727,7 @@ async fn push_site_inner_impl(
 /// leniency: the app's own `moss deploy` builds and publishes whatever the
 /// build produced, and the one hard refusal on both sides is
 /// [`crate::deploy::refuse_publish`]. A binary that refused here on a problem
-/// count the app publishes through would be the divergence this whole track
-/// exists to delete. `--strict` belongs to `build`, where the caller decides.
+/// count the app publishes through would diverge from it. `--strict` belongs to `build`, where the caller decides.
 ///
 /// One refusal is the terminal's alone, on purpose: a folder behind the live
 /// site, lifted by `overwrite_newer` — see [`crate::deploy::resolve_publish_inputs`].

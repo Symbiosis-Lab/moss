@@ -10,36 +10,28 @@
 //      ffmpeg thumbnail that lands seconds to minutes after the page paints.
 //
 // The blueprint grid is the placeholder for BOTH. Case 1 simply never resolves;
-// case 2 resolves when the bytes land. Collapsing them removes the thing that
-// used to break: an error handler guessing "permanently broken" and acting on
-// that guess irreversibly.
+// case 2 resolves when the bytes land. Collapsing them means no error handler
+// guesses "permanently broken" and acts on that guess irreversibly.
 //
 // WHY EVERY MUTATION HERE IS REVERSIBLE
 // -------------------------------------
-// This used to be a hand-written script inlined in shell.html that swapped the
-// <img>'s src to the blueprint data-URI, dropped its `srcset`, and DELETED every
-// <source> child of an enclosing <picture>. Nothing was saved. The preview's
-// asset-ready swap (js-src/bridge/iframe-bridge.ts) finds elements by URL, so
-// after that transform there was no longer anything to find: the <source>
-// elements were gone and the <img>'s src was a data-URI. A pending image that
-// errored once stayed a blueprint grid until the user pressed Cmd+R, no matter
-// how many AssetReady/AssetsSettled events arrived. Diagnosed from ticket
-// LOG-8D03-T0528-08-08 (876 images, ~9 minutes of background encoding).
+// The preview's asset-ready swap (js-src/bridge/iframe-bridge.ts) finds
+// elements by URL, so a transform that discards the original `src`/`srcset`/
+// <source> elements leaves a pending image that errored once stuck as a
+// blueprint grid, however many AssetReady/AssetsSettled events arrive.
 //
-// So: we still paint into `img.src`, because that is the only thing that
-// suppresses the native broken-image icon in every engine (Chromium draws the
-// icon over any CSS background; verified 2026-08-08 in chromium + webkit). But
-// every attribute we touch is stashed first, and `restore()` puts all of it
-// back. Neutralizing a <picture>'s <source> means moving its `srcset` ONTO the
+// So: we paint into `img.src`, because that is the only thing that suppresses
+// the native broken-image icon in every engine (Chromium draws the icon over
+// any CSS background). But every attribute we touch is stashed first, and
+// `restore()` puts all of it back. Neutralizing a <picture>'s <source> means moving its `srcset` ONTO the
 // same element as `data-moss-ph-srcset` — source-set selection skips a <source>
 // with no srcset, and the element stays in the DOM, so the undo is an attribute
 // write rather than a re-parse.
 //
 // A <video> takes the same treatment through a different attribute: the grid
 // goes into `poster` (a video cannot display an SVG data-URI as media) and the
-// dead `src` comes off, both stashed. The class is still called
-// `.moss-img-fallback` — it predates video, and renaming it would touch a dozen
-// files to say the same thing.
+// dead `src` comes off, both stashed. The class is called `.moss-img-fallback`
+// for both.
 //
 // WHERE IT RUNS — LOCAL PREVIEW ONLY
 // ----------------------------------
@@ -48,12 +40,8 @@
 // not before </body>, because it must be registered before any image load can
 // fail — which also rules out an external script.
 //
-// A published site carries none of it. It used to: shell.html inlined the
-// script into every page, so a broken reference showed a stranger a blueprint
-// grid on a live site while the author's local preview looked identical, and
-// nothing ever told the author. Rather than dress up the failure, moss removes
-// the cause — a publish is refused while any file reference is broken. The
-// placeholder is a working state, and the work is local.
+// A published site carries none of it: a publish is refused while any file
+// reference is broken, so the placeholder is a local working state only.
 //
 // `restore()` is published to `window.__mossAssetPlaceholder` so the preview's
 // iframe-bridge drives this implementation instead of carrying a second copy of

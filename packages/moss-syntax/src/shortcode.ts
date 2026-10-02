@@ -98,12 +98,9 @@ export const shortcodeBlockConfig: MarkdownConfig = {
 //
 // `:::hero {image=photo.jpg}` names an image, but the name sits in an
 // ATTRIBUTE, not in a markdown embed — so `cm-image-extract`'s Lezer walk
-// (`Image` / `WikilinkEmbed` nodes) never saw it. Three things fall out of
-// that one blind spot: the reference resolver never resolved the path, so the
-// hero tag had nothing to draw a thumbnail from; the hover popover had no
-// target; and a hero pointing at a deleted file got no broken-asset cue while
-// every `![[…]]` in the same document did. `extractImageTargets` calls
-// `shortcodeAssetRef` below, so all three are fixed at one seam.
+// (`Image` / `WikilinkEmbed` nodes) never sees it. `extractImageTargets`
+// calls `shortcodeAssetRef` below so the reference resolver, hover popover
+// and broken-asset cue cover shortcode attributes too.
 //
 // This lives beside the fence grammar rather than in a module of its own
 // because it IS grammar: the same opening line, one level further in. The
@@ -126,7 +123,7 @@ export const shortcodeBlockConfig: MarkdownConfig = {
 // (`gather_multi_line_attrs`). The grammar above does not — `ShortcodeAttrs`
 // ends at EOL — so neither does this, and a hero whose attrs wrap gets no
 // thumbnail and no hover. It also gets no micro-tag params today, for the same
-// reason: `SHORTCODE_OPEN_RE` is line-based. One limitation, not a new one.
+// reason: `SHORTCODE_OPEN_RE` is line-based.
 
 /** One `key=value` item read off an attribute block. */
 export interface AttrKvSpan {

@@ -156,17 +156,13 @@ pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) 
 /// 2. **the block has overlay text of its own, once its image is accounted
 ///    for.**
 ///
-/// Without (2) this returned `true` for any hero with a non-blank body line —
-/// including an image-only cover, which is the obvious way to write
-/// "full-bleed cover photo" and by far the commonest hero there is, in either
-/// of its two syntaxes: `:::hero {image=cover.jpg}` / `:::`, or the plain
-/// body-image form `:::hero {.plate}` / `![cover](cover.jpg)` / `:::`. moss
-/// suppressed the title, and the hero renderer draws only the image, the
-/// overlay and the caption; it never consults `doc.title`. So the slot was
-/// handed to a component that put nothing in it and the title vanished from
-/// the page — silently, because `<title>`, the OG tags and RSS all resolve
-/// the same text by other paths. One site adopted full-bleed covers across 87
-/// pages this way, and a second adopted the body-image form across 62 more.
+/// Without (2), an image-only cover — the commonest hero, in either syntax:
+/// `:::hero {image=cover.jpg}` / `:::`, or the body-image form
+/// `:::hero {.plate}` / `![cover](cover.jpg)` / `:::` — would suppress the
+/// title, and the hero renderer draws only the image, the overlay and the
+/// caption; it never consults `doc.title`. The title would vanish from the
+/// page silently, because `<title>`, the OG tags and RSS resolve the same
+/// text by other paths.
 ///
 /// "Has overlay text" rather than "has a heading" is deliberate: any overlay
 /// content means the author put *something* in the title slot, and widening

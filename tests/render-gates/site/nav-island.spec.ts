@@ -9,18 +9,18 @@
  *
  * The three geometric claims:
  *
- *   §5  The trail is one line at ANY width. Not "one line above 768px" — the
- *       fold is measured, so a phone is the narrowest case of one behaviour
- *       rather than a special case that drifts out of step.
- *   §5  Folding keeps the first crumb and the current page. They are the two
- *       ends of "where am I"; dropping either is what makes a folded trail
- *       useless.
- *   §7  Every label in the sections panel starts at the same x. The first
- *       attempt used an in-flow `content: "●"` for the current row, which
- *       shifted its own label sideways — the one thing a position indicator
- *       must never do. Measured with a Range around the TEXT NODE, not the
- *       row box: a marker that moves the box would be invisible to a
- *       getBoundingClientRect on the <a>.
+ *   The trail is one line at ANY width. Not "one line above 768px" — the
+ *   fold is measured, so a phone is the narrowest case of one behaviour
+ *   rather than a special case that drifts out of step.
+ *
+ *   Folding keeps the first crumb and the current page. They are the two
+ *   ends of "where am I"; dropping either is what makes a folded trail
+ *   useless.
+ *
+ *   Every label in the sections panel starts at the same x — the current
+ *   row's position marker must never shift its own label sideways. Measured
+ *   with a Range around the TEXT NODE, not the row box: a marker that moves
+ *   the box would be invisible to a getBoundingClientRect on the <a>.
  *
  * Harness: playwright/fixtures/nav-island/live-css.html
  * Config:  playwright/nav-island.config.ts

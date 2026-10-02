@@ -58,11 +58,10 @@
 //! out-of-band as [`validation`] diagnostics, not return values.
 //!
 //! moss ships this crate in a host built with `panic = "abort"` (release
-//! profile), so a panic on user input crashes the whole desktop app (see the
-//! `date.rs` fix for the
-//! editor-mount panic on Chinese filenames). The lint attributes below enforce
-//! the panic-free contract — `string_slice` plus `unwrap_used`/`expect_used`,
-//! all denied outside tests — each with a per-site escape-hatch rule.
+//! profile), so a panic on user input crashes the whole desktop app. The lint
+//! attributes below enforce the panic-free contract — `string_slice` plus
+//! `unwrap_used`/`expect_used`, all denied outside tests — each with a
+//! per-site escape-hatch rule.
 
 #![forbid(unsafe_code)]
 // `clippy::string_slice` flags `&s[..n]` byte-indexed slicing on `&str`. That

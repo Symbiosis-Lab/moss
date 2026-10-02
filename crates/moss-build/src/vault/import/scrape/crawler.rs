@@ -156,7 +156,7 @@ const STYLE_SCRIPT_EXTENSIONS: &[&str] = &["css", "js", "mjs"];
 /// `.html`/`.htm`, `.php`, `.asp`, or `.aspx` — the extensions a page is
 /// actually served at on the CMSes this importer meets), answers `false`:
 /// it is still a page candidate, and a failed fetch of it keeps getting its
-/// stub exactly as before this function existed.
+/// stub.
 ///
 /// `FEED_DATA_EXTENSIONS` is the one family that can be wrong: a `.json` or
 /// `.xml` URL is almost always a feed or a data endpoint, but a headless

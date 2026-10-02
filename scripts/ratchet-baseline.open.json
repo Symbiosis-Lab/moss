@@ -32,9 +32,9 @@
         "crates/moss-build/src/seta/client.rs": 1100,
         "crates/moss-build/src/tasks.rs": 1400,
         "crates/moss-build/src/vault/fs.rs": 900,
-        "crates/moss-core/src/ast/hooks.rs": 1200,
+        "crates/moss-core/src/ast/hooks.rs": 1100,
         "crates/moss-core/src/ast/parser.rs": 2100,
-        "crates/moss-core/src/ast/render.rs": 1000,
+        "crates/moss-core/src/ast/render.rs": 900,
         "crates/moss-core/src/ast/resolve_urls.rs": 1000,
         "crates/moss-core/src/ast/shortcode_extract.rs": 1700,
         "crates/moss-core/src/contract/components.rs": 4400,
@@ -83,7 +83,7 @@
         "crates/moss-core/src/contract/components.rs": "One ComponentEntry per emitted moss-* class in a single const table, the federated contract's Source 2; splitting it by category would need the components_sync_test scanner taught to scan multiple files, which nothing currently proposes.",
         "crates/moss-core/src/frontmatter_typed.rs": "One struct per frontmatter concept (series, analytics, and the rest) so validation, the resolver and the build pipeline share a single definition per the module doc; splitting by concern would break the co-location with schema_fields.rs that keeps the two in sync by review.",
         "crates/moss-core/src/render/image.rs": "The single entry point every <img>/<picture> call site converges on, by explicit architectural choice recorded in the module doc; splitting it back into per-call-site emitters is the exact regression the migration that produced this file was written to retire.",
-        "crates/moss-core/src/resolve/wikilink_dispatch.rs": "Already replaced a ~2155-line string-rewriter with this dispatcher per its own module doc; the remaining growth path is more embed types registering through the shared renderer lookup, which is the intended way to add one, not a sign this file needs splitting.",
+        "crates/moss-core/src/resolve/wikilink_dispatch.rs": "This dispatcher is the single entry point for wikilink embeds; the remaining growth path is more embed types registering through the shared renderer lookup, which is the intended way to add one, not a sign this file needs splitting.",
         "crates/moss-core/src/schema_fields.rs": "BUILTIN_FIELDS is deliberately one flat table, co-located by convention with frontmatter_typed.rs per the module doc, so a new field is a two-file one-commit change; it grows exactly one entry per frontmatter field moss adds, which is the design working as intended.",
         "packages/moss-api/src/testing/mock-tauri.ts": "In-memory Tauri IPC mocks for plugin integration tests, one mock per real IPC command moss-api exposes; it grows in lockstep with the command surface and retires only if the mocks are generated from the bindings instead of hand-written."
       }

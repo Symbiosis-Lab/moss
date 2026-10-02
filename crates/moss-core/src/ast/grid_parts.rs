@@ -153,38 +153,28 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
             open_tag.push('"');
         }
         // `scroll` keeps the row on one line and lets the reader drag it
-        // sideways instead of it wrapping/collapsing; `tabindex="0"` makes
-        // an overflowing row keyboard-scrollable, the same affordance
-        // `.moss-table-scroll` already gives a wide table. `label` only
-        // means something once the row IS a scroll region, so it emits
-        // `role`/`aria-label` only alongside `scroll` — set on its own it
-        // would name a landmark that was never created.
+        // sideways; `tabindex="0"` makes an overflowing row
+        // keyboard-scrollable, the same affordance `.moss-table-scroll` gives
+        // a wide table. `label` only means something once the row IS a
+        // scroll region, so `role`/`aria-label` are emitted only alongside
+        // `scroll` — alone they would name a landmark that was never created.
         //
-        // `args.is_scroll_row()`, not the bare `scroll` flag: a `{scroll}`
-        // grid with only one cell has nothing to drag past at any width, so
-        // it needs none of this — no dots, no drag, full-width card, same
-        // as the grid without `scroll` at all. See
-        // `GridShortcode::is_scroll_row`.
+        // `args.is_scroll_row()`, not the bare `scroll` flag: a one-cell
+        // `{scroll}` grid has nothing to drag past, so it gets none of this.
         //
         // A row whose cells already fit in `columns` (`fits_without_scrolling`)
-        // still gets the full `data-scroll`/`tabindex`/`role`/`aria-label`
-        // treatment here — it stays a real scroll region at narrow widths,
-        // just not at wide ones — but carries `data-fits` too, so
-        // site.css/vertical.css can key the wide-screen plain-grid layout
-        // off it. `tabindex="0"` is always emitted regardless of `data-fits`
-        // so a no-JS narrow view is still keyboard-scrollable; the runtime
-        // script (`scroll-row.ts`) removes it again once it can see the row
-        // isn't actually scrollable at the current width.
+        // still gets the full scroll-region treatment but carries `data-fits`
+        // too, so site.css/vertical.css can key the wide-screen plain-grid
+        // layout off it. `tabindex="0"` is always emitted so a no-JS narrow
+        // view stays keyboard-scrollable; the runtime script (`scroll-row.ts`)
+        // removes it once it can see the row isn't scrollable at the current
+        // width.
         //
-        // `label` may be the author's own `{label="…"}` text, or — when
-        // they wrote none — the nearest preceding heading's text, filled in
-        // by the one caller that can see a document's top-level blocks
-        // (moss-build's `render_segmented`, via `grid_with_heading_fallback`
-        // in `body_plan.rs`) before this function ever runs. Either way this
-        // function only ever reads `args.label`; it cannot tell the two
-        // apart, and doesn't need to — an unnamed keyboard stop is a real
-        // accessibility gap (a screen reader announces a focusable element
-        // with no name), and both are equally valid names for it.
+        // `label` is the author's `{label="…"}` text or, when none, the
+        // nearest preceding heading's text, filled in by the caller that sees
+        // the top-level blocks (`grid_with_heading_fallback` in moss-build's
+        // `body_plan.rs`). This function only reads `args.label`; an unnamed
+        // focusable element is an accessibility gap, so either name is valid.
         if args.is_scroll_row() {
             open_tag.push_str(r#" data-scroll"#);
             if args.fits_without_scrolling() {

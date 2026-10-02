@@ -1,19 +1,18 @@
 // A card auto-built from a page's own description clamps to two lines with
 // no ellipsis — `.moss-card-description`'s `max-block-size: calc(1.5em * 2)`
 // clips overflow with a bare `overflow: hidden`, so a truncated sentence
-// just stops mid-word with nothing to tell a reader it was cut. The clamp
-// used to be `display: -webkit-box` + `-webkit-line-clamp: 2`, which paints
-// the ellipsis for free, but that legacy multi-line-truncation box lays out
-// along the PHYSICAL horizontal axis regardless of the element's own
-// writing-mode: inside a vertical-typesetting site it rotated the
-// description sideways while the title beside it stayed correctly vertical
-// (see the long comment on the base rule in site.css). Neither shipping
-// engine implements the unprefixed `line-clamp` property, which would not
-// have that restriction.
+// just stops mid-word with nothing to tell a reader it was cut.
+// `display: -webkit-box` + `-webkit-line-clamp: 2` would paint the ellipsis
+// for free, but that legacy multi-line-truncation box lays out along the
+// PHYSICAL horizontal axis regardless of the element's own writing-mode: in
+// a vertical-typesetting site it rotates the description sideways while the
+// title beside it stays correctly vertical (see the long comment on the base
+// rule in site.css). Neither shipping engine implements the unprefixed
+// `line-clamp` property, which would not have that restriction.
 //
-// The fix re-enables the ellipsis clamp unconditionally in core (site.css),
-// and undoes it in site/vertical.css — the gated partial a horizontal site
-// never ships — because core CSS must never reference `data-typesetting` at
+// The ellipsis clamp is unconditional in core (site.css), and undone in
+// site/vertical.css — the gated partial a horizontal site never ships —
+// because core CSS must never reference `data-typesetting` at
 // all (stylesheet_tests.rs's gates_change_what_ships/gates_are_independent
 // enforce that for every horizontal build, and a `:not([data-typesetting=
 // "vertical"])` in core would still carry the substring). So a

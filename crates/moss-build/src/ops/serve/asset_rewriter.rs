@@ -30,9 +30,8 @@
 //!
 //! ## Second job: the inline LQIP never reaches a preview
 //!
-//! moss emits a blur-up placeholder two ways, and removing one is not removing
-//! both. The registry channel is gone (`AssetPlaceholder` carries no LQIP), but
-//! `moss_core::render::image` also bakes one **inline into the HTML** as
+//! `AssetPlaceholder` carries no LQIP, but
+//! `moss_core::render::image` bakes one **inline into the HTML** as
 //! `style="background-image:url(data:image/jpeg;base64,…)"` on the inner
 //! `<img>`. That one is emitted by the same renderer for preview and for
 //! publish, because there is one pipeline and the generation the preview serves
@@ -40,20 +39,16 @@
 //! time without also taking it off the published site, which is the one place it
 //! belongs.
 //!
-//! So it comes off HERE, at serve time, which is precisely the layer this
-//! design assigns the job: "HTML is structural and stable. Servers handle availability."
-//! The bytes on disk keep their LQIP for the deploy; the preview response does
-//! not carry one.
+//! So it comes off HERE, at serve time. The bytes on disk keep their LQIP for
+//! the deploy; the preview response does not carry one.
 //!
 //! Why it must come off at all: an author looking at their own photo to judge it
 //! cannot tell a blur that resembles it from a badly-encoded result. With the
 //! source passthrough serving the real original the background is invisible
-//! anyway — until the moment it is not. If the passthrough cannot read the
-//! source (cloud-evicted, deleted mid-session), the fallback is a 1×1
-//! **transparent** WebP, and a transparent image over an LQIP background paints
-//! the LQIP, scaled to the `width`/`height` attributes. That is the failure a
-//! production incident recorded: "Users saw the LQIP placeholder permanently
-//! in place of the photo."
+//! anyway — until the passthrough cannot read the source (cloud-evicted,
+//! deleted mid-session). The fallback is then a 1×1 **transparent** WebP, and a
+//! transparent image over an LQIP background paints the LQIP, scaled to the
+//! `width`/`height` attributes.
 
 use axum::{
     body::Body,

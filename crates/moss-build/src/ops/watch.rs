@@ -1,12 +1,9 @@
 //! The file-watch driver: debouncer sessions, the event pump, and the
 //! per-folder rebuild worker — the long-running loop behind `--watch`.
 //!
-//! Crossed from the desktop app's build-shell watch module at slice W1 of the
-//! 2026-08-28 preview-server relocation plan (NORTH-STAR charters exactly this
-//! home: "watch — loop in `ops/watch.rs` behind Spawner; the app-side task
-//! stays UiBound"). The *decisions* — whether a change should rebuild, the
-//! content-hash gate, rename pairing, the refresh diff — were already here in
-//! [`crate::build::watch`]; this module adds the driver that runs them.
+//! The *decisions* — whether a change should rebuild, the content-hash gate,
+//! rename pairing, the refresh diff — live in [`crate::build::watch`]; this
+//! module is the driver that runs them.
 //!
 //! ## The host seam, constructor-shaped
 //!
@@ -18,17 +15,17 @@
 //!   [`TokioSpawner`](crate::build::ports::spawner::TokioSpawner));
 //! * **where events go** — an [`EventRelay`]: the app's typed Tauri bus, or
 //!   the SSE carrier's bus ([`crate::ops::serve::events`]) when there is no
-//!   shell. There is no `Option<AppHandle>` mode flag any more; each host has
-//!   exactly one construction path (the same shape `ops/serve.rs` took at S1);
+//!   shell. There is no `Option<AppHandle>` mode flag; each host has exactly
+//!   one construction path;
 //! * **how a rebuild runs** — [`RebuildDispatch`]/[`RebuildAttempt`]: the
 //!   rebuild bodies stay host-side (they are managed-state glue — baseline
 //!   stashes, the publish freeze, progress channels), and the driver only
 //!   decides *when* to call them.
 //!
 //! The worker/supervision machinery (`ops/watch/worker.rs`,
-//! `ops/watch/supervision.rs`, `ops/watch/reconcile.rs`) rode along whole —
-//! it was host-free already, process-global by design so the headless path
-//! gets the same slots and strike rules.
+//! `ops/watch/supervision.rs`, `ops/watch/reconcile.rs`) is host-free and
+//! process-global by design, so the headless path gets the same slots and
+//! strike rules.
 
 use std::path::Path;
 use std::sync::Arc;

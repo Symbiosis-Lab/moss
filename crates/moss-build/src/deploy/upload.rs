@@ -4,12 +4,10 @@
 //! # Why this module exists
 //!
 //! moss has two upload loops — the interactive publish in `deploy.rs` and
-//! `moss deploy --prebuilt` in `deploy/prebuilt.rs`. They were copies, and they
-//! had drifted: `prebuilt.rs` had **no size routing at all** and would send a
-//! 100 MB video as a single PUT. A fix applied to one was not a fix.
+//! `moss deploy --prebuilt` in `deploy/prebuilt.rs`. A fix applied to one must
+//! apply to both, so the shared part lives here.
 //!
-//! They are not identical, and pretending otherwise is how the drift started.
-//! What they genuinely share is *"given a file on disk, produce the right
+//! They are not identical. What they genuinely share is *"given a file on disk, produce the right
 //! requests"* and *"admit work at a rate the uplink can sustain"*. That is what
 //! lives here. Progress reporting and symlink handling stay with their callers,
 //! because those really do differ.
@@ -264,19 +262,17 @@ fn accept_self_heal(
 
 /// Upload one regular file, choosing single-PUT or chunked by size.
 ///
-/// This is the routing decision that was silently deleted by a refactor once
-/// (`b1df2298a`) and cost a real site six 100 MB videos, and that
-/// `deploy/prebuilt.rs` never had at all. One implementation, one place to pin
-/// with a test.
+/// This is the routing decision: one implementation, one place to pin with a
+/// test.
 ///
 /// `size` is the caller's already-stat'd file length; taking it as a parameter
 /// avoids a second syscall on a path the caller just measured.
 /// `throughput` is the deploy's shared link estimate. It decides the routing —
 /// "does this file fit in one request at the speed we are actually getting" —
-/// and every completed upload feeds it. Routing on a *fixed* size was the
-/// 2026-08-04 bug: a 3.9 MB file at 25 KB/s sat just under the fixed 4 MiB
-/// threshold, so it took the single-PUT path, which has no chunking, no
-/// escalation and no resume, and timed out at 150 s on every attempt forever.
+/// and every completed upload feeds it. Routing on a *fixed* size fails: a
+/// 3.9 MB file at 25 KB/s sits just under a 4 MiB threshold, so it would take
+/// the single-PUT path, which has no chunking, no escalation and no resume,
+/// and time out on every attempt.
 /// `self_heal_cap` is the deploy-wide budget from [`self_heal_cap`] (the
 /// function) — every caller computes it once from its own file count and
 /// passes the same value into every call this deploy makes.

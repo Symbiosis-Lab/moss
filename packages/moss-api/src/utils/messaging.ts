@@ -399,8 +399,7 @@ async function invokeLifecycle(
  * Awaiting pulse) surfaces the task. Plugin authors do NOT pick the
  * surface; they just describe what they're doing and why.
  *
- * Preferred over `reportProgress()` for new code. The legacy API stays
- * supported until a later phase sweeps the remaining call sites.
+ * Preferred over `reportProgress()` for new code.
  *
  * @example
  * const task = await startTask("Importing 42 articles", {

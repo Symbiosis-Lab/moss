@@ -2,8 +2,8 @@
 //!
 //! `build::assets::download` is right for site assets: small, in-memory, one
 //! shot, bounded by a total-duration timeout. Those exact properties make it
-//! wrong for a 167 MB stack DMG pulled across the GFW, where three distinct
-//! failures were observed on one machine within 24 hours:
+//! wrong for a 167 MB stack DMG pulled across a hostile network, which fails
+//! in three distinct ways:
 //!
 //! 1. **Slow but alive.** The asset host throttled to ~83 KB/s. A 300 s
 //!    *total-duration* timeout silently encodes "must sustain ≥ 560 KB/s" —
@@ -17,9 +17,9 @@
 //!    `Range: bytes=N-` (the CDN answers 206). Progress is cumulative across
 //!    attempts, and across whole app runs.
 //!
-//! 3. **One transport dies, the other lives.** The proxy path failed TLS
-//!    (`SSL_ERROR_SYSCALL`) at the same moment the direct path worked, having
-//!    been the reverse the day before. Attempts therefore ALTERNATE proxy and
+//! 3. **One transport dies, the other lives.** The proxy path can fail TLS
+//!    while the direct path works, and the reverse on another day. Attempts
+//!    therefore ALTERNATE proxy and
 //!    direct rather than committing to whichever was configured.
 //!
 //! Resuming cuts both ways, so the `.part` is treated as *disposable state,

@@ -95,8 +95,8 @@ pub struct RawRef {
 /// re-scanned, so `[![[hero.png]]](/album/)` — a link-wrapped embed —
 /// yields the outer `MarkdownLink` AND the inner `WikilinkStemEmbed`, and
 /// `[![a](hero.png)](/album/)` yields the outer link and the inner image.
-/// Before that, the inner reference existed only as a substring of the outer
-/// ref's `label`, so a rename left it dangling with no report. Results stay in
+/// Otherwise the inner reference would exist only as a substring of the outer
+/// ref's `label`, and a rename would leave it dangling with no report. Results stay in
 /// source order, with an enclosing reference immediately preceding the ones
 /// nested inside it.
 ///

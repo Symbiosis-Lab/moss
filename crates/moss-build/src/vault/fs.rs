@@ -11,12 +11,10 @@
 //!   holds the identity secret, every plugin's declared capability grants, and
 //!   other plugins' stored credentials.
 //!
-//! Those two rules used to live in two places under one name, and the fence
-//! built for the second one silently caged the first: moss's own Analytics
-//! dashboard read `.moss/data/events.jsonl` through the plugin door and got a
-//! refusal on every load, for eleven days, rendered as a plausible "no data
-//! yet". The lesson is not "pick the right function" — it is that a
-//! policy repeated at N call sites cannot say *which* door it guards.
+//! A policy repeated at every call site cannot say *which* door it guards —
+//! moss's own Analytics dashboard once got refused reading
+//! `.moss/data/events.jsonl` because it went through the plugin sandbox
+//! instead of the first-party door.
 //!
 //! So the two policies are separate, and the plugin one is a **type**:
 //! [`PluginPath`] is the only thing the plugin file commands accept, and
@@ -75,11 +73,10 @@ pub(crate) fn rejects_traversal(path: &str) -> Result<(), String> {
 /// callers get one guard rather than a lexical one they must remember to
 /// pair.
 ///
-/// Pairing it by hand is exactly what went wrong: nine call sites, and
-/// `create_entry_path` was the one that never did, which left `create_file`
-/// and `create_folder` able to write outside the vault on BOTH carriers.
-/// [`recheck_canonical`] remains public for the callers that need the
-/// resolved `(root, target)` pair back, not for containment.
+/// Pairing it by hand is the hazard this removes: one forgotten call site is
+/// enough to let a write land outside the vault.
+/// [`recheck_canonical`] remains public for callers that need the resolved
+/// `(root, target)` pair back, not for containment.
 pub fn validate_entry_path(project_root: &Path, path: &str) -> Result<PathBuf, String> {
     rejects_traversal(path)?;
     let p = PathBuf::from(path);
@@ -190,46 +187,27 @@ pub fn delete_entries_inner(project_root: &Path, paths: &[String]) -> Result<(),
 
         // On macOS, trash via `NSFileManager.trashItemAtURL`, not the crate's
         // default Finder AppleScript. The Finder route serializes through a
-        // busy Finder under the default ~60s AppleEvent ceiling — on a cloud
-        // File Provider vault it timed out (-1712) where trashItemAtURL took
-        // 30ms (measured 2026-09-05, Google Drive) — and it needs the
-        // Automation permission whose denial (-1743) was a real regression. Both
-        // failure modes cease to exist on this route. Known cost: Finder may
-        // not offer "Put Back" for items trashed this way; drag-out recovery
-        // still works.
+        // busy Finder under the default ~60s AppleEvent ceiling, which times
+        // out on a cloud File Provider vault, and it needs the Automation
+        // permission, whose denial is a real regression. Both failure modes
+        // cease to exist on this route. Known cost: Finder may not offer "Put
+        // Back" for items trashed this way; drag-out recovery still works.
         //
-        // And with NO fallback route when it fails, though 31101e8 briefly added
-        // one. A client's delete inside iCloud Drive failed with Apple's "the
-        // volume doesn't have one", so the obvious repair was to hand the file to
-        // Finder — the one process whose job is knowing where a given item's
-        // Trash lives, and the route that had worked for that client by hand.
-        // Measured 2026-09-17 on a scratch APFS volume whose `.Trashes` was
-        // deliberately blocked by a regular file, which reproduces that class of
-        // failure:
+        // Deliberately NO fallback route when this fails. On a volume whose
+        // Trash is unusable, every sanctioned API — `FileManager.trashItem`,
+        // `NSWorkspace.recycle` (the same underlying failure, not a second
+        // door) — fails the same way, and the one route that "succeeds",
+        // handing the delete to Finder via `osascript`, does so by deleting
+        // the file permanently: gone from `~/.Trash`, the volume, and —
+        // propagated by sync — every other device, with no undo.
         //
-        //   - `FileManager.trashItem`   fails: NSCocoaErrorDomain 512, underlying
-        //                               -1407 errFSNotAFolder.
-        //   - `NSWorkspace.recycle`     fails, wrapping the SAME -1407. AppKit's
-        //                               route is not a second door, it is this
-        //                               door with another handle — so there is no
-        //                               sanctioned API left to fall back to.
-        //   - Finder via `osascript`    "succeeds", and the file is GONE: absent
-        //                               from `~/.Trash`, absent from the volume,
-        //                               nowhere on disk.
-        //
-        // That last line is why there is no fallback. Asked to delete something
-        // whose volume has no usable Trash, Finder deletes it permanently — the
-        // exact opposite of what this function promises three paragraphs up, and
-        // on a synced vault that destruction propagates to every other device
-        // with no undo. A delete door that silently becomes a shredder in its
-        // degraded case is worse than one that refuses, so it refuses.
-        //
-        // Trashing an item really can be impossible (a File Provider item whose
-        // provider does not advertise `allowsTrashing`, a volume with no Trash),
-        // and destroying it anyway is a decision only the person can make. Making
-        // it available needs a typed error this returns instead of a string, and a
-        // confirmation the frontend owns — see the desktop repo's delete-error
-        // surface work for that contract. Until then: say so, and stop.
+        // A delete door that silently becomes a shredder in its degraded
+        // case is worse than one that refuses, so it refuses. Trashing an
+        // item really can be impossible (a File Provider item whose provider
+        // does not advertise `allowsTrashing`, a volume with no Trash), and
+        // destroying it anyway is a decision only the person can make —
+        // which needs a typed error here instead of a string, and a
+        // confirmation the UI owns. Until then: say so, and stop.
         #[allow(unused_mut)]
         let mut ctx = trash::TrashContext::default();
         #[cfg(target_os = "macos")]

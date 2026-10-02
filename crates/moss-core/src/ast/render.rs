@@ -3,39 +3,12 @@
 //! Walks every variant; calls hooks at interceptable points. Debug-asserts
 //! on `Url::Unresolved` reaching the renderer — a missing visitor is a bug.
 //!
-//! # Phase 4: render_document IS the production rendering path (target)
-//!
-//! Today (2026-05-27) this function runs as a parallel observer via
-//! `observe_typed_ast` in moss-build's markdown pipeline;
-//! production HTML still comes from `pulldown_cmark::html::push_html` over
-//! the event stream. Phase 4 PR7a flips this: `render_document` becomes
-//! the production renderer, `html::push_html` is no longer called in the
-//! main pipeline, and `transform_events` is reduced to a thin
-//! events-to-Document adapter (or deleted).
-//!
 //! # Why the AST renders (not pulldown-cmark)
 //!
-//! Cross-SSG research (2026-05-27) confirms every AST-bearing SSG with
-//! secondary consumers (link graphs, editors, validators, multi-target
-//! rendering) puts the AST at the rendering source:
-//!
-//! - **mdBook** (same parser as moss) recently migrated from
-//!   `html::push_html` to a typed `Tree<Node>` via `ego_tree`. Same
-//!   destination, same motivation.
-//! - **Hugo** dispatches NodeRenderer per AST node-kind; render hooks
-//!   fire during AST walk.
-//! - **Markdoc** ships `AstNode → RenderableTreeNode → HTML/React`.
-//! - **Pandoc** has been AST-first since 2006; output is a writer per
-//!   target format.
-//! - **Quarto 2** is mid-migration from Stage 1 pre-parsers to AST-first
-//!   for three reasons: performance, fragility, information loss.
-//!
-//! Streaming-only SSGs (Zola, markdown-it ecosystem) live without an AST,
-//! but pay the cost: structural reshape requires fragile token-window
-//! pattern matching; secondary consumers can't ride on event streams.
-//! moss has secondary consumers (page threading, editor's
-//! `scan_shortcodes`, `has_shortcode_recursive`, future WASM editor,
-//! future LSP-style diagnostics) — AST is non-optional.
+//! moss has secondary consumers (page threading, the editor's
+//! `scan_shortcodes`, `has_shortcode_recursive`, diagnostics) that cannot ride
+//! on an event stream, and structural reshaping over events needs fragile
+//! token-window pattern matching. The typed AST is the rendering source.
 
 use super::document::{BlockMeta, Document};
 use super::footnotes::{self, FootnoteCtx};
@@ -204,7 +177,7 @@ pub fn render_block_with_meta<H: RenderHooks + ?Sized>(
 }
 
 /// Render a sequence of blocks to HTML. Used by shortcode-body renderers —
-/// grid cells and, via moss-build's `render_hero_html_typed` (Phase 4 PR4.5),
+/// grid cells and, via moss-build's `render_hero_html_typed`,
 /// the hero overlay — to render a `Vec<Block>` that didn't come from a full
 /// `Document`. [`render_document`] does NOT call this: it walks its blocks
 /// and meta in lockstep, calling `render_block` directly.
@@ -220,7 +193,7 @@ pub fn render_block_with_meta<H: RenderHooks + ?Sized>(
 /// [`render_document`]). Today only [`render_document`] consumes meta;
 /// nested-block walks (list items, callout bodies, blockquotes) are
 /// also meta-free — `data-source-line` is a top-level-block-only
-/// concern, matching the legacy `transform_events` emit shape.
+/// concern.
 ///
 /// `H: ?Sized` so the function can be called with `&dyn RenderHooks` or
 /// with `self: &Self` from inside a trait default method (where `Self`
@@ -536,34 +509,27 @@ fn render_block<H: RenderHooks + ?Sized>(
             class_names,
             img_style,
         } => {
-            // Phase 4 PR3 (2026-05-27): image-only paragraphs promoted at
-            // parse time become Block::Figure. The render shape is a
-            // `<figure class="moss-image">` wrap around the image hook's
-            // output, optionally followed by `<figcaption>{caption}</figcaption>`.
+            // Image-only paragraphs promoted at parse time become
+            // Block::Figure: a `<figure class="moss-image">` wrap around the
+            // image hook's output, optionally followed by
+            // `<figcaption>{caption}</figcaption>`.
             //
             // The inner image renders via `hooks.render_image` (the same
-            // path as Inline::Image — production wires this through
-            // `DefaultHooks::with_snapshot` / `PipelineHooks` which uses
-            // `ImageContext::MarkdownInline`, producing the bare
-            // `<picture><img></picture>` shape). The structural `<figure>`
-            // wrapper is the Figure renderer's responsibility — this keeps
-            // the byte shape contract with shape-spec § 1: the spec sample
-            // shows `<figure>` containing exactly the MarkdownInline inner.
+            // path as Inline::Image, `ImageContext::MarkdownInline`, giving
+            // the bare `<picture><img></picture>` shape). The structural
+            // `<figure>` wrapper is the Figure renderer's responsibility.
             //
-            // Caption omission: `caption: None` means "no figcaption" (the
-            // empty-alt case). Empty caption Vec is also treated as no
-            // figcaption — defensive, since `caption: Some(vec![])` would
-            // otherwise emit `<figcaption></figcaption>`.
+            // `caption: None` means "no figcaption" (the empty-alt case); an
+            // empty caption Vec is treated the same, since `Some(vec![])`
+            // would otherwise emit `<figcaption></figcaption>`.
             //
             // Figure-level display params (`width`, `align`, `class_names`,
             // `img_style`) are populated only by parameterized wikilink
-            // embeds (image-embed synth-collapse). The class list /
-            // `data-width=` byte shape matches
+            // embeds. The class list / `data-width=` byte shape matches
             // `render::image::wrap_in_figure_full` so an embed-sourced figure
             // and a CommonMark `![](url)` figure with the same params are
-            // byte-identical. For the CommonMark path these are all defaults,
-            // so `class="moss-image"` with no `data-width=` — unchanged from
-            // before the collapse.
+            // byte-identical. For the CommonMark path these are all defaults:
+            // `class="moss-image"` with no `data-width=`.
             let mut class_value = String::from("moss-image");
             if let Some(a) = align {
                 class_value.push(' ');

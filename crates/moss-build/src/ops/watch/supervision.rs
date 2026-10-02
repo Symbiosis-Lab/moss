@@ -1,13 +1,12 @@
 //! Watcher supervision: the sweep judges the watcher by outcomes, and this
 //! module carries the evidence between the two.
 //!
-//! Phase 3 ("The sweep is also the watcher's supervisor"). The incident that design
-//! answers — notify's macOS FSEvents stream dying with no flag, no error, no
-//! Rescan (LOG-8D03-T0942-08-18) — emits nothing a health check could poll,
-//! so the watcher is judged by the one signal a silent-but-dead stream cannot
-//! fake: **drift the sweep catches that the watcher never delivered.**
+//! notify's macOS FSEvents stream can die with no flag, no error, no Rescan,
+//! emitting nothing a health check could poll, so the watcher is judged by the
+//! one signal a silent-but-dead stream cannot fake: **drift the sweep catches
+//! that the watcher never delivered.**
 //!
-//! ## The strike rule, exactly as the design states it
+//! ## The strike rule
 //!
 //! - **A strike is a drift catch, aged sweep-relative.** When the sweep
 //!   dispatches fresh drift it arms a candidate carrying this registry's
@@ -27,7 +26,7 @@
 //!   (File-Provider death loop, FUSE mount with no event support) degrades to
 //!   sweep-only operation with occasional retries: the n-th recreation is
 //!   honored only after `min(2^(n-1) × 60s, 1h)`. Both constants are
-//!   conservative on purpose — the design prefers a false "watcher healthy"
+//!   conservative on purpose — a false "watcher healthy" is preferred
 //!   (the sweep still bounds staleness) over recreate churn, since recreation
 //!   is itself a brief event-loss window on macOS. Any delivered batch resets
 //!   the count: a watcher that speaks is a watcher that works.

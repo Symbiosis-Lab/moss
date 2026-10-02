@@ -7,11 +7,9 @@
 //! separating the file format from the sole thing that produces it would put
 //! the two halves of one invariant in two modules.
 //!
-//! Crossed out of the desktop app's events-sync module on 2026-09-09 (track
-//! C4e) because the publish body calls `sync_events` and had to stop naming an
-//! app-crate path to cross itself. The Tauri command that reads this log for
-//! the Analytics panel stayed behind — it needs `AppState` to learn which
-//! folder is open.
+//! The UI command that reads this log for the Analytics panel lives outside
+//! this crate — it needs app state to learn which folder is open, which this
+//! crate does not carry.
 //!
 //! # Storage Layout
 //!

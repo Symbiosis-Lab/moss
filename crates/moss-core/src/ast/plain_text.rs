@@ -4,36 +4,27 @@
 //!
 //! - [`inlines_to_plain_text`] — the crate's one inline-flattening POLICY
 //!   (what does an equation, a line break, a footnote marker "look like" as
-//!   bare text). Promoted from `heading::text::inlines_to_text` per that
-//!   module's own doc comment: "a THIRD non-heading consumer appearing is
-//!   the signal to promote this walker to its own `ast/plain_text.rs`."
-//!   `ast::extract_hero`'s hero-overlay rung was the second consumer;
-//!   `newsletter.rs`'s email plain text is the third.
+//!   bare text). Consumers: heading slugs, the hero-overlay description rung,
+//!   and email plain text.
 //!
 //!   **`build::page::meta::extract_description` deliberately does NOT use
-//!   this policy**, despite being named alongside email in that migration's
-//!   initial scope. Investigation during that migration found the two
-//!   functions disagree on what an image contributes: this walker folds an
-//!   image's `alt` into the flattened text (right for a heading whose only
-//!   content is `![diagram](x.png)`); `extract_description` drops a
-//!   whole-image paragraph with NO text at all and falls through to the
-//!   next real paragraph (`test_extract_description_strips_image_syntax`,
+//!   this policy**: this walker folds an image's `alt` into the flattened
+//!   text (right for a heading whose only content is `![diagram](x.png)`);
+//!   `extract_description` drops a whole-image paragraph with NO text at all
+//!   and falls through to the next real paragraph
+//!   (`test_extract_description_strips_image_syntax`,
 //!   `a_broken_image_paragraph_is_deliberately_not_the_description` in
 //!   `meta_tests.rs` pin this). That is a deliberate excerpt-quality choice
 //!   — an image's alt attribute, or a footnote reference that broke an
 //!   image's alt bracket, is not SEO-description material even though a
 //!   heading slug or hero overlay may reasonably want it.
 //! - [`render_plain_text`] — a full `Document` → plain-text LOWERING,
-//!   parallel to [`super::render::render_document`]'s HTML lowering. This is
-//!   new: nothing before this migration walked the whole typed tree into a
-//!   plain-text document. `newsletter.rs`'s email plain-text body used to be
-//!   a fourth independent `pulldown_cmark::Event` walk, hand-tracking its
-//!   own list/quote/image nesting state; this function derives the same
-//!   shape (dash/numbered bullets, `>` quote prefixing, fenced code with a
-//!   language tag, `[N]` footnote markers + a hoisted endnote section,
-//!   `[image: url — alt]` markers, `text (href)` links) from the tree's
-//!   actual structure, so it can never structurally disagree with the HTML
-//!   lowering the way two independent walkers eventually did.
+//!   parallel to [`super::render::render_document`]'s HTML lowering. It
+//!   derives the shape (dash/numbered bullets, `>` quote prefixing, fenced
+//!   code with a language tag, `[N]` footnote markers + a hoisted endnote
+//!   section, `[image: url — alt]` markers, `text (href)` links) from the
+//!   tree's actual structure, so it cannot structurally disagree with the
+//!   HTML lowering.
 //!
 //! `render_plain_text` and `inlines_to_plain_text` answer different
 //! questions and must not be confused: the former is "what does this whole
@@ -130,8 +121,7 @@ pub fn inlines_to_plain_text(inlines: &[Inline]) -> String {
 /// Structural parallel to [`super::render::render_document`]: one pass
 /// builds the document's [`FootnoteIndex`] and the hoisted-body map, then
 /// walks every top-level block, then appends the hoisted endnote section.
-/// Conventions (matching `newsletter.rs`'s pre-migration hand-rolled walker,
-/// which this supersedes):
+/// Conventions:
 ///
 /// - Paragraphs and headings: flattened text followed by a blank line.
 ///   Headings carry no special markup — a plain-text mail client has no

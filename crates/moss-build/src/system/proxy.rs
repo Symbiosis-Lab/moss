@@ -2,11 +2,8 @@
 //!
 //! moss's Rust HTTP clients (ureq in `plugins/runtime/download.rs`, and reqwest
 //! in the seta/deploy client + setup probes) otherwise connect DIRECTLY, so
-//! behind a split-tunnel VPN / GFW proxy they cannot reach hosts the browser
-//! reaches through the proxy — e.g. `server.matters.town/graphql` times out
-//! while `matters.town` loads fine in the login webview (article sync fails),
-//! and a direct connection to `api.mosspub.com` (Cloudflare) is reset so every
-//! deploy `sync`/`upload`/`commit` and "Send logs" call fails.
+//! behind a split-tunnel VPN or censoring proxy they cannot reach hosts the
+//! browser reaches through the proxy.
 //!
 //! On macOS we call **`CFNetworkCopyProxiesForURL`** — the exact API WKWebView
 //! uses to pick a proxy for a URL. Unlike the static system proxy (`scutil

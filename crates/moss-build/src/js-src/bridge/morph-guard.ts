@@ -107,9 +107,7 @@ export function describeScriptKey(key: string): string {
 
 /**
  * Loggable descriptors for the scripts that force a reload, or `null` when a
- * morph can proceed. One call so the bridge's hot path stays a single branch —
- * the two 1400-line call sites the preview morph runs through are held flat by
- * the `prod_lines_per_file` ratchet, and this is where the logic belongs anyway.
+ * morph can proceed. One call so the bridge's hot path stays a single branch.
  */
 export function describeScriptChange(live: ParentNode, next: ParentNode): string[] | null {
   const keys = differingScriptKeys(live, next);

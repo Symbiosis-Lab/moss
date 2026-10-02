@@ -297,9 +297,7 @@ impl ContentGraph {
     ///
     /// Downstream code (the compiler's URL-prettifier, for instance)
     /// receives already-resolved hrefs and MUST NOT reimplement any
-    /// part of this chain. Adding a parallel resolver was the root
-    /// cause of the `[文字](文字.md)` regression on sites using folder
-    /// notes.
+    /// part of this chain; a parallel resolver diverges on folder notes.
     ///
     /// Resolution chain (first match wins):
     /// 1. Exact normalized path

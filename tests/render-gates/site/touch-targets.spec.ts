@@ -1,28 +1,20 @@
 // Tap targets under 44 by 44 CSS px at phone width — the WCAG 2.5.8 AA
-// floor. Measured on a real build at 390px: nav links rendered 39 by 24.5px
-// with no block padding at all; the hamburger button is 32px; footer links
-// (plain text, no padding) were 20 to 27px tall; the subscribe input and
-// button were one line of body text — 30px at the default reading size.
+// floor.
 //
-// The two nav icon controls (language switch, theme toggle) are covered
-// elsewhere: develop's header-controls audit (5f253fd1) gives every header
-// control its own 44px hit area and its own render gate
-// (playwright/header-hit-areas.config.ts) — this file does not duplicate
-// that work, and the fixture below still renders the icon cluster (for a
-// realistic `.nav-icons` layout) without asserting on it.
+// The two nav icon controls (language switch, theme toggle) have their own
+// 44px hit area and render gate (playwright/header-hit-areas.config.ts) —
+// this file does not duplicate that work, and the fixture below still
+// renders the icon cluster (for a realistic `.nav-icons` layout) without
+// asserting on it.
 //
 // Nav links and footer links grow the HIT AREA only — an absolutely
 // positioned, invisible `::after` around the real control — never the
-// control's own box: a first attempt grew `.nav-links a` itself
-// (`min-block-size` + flex), which took part in layout and, at 390px, grew
-// an eight-link wrapped nav from 109 to 163px tall and moved an active
-// link's underline ~23px below its label. `position: relative` on the
-// control changes only its positioning context, so the control's rendered
-// size, the nav bar's own height, and an active link's `border-block-end`
-// position are all unaffected. The subscribe input/button instead grow
-// their own `block-size` — no neighbor to overlap, and no independent "row
-// height must not change" constraint on that form — so that fix is
-// unchanged from the first round.
+// control's own box: growing the control itself takes part in layout and
+// moves the nav bar's own height and an active link's underline position.
+// `position: relative` on the control changes only its positioning context,
+// leaving the control's rendered size and the nav bar's height unaffected.
+// The subscribe input/button instead grow their own `block-size`: there's no
+// neighbor to overlap and no "row height must not change" constraint there.
 //
 // Two real scratch sites (footer.md, and the generated fallback) are built
 // and served via buildScratchSite, the same idiom as hero-tone.spec.ts: the

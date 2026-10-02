@@ -3,23 +3,19 @@
  *
  * A reader highlights a sentence, taps Share, and moss draws a PNG: the
  * article's own cover photograph across the top 140pt, the quote below it, the
- * site's name at the foot. For two months the photograph was simply missing —
- * `findCoverSource()` searched for `.article-cover img`, a class moss has never
- * emitted in any version — and the suite stayed green the whole time, because
- * the one test covering it hand-built a `div.article-cover` in jsdom. It
- * asserted the author's belief about moss's markup instead of moss's markup.
+ * site's name at the foot.
  *
- * So this gate refuses to look at markup at all. It drives the real flow —
- * select, click Share, wait for the chunk to load over the network — and then
- * reads the PNG the browser actually produced back through a canvas and
- * samples its pixels. Every one of those steps needs an engine: a real 2D
- * context, a real image decode, a real `drawImage`. jsdom's canvas draws
- * nothing and its `fetch` reaches nowhere, so no test in that suite could have
- * caught this however it was written.
+ * This gate refuses to look at markup at all — a hand-built jsdom fixture can
+ * assert the author's belief about moss's markup instead of moss's markup. It
+ * drives the real flow — select, click Share, wait for the chunk to load over
+ * the network — and then reads the PNG the browser actually produced back
+ * through a canvas and samples its pixels. Every one of those steps needs an
+ * engine: a real 2D context, a real image decode, a real `drawImage`. jsdom's
+ * canvas draws nothing and its `fetch` reaches nowhere.
  *
  * What is NOT here: whether `data-share-cover` is emitted, and with what value.
  * That is text, so it is a Rust test — `share_cover_*` in `build/page/cover.rs`.
- * Re-checking the attribute here would reproduce the original blind spot one
+ * Re-checking the attribute here would reproduce the same blind spot one
  * level up: the attribute can be perfect and the strip still blank.
  *
  * Site: tests/e2e/helpers/gate-sites.ts → SHARE_CARD_GATE. Six pages: three,

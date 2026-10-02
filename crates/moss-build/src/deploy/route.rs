@@ -2,25 +2,17 @@
 //!
 //! `moss deploy` can mean three different things depending on what is in the
 //! folder: upload a directory some other tool built, build the site and publish
-//! it to moss's own hosting, or hand the whole job to a deploy plugin. Before
-//! C4g each caller worked that out for itself, and the copies had already
-//! drifted: `start_deploy` chose moss-hosted whenever a `site_id` was present,
-//! while the Publish button chose the plugin whenever `[hooks] deploy` was
-//! pinned. A folder with both published to two different places depending on
-//! which one you used.
+//! it to moss's own hosting, or hand the whole job to a deploy plugin.
 //!
-//! So the route is now a value. [`DeployRoute::resolve`] answers it from the
+//! The route is a value, so no caller works it out for itself and two callers
+//! cannot disagree about where a folder with both a `site_id` and a pinned
+//! `[hooks] deploy` publishes. [`DeployRoute::resolve`] answers it from the
 //! folder alone and both binaries read the same answer, through
 //! `moss_build::cli::deploy`, to pick a driver.
 //!
-//! There used to be a second question here — `runs_headless()`, which said
-//! whether answering a route needed a window. It was deleted at track P slice
-//! P2b, when the plugin route grew a driver of its own
-//! (`deploy::plugin_push`): every variant answered `true`, and a predicate
-//! that cannot say no is worse than none, because a reader takes it for a
-//! live distinction. The app's `startup::headless::intercept` now diverges on
-//! `RunMode::Deploy` unconditionally and never reaches `tauri::Builder` for a
-//! publish.
+//! No route needs a window: the app's `startup::headless::intercept` diverges
+//! on `RunMode::Deploy` unconditionally and never reaches `tauri::Builder` for
+//! a publish.
 //!
 //! What is deliberately NOT a variant: "this folder has no site yet".
 //! Registration is not a route, it is the first step of one — the drivers

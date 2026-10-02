@@ -413,11 +413,8 @@ fn detect_bare_url_cell(cell_text: &str) -> Option<String> {
 /// image-link-plus-caption shape described below; it is `""` for the
 /// classic whole-cell-is-the-link shape.
 ///
-/// Ported from the desktop app's `crate::build::markdown::typed_renderers::
-/// detect_compound_link` (Phase 4 PR4.5, 2026-05-28) — the AST-level
-/// equivalent of the same string-level detection. The desktop app's version
-/// is deleted in PR4.5. NOT the general cure for `[![[x.png]]](/url)` —
-/// [`super::linked_embed`] is; this is the block-level grid *card*.
+/// NOT the general cure for `[![[x.png]]](/url)` — [`super::linked_embed`]
+/// is; this is the block-level grid *card*.
 ///
 /// Safety rules that cause this function to return `None`:
 /// - Cell contains a top-level code fence (\`\`\` or ~~~).
@@ -710,7 +707,7 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
 ///
 /// The structural half of rename tracking: these paths carry NO markdown
 /// reference syntax, so [`crate::resolve::md_extract::extract_md_references`]
-/// cannot see them and a rename silently broke them. Offsets are absolute in
+/// cannot see them and a rename would silently break them. Offsets are absolute in
 /// `source`; the body is never joined, so CRLF sources are exact by
 /// construction (unlike `extract_with_state`, which parses a
 /// `lines().join("\n")` copy and destroys offsets one level above the

@@ -20,14 +20,12 @@ use std::collections::HashMap;
 /// block sequence.
 ///
 /// Search order (depth-first, document order):
-/// 1. `Block::Figure { image, .. }` — the image-only paragraph promoted
-///    in PR3. Direct match.
+/// 1. `Block::Figure { image, .. }` — the promoted image-only paragraph.
+///    Direct match.
 /// 2. `Block::Paragraph(inlines)` — look for the first `Inline::Image`
 ///    appearing in the paragraph (descending into nested
-///    Emphasis/Strong/Link children — matches today's
-///    `transform_events::body_cover_path` capture behavior, which
-///    extracts the first markdown-origin image regardless of inline
-///    wrapping).
+///    Emphasis/Strong/Link children, so the first markdown-origin image is
+///    found regardless of inline wrapping).
 /// 3. `Block::Shortcode(_)` — descend into shortcode bodies (Grid cells,
 ///    Hero overlay, Gallery items) in document order. Production's
 ///    cover chain explicitly considers shortcode-borne images.
@@ -37,12 +35,7 @@ use std::collections::HashMap;
 ///
 /// Returns `None` if no image is found anywhere reachable.
 ///
-/// # Phase 4 PR7a (2026-05-28)
-///
-/// Replaces the `body_cover_path` capture currently in
-/// `pipeline.rs::transform_events`. Closes the acceptance criteria of
-/// the first-body-image AST walker on top of the typed AST.
-/// # Render order, not source order (2026-07-29)
+/// # Render order, not source order
 ///
 /// The walk is depth-first over the source tree, but a footnote definition
 /// does not render where it sits — `footnotes::render_section` hoists it to

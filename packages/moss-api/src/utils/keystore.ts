@@ -212,8 +212,7 @@ export async function rejectSecret(
  * — you cannot write another plugin's secret, the same way you cannot read one.
  *
  * An empty `value` erases the key — that is how you sign a user out, and moss
- * then reports nothing stored for the slot. Earlier releases stored the empty
- * string literally, so a signed-out account went on showing as connected.
+ * then reports nothing stored for the slot.
  *
  * Why here and not in your own plugin folder: `.moss/plugins/` is inside the
  * user's repo and is not gitignored, so a token you keep yourself is a token

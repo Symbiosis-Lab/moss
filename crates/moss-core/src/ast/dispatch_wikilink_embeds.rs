@@ -8,22 +8,17 @@
 //!
 //! # Why a separate visitor
 //!
-//! Pre-Phase-4, `transform_events` ran this dispatch INLINE on each
-//! `Event::Start(Tag::Image { link_type: LinkType::WikiLink, .. })`
-//! event from pulldown-cmark, swallowing the event range. With the flip to
-//! `parse → render_document`, pulldown-cmark only runs once (during
-//! `parse`), so the dispatcher must operate on the typed AST instead. This
-//! visitor IS the AST equivalent.
+//! pulldown-cmark runs once, during `parse`, so the dispatcher must operate
+//! on the typed AST rather than on the event stream.
 //!
 //! # Why ![`![[...]]`] needs pothole preservation
 //!
-//! PR3.5 (2026-05-28) added wikilink-alt classification to the parser, so
-//! `![[v.mp4|width=400]]` arrives at the AST with `alt: ""` (params
-//! consumed) and the original `width=400` token is gone. The dispatcher
-//! needs the original pothole to compose typed params for the video synth.
-//! PR7a-flip-core-B added the `wikilink_pothole` field on `Inline::Image`
-//! that the parser populates from the raw alt text BEFORE classification
-//! runs — this visitor reads it for embed dispatch.
+//! The parser's wikilink-alt classification consumes params, so
+//! `![[v.mp4|width=400]]` arrives at the AST with `alt: ""` and the original
+//! `width=400` token is gone. The dispatcher needs the original pothole to
+//! compose typed params for the video synth, so the parser populates
+//! `wikilink_pothole` on `Inline::Image` from the raw alt text BEFORE
+//! classification runs; this visitor reads it for embed dispatch.
 //!
 //! # Inline vs block-level
 //!
@@ -50,7 +45,7 @@
 //! `<audio>`, `<object>`, `<iframe>` or `<model-viewer>`, all legal `<p>`
 //! children. Anything block-level (a captioned `<figure>`) or not known to
 //! be phrasing content (a deferred post-pass marker) is left as the
-//! original `Inline::Image`, same as before this dispatcher existed; see
+//! original `Inline::Image`; see
 //! [`dispatch_inline_wikilink_embeds`]'s own doc for the full list.
 
 use crate::asset_snapshot::AssetSnapshot;
@@ -298,7 +293,7 @@ fn dispatch_inline_wikilink_embeds(
                 *inline = Inline::Other(html);
             }
             // Not known to be phrasing content — see function doc. Left as
-            // the original Inline::Image, exactly as before this fix.
+            // the original Inline::Image.
             EmitKind::HtmlFigure(_) | EmitKind::Block(_) | EmitKind::Inline(_) | EmitKind::Link(_) => {}
         }
     }

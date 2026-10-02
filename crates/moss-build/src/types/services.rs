@@ -170,8 +170,8 @@ impl BackgroundContext {
 /// 2. **Rust core / JS UI separation**: the two fields the pipeline reaches the
 ///    shell through — `reporter` and `spawner` — are ports whose Tauri-backed
 ///    implementations live app-side in `crate::events`. No FIELD names an
-///    `AppHandle` any more; `from_app` still takes one, because building the
-///    ports from a shell is what that constructor is for.
+///    `AppHandle`; `from_app` takes one, because building the ports from a
+///    shell is what that constructor is for.
 ///
 /// 3. **Interior mutability**: All fields use atomics or locks, so `&BuildServices`
 ///    is sufficient for concurrent access. No `&mut` needed.

@@ -274,11 +274,8 @@ export async function openBrowserWithHtml(html: string): Promise<void> {
  * // <button onclick="window.mossApi.close()">Cancel</button>
  * ```
  *
- * **Why migrate:**
- * - Explicit browser lifecycle control (no magic auto-close)
- * - No hidden event listeners (`moss:browser-form-submit`, `moss:browser-form-cancel`)
- * - Simpler mental model: open, use, close
- * - Matches modern plugin patterns (see Matters plugin)
+ * The replacement has an explicit lifecycle (open, use, close) and no hidden
+ * event listeners.
  *
  * Note: This deprecated function still listens for `moss:browser-form-submit` and
  * `moss:browser-form-cancel` events for backward compatibility. New code should use

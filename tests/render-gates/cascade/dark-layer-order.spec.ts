@@ -20,11 +20,6 @@
  * order (`tokens` < `themes`). Add `:root` to either and the gate stops proving
  * anything.
  *
- * A third test used to fetch the built stylesheet and regex it to confirm the
- * tokens-layer selector is bare. That is a fact about emitted text, already
- * asserted by exact selector match in a Rust unit test — downloading the
- * sheet inside two browsers to re-check it added cost, not confidence.
- *
  * The scratch site comes from tests/e2e/helpers/gate-sites.ts, built by the
  * playwright config at parse time and served by its webServer.
  *

@@ -4,7 +4,7 @@
  * The markup ships from `build/components/nav.rs` and is complete without this
  * file: every link in the island is one the masthead also carries, and the
  * island is `display: none` until this module writes `data-shown` on it. So
- * with JavaScript off, a moss page behaves exactly as it did before this island existed.
+ * with JavaScript off the island simply never appears.
  * What this module adds is the four things CSS cannot do:
  *
  * 1. **Reveal.** Show the bar when the reader scrolls back UP past the

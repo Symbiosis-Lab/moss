@@ -1,10 +1,5 @@
-//! Everything moss knows about a heading, in one place.
-//!
-//! Headings used to be spread over four homes — `heading.rs` (the article
-//! title rule), `heading_anchor.rs` (the Obsidian slug algorithm),
-//! `extract_headings.rs` (the autocomplete walker), and a private
-//! `collect_heading_text` inside `ast/parser.rs`. They are not four
-//! subjects; they are four steps of one pipeline:
+//! Everything moss knows about a heading, in one place — not four separate
+//! subjects, but four steps of one pipeline:
 //!
 //! ```text
 //!   inline nodes / parser events ──[text]──> plain text
@@ -18,11 +13,9 @@
 //! slug `extract` reports, the `id` the renderer emits, and the raw-line
 //! slug the wikilink scanner computes in `build/scan/scan.rs` must agree
 //! character for character, or a `[[Page#Heading]]` link resolves to a
-//! fragment the page does not have. Spread across four files that identity
-//! was something tests had to keep re-checking; a math bug cluster hit
-//! three of the four homes independently in July 2026 precisely because
-//! nothing structural tied them together. Co-locating them makes the
-//! shared step ([`text`]) a single function instead of a coincidence.
+//! fragment the page does not have. Co-locating the four steps in one module
+//! is what keeps that identity from drifting when one of them is edited in
+//! isolation.
 
 pub mod anchor;
 pub mod extract;

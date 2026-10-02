@@ -31,14 +31,11 @@ use crate::moss_paths::MossPaths;
 
 /// Record what went live and recompute what is left to publish.
 ///
-/// `sealed` was an `Option` until track P slice P3, because the plugin path
-/// could arrive without a manifest and would then advance only what it could.
-/// It cannot any more: both plugin callers go through
+/// `sealed` is required: both plugin callers go through
 /// `plugin_push::run_plugin_deploy_inner`, which refuses a sealless publish
 /// before any bytes move — the directory it hands the plugin is
 /// `.moss/build.nosync/current`, and without the manifest nothing can say which
-/// generation that is. The sealless writer went with the `Option`; its
-/// behaviour is in git history and in `one_shot::require_sealed`'s doc.
+/// generation that is.
 ///
 /// `target` is `<method>:<id>` — `moss:<site_id>`, `onionpress:<url>`. It says
 /// which host the record describes, so a site that switches hosts does not
@@ -47,24 +44,19 @@ use crate::moss_paths::MossPaths;
 /// Both halves are best-effort in the same direction: a failed write costs one
 /// degraded change set, never a failed deploy.
 ///
-/// The recompute reaches the process through `ports` rather than an
-/// `Option<&AppState>`. The `Option` was there because a caller might have no
-/// state to recompute against; a headless publish answers the same question by
-/// having nothing to tell, which is an implementation rather than an absence —
-/// so the guard that used to return early is gone.
+/// The recompute reaches the process through `ports`; a headless publish
+/// answers the same question by having nothing to tell, which is an
+/// implementation rather than an absence.
 ///
 /// `history` is a plain `&HistoryStore`, not an `Option` — `HistoryStore::
 /// in_vault` is infallible, a fixed join against the vault rather than an
-/// app-data lookup, so every caller already has one to give: production
-/// constructs it once, right beside `ports`, and a test passes a
-/// `HistoryStore::at(tempdir)`. There is no second, test-only entry point:
-/// whichever store a caller has is the one this function uses.
+/// app-data lookup, so every caller already has one to give; a test passes a
+/// `HistoryStore::at(tempdir)`.
 ///
 /// Returns the same [`PageChangeSummary`] it hands [`DeployPorts::
 /// after_landing`](crate::build::ports::deploy::DeployPorts::after_landing) —
-/// `push_site` (task 4-6) needs it a second time, to verify the pages it
-/// names, and reading it back off the return value is the one way to give it
-/// that without computing it twice.
+/// `push_site` needs it a second time, to verify the pages it names, and
+/// reading it back off the return value avoids computing it twice.
 pub async fn record_landed(
     folder: &Path,
     sealed: &SealedManifest,
@@ -86,30 +78,23 @@ pub async fn record_landed(
 /// The record is one artifact carrying two facts, because one publish
 /// establishes both at the same instant: the page hashes the next change set
 /// diffs against, and the `{source path → uid}` map that rename detection and
-/// duplicate-uid resolution read (`manifest::live_baseline`). They were two
-/// files until a fix merged them, and the second one was a byte copy of the
-/// whole article map — 4.83 MB on a real vault to carry about 7 KB.
+/// duplicate-uid resolution read (`manifest::live_baseline`).
 ///
-/// One shape since track P slice P3. There was a second — a publish with no
-/// manifest advanced the uids and the page mapping on the STANDING record and
-/// left the hashes alone — for the deploy-plugin path, which used to publish a
-/// directory it could not name a generation for. That path now refuses instead,
-/// so the branch was unreachable, and an unreachable branch that quietly
-/// degrades the rename baseline is worse than absent: nothing would have
-/// reported it running.
+/// There is no sealless variant: a publish with no manifest is refused
+/// upstream, and a branch that quietly degraded the rename baseline would
+/// report nothing.
 ///
 /// Best-effort throughout: a failed write costs the next build's rename
 /// detection, never the publish. See [`record_landed`]'s doc for why
 /// `history` is a plain `&HistoryStore` rather than an `Option`.
 ///
 /// Returns the completion-scoped Added/Moved/Removed page summary a publish
-/// receipt renders (publish-receipt design, step 4). It has to be computed
+/// receipt renders. It has to be computed
 /// from the reads below BEFORE the write further down overwrites the record
 /// they read — the same "before" the redirect stubs above already read for
 /// the same reason. `PageChangeSummary::default()` when this build's own
 /// article map cannot be read: with no `current_map` there is nothing to
-/// diff, and guessing here is the same mistake that produced the duplicate
-/// live-baseline file, one call site over.
+/// diff, and guessing here would corrupt the rename baseline.
 async fn record_what_is_live(
     mp: &MossPaths,
     sealed: &SealedManifest,

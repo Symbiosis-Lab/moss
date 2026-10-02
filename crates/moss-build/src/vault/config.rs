@@ -80,16 +80,13 @@ pub fn load_managed_toml(path: &Path) -> Result<ManagedToml, String> {
 /// field being saved, because `toml_rewrite::apply_changes` is surgical: an
 /// edit that changes nothing renders the original bytes back exactly. One
 /// check therefore covers every writer, including those that rewrite a whole
-/// section. Until 2026-08-31 this check lived inside the site-language
-/// writer alone, which made "does not thrash the watcher" a property of one
-/// function rather than of writing config; that writer has since gone.
+/// section, so "does not thrash the watcher" is a property of writing config,
+/// not of one writer.
 ///
 /// The write commits through [`crate::infra::atomic_write::write_atomic`], so
 /// a reader — the watcher rebuilding on the change, or the other binary —
 /// never observes a half-written config, and two writers racing cannot rename
-/// each other's bytes into place. Until 2026-09-07 only `save_environment`
-/// committed atomically; nobody has argued for a config write that may be
-/// observed half-written, so it is now the one way.
+/// each other's bytes into place.
 /// A document a newer moss already stamped is refused, not patched. Every
 /// writer above reaches `.moss/config.toml` through `load_managed_toml` +
 /// this function, and none of them checks `schema_version` before mutating —

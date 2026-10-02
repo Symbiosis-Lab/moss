@@ -6,8 +6,8 @@
 //!
 //! `[site].math` defaults ON, which means pulldown-cmark's `ENABLE_MATH` is
 //! live for every vault that never mentions math in its config. That is safe
-//! for the vaults we measured (zero `$` outside fenced code in any published
-//! vault), but pulldown's open/close rule is an ASCII byte test:
+//! for a vault with no `$` outside fenced code, but pulldown's open/close rule
+//! is an ASCII byte test:
 //! **any non-whitespace byte before the closing `$` closes the span.** So
 //! prose that merely quotes two prices becomes an equation:
 //!
@@ -16,15 +16,14 @@
 //! 一个$5，两个$10            →  one inline-math span (no spaces in CJK prose)
 //! ```
 //!
-//! An author importing a corpus we never measured — a shop's price list, a
-//! translated finance post — has no way to know this before publishing. This
-//! command is that way: it reports every `$`-span that the real parser would
+//! An author importing a shop's price list or a translated finance post has no
+//! way to know this before publishing. This command is that way: it reports every `$`-span that the real parser would
 //! turn into math, with `path:line:` locations, so the author can audit the
 //! vault and choose a remedy: escape as `\$` (renders as a plain `$`, so the
 //! prose is untouched — the recommended fix), add a space after the `$`
 //! (changes what readers see), or set `math = false` for the whole site.
 //!
-//! Note the report says "parsed as math", not "typeset": P1 ships no
+//! Note the report says "parsed as math", not "typeset": there is no
 //! typesetting engine, so a reported span renders as its LaTeX source with
 //! the `$` delimiters consumed.
 //!
