@@ -1099,7 +1099,7 @@ mod tests {
             fields: vec!["author".to_string()],
             title: "People".to_string(),
             is_place: false,
-            parents: Default::default(), explorer: None,
+            parents: Default::default(), explorer: None, line: None,
         }];
         map.terms.insert(
             "people/scarly".to_string(),

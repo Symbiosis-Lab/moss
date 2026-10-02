@@ -2384,7 +2384,7 @@ fn place_kind(explorer: Option<bool>) -> TermKind {
         title: "Places".to_string(),
         is_place: true,
         parents: Default::default(),
-        explorer,
+        explorer, line: None,
     }
 }
 

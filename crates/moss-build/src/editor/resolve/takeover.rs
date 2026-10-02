@@ -261,7 +261,7 @@ fn namespace_kind(map: &ArticleMap, ns: &str, site_lang: Language) -> Option<cra
             key: key.to_string(),
             fields: vec![field.to_string()],
             title: crate::i18n::term_root_title(site_lang, key).to_string(),
-            is_place: false, parents: Default::default(), explorer: None,
+            is_place: false, parents: Default::default(), explorer: None, line: None,
         })
 }
 
@@ -515,7 +515,7 @@ mod tests {
             key: "people".into(),
             fields: vec!["author".into(), "editor".into(), "jury".into()],
             title: "People".into(),
-            is_place: false, parents: Default::default(), explorer: None,
+            is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         m.terms.insert("people/kane".into(), TermSite { display: "Kane".into(), claimed_by: None, parent: None });
         m.generated = vec!["people/".into(), "people/kane/".into()];
@@ -564,7 +564,7 @@ mod tests {
             key: "authors".into(),
             fields: Vec::new(),
             title: "作者".into(),
-            is_place: false, parents: Default::default(), explorer: None,
+            is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         m.generated = vec!["authors/".into()];
         let t = takeover_for(&m, dir.path(), "s", "authors/", Language::ZhHant).unwrap();

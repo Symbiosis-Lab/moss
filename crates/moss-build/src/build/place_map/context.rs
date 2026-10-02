@@ -985,7 +985,7 @@ mod tests {
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
             is_place: true,
-            parents: Default::default(), explorer: None,
+            parents: Default::default(), explorer: None, line: None,
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gaz);
         let maps = PlaceMapContext::new(super::super::embedded().unwrap());

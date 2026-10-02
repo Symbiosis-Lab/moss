@@ -453,7 +453,7 @@ fn a_places_toml_only_edit_full_renders_via_surface_changed_and_moves_membership
         title: "Places".to_string(),
         is_place: true,
         parents: [("places/kyoto".to_string(), parent_of_kyoto.to_string())].into_iter().collect(),
-        explorer: None,
+        explorer: None, line: None,
     };
 
     let mut before_docs = vec![doc("posts/a/index.html", PageKind::Article, "A body", Some("A"))];

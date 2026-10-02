@@ -45,7 +45,7 @@ fn duplicate_name_in_one_row_warns() {
         key: "people".to_string(),
         fields: vec!["author".to_string(), "editor".to_string()],
         title: "People".to_string(),
-        is_place: false, parents: Default::default(), explorer: None,
+        is_place: false, parents: Default::default(), explorer: None, line: None,
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "posts/a/index.html".to_string(),
@@ -95,7 +95,7 @@ fn unclaimed_typo_diagnostic_counts_as_a_cli_problem() {
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
         title: "Authors".to_string(),
-        is_place: false, parents: Default::default(), explorer: None,
+        is_place: false, parents: Default::default(), explorer: None, line: None,
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "about/kane/index.html".to_string(),
@@ -116,7 +116,7 @@ fn declared_name_absent_from_any_byline_row_warns() {
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
         title: "Authors".to_string(),
-        is_place: false, parents: Default::default(), explorer: None,
+        is_place: false, parents: Default::default(), explorer: None, line: None,
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "posts/a/index.html".to_string(),
@@ -147,13 +147,13 @@ fn place_names_never_warn_or_link_in_bylines() {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
-            is_place: false, parents: Default::default(), explorer: None,
+            is_place: false, parents: Default::default(), explorer: None, line: None,
         },
         crate::build::terms::TermKind {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            is_place: true, parents: Default::default(), explorer: None,
+            is_place: true, parents: Default::default(), explorer: None, line: None,
         },
     ];
     let mut docs = vec![crate::build::types::ParsedDocument {
@@ -192,13 +192,13 @@ fn place_name_present_in_a_byline_row_is_left_unlinked() {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
-            is_place: false, parents: Default::default(), explorer: None,
+            is_place: false, parents: Default::default(), explorer: None, line: None,
         },
         crate::build::terms::TermKind {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            is_place: true, parents: Default::default(), explorer: None,
+            is_place: true, parents: Default::default(), explorer: None, line: None,
         },
     ];
     let mut docs = vec![crate::build::types::ParsedDocument {

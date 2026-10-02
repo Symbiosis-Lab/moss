@@ -238,7 +238,8 @@ impl ConfigFile {
                 let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
                 let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
                 let explorer = table.get("explorer").and_then(|v| v.as_bool());
-                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer });
+                let line = table.get("line").and_then(|v| v.as_bool());
+                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer, line });
             }
         }
         let declared_keys: std::collections::HashSet<&str> =
@@ -258,7 +259,7 @@ impl ConfigFile {
                 },
                 title: None,
                 kind_type: None,
-                explorer: None,
+                explorer: None, line: None,
             });
         }
         kinds.extend(declared);
@@ -304,6 +305,9 @@ pub struct RawKind {
     /// ever meaningful there. `None` for the two built-ins and for a
     /// declared kind that didn't set the key.
     pub explorer: Option<bool>,
+    /// `[terms.<key>] line`, unvalidated and gated on `kind_type` the same
+    /// way as `explorer`: `term_kinds` keeps it only for the place-typed kind.
+    pub line: Option<bool>,
 }
 
 #[cfg(test)]

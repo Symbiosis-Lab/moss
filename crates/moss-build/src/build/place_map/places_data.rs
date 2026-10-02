@@ -558,7 +558,7 @@ mod tests {
             title: "Places".to_string(),
             is_place: true,
             parents: Default::default(),
-            explorer: None,
+            explorer: None, line: None,
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gaz);
         let parents = kinds.into_iter().next().unwrap().parents;
@@ -575,7 +575,7 @@ mod tests {
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
             is_place: true,
-            parents: Default::default(), explorer: None,
+            parents: Default::default(), explorer: None, line: None,
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gazetteer());
         kinds.into_iter().next().unwrap().parents

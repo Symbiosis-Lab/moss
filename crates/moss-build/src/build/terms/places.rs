@@ -74,7 +74,7 @@ mod tests {
     use crate::vault::places::Gazetteer;
 
     fn place_kind(key: &str) -> TermKind {
-        TermKind { key: key.to_string(), fields: vec!["location".to_string()], title: "Places".to_string(), is_place: true, parents: Default::default(), explorer: None }
+        TermKind { key: key.to_string(), fields: vec!["location".to_string()], title: "Places".to_string(), is_place: true, parents: Default::default(), explorer: None, line: None }
     }
 
     fn gaz(toml_str: &str) -> Gazetteer {
@@ -132,7 +132,7 @@ mod tests {
             fields: vec!["author".to_string()],
             title: "People".to_string(),
             is_place: false,
-            parents: Default::default(), explorer: None,
+            parents: Default::default(), explorer: None, line: None,
         }];
         let g = gaz("[\"Kyoto\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\nparent = \"Japan\"\n");
         attach_parents(&mut kinds, &g);

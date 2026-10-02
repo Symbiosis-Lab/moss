@@ -62,6 +62,11 @@ pub struct TermKind {
     /// has no effect there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explorer: Option<bool>,
+    /// `[terms.<key>] line`, carried through only for the place-typed kind,
+    /// like `explorer`. `Some(false)` is the only way to drop the automatic
+    /// place line; `None` means the default, on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<bool>,
 }
 
 impl TermKind {
@@ -164,7 +169,8 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) 
             // for it to turn off), the same posture `is_place` itself takes
             // toward an unrecognized `type`.
             let explorer = is_place.then_some(kind.explorer).flatten();
-            TermKind { key: kind.key, fields, title, is_place, parents: Default::default(), explorer }
+            let line = is_place.then_some(kind.line).flatten();
+            TermKind { key: kind.key, fields, title, is_place, parents: Default::default(), explorer, line }
         })
         .collect()
 }
@@ -240,6 +246,17 @@ mod tests {
         let kinds = term_kinds(&cfg, crate::i18n::Language::En);
         let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
         assert!(!places.explorer_enabled());
+    }
+
+    #[test]
+    fn line_false_is_kept_for_a_place_kind_and_dropped_for_any_other() {
+        let cfg = crate::config::ConfigFile::parse(
+            "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\nline = false\n\n[terms.people]\nfields = [\"author\"]\nline = false\n",
+        )
+        .unwrap();
+        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        assert_eq!(kinds.iter().find(|k| k.key == "places").unwrap().line, Some(false));
+        assert_eq!(kinds.iter().find(|k| k.key == "people").unwrap().line, None);
     }
 
     #[test]

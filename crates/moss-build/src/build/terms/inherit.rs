@@ -305,7 +305,7 @@ mod tests {
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
             is_place: true,
-            parents: Default::default(), explorer: None,
+            parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![
             home("works/kyoto-walk/kyoto-walk.md", &["Kyoto"]),
