@@ -635,7 +635,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::Checkbox,
         // Frequency=0, Importance=1 → score=96
         score: 96,
-        description: "Opt out of the term map on a claimed term page or a real folder index at a place namespace root. Shown by default; set false to hide it.",
+        description: "This page's own map, on or off: the term map on a place page (shown by default), the locator on a located article (follows the site's `locator` setting).",
         label_key: "chip.map.label",
         group: "This Page",
         ..FIELD_DEFAULTS

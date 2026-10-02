@@ -886,7 +886,7 @@ fn generate_html_inner<'d>(
                 // term claim always resolves to a sub-key, never the bare
                 // namespace root `is_place_namespace_root` marks.
                 let root_map_key = doc.is_place_namespace_root.then(|| folder_path.as_str());
-                let map_key = term_listing.or(root_map_key).filter(|_| doc.map != Some(false));
+                let map_key = term_listing.or(root_map_key).filter(|_| doc.shows_own_map(true));
                 if let Some(map) = map_key.and_then(|key| {
                     layout_config.place_maps.as_ref().and_then(|maps| {
                         maps.render_term_map(key, all_docs.iter(), &doc.url_path, 1, doc.route, false)

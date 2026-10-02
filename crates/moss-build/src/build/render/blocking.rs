@@ -2460,7 +2460,7 @@ pub fn generate_blocking_content_for_build(
             let (is_explorer_root, mut content_html) = crate::build::place_map::PlaceMapRenderContext::render_explorer_folder_lead(
                 layout_config.place_maps.as_ref(),
                 folder_doc.is_place_namespace_root,
-                folder_doc.map == Some(false),
+                !folder_doc.shows_own_map(true),
                 &page_title,
                 folder,
                 all_docs_refs.iter().copied(),

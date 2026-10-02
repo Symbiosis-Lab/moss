@@ -144,18 +144,22 @@ pub fn render_page_masthead(
 }
 
 /// The place-map locator's own HTML (`<div class="moss-place-locator" …>`),
-/// or `None` when the site has no locator configured or the page names no
-/// place with coordinates — same resolution `render_page_masthead` folds
-/// in. Exposed separately so the article path can place it in the BODY,
-/// via `BodyPlan::insert_before_text`, rather than in the masthead.
+/// or `None` when neither the site (`[site] locator`) nor the page (`map:`)
+/// asks for one, or the page names no place with coordinates — same
+/// resolution `render_page_masthead` folds in. A place page's own map is its
+/// term map, so it never also gets a locator. Exposed separately so the
+/// article path can place it in the BODY, via `BodyPlan::insert_before_text`,
+/// rather than in the masthead.
 pub fn render_place_locator(
     doc: &crate::build::types::ParsedDocument,
     layout: &crate::build::page::layout::LayoutConfig,
 ) -> Option<String> {
-    layout
-        .place_maps
-        .as_ref()
-        .and_then(|maps| maps.render_locator(&doc.location, doc.route, &doc.url_path, 0))
+    let maps = layout.place_maps.as_ref()?;
+    let is_place_page = doc.place_page.is_some() || doc.is_place_namespace_root;
+    if is_place_page || !doc.shows_own_map(maps.locator_default()) {
+        return None;
+    }
+    maps.render_locator(&doc.location, doc.route, &doc.url_path, 0)
 }
 
 /// Put a non-empty page masthead after the authored title block.

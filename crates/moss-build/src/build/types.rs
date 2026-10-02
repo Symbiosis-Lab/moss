@@ -276,11 +276,13 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]
     pub is_place_namespace_root: bool,
-    /// Page-level opt-out for the term map spliced below a claimed term
-    /// page's or a place-namespace-root page's own content (see
-    /// `is_place_namespace_root`). `Some(false)` suppresses it; unset or
-    /// `Some(true)` renders it when one would otherwise show. No effect on
-    /// any other page.
+    /// The one per-page switch for this page's own map. On a claimed term
+    /// page or a place-namespace-root page it gates the term map spliced
+    /// below the content (see `is_place_namespace_root`): `Some(false)`
+    /// suppresses it, unset or `Some(true)` renders it when one would
+    /// otherwise show. On a located page it gates the article locator:
+    /// `Some(false)` hides it, `Some(true)` shows it even when `[site]
+    /// locator` is `none`, unset follows the site.
     pub map: Option<bool>,
     /// Opt-in from frontmatter `route:` to draw this page's `location:` list,
     /// in its existing declared order, as a route: a dashed line through the
@@ -543,6 +545,14 @@ pub struct ParsedDocument {
 }
 
 impl ParsedDocument {
+    /// Whether this page shows its own map: `map:` when the page sets it,
+    /// else `site_default`. The one definition of the `map` key's meaning,
+    /// read for a place page's term map (default on) and for a located
+    /// article's locator (default `[site] locator`).
+    pub fn shows_own_map(&self, site_default: bool) -> bool {
+        self.map.unwrap_or(site_default)
+    }
+
     /// Rewrite the page body, keeping the typed plan and the flattened
     /// `html_content` in sync.
     ///

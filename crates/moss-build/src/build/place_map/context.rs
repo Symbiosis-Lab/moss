@@ -150,8 +150,15 @@ impl PlaceMapRenderContext {
         &self.parents
     }
 
+    /// Whether `[site] locator` asks for a locator beside every located
+    /// page: the default a page's own `map:` overrides
+    /// (`ParsedDocument::shows_own_map`). `render_locator` draws one
+    /// regardless; the caller applies the switch.
+    pub fn locator_default(&self) -> bool {
+        self.locator != LocatorPlacement::None
+    }
+
     pub fn render_locator(&self, names: &[String], route: bool, page_path: &str, ordinal: usize) -> Option<String> {
-        if self.locator == LocatorPlacement::None { return None; }
         let mut target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names, route);
         apply_route_gate(&mut target, page_path);
         if !target.has_coordinates() { return None; }
@@ -226,7 +233,7 @@ impl PlaceMapRenderContext {
         let is_folder_index = doc.kind == moss_core::PageKind::Folder
             && doc.url_path.ends_with("/index.html")
             && doc.url_path != "index.html";
-        self.is_explorer_root(is_folder_index, doc.is_place_namespace_root, doc.map == Some(false))
+        self.is_explorer_root(is_folder_index, doc.is_place_namespace_root, !doc.shows_own_map(true))
     }
 
     /// Compose a SYNTHETIC term-listing folder's lead content whole: the
@@ -807,11 +814,12 @@ mod tests {
         let off = PlaceMapRenderContext::new(
             maps.clone(), gazetteer(), "places".into(), LocatorPlacement::None, BTreeMap::new(),
         );
-        assert!(off.render_locator(&["Harbor".into()], false, "story/index.html", 0).is_none());
+        assert!(!off.locator_default());
 
         let on = PlaceMapRenderContext::new(
             maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
         );
+        assert!(on.locator_default());
         let html = on.render_locator(&["Harbor".into()], false, "story/index.html", 0).unwrap();
         assert!(html.contains("moss-place-locator moss-align-right"));
         assert!(html.contains("data-map-locator-profile=\"exact-city\""));

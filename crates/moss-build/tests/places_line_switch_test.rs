@@ -1,6 +1,7 @@
 //! The place line's `line = false` switch on a place-typed kind: the line
 //! disappears from every located page, while `location:` keeps feeding
-//! listing cards and the article locator.
+//! listing cards and the article locator. Also the page's own `map:` switch,
+//! which turns that page's locator on or off against the site's setting.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,10 +46,14 @@ impl Drop for Cleanup {
     }
 }
 
-const PLACES: &str = "[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n";
+const PLACES: &str = "[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n\n[\"Inland\"]\nlat = 36.0\nlng = 136.0\nprecision = \"city\"\n";
 
 /// Build a one-article site and return (article html, listing html).
 fn build_site(terms_extra: &str, site_extra: &str, article_fm: &str) -> (String, String) {
+    build_located_site(terms_extra, site_extra, article_fm, "Harbor")
+}
+
+fn build_located_site(terms_extra: &str, site_extra: &str, article_fm: &str, location: &str) -> (String, String) {
     let tmp = std::env::temp_dir().join(format!("moss_place_line_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&tmp).unwrap();
     let _cleanup = Cleanup(tmp.clone());
@@ -59,7 +64,7 @@ fn build_site(terms_extra: &str, site_extra: &str, article_fm: &str) -> (String,
     );
     write(&tmp, ".moss/places.toml", PLACES);
     write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
-    write(&tmp, "posts/report.md", &format!("---\ntitle: Report\ndate: 2025-05-22\nlocation: Harbor\n{article_fm}---\n\nA single place.\n"));
+    write(&tmp, "posts/report.md", &format!("---\ntitle: Report\ndate: 2025-05-22\nlocation: {location}\n{article_fm}---\n\nA single place.\n"));
     let result = build_sync(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
     let out = tmp.join(".moss/build.nosync/staging");
@@ -78,4 +83,92 @@ fn line_false_drops_the_line_but_keeps_card_meta_and_locator() {
     assert!(!article.contains("moss-place-line"), "{article}");
     assert!(article.contains("moss-place-locator"), "locator must still show: {article}");
     assert!(listing.contains("moss-card-meta") && listing.contains("Harbor"), "card meta must still name the place: {listing}");
+}
+
+#[test]
+fn page_map_true_shows_the_locator_where_the_site_has_none() {
+    let (article, _) = build_site("", "locator = \"none\"\n", "map: true\n");
+    assert!(article.contains("moss-place-locator"), "{article}");
+}
+
+#[test]
+fn page_map_false_hides_the_locator_where_the_site_has_one() {
+    let (article, _) = build_site("", "locator = \"align-right\"\n", "map: false\n");
+    assert!(!article.contains("moss-place-locator"), "{article}");
+    assert!(article.contains("moss-place-line"), "the place line is not the map: {article}");
+}
+
+#[test]
+fn an_unset_page_map_follows_the_site_locator_either_way() {
+    let (on, _) = build_site("", "locator = \"align-right\"\n", "");
+    let (off, _) = build_site("", "locator = \"none\"\n", "");
+    assert!(on.contains("moss-place-locator"));
+    assert!(!off.contains("moss-place-locator"));
+}
+
+#[test]
+fn page_map_true_with_no_resolved_location_renders_nothing_and_builds() {
+    let tmp = std::env::temp_dir().join(format!("moss_place_line_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\nlocator = \"none\"\n\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\ntitle = \"Places\"\n");
+    write(&tmp, ".moss/places.toml", PLACES);
+    write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
+    write(&tmp, "posts/none.md", "---\ntitle: None\nmap: true\n---\n\nNo location.\n");
+    write(&tmp, "posts/gone.md", "---\ntitle: Gone\nmap: true\nlocation: Nowhere\n---\n\nUnknown place.\n");
+    write(&tmp, "posts/bare.md", "---\ntitle: Bare\nmap: true\nlocation: Harbor\n---\n\nKnown.\n");
+    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
+    let out = tmp.join(".moss/build.nosync/staging");
+    assert!(!read_page(&out, "posts/none/index.html").contains("moss-place-locator"));
+    assert!(!read_page(&out, "posts/gone/index.html").contains("moss-place-locator"));
+    assert!(read_page(&out, "posts/bare/index.html").contains("moss-place-locator"));
+}
+
+/// A claimed place page keeps `map: false`'s existing meaning: its own term
+/// map is off. Without the key the same page draws it.
+#[test]
+fn map_false_on_a_place_page_still_turns_its_term_map_off() {
+    let build = |fm: &str| {
+        let tmp = std::env::temp_dir().join(format!("moss_place_line_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let _cleanup = Cleanup(tmp.clone());
+        write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\ntitle = \"Places\"\n");
+        write(&tmp, ".moss/places.toml", PLACES);
+        write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
+        write(&tmp, "harbor.md", &format!("---\ntitle: Harbor\nplace_page: true\n{fm}---\n\nThe harbor.\n"));
+        write(&tmp, "posts/report.md", "---\ntitle: Report\nlocation: Harbor\n---\n\nText.\n");
+        assert!(build_sync(&tmp.to_string_lossy()).is_ok());
+        read_page(&tmp.join(".moss/build.nosync/staging"), "harbor/index.html")
+    };
+    assert!(build("").contains("moss-place-map"));
+    assert!(!build("map: false\n").contains("moss-place-map"));
+}
+
+#[test]
+fn route_true_and_map_true_draw_the_route_on_a_locator_the_site_did_not_ask_for() {
+    let (article, _) = build_located_site(
+        "",
+        "locator = \"none\"\n",
+        "map: true\nroute: true\n",
+        "[Harbor, Inland]",
+    );
+    assert!(article.contains("moss-place-locator"), "{article}");
+    assert!(article.contains("data-map-route=\"line\""), "route must draw on the page's map: {article}");
+}
+
+/// A place page's own map is its term map; it never also gets a locator,
+/// even with `location:` and `map: true`.
+#[test]
+fn a_claimed_place_page_never_gets_a_locator() {
+    let tmp = std::env::temp_dir().join(format!("moss_place_line_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\nlocator = \"align-right\"\n\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\ntitle = \"Places\"\n");
+    write(&tmp, ".moss/places.toml", PLACES);
+    write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
+    write(&tmp, "harbor.md", "---\ntitle: Harbor\nplace_page: true\nlocation: Harbor\nmap: true\n---\n\nThe harbor.\n");
+    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
+    let page = read_page(&tmp.join(".moss/build.nosync/staging"), "harbor/index.html");
+    assert!(page.contains("moss-place-map"), "its own term map still draws: {page}");
+    assert!(!page.contains("moss-place-locator"), "{page}");
 }
