@@ -144,11 +144,11 @@ const failures = [];
 // to an unoptimized, multi-megabyte source.
 const MAX_GIF_BYTES = 4.5 * 1024 * 1024;
 const MAX_PAGE_GIF_BYTES = 12 * 1024 * 1024;
-// Console errors/failed requests unrelated to media (e.g. the moss-ui-demo
-// iframe's own `/__moss/token` preview-detection probe, expected to 404 on
-// a static deployment) are still recorded in the raw report above, but they
-// are not this script's concern and would otherwise make it permanently red
-// for a reason that has nothing to do with images, video, or iframes.
+// Console errors/failed requests unrelated to media are still recorded in the
+// raw report above, but they are not this script's concern and would
+// otherwise make it red for a reason that has nothing to do with images,
+// video, or iframes. The harvested demo documents make no `/__moss/` request,
+// so no failed request of that kind is expected here.
 const isMediaRelated = (text) => /\.(gif|png|jpe?g|webp|mp4|webm|mov)\b|\/ui\/|\/assets\/(animations|guides)\//i.test(text);
 
 for (const base of bases) {
