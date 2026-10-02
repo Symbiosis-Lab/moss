@@ -817,7 +817,9 @@ button.moss-places-chip-crumb {
 
 /* The "This article | All articles" switch: a segmented pair standing in
    for the root crumb. The selected segment differs in weight and fill, not
-   colour alone. */
+   colour alone, and casts no shadow: it sits inside a chip that already
+   carries the resting elevation, and every elevation level casts further
+   than the 2px track around it. */
 .moss-places-chip-scope {
   display: inline-flex;
   flex: 0 0 auto;
@@ -848,7 +850,6 @@ button.moss-places-chip-crumb {
   color: var(--moss-color-text);
   font-weight: 600;
   background: var(--moss-color-surface);
-  box-shadow: 0 0.5px 1.5px color-mix(in srgb, var(--moss-color-text) 22%, transparent);
 }
 /* 44px touch target without growing the chip */
 .moss-places-chip-scope-option::after {
