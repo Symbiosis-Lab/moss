@@ -260,6 +260,7 @@ impl StagingDir {
 impl Drop for StagingDir {
     fn drop(&mut self) {
         // allow:raw_write removes the OS-temp staging dir this request created, never build output
+        // allow:unlink the request's own directory under the OS temp dir, never under the served staging tree
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
@@ -342,8 +343,8 @@ mod tests {
     /// One part lands in the attachment directory and the response names it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn one_part_upload_lands_and_is_named_in_the_response() {
-        let (_vault, site_dir) = served_vault();
-        let vault_root = site_dir.ancestors().nth(3).unwrap().to_path_buf();
+        let (vault, site_dir) = served_vault();
+        let vault_root = vault.path().to_path_buf();
         std::fs::create_dir_all(vault_root.join("posts")).unwrap();
         let ctx = InvokeCtx::standalone();
         let (port, shutdown_tx) = start_server(ServeConfig {
@@ -378,8 +379,8 @@ mod tests {
     /// Two file parts in one request both land.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn two_parts_in_one_request_both_land() {
-        let (_vault, site_dir) = served_vault();
-        let vault_root = site_dir.ancestors().nth(3).unwrap().to_path_buf();
+        let (vault, site_dir) = served_vault();
+        let vault_root = vault.path().to_path_buf();
         let ctx = InvokeCtx::standalone();
         let (port, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
@@ -416,8 +417,8 @@ mod tests {
     /// `..` in a filename is 400, never landed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dotdot_in_a_filename_is_400() {
-        let (_vault, site_dir) = served_vault();
-        let vault_root = site_dir.ancestors().nth(3).unwrap().to_path_buf();
+        let (vault, site_dir) = served_vault();
+        let vault_root = vault.path().to_path_buf();
         let ctx = InvokeCtx::standalone();
         let (port, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
@@ -483,8 +484,8 @@ mod tests {
     /// insert) is created inside the vault and the upload lands in it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn missing_dir_inside_the_vault_is_created() {
-        let (_vault, site_dir) = served_vault();
-        let vault_root = site_dir.ancestors().nth(3).unwrap().to_path_buf();
+        let (vault, site_dir) = served_vault();
+        let vault_root = vault.path().to_path_buf();
         let ctx = InvokeCtx::standalone();
         let (port, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
@@ -516,8 +517,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn missing_dir_under_an_escaping_symlink_is_400_and_creates_nothing() {
-        let (_vault, site_dir) = served_vault();
-        let vault_root = site_dir.ancestors().nth(3).unwrap().to_path_buf();
+        let (vault, site_dir) = served_vault();
+        let vault_root = vault.path().to_path_buf();
         let outside = tempfile::TempDir::new().unwrap();
         std::os::unix::fs::symlink(outside.path(), vault_root.join("link")).unwrap();
         let ctx = InvokeCtx::standalone();
