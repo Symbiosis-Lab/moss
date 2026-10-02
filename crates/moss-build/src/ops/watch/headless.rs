@@ -152,10 +152,10 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
         folder_path: folder_path.clone(),
         spawner: Arc::new(crate::build::ports::spawner::TokioSpawner),
         shutdown_rx,
-        emit,
+        emit: emit.clone(),
         dispatch: dispatch.clone(),
         attempt,
-        cadence: always_live,
+        cadence: always_live.clone(),
     })
     .await;
 
@@ -166,7 +166,11 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
     // headless renders it yet, same as before this crossed). Started AFTER
     // `super::start` so the worker it just registered is in place for the
     // sweep's first stat pass.
-    super::sweep::start(session, dispatch, Arc::new(CarrierReporter)).await;
+    super::sweep::start(
+        session,
+        super::sweep::SweepHost { dispatch, reporter: Arc::new(CarrierReporter), emit, cadence: always_live },
+    )
+    .await;
 
     shutdown_tx
 }

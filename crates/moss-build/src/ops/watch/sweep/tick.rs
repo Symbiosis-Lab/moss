@@ -13,15 +13,16 @@ use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 
-use crate::build::ports::reporter::BuildReporter;
 use crate::build::watch::{drift, scope};
-use crate::ops::watch::{supervision, worker, RebuildDispatch};
+use crate::ops::watch::cadence::{Cadence, CadenceTicker, Tick};
+use crate::ops::watch::{supervision, worker};
 use crate::system::folder_session::FolderSession;
 
 use super::{progress, walk};
-use super::{CLOUD_WALK_EVERY_TICKS, HEARTBEAT_EVERY_TICKS, LOCAL_WALK_EVERY_TICKS, UNAVAILABLE_AFTER};
+use super::{CLOUD_WALK_EVERY_TICKS, HEARTBEAT_EVERY, LOCAL_WALK_EVERY_TICKS, UNAVAILABLE_AFTER};
 
-pub(crate) async fn run(session: Arc<FolderSession>, dispatch: RebuildDispatch, reporter: Arc<dyn BuildReporter>) {
+pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
+    let super::SweepHost { dispatch, reporter, emit, cadence } = host;
     let folder = session.folder.clone();
     let folder_str = folder.to_string_lossy().to_string();
     let social = folder.join(".moss").join("data").join("social");
@@ -117,8 +118,20 @@ pub(crate) async fn run(session: Arc<FolderSession>, dispatch: RebuildDispatch, 
     // which is itself a transition from anything else.
     let mut told_health = (false, false);
 
+    // The sleep follows the host's cadence (a backgrounded window ticks
+    // slowly) unless the test seam shortened the tick, which wins.
+    let tick_seam = tick_every != super::TICK;
+    let mut ticker = CadenceTicker::new(cadence);
+    let mut last_heartbeat = Instant::now();
+
     loop {
-        tokio::time::sleep(tick_every).await;
+        if tick_seam {
+            tokio::time::sleep(tick_every).await;
+        } else if let Tick::CadenceChanged(Cadence::Background) = ticker.next_tick().await {
+            // A fresh flip to Background lets the newly armed slow sleep
+            // govern instead of running this tick's body immediately.
+            continue;
+        }
         if session.cancel.is_cancelled() {
             return;
         }
@@ -537,14 +550,13 @@ pub(crate) async fn run(session: Arc<FolderSession>, dispatch: RebuildDispatch, 
         // `degraded` (`folder_degraded`, below) — become one transitions-only
         // event the preview can render. Polling here (≤2s latency on a
         // diagnostics surface) heals for free: whatever a missed tick
-        // skipped, the next tick's comparison emits. Published unconditionally
-        // through the SSE/Tauri event bus — it is a no-op when nobody is
-        // listening (see `ops/serve/events.rs`), so there is no "is there a
-        // window" check to make here the way there used to be.
+        // skipped, the next tick's comparison emits. Sent through the
+        // host's relay, which is a no-op when nobody is listening, so there is
+        // no "is there a window" check to make here.
         let health = (session.is_unavailable(), folder_degraded(worker.as_deref(), &folder_str));
         if health != told_health {
             told_health = health;
-            crate::ops::serve::events::publish(&crate::types::events::MossEvent::FolderHealthChanged {
+            emit(crate::types::events::MossEvent::FolderHealthChanged {
                 folder: folder_str.clone(),
                 unavailable: health.0,
                 degraded: health.1,
@@ -552,7 +564,8 @@ pub(crate) async fn run(session: Arc<FolderSession>, dispatch: RebuildDispatch, 
         }
 
         // ── (7) Heartbeat — a dead loop must be diagnosable from the log ──
-        if ticks % HEARTBEAT_EVERY_TICKS == 0 {
+        if last_heartbeat.elapsed() >= HEARTBEAT_EVERY {
+            last_heartbeat = Instant::now();
             log::info!(
                 target: "moss::build::watch",
                 "Sweep alive for '{}': {} walk pass(es), {} drift catch(es), {} consecutive pass(es) without a baseline, {} file(s) pending",

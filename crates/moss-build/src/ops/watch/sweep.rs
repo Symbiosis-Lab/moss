@@ -7,9 +7,10 @@
 //! (dataless-set measurement, download requests, arrival-paced rebuilds). Three
 //! host-specific seams are replaced by engine ones:
 //!
-//! - **Folder-health transitions** (`FolderHealthChanged`) go out through
-//!   [`crate::ops::serve::events::publish`] — the same bus [`SitePromoted`]
-//!   already rides — instead of a window-labeled `emit_to("preview", …)`.
+//! - **Folder-health transitions** (`FolderHealthChanged`) go out through the
+//!   host's [`EventRelay`] — the one the watcher already takes (the carrier's
+//!   `publish` headless, the typed Tauri bus plus the carrier on the desktop) —
+//!   instead of a window-labeled `emit_to("preview", …)`.
 //!   `MossEvent::FolderHealthChanged` already lives in the shared enum; this
 //!   is the first host-agnostic *emitter* of it, not a new variant.
 //! - **Cloud-sync progress** goes out through
@@ -79,7 +80,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use crate::build::ports::reporter::BuildReporter;
-use crate::ops::watch::RebuildDispatch;
+use crate::ops::watch::{EventRelay, RebuildDispatch};
 use crate::system::folder_session::FolderSession;
 
 mod progress;
@@ -110,9 +111,10 @@ pub(crate) const WALK_DEADLINE: Duration = Duration::from_secs(15);
 /// unavailable — rides out provider flaps (design: "2–3 sweeps").
 pub(crate) const UNAVAILABLE_AFTER: u32 = 3;
 
-/// One INFO line roughly every 5 minutes, so "the sweep is alive and has
-/// caught N drifts over M passes" is answerable from a support log.
-pub(crate) const HEARTBEAT_EVERY_TICKS: u64 = 150;
+/// One INFO line every 5 minutes of wall clock, whatever the cadence, so "the
+/// sweep is alive and has caught N drifts over M passes" is answerable from a
+/// support log — and a silent log means a dead loop.
+pub(crate) const HEARTBEAT_EVERY: Duration = Duration::from_secs(300);
 
 /// Floor on the gap between two arrival-driven rebuilds. Carried over from
 /// the cloud supervisor verbatim, rationale and all: a bulk download is not
@@ -151,13 +153,21 @@ pub(crate) fn tick_and_walk_every(default_walk_every: u64) -> (Duration, u64) {
 // Lifecycle: one sweep per folder, owned by the FolderSession
 // ---------------------------------------------------------------------------
 
-/// folder-key → generation of the live sweep. Process-global (like the
-/// worker registry) so the headless `moss build --serve --watch` path gets
-/// the same dedupe without managed state.
-static SWEEPS: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// folder-key → generation and cancel token of the live sweep. Process-global
+/// (like the worker registry) so the headless `moss build --serve --watch`
+/// path gets the same dedupe without managed state. The token is what lets a
+/// start tell a live claim from one whose session was already cancelled.
+/// What the registry remembers of a live sweep: its generation, and the cancel
+/// token of the session that owns it.
+pub(crate) struct ClaimInfo {
+    pub(crate) gen: u64,
+    pub(crate) token: tokio_util::sync::CancellationToken,
+}
+
+static SWEEPS: LazyLock<Mutex<HashMap<String, ClaimInfo>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_GEN: AtomicU64 = AtomicU64::new(1);
 
-fn sweeps() -> std::sync::MutexGuard<'static, HashMap<String, u64>> {
+fn sweeps() -> std::sync::MutexGuard<'static, HashMap<String, ClaimInfo>> {
     SWEEPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -171,10 +181,25 @@ struct Claim {
 impl Drop for Claim {
     fn drop(&mut self) {
         let mut map = sweeps();
-        if map.get(&self.key) == Some(&self.gen) {
+        if map.get(&self.key).map(|c| c.gen) == Some(self.gen) {
             map.remove(&self.key);
         }
     }
+}
+
+/// The host's side of the sweep, as one value.
+pub struct SweepHost {
+    /// Routes rebuild triggers through the host's rebuild path.
+    pub dispatch: RebuildDispatch,
+    /// Carries cloud-sync progress to whatever surface the host gives it (a
+    /// no-op reporter if nobody is listening).
+    pub reporter: Arc<dyn BuildReporter>,
+    /// The host's event relay — the one the watcher takes — carrying
+    /// folder-health changes.
+    pub emit: EventRelay,
+    /// The host's Live/Background signal (a constant-`Live` receiver where
+    /// there is no visibility signal), the one the watcher takes.
+    pub cadence: tokio::sync::watch::Receiver<crate::ops::watch::cadence::Cadence>,
 }
 
 /// Start the folder's sweep if none is running for it. The check and the
@@ -183,25 +208,32 @@ impl Drop for Claim {
 /// fires (or the future is dropped), and its [`Claim`] then frees the key so
 /// a later start — a resumed process — begins a fresh one.
 ///
-/// `dispatch` routes rebuild triggers through the host's rebuild path;
-/// `reporter` carries cloud-sync progress to whatever surface the host gives
-/// it (a no-op reporter if nobody is listening).
-pub(crate) async fn start(session: Arc<FolderSession>, dispatch: RebuildDispatch, reporter: Arc<dyn BuildReporter>) {
+/// A claim whose session is already cancelled does not count as running: its
+/// task is only about to be dropped, and a reopen builds its new session
+/// before the old one's cancellation has been polled, so honouring the stale
+/// claim would leave the reopened folder with no sweep at all. The stale
+/// task's own [`Claim`] leaves the replacement alone (generation check). The old
+/// task may run until its next cancellation poll, so for at most one tick it
+/// overlaps the new sweep; that is benign because both read the same baseline
+/// and dispatch through the same build lock.
+///
+/// `host` is everything the host supplies: see [`SweepHost`].
+pub async fn start(session: Arc<FolderSession>, host: SweepHost) {
     let key = session.folder.to_string_lossy().to_string();
     let gen = NEXT_GEN.fetch_add(1, Ordering::SeqCst);
     {
         let mut map = sweeps();
-        if map.contains_key(&key) {
+        if map.get(&key).is_some_and(|c| !c.token.is_cancelled()) {
             return;
         }
-        map.insert(key.clone(), gen);
+        map.insert(key.clone(), ClaimInfo { gen, token: session.cancel.clone() });
     }
     let claim = Claim { key, gen };
     let fut = {
         let session = session.clone();
         async move {
             let _claim = claim; // released whenever the future ends or drops
-            tick::run(session, dispatch, reporter).await;
+            tick::run(session, host).await;
         }
     };
     session.spawn_ui_bound(fut).await;

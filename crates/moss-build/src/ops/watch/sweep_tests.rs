@@ -1008,7 +1008,7 @@ async fn cancelling_the_session_stops_the_sweep_and_frees_its_claim() {
     let key = folder.to_string_lossy().to_string();
     let session = FolderSession::new(folder);
     let dispatch: crate::ops::watch::RebuildDispatch = std::sync::Arc::new(|_| Box::pin(async {}));
-    start(session.clone(), dispatch, crate::build::ports::reporter::discard_owned()).await;
+    start(session.clone(), host(dispatch)).await;
     assert!(sweeps().contains_key(&key), "the sweep claims its folder");
 
     session.cancel.cancel();
@@ -1016,5 +1016,42 @@ async fn cancelling_the_session_stops_the_sweep_and_frees_its_claim() {
     while sweeps().contains_key(&key) {
         assert!(Instant::now() < deadline, "the sweep outlived its cancelled session");
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// A reopen registers its new session before the old session's cancellation
+/// has been polled, so the old claim is still in the map when the new start
+/// arrives. The new start must replace it, and the old task's later exit must
+/// not free the new claim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_replaces_the_claim_of_a_cancelled_session() {
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-reopen-").tempdir().unwrap();
+    let folder = tmp.path().to_path_buf();
+    let key = folder.to_string_lossy().to_string();
+    let dispatch: crate::ops::watch::RebuildDispatch = std::sync::Arc::new(|_| Box::pin(async {}));
+
+    let old = FolderSession::new(folder.clone());
+    start(old.clone(), host(dispatch.clone())).await;
+    let old_gen = sweeps().get(&key).map(|c| c.gen).expect("the first sweep claims its folder");
+
+    old.cancel.cancel();
+    let new = FolderSession::new(folder);
+    start(new.clone(), host(dispatch)).await;
+    let new_gen = sweeps().get(&key).map(|c| c.gen).expect("the reopened folder is claimed");
+    assert_ne!(new_gen, old_gen, "the reopened session must own the claim");
+
+    // Let the old task drop; its claim must not remove the new one.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(sweeps().get(&key).map(|c| c.gen), Some(new_gen));
+
+    new.cancel.cancel();
+}
+
+fn host(dispatch: crate::ops::watch::RebuildDispatch) -> SweepHost {
+    SweepHost {
+        dispatch,
+        reporter: crate::build::ports::reporter::discard_owned(),
+        emit: std::sync::Arc::new(|_| {}),
+        cadence: tokio::sync::watch::channel(crate::ops::watch::cadence::Cadence::Live).1,
     }
 }
