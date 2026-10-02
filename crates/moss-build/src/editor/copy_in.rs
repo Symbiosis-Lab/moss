@@ -90,6 +90,7 @@ pub const IMPORT_SKIP_DIRS: &[&str] = &[".moss", "node_modules", ".git"];
 /// Returns the number of FILES copied.
 ///
 /// A host uses this to copy a dropped folder with the same skip, symlink and deadline rules as [`copy_files_into`].
+/// `dst` must come from [`validate_copy_target`]; this function does no containment check of its own.
 pub fn copy_dir_for_import(
     src: &Path,
     dst: &Path,
@@ -186,6 +187,7 @@ pub fn copy_dir_for_import(
 /// it worse.
 ///
 /// A host uses this to copy a single file with the same cloud-materialization wait as [`copy_files_into`].
+/// `dst` must come from [`validate_copy_target`]; this function does no containment check of its own.
 pub fn copy_file_into_vault(
     src: &Path,
     dest: &Path,
