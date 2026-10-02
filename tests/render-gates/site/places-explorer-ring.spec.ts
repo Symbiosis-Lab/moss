@@ -91,6 +91,27 @@ test("Escape closes the ring and restores the full row", async ({ page }) => {
   expect(cardCount).toBeGreaterThan(2); // Porto and Coimbra are back in the row
 });
 
+// One Escape closes exactly the innermost open thing: the ring first, the
+// open card only on the next press.
+test("Escape with a ring and a card open closes the ring only, then the card", async ({ page }) => {
+  await gotoReady(page);
+  await page.locator('.moss-places-marker[data-count="2"]').click();
+  await page.waitForTimeout(400);
+  await page.locator(".moss-places-ring-dot").first().click();
+  await page.waitForTimeout(500);
+  const open = page.locator('.moss-places-cards .moss-card[aria-current="true"]');
+  await expect(open).toHaveCount(1);
+  await expect(page.locator(".moss-places-ring-dot")).toHaveCount(2);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".moss-places-ring-dot")).toHaveCount(0);
+  await page.waitForTimeout(500); // a card that was going to close has done so by now
+  await expect(open, "the card stays open under the first Escape").toHaveCount(1);
+
+  await page.keyboard.press("Escape");
+  await expect(open).toHaveCount(0);
+});
+
 test("an outside click closes the ring", async ({ page }) => {
   await gotoReady(page);
   await page.locator('.moss-places-marker[data-count="2"]').click();

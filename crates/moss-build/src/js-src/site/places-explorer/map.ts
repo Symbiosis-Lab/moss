@@ -655,6 +655,27 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     maxZoom: () => currentMaxZoom(getViewport()),
     cooperative: () => cooperativeGestures,
     cooperativeHint: showCooperativeHint,
+    // The same deselect a card or marker click on the open work performs; `selectWork(null)` leaves the camera alone.
+    onDismiss: () => {
+      if (selectedId) selectWork(null);
+    },
+  });
+
+  // One Escape closes exactly the innermost open thing: a cluster ring, else the
+  // breadcrumb's dig-down menu, else the open card. Document-level so it fires
+  // wherever focus sits: a clicked marker does not reliably take focus in every
+  // engine (WebKit does not focus a button on click). The card, unlike the ring
+  // and menu, is only dismissed when the key reached the map or nothing holds
+  // focus (closing the ring removes the dot that had it, leaving the body).
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (markerLayer.hasOpenRing()) markerLayer.closeRing();
+    else if (!scopeChip.dismissMenu()) {
+      const inMap = event.target === document.body || (event.target instanceof Node && viewportEl.contains(event.target));
+      if (selectedId && inMap) selectWork(null);
+      return;
+    }
+    event.preventDefault();
   });
 
   function setCooperativeGestures(enabled: boolean): void {

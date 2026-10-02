@@ -4,7 +4,8 @@
  * by the render gates.
  */
 import { describe, test, expect } from "vitest";
-import { byDateDescThenTitle, worksForRow } from "../cards";
+import { byDateDescThenTitle, CardRow, worksForRow } from "../cards";
+import type { PlacesStrings } from "../strings";
 import type { Work } from "../types";
 
 function work(id: string, title: string, date?: string): Work {
@@ -51,5 +52,23 @@ describe("worksForRow", () => {
   test("a scoped-out selection is not added back — scope wins", () => {
     const row = worksForRow(works, new Set(["a", "b", "c"]), new Set(["b"]), "c");
     expect(row.map((w) => w.id)).toEqual(["b"]);
+  });
+});
+
+describe("the collapsed card's meta line", () => {
+  function metaOf(w: Work): string[] {
+    const container = document.createElement("div");
+    const row = new CardRow(container, { selectWork() {} }, { untitled: "Untitled", readArticle: "Read" } as PlacesStrings);
+    row.render([w], [], null);
+    return [...container.querySelectorAll(".moss-places-card-select .moss-card-meta > span")].map((el) => el.textContent ?? "");
+  }
+
+  test("the author comes first, then the date carrying its own separator", () => {
+    expect(metaOf({ ...work("a", "A", "2024-06-10"), byline: ["Ana", "Bo"] })).toEqual(["Ana", "\u00a0\u00b7\u00a0" + "2024-06-10"]);
+  });
+
+  test("a lone date or a lone author is the whole line, with no separator", () => {
+    expect(metaOf(work("a", "A", "2024-06-10"))).toEqual(["2024-06-10"]);
+    expect(metaOf({ ...work("a", "A"), byline: ["Ana"] })).toEqual(["Ana"]);
   });
 });

@@ -102,10 +102,9 @@ export class ScopeChip {
     this.callbacks = callbacks;
     this.strings = strings;
     this.lang = lang;
-    // Mirrors markers.ts's own ring-outside-click guard: a menu item takes
-    // real focus (unlike a clicked marker in WebKit), so Escape is handled
-    // by the menu's own keydown listener below — only the outside-click
-    // path needs a document-level reach.
+    // Mirrors markers.ts's own ring-outside-click guard. Escape is not
+    // handled here: map.ts's one Escape handler decides which open thing it
+    // closes (see `dismissMenu`).
     document.addEventListener("pointerdown", (event) => {
       if (!this.menuEl) return;
       if (event.target instanceof Node && this.container.contains(event.target)) return;
@@ -342,10 +341,6 @@ export class ScopeChip {
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
         this.moveFocus(-1);
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        this.closeMenu();
-        trigger.focus();
       }
     });
 
@@ -375,6 +370,15 @@ export class ScopeChip {
     const next = this.menuItems[this.focusIndex];
     next.tabIndex = 0;
     next.focus();
+  }
+
+  /** Escape's half of the menu: close it and hand focus back to the crumb that opened it. `false` when no menu was open, so the caller moves on to the next thing Escape may close. */
+  dismissMenu(): boolean {
+    if (!this.menuEl) return false;
+    const trigger = this.menuTrigger;
+    this.closeMenu();
+    trigger?.focus();
+    return true;
   }
 
   private closeMenu(): void {

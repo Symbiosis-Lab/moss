@@ -157,3 +157,45 @@ test("a nested place page still has its own h1, above its map, and still lists i
   expect(h1Box.y).toBeLessThan(mapBox.y);
   await expect(page.locator("main .moss-cards-container")).not.toHaveCount(0);
 });
+
+// The fixture ships the side-note stylesheet (a footnote on /notes/), so body
+// carries `padding-right: var(--moss-sidenote-inset)` from 76rem until the
+// centred column has room. The full-width map must still run from the
+// window's left edge to its right edge at every width, the insetted band
+// (about 1216-1316px) included, with no horizontal scroll.
+for (const width of [1024, 1180, 1216, 1241, 1280, 1300, 1316, 1366, 1440, 1920]) {
+  test(`the full-width map spans the window edge to edge at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("places/", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(FIGURE)).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+    const m = await page.evaluate(() => {
+      const r = document.querySelector(".moss-places-viewport")!.getBoundingClientRect();
+      const root = document.documentElement;
+      return { left: r.left, right: r.right, clientWidth: root.clientWidth, scrollWidth: root.scrollWidth };
+    });
+    expect(m.left, "left edge").toBeCloseTo(0, 0);
+    expect(Math.abs(m.right - m.clientWidth), `right edge ${m.right} vs ${m.clientWidth}`).toBeLessThanOrEqual(0.5);
+    expect(m.scrollWidth, "no horizontal scroll").toBe(m.clientWidth);
+  });
+}
+
+// The inset is a physical padding-right, so in a right-to-left page the band
+// must still end at the window's right edge, and start at the left one: the
+// insetted widths, with and without the footnote gutter's reserve.
+for (const [page_, selector] of [["places/", FIGURE], ["hero/", '[data-width="screen"]']] as const) {
+  for (const width of [1241, 1280]) {
+    test(`${page_} spans the window edge to edge at ${width}px under dir="rtl"`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(page_, { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => { document.documentElement.dir = "rtl"; });
+      const m = await page.evaluate((sel) => {
+        const r = document.querySelector(sel)!.getBoundingClientRect();
+        const root = document.documentElement;
+        return { left: r.left, right: r.right, clientWidth: root.clientWidth, scrollWidth: root.scrollWidth };
+      }, selector);
+      expect(Math.abs(m.left), `left edge ${m.left}`).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(m.right - m.clientWidth), `right edge ${m.right} vs ${m.clientWidth}`).toBeLessThanOrEqual(0.5);
+      expect(m.scrollWidth, "no horizontal scroll").toBe(m.clientWidth);
+    });
+  }
+}

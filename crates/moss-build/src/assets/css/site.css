@@ -4457,6 +4457,21 @@ article.container > [data-width] {
   margin-inline: calc((100% - min(var(--moss-escape, 100%), 100cqi)) / 2);
 }
 
+/* A full-width band reaches the window's edge, not `main`'s: body's
+ * padding-right (--moss-sidenote-inset, the sidenote gutter's reserve) makes
+ * `main` that much narrower than the window, so the band adds the inset back
+ * on its far side, the contract body's own comment states. The near edge does
+ * not move: the start margin stays as above and the end margin gives up the
+ * inset. The margins are physical, not logical, because the inset is a
+ * physical padding-right: an over-constrained box drops its end-side margin,
+ * so left-to-right pages position from the left and right-to-left pages from
+ * the right, and the extra width reaches the window's right edge in both. */
+article.container > [data-width="screen"] {
+  inline-size: calc(100cqi + var(--moss-sidenote-inset, 0px));
+  margin-left: calc((100% - 100cqi) / 2);
+  margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));
+}
+
 @media (max-width: 48rem) {
   article.container > [data-width] {
     /* collapse to the column. `auto` rather than 0: a hand-written band

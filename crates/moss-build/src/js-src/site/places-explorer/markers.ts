@@ -146,16 +146,6 @@ export class MarkerLayer {
     this.callbacks = callbacks;
     this.strings = strings;
     this.lang = lang;
-    // Document-level, not just the markers layer: a clicked marker does not
-    // reliably take focus in every engine (WebKit historically does not
-    // focus a button on click), so scoping this to the container alone
-    // would miss Escape whenever focus never actually moved there.
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && this.ring) {
-        event.preventDefault();
-        this.closeRing();
-      }
-    });
     document.addEventListener("pointerdown", (event) => {
       if (!this.ring) return;
       if (event.target instanceof Node && this.container.contains(event.target)) return;

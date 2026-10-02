@@ -309,3 +309,44 @@ describe("attachGestures — cooperative mode", () => {
     expect(setCamera).not.toHaveBeenCalled(); // now cooperative: the lone touch defers
   });
 });
+
+describe("attachGestures — dismiss", () => {
+  function setup(): { viewport: HTMLElement; callbacks: GestureCallbacks & { onDismiss: ReturnType<typeof vi.fn> } } {
+    const viewport = document.createElement("div");
+    document.body.append(viewport);
+    (viewport as unknown as { setPointerCapture: (id: number) => void }).setPointerCapture ??= () => {};
+    const callbacks = { ...makeCallbacks(), onDismiss: vi.fn() };
+    attachGestures(viewport, callbacks);
+    return { viewport, callbacks };
+  }
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  test("a press and release in place on the bare map dismisses", () => {
+    const { viewport, callbacks } = setup();
+    fire(viewport, "pointerdown", { pointerId: 1, clientX: 10, clientY: 10 });
+    fire(viewport, "pointerup", { pointerId: 1, clientX: 12, clientY: 11 });
+    expect(callbacks.onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  test("the end of a drag does not", () => {
+    const { viewport, callbacks } = setup();
+    fire(viewport, "pointerdown", { pointerId: 1, clientX: 10, clientY: 10 });
+    fire(viewport, "pointermove", { pointerId: 1, clientX: 60, clientY: 10 });
+    fire(viewport, "pointerup", { pointerId: 1, clientX: 60, clientY: 10 });
+    expect(callbacks.onDismiss).not.toHaveBeenCalled();
+  });
+
+  test("a press on a card or a control does not", () => {
+    const { viewport, callbacks } = setup();
+    const card = document.createElement("article");
+    card.className = "moss-card";
+    const text = document.createElement("p");
+    card.append(text);
+    viewport.append(card);
+    fire(text, "pointerdown", { pointerId: 1, clientX: 10, clientY: 10 });
+    fire(text, "pointerup", { pointerId: 1, clientX: 10, clientY: 10 });
+    expect(callbacks.onDismiss).not.toHaveBeenCalled();
+  });
+});

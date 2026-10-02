@@ -2349,15 +2349,22 @@ footer: true
 const PLACES_EXPLORER_COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="140" viewBox="0 0 200 140"><rect width="200" height="140" fill="#6a8caf"/></svg>
 `;
 
-function placesExplorerWork(uid: string, title: string, location: string, date: string): string {
+// Covers of other shapes, so a card row whose images keep their natural
+// heights shows up: one tall, one wide.
+const PLACES_EXPLORER_TALL_COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="60" height="240" viewBox="0 0 60 240"><rect width="60" height="240" fill="#af8c6a"/></svg>
+`;
+const PLACES_EXPLORER_WIDE_COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="60" viewBox="0 0 400 60"><rect width="400" height="60" fill="#8caf6a"/></svg>
+`;
+
+function placesExplorerWork(uid: string, title: string, location: string, date: string, cover = "cover.svg", byline = "Field notes"): string {
   return `---
 title: ${title}
 uid: "${uid}"
 location: "${location}"
 date: ${date}
-byline: "Field notes"
+byline: "${byline}"
 description: "A short note from ${title}."
-cover: cover.svg
+cover: ${cover}
 ---
 
 # ${title}
@@ -2390,6 +2397,8 @@ export const PLACES_EXPLORER_GATE: ScratchSiteSpec = {
   name: "places-explorer-gate",
   files: {
     "cover.svg": PLACES_EXPLORER_COVER_SVG,
+    "cover-tall.svg": PLACES_EXPLORER_TALL_COVER_SVG,
+    "cover-wide.svg": PLACES_EXPLORER_WIDE_COVER_SVG,
     "places/index.md": `---
 title: Places
 ---
@@ -2424,11 +2433,22 @@ title: World
 
 The hero above is Lisbon's own map, full-bleed.
 `,
-    "lisbon-walk.md": placesExplorerWork("pex001aa", "Lisbon Walk", "Lisbon", "2024-06-10"),
-    "lisbon-harbor-light.md": placesExplorerWork("pex002bb", "Lisbon Harbor Light", "Lisbon Harbor", "2024-06-05"),
-    "porto-steps.md": placesExplorerWork("pex003cc", "Porto Steps", "Porto", "2024-05-20"),
+    // One footnote anywhere makes the side-note stylesheet ship site-wide, and
+    // with it body's `padding-right: var(--moss-sidenote-inset)` between 1216
+    // and 1316px: the full-width map must still reach the window's right edge.
+    "notes.md": `---
+title: Notes
+---
+
+A claim with a source.[^1]
+
+[^1]: The source.
+`,
+    "lisbon-walk.md": placesExplorerWork("pex001aa", "Lisbon Walk", "Lisbon", "2024-06-10", "cover.svg", "Ana"),
+    "lisbon-harbor-light.md": placesExplorerWork("pex002bb", "Lisbon Harbor Light", "Lisbon Harbor", "2024-06-05", "cover-tall.svg"),
+    "porto-steps.md": placesExplorerWork("pex003cc", "Porto Steps", "Porto", "2024-05-20", "cover-wide.svg"),
     "coimbra-library.md": placesExplorerWork("pex004dd", "Coimbra Library", "Coimbra", "2024-05-01"),
-    "portugal-overview.md": placesExplorerWork("pex013mm", "Portugal Overview", "Portugal", "2024-07-01"),
+    "portugal-overview.md": placesExplorerWork("pex013mm", "Portugal Overview", "Portugal", "2024-07-01", "cover.svg", "Alexandria Papadopoulos Konstantinou"),
     "kyoto-garden.md": placesExplorerWork("pex005ee", "Kyoto Garden", "Kyoto", "2024-04-15"),
     "osaka-market.md": placesExplorerWork("pex006ff", "Osaka Market", "Osaka", "2024-04-01"),
     "tokyo-crossing.md": placesExplorerWork("pex007gg", "Tokyo Crossing", "Tokyo", "2024-03-10"),

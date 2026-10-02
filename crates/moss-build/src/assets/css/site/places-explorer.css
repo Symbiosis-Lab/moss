@@ -100,9 +100,16 @@ html[data-moss-embed] main article.container > figure[data-moss-places-explorer]
    its bottom a header's height past the viewport's own — worse than
    subtracting, never worse than before this fix. */
 article.container > figure[data-moss-places-explorer] {
-  inline-size: 100cqi;
+  /* Plus body's sidenote inset, so the map reaches the window's edge on a
+     site with footnotes (see site.css's `[data-width="screen"]`). The
+     margins are physical because the inset is a physical padding-right:
+     an over-constrained box drops its end-side margin, so left-to-right
+     pages position from the left and right-to-left pages from the right,
+     and both reach the window's right edge. */
+  inline-size: calc(100cqi + var(--moss-sidenote-inset, 0px));
   max-inline-size: none;
-  margin-inline: calc((100% - 100cqi) / 2);
+  margin-left: calc((100% - 100cqi) / 2);
+  margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));
   /* A bare `<figure>`'s own UA margin-block-start used to open a gap here
      the header's own border-removal rule above can't see — the explorer
      root's no-heading composition (`render/html.rs`'s `is_explorer_root`)
@@ -982,7 +989,11 @@ button.moss-places-chip-crumb {
 .moss-places-cards {
   position: absolute;
   z-index: 3;
-  inset-inline: 12px;
+  /* Edge to edge: the first card rests 12px in, and cards scroll out under
+     the map's own edge rather than stopping 12px short of it. */
+  inset-inline: 0;
+  padding-inline: 12px;
+  scroll-padding-inline: 12px;
   inset-block-end: 12px;
   /* The row is a fixed, tall band along the bottom and its cards sit on its
      floor: an opened card grows UP inside the band, so nothing else (the
@@ -1083,6 +1094,16 @@ button.moss-places-chip-crumb {
   border-radius: 8px;
   overflow: hidden;
 }
+/* The box above is one fixed size, but `article figure:not(.video-figure) img`
+   (site.css) out-ranks the generic cover rule and gives the image
+   `block-size: auto`, so each image kept its own natural height inside the
+   box. Out-rank it back: the image fills the box and is cropped. */
+.moss-places-cards .moss-card-cover > img,
+.moss-places-cards .moss-card-cover > picture > img {
+  inline-size: 100%;
+  block-size: calc(100% + 1px);
+  object-fit: cover;
+}
 .moss-places-card-select:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: -2px;
@@ -1130,6 +1151,24 @@ button.moss-places-chip-crumb {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The collapsed meta line is author then date on one line, always both: the
+   author takes what room is left and is ellipsised when it is too long, the
+   date (which carries its own " · " separator as text) never shrinks or wraps. */
+.moss-places-card-select .moss-card-meta {
+  display: flex;
+}
+.moss-card-meta-author {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.moss-card-meta-date {
+  flex: none;
+  white-space: nowrap;
 }
 
 /* Everything the collapsed card hides, in full: the description is

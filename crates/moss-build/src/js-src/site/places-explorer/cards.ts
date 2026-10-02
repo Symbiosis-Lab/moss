@@ -154,17 +154,30 @@ export class CardRow {
     title.className = "moss-card-title";
     title.textContent = work.title || this.strings.untitled;
     body.append(title);
-    // One compact meta line — date and/or the first byline entry, each
-    // clamped to a single line by CSS — never the full byline: a work with
-    // several linked contributors used to print its whole credit line here
-    // with nothing to stop it wrapping, which is what made an ordinary
-    // card hundreds of px tall. The full byline moves to the expanded
-    // detail below, alongside everything else collapsed hides.
-    const metaText = [work.date, work.byline[0]].filter(Boolean).join(" · ");
-    if (metaText) {
+    // One compact meta line — the first byline entry, then the date — never
+    // the full byline: a work with several linked contributors used to print
+    // its whole credit line here with nothing to stop it wrapping, which is
+    // what made an ordinary card hundreds of px tall. The full byline moves
+    // to the expanded detail below. Each part is its own span so CSS can
+    // ellipsise the author while the date never shrinks (places-explorer.css);
+    // the separator is real text in the date span, so a copy or a screen
+    // reader gets "Author · 2024-06-10", and a lone date has none.
+    const author = work.byline[0];
+    if (author || work.date) {
       const meta = document.createElement("span");
       meta.className = "moss-card-meta";
-      meta.textContent = metaText;
+      if (author) {
+        const part = document.createElement("span");
+        part.className = "moss-card-meta-author";
+        part.textContent = author;
+        meta.append(part);
+      }
+      if (work.date) {
+        const part = document.createElement("span");
+        part.className = "moss-card-meta-date";
+        part.textContent = author ? `\u00a0\u00b7\u00a0${work.date}` : work.date;
+        meta.append(part);
+      }
       body.append(meta);
     }
     row.append(body);

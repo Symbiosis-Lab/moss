@@ -108,6 +108,24 @@ test.describe("desktop, light", () => {
     await expect(root).toBeFocused();
   });
 
+  test("Escape with the menu and a card open closes the menu only, with focus on an item or on the crumb", async ({ page }) => {
+    for (const focusTrigger of [false, true]) {
+      await gotoReady(page);
+      await page.locator(".moss-places-cards .moss-card .moss-places-card-select").first().click();
+      const open = page.locator('.moss-places-cards .moss-card[aria-current="true"]');
+      await expect(open).toHaveCount(1);
+      const root = trigger(page);
+      await root.click();
+      await expect(menuItems(page).first()).toBeFocused();
+      if (focusTrigger) await root.focus();
+
+      await page.keyboard.press("Escape");
+      await expect(page.locator(".moss-places-chip-menu")).toHaveCount(0);
+      await page.waitForTimeout(500); // a card that was going to close has done so by now
+      await expect(open, "the card stays open under the first Escape").toHaveCount(1);
+    }
+  });
+
   test("choosing a menu item narrows the scope and updates the URL without a navigation", async ({ page }) => {
     await gotoReady(page);
     await page.evaluate(() => {

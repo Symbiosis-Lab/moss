@@ -45,7 +45,18 @@ export interface GestureCallbacks {
    * hint to show.
    */
   cooperativeHint?(): void;
+  /**
+   * A tap or click on the bare map surface (not a marker, cluster, card,
+   * breadcrumb chip or control, and not the end of a drag or pinch).
+   * map.ts closes an open card with it; the camera is left where it is.
+   */
+  onDismiss?(): void;
 }
+
+/** What a press is NOT on the bare map when it lands on: anything with a job of its own. */
+const OWN_JOB = "button, a, .moss-card, .moss-places-chip, .moss-places-controls";
+/** Movement under this many CSS px is a tap, not a drag. */
+const TAP_SLOP = 5;
 
 const KEYBOARD_STEP = 32;
 const KEYBOARD_STEP_FAST = 70;
@@ -81,15 +92,18 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
   const pointers = new Map<number, { x: number; y: number; type: string }>();
   let drag: { id: number; startX: number; startY: number; cameraX: number; cameraY: number } | null = null;
   let pinch: { distance: number; midpoint: Point } | null = null;
+  /** The one press that may still end as a tap: set on a lone press on the bare map, voided by movement past the slop or a second pointer. */
+  let tap: { id: number; x: number; y: number } | null = null;
 
   const isCooperative = (): boolean => callbacks.cooperative?.() ?? false;
   /** A lone touch, in cooperative mode, is the one pointer left for the page's own scroll rather than claimed as a map drag. */
   const isDeferredTouch = (pointerType: string): boolean => pointerType === "touch" && isCooperative();
 
   viewport.addEventListener("pointerdown", (event) => {
-    if (event.target instanceof Element && event.target.closest("button, a")) return;
+    if (event.target instanceof Element && event.target.closest(OWN_JOB)) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
+    tap = pointers.size === 1 ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null;
     if (pointers.size === 1) {
       if (isDeferredTouch(event.pointerType)) return;
       viewport.setPointerCapture(event.pointerId);
@@ -108,6 +122,7 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
   viewport.addEventListener("pointermove", (event) => {
     if (!pointers.has(event.pointerId)) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
+    if (tap && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > TAP_SLOP) tap = null;
     if (pointers.size >= 2 && pinch) {
       const [a, b] = [...pointers.values()];
       const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
@@ -160,6 +175,8 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
     // pressed a marker and did nothing. `pointerup`/`pointercancel`/
     // `lostpointercapture` all reach this same guard.
     if (!pointers.has(event.pointerId)) return;
+    const isTap = event.type === "pointerup" && tap?.id === event.pointerId && pointers.size === 1;
+    if (tap?.id === event.pointerId) tap = null;
     pointers.delete(event.pointerId);
     if (drag?.id === event.pointerId) drag = null;
     if (pointers.size < 2) pinch = null;
@@ -181,6 +198,7 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
       viewport.removeAttribute("data-dragging");
     }
     if (pointers.size === 0) callbacks.onSettle();
+    if (isTap) callbacks.onDismiss?.();
   }
   viewport.addEventListener("pointerup", endPointer);
   viewport.addEventListener("pointercancel", endPointer);

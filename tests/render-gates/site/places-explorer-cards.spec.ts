@@ -185,3 +185,164 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     expect(fit).toEqual({ clipped: false, inside: true, read: true });
   });
 }
+
+// The row spans the map edge to edge: the first card rests 12px in from the
+// left edge, the last 12px short of the right edge once scrolled to the end,
+// and in between cards scroll out under the map's own edge rather than being
+// cut 12px short of it. Scroll snapping keeps the same 12px.
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`cards: the row runs from the map's left edge to its right edge (${viewport.width}px)`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("places/", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+    await page.waitForTimeout(500);
+    const m = await page.evaluate(() => {
+      const map = document.querySelector(".moss-places-viewport")!.getBoundingClientRect();
+      const row = document.querySelector<HTMLElement>(".moss-places-cards")!;
+      const rowBox = row.getBoundingClientRect();
+      const cards = [...row.querySelectorAll<HTMLElement>(".moss-card")];
+      const first = cards[0].getBoundingClientRect();
+      row.scrollLeft = row.scrollWidth;
+      const last = cards[cards.length - 1].getBoundingClientRect();
+      return { mapLeft: map.left, mapRight: map.right, rowLeft: rowBox.left, rowRight: rowBox.right, firstLeft: first.left, lastRight: last.right, scrollPadding: getComputedStyle(row).scrollPaddingInlineStart, overflows: row.scrollWidth > row.clientWidth };
+    });
+    expect(m.rowLeft, "row's left edge is the map's").toBeCloseTo(m.mapLeft, 0);
+    expect(m.rowRight, "row's right edge is the map's").toBeCloseTo(m.mapRight, 0);
+    expect(m.firstLeft - m.mapLeft, "first card rests 12px in").toBeCloseTo(12, 0);
+    expect(m.overflows, "the fixture has more cards than fit").toBe(true);
+    expect(m.mapRight - m.lastRight, "last card rests 12px in at the end of the scroll").toBeCloseTo(12, 0);
+    expect(m.scrollPadding).toBe("12px");
+  });
+}
+
+// Collapsed covers are one fixed box, cropped to fit: the fixture mixes a
+// square-ish, a tall and a wide image, and every <img> must fill the same
+// box rather than keep its own natural height.
+test("cards: every collapsed cover image fills one shared box", async ({ page }) => {
+  await gotoReady(page);
+  const sizes = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLImageElement>(".moss-places-cards .moss-card:not([aria-current='true']) .moss-card-cover > img")].map((img) => {
+      const box = img.parentElement!.getBoundingClientRect();
+      const r = img.getBoundingClientRect();
+      return { box: [box.width, box.height], img: [r.width, r.height], src: img.getAttribute("src"), fit: getComputedStyle(img).objectFit };
+    }),
+  );
+  expect(new Set(sizes.map((s) => s.src)).size, "the fixture mixes cover shapes").toBeGreaterThan(2);
+  for (const s of sizes) {
+    expect(s.fit).toBe("cover");
+    expect(s.box[0] / s.box[1], "box is 4:3").toBeCloseTo(4 / 3, 1);
+    expect(s.img[0], "image width fills the box").toBeCloseTo(s.box[0], 0);
+    expect(Math.abs(s.img[1] - s.box[1]), "image height fills the box (plus the 1px hairline overshoot)").toBeLessThanOrEqual(1.5);
+    expect(s.img).toEqual(sizes[0].img);
+  }
+});
+
+// The collapsed meta line is author then date, always both, on one line. The
+// author is ellipsised when the pair does not fit ("Alexandria Papadopoulos
+// Konstantinou" is wider than the line on its own); the date, which carries
+// its own " · " separator as text, is never cut or wrapped.
+test("cards: meta line always shows the date whole and ellipsises only the author", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("places/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+  await page.waitForTimeout(500);
+  const metas = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>(".moss-places-cards .moss-card")].map((card) => {
+      const meta = card.querySelector<HTMLElement>(".moss-places-card-select .moss-card-meta");
+      if (!meta) return null;
+      const box = meta.getBoundingClientRect();
+      const author = meta.querySelector<HTMLElement>(".moss-card-meta-author");
+      const date = meta.querySelector<HTMLElement>(".moss-card-meta-date");
+      const dr = date?.getBoundingClientRect();
+      const lineHeight = parseFloat(getComputedStyle(meta).lineHeight);
+      return {
+        title: card.querySelector(".moss-card-title")!.textContent,
+        text: meta.textContent,
+        authorText: author?.textContent ?? null,
+        authorLeft: author?.getBoundingClientRect().left ?? null,
+        dateLeft: dr?.left ?? null,
+        dateFullyShown: dr ? dr.top >= box.top - 0.5 && dr.bottom <= box.bottom + 0.5 && dr.right <= box.right + 0.5 : null,
+        dateOneLine: dr ? dr.height <= lineHeight + 0.5 : null,
+        authorClipped: author ? author.scrollWidth > author.clientWidth : null,
+      };
+    }),
+  );
+  const wide = metas.find((m) => m?.title === "Lisbon Walk")!;
+  expect(wide.text).toBe("Ana\u00a0\u00b7\u00a02024-06-10");
+  expect(wide.authorLeft!, "author before date").toBeLessThan(wide.dateLeft!);
+  expect(wide.dateFullyShown, "both fit: the date is shown").toBe(true);
+  expect(wide.authorClipped, "both fit: no ellipsis").toBe(false);
+
+  const narrow = metas.find((m) => m?.title === "Portugal Overview")!;
+  expect(narrow.dateFullyShown, "they do not fit: the date is still fully visible").toBe(true);
+  expect(narrow.dateOneLine, "the date does not wrap").toBe(true);
+  expect(narrow.authorClipped, "the author's box is narrower than its text: ellipsised").toBe(true);
+
+  for (const m of metas) {
+    if (m && m.dateFullyShown !== null) expect(m.dateFullyShown, `${m.title}: the date is always whole`).toBe(true);
+  }
+});
+
+// Closing an open card from the map itself: a click on bare map (not a marker,
+// cluster, card, chip or control, and not the end of a drag) and Escape with
+// focus in the map both close it, with the camera left where it is. All real
+// input.
+test.describe("an open card closes from the map", () => {
+  async function openFirstCard(page: Page) {
+    await gotoReady(page);
+    const first = page.locator(".moss-places-cards .moss-card").first();
+    await first.locator(".moss-places-card-select").click();
+    await expect(first).toHaveAttribute("aria-current", "true");
+    await page.waitForTimeout(500);
+    return first;
+  }
+  /** A point on the map that no marker, card, chip or control covers. */
+  const bareMapPoint = (page: Page) =>
+    page.evaluate(() => {
+      const r = document.querySelector(".moss-places-viewport")!.getBoundingClientRect();
+      for (let fy = 0.25; fy < 0.6; fy += 0.04) {
+        for (let fx = 0.2; fx < 0.9; fx += 0.04) {
+          const x = r.left + r.width * fx;
+          const y = r.top + r.height * fy;
+          const hit = document.elementFromPoint(x, y);
+          if (hit && !hit.closest("button, a, .moss-card, .moss-places-chip, .moss-places-controls") && hit.closest(".moss-places-viewport")) return { x, y };
+        }
+      }
+      throw new Error("no bare map point");
+    });
+  const cameraOf = (page: Page) => page.evaluate(() => ["z", "x", "y"].map((k) => new URL(location.href).searchParams.get(k)).join(","));
+
+  test("a click on bare map closes it and leaves the camera", async ({ page }) => {
+    const first = await openFirstCard(page);
+    expect(page.url()).toContain("article=");
+    const camera = await cameraOf(page);
+    const p = await bareMapPoint(page);
+    await page.mouse.click(p.x, p.y);
+    await page.waitForTimeout(400);
+    await expect(page.locator('.moss-places-cards .moss-card[aria-current="true"]')).toHaveCount(0);
+    await expect(first).toHaveAttribute("aria-current", "false");
+    expect(page.url()).not.toContain("article=");
+    expect(await cameraOf(page)).toBe(camera);
+  });
+
+  test("dragging the map with a card open leaves it open", async ({ page }) => {
+    const first = await openFirstCard(page);
+    const p = await bareMapPoint(page);
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    await page.mouse.move(p.x + 60, p.y + 20, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    await expect(first).toHaveAttribute("aria-current", "true");
+    expect(page.url()).toContain("article=");
+  });
+
+  test("Escape with focus in the map closes it", async ({ page }) => {
+    const first = await openFirstCard(page);
+    await page.locator(".moss-places-viewport").focus();
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    await expect(first).toHaveAttribute("aria-current", "false");
+    expect(page.url()).not.toContain("article=");
+  });
+});
