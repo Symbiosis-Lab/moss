@@ -2,6 +2,14 @@
  * Render gate: the works row's selection (expand in place) and its own
  * dependence on the current view.
  *
+ * Every select click below is real input (`locator.click()`), not the
+ * `element.click()` workaround this file used to carry for the same
+ * reason `places-explorer-ring.spec.ts` did: `gestures.ts`'s `endPointer`
+ * used to settle (re-render the marker/card layers) for an untracked
+ * pointer too, which could replace a `.moss-places-card-select` button
+ * between press and release. Fixed at the source — see that file's own
+ * doc for the mechanism.
+ *
  * The scratch site comes from tests/e2e/helpers/gate-sites.ts
  * (PLACES_EXPLORER_GATE), built by the playwright config at parse time.
  *
@@ -21,7 +29,7 @@ async function gotoReady(page: Page, search = ""): Promise<void> {
   await page.waitForTimeout(300);
 }
 
-test("selecting a card expands its detail in place", async ({ page }) => {
+test("selecting a card expands its detail in place", async ({ page, browserName }) => {
   await gotoReady(page);
   const card = page.locator(".moss-places-cards .moss-card").first();
   const select = card.locator(".moss-places-card-select");
@@ -32,7 +40,7 @@ test("selecting a card expands its detail in place", async ({ page }) => {
   const collapsedHeight = await detail.evaluate((el) => el.getBoundingClientRect().height);
   expect(collapsedHeight).toBeLessThan(1);
 
-  await select.evaluate((el) => (el as HTMLElement).click());
+  await select.click();
   await page.waitForTimeout(400); // the grid-template-rows transition
 
   await expect(card).toHaveAttribute("aria-current", "true");
@@ -47,8 +55,21 @@ test("selecting a card expands its detail in place", async ({ page }) => {
   await expect(readLink).toHaveCount(1);
   await expect(readLink).toHaveAttribute("href", /.+/);
 
-  // Clicking the same card again collapses it back.
-  await select.evaluate((el) => (el as HTMLElement).click());
+  // Clicking the same card again collapses it back. `locator.click()`'s
+  // own pre-click actionability wait hangs here in WebKit specifically —
+  // the SAME class of harness limitation `places-explorer-ring.spec.ts`
+  // diagnosed for a second real click on an element whose attributes an
+  // earlier click just changed (there: a ring dot after the ring bloomed;
+  // here: this very button, now `aria-pressed="true"`). See that file's
+  // own comment for the direct, API-level evidence (isVisible/boundingBox/
+  // elementFromPoint all already hold) that ruled out a product
+  // re-render race before reaching for this.
+  if (browserName === "webkit") {
+    const box = (await select.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  } else {
+    await select.click();
+  }
   await page.waitForTimeout(400);
   await expect(card).toHaveAttribute("aria-current", "false");
   await expect(detail).toHaveAttribute("inert", "");
@@ -64,7 +85,7 @@ test("every card's cover sits at the same offset from its own card top, even whe
   // happened to wrap to one line (a shorter `.moss-card-row`) got pushed
   // down by half the slack while two-line titles got none.
   const select = page.locator(".moss-places-card-select").first();
-  await select.evaluate((el) => (el as HTMLElement).click());
+  await select.click();
   await page.waitForTimeout(400); // the grid-template-rows/inline-size transition
 
   const offsets = await page.$$eval(".moss-places-cards .moss-card", (cards) =>

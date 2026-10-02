@@ -71,6 +71,7 @@ test.describe("desktop, light", () => {
       "Portugal(3)",
       "Arequipa(1)",
       "Cusco(1)",
+      "Faro(1)",
       "Iquitos(1)",
       "Kyoto(1)",
       "Lima(1)",
@@ -233,6 +234,6 @@ test.describe("dark theme", () => {
     await expect(page.locator(".moss-places-chip")).toBeVisible();
     await trigger(page).click();
     await expect(page.locator('.moss-places-chip-menu[role="menu"]')).toBeVisible();
-    await expect(menuItems(page)).toHaveCount(11);
+    await expect(menuItems(page)).toHaveCount(12);
   });
 });

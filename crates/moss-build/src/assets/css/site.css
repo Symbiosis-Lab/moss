@@ -380,6 +380,25 @@ b {
   font-weight: 480;
 }
 
+/* Clips an element to a 1px box while keeping it in the accessibility tree
+   and the tab order — content meant for assistive tech only, never sighted
+   readers (a page's own `<h1>` on a layout whose visible heading is drawn
+   some other way, a form label standing in for a visible placeholder). Moved
+   here from comments.css (2026-10) so a page with no synced comments still
+   loads it: that sheet is a feature partial, linked only when comments are
+   present, and this rule has nothing to do with comments. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ==========================================================================
    3. Typography
    ========================================================================== */

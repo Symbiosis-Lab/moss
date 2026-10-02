@@ -73,7 +73,7 @@ pub fn render(
             } else {
                 cover_html
             };
-            let folder_title_h1 = super::folder_title::render(label, emit_source_fm);
+            let folder_title_h1 = super::folder_title::render(label, emit_source_fm, false);
             format!(
                 r#"<div class="moss-collection-cover-row">{}<div class="moss-collection-cover-body">{}{}</div></div>"#,
                 cover_html,

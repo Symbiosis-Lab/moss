@@ -27,7 +27,7 @@ export interface Companion {
   url: string;
 }
 
-/** One work (or standalone located page) — one dot on the map. */
+/** One work (or standalone located page) — one dot on the map. Every reader in this directory can assume `byline` is an array, never `undefined`: {@link normalizePlacesData} is the one place that fills it in, so a reader never has to guard its own read of it. */
 export interface Work {
   id: string;
   title: string;
@@ -45,6 +45,45 @@ export interface Work {
 export interface PlacesData {
   works: Work[];
   places: Place[];
+}
+
+/**
+ * `places.<hash>.json` exactly as `places_data.rs`'s `WorkEntry` serializes
+ * it over the wire, not as every reader in this directory wants to consume
+ * it: `#[serde(skip_serializing_if = "Vec::is_empty")]` on `byline` means an
+ * unauthored work's JSON omits the key outright, the same way
+ * `Option::is_none` already does for `date`/`description`/`cover` — `byline`
+ * was the one field this type declared required when the wire can truthfully
+ * omit it, which crashed `cards.ts`'s first read of `work.byline.length` on
+ * any such work before the whole explorer ever reached its ready state.
+ * {@link normalizePlacesData} is the one place that reconciles the two
+ * shapes; every other module in this directory should import {@link Work},
+ * never this.
+ */
+export interface WorkWire {
+  id: string;
+  title: string;
+  url: string;
+  date?: string;
+  byline?: string[];
+  description?: string;
+  cover?: string;
+  places: string[];
+  companions: Companion[];
+}
+
+/** The wire shape of {@link PlacesData} — see {@link WorkWire}. */
+export interface PlacesDataWire {
+  works: WorkWire[];
+  places: Place[];
+}
+
+/** Reconcile a fetched `places.<hash>.json` payload into the shape every reader in this directory actually relies on — today, just defaulting an omitted `byline` to `[]`. The one normalization boundary: call this once, right where the JSON is parsed ({@link import("./index").initPlacesExplorer}), not at each read site. */
+export function normalizePlacesData(wire: PlacesDataWire): PlacesData {
+  return {
+    works: wire.works.map((work) => ({ ...work, byline: work.byline ?? [] })),
+    places: wire.places,
+  };
 }
 
 /** A plain 2D point, in whatever coordinate space the caller documents. */

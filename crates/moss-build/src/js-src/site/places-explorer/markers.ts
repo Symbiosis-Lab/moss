@@ -84,6 +84,21 @@ interface RingState {
   members: WorkPoint[];
 }
 
+/** A plain marker's own persistent DOM, reused across renders by `clusterKey`. `cluster`/`members` are mutated in place on every render so the button's own `click` closure (bound once, at creation) always reads the current data instead of the snapshot from whenever the button was first built. */
+interface MarkerEntry {
+  button: HTMLButtonElement;
+  cluster: ProximityCluster;
+  members: WorkPoint[];
+}
+
+/** An open ring's own persistent DOM. `dots` is keyed by work id (stable across a ring's own lifetime, unlike array index) so a mid-gesture settle reuses the SAME dot element a pointer sequence may already be resolving a click against. Legs carry no listener, so they are simplest rebuilt each render rather than diffed. */
+interface RingEntry {
+  key: string;
+  anchor: HTMLButtonElement;
+  legs: HTMLElement[];
+  dots: Map<string, HTMLButtonElement>;
+}
+
 export class MarkerLayer {
   private readonly container: HTMLElement;
   private readonly callbacks: MarkerCallbacks;
@@ -94,6 +109,16 @@ export class MarkerLayer {
   private lastCamera: Camera = { x: 0, y: 0, zoom: 1 };
   /** Work ids exempted from the ring's own dimming attribute while the scope chip's menu has an item hovered/focused — `null` lifts the exemption. Independent of `ring`: the chip never shows a dig-down menu while a ring is open (its terminal crumb is the ring itself), so the two are never both active. */
   private highlightIds: Set<string> | null = null;
+  // Persistent DOM, reused across `render()` calls — see `MarkerEntry`/
+  // `RingEntry`. `container.replaceChildren()` every render used to mean
+  // ANY settle (a resize, a tile arriving, not just a gesture's own end)
+  // could replace a marker or ring-dot button mid-click: the browser's own
+  // click synthesis resolves against the element `pointerdown` landed on,
+  // and a node swapped out between `pointerdown` and `pointerup` leaves it
+  // nothing to fire `click` on. Reusing the same node when a cluster's own
+  // identity (its member ids) hasn't changed closes that window.
+  private markerEntries = new Map<string, MarkerEntry>();
+  private ringEntry: RingEntry | null = null;
 
   constructor(container: HTMLElement, callbacks: MarkerCallbacks, strings: PlacesStrings, lang: string) {
     this.container = container;
@@ -153,19 +178,40 @@ export class MarkerLayer {
       this.callbacks.scopeRow(null);
     }
 
-    this.container.replaceChildren();
     const byId = new Map(points.map((point) => [point.id, point]));
+    const seenMarkerKeys = new Set<string>();
 
     for (const cluster of clusters) {
-      if (this.ring && clusterKey(cluster.ids) === this.ring.key) {
-        this.renderRing(cluster, byId, camera, viewport, selectedId, works);
+      const key = clusterKey(cluster.ids);
+      if (this.ring && key === this.ring.key) {
+        this.renderRing(key, cluster, byId, camera, viewport, selectedId, works);
         continue;
       }
-      this.renderMarker(cluster, byId, camera, viewport, selectedId, works);
+      seenMarkerKeys.add(key);
+      this.renderMarker(key, cluster, byId, camera, viewport, selectedId, works);
+    }
+
+    // A cluster from a previous render that no longer exists this one
+    // (re-clustered away, or scrolled out of scope) — only now is its
+    // button actually removed.
+    for (const [key, entry] of this.markerEntries) {
+      if (!seenMarkerKeys.has(key)) {
+        entry.button.remove();
+        this.markerEntries.delete(key);
+      }
+    }
+    // The ring itself closed, or re-clustered into a different key, since
+    // the last render that had one open.
+    if (this.ringEntry && (!this.ring || this.ringEntry.key !== this.ring.key)) {
+      this.ringEntry.anchor.remove();
+      this.ringEntry.legs.forEach((leg) => leg.remove());
+      this.ringEntry.dots.forEach((dot) => dot.remove());
+      this.ringEntry = null;
     }
   }
 
   private renderMarker(
+    key: string,
     cluster: ProximityCluster,
     byId: Map<string, WorkPoint>,
     camera: Camera,
@@ -175,22 +221,41 @@ export class MarkerLayer {
   ): void {
     const members = cluster.ids.map((id) => byId.get(id)).filter((point): point is WorkPoint => point != null);
     const screen = worldToScreen(worldCentroid(members), camera, viewport);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "moss-places-marker";
+
+    let entry = this.markerEntries.get(key);
+    if (!entry) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "moss-places-marker";
+      this.container.append(button);
+      entry = { button, cluster, members };
+      this.markerEntries.set(key, entry);
+      // Reads `entry.cluster`/`entry.members`, not the `cluster`/`members`
+      // captured here — those two fields are updated in place below on
+      // every later render that reuses this same button, so a click long
+      // after creation still activates with current data.
+      button.addEventListener("click", () => this.activate(entry!.cluster, entry!.members));
+    } else {
+      entry.cluster = cluster;
+      entry.members = members;
+    }
+
+    const button = entry.button;
     button.style.left = `${screen.x}px`;
     button.style.top = `${screen.y}px`;
     button.dataset.precision = coarsestPrecision(members.map((member) => member.precision));
     if (cluster.ids.length > 1) button.dataset.count = String(cluster.ids.length);
+    else delete button.dataset.count;
     if (cluster.ids.some((id) => id === selectedId)) button.dataset.selected = "true";
+    else delete button.dataset.selected;
     const dimmedByHighlight = this.highlightIds != null && !cluster.ids.some((id) => this.highlightIds!.has(id));
     if (this.ring || dimmedByHighlight) button.dataset.dimmed = "";
+    else delete button.dataset.dimmed;
     button.setAttribute("aria-label", this.labelFor(cluster.ids, works));
-    button.addEventListener("click", () => this.activate(cluster, members));
-    this.container.append(button);
   }
 
   private renderRing(
+    key: string,
     cluster: ProximityCluster,
     byId: Map<string, WorkPoint>,
     camera: Camera,
@@ -200,15 +265,34 @@ export class MarkerLayer {
   ): void {
     const members = cluster.ids.map((id) => byId.get(id)).filter((point): point is WorkPoint => point != null);
     const anchorScreen = worldToScreen(worldCentroid(members), camera, viewport);
-    const anchor = document.createElement("button");
-    anchor.type = "button";
-    anchor.className = "moss-places-marker";
-    anchor.dataset.ringAnchor = "";
-    anchor.style.left = `${anchorScreen.x}px`;
-    anchor.style.top = `${anchorScreen.y}px`;
-    anchor.setAttribute("aria-label", this.labelFor(cluster.ids, works));
-    anchor.addEventListener("click", () => this.closeRing());
-    this.container.append(anchor);
+
+    let ringEntry = this.ringEntry;
+    if (!ringEntry || ringEntry.key !== key) {
+      // Switching rings within one render is not a real case today (a ring
+      // only ever opens from a fresh click, never while another is still
+      // open), but drop any stale one defensively rather than leak it.
+      if (ringEntry) {
+        ringEntry.anchor.remove();
+        ringEntry.legs.forEach((leg) => leg.remove());
+        ringEntry.dots.forEach((dot) => dot.remove());
+      }
+      const anchor = document.createElement("button");
+      anchor.type = "button";
+      anchor.className = "moss-places-marker";
+      anchor.dataset.ringAnchor = "";
+      this.container.append(anchor);
+      anchor.addEventListener("click", () => this.closeRing());
+      ringEntry = { key, anchor, legs: [], dots: new Map() };
+      this.ringEntry = ringEntry;
+    }
+    ringEntry.anchor.style.left = `${anchorScreen.x}px`;
+    ringEntry.anchor.style.top = `${anchorScreen.y}px`;
+    ringEntry.anchor.setAttribute("aria-label", this.labelFor(cluster.ids, works));
+
+    // Legs carry no listener and are cheap to rebuild — unlike the anchor
+    // and the dots below, there is no click race to protect here.
+    ringEntry.legs.forEach((leg) => leg.remove());
+    ringEntry.legs = [];
 
     // Row order, not cluster.ids' own id-sorted order (clusters.ts sorts by
     // id purely for deterministic merging, see its own doc) — the ring's
@@ -221,6 +305,7 @@ export class MarkerLayer {
     });
     const layout = ringLayout(orderedIds.length, anchorScreen);
     const positions = layout.positions ?? orderedIds.map(() => anchorScreen);
+    const seenDotIds = new Set<string>();
     orderedIds.forEach((id, index) => {
       const position = positions[index];
       const leg = document.createElement("div");
@@ -234,18 +319,31 @@ export class MarkerLayer {
       leg.style.width = `${length}px`;
       leg.style.transform = `rotate(${angle}deg)`;
       this.container.append(leg);
+      ringEntry!.legs.push(leg);
 
+      seenDotIds.add(id);
+      let dot = ringEntry!.dots.get(id);
+      if (!dot) {
+        dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "moss-places-ring-dot";
+        this.container.append(dot);
+        dot.addEventListener("click", () => this.callbacks.selectWork(id));
+        ringEntry!.dots.set(id, dot);
+      }
       const work = works.get(id);
-      const dot = document.createElement("button");
-      dot.type = "button";
-      dot.className = "moss-places-ring-dot";
       dot.style.left = `${position.x}px`;
       dot.style.top = `${position.y}px`;
       if (id === selectedId) dot.dataset.selected = "true";
+      else delete dot.dataset.selected;
       dot.setAttribute("aria-label", work ? (work.title || this.strings.untitled) : id);
-      dot.addEventListener("click", () => this.callbacks.selectWork(id));
-      this.container.append(dot);
     });
+    for (const [id, dot] of ringEntry.dots) {
+      if (!seenDotIds.has(id)) {
+        dot.remove();
+        ringEntry.dots.delete(id);
+      }
+    }
   }
 
   private labelFor(ids: string[], works: Map<string, Work>): string {

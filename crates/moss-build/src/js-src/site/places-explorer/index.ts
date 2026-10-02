@@ -30,7 +30,7 @@
  * moss-places-card-detail, moss-places-card-read, moss-places-status.
  */
 import { mountPlacesMap } from "./map";
-import type { LabelsData, PlacesData } from "./types";
+import { normalizePlacesData, type LabelsData, type PlacesDataWire } from "./types";
 
 export {};
 
@@ -69,9 +69,9 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
     // URL fetched outside the `Promise.all` that still gates everything
     // else — caught on its own, resolving to `null` (no labels) rather than
     // rejecting the whole boot.
-    const [worldSvgText, places, tiles, labels] = await Promise.all([
+    const [worldSvgText, placesWire, tiles, labels] = await Promise.all([
       fetchLocal(worldUrl).then((response) => response.text()),
-      fetchLocal(placesUrl).then((response) => response.json() as Promise<PlacesData>),
+      fetchLocal(placesUrl).then((response) => response.json() as Promise<PlacesDataWire>),
       fetchLocal(tilesUrl).then((response) => response.json() as Promise<TileIndex>),
       labelsUrl
         ? fetchLocal(labelsUrl)
@@ -82,6 +82,7 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
             })
         : Promise.resolve(null),
     ]);
+    const places = normalizePlacesData(placesWire);
     const tilesBaseUrl = tilesUrl.slice(0, tilesUrl.lastIndexOf("/") + 1);
     const controller = mountPlacesMap(figure, {
       worldSvgText,

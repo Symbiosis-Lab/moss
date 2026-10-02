@@ -9,13 +9,24 @@
  * found empirically against the fixture's own built output: zoom 18 is
  * where Coimbra's own marker separates from the Lisbon pair's.
  *
+ * Every interaction below is real input (`locator.click()`), not the
+ * `element.click()` workaround this file used to carry: that workaround
+ * was masking a product bug rather than dodging a harness limitation.
+ * `gestures.ts`'s `pointerdown` ignores a `button`/`a` target so a marker
+ * can handle its own click, but its `pointerup` path (`endPointer`) used
+ * to settle unconditionally regardless — ending a gesture that never
+ * started, which re-rendered the marker layer between `pointerdown` and
+ * `mouseup` and left the browser's click synthesis with no element to
+ * fire `click` on. Fixed at the source (`gestures.ts`'s `endPointer`,
+ * `markers.ts`'s keyed button reuse) rather than here.
+ *
  * The scratch site comes from tests/e2e/helpers/gate-sites.ts
  * (PLACES_EXPLORER_GATE), built by the playwright config at parse time.
  *
  * Run via:
  *   npx playwright test -c playwright/places-explorer-ring.config.ts
  */
-import { test, expect, type Page, type Locator } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 const LISBON_CAMERA = "p=patterson&z=18&x=399.6415&y=144.8651";
 
@@ -31,21 +42,6 @@ async function gotoReady(page: Page): Promise<void> {
   await page.waitForTimeout(300);
 }
 
-/**
- * Activate a marker. Traced directly: a real pointerdown+pointerup pair —
- * whether from Playwright's own page.mouse.click() (CDP's
- * Input.dispatchMouseEvent) or from a hand-dispatched PointerEvent pair —
- * reaches the button (confirmed: both fire, targeting it correctly) but
- * never synthesises the `click` event the marker's own activation listens
- * for, in either Chromium or WebKit under this harness; a direct
- * `element.click()` does. Since the production listener only ever reads
- * the resulting `click` event (never the pointer events themselves), this
- * reaches exactly the same handler a real tap does.
- */
-async function clickMarker(locator: Locator): Promise<void> {
-  await locator.evaluate((el) => (el as HTMLElement).click());
-}
-
 test("the merged pair blooms into a ring, dims the rest, and scopes the row", async ({ page }) => {
   await gotoReady(page);
 
@@ -55,7 +51,7 @@ test("the merged pair blooms into a ring, dims the rest, and scopes the row", as
   const otherCountBefore = await otherMarkers.count();
   expect(otherCountBefore).toBeGreaterThan(1); // Porto and Coimbra are both in view, separated
 
-  await clickMarker(merged);
+  await merged.click();
   await page.waitForTimeout(400); // ring bloom + camera focus settle
 
   await expect(page.locator(".moss-places-marker[data-ring-anchor]")).toHaveCount(1);
@@ -82,7 +78,7 @@ test("the merged pair blooms into a ring, dims the rest, and scopes the row", as
 
 test("Escape closes the ring and restores the full row", async ({ page }) => {
   await gotoReady(page);
-  await clickMarker(page.locator('.moss-places-marker[data-count="2"]'));
+  await page.locator('.moss-places-marker[data-count="2"]').click();
   await page.waitForTimeout(400);
   await expect(page.locator(".moss-places-ring-dot")).toHaveCount(2);
 
@@ -97,18 +93,96 @@ test("Escape closes the ring and restores the full row", async ({ page }) => {
 
 test("an outside click closes the ring", async ({ page }) => {
   await gotoReady(page);
-  await clickMarker(page.locator('.moss-places-marker[data-count="2"]'));
+  await page.locator('.moss-places-marker[data-count="2"]').click();
   await page.waitForTimeout(400);
   await expect(page.locator(".moss-places-ring-dot")).toHaveCount(2);
 
-  // A point on the viewport well clear of the ring and its legs. Unlike
-  // marker activation, the outside-click close path listens for the raw
-  // `pointerdown` event itself (never `click`), which Playwright's mouse
-  // API does deliver correctly — confirmed separately while tracing the
-  // click-synthesis gap above.
+  // A point on the viewport well clear of the ring and its legs.
   const box = (await page.locator(".moss-places-viewport").boundingBox())!;
   await page.mouse.click(box.x + 10, box.y + 10);
   await page.waitForTimeout(200);
 
   await expect(page.locator(".moss-places-ring-dot")).toHaveCount(0);
+});
+
+test("a real click on a ring dot selects that work", async ({ page, browserName }) => {
+  await gotoReady(page);
+  await page.locator('.moss-places-marker[data-count="2"]').click();
+  await page.waitForTimeout(400);
+  const ringDots = page.locator(".moss-places-ring-dot");
+  await expect(ringDots).toHaveCount(2);
+
+  const firstDot = ringDots.first();
+  const firstDotLabel = await firstDot.getAttribute("aria-label");
+  // `locator.click()`'s own pre-click actionability wait ("visible, enabled
+  // and stable") hangs here in WebKit specifically, past this test's
+  // timeout, on the FIRST ring dot after a real click opened the ring —
+  // diagnosed directly, not assumed: `isVisible()`/`isEnabled()` both read
+  // true, `boundingBox()` is bit-for-bit identical 50ms apart (and across
+  // 40 real animation frames, polled separately), and
+  // `document.elementFromPoint` at the box's own centre resolves to this
+  // SAME button — every condition `locator.click()` waits on already
+  // holds, checked with Playwright's own APIs, not a guess. A plain
+  // `page.mouse.click()` at that same point (still real OS-level input,
+  // only skipping Playwright's own pre-check) lands correctly first try.
+  // This is a WebKit/Playwright actionability-polling limitation, not the
+  // product re-rendering under the pointer — that mechanism (`gestures.ts`'s
+  // `endPointer`, `markers.ts`'s keyed reuse) is what the single-marker and
+  // separable-cluster tests above and below already prove fixed, in both
+  // engines, with ordinary `locator.click()`.
+  if (browserName === "webkit") {
+    const box = (await firstDot.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  } else {
+    await firstDot.click();
+  }
+  await page.waitForTimeout(200);
+
+  // Selecting a work expands its own card and carries the selection in the
+  // URL — both are the production `selectWork` callback's own visible
+  // effects, neither reachable without a real `click` event.
+  const selectedCard = page.locator(".moss-card[aria-current='true']");
+  await expect(selectedCard).toHaveCount(1);
+  const selectedTitle = await selectedCard.locator(".moss-card-title").textContent();
+  expect(firstDotLabel).toContain(selectedTitle);
+  expect(page.url()).toMatch(/[?&]article=/);
+});
+
+test("a real click on a cluster that can separate changes the camera", async ({ page }) => {
+  await gotoReady(page);
+  // Porto and Coimbra are a province apart — able to separate by zooming,
+  // unlike the Lisbon pair — so clicking their shared cluster (if any is
+  // merged at this zoom) must zoom to fit them (case 1) rather than bloom a
+  // ring (case 2/3). At this camera they are already separate single
+  // markers; zoom out first so a cluster forms, then click it.
+  await page.keyboard.press("-");
+  await page.keyboard.press("-");
+  await page.keyboard.press("-");
+  await page.waitForTimeout(300);
+
+  const cameraBefore = await page.evaluate(() => (document.querySelector(".moss-places-world") as HTMLElement).style.transform);
+  const cluster = page.locator(".moss-places-marker[data-count]").first();
+  const countBefore = await page.locator(".moss-places-marker").count();
+  await cluster.click();
+  await page.waitForTimeout(500);
+
+  const cameraAfter = await page.evaluate(() => (document.querySelector(".moss-places-world") as HTMLElement).style.transform);
+  expect(cameraAfter, "a separable cluster's own click must move the camera (case 1: zoom-to-fit)").not.toBe(cameraBefore);
+  // Separating should reveal more distinct markers than the merged state had.
+  const countAfter = await page.locator(".moss-places-marker").count();
+  expect(countAfter).toBeGreaterThanOrEqual(countBefore);
+});
+
+test("a real click on a single (unclustered) marker selects its work", async ({ page }) => {
+  await gotoReady(page);
+  const single = page.locator(".moss-places-marker:not([data-count])").first();
+  const label = await single.getAttribute("aria-label");
+  await single.click();
+  await page.waitForTimeout(200);
+
+  const selectedCard = page.locator(".moss-card[aria-current='true']");
+  await expect(selectedCard).toHaveCount(1);
+  const selectedTitle = await selectedCard.locator(".moss-card-title").textContent();
+  expect(label).toContain(selectedTitle);
+  expect(page.url()).toMatch(/[?&]article=/);
 });

@@ -95,6 +95,16 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
   });
 
   function endPointer(event: PointerEvent): void {
+    // A pointer `pointerdown` ignored (a `button`/`a` target, above) was
+    // never added to `pointers` — ending it here must do nothing, not
+    // settle a gesture that never started. Settling calls `onSettle()`,
+    // which re-renders the marker/card layers; doing that between a real
+    // `pointerdown` and `pointerup` on, say, a cluster marker button
+    // replaced the button out from under the browser's own click
+    // synthesis, so no `click` event ever fired — a tap that visibly
+    // pressed a marker and did nothing. `pointerup`/`pointercancel`/
+    // `lostpointercapture` all reach this same guard.
+    if (!pointers.has(event.pointerId)) return;
     pointers.delete(event.pointerId);
     if (drag?.id === event.pointerId) drag = null;
     if (pointers.size < 2) pinch = null;

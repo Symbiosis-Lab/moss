@@ -25,7 +25,7 @@ function handshakeFigure(withLabels = false): string {
   );
 }
 
-function stubSuccessfulFetch(labelsOutcome: "ok" | "fail" = "ok"): void {
+function stubSuccessfulFetch(placesJson: unknown = PLACES_JSON, labelsOutcome: "ok" | "fail" = "ok"): void {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
@@ -36,7 +36,7 @@ function stubSuccessfulFetch(labelsOutcome: "ok" | "fail" = "ok"): void {
         if (labelsOutcome === "fail") return Promise.resolve({ ok: false, status: 404 } as Response);
         return Promise.resolve({ ok: true, json: () => Promise.resolve(LABELS_JSON) } as Response);
       }
-      if (url.endsWith(".json")) return Promise.resolve({ ok: true, json: () => Promise.resolve(PLACES_JSON) } as Response);
+      if (url.endsWith(".json")) return Promise.resolve({ ok: true, json: () => Promise.resolve(placesJson) } as Response);
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
     }),
   );
@@ -110,7 +110,7 @@ describe("initPlacesExplorer", () => {
 
   test("a failed labels.json fetch never blocks the map from becoming ready", async () => {
     document.body.innerHTML = handshakeFigure(true);
-    stubSuccessfulFetch("fail");
+    stubSuccessfulFetch(PLACES_JSON, "fail");
     const figure = document.querySelector<HTMLElement>("[data-moss-places-explorer]")!;
     await initPlacesExplorer();
     expect(figure.getAttribute("data-moss-places-explorer-ready")).toBe("ready");
@@ -119,8 +119,24 @@ describe("initPlacesExplorer", () => {
 
   test("a present data-labels attribute is fetched alongside the required three", async () => {
     document.body.innerHTML = handshakeFigure(true);
-    stubSuccessfulFetch("ok");
+    stubSuccessfulFetch(PLACES_JSON, "ok");
     await initPlacesExplorer();
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining("labels.json"), expect.anything());
+  });
+
+  test("a work missing byline (and every other skip_serializing_if field) still reaches ready — the wire can omit them, not send null", async () => {
+    document.body.innerHTML = handshakeFigure();
+    // Exactly what `places_data.rs` serializes for a work with no byline, no
+    // date, no description and no cover: those keys are absent, not `null`
+    // or `[]` — `#[serde(skip_serializing_if = ...)]` on each one.
+    stubSuccessfulFetch({
+      works: [{ id: "/sparse/", title: "Sparse", url: "/sparse/", places: ["places/kyoto"], companions: [] }],
+      places: [{ id: "places/kyoto", name: "Kyoto", precision: "city", lat: 35.01, lng: 135.77 }],
+    });
+    const figure = document.querySelector<HTMLElement>("[data-moss-places-explorer]")!;
+
+    await expect(initPlacesExplorer()).resolves.toBeUndefined();
+
+    expect(figure.getAttribute("data-moss-places-explorer-ready")).toBe("ready");
   });
 });

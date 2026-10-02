@@ -61,6 +61,13 @@ article.container > figure[data-moss-places-explorer] {
   inline-size: 100cqi;
   max-inline-size: none;
   margin-inline: calc((100% - 100cqi) / 2);
+  /* A bare `<figure>`'s own UA margin-block-start used to open a gap here
+     the header's own border-removal rule above can't see — the explorer
+     root's no-heading composition (`render/html.rs`'s `is_explorer_root`)
+     made the figure the article's first child for the first time, where
+     nothing had zeroed this before. The header's bottom edge and the map's
+     top edge must coincide exactly. */
+  margin-block-start: 0;
   block-size: max(480px, 100svh);
 }
 
@@ -142,10 +149,11 @@ header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-co
 }
 
 /* site.css's own `.moss-place-map svg { inline-size: 100%; block-size: auto;
-   aspect-ratio: 3 / 2; }` is right for the world SVG and every per-page
-   static figure (both share that one fixed 3:2 canvas) but wrong for a
-   regional tile: a tile's intrinsic size IS the exact rectangle `tiles.ts`'s
-   `TileLayer` positions it at (`PattersonProjection::for_tile`'s own
+   aspect-ratio: 3 / 2; }` is right for every per-page static figure (the
+   fixed 720x480, 3:2 canvas `geometry.rs`'s `VIEWBOX_WIDTH`/`VIEWBOX_HEIGHT`
+   draw every one of those at) but wrong for both layers below: a regional
+   tile's intrinsic size IS the exact rectangle `tiles.ts`'s `TileLayer`
+   positions it at (`PattersonProjection::for_tile`'s own
    canvas_width/canvas_height — a different aspect ratio per cell, shorter
    toward the poles), scaled only by its own `transform`. Stretching it to
    100% of `.moss-places-tiles` (the whole world layer's own box) and
@@ -156,6 +164,24 @@ header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-co
 [data-moss-places-explorer] .moss-places-tiles > svg {
   inline-size: auto;
   block-size: auto;
+  aspect-ratio: auto;
+}
+
+/* The shared world SVG (`explorer::emit_world_svg`) is wider than the 3:2
+   canvas too — `geometry.rs`'s `world_viewbox_width()` is the full,
+   uncropped Patterson extent (about 842 x 480, not 720 x 480), because this
+   one copy is panned and zoomed across the whole globe at runtime rather
+   than cropped once like a per-page map. Forcing the generic 3:2
+   `aspect-ratio` onto it narrowed the content `map.ts`'s own `applyCamera`
+   already sized exactly via `worldEl.style.width`/`height`, which SVG's
+   default `preserveAspectRatio="xMidYMid meet"` then centred inside —
+   leaving an empty band above and below the actual map at rest. `100%` in
+   both axes (not `auto`, unlike a tile, which must keep its own aspect so
+   its viewBox and its cell rectangle still agree) fills exactly the box
+   `applyCamera` computed, no second aspect-ratio opinion layered on top. */
+[data-moss-places-explorer] .moss-places-world > svg {
+  inline-size: 100%;
+  block-size: 100%;
   aspect-ratio: auto;
 }
 

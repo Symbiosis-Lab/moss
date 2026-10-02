@@ -57,11 +57,29 @@ export interface CardCallbacks {
   selectWork(id: string | null): void;
 }
 
+/** One card's own persistent DOM, reused across renders by `work.id` — see `CardRow`'s own doc on why. */
+interface CardEntry {
+  card: HTMLElement;
+  select: HTMLButtonElement;
+  detail: HTMLElement;
+}
+
 export class CardRow {
   private readonly container: HTMLElement;
   private readonly callbacks: CardCallbacks;
   private readonly strings: PlacesStrings;
   private placesById = new Map<string, Place>();
+  // Persistent DOM, reused across `render()` calls when a work's own card
+  // already exists — the same reasoning `MarkerLayer`'s own
+  // `markerEntries`/`ringEntry` are built on: `container.replaceChildren()`
+  // every render could replace a card's `.moss-places-card-select` button
+  // between a real `pointerdown` and `pointerup` on it (any settle, not
+  // only this row's own re-renders — a resize or a tile arriving re-renders
+  // the whole explorer), leaving the browser's click synthesis nothing to
+  // fire `click` on. A work's own title/byline/cover/description/companions
+  // never change between renders, so only the "is this the selected card"
+  // state below is ever updated on a reused entry.
+  private cardEntries = new Map<string, CardEntry>();
 
   constructor(container: HTMLElement, callbacks: CardCallbacks, strings: PlacesStrings) {
     this.container = container;
@@ -71,10 +89,35 @@ export class CardRow {
 
   render(works: Work[], places: Place[], selectedId: string | null): void {
     this.placesById = new Map(places.map((place) => [place.id, place]));
-    this.container.replaceChildren();
+    const seenIds = new Set<string>();
     for (const work of works) {
-      this.container.append(this.buildCard(work, work.id === selectedId));
+      seenIds.add(work.id);
+      this.renderCard(work, work.id === selectedId);
     }
+    for (const [id, entry] of this.cardEntries) {
+      if (!seenIds.has(id)) {
+        entry.card.remove();
+        this.cardEntries.delete(id);
+      }
+    }
+  }
+
+  private renderCard(work: Work, expanded: boolean): void {
+    let entry = this.cardEntries.get(work.id);
+    if (!entry) {
+      entry = this.buildCard(work);
+      this.cardEntries.set(work.id, entry);
+    }
+    // Always re-appended (never only on creation): `works` arrives sorted
+    // (date descending, then title) on every render, and `append` on a
+    // node already in the document MOVES it rather than duplicating it, so
+    // this keeps the row's visible order matching that sort cheaply.
+    this.container.append(entry.card);
+    entry.card.setAttribute("aria-current", String(expanded));
+    entry.select.setAttribute("aria-pressed", String(expanded));
+    entry.select.setAttribute("aria-expanded", String(expanded));
+    if (expanded) entry.detail.removeAttribute("inert");
+    else entry.detail.setAttribute("inert", "");
   }
 
   /** Scrolls the selected card fully into the row's own viewport, if it isn't already. */
@@ -84,18 +127,15 @@ export class CardRow {
     card?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }
 
-  private buildCard(work: Work, expanded: boolean): HTMLElement {
+  private buildCard(work: Work): CardEntry {
     const card = document.createElement("article");
     card.className = "moss-card";
     card.dataset.workId = work.id;
     card.setAttribute("role", "listitem");
-    card.setAttribute("aria-current", String(expanded));
 
     const select = document.createElement("button");
     select.type = "button";
     select.className = "moss-places-card-select";
-    select.setAttribute("aria-pressed", String(expanded));
-    select.setAttribute("aria-expanded", String(expanded));
     select.addEventListener("click", () => this.callbacks.selectWork(work.id));
 
     const row = document.createElement("div");
@@ -126,14 +166,14 @@ export class CardRow {
     }
     select.append(row);
     card.append(select);
-    card.append(this.buildDetail(work, expanded));
-    return card;
+    const detail = this.buildDetail(work);
+    card.append(detail);
+    return { card, select, detail };
   }
 
-  private buildDetail(work: Work, expanded: boolean): HTMLElement {
+  private buildDetail(work: Work): HTMLElement {
     const detail = document.createElement("div");
     detail.className = "moss-places-card-detail";
-    if (!expanded) detail.setAttribute("inert", "");
 
     if (work.description) {
       const description = document.createElement("p");

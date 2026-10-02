@@ -23,6 +23,19 @@ test("the static figure is replaced by the interactive layer once ready", async 
   await expect(figure.locator(".moss-places-status")).toHaveCount(1);
 });
 
+// The fixture's own "Faro Notes" (gate-sites.ts's `placesExplorerSparseWork`)
+// carries none of byline/date/description/cover — `places_data.rs` omits all
+// four from the wire for a work with none of them, which once crashed the
+// explorer's very first render (`work.byline.length` on an `undefined`
+// byline) before any card painted, leaving `data-moss-places-explorer-ready`
+// stuck at "pending" for the WHOLE site, not just this one work's card.
+test("a work missing byline, cover, date and description still reaches ready and renders its card", async ({ page }) => {
+  await page.goto("places/", { waitUntil: "domcontentloaded" });
+  const figure = page.locator(FIGURE);
+  await expect(figure).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+  await expect(figure.locator(".moss-card-title", { hasText: "Faro Notes" })).toHaveCount(1);
+});
+
 test("without JavaScript, the static figure remains and nothing swaps in", async ({ browser, baseURL }) => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();
@@ -51,7 +64,8 @@ test("a failed fetch leaves the static figure untouched and throws nothing", asy
 
 // Design decision 7: "the map is the page" — on the places root the figure
 // breaks out of the article's text column and fills the viewport below the
-// header, at every width.
+// header, at every width, with no page heading of its own and no gap or
+// double line where the header's own bottom edge meets the map's top.
 for (const width of [1440, 390]) {
   test(`the map fills the viewport width and reaches the viewport bottom at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -80,11 +94,42 @@ for (const width of [1440, 390]) {
     const navBorder = await page.locator(".nav-content").first().evaluate((el) => getComputedStyle(el).borderBottomStyle);
     expect(navBorder).toBe("none");
 
+    // No VISIBLE page heading of moss's own on an explorer root, but
+    // screen-reader navigation still gets exactly one `<h1>`, carrying the
+    // page's own title, clipped to a 1px box by `.visually-hidden`
+    // (`render/html.rs`'s `is_explorer_root`, `place_map::context`'s own
+    // doc for the condition).
+    const h1 = page.locator("main h1");
+    await expect(h1).toHaveCount(1);
+    await expect(h1).toHaveClass(/visually-hidden/);
+    await expect(h1).toHaveText("Places");
+    const h1Box = await h1.evaluate((el) => el.getBoundingClientRect());
+    expect(h1Box.width).toBeLessThanOrEqual(1);
+    expect(h1Box.height).toBeLessThanOrEqual(1);
+
+    // The header's bottom edge and the map's top edge coincide: no gap
+    // (a stray margin/padding) and no double line (the border check above
+    // already rules out a second rule drawn at a different y).
+    const headerBottom = await page.locator("header").first().evaluate((el) => el.getBoundingClientRect().bottom);
+    expect(Math.abs(figureBox.y - headerBottom)).toBeLessThanOrEqual(1);
+
     // The fixture's own places/index.md carries a real intro paragraph —
-    // task 1's composition keeps it above the map, which this file's own
-    // layout must not disturb.
+    // it renders BELOW the map now, not above (the map leads).
     const intro = page.getByText("Every work this site locates, gathered on one map.");
     const introBox = (await intro.boundingBox())!;
-    expect(introBox.y + introBox.height).toBeLessThanOrEqual(figureBox.y + 1);
+    expect(introBox.y).toBeGreaterThanOrEqual(figureBox.y + figureBox.height - 1);
   });
 }
+
+// A nested place's own page (not the namespace root) is an ordinary term
+// page, unchanged by design decision 7: it keeps its heading and its
+// article list below its own map, same as before.
+test("a nested place page still has its own h1, above its map", async ({ page }) => {
+  await page.goto("places/kyoto/", { waitUntil: "domcontentloaded" });
+  const h1 = page.locator("main h1").first();
+  await expect(h1).toHaveCount(1);
+  const h1Box = (await h1.boundingBox())!;
+  const map = page.locator(".moss-place-map").first();
+  const mapBox = (await map.boundingBox())!;
+  expect(h1Box.y).toBeLessThan(mapBox.y);
+});

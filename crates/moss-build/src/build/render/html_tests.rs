@@ -6069,7 +6069,7 @@ mod article_cover_tests {
 /// in `folder_cover.rs` (cover branch) and the no-cover branch in this file.
 #[test]
 fn test_auto_folder_index_includes_h1_heading() {
-    let folder_h1 = crate::build::components::folder_title::render("文字", false);
+    let folder_h1 = crate::build::components::folder_title::render("文字", false, false);
     let article_list = "<div class=\"moss-cards\" data-layout=\"list\">...</div>";
     let content_html = format!("{}\n{}", folder_h1, article_list);
 
@@ -6089,7 +6089,7 @@ fn test_auto_folder_index_includes_h1_heading() {
 /// as the cover branch — single source of the class string.
 #[test]
 fn folder_index_without_cover_prepends_folder_title_h1() {
-    let folder_h1 = crate::build::components::folder_title::render("Projects", false);
+    let folder_h1 = crate::build::components::folder_title::render("Projects", false, false);
     assert!(folder_h1.contains(r#"<h1 class="moss-folder-title">Projects</h1>"#));
     // Integration: the no-cover branch in this file concatenates folder_h1 \n content.
     let content = "<p>Body.</p>";
@@ -7964,12 +7964,26 @@ mod place_namespace_root_map_tests {
             "a real folder index at a place namespace root must still get the term map: {html}"
         );
         assert!(html.contains("Harbor Diary"), "the folder's own children must still list: {html}");
-        let intro_pos = html.find("Every place this site names").unwrap();
+        // Design decision 7, "the map is the page": an explorer root carries
+        // no VISIBLE heading (the title stays out of the visible layout) but
+        // still exactly one real `<h1>`, for screen-reader navigation, with
+        // `.visually-hidden` doing the hiding rather than the heading's own
+        // absence. The map leads — the author's own intro and the
+        // auto-listed children both render BELOW it, not above.
+        let main_start = html.find("<main").expect("page has a <main>");
+        let main = &html[main_start..];
+        assert_eq!(main.matches("<h1").count(), 1, "an explorer root must carry exactly one <h1> in main: {html}");
+        let h1_start = main.find("<h1").unwrap();
+        let h1_end = main[h1_start..].find("</h1>").unwrap() + h1_start + "</h1>".len();
+        let h1 = &main[h1_start..h1_end];
+        assert!(h1.contains("visually-hidden"), "the explorer root's own <h1> must be visually hidden: {h1}");
+        assert!(h1.contains("Places"), "the hidden <h1> must still carry the page title: {h1}");
         let map_pos = html.find("moss-place-map").unwrap();
+        let intro_pos = html.find("Every place this site names").unwrap();
         let children_pos = html.find("Harbor Diary").unwrap();
         assert!(
-            intro_pos < map_pos && map_pos < children_pos,
-            "map must land below the intro and above the children listing: {html}"
+            map_pos < intro_pos && intro_pos < children_pos,
+            "the map must lead, with the intro above the children listing, both below it: {html}"
         );
     }
 

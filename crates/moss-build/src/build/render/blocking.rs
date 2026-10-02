@@ -2449,7 +2449,7 @@ pub fn generate_blocking_content_for_build(
             // its own line — an empty string here must not add a byte to a
             // non-place site's output, which the byte-identity witness (task
             // A0) treats as a build regression exactly the same as any other.
-            let mut content_html = crate::build::components::folder_title::render(&page_title, false);
+            let mut content_html = crate::build::components::folder_title::render(&page_title, false, false);
             if !place_breadcrumb_html.is_empty() {
                 content_html.push('\n');
                 content_html.push_str(&place_breadcrumb_html);

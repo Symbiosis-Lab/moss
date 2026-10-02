@@ -189,6 +189,23 @@ impl PlaceMapRenderContext {
         }
     }
 
+    /// Whether `doc` is a place-typed namespace root with a map to draw —
+    /// `render/html.rs`'s one page-assembly fork for design decision 7, "the
+    /// map is the page": such a root's own folder-title heading renders
+    /// `.visually-hidden` instead of the ordinary visible one, and any
+    /// authored body renders below the map rather than above it. A method on
+    /// `&self`, not a free function over the same three bools, so a site
+    /// with no place maps at all (no `PlaceMapRenderContext` to call this
+    /// on) can never answer yes — the `Option::is_some()` check that used to
+    /// sit beside this logic at the call site is now just "do I have a
+    /// context to ask". `is_folder_index`/`is_place_namespace_root`/
+    /// `map_disabled` are `ParsedDocument` fields this module never depends
+    /// on directly (see its own boundary) — the caller reads them off `doc`
+    /// and passes them through.
+    pub fn is_explorer_root(&self, is_folder_index: bool, is_place_namespace_root: bool, map_disabled: bool) -> bool {
+        is_folder_index && is_place_namespace_root && !map_disabled
+    }
+
     pub fn render_term_map<'a>(
         &self,
         key: &str,

@@ -210,7 +210,7 @@ fn no_cover_folder_heading(
         // the part that was missing.
         String::new()
     } else {
-        crate::build::components::folder_title::render(h1_text, emit_source_fm)
+        crate::build::components::folder_title::render(h1_text, emit_source_fm, false)
     }
 }
 
@@ -662,6 +662,15 @@ fn generate_html_inner<'d>(
             // branch above, gated on `is_folder_index`).
             let term_listing = doc.term_listing.as_deref();
 
+            // Design decision 7, "the map is the page": a `.visually-hidden`
+            // heading instead of a visible one, and the map leads any
+            // authored body (prepended below rather than appended). See
+            // `PlaceMapRenderContext::is_explorer_root`'s own doc for the
+            // condition; a claimed sub-term listing keeps its ordinary
+            // visible heading either way.
+            let is_explorer_root = layout_config.place_maps.as_ref()
+                .is_some_and(|maps| maps.is_explorer_root(is_folder_index, doc.is_place_namespace_root, doc.map == Some(false)));
+
             // Wrap content in book-open layout with cover on the left (before
             // placeholder pass so LQIP attributes are added to the cover <img>).
             // Title and byline are prepended into the cover body so they
@@ -699,7 +708,7 @@ fn generate_html_inner<'d>(
                 let folder_byline = (!is_article_page)
                     .then(|| credits::render_page_masthead(doc, layout_config, emit_source_lines))
                     .unwrap_or_default();
-                if resolved_cover.is_some() && !is_article_layout {
+                if resolved_cover.is_some() && !is_article_layout && !is_explorer_root {
                     // Cover branch: folder_cover renders the cover-row with the
                     // <h1 class="moss-folder-title"> inside
                     // .moss-collection-cover-body.
@@ -741,20 +750,24 @@ fn generate_html_inner<'d>(
                 } else {
                     // No-cover branch: prepend the <h1 class="moss-folder-title">
                     // unless this folder is a nav item — the nav bar already
-                    // shows its title.
-                    // Same byline as the cover branch, directly after the title.
-                    // Both empty still means empty, so the guard below keeps
-                    // working for a nav folder with no byline.
-                    let heading = format!(
-                        "{}{}",
-                        no_cover_folder_heading(
-                            doc,
-                            h1_text,
-                            project.has_content_folders,
-                            emit_source_lines,
-                        ),
-                        folder_byline,
-                    );
+                    // shows its title. An explorer root gets a hidden one
+                    // instead (no byline), bypassing `no_cover_folder_heading`'s
+                    // own nav/hero dedup below — that guards a second VISIBLE
+                    // title, moot for a hidden one.
+                    let heading = if is_explorer_root {
+                        crate::build::components::folder_title::render(h1_text, emit_source_lines, true)
+                    } else {
+                        format!(
+                            "{}{}",
+                            no_cover_folder_heading(
+                                doc,
+                                h1_text,
+                                project.has_content_folders,
+                                emit_source_lines,
+                            ),
+                            folder_byline,
+                        )
+                    };
                     content = if heading.is_empty() {
                         content
                     } else {
@@ -874,7 +887,11 @@ fn generate_html_inner<'d>(
                             )
                         );
                     }
-                    content.push_str(&map);
+                    if is_explorer_root {
+                        content = format!("{map}{content}");
+                    } else {
+                        content.push_str(&map);
+                    }
                 }
                 if show_folder_children {
                     let marker = crate::build::folder_embed::synthesize_children_marker(

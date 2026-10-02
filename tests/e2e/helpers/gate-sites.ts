@@ -2293,6 +2293,26 @@ A short note from ${title}.
 `;
 }
 
+/**
+ * A located work with NO byline, cover, date or description — the sparse
+ * shape `places_data.rs` omits those four keys from the wire for
+ * (`#[serde(skip_serializing_if = ...)]`), which once crashed the
+ * explorer's first render (`work.byline.length` on an `undefined` byline)
+ * before any card painted. Exists so the boot gate below has a real work
+ * this bug would have failed on, not a fixture only exercising the
+ * fully-authored path every other `placesExplorerWork` entry takes.
+ */
+function placesExplorerSparseWork(uid: string, title: string, location: string): string {
+  return `---
+title: ${title}
+uid: "${uid}"
+location: "${location}"
+---
+
+# ${title}
+`;
+}
+
 export const PLACES_EXPLORER_GATE: ScratchSiteSpec = {
   name: "places-explorer-gate",
   files: {
@@ -2316,6 +2336,11 @@ Every work this site locates, gathered on one map.
     "cusco-terraces.md": placesExplorerWork("pex010jj", "Cusco Terraces", "Cusco", "2023-12-01"),
     "arequipa-volcano.md": placesExplorerWork("pex011kk", "Arequipa Volcano", "Arequipa", "2023-11-10"),
     "iquitos-river.md": placesExplorerWork("pex012ll", "Iquitos River", "Iquitos", "2023-10-01"),
+    // Its own location, not a reuse of another work's: `places-explorer-ring.spec.ts`
+    // relies on Lisbon's pair being the fixture's ONE coincident 2-count
+    // cluster — reusing a located work's exact coordinates here would quietly
+    // mint a second one.
+    "faro-notes.md": placesExplorerSparseWork("pex014nn", "Faro Notes", "Faro"),
     ".moss/config.toml": `schema_version = 6
 
 [site]
@@ -2390,6 +2415,18 @@ precision = "city"
 ["Iquitos"]
 lat = -3.7437
 lng = -73.2516
+precision = "city"
+
+# Reykjavik's real coordinate under the "Faro" key, not Faro's own — a
+# gazetteer edit elsewhere (the "Portugal" country entry above) landed
+# almost exactly on Faro's real-world point, quietly minting a second
+# coincident 2-count cluster the ring gate's own "ONE coincident pair"
+# assumption did not expect. Keeping the real coordinate under this key
+# again would only reintroduce that risk the moment some other entry
+# nearby moves; a continent away is immune to it by construction.
+["Faro"]
+lat = 64.1466
+lng = -21.9426
 precision = "city"
 `,
     ".moss/theme/style.css": null,

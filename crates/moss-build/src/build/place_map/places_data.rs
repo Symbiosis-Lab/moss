@@ -452,6 +452,27 @@ mod tests {
         d
     }
 
+    /// Pins the wire contract `types.ts`'s `WorkWire`/`normalizePlacesData`
+    /// is built to tolerate: a work with no byline serializes with the key
+    /// ABSENT, not `"byline":[]` or `"byline":null` — the same
+    /// `skip_serializing_if` shape `date`/`description`/`cover` already had.
+    /// `types.ts` once declared `byline` required when the wire can
+    /// truthfully omit it this way, which crashed the explorer's first
+    /// render on any unauthored work; this test is what would have caught
+    /// the two sides drifting apart again, from the Rust side.
+    #[test]
+    fn a_work_with_no_byline_serializes_with_the_key_absent() {
+        let docs = vec![standalone("posts/kyoto-report.md", "posts/kyoto-report/", "Kyoto Report", &["Kyoto"])];
+        let json = emit_places_data(&docs, &context(gazetteer()), true);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let work = &parsed["works"][0];
+        assert!(work.get("byline").is_none(), "byline must be ABSENT, not null or [], when a work has none: {json}");
+        // date/description/cover already behave this way; pinned alongside
+        // byline so a future reviewer sees all four together.
+        assert!(work.get("date").is_none(), "{json}");
+        assert!(work.get("cover").is_none(), "{json}");
+    }
+
     #[test]
     fn a_places_parent_reaches_a_roll_up_only_ancestor_with_no_gazetteer_row() {
         // Japan has no row of its own in `gazetteer()` — only Kyoto's and
