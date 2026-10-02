@@ -9,10 +9,6 @@
 // check-site-watercolor-freshness.mjs exists to catch: this script is also
 // what that check reruns before diffing.
 //
-// The landing gets the engine, the model and the default paper, not the whole
-// package: the physical paper generator is for offline sheets and the lab,
-// and would add a third to the bundle for nothing the page calls.
-//
 // Usage: node scripts/build-site-watercolor.mjs
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
@@ -20,16 +16,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 await build({
-  stdin: {
-    contents: [
-      "export * from './engine/index.js';",
-      "export * from './model/index.js';",
-      "export { createPaper } from './paper/default.js';",
-    ].join('\n'),
-    resolveDir: `${ROOT}/packages/moss-watercolor/src`,
-    loader: 'ts',
-  },
-  tsconfig: `${ROOT}/packages/moss-watercolor/tsconfig.json`,
+  entryPoints: [`${ROOT}/packages/moss-watercolor/src/index.ts`],
   outfile: `${ROOT}/site/vendor/moss-watercolor/moss-watercolor.js`,
   bundle: true,
   format: 'iife',

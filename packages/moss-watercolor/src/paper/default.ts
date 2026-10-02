@@ -6,8 +6,6 @@
 // The result carries its own width/height rather than a caller assuming 256,
 // but `createSim` still accepts only 256x256: the shaders' paper period is a
 // constant, not yet a uniform.
-import { seededRandom } from './random.js';
-
 export interface PaperOptions {
   width?: number;
   height?: number;
@@ -24,7 +22,8 @@ export interface Paper {
 }
 
 export function createPaper({ width = 256, height = 256, seed = 90210 }: PaperOptions = {}): Paper {
-  const rnd = seededRandom(seed);
+  let a0 = seed;
+  const rnd = () => { a0 = (a0 + 0x6d2b79f5) | 0; let t = Math.imul(a0 ^ (a0 >>> 15), 1 | a0); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   const lattice = (n: number) => { const g = new Float32Array(n * n); for (let i = 0; i < g.length; i++) g[i] = rnd(); return g; };
   const sm = (t: number) => t * t * (3 - 2 * t);
   const value = (g: Float32Array, n: number, x: number, y: number) => { const gx = x * n, gy = y * n, x0 = Math.floor(gx) % n, y0 = Math.floor(gy) % n, x1 = (x0 + 1) % n, y1 = (y0 + 1) % n, fx = sm(gx - Math.floor(gx)), fy = sm(gy - Math.floor(gy));

@@ -1,11 +1,2 @@
 export { createPaper } from './default.js';
 export type { Paper, PaperOptions } from './default.js';
-export { generatePaper, validateGrid } from './generate.js';
-export { isFine, latticeCell } from './recipe.js';
-export { resamplePaper, fitDensityClosure, closureFor } from './resample.js';
-export { bulkPorosity } from './fields.js';
-export { PRESETS, PRESET_TARGETS } from './recipe.js';
-export type { PaperRecipe, FibreType, FeltSpec, PressSpec, DensityClosure, PresetName } from './recipe.js';
-export type { PaperSheet, Tensor, Field } from './fields.js';
-export type { Grid } from './deposit.js';
-export { toEngineChannels, enginePaper, CSS_PX, ENGINE_TEXEL, ENGINE_SPANS } from './engine.js';

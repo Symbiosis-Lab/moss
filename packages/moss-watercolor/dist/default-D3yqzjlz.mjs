@@ -1,40 +1,12 @@
-//#region src/paper/random.ts
-function seededRandom(seed) {
+//#region src/paper/default.ts
+function createPaper({ width = 256, height = 256, seed = 90210 } = {}) {
 	let a0 = seed;
-	return () => {
+	const rnd = () => {
 		a0 = a0 + 1831565813 | 0;
 		let t = Math.imul(a0 ^ a0 >>> 15, 1 | a0);
 		t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
 		return ((t ^ t >>> 14) >>> 0) / 4294967296;
 	};
-}
-function normal(rng) {
-	return Math.sqrt(-2 * Math.log(1 - rng())) * Math.cos(2 * Math.PI * rng());
-}
-/** A lognormal sample with the given arithmetic mean and log-space standard deviation. */
-function lognormal(rng, mean, logSd) {
-	const mu = Math.log(mean) - logSd * logSd / 2;
-	return Math.exp(mu + logSd * normal(rng));
-}
-/** An axial angle in [0, π): the doubled angle is von Mises around 0 with concentration kappa (Best & Fisher 1979). */
-function vonMisesAxial(rng, kappa) {
-	if (kappa <= 0) return Math.PI * rng();
-	const tau = 1 + Math.sqrt(1 + 4 * kappa * kappa);
-	const rho = (tau - Math.sqrt(2 * tau)) / (2 * kappa);
-	const r = (1 + rho * rho) / (2 * rho);
-	for (;;) {
-		const z = Math.cos(Math.PI * rng());
-		const f = (1 + r * z) / (r + z);
-		const c = kappa * (r - f);
-		const u2 = rng();
-		if (c * (2 - c) - u2 > 0 || Math.log(c / u2) + 1 - c >= 0) return ((rng() > .5 ? 1 : -1) * Math.acos(Math.max(-1, Math.min(1, f))) / 2 % Math.PI + Math.PI) % Math.PI;
-	}
-}
-
-//#endregion
-//#region src/paper/default.ts
-function createPaper({ width = 256, height = 256, seed = 90210 } = {}) {
-	const rnd = seededRandom(seed);
 	const lattice = (n) => {
 		const g = new Float32Array(n * n);
 		for (let i = 0; i < g.length; i++) g[i] = rnd();
@@ -99,4 +71,4 @@ function createPaper({ width = 256, height = 256, seed = 90210 } = {}) {
 }
 
 //#endregion
-export { vonMisesAxial as a, seededRandom as i, lognormal as n, normal as r, createPaper as t };
+export { createPaper as t };

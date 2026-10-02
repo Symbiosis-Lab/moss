@@ -1,4 +1,3 @@
-import { t as createPaper } from "../default-CV2Smisg.mjs";
-import { a as toEngineChannels, c as closureFor, d as bulkPorosity, f as PRESETS, h as latticeCell, i as enginePaper, l as fitDensityClosure, m as isFine, n as ENGINE_SPANS, o as generatePaper, p as PRESET_TARGETS, r as ENGINE_TEXEL, s as validateGrid, t as CSS_PX, u as resamplePaper } from "../paper-D0wFyOmj.mjs";
+import { t as createPaper } from "../default-D3yqzjlz.mjs";
 
-export { CSS_PX, ENGINE_SPANS, ENGINE_TEXEL, PRESETS, PRESET_TARGETS, bulkPorosity, closureFor, createPaper, enginePaper, fitDensityClosure, generatePaper, isFine, latticeCell, resamplePaper, toEngineChannels, validateGrid };
+export { createPaper };
