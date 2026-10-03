@@ -46,7 +46,7 @@ describe("mountPlacesMap — the world raster after a bake that outlasted a resi
     const figure = document.createElement("figure");
     document.body.append(figure);
     mountPlacesMap(figure, {
-      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileBleed: 0.1,
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18,
       places: { works: [], places: [] } as any, lang: "en",
     });
     expect(rasterizeSpy).toHaveBeenCalledTimes(1); // the first bake, still decoding

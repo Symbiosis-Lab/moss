@@ -17,7 +17,7 @@
 //! `<g data-map-layer="marker">` group `render_svg` always emits is present
 //! but empty here, the same contract a page's own map gives it.
 
-use super::geometry::{tile_x, tile_y, world_viewbox_width, Frame, FrameTier, ProjectedPoint, Projection};
+use super::geometry::{tile_x, tile_y, world_viewbox_width, Frame, FrameTier, ProjectedPoint, Projection, TileGrid, TILE_COLUMNS, TILE_ROWS};
 use super::svg::{render_svg, Ids, Writer, SVG_HEIGHT};
 use super::{Pack, PlaceMapContext, PlaceMapTarget};
 use crate::vault::places::Gazetteer;
@@ -104,6 +104,13 @@ pub fn emit_tile_svg(context: &PlaceMapContext, x: i16, y: i16) -> String {
     writer.output
 }
 
+/// Where tile `(x, y)`'s canvas starts on the world's lattice of
+/// `1 / TILE_K` units, in whole canvas units: the top-left corner the
+/// runtime places the tile's own `(0, 0)` at (`tiles.json`'s `origins`).
+pub fn tile_origin_units(x: i16, y: i16) -> (i64, i64) {
+    TileGrid::of(&tile_frame(x, y)).origin_units()
+}
+
 /// Every tile the pack actually has fine-tier features in, `(x, y)`. An
 /// empty ocean cell has no `Tile` entry with features, so rendering one
 /// would cost bytes for a blank map.
@@ -142,13 +149,13 @@ pub fn relevant_tiles(gazetteer: &Gazetteer, pack: &Pack) -> Vec<(i16, i16)> {
         let (center_x, center_y) = (tile_x(point.longitude), tile_y(point.latitude));
         for delta_y in -1..=1i32 {
             let y = i32::from(center_y) + delta_y;
-            if !(0..18).contains(&y) {
+            if !(0..TILE_ROWS as i32).contains(&y) {
                 continue;
             }
             for delta_x in -1..=1i32 {
                 // Longitude wraps (tile 35's east neighbour is tile 0);
                 // latitude does not (no tile sits beyond the poles).
-                let x = (i32::from(center_x) + delta_x).rem_euclid(36) as i16;
+                let x = (i32::from(center_x) + delta_x).rem_euclid(TILE_COLUMNS as i32) as i16;
                 let cell = (x, y as i16);
                 if populated.contains(&cell) {
                     cells.insert(cell);
@@ -233,6 +240,95 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.contains("moss-place-map-tile-20-12-"));
         assert!(!first.contains("data-map-layer=\"globe\""));
+    }
+
+    /// A tile carries no SVG filter of any kind: WebKit rasterises blur and
+    /// lighting filters at low resolution, so a filtered tile came out
+    /// blurry, off-tint from the world layer under it, and drew a light
+    /// line at its edges. The world SVG, shown far smaller, keeps its
+    /// filters. A tile's flat land is the same `--moss-place-land` the
+    /// world draws, so the hand-over shows no colour step on flat ground.
+    #[test]
+    fn a_tile_is_flat_and_draws_land_in_the_worlds_own_land_colour() {
+        let context = PlaceMapContext::embedded().unwrap();
+        // East Asian coast and the Alps: land, relief, sea floor and rivers.
+        for (x, y) in [(29i16, 12i16), (18, 13)] {
+            let svg = emit_tile_svg(&context, x, y);
+            for banned in ["filter", "feGaussianBlur", "feDiffuseLighting", "feDropShadow", "data-map-layer=\"lighting\"", "data-map-layer=\"coast\""] {
+                assert!(!svg.contains(banned), "tile ({x},{y}) carries {banned}");
+            }
+            for layer in ["seafloor", "land", "relief", "lakes", "rivers"] {
+                assert!(svg.contains(&format!("data-map-layer=\"{layer}\"")), "tile ({x},{y}) lost {layer}");
+            }
+            assert!(svg.contains("<use href=\"#moss-place-map-tile-"), "land fill is drawn");
+            assert!(svg.contains("fill=\"var(--moss-place-land, "), "tile ({x},{y}) land is not --moss-place-land");
+            // The lowest relief band is the flat ground: its tint starts at, and
+            // here is exactly, the land colour.
+            let relief = &svg[svg.find("data-map-layer=\"relief\"").unwrap()..];
+            let first_band = &relief[relief.find("<g data-map-band=").expect("tile has relief")..];
+            assert!(
+                first_band.contains("style=\"fill:color-mix(in srgb, var(--moss-place-land, #e3e6d5), var(--moss-place-land-mid, #ece4cc) 0%)\""),
+                "tile ({x},{y}): {:.200}",
+                first_band
+            );
+        }
+        assert!(emit_world_svg(&context).contains("feDiffuseLighting"), "the world layer keeps its filters");
+    }
+
+    /// A tile is drawn at a fractional size, and WebKit clips its stacked
+    /// band polygons at the image edge one draw at a time, so the last
+    /// partly covered row came out a few levels lighter than the tile (a
+    /// light line along the bottom edge over open sea). Everything sits in
+    /// one isolated group so the edge is clipped once.
+    #[test]
+    fn a_tile_draws_inside_one_isolated_group() {
+        let context = PlaceMapContext::embedded().unwrap();
+        let svg = emit_tile_svg(&context, 16, 13);
+        let open = svg.find('>').unwrap() + 1;
+        assert!(svg[open..].starts_with("<g style=\"isolation:isolate\">"), "{:.200}", &svg[open..]);
+        assert!(svg.ends_with("</g></svg>"));
+        assert!(!emit_world_svg(&context).contains("isolation:isolate"));
+    }
+
+    /// One integer coordinate in a tile is at most 0.01 degree (about 1 km),
+    /// so a coast or lake is not rounded to the 0.1 degree staircase a
+    /// 95-unit canvas gave. The serializer snaps to integers and simplifies
+    /// at one unit, so this canvas width is the precision of the whole tile.
+    /// The densest tiles stay well under the per-tile byte budget.
+    #[test]
+    fn a_tile_coordinate_unit_is_at_most_a_hundredth_of_a_degree_and_tiles_stay_small() {
+        let (canvas_width, _) = Projection::new(&tile_frame(29, 12)).canvas_size();
+        let degrees_per_unit = 10.0 / (canvas_width - 2.0 * TILE_BLEED * TILE_K);
+        assert!(degrees_per_unit <= 0.01, "one unit is {degrees_per_unit} degrees");
+        let context = PlaceMapContext::embedded().unwrap();
+        for (x, y) in [(19i16, 13i16), (20, 12), (18, 13)] {
+            let bytes = emit_tile_svg(&context, x, y).len();
+            assert!(bytes < 150_000, "tile ({x},{y}) is {bytes} bytes");
+        }
+    }
+
+    /// Two tiles overlap by their bleed, so one band must be one colour in
+    /// every tile; tinted against only the bands a tile holds, the same
+    /// 1000 band read differently in a lowland tile and a mountain one, and
+    /// the strip two tiles share took whichever tile loaded last.
+    #[test]
+    fn a_band_has_one_tint_in_every_tile() {
+        let context = PlaceMapContext::embedded().unwrap();
+        // The Alps, the east Asian coast and the Atlantic off Iberia hold
+        // bands up to different heights and depths.
+        let mut tints: std::collections::HashMap<String, (String, usize)> = std::collections::HashMap::new();
+        for (x, y) in [(18i16, 13i16), (29, 12), (16, 13), (17, 12)] {
+            let svg = emit_tile_svg(&context, x, y);
+            for part in svg.split("<g data-map-band=\"").skip(1) {
+                let band = &part[..part.find('"').unwrap()];
+                let tint = &part[part.find("fill:").unwrap()..part.find("\">").unwrap()];
+                let entry = tints.entry(band.to_string()).or_insert((tint.to_string(), 0));
+                assert_eq!(entry.0, tint, "band {band} is tinted differently in tile ({x},{y})");
+                entry.1 += 1;
+            }
+        }
+        let shared = |sign: i32| tints.iter().filter(|(band, (_, tiles))| *tiles > 1 && band.parse::<i32>().unwrap().signum() == sign).count();
+        assert!(shared(1) > 0 && shared(-1) > 0, "the tiles share no relief or no sea-floor band, so this checks nothing");
     }
 
     fn gazetteer(entries: &str) -> Gazetteer {
@@ -331,63 +427,55 @@ mod tests {
         assert!(relevant_tiles(&gaz, &pack).is_empty());
     }
 
-    /// Where the runtime's own `translate(cellX - TILE_BLEED, cellY -
-    /// TILE_BLEED)` places a tile's local `(0, 0)` (`tiles.ts`'s
-    /// `tileOverlayTransform`): the cell's own world-unit corner (`map.ts`'s
-    /// `tileCellBounds`, `(minX, minY)`) — re-derived here from the
-    /// full-extent world projection directly, the same cross-check
-    /// `projection.ts`'s own module doc describes for the TS side, rather
-    /// than reaching into `PattersonProjection::for_tile`'s private fields —
-    /// pulled back by `TILE_BLEED` once, here, rather than at every call
-    /// site below.
-    fn tile_anchor_world(full: &Projection, x: i16, y: i16) -> (f64, f64) {
-        let west = f64::from(x) * 10.0 - 180.0;
-        let north = f64::from(y) * 10.0 - 90.0 + 10.0;
-        let (min_x, _) = full.project(ProjectedPoint::new(west, 0.0).unwrap()).unwrap();
-        let (_, min_y) = full.project(ProjectedPoint::new(0.0, north).unwrap()).unwrap();
-        (min_x - TILE_BLEED, min_y - TILE_BLEED)
+    /// Where the runtime places a tile's local `(0, 0)`: the canvas origin
+    /// `tiles.json` carries (`tile_origin_units`, whole canvas
+    /// units), in world units.
+    fn tile_anchor_world(x: i16, y: i16) -> (f64, f64) {
+        let (left, top) = tile_origin_units(x, y);
+        (left as f64 / TILE_K, top as f64 / TILE_K)
     }
 
     /// A tile's own viewBox is its cell's Patterson rectangle (in world
     /// units, from the full-extent projection), padded by `TILE_BLEED` on
-    /// every edge, scaled by `TILE_K` — the contract `explorer::
-    /// emit_tile_svg` builds its `Writer` from (`Projection::canvas_size`)
-    /// and the one the runtime's own `tiles.json` `k`/`bleed` fields let it
-    /// reconstruct without recomputing this projection a third way. This is
-    /// the test that would catch a bleed regression at its source: if
-    /// `for_tile` stopped padding the box, this canvas would shrink back to
-    /// exactly the nominal cell and the assertions below would fail.
+    /// every edge and scaled by `TILE_K`, then grown outward to whole
+    /// canvas units on the world's lattice: it starts at the origin
+    /// `tiles.json` carries, covers the padded rectangle, and is less than
+    /// two units larger than it in each direction. If `for_tile` stopped
+    /// padding the box, this canvas would shrink back to the nominal cell
+    /// and the assertions below would fail.
     ///
-    /// Width is derived from `world_viewbox_width()` rather than by
-    /// projecting the cell's own west/east edges: Patterson's x term is
-    /// exactly linear in longitude, so every 10-degree cell is the same
-    /// width regardless of column, and a column at the antimeridian
-    /// (`x == 35`, east edge at longitude 180) would otherwise collide with
-    /// `ProjectedPoint::new`'s own half-open normalisation (180 folds to
-    /// -180, `longitude_normalisation_is_half_open`) the way
-    /// `emit_world_svg_carries_the_full_patterson_extent_with_no_crop`
-    /// already dodges with its own `180.0 - 1e-9`.
+    /// The cell's width comes from `world_viewbox_width()` rather than from
+    /// projecting its west/east edges: Patterson's x term is exactly linear
+    /// in longitude, so every 10-degree cell is the same width, and a
+    /// column at the antimeridian (`x == 35`, east edge at longitude 180)
+    /// would otherwise collide with `ProjectedPoint::new`'s half-open
+    /// normalisation (`longitude_normalisation_is_half_open`).
     #[test]
-    fn tile_viewbox_equals_its_cell_rectangle_padded_by_bleed_times_k() {
+    fn tile_viewbox_covers_its_cell_padded_by_bleed_on_whole_units() {
         let full = Projection::new_world_full_extent();
-        let expected_width = (world_viewbox_width() / 360.0 * 10.0 + 2.0 * TILE_BLEED) * TILE_K;
+        let padded_width = (world_viewbox_width() / 360.0 * 10.0 + 2.0 * TILE_BLEED) * TILE_K;
         for (x, y) in [(10i16, 9i16), (0, 0), (35, 17), (20, 14)] {
             let frame = tile_frame(x, y);
             let north = f64::from(y) * 10.0 - 90.0 + 10.0;
             let south = f64::from(y) * 10.0 - 90.0;
             let (_, min_y) = full.project(ProjectedPoint::new(0.0, north).unwrap()).unwrap();
             let (_, max_y) = full.project(ProjectedPoint::new(0.0, south).unwrap()).unwrap();
-            let expected_height = (max_y - min_y + 2.0 * TILE_BLEED) * TILE_K;
+            let padded_height = (max_y - min_y + 2.0 * TILE_BLEED) * TILE_K;
 
             let (canvas_width, canvas_height) = Projection::new(&frame).canvas_size();
+            assert_eq!(canvas_width.fract(), 0.0, "({x},{y}): canvas_width {canvas_width}");
+            assert_eq!(canvas_height.fract(), 0.0, "({x},{y}): canvas_height {canvas_height}");
             assert!(
-                (canvas_width - expected_width).abs() < 1e-6,
-                "({x},{y}): canvas_width {canvas_width}, expected {expected_width}"
+                canvas_width >= padded_width - 1e-6 && canvas_width < padded_width + 2.0,
+                "({x},{y}): canvas_width {canvas_width}, padded {padded_width}"
             );
             assert!(
-                (canvas_height - expected_height).abs() < 1e-6,
-                "({x},{y}): canvas_height {canvas_height}, expected {expected_height}"
+                canvas_height >= padded_height - 1e-6 && canvas_height < padded_height + 2.0,
+                "({x},{y}): canvas_height {canvas_height}, padded {padded_height}"
             );
+            let (_, top) = tile_origin_units(x, y);
+            assert!(top as f64 <= (min_y - TILE_BLEED) * TILE_K + 1e-6, "({x},{y}): top {top}");
+            assert!((top as f64) > (min_y - TILE_BLEED) * TILE_K - 1.0, "({x},{y}): top {top}");
         }
     }
 
@@ -407,15 +495,14 @@ mod tests {
     /// own vitest suite covers that overlap directly.
     #[test]
     fn adjacent_tiles_meet_at_their_shared_edge_after_dividing_by_k() {
-        let full = Projection::new_world_full_extent();
         for y in [0i16, 9, 16] {
             let (x_a, x_b) = (10i16, 11i16);
             let frame_a = tile_frame(x_a, y);
             let frame_b = tile_frame(x_b, y);
             let projection_a = Projection::new(&frame_a);
             let projection_b = Projection::new(&frame_b);
-            let (origin_a_x, origin_a_y) = tile_anchor_world(&full, x_a, y);
-            let (origin_b_x, origin_b_y) = tile_anchor_world(&full, x_b, y);
+            let (origin_a_x, origin_a_y) = tile_anchor_world(x_a, y);
+            let (origin_b_x, origin_b_y) = tile_anchor_world(x_b, y);
 
             let boundary_longitude = f64::from(x_b) * 10.0 - 180.0;
             let boundary_point = ProjectedPoint::new(boundary_longitude, frame_a.center_latitude).unwrap();
@@ -440,7 +527,7 @@ mod tests {
         for (x, y, longitude, latitude) in [(20i16, 12i16, 35.5, 33.89), (0, 0, -179.0, -89.0), (17, 9, 4.9, -0.1)] {
             let frame = tile_frame(x, y);
             let projection = Projection::new(&frame);
-            let (origin_x, origin_y) = tile_anchor_world(&full, x, y);
+            let (origin_x, origin_y) = tile_anchor_world(x, y);
             let point = ProjectedPoint::new(longitude, latitude).unwrap();
 
             let (px, py) = projection.project(point).unwrap();
@@ -448,6 +535,39 @@ mod tests {
             let world_full = full.project(point).unwrap();
             assert!((world.0 - world_full.0).abs() < 1e-6, "({x},{y}) {longitude},{latitude}: x={}, expected {}", world.0, world_full.0);
             assert!((world.1 - world_full.1).abs() < 1e-6, "({x},{y}) {longitude},{latitude}: y={}, expected {}", world.1, world_full.1);
+        }
+    }
+
+    /// Two tiles quantise their vertices to integers in their own canvas.
+    /// A point in the overlap of two neighbours must land on the same
+    /// integer once each tile's origin (a whole number of canvas units) is
+    /// added back, or a shared coastline sits a pixel or two apart in the
+    /// two tiles.
+    #[test]
+    fn a_point_in_the_overlap_of_two_tiles_quantises_to_one_global_coordinate() {
+        let global = |x: i16, y: i16, longitude: f64, latitude: f64| {
+            let frame = tile_frame(x, y);
+            let projection = Projection::new(&frame);
+            let (px, py) = projection.project(ProjectedPoint::new(longitude, latitude).unwrap()).unwrap();
+            let (width, height) = projection.canvas_size();
+            assert!((0.0..=width).contains(&px) && (0.0..=height).contains(&py), "({x},{y}) {longitude},{latitude}: ({px},{py}) is outside {width}x{height}");
+            let (origin_x, origin_y) = tile_origin_units(x, y);
+            (origin_x + px.round() as i64, origin_y + py.round() as i64)
+        };
+        // West and east neighbours: the shared meridian is -70, and a point
+        // 0.05 degree to either side is inside both canvases' bleed.
+        for latitude in [0.3f64, 25.3, 41.7, 66.1] {
+            let y = ((latitude + 90.0) / 10.0).floor() as i16;
+            for longitude in [-70.05, -69.97] {
+                assert_eq!(global(10, y, longitude, latitude), global(11, y, longitude, latitude), "row {y}, {longitude},{latitude}");
+            }
+        }
+        // North and south neighbours: the shared parallel is 10 degrees north.
+        for longitude in [-100.3f64, -64.9, 12.2, 140.8] {
+            let x = ((longitude + 180.0) / 10.0).floor() as i16;
+            for latitude in [9.97, 10.05] {
+                assert_eq!(global(x, 9, longitude, latitude), global(x, 10, longitude, latitude), "column {x}, {longitude},{latitude}");
+            }
         }
     }
 

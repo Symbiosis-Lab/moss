@@ -752,15 +752,16 @@ fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
     #[derive(serde::Deserialize)]
     struct TileIndex {
         k: f64,
-        bleed: f64,
+        columns: u32,
+        rows: u32,
         cells: Vec<(i16, i16)>,
     }
     let index: TileIndex =
         serde_json::from_slice(&fs::read(map_dir.join("tiles.json")).expect("tiles.json must be emitted"))
-            .expect("tiles.json must be {k, bleed, cells}");
+            .expect("tiles.json must be {k, columns, rows, cells}");
     assert_eq!(index.cells.len(), tile_count, "tiles.json must list exactly the tiles actually emitted");
-    assert_eq!(index.k, 4.0, "tiles.json's k must match the build's own TILE_K");
-    assert_eq!(index.bleed, 0.2, "tiles.json's bleed must match the build's own TILE_BLEED");
+    assert_eq!(index.k, 44.0, "tiles.json's k must match the build's own TILE_K");
+    assert_eq!((index.columns, index.rows), (36, 18), "tiles.json's grid must match the build's own tile grid");
 }
 
 /// The places root and a parent place's listing mark every place their

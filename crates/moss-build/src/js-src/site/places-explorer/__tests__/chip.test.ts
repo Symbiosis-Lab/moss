@@ -76,7 +76,7 @@ function mount(articlePlaces: { works: Work[]; places: Place[] } = { works, plac
     tilesBaseUrl: "/_moss/map.abc/",
     tileCells: [],
     tileK: 4,
-    tileBleed: 0.1,
+    tileOrigins: {}, tileColumns: 36, tileRows: 18,
     places: articlePlaces,
     lang: "en",
   });

@@ -69,7 +69,7 @@ describe("mountPlacesMap — embed seams", () => {
       tilesBaseUrl: "/_moss/map.abc/",
       tileCells: [],
       tileK: 4,
-      tileBleed: 0.1,
+      tileOrigins: {}, tileColumns: 36, tileRows: 18,
       places,
       lang: "en",
     })!;
@@ -243,7 +243,7 @@ describe("mountPlacesMap — a work's fit ceiling follows tile coverage", () => 
     history.replaceState(null, "", "/places/?article=w1");
     const figure = document.createElement("figure");
     document.body.append(figure);
-    mountPlacesMap(figure, { worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells, tileK: 4, tileBleed: 0.1, places: PLACES, lang: "en" });
+    mountPlacesMap(figure, { worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells, tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, places: PLACES, lang: "en" });
     return readUrlState().camera!.zoom;
   }
 
@@ -263,7 +263,7 @@ describe("mountPlacesMap — the applyCamera re-clamp never forces a zoom-out on
       tilesBaseUrl: "/_moss/map.abc/",
       tileCells: [TILE_CELL],
       tileK: 4,
-      tileBleed: 0.1,
+      tileOrigins: {}, tileColumns: 36, tileRows: 18,
       places: { works: [], places: [] },
       lang: "en",
     });
@@ -283,7 +283,7 @@ describe("mountPlacesMap — the applyCamera re-clamp never forces a zoom-out on
     wheelZoomIn(viewportEl, anchorX, anchorY, 60);
 
     const worldCeiling = detailMaxZoom(VIEWPORT);
-    const tileCeiling = tileDetailMaxZoom(VIEWPORT, 4);
+    const tileCeiling = tileDetailMaxZoom(VIEWPORT);
     const zoomedState = readUrlState();
     expect(zoomedState.camera).not.toBeNull();
     const zoomInZoom = zoomedState.camera!.zoom;
@@ -352,7 +352,7 @@ describe("mountPlacesMap — the label layer actually reserves the breadcrumb ch
       tilesBaseUrl: "/_moss/map.abc/",
       tileCells: [],
       tileK: 4,
-      tileBleed: 0.1,
+      tileOrigins: {}, tileColumns: 36, tileRows: 18,
       places: { works: [], places: [] },
       labels,
       lang: "en",
@@ -404,7 +404,7 @@ describe("mountPlacesMap — the label layer actually reserves the breadcrumb ch
       tilesBaseUrl: "/_moss/map.abc/",
       tileCells: [],
       tileK: 4,
-      tileBleed: 0.1,
+      tileOrigins: {}, tileColumns: 36, tileRows: 18,
       places: { works: [work], places: [place] },
       labels,
       lang: "en",

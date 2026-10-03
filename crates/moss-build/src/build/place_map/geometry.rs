@@ -1,6 +1,9 @@
 use super::{Feature, Pack};
 use crate::vault::places::Precision;
 
+mod tile_grid;
+pub(crate) use tile_grid::TileGrid;
+
 pub const VIEWBOX_WIDTH: f64 = 720.0;
 pub const VIEWBOX_HEIGHT: f64 = 480.0;
 const POLAR_LIMIT: f64 = 85.0;
@@ -301,17 +304,29 @@ pub(crate) fn world_viewbox_width() -> f64 {
 }
 
 /// How many times the world map's own scale a regional detail tile is drawn
-/// at (`PattersonProjection::for_tile`). Chosen from the runtime's own
-/// detail ceilings (`js-src/site/places-explorer/camera.ts`'s
-/// `DETAIL_MAX_SCALE`): the world map stops at about 8.41 CSS px per world
-/// unit, and a world unit covers `world_viewbox_width() / 360` viewBox
-/// units of longitude, so the world ceiling is about 8.41 * (842.035/360)
-/// = 19.7 screen px per degree of longitude. `K = 4` puts the tile ceiling
-/// at `4 * 19.7` = about 79 px per degree — the detail the static 10-degree
-/// locators (`DESIGN_PIXELS_PER_DEGREE`, about 70.6 px per degree) are
-/// drawn at. Exposed to the runtime through `tiles.json`'s own `k` field
-/// (`emit::place_map_assets::emit`) so the two can never drift apart.
-pub(crate) const TILE_K: f64 = 4.0;
+/// at (`PattersonProjection::for_tile`). A 10-degree cell is about 23.4
+/// world units wide, so at `K = 44` its canvas is about 1030 units and one
+/// integer coordinate is about 0.0097 degrees (about 1 km), which is also
+/// where the pack's own vertices stop carrying detail. The canvas used to
+/// be about 95 units wide, which rounded every shape to about 0.1 degree
+/// and drew a visible staircase on each coast and lake at the zoom readers
+/// use. The serializer snaps to integers and simplifies at one unit, so a
+/// bigger `K` is what carries the finer quantum into the tile SVG's
+/// coordinates. Exposed to the runtime through `tiles.json`'s own `k`
+/// field (`emit::place_map_assets::emit`) so the two can never drift apart.
+pub(crate) const TILE_K: f64 = 44.0;
+
+/// The tile grid's size in cells: `tile_x`/`tile_y` bucket the world into
+/// 36 columns of 10 degrees by 18 rows. Written to `tiles.json` so the
+/// runtime never keeps its own copy.
+pub(crate) const TILE_COLUMNS: u32 = 36;
+pub(crate) const TILE_ROWS: u32 = 18;
+
+/// The tile scale the line widths (`river_width`, the reef stroke) were
+/// tuned at: a tile at `TILE_K` multiplies them by
+/// `TILE_K / TILE_STROKE_BASE_K` so a river keeps the same weight against
+/// the map however finely the tile is quantised.
+pub(crate) const TILE_STROKE_BASE_K: f64 = 4.0;
 
 /// How far, in world units (the same space `tileCellBounds` and
 /// `tile_viewbox_equals_its_cell_rectangle_times_k` both work in — see
@@ -325,9 +340,8 @@ pub(crate) const TILE_K: f64 = 4.0;
 /// A cell is about 23 world units wide at the equator; `TILE_BLEED` is
 /// small enough to cost nothing in file size or render time but, at the
 /// tile's own native screen scale, covers that disagreement with overlap
-/// instead of a gap. Exposed to the runtime through `tiles.json`'s own
-/// `bleed` field, the same way `k` is — see `tiles.ts`'s
-/// `tileOverlayTransform`.
+/// instead of a gap. The runtime never reads it: it places a tile from the
+/// `origins` in `tiles.json`, which already include the bleed.
 pub(crate) const TILE_BLEED: f64 = 0.2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -392,36 +406,22 @@ impl PattersonProjection {
     /// TILE_BLEED) scale(1/TILE_K)`, `js-src/site/places-explorer/tiles.ts`'s
     /// `tileOverlayTransform`), to float precision — see
     /// `world_and_a_tile_agree_on_a_known_points_position_after_the_runtimes_transform`.
+    ///
+    /// The box is `TileGrid`'s: the padded cell snapped outward to whole
+    /// canvas units, so the canvas starts at `tile_origin_units` and is a
+    /// whole number of units wide and tall.
     fn for_tile(frame: &Frame) -> Self {
         let full = Self::full_extent();
-        let west = frame.center_longitude - frame.longitude_span / 2.0;
-        let east = frame.center_longitude + frame.longitude_span / 2.0;
-        let north = frame.center_latitude + frame.latitude_span / 2.0;
-        let south = frame.center_latitude - frame.latitude_span / 2.0;
-        let (min_x, _) = full.project_unwrapped(west, 0.0);
-        let (max_x, _) = full.project_unwrapped(east, 0.0);
-        // Higher latitude (north) projects to a SMALLER y (north is up), so
-        // the cell's own north edge gives min_y and south gives max_y —
-        // mirrors `map.ts`'s `tileCellBounds` exactly.
-        let (_, min_y) = full.project_unwrapped(0.0, north);
-        let (_, max_y) = full.project_unwrapped(0.0, south);
-        // Padding the box symmetrically, before deriving canvas_width/height
-        // and offset_x/offset_y from it, is what makes the bleed free: the
-        // midpoint `offset_x`/`offset_y` center on (and so the content's own
-        // position is unchanged by padding both edges equally), while
-        // canvas_width/canvas_height — and so the viewBox every other layer
-        // in this file sizes itself against (the water rect, the ring-clip
-        // bounds) — grow to cover the wider box. See `TILE_BLEED`.
-        let min_x = min_x - TILE_BLEED;
-        let max_x = max_x + TILE_BLEED;
-        let min_y = min_y - TILE_BLEED;
-        let max_y = max_y + TILE_BLEED;
+        let grid = TileGrid::of(frame);
+        // The canvas is the grid box: its corner sits on a whole canvas
+        // unit of the world's lattice, so offsets derive from the box's
+        // own centre.
+        let (min_x, max_x) = (grid.left / TILE_K, (grid.left + grid.width) / TILE_K);
+        let (min_y, max_y) = (grid.top / TILE_K, (grid.top + grid.height) / TILE_K);
         let scale = full.scale * TILE_K;
-        let canvas_width = (max_x - min_x) * TILE_K;
-        let canvas_height = (max_y - min_y) * TILE_K;
         let offset_x = TILE_K * (full.canvas_width / 2.0 - (min_x + max_x) / 2.0);
         let offset_y = TILE_K * (full.canvas_height / 2.0 - (min_y + max_y) / 2.0);
-        Self { scale, offset_x, offset_y, canvas_width, canvas_height }
+        Self { scale, offset_x, offset_y, canvas_width: grid.width, canvas_height: grid.height }
     }
 
     fn project_point(&self, point: ProjectedPoint) -> (f64, f64) {

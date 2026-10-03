@@ -263,6 +263,10 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   position: absolute;
   inset: 0;
   opacity: var(--moss-place-tile-opacity, 0);
+  /* Tiles carry a z-index for their draw order; at opacity 1 this element
+     is no stacking context of its own, so without this they would compete
+     with the markers and cards above the layer. */
+  isolation: isolate;
 }
 @media (prefers-reduced-motion: no-preference) {
   .moss-places-tiles {

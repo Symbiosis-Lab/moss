@@ -27,6 +27,17 @@ pub(super) fn relief_height_grey(band: i16) -> &'static str {
     }
 }
 
+/// Every threshold the pack stores for a layer, in the order they nest: the
+/// stretch a flat figure (a detail tile) tints against, so one band has one
+/// colour in every tile.
+pub(super) fn band_ladder(name: &str) -> &'static [i16] {
+    if name == "relief" {
+        &[100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000]
+    } else {
+        &[-10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000]
+    }
+}
+
 /// The smallest range a frame's land ramp is stretched over, in band units.
 const LAND_FLOOR: f64 = 1500.0;
 /// The smallest range a frame's sea ramp is stretched over, in band units.
@@ -89,6 +100,29 @@ pub(super) fn band_tint(name: &str, band: i16, present: &[i16]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    /// The pack stores a band per feature, not its ladder, so `band_ladder`
+    /// repeats the thresholds the pack was built with. This compares the two
+    /// as sets of bands; `band_position` uses only the ladder's lowest and
+    /// highest, so a pack regenerated at other thresholds would leave a flat
+    /// tile tinting against a ladder that no longer matches the bands it
+    /// draws.
+    #[test]
+    fn band_ladder_is_the_set_of_bands_the_pack_stores() {
+        let pack = crate::build::place_map::embedded().expect("checked-in place-map pack must decode");
+        for (name, layer_id) in [("relief", 9), ("seafloor", 10)] {
+            let stored: BTreeSet<i16> = pack
+                .tiers
+                .iter()
+                .flat_map(|tier| tier.layers.iter())
+                .filter(|layer| layer.id == layer_id)
+                .flat_map(|layer| layer.features.iter().map(|feature| feature.band))
+                .collect();
+            let ladder: BTreeSet<i16> = band_ladder(name).iter().copied().collect();
+            assert_eq!(ladder, stored, "{name} ladder differs from the pack's bands");
+        }
+    }
 
     /// Land stretches over the bands present or 1500 units, whichever is
     /// larger; the sea over the bands present or 1000, at gamma 0.45.

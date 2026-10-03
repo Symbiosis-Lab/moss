@@ -15,44 +15,26 @@
  * The world layer used to be the fetched world SVG, parsed and inlined
  * live, with its filters (relief shading, the coast halo) re-run by the
  * browser on every repaint of the pan/zoom transform above it — measured
- * costing Chromium whole frames and WebKit whole SECONDS once a handful of
- * regional tiles (each its own filtered document) were also on screen.
- * Neither engine's cost was really about the FILTER's own parameters (a
- * spike here halving blur radii changed nothing in WebKit); it was about a
- * LIVE, filtered element sitting inside a transformed subtree. This file
+ * costing Chromium whole frames and WebKit whole SECONDS. Neither engine's
+ * cost was really about the FILTER's own parameters (a spike here halving
+ * blur radii changed nothing in WebKit); it was about a LIVE, filtered element sitting inside a transformed subtree. This file
  * now builds that layer as a decoded, opaque `<img>` instead (`raster.ts`'s
  * `splitMapSvg`/`rasterizeOrFallback`), composited once and then only ever
  * moved by the SAME transform, with the world's own box permanently
  * promoted to its own compositor layer (`places-explorer.css`) rather than
  * only for the span of a gesture — nothing left for either engine to
  * re-invalidate on a pan or a zoom click. `tiles.ts`'s `TileLayer` does the
- * same for each regional tile.
+ * same for each regional tile, which carries no filters of its own.
  *
  * Two things the live SVG let CSS drive no longer can, because a
  * rasterised resource has no access to the page's own custom properties:
  * rivers (which must keep a constant ON-SCREEN width while the world
  * scales under them) stay a separate, live, UNFILTERED overlay — cheap,
  * since it is thin strokes, not fills with a shadow filter on every band —
- * and the old continuous `--moss-place-relief-strength` fade (dimming
- * relief/lighting toward a floor as the camera approached the tile-covered
- * zoom range) is gone outright rather than reproduced. That fade's own
- * denominator was the RAISED, tile-covered ceiling once any tile existed
- * nearby (`tiles.ts`'s `hasVisibleTiles` — true almost everywhere a cover
- * camera starts, since it sees the whole world) — so at the point the
- * world's own un-raised ceiling is reached and tiles are fully faded in,
- * the old strength had only dropped to roughly 0.83 of full, not the 0.2
- * floor; the floor was only ever reached deep inside the RAISED range,
- * where tiles already sit fully opaque over the world and hide it
- * entirely. Baking the world at full strength and every tile at the floor
- * (`raster.ts`'s `WORLD_RELIEF_STRENGTH`/`TILE_RELIEF_STRENGTH`) therefore
- * tracks what a reader actually saw closely enough to keep: the one range
- * where the world's own strength mattered (before any tile is visible at
- * all) is a small, early fade the full-strength bake just skips, and the
- * one range where it kept changing after that (deep in tile territory) was
- * already invisible underneath an opaque tile. Recomputing the old
- * continuous value for up to several dozen simultaneously-visible tiles on
- * every settle was measured too costly to keep regardless — see this
- * file's own perf numbers.
+ * and the old continuous `--moss-place-relief-strength` fade, which is gone
+ * outright: the world is baked at full strength, and a tile is flat and
+ * tinted against the same full ladder, so the hand-over from one to the
+ * other changes detail, not tone.
  */
 import {
   clampCamera,
@@ -71,7 +53,7 @@ import { ScopeChip } from "./chip";
 import { LabelLayer } from "./labels";
 import { MarkerLayer, pointsForWorks, workIdOf } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
-import { rasterizeOrFallback, splitMapSvg, WORLD_RELIEF_STRENGTH } from "./raster";
+import { rasterizeOrFallback, splitMapSvg } from "./raster";
 import { inScope } from "./scope";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
@@ -124,8 +106,11 @@ export interface MountOptions {
   tileCells: Array<[number, number]>;
   /** The factor a tile is drawn at over the world's own scale (`tiles.json`'s own `k`, the build's `TILE_K`) — read off the build, never hardcoded here, so the runtime's own detail ceiling and placement transform can never drift from what a tile was actually rendered at. */
   tileK: number;
-  /** How far, in world units, a tile's own canvas was padded past its nominal cell on every edge (`tiles.json`'s own `bleed`, the build's `TILE_BLEED`) — read off the build for the same reason `tileK` is. */
-  tileBleed: number;
+  /** Each tile's canvas origin keyed `"x,y"`, in whole canvas units (`tiles.json`'s own `origins`) — read off the build for the same reason `tileK` is. */
+  tileOrigins: Record<string, [number, number]>;
+  /** The tile grid's size in cells (`tiles.json`'s own `columns` and `rows`) — read off the build so the draw order follows the grid the emitter cut. */
+  tileColumns: number;
+  tileRows: number;
   places: PlacesData;
   /** `labels.json`'s own parsed body — `null`/`undefined` when the handshake carried no `data-labels` or that fetch failed; the label layer then simply never places anything (progressive enhancement, same posture as a missing locator). */
   labels?: LabelsData | null;
@@ -150,7 +135,7 @@ export interface PlacesMapController {
 /** Build the interactive layer in place of `figure`'s static `<svg>` child and wire every gesture, selection and scope path together. `null` (leaving the static figure untouched) when the fetched world SVG fails to parse. The world's own first raster decodes in the background (`rebakeWorld`) rather than gating this return — see that call's own comment. */
 export function mountPlacesMap(figure: HTMLElement, options: MountOptions): PlacesMapController | null {
   const strings = copyFor(options.lang);
-  const worldSplit = splitMapSvg(options.worldSvgText, WORLD_RELIEF_STRENGTH);
+  const worldSplit = splitMapSvg(options.worldSvgText);
   if (!worldSplit) return null;
   // Pulled out of `worldSplit` by name, not read through it, so the closures
   // below (defined once, called later — `rebakeWorld`'s own async body) see
@@ -310,7 +295,9 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     tilesBaseUrl: options.tilesBaseUrl,
     availableTiles: options.tileCells,
     k: options.tileK,
-    bleed: options.tileBleed,
+    origins: options.tileOrigins,
+    columns: options.tileColumns,
+    rows: options.tileRows,
   });
   const initial = urlState.readUrlState();
 
@@ -335,7 +322,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   function currentMaxZoom(viewport: Viewport): number {
     return tileLayer.hasVisibleTiles(camera, viewport)
-      ? tileDetailMaxZoom(viewport, options.tileK)
+      ? tileDetailMaxZoom(viewport)
       : detailMaxZoom(viewport);
   }
 
@@ -458,7 +445,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   /** A work's fit may go as deep as the tile ceiling only where tiles cover the fit's own target; elsewhere it stops at the world's detail ceiling, since deeper would only upscale the world image. */
   function fitWorkCamera(points: Point[], viewport: Viewport, frame: Rect | undefined): Camera {
-    const deep = fitWork(points, viewport, frame, tileDetailMaxZoom(viewport, options.tileK));
+    const deep = fitWork(points, viewport, frame, tileDetailMaxZoom(viewport));
     return tileLayer.hasVisibleTiles(deep, viewport) ? deep : fitWork(points, viewport, frame, detailMaxZoom(viewport));
   }
 

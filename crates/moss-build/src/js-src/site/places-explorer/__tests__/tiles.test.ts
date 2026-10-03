@@ -4,14 +4,16 @@
  * split `markers.ts`'s own tests draw for `MarkerLayer`), except for
  * `TileLayer`'s own neighbour-load-state bookkeeping below: whether a
  * neighbour is loaded, failed, or still in flight only exists on a real
- * `TileLayer` instance (`tileClipInset`/`tileEdgeMask` themselves are pure
+ * `TileLayer` instance (`tileEdgeMask` itself is pure
  * and take whatever cell list they're handed), so that part is exercised
  * here instead, against a mocked, controllable `fetch`.
  */
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import { detailMaxZoom, MIN_ZOOM } from "../camera";
 import { WORLD_WIDTH, WORLD_HEIGHT } from "../projection";
-import { TileLayer, tileCellBounds, tileClipInset, tileEdgeMask, tileFadeOpacity, tileOverlayTransform, tilesForView } from "../tiles";
+import { TileLayer, tileCellBounds, tileEdgeMask, tileFadeOpacity, tileOverlayTransform, tilesForView } from "../tiles";
 
 // `rasterizeOrFallback` defaults to delegating to the real implementation
 // (the no-op jsdom fallback every other test in this file relies on), and
@@ -24,6 +26,18 @@ vi.mock("../raster", async (importOriginal) => {
   rasterizeOrFallbackSpy.mockImplementation(actual.rasterizeOrFallback);
   return { ...actual, rasterizeOrFallback: rasterizeOrFallbackSpy };
 });
+
+/** The canvas origins a build writes to `tiles.json` for `cells`: the padded cell's top-left, snapped down to a whole canvas unit. */
+const GRID = { columns: 36, rows: 18 };
+
+function originsFor(cells: Array<[number, number]>, k: number, bleed: number): Record<string, [number, number]> {
+  const origins: Record<string, [number, number]> = {};
+  for (const [x, y] of cells) {
+    const bounds = tileCellBounds(x, y);
+    origins[`${x},${y}`] = [Math.floor((bounds.minX - bleed) * k), Math.floor((bounds.minY - bleed) * k)];
+  }
+  return origins;
+}
 
 describe("tileCellBounds", () => {
   test("the world's own four corner cells sit at the canvas edges", () => {
@@ -112,94 +126,93 @@ describe("tileFadeOpacity", () => {
 });
 
 describe("tileOverlayTransform", () => {
-  // A tile's own native SVG size, as `explorer::emit_tile_svg` actually
-  // emits it (`Projection::canvas_size`, backed by
-  // `PattersonProjection::for_tile`): its cell's world-unit rectangle,
-  // padded by `bleed` on every edge, times `k`. Re-derived here from
-  // `tileCellBounds` rather than imported, so this test can check the
-  // geometric CONTRACT (a rendered-and-scaled tile covers its own cell plus
-  // a deliberate overlap margin) rather than restate the production
-  // formula under a different name.
-  function nativeTileSize(x: number, y: number, k: number, bleed: number): { width: number; height: number } {
-    const bounds = tileCellBounds(x, y);
-    return { width: (bounds.maxX - bounds.minX + 2 * bleed) * k, height: (bounds.maxY - bounds.minY + 2 * bleed) * k };
-  }
+  const unitScale = 2.3;
 
-  test("maps a cell to its own rectangle padded by bleed, at any unitScale/k", () => {
-    const unitScale = 2.3;
-    const k = 4;
-    const bleed = 0.1;
-    for (const [x, y] of [[10, 5], [0, 0], [35, 17], [20, 14]] as const) {
-      const bounds = tileCellBounds(x, y);
-      const { width: nativeWidth, height: nativeHeight } = nativeTileSize(x, y, k, bleed);
-      const { translateX, translateY, scale } = tileOverlayTransform(x, y, unitScale, k, bleed);
-
-      // Top-left corner lands bleed world units outside the cell's own
-      // origin, not exactly on it.
-      expect(translateX).toBeCloseTo((bounds.minX - bleed) * unitScale);
-      expect(translateY).toBeCloseTo((bounds.minY - bleed) * unitScale);
-      // Rendered (native size * scale) equals the cell's own rectangle
-      // padded by bleed on every edge, in the SAME unitScale px space the
-      // world layer's internal layout uses — not the tile's own larger,
-      // k-magnified canvas.
-      expect(nativeWidth * scale).toBeCloseTo((bounds.maxX - bounds.minX + 2 * bleed) * unitScale);
-      expect(nativeHeight * scale).toBeCloseTo((bounds.maxY - bounds.minY + 2 * bleed) * unitScale);
-    }
+  test("places the tile's own (0, 0) at its origin, scaled by unitScale / k", () => {
+    const { translateX, translateY, scale } = tileOverlayTransform([-37, 1204], unitScale, 4);
+    expect(scale).toBe(unitScale / 4);
+    expect(translateX).toBe(-37 * (unitScale / 4));
+    expect(translateY).toBe(1204 * (unitScale / 4));
   });
 
-  test("adjacent tiles overlap by exactly 2 * bleed at their shared edge, at any k", () => {
-    const unitScale = 1.7;
-    const bleed = 0.1;
-    for (const k of [1, 4, 10]) {
-      const a = tileOverlayTransform(10, 5, unitScale, k, bleed);
-      const { width: nativeWidthA } = nativeTileSize(10, 5, k, bleed);
-      const b = tileOverlayTransform(11, 5, unitScale, k, bleed);
-      const aRightEdge = a.translateX + nativeWidthA * a.scale;
-      // A's own right edge lands PAST b's own left edge by 2 * bleed world
-      // units (in unitScale px) — an overlap, not a meet — so a sub-pixel
-      // rounding disagreement between the two leaves overlap, not a gap.
-      expect(aRightEdge - b.translateX).toBeCloseTo(2 * bleed * unitScale);
-      expect(aRightEdge).toBeGreaterThan(b.translateX);
+  // The origins a real build wrote (`tiles.json`'s `origins`) sit on whole
+  // canvas units at or just before the padded cell's corner, which is what
+  // puts every tile's integer vertices on one lattice. The exact floor is
+  // pinned on the Rust side by
+  // `tile_viewbox_covers_its_cell_padded_by_bleed_on_whole_units`; here the
+  // client's own view of the cell must agree to within one unit of `k`.
+  const mapDir = join(__dirname, "../../../../../tests/fixtures/snapshot-sites/places-site/expected/_moss");
+  const index = JSON.parse(
+    readFileSync(join(mapDir, readdirSync(mapDir).find((name) => name.startsWith("map."))!, "tiles.json"), "utf8"),
+  ) as { k: number; cells: Array<[number, number]>; origins: Record<string, [number, number]> };
+
+  test("every emitted tile's origin is a whole-unit pair at or before its cell's top-left corner", () => {
+    expect(index.cells.length).toBeGreaterThan(0);
+    for (const [x, y] of index.cells) {
+      const bounds = tileCellBounds(x, y);
+      const origin = index.origins[`${x},${y}`];
+      expect(Number.isInteger(origin[0]) && Number.isInteger(origin[1]), `(${x},${y}) whole units`).toBe(true);
+      expect(origin[0], `(${x},${y}) west`).toBeLessThanOrEqual(bounds.minX * index.k);
+      expect(origin[1], `(${x},${y}) north`).toBeLessThanOrEqual(bounds.minY * index.k);
+      expect(bounds.minX * index.k - origin[0], `(${x},${y}) west gap`).toBeLessThan(index.k);
+      expect(bounds.minY * index.k - origin[1], `(${x},${y}) north gap`).toBeLessThan(index.k);
+      const { translateX, translateY, scale } = tileOverlayTransform(origin, unitScale, index.k);
+      expect(translateX / scale).toBeCloseTo(origin[0], 9);
+      expect(translateY / scale).toBeCloseTo(origin[1], 9);
     }
   });
 });
 
-describe("tileClipInset", () => {
-  const cells: Array<[number, number]> = [
-    [10, 5],
-    [11, 5], // east neighbour of (10, 5)
-    [10, 6], // north neighbour of (10, 5)
-  ];
+/**
+ * Draw order is part of the picture: where two tiles overlap, the one with the
+ * higher z-index wins. The index is a fixed function of the cell, so the same
+ * coastline is drawn by the same neighbour on every load, whatever order the
+ * fetches finish in.
+ */
+describe("TileLayer — each tile's z-index is fixed by its cell, north to south then west to east, whatever order the fetches finish", () => {
+  const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"></svg>';
+  const BASE_URL = "/_moss/tiles/";
+  const VIEWPORT = { width: 1200, height: 700 };
+  const CELLS: Array<[number, number]> = [[9, 5], [10, 5], [11, 5], [10, 4], [10, 6]];
+  // North to south, west to east: a southern tile is drawn over the bleed of the one above it.
+  const EXPECTED: Array<[number, number]> = [[10, 6], [9, 5], [10, 5], [11, 5], [10, 4]];
+  const CAMERA = {
+    x: (tileCellBounds(10, 5).minX + tileCellBounds(10, 5).maxX) / 2,
+    y: (tileCellBounds(10, 5).minY + tileCellBounds(10, 5).maxY) / 2,
+    zoom: detailMaxZoom(VIEWPORT),
+  };
 
-  test("a tile clips the one edge whose lower-index neighbour is present, leaves the other alone", () => {
-    // (11, 5)'s own west neighbour is (10, 5): left-clipped. Its own south
-    // neighbour, (11, 4), is absent: not bottom-clipped.
-    expect(tileClipInset(11, 5, cells, 4, 0.2)).toEqual({ bottom: 0, left: 0.8 });
-    // (10, 6)'s own south neighbour is (10, 5): bottom-clipped. Its own
-    // west neighbour, (9, 6), is absent: not left-clipped.
-    expect(tileClipInset(10, 6, cells, 4, 0.2)).toEqual({ bottom: 0.8, left: 0 });
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  test("a tile with neither neighbour present clips nothing", () => {
-    expect(tileClipInset(10, 5, cells, 4, 0.2)).toEqual({ bottom: 0, left: 0 });
-  });
+  test("a tile that finishes last but has the lowest z-index still gets it", async () => {
+    const resolvers = new Map<string, () => void>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => new Promise((resolve) => {
+        resolvers.set(url, () => resolve({ ok: true, text: () => Promise.resolve(TILE_SVG) } as unknown as Response));
+      })),
+    );
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: CELLS, k: 4, origins: originsFor(CELLS, 4, 0.1), ...GRID });
+    layer.render(CAMERA, VIEWPORT, 1);
 
-  test("the inset scales with k and bleed, not a fixed pixel amount", () => {
-    expect(tileClipInset(11, 5, cells, 1, 0.2)).toEqual({ bottom: 0, left: 0.2 });
-    expect(tileClipInset(11, 5, cells, 4, 0.5)).toEqual({ bottom: 0, left: 2 });
-  });
+    // Finish in the reverse of the expected order, so the lowest z-index is the last to arrive.
+    for (const [x, y] of [...EXPECTED].reverse()) {
+      resolvers.get(`${BASE_URL}tile-${x}-${y}.svg`)!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
 
-  test("of two adjacent tiles, exactly one ever keeps its bleed toward the other — the lower-index one, bleeding toward the higher", () => {
-    // (10,5)/(11,5): east-west pair. (10,5) is lower-index on x; it must
-    // keep bleeding east (no left-clip of its own — left-clip only ever
-    // fires on ITS OWN west side), while (11,5) must clip its own west.
-    expect(tileClipInset(10, 5, cells, 4, 0.2).left).toBe(0);
-    expect(tileClipInset(11, 5, cells, 4, 0.2).left).toBeGreaterThan(0);
-    // (10,5)/(10,6): south-north pair. (10,5) is lower-index on y; it keeps
-    // bleeding north (no bottom-clip of its own), while (10,6) clips its
-    // own south.
-    expect(tileClipInset(10, 5, cells, 4, 0.2).bottom).toBe(0);
-    expect(tileClipInset(10, 6, cells, 4, 0.2).bottom).toBeGreaterThan(0);
+    const zIndexes = new Map(
+      [...container.querySelectorAll<HTMLElement>("[data-moss-places-tile]")].map((el) => [el.dataset.mossPlacesTile, Number(el.style.zIndex)]),
+    );
+    expect(zIndexes.size).toBe(EXPECTED.length);
+    // Rows run 17 (north) to 0 (south) over 36 columns, and each z-index is its place in that order.
+    expect(Object.fromEntries(zIndexes)).toEqual(Object.fromEntries(EXPECTED.map(([x, y]) => [`${x},${y}`, (17 - y) * 36 + x])));
+    const byIndex = [...zIndexes].sort((a, b) => a[1] - b[1]).map(([key]) => key);
+    expect(byIndex).toEqual(EXPECTED.map(([x, y]) => `${x},${y}`));
   });
 });
 
@@ -242,27 +255,16 @@ describe("tileEdgeMask", () => {
     expect(mask1).toContain("1.5px");
     expect(mask4).toContain("6px");
   });
-
-  test("an edge a tile SHARES with a real neighbour never appears in its own mask — `tileClipInset` and `tileEdgeMask` never both touch the same edge", () => {
-    for (const [x, y] of cells) {
-      const clip = tileClipInset(x, y, cells, 4, 0.2);
-      const mask = tileEdgeMask(x, y, cells, 4) ?? "";
-      if (clip.left > 0) expect(mask).not.toContain("to right"); // west fade would duplicate a west-clip
-      if (clip.bottom > 0) expect(mask).not.toContain("to top"); // south fade would duplicate a south-clip
-    }
-  });
 });
 
 /**
- * `TileLayer`'s own clip/mask bookkeeping: whether a neighbour counts as
- * present has to come from what's actually loaded and in the DOM, never
- * from the static manifest alone — a neighbour still in flight, or one
- * whose fetch permanently failed (failures are cached and never retried,
- * this file's own `TileLayer` doc), has not drawn the shared strip either,
- * so clipping toward it as though it had would leave that strip undrawn by
- * BOTH tiles.
+ * `TileLayer`'s own edge-mask bookkeeping: a neighbour the manifest names
+ * counts as present until its fetch permanently fails (failures are cached
+ * and never retried, this file's own `TileLayer` doc), after which the edge
+ * it shared fades like any other outer edge. A tile is never clipped toward
+ * a neighbour: the clip edge antialiased into a light line between tiles.
  */
-describe("TileLayer — neighbour load state, not the manifest, drives clip and edge-fade", () => {
+describe("TileLayer — a failed neighbour turns its shared edge into a fading outer edge", () => {
   const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>';
   const BASE_URL = "/_moss/tiles/";
   const VIEWPORT = { width: 1200, height: 700 };
@@ -309,30 +311,10 @@ describe("TileLayer — neighbour load state, not the manifest, drives clip and 
     vi.unstubAllGlobals();
   });
 
-  test("a tile keeps its full bleed toward a west neighbour still in flight, and clips once that neighbour loads", async () => {
+  test("a tile fades the edge toward a west neighbour whose fetch failed", async () => {
     const controllers = stubControllableFetch();
     const container = document.createElement("div");
-    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[9, 5], [10, 5]], k: K, bleed: BLEED });
-
-    layer.render(CAMERA, VIEWPORT, 1);
-    controllers.get(`${BASE_URL}tile-10-5.svg`)!.resolveOk(TILE_SVG);
-    await flush();
-    const main = container.querySelector('[data-moss-places-tile="10,5"]') as unknown as HTMLElement;
-    expect(main).not.toBeNull();
-    // (9,5) is in the manifest but its own fetch hasn't resolved yet.
-    expect(main.style.clipPath).toBe("");
-
-    controllers.get(`${BASE_URL}tile-9-5.svg`)!.resolveOk(TILE_SVG);
-    await flush();
-    // Now that (9,5) is itself loaded and in the DOM, (10,5) — the
-    // higher-index tile of the pair — clips its own west bleed away.
-    expect(main.style.clipPath).toBe(`inset(0 0 0px ${BLEED * K}px)`);
-  });
-
-  test("a tile stays unclipped toward a west neighbour whose fetch failed, and fades that edge instead", async () => {
-    const controllers = stubControllableFetch();
-    const container = document.createElement("div");
-    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[9, 5], [10, 5]], k: K, bleed: BLEED });
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[9, 5], [10, 5]], k: K, origins: originsFor([[9, 5], [10, 5]], K, BLEED), ...GRID });
 
     layer.render(CAMERA, VIEWPORT, 1);
     controllers.get(`${BASE_URL}tile-10-5.svg`)!.resolveOk(TILE_SVG);
@@ -340,19 +322,16 @@ describe("TileLayer — neighbour load state, not the manifest, drives clip and 
     await flush();
 
     const main = container.querySelector('[data-moss-places-tile="10,5"]') as unknown as HTMLElement;
-    // A permanently-failed neighbour never draws the shared strip either —
-    // clipping here would draw NEITHER side of it.
-    expect(main.style.clipPath).toBe("");
     // The manifest named a west neighbour, but it will never arrive, so
     // that edge now reads as this layer's own outer edge and fades toward
     // the world layer instead of ending in a hard, undrawn line.
     expect(main.style.maskImage).toContain("to right");
   });
 
-  test("a pan — render() called again with only the camera moved — never reassigns an already-loaded tile's clip-path or mask-image", async () => {
+  test("a pan — render() called again with only the camera moved — never reassigns an already-loaded tile's mask-image", async () => {
     const controllers = stubControllableFetch();
     const container = document.createElement("div");
-    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[9, 5], [10, 5]], k: K, bleed: BLEED });
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[9, 5], [10, 5]], k: K, origins: originsFor([[9, 5], [10, 5]], K, BLEED), ...GRID });
 
     layer.render(CAMERA, VIEWPORT, 1);
     controllers.get(`${BASE_URL}tile-10-5.svg`)!.resolveOk(TILE_SVG);
@@ -360,20 +339,13 @@ describe("TileLayer — neighbour load state, not the manifest, drives clip and 
     await flush();
 
     const main = container.querySelector('[data-moss-places-tile="10,5"]') as unknown as HTMLElement;
-    let clipPathSets = 0;
     let maskImageSets = 0;
-    let clipPathValue = main.style.clipPath;
     let maskImageValue = main.style.maskImage;
-    // Shadow the two properties on THIS style instance only — an own
+    // Shadow the property on THIS style instance only — an own
     // property always wins the lookup over the inherited accessor, so this
-    // counts every assignment `applyClipAndMask` (or a reverted `position`)
+    // counts every assignment `applyEdgeMask` (or a reverted `position`)
     // makes, without needing to know how the DOM implementation itself
     // wires up `CSSStyleDeclaration`.
-    Object.defineProperty(main.style, "clipPath", {
-      configurable: true,
-      get: () => clipPathValue,
-      set: (v: string) => { clipPathSets++; clipPathValue = v; },
-    });
     Object.defineProperty(main.style, "maskImage", {
       configurable: true,
       get: () => maskImageValue,
@@ -382,7 +354,6 @@ describe("TileLayer — neighbour load state, not the manifest, drives clip and 
 
     for (let i = 0; i < 5; i++) layer.render({ ...CAMERA, x: CAMERA.x + i }, VIEWPORT, 1);
 
-    expect(clipPathSets).toBe(0);
     expect(maskImageSets).toBe(0);
   });
 });
@@ -432,7 +403,7 @@ describe("TileLayer — a clear()+re-queue of the same cell drops the stale load
   test("a stale load that outlasts a clear()+re-queue releases its own surface and never appends; the fresh load wins", async () => {
     const controllers = stubControllableFetch();
     const container = document.createElement("div");
-    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[10, 5]], k: K, bleed: BLEED });
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[10, 5]], k: K, origins: originsFor([[10, 5]], K, BLEED), ...GRID });
     const url = `${BASE_URL}tile-10-5.svg`;
 
     const staleRelease = vi.fn();
@@ -502,7 +473,7 @@ describe("TileLayer — re-bakes follow the density needed, within the same conc
   /** Loads every cell at `density` and lets the layer settle. */
   async function loaded(density: number) {
     const container = document.createElement("div");
-    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: CELLS, k: K, bleed: 0.1 });
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: CELLS, k: K, origins: originsFor(CELLS, K, 0.1), ...GRID });
     layer.render(CAMERA, VIEWPORT, unitScaleFor(density), true);
     await flush();
     expect(container.querySelectorAll(".moss-places-tile")).toHaveLength(CELLS.length);
@@ -571,5 +542,23 @@ describe("TileLayer — re-bakes follow the density needed, within the same conc
     layer.render(CAMERA, VIEWPORT, unitScaleFor(20), true);
     await flush();
     expect(rasterizeOrFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  test("the container reports busy until every load and re-bake has finished, and idle after", async () => {
+    stubFetch();
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: CELLS, k: K, origins: originsFor(CELLS, K, 0.1), ...GRID });
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(2), true);
+    expect(container.dataset.mossPlacesTilesState).toBe("busy");
+    await flush();
+    expect(container.dataset.mossPlacesTilesState).toBe("idle");
+    // A gesture frame is never idle: the settled re-bake pass has not run yet.
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(10), false);
+    expect(container.dataset.mossPlacesTilesState).toBe("busy");
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(10), true);
+    expect(container.dataset.mossPlacesTilesState).toBe("busy");
+    await flush();
+    expect(container.dataset.mossPlacesTilesState).toBe("idle");
   });
 });

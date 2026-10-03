@@ -27,13 +27,13 @@ pub use locator::{
 };
 mod river;
 mod palette;
-use palette::{band_tint, relief_height_grey};
+use palette::{band_ladder, band_tint, relief_height_grey};
 mod route;
 use route::{draw_badges, draw_globe_line, draw_line};
 // Re-exported (via place_map.rs) for context.rs's privacy gate; see route.rs.
 pub(crate) use route::{route_blocked_diagnostic, route_precision_gate};
 
-use super::geometry::{marker_radius, FrameTier, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES, REGION_FADE_MIN_RADIUS};
+use super::geometry::{marker_radius, FrameTier, TILE_K, TILE_STROKE_BASE_K, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES, REGION_FADE_MIN_RADIUS};
 use super::globe::{globe_line, globe_marker, globe_rings};
 use super::{Feature, Pack, PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 use crate::vault::places::Precision;
@@ -152,6 +152,7 @@ fn emit_svg_with_mode(
         canvas_width: f64::from(SVG_WIDTH),
         canvas_height: f64::from(SVG_HEIGHT),
         full_extent: false,
+        tile: false,
     };
     writer.open_figure(
         target,
@@ -194,6 +195,7 @@ pub(super) fn render_svg(
     target: &PlaceMapTarget,
     draw_globe: bool,
 ) {
+    writer.tile = target.frame.as_ref().is_some_and(|frame| frame.tier.is_tile());
     writer.open_svg();
     writer.defs();
     writer.water();
@@ -209,8 +211,7 @@ pub(super) fn render_svg(
     // `TILE_K`-multiplied one. A tile is always exactly a 10-degree cell —
     // the same span a `Local` frame never trips `is_wide` for — so it never
     // gets the world map's rank/layer thinning either.
-    let is_tile = target.frame.as_ref().is_some_and(|frame| frame.tier.is_tile());
-    let wide = !is_tile && projection.as_ref().is_some_and(Projection::is_wide);
+    let wide = !writer.tile && projection.as_ref().is_some_and(Projection::is_wide);
     let wide_locator = writer.locator_profile.is_some() && wide;
     let grouped = target.frame.as_ref().map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
@@ -317,9 +318,25 @@ pub(super) struct Writer<'a> {
     /// explicitly by each caller — never inferred from `canvas_width`, which
     /// is only a width.
     pub(super) full_extent: bool,
+    /// The figure is one of the explorer's regional detail tiles
+    /// (`FrameTier::Tile`), set by `render_svg`. A tile is flat: it carries
+    /// no SVG filters and no lighting group. WebKit rasterises
+    /// `feGaussianBlur`/`feDiffuseLighting` at low resolution, so a filtered
+    /// tile came out blurry, tinted differently from the world layer under
+    /// it, and showed a light line where two tiles meet; the world figure
+    /// keeps its filters because it is shown at a scale where that does not
+    /// matter.
+    pub(super) tile: bool,
 }
 
 impl<'a> Writer<'a> {
+    /// Line widths are drawn in canvas units, so a canvas drawn at a finer
+    /// quantum (a tile, `TILE_K`) multiplies them to keep the same weight
+    /// on screen. 1 for every other figure.
+    pub(super) fn stroke_scale(&self) -> f64 {
+        if self.tile { TILE_K / TILE_STROKE_BASE_K } else { 1.0 }
+    }
+
     /// The shared literal for a page-independent places-explorer base-map
     /// asset (`explorer::emit_world_svg`/`emit_tile_svg`): full capacity, no
     /// globe inset, no href, no locator, undetailed (never shown smaller
@@ -338,6 +355,7 @@ impl<'a> Writer<'a> {
             canvas_width,
             canvas_height,
             full_extent,
+            tile: false,
         }
     }
 }
@@ -487,9 +505,19 @@ impl Writer<'_> {
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" aria-hidden=\"true\" focusable=\"false\">",
         )
         .expect("writing to String cannot fail");
+        // A flat tile is composited at a fractional size. WebKit clips the
+        // stacked band polygons at the image edge one draw at a time, so the
+        // last partly covered row blends every band over a lighter one and
+        // reads as a light line. Isolating the whole drawing clips it once.
+        if self.tile {
+            self.output.push_str("<g style=\"isolation:isolate\">");
+        }
     }
 
     fn close_svg_tag(&mut self) {
+        if self.tile {
+            self.output.push_str("</g>");
+        }
         self.output.push_str("</svg>");
     }
 
@@ -501,6 +529,9 @@ impl Writer<'_> {
     }
 
     fn defs(&mut self) {
+        if self.tile {
+            return;
+        }
         let height_filter = self.ids.get("height-filter");
         let marker_gradient = self.ids.get("marker-fade");
         let globe_clip = self.ids.get("globe-clip");
@@ -593,7 +624,10 @@ impl Writer<'_> {
         // then land and relief low to high. The source pack has stable IDs;
         // no administrative layer is accepted or emitted here.
         self.land_defs(quantisation, projection, grouped);
-        self.coast();
+        // The coast is a blurred halo, which a flat figure has no filter for.
+        if !self.tile {
+            self.coast();
+        }
         self.emit_band_layer(quantisation, projection, grouped, 10, "seafloor", true);
         self.land();
         self.emit_band_layer(quantisation, projection, grouped, 9, "relief", false);
@@ -659,7 +693,7 @@ impl Writer<'_> {
         self.emit_merged_layer(quantisation, projection, grouped, 3, "lakes", &fill("var(--moss-place-lakes, #bcd3de)"));
         self.emit_river_layer(quantisation, projection, grouped, "var(--moss-place-rivers, #7fa6bd)");
         // Natural Earth's reefs are lines, not areas.
-        self.emit_merged_layer(quantisation, projection, grouped, 6, "reefs", "fill=\"none\" stroke=\"var(--moss-place-reefs, #b9d6cf)\" stroke-width=\"1.2\"");
+        self.emit_merged_layer(quantisation, projection, grouped, 6, "reefs", &format!("fill=\"none\" stroke=\"var(--moss-place-reefs, #b9d6cf)\" stroke-width=\"{}\"", length(1.2 * self.stroke_scale())));
         self.emit_merged_layer(quantisation, projection, grouped, 8, "built-up", "fill=\"var(--moss-place-built-up, #c9bdb4)\" fill-opacity=\"0.7\"");
     }
 
@@ -728,6 +762,13 @@ impl Writer<'_> {
             .collect();
         let mut present: Vec<i16> = projected.iter().map(|(feature, _)| feature.band).collect();
         present.dedup();
+        // A tile's tint is not stretched to the bands it happens to hold:
+        // two tiles overlap by their bleed and must paint one band the same
+        // colour, or whichever sits on top decides the colour of the strip.
+        // The whole ladder is the world layer's own stretch, too.
+        if self.tile {
+            present = band_ladder(name).to_vec();
+        }
         // Relief is traced from an elevation grid that does not follow the
         // Natural Earth shoreline, so about 5% of the lowest band lies over
         // the sea; the approved design clips relief to the land outline.
@@ -742,6 +783,11 @@ impl Writer<'_> {
             self.ids.get(&format!("layer-{name}"))
         )
         .expect("writing to String cannot fail");
+        let band_shadow = if self.tile {
+            String::new()
+        } else {
+            format!(" filter=\"url(#{})\"", self.ids.get(&format!("shadow-{name}")))
+        };
         let mut active_band = None;
         for (index, (feature, path)) in projected.into_iter().enumerate() {
             if active_band != Some(feature.band) {
@@ -754,10 +800,9 @@ impl Writer<'_> {
                 // per band, and a path's own fill would override it.
                 write!(
                     self.output,
-                    "<g data-map-band=\"{}\" style=\"fill:{}\" filter=\"url(#{})\">",
+                    "<g data-map-band=\"{}\" style=\"fill:{}\"{band_shadow}>",
                     feature.band,
                     band_tint(name, feature.band, &present),
-                    self.ids.get(&format!("shadow-{name}"))
                 )
                 .expect("writing to String cannot fail");
             }
@@ -793,6 +838,9 @@ impl Writer<'_> {
             .expect("writing to String cannot fail");
         }
         self.output.push_str("</clipPath>");
+        if self.tile {
+            return;
+        }
         // The approved design lights the terrain at half strength: the
         // opacity sits on the filtered group, so it fades the filter's
         // output. On an element inside the filter it would change nothing,
@@ -1110,6 +1158,7 @@ mod tests {
             canvas_width: f64::from(SVG_WIDTH),
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
+            tile: false,
         };
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1154,6 +1203,7 @@ mod tests {
             canvas_width: f64::from(SVG_WIDTH),
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
+            tile: false,
         };
         writer.emit_river_layer(10_000, &projection, &grouped, "#5b93bd");
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1359,6 +1409,7 @@ mod tests {
             canvas_width: f64::from(SVG_WIDTH),
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: true,
+            tile: false,
         };
         let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None, route: false };
         let projection = choose_projection(&writer, &target).unwrap();

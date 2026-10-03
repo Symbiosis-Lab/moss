@@ -13,9 +13,7 @@ import {
   createRasterImage,
   rasterizeOrFallback,
   splitMapSvg,
-  TILE_RELIEF_STRENGTH,
   withRootSize,
-  WORLD_RELIEF_STRENGTH,
 } from "../raster";
 
 const SAMPLE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480" role="img" aria-label="A map">
@@ -39,18 +37,18 @@ afterEach(() => {
 
 describe("splitMapSvg", () => {
   test("null on markup that isn't a real svg", () => {
-    expect(splitMapSvg("<html><body>not a map</body></html>", 1)).toBeNull();
-    expect(splitMapSvg("<<<not xml at all", 1)).toBeNull();
+    expect(splitMapSvg("<html><body>not a map</body></html>")).toBeNull();
+    expect(splitMapSvg("<<<not xml at all")).toBeNull();
   });
 
   test("reads the source's own canvas size", () => {
-    const split = splitMapSvg(SAMPLE_SVG, 1)!;
+    const split = splitMapSvg(SAMPLE_SVG)!;
     expect(split.width).toBe(720);
     expect(split.height).toBe(480);
   });
 
   test("extracts a non-empty rivers group into its own live overlay, copying stroke-width onto --river-w", () => {
-    const split = splitMapSvg(SAMPLE_SVG, 1)!;
+    const split = splitMapSvg(SAMPLE_SVG)!;
     expect(split.rivers).not.toBeNull();
     expect(split.rivers!.getAttribute("viewBox")).toBe("0 0 720 480");
     const path = split.rivers!.querySelector("path")!;
@@ -62,30 +60,28 @@ describe("splitMapSvg", () => {
   });
 
   test("an empty rivers group yields no overlay, and is still dropped from the base", () => {
-    const split = splitMapSvg(SAMPLE_SVG_NO_RIVERS, 1)!;
+    const split = splitMapSvg(SAMPLE_SVG_NO_RIVERS)!;
     expect(split.rivers).toBeNull();
     expect(split.base.querySelector('[data-map-layer="rivers"]')).toBeNull();
   });
 
-  test("bakes the given strength onto relief and lighting, not onto any other layer", () => {
-    const split = splitMapSvg(SAMPLE_SVG, TILE_RELIEF_STRENGTH)!;
-    const relief = split.base.querySelector('[data-map-layer="relief"]') as SVGElement;
-    const lighting = split.base.querySelector('[data-map-layer="lighting"]') as SVGElement;
-    const water = split.base.querySelector('[data-map-layer="water"]') as SVGElement;
-    expect(relief.style.getPropertyValue("opacity")).toBe(String(TILE_RELIEF_STRENGTH));
-    expect(lighting.style.getPropertyValue("opacity")).toBe(String(TILE_RELIEF_STRENGTH));
-    expect(water.style.getPropertyValue("opacity")).toBe("");
+  test("leaves relief and lighting at full strength: a tile's bands are tinted for the world's own, not dimmed", () => {
+    const split = splitMapSvg(SAMPLE_SVG)!;
+    for (const layer of ["relief", "lighting"]) {
+      const group = split.base.querySelector(`[data-map-layer="${layer}"]`) as SVGElement;
+      expect(group.style.getPropertyValue("opacity")).toBe("");
+    }
   });
 
   test("strips the accessible-label attributes a rasterised duplicate must not repeat", () => {
-    const split = splitMapSvg(SAMPLE_SVG, 1)!;
+    const split = splitMapSvg(SAMPLE_SVG)!;
     expect(split.base.hasAttribute("role")).toBe(false);
     expect(split.base.hasAttribute("aria-label")).toBe(false);
   });
 
   test("inlines the current theme's tokens onto the base's own root style", () => {
     document.documentElement.style.setProperty("--moss-place-water", "#123456");
-    const split = splitMapSvg(SAMPLE_SVG, 1)!;
+    const split = splitMapSvg(SAMPLE_SVG)!;
     expect(split.base.getAttribute("style")).toContain("--moss-place-water:#123456");
   });
 });
@@ -113,13 +109,6 @@ describe("capturePlaceMapTheme", () => {
   });
 });
 
-describe("TILE_RELIEF_STRENGTH / WORLD_RELIEF_STRENGTH", () => {
-  test("the tile floor is strictly dimmer than the world's full strength", () => {
-    expect(TILE_RELIEF_STRENGTH).toBeLessThan(WORLD_RELIEF_STRENGTH);
-    expect(WORLD_RELIEF_STRENGTH).toBe(1);
-  });
-});
-
 describe("withRootSize", () => {
   test("replaces only the root svg's own width/height, never the viewBox or a descendant's", () => {
     const markup = '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480"><rect width="720" height="480"/></svg>';
@@ -135,7 +124,7 @@ describe("withRootSize", () => {
 
 describe("splitMapSvg's cached baseMarkup", () => {
   test("is the base's own serialised markup, carrying its baked width/height and style", () => {
-    const split = splitMapSvg(SAMPLE_SVG, TILE_RELIEF_STRENGTH)!;
+    const split = splitMapSvg(SAMPLE_SVG)!;
     expect(split.baseMarkup).toContain('width="720"');
     expect(split.baseMarkup).toContain('height="480"');
     expect(split.baseMarkup).not.toContain('data-map-layer="rivers"');
@@ -150,7 +139,7 @@ describe("createRasterImage", () => {
 
 describe("rasterizeOrFallback", () => {
   test("falls back to the live fallback element when Blob/decode aren't available (jsdom, same as this suite)", async () => {
-    const split = splitMapSvg(SAMPLE_SVG, 1)!;
+    const split = splitMapSvg(SAMPLE_SVG)!;
     const surface = await rasterizeOrFallback(split.baseMarkup, split.base, 100, 100);
     expect(surface.el).toBe(split.base);
     expect(() => surface.release()).not.toThrow();

@@ -17,7 +17,7 @@ mod simplify;
 mod svg;
 
 pub use context::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext, PlaceMapTarget, ResolvedPlace};
-pub use explorer::{emit_tile_svg, emit_world_svg, relevant_tiles};
+pub use explorer::{emit_tile_svg, emit_world_svg, relevant_tiles, tile_origin_units};
 pub use geometry::{marker_radius, privacy_floor, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
 pub use labels::{Labels, PointLabel, RiverLabel};
 pub use svg::{
@@ -38,10 +38,9 @@ pub(crate) use svg::{route_blocked_diagnostic, route_precision_gate};
 // placement transform can never drift from the factor a tile was actually
 // rendered at.
 pub(crate) use geometry::TILE_K;
-// Crate-internal only: `emit::place_map_assets` writes `bleed` into
-// `tiles.json` from this SAME constant, the same reason `TILE_K` travels
-// with it — see `geometry::TILE_BLEED`.
-pub(crate) use geometry::TILE_BLEED;
+// Crate-internal only: `tiles.json` carries the grid's size from these, so
+// the runtime orders tiles by the same grid the emitter cells the world into.
+pub(crate) use geometry::{TILE_COLUMNS, TILE_ROWS};
 
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
 const HEADER_LEN: usize = 92;

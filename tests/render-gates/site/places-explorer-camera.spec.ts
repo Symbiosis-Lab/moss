@@ -458,8 +458,8 @@ async function loadAndFindAdjacentTilePairs(
   // fetch.
   const world = pattersonProject(38.722, -9.139);
   // z=8 is comfortably past this viewport's own world ceiling (about 5,
-  // `detailMaxZoom`) and under the raised tile ceiling (about 20,
-  // `tileDetailMaxZoom` at k=4) — exactly the zoom band regional tiles
+  // `detailMaxZoom`) and under the raised tile ceiling (about 45 at
+  // this viewport, `tileDetailMaxZoom`) — exactly the zoom band regional tiles
   // exist to cover.
   await page.goto(`places/?p=patterson&z=8&x=${world.x}&y=${world.y}`, { waitUntil: "domcontentloaded" });
   await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute(
@@ -482,13 +482,12 @@ async function loadAndFindAdjacentTilePairs(
   // OVERLAP by no more than a tile's own bleed margin on the other — the
   // shape a correctly placed `translate(cellX - bleed, cellY - bleed)
   // scale(1/k)` produces for every neighbour pair (`tiles.ts`'s
-  // `tileOverlayTransform`), and the shape the pre-fix bug (each tile its
-  // own small misplaced rectangle, visible in the original review
-  // screenshot) could not. The bound is the bleed margin's own worst case,
-  // not a tuned fudge factor: two world units of bleed (one on each
-  // neighbour) at the tile's own native screen scale — the ceiling this
-  // zoom band stays under (`tileDetailMaxZoom`, `camera.ts`) —
-  // 2 * 0.5 * (8.4117 * 4) is about 33.6px, including where two tiles only
+  // `tileOverlayTransform`), and the shape a misplaced tile (each tile its
+  // own small rectangle) could not. The bound is the bleed margin's own worst case,
+  // not a tuned fudge factor: two bleeds (one on each
+  // neighbour) at the deepest screen scale (`tileDetailMaxZoom`,
+  // `camera.ts`): 2 * 0.2 world units (`TILE_BLEED`) at about 85 px per
+  // world unit is about 34px, including where two tiles only
   // touch at a shared CORNER (each bleeds into the other on both axes
   // there); a real misplacement (the wrong cell entirely, or the pre-fix
   // bug) overshoots that by a cell's width, not a few tens of px.
@@ -679,10 +678,9 @@ test("past the world ceiling, an open-sea tile boundary is pixel-continuous in b
   // step at its one misplaced column; this file's own history tightened
   // that to 4 once that fix landed. Tightened again, to 1, once the
   // TOP-OF-STACK tile at this shared edge stopped being whichever one's
-  // async fetch happened to resolve last (`tiles.ts`'s `tileClipInset` —
-  // see the row-boundary test below, whose own ablation is what actually
-  // proves this bound): ordinary anti-aliasing noise alone measures under
-  // 1 here, so 1 is a real bound, not a loosened one picked to pass.
+  // async fetch happened to resolve last: ordinary anti-aliasing noise
+  // alone measures under 1 here, so 1 is a real bound, not a loosened one
+  // picked to pass.
   const TOLERANCE = 1;
   // Whether EVERY x in the compared span reads within TOLERANCE of the
   // span's own west end, at row `y` — i.e. whether `y` is itself a row
@@ -752,11 +750,11 @@ test("past the world ceiling, an open-sea tile boundary is pixel-continuous in b
  * readily as with it present, so this was never two tiles disagreeing on
  * one feature's shape; it was the north tile's own south-bleeding slice
  * reading wrong regardless of what (if anything) sat under it.
- * `tiles.ts`'s `tileClipInset` stops that slice from ever being drawn: a
- * tile keeps the OPPOSITE bleed (north, into whichever neighbour sits
- * there) because measuring the same way along that edge found nothing
- * wrong with it — so of the two tiles meeting at a row boundary, only the
- * SOUTH one ever draws their shared strip now.
+ * That slice was the tile's blur and lighting filters misreading at the
+ * canvas edge, which a flat tile no longer carries; a later attempt to hide
+ * the slice with a `clip-path` inset made its own light line (the clip edge
+ * antialiased at a fractional pixel), so tiles are not clipped at all and
+ * the overlap simply draws the same terrain twice.
  *
  * Checked as continuity within the south tile's own content, not as
  * agreement between the two tiles' own colours: a reader comparing this
@@ -791,7 +789,10 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
     "ready",
     { timeout: 10000 },
   );
-  await page.waitForTimeout(500); // tile fetch + position settle
+  // No fixed sleep: wait until the tile layer reports nothing left to bake or
+  // re-bake, so a half-swapped raster never reaches the capture.
+  await expect(page.locator('.moss-places-tiles[data-moss-places-tiles-state="idle"]')).toHaveCount(1, { timeout: 15000 });
+  await expect(page.locator('.moss-places-tiles > .moss-places-tile[data-moss-places-tile="16,12"]')).toHaveCount(1);
 
   const rectByCell = async (cell: string) => {
     const rect = await page.locator(`.moss-places-tiles > .moss-places-tile[data-moss-places-tile="${cell}"]`).boundingBox();
@@ -845,6 +846,17 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
   const png = await page.screenshot({ clip, animations: "disabled", scale: "css" });
   const image = decodePng(png);
   const at = (x: number, y: number) => image.at(Math.round(x - clip.x), Math.round(y - clip.y));
+  // The columns to compare are chosen on the south row's own tiles over the
+  // world, with the north row hidden: the draw order is fixed, north to
+  // south, so overlapping edges render the same way on every load, and a
+  // column where the south tile's own relief already ramps by more than the
+  // tolerance between two rows cannot tell a seam from terrain. (Judged on the world layer alone, such
+  // a column looked flat while the south tile's relief ramped 212, 209, 207.)
+  const northTiles = page.locator('.moss-places-tiles > .moss-places-tile[data-moss-places-tile$=",13"]');
+  await northTiles.evaluateAll((els) => els.forEach((el) => ((el as HTMLElement).style.visibility = "hidden")));
+  const southImage = decodePng(await page.screenshot({ clip, animations: "disabled", scale: "css" }));
+  await northTiles.evaluateAll((els) => els.forEach((el) => ((el as HTMLElement).style.visibility = "")));
+  const southAt = (x: number, y: number) => southImage.at(Math.round(x - clip.x), Math.round(y - clip.y));
 
   // Per RGBA channel — the measured pre-fix step was 7-12 at every land x
   // and 7-8 at every sea x, between its one bad row and its own immediate
@@ -862,10 +874,13 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
   // scanning for columns where this already holds can't quietly skip past
   // the defect it exists to catch; a widespread seam leaves NO column
   // anywhere in range passing it.
+  // The columns are chosen for continuity between the world layer and the
+  // south tile with the north row hidden; the assertion below then reads the
+  // full capture, with every tile shown.
   const isContinuousColumn = (x: number): boolean => {
     for (let y = bleedTop; y < bleedBottom; y++) {
-      const a = at(x, y);
-      const b = at(x, y + 1);
+      const a = southAt(x, y);
+      const b = southAt(x, y + 1);
       for (let channel = 0; channel < 4; channel++) {
         if (Math.abs(a[channel] - b[channel]) > TOLERANCE) return false;
       }
@@ -905,14 +920,124 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
 });
 
 /**
+ * Flat detail tiles at the close zoom, both engines. WebKit rasterised the
+ * tiles' blur and lighting filters at low resolution, so a tile's flat land
+ * came out a different tint from the world layer under it and a light line
+ * showed where two tiles meet; tiles are now drawn with no filters. Two
+ * claims, read off pixels (page.screenshot decoded in Node, as the seam tests
+ * above do, because an in-page decode hangs in WebKit at this state):
+ *
+ * - where the world layer alone (tiles hidden) shows unlit flat ground, that
+ *   is its `--moss-place-land` colour, the tile over it reads the same colour;
+ * - the row boundary between two stacked land tiles carries no light line: a
+ *   column of pixels across the edge reads like one mid-tile.
+ */
+test("at the close zoom, a tile's flat land matches the world's lowland and the tile edge shows no light line", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("places/?p=patterson&z=18&x=399.6415&y=144.8651", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute(
+    "data-moss-places-explorer-ready",
+    "ready",
+    { timeout: 10000 },
+  );
+  await page.waitForTimeout(800); // tile fetch + raster settle
+
+  const rectByCell = async (cell: string) => {
+    const rect = await page.locator(`.moss-places-tiles > .moss-places-tile[data-moss-places-tile="${cell}"]`).boundingBox();
+    if (!rect) throw new Error(`tile ${cell} not found in view`);
+    return rect;
+  };
+  // Column 17 is land here; rows 12 (south) and 13 (north) share one edge.
+  const [south, north, figure] = await Promise.all([rectByCell("17,12"), rectByCell("17,13"), page.locator(".moss-place-map[data-moss-places-explorer]").boundingBox()]);
+  if (!figure) throw new Error("explorer figure not found");
+  const viewportSize = page.viewportSize()!;
+  const edgeY = Math.round((north.y + north.height + south.y) / 2);
+  const left = Math.ceil(Math.max(south.x, north.x, figure.x, 0)) + 4;
+  const right = Math.floor(Math.min(south.x + south.width, north.x + north.width, figure.x + figure.width, viewportSize.width)) - 4;
+  const top = Math.ceil(Math.max(north.y, figure.y, 0)) + 4;
+  const bottom = Math.floor(Math.min(south.y + south.height, figure.y + figure.height, viewportSize.height)) - 4;
+  if (right <= left || bottom <= top || edgeY < top + 12 || edgeY > bottom - 60) throw new Error(`no usable span across the row edge: x ${left}..${right}, y ${top}..${bottom}, edge ${edgeY}`);
+
+  const clip = { x: left, y: top, width: right - left, height: bottom - top };
+  const tiled = decodePng(await page.screenshot({ clip, animations: "disabled", scale: "css" }));
+  await page.locator(".moss-places-tiles").evaluate((el) => ((el as HTMLElement).style.visibility = "hidden"));
+  const worldOnly = decodePng(await page.screenshot({ clip, animations: "disabled", scale: "css" }));
+  await page.locator(".moss-places-tiles").evaluate((el) => ((el as HTMLElement).style.visibility = ""));
+
+  const landRgb = await page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.background = "var(--moss-place-land)";
+    // The token is set on the explorer's own figure, not on :root.
+    document.querySelector(".moss-place-map[data-moss-places-explorer]")!.append(probe);
+    const rgb = getComputedStyle(probe).backgroundColor.match(/\d+(\.\d+)?/g)!.slice(0, 3).map(Number);
+    probe.remove();
+    return rgb;
+  });
+  const near = (pixel: ArrayLike<number>, rgb: number[], tolerance: number) => rgb.every((value, channel) => Math.abs(pixel[channel] - value) <= tolerance);
+  const worldAt = (x: number, y: number) => worldOnly.at(x - left, y - top);
+  const tileAt = (x: number, y: number) => tiled.at(x - left, y - top);
+
+  // 1. Where the world layer shows unlit flat ground (its land colour, give
+  // or take the faint warm tint its own lighting leaves), the colour the tile
+  // paints there is the land colour itself. The tile also draws detail the
+  // world does not (built-up areas, thin relief bands), so this reads the
+  // median over those pixels, not every one.
+  const tileSamples: number[][] = [[], [], []];
+  const worldSamples: number[][] = [[], [], []];
+  for (let y = top; y < bottom; y += 3) {
+    for (let x = left; x < right; x += 3) {
+      const world = worldAt(x, y);
+      if (!near(world, landRgb, 2)) continue;
+      const tile = tileAt(x, y);
+      for (let channel = 0; channel < 3; channel++) {
+        tileSamples[channel].push(tile[channel]);
+        worldSamples[channel].push(world[channel]);
+      }
+    }
+  }
+  expect(tileSamples[0].length, "expected a real stretch of unlit flat land in the world layer at this camera").toBeGreaterThan(200);
+  const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+  const tileMedian = tileSamples.map(median);
+  const worldMedian = worldSamples.map(median);
+  expect(near(tileMedian, landRgb, 2), `the tile's flat land reads ${tileMedian}, not the land colour ${landRgb}`).toBe(true);
+  expect(near(tileMedian, worldMedian, 6), `the tile's flat land reads ${tileMedian} over the world's ${worldMedian}`).toBe(true);
+
+  // 2. A column of pixels across the row edge reads like one mid-tile. Only
+  // columns plain on both sides of the edge are compared (the tile draws
+  // built-up areas, rivers and relief bands the world does not, which are
+  // real detail, not a seam); the rows at the edge itself never take part in
+  // that choice, so a light line there cannot exclude its own column.
+  const MID = 48; // px south of the edge, well inside the south tile
+  const atEdge = [edgeY - 1, edgeY, edgeY + 1];
+  const plain: number[] = [];
+  for (let y = edgeY - 8; y <= edgeY + 8; y++) if (!atEdge.includes(y)) plain.push(y);
+  plain.push(edgeY + MID);
+  let columns = 0;
+  for (let x = left; x < right; x++) {
+    if (![...atEdge, ...plain].every((y) => near(worldAt(x, y), landRgb, 6))) continue;
+    // The tile's own band edges (full-strength relief tints differ by a few levels) are real detail, so a column must read one flat colour on every row but the edge itself.
+    if (!plain.every((y) => near(tileAt(x, y), tileAt(x, edgeY + MID), 1))) continue;
+    columns++;
+    const mid = tileAt(x, edgeY + MID);
+    for (const y of atEdge) {
+      const pixel = tileAt(x, y);
+      for (let channel = 0; channel < 3; channel++) {
+        expect(Math.abs(pixel[channel] - mid[channel]), `x=${x} y=${y}: ${pixel} against mid-tile ${mid}`).toBeLessThanOrEqual(2);
+      }
+    }
+  }
+  expect(columns, "expected flat-land columns across the row edge").toBeGreaterThan(20);
+});
+
+/**
  * Past a site's own tile coverage, the detailed regional layer meets the
  * world layer's own coarser, pre-faded rendering of the same terrain at a
  * straight line — the cell edge nothing populates past. Softened by fading
  * each covered tile's own OUTER edges (the ones `tiles.ts`'s `tileEdgeMask`
  * finds no real neighbour cell on) toward transparent over a short
  * distance, via `mask-image`, never touching an edge a tile shares with a
- * real neighbour — `tileClipInset`'s own territory, proven elsewhere, and
- * this gate's own second half checks the two never collide.
+ * real neighbour — and this gate's own second half checks a shared one
+ * carries none.
  *
  * Checked at the DOM/style level, not by chasing a pixel step: this
  * fixture's own geography keeps real relief/sea-floor detail well inside

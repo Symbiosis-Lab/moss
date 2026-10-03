@@ -2,16 +2,16 @@
  * raster.ts — turns a fetched map SVG (the world document or one regional
  * tile) into a decoded, opaque `<img>` plus a small live rivers overlay.
  *
- * Both WebKit and Chromium were measured re-running the relief/lighting
- * filters on every repaint of a LIVE, in-document, filtered `<svg>` —
- * WebKit worst of all, going unresponsive for whole seconds once more than
- * a couple of filtered documents (the world plus a handful of regional
- * tiles) were on screen at once. An `<img>` decoded from the same markup
- * is composited as a single opaque bitmap instead: nothing left for either
- * engine's paint-invalidation to re-run. `map.ts` and `tiles.ts` both
- * build their own raster this way; this module is the one place that
- * knows how to split a fetched document into the part worth rasterising
- * and the part that must stay live.
+ * Both WebKit and Chromium were measured re-running the world's
+ * relief/lighting filters on every repaint of a LIVE, in-document,
+ * filtered `<svg>` — WebKit worst of all, going unresponsive for whole
+ * seconds. An `<img>` decoded from the same markup is composited as a
+ * single opaque bitmap instead: nothing left for either engine's
+ * paint-invalidation to re-run. Regional tiles carry no filters but are
+ * rasterised the same way, so each is one bitmap too. `map.ts` and
+ * `tiles.ts` both build their own raster this way; this module is the one
+ * place that knows how to split a fetched document into the part worth
+ * rasterising and the part that must stay live.
  */
 
 const XML_NS = "http://www.w3.org/2000/svg" as const;
@@ -46,29 +46,6 @@ const BASE_TOKENS = [
   "--moss-place-reefs",
   "--moss-place-route",
 ];
-
-/**
- * Baked into every regional tile's relief/lighting layers, in place of the
- * live `--moss-place-relief-strength` fade the inline-SVG runtime used to
- * drive continuously as the camera zoomed. A tile is only ever shown once
- * the camera has crossed INTO the fade band short of the world's own
- * ceiling (`tiles.ts`'s `tileFadeOpacity`), where the old formula (whose
- * denominator is the RAISED, tile-covered ceiling, not the world's own
- * un-raised one — tiles exist across a far wider zoom span than the band
- * they fade in over) had already fallen most of the way to its floor —
- * baking every tile at that floor from the start is the single-value
- * snapshot closest to what the whole tile-visible zoom range actually
- * looked like. Recomputing it per settle for the dozens of tiles that can
- * be on screen at once was the cost this whole module exists to cut, so it
- * is not reintroduced here. The world layer, by contrast, is baked at full
- * strength (`WORLD_RELIEF_STRENGTH`, i.e. left untouched): it is only ever
- * shown alone BELOW that same fade band, where the old formula had barely
- * faded in the first place — see `map.ts`'s own module doc for the numbers
- * behind both halves of this call.
- */
-export const TILE_RELIEF_STRENGTH = 0.2;
-/** The world raster's own relief/lighting strength — full, i.e. matching the approved static per-article map look, never overridden. See `TILE_RELIEF_STRENGTH`'s doc for why dropping the dynamic fade is safe for both layers. */
-export const WORLD_RELIEF_STRENGTH = 1;
 
 /**
  * The current light/dark value of every `BASE_TOKENS` entry, as one inline
@@ -111,8 +88,7 @@ function sanitize(doc: Document): void {
 export interface MapSvgSplit {
   /**
    * Every layer but rivers, with the page's current theme tokens inlined
-   * on its root (see `capturePlaceMapTheme`) and `[data-map-layer="relief"]`/
-   * `[data-map-layer="lighting"]` baked to the caller's chosen strength.
+   * on its root (see `capturePlaceMapTheme`).
    * Never mutated by `rasterize` — it clones before resizing, so the same
    * split can be rasterised more than once (the world layer re-bakes at a
    * sharper size on settle; see `map.ts`).
@@ -146,11 +122,11 @@ export interface MapSvgSplit {
 /**
  * Parse a fetched map SVG (the world document or one regional tile),
  * sanitise it, pull its rivers group out into a separate live overlay, and
- * bake `reliefStrength` into what remains. `null` on anything that fails
+ * leave every other layer as drawn. `null` on anything that fails
  * to parse as a real `<svg>` — the same "leave the static floor alone"
  * contract `tiles.ts`'s old `parseMapSvg` carried.
  */
-export function splitMapSvg(markup: string, reliefStrength: number): MapSvgSplit | null {
+export function splitMapSvg(markup: string): MapSvgSplit | null {
   const parsed = new DOMParser().parseFromString(markup, "image/svg+xml");
   const svg = parsed.documentElement;
   if (svg.localName !== "svg" || parsed.querySelector("parsererror")) return null;
@@ -177,10 +153,6 @@ export function splitMapSvg(markup: string, reliefStrength: number): MapSvgSplit
     riverGroup?.remove();
   }
 
-  for (const layer of ["relief", "lighting"]) {
-    const group = svg.querySelector(`[data-map-layer="${layer}"]`);
-    if (group instanceof SVGElement) group.style.setProperty("opacity", String(reliefStrength));
-  }
   svg.removeAttribute("role");
   svg.removeAttribute("aria-label");
   const existingStyle = svg.getAttribute("style") ?? "";
@@ -268,7 +240,7 @@ export interface Surface {
 }
 
 /**
- * `rasterize`, falling back to showing `fallback` itself — live, filtered,
+ * `rasterize`, falling back to showing `fallback` itself — live,
  * unrasterised — on a browser lacking the `Blob`/`decode()` support every
  * real target engine (Chromium, WebKit, Firefox) has. The same "never show
  * nothing" posture the rest of this runtime takes on a failed fetch: a map

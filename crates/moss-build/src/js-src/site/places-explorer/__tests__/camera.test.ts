@@ -10,6 +10,7 @@ import {
   MIN_ZOOM,
   screenScale,
   detailMaxZoom,
+  tileDetailMaxZoom,
   clampCamera,
   coverCamera,
   fitPoints,
@@ -94,6 +95,19 @@ describe("detailMaxZoom / screenScale", () => {
     const wideCeilingScale = screenScale({ x: 0, y: 0, zoom: detailMaxZoom(wide) }, wide);
     expect(Math.abs(narrowCeilingScale - DETAIL_MAX_SCALE)).toBeLessThan(1e-9);
     expect(Math.abs(wideCeilingScale - DETAIL_MAX_SCALE)).toBeLessThan(1e-9);
+  });
+});
+
+describe("tileDetailMaxZoom", () => {
+  test("stops where one CSS px is 0.005 degree of longitude, at any viewport size", () => {
+    for (const viewport of [{ width: 360, height: 640 }, { width: 1440, height: 900 }]) {
+      const camera = clampCamera({ x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, zoom: 1e6 }, viewport, tileDetailMaxZoom(viewport));
+      expect(camera.zoom).toBe(tileDetailMaxZoom(viewport));
+      const west = worldToScreen(project(0, 10), camera, viewport);
+      const east = worldToScreen(project(0, 11), camera, viewport);
+      // One degree of longitude is 200 CSS px at 0.005 degree per px.
+      expect(east.x - west.x).toBeCloseTo(200, 6);
+    }
   });
 });
 
@@ -222,7 +236,7 @@ describe("fitWork framing", () => {
   };
   const a = project(26.7, 119.6);
   const b = project(25.0, 121.3);
-  // The tile ceiling (k=4) itself caps how tight a 1440 px frame can go: 1440 / (7.21*560/480*4) world units is about 18.3 degrees.
+  // The deepest zoom is one CSS px per 0.005 degrees of longitude (`TILE_DETAIL_DEGREES_PER_PX`), so a 1440 px frame cannot span less than about 7.2 degrees.
   const cases: [string, Vp, { x: number; y: number; width: number; height: number } | undefined, number][] = [
     ["346x231 embed", { width: 346, height: 231 }, undefined, 16],
     ["1440x776 with a card row", { width: 1440, height: 776 }, { x: 0, y: 0, width: 1440, height: 610 }, 19],

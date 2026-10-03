@@ -23,7 +23,7 @@
  */
 import { detailMaxZoom, screenScale } from "./camera";
 import { project } from "./projection";
-import { rasterizeOrFallback, splitMapSvg, TILE_RELIEF_STRENGTH, type MapSvgSplit } from "./raster";
+import { rasterizeOrFallback, splitMapSvg, type MapSvgSplit } from "./raster";
 import type { Camera, Viewport } from "./types";
 
 /** Tile rasters are capped at this device pixel ratio — a tile's own build-time resolution already carries the real detail ceiling, so a 3x phone gains nothing from tripling it further. */
@@ -73,40 +73,36 @@ export function tileCellBounds(x: number, y: number): { minX: number; maxX: numb
 }
 
 /**
- * The CSS transform that overlays regional tile `(x, y)` on the world
- * layer: a tile is rendered server-side at `k` times the world's own scale,
- * in the SAME Patterson projection, clipped to its own cell padded by
- * `bleed` world units on every edge (`PattersonProjection::for_tile` in
- * `crates/moss-build/src/build/place_map/geometry.rs` — `bleed` is
- * `tiles.json`'s own `bleed` field, `TILE_BLEED` there), so its viewBox
- * already equals that padded rectangle times `k` — overlaying it is
- * therefore one transform, not a resize: translate its own `(0, 0)` to the
- * padded rectangle's own top-left corner (the cell's own corner, minus
- * `bleed`), then scale down by `1 / k` to bring its magnified content back
- * to the world's own unit size. `unitScale` (world units to CSS px,
- * constant across pan/zoom — see `map.ts`'s `applyCamera`) converts both
- * numbers into the SAME px space `worldEl`'s own internal layout uses, so
- * the tile inherits the world layer's own outer `translate(...)
- * scale(camera.zoom)` for free and adjacent tiles OVERLAP by `2 * bleed`
- * world units at their shared edge instead of meeting it exactly: neither
- * one's rendered size depends on its own SVG being stretched to a
- * DIFFERENT aspect ratio (the bug this replaces), and the deliberate
- * overlap absorbs the sub-pixel rounding that an exact meet is vulnerable
- * to when two independently-transformed elements are rasterized.
+ * The CSS transform that overlays a regional tile on the world layer. A
+ * tile is rendered server-side at `k` times the world's own scale, in the
+ * SAME Patterson projection, and its canvas starts at `origin` — a whole
+ * number of canvas units (`1 / k` world units) from the world's own origin,
+ * written to `tiles.json`'s `origins` by `TileGrid` in
+ * `crates/moss-build/src/build/place_map/geometry/tile_grid.rs`. The canvas
+ * is the cell padded by a bleed on every edge, so adjacent tiles overlap at
+ * their shared edge instead of meeting it exactly, which absorbs the
+ * sub-pixel rounding two independently-transformed elements are rasterized
+ * with. Overlaying it is one transform, not a resize: translate its own
+ * `(0, 0)` to `origin`, then scale by `1 / k` to bring its magnified
+ * content back to the world's unit size. `unitScale` (world units to CSS
+ * px, constant across pan/zoom — see `map.ts`'s `applyCamera`) puts both
+ * numbers in the px space `worldEl`'s own layout uses, so the tile inherits
+ * the world layer's own outer `translate(...) scale(camera.zoom)`. Every
+ * tile's vertices were rounded to integers from an origin on that one
+ * lattice, so a shared coastline lands on the same pixels in both tiles.
  */
 export function tileOverlayTransform(
-  x: number,
-  y: number,
+  origin: readonly [number, number],
   unitScale: number,
   k: number,
-  bleed: number,
 ): { translateX: number; translateY: number; scale: number } {
-  const bounds = tileCellBounds(x, y);
-  return {
-    translateX: (bounds.minX - bleed) * unitScale,
-    translateY: (bounds.minY - bleed) * unitScale,
-    scale: unitScale / k,
-  };
+  const scale = unitScale / k;
+  return { translateX: origin[0] * scale, translateY: origin[1] * scale, scale };
+}
+
+/** The z-index tile `(x, y)` is drawn at: north to south, then west to east. Every tile is padded on all sides and none is clipped, so where two overlap one of them draws over the other's edge and no order lets every tile's own cell win. What matters is that the order is fixed, so the overlapping edges render identically on every load, whatever order the fetches finish in. */
+export function tileDrawOrder(x: number, y: number, columns: number, rows: number): number {
+  return (rows - 1 - y) * columns + x;
 }
 
 /** Pad, in world units, added to the viewport's own visible rect before testing a tile for intersection — a tile just past the edge is worth fetching slightly ahead of the reader panning to it. */
@@ -127,59 +123,18 @@ export function tilesForView(cells: Array<[number, number]>, camera: Camera, vie
   });
 }
 
-/**
- * Which of a tile's own two bled-toward-a-LOWER-index-neighbour edges (its
- * own west and south) must be clipped away because a real neighbour cell
- * sits there — the fix for a faint but real line measured along both axes
- * of the `2 * bleed` overlap two adjacent tiles deliberately leave at their
- * shared edge (`tileOverlayTransform`): sampling pixel rows/columns across a
- * real tile pair showed BOTH a west- and a south-bleeding slice reading a
- * few colour units off its own tile's flat surroundings — reproducible with
- * the neighbour and the world layer each hidden in turn, so neither a
- * two-copy disagreement nor the world layer showing through explains it —
- * while the SAME tile's own east/north-bleeding slice (the opposite
- * direction) never did. Whatever in the per-cell source data or its
- * rendering makes a west/south bleed less trustworthy than an east/north
- * one, never drawing it is strictly safer than drawing it on top: this
- * function always keeps a tile's bleed toward a HIGHER-index neighbour
- * (east, north) and clips the slice it bled toward a LOWER-index one (west,
- * south) whenever that neighbour cell actually exists, so of any two
- * adjacent tiles exactly one — always the lower-index one, bleeding
- * forward — draws their shared strip. A cell with no neighbour in a given
- * direction (the outer perimeter of this site's tile coverage) keeps that
- * edge's own bleed unclipped, same as before: nothing to prefer away from
- * there, and `tileFadeOpacity`'s cross-fade still needs it to close the
- * sub-pixel seam against the bare world layer past it.
- */
-export function tileClipInset(
-  x: number,
-  y: number,
-  availableTiles: Array<[number, number]>,
-  k: number,
-  bleed: number,
-): { bottom: number; left: number } {
-  const has = (cx: number, cy: number): boolean => availableTiles.some(([ax, ay]) => ax === cx && ay === cy);
-  const insetUnits = bleed * k;
-  return {
-    // Larger y is further north (`tile_frame`'s own `center_latitude`), so
-    // the south (lower-index) neighbour is (x, y - 1).
-    bottom: has(x, y - 1) ? insetUnits : 0,
-    left: has(x - 1, y) ? insetUnits : 0,
-  };
-}
-
-/** How far, in canvas units (world units times `k`, the SAME unit `tileClipInset` returns), the outer edge of a tile's own covered region fades toward the bare world layer past it — a cell about 23 world units wide, so this is a short distance against it, not a redraw of the whole tile. */
+/** How far, in canvas units (world units times `k`), the outer edge of a tile's own covered region fades toward the bare world layer past it — a cell about 23 world units wide, so this is a short distance against it, not a redraw of the whole tile. */
 const OUTER_FADE_WORLD_UNITS = 1.5;
 
 /**
  * The `mask-image` that fades a tile's own OUTER edges only — the sides
- * `tileClipInset` finds no real neighbour cell on — toward transparent,
+ * with no real neighbour cell — toward transparent,
  * leaving every edge shared with a real neighbour fully opaque: past the
  * site's own detail coverage, the world layer carries a frame at this
  * tile's own geometry but no further detail past it, so a tile that
  * stopped dead at its own nominal cell edge met it with a hard tone step,
- * same shape as the seam `tileClipInset` fixes but deliberately placed
- * rather than measured away — there is no second tile's content to
+ * the same shape as a seam, but deliberately placed rather than
+ * measured away — there is no second tile's content to
  * disagree with past a coverage edge, only the world's own coarser one.
  *
  * One `linear-gradient` layer per outer edge — ordinarily at most two
@@ -225,8 +180,11 @@ export interface TileLayerOptions {
   availableTiles: Array<[number, number]>;
   /** The factor a tile is drawn at over the world's own scale (`tiles.json`'s own `k`, the build's `TILE_K`). */
   k: number;
-  /** How far, in world units, a tile's own canvas was padded past its nominal cell on every edge (`tiles.json`'s own `bleed`, the build's `TILE_BLEED`) — see `tileOverlayTransform`. */
-  bleed: number;
+  /** Each emitted cell's canvas origin, keyed `"x,y"`, in whole canvas units (`tiles.json`'s own `origins`) — see `tileOverlayTransform`. */
+  origins: Record<string, [number, number]>;
+  /** The grid's size in cells (`tiles.json`'s own `columns` and `rows`), which `tileDrawOrder` numbers tiles by. */
+  columns: number;
+  rows: number;
 }
 
 /** A fetched, decoded tile: the positioned wrapper div and the raster's own release callback (a no-op on the progressive-enhancement fallback — see `raster.ts`'s `rasterizeOrFallback`). */
@@ -259,6 +217,10 @@ export class TileLayer {
   private unitScale = 1;
   /** Keys of the tiles actually on screen right now (the loaded set also holds a margin of neighbours). Only these are baked sharp: a raster at full density is far larger than the screen it serves, so spending it on every neighbour would cost memory for nothing. */
   private onScreen = new Set<string>();
+  /** Whether the latest `render()` was a settled one: re-bakes are only discovered then, so a layer is not idle before its first settled render. */
+  private settledRender = false;
+  /** Whether the latest `render()` was inside the fade band, i.e. tiles are wanted at all. */
+  private shown = false;
 
   constructor(container: HTMLElement, options: TileLayerOptions) {
     this.container = container;
@@ -285,8 +247,11 @@ export class TileLayer {
     this.density = (unitScale / this.options.k) * camera.zoom;
     const opacity = tileFadeOpacity(camera, viewport);
     this.container.style.setProperty("--moss-place-tile-opacity", String(opacity));
+    this.settledRender = settled;
+    this.shown = opacity > 0;
     if (opacity <= 0) {
       this.clear();
+      this.publishState();
       return;
     }
     const visible = tilesForView(this.options.availableTiles, camera, viewport);
@@ -311,6 +276,14 @@ export class TileLayer {
       }
     }
     this.drainQueue();
+    this.publishState();
+  }
+
+  /** `data-moss-places-tiles-state` on the container: "busy" while a bake or re-bake is pending or the view has not settled, "idle" once nothing is left to change — the signal a gate waits on before it reads pixels. */
+  private publishState(): void {
+    const working = this.activeLoads > 0 || this.queue.length > 0 || this.rebakeQueue.length > 0;
+    const idle = !this.shown || (this.settledRender && !working);
+    this.container.dataset.mossPlacesTilesState = idle ? "idle" : "busy";
   }
 
   /**
@@ -345,6 +318,7 @@ export class TileLayer {
     void job.finally(() => {
       this.activeLoads--;
       this.drainQueue();
+      this.publishState();
     });
   }
 
@@ -359,8 +333,8 @@ export class TileLayer {
       // cannot: a clear() + re-queue of this SAME cell while this call was
       // awaiting, which resets the sentinel back to "loading" too.
       if (generation !== this.generation || this.elements.get(key) !== "loading") return; // dropped out of the fade band mid-fetch
-      const split = splitMapSvg(text, TILE_RELIEF_STRENGTH);
-      if (!split) throw new Error("invalid tile svg");
+      const split = splitMapSvg(text);
+      if (!split || !this.options.origins[key]) throw new Error("invalid tile svg");
       const { surface, baked } = await this.bake(split, this.onScreen.has(key) ? this.density : 1);
       if (generation !== this.generation || this.elements.get(key) !== "loading") {
         surface.release();
@@ -377,16 +351,13 @@ export class TileLayer {
         split.rivers.classList.add("moss-places-rivers");
         wrapper.append(split.rivers);
       }
+      wrapper.style.zIndex = String(tileDrawOrder(x, y, this.options.columns, this.options.rows));
       this.container.append(wrapper);
       this.elements.set(key, { el: wrapper, release: surface.release, split, bakedDensity: baked, rebaking: false });
       this.position(wrapper, x, y, this.unitScale);
-      // This tile just became a real, DOM-present neighbour for up to four
-      // others — including, possibly, itself relative to ones already
-      // loaded — so both its own clip/mask and theirs need recomputing now,
-      // not at whatever later camera move happens to call `render()` again
-      // next.
-      this.applyClipAndMask(wrapper, x, y);
-      this.refreshNeighbourClipAndMask(x, y);
+      // A cell the manifest names counts as present while it loads, so its
+      // own load changes no neighbour's mask; only its own edges need one.
+      this.applyEdgeMask(wrapper, x, y);
     } catch {
       // A stale generation's own failure must not stomp the CURRENT load's
       // state — it may already be "loading" again under the new generation.
@@ -396,7 +367,7 @@ export class TileLayer {
       // above), so any loaded neighbour that was treating this cell as
       // still-pending must now fade that shared edge instead of waiting
       // forever for a tile that will never arrive.
-      this.refreshNeighbourClipAndMask(x, y);
+      this.refreshNeighbourEdgeMask(x, y);
     }
   }
 
@@ -460,24 +431,13 @@ export class TileLayer {
     this.rebakeQueue.length = 0;
   }
 
-  /** Only the transform — called on every `render()`, including a plain pan where nothing has loaded, failed, or been removed, so this must never touch `clip-path`/`mask-image` (see `applyClipAndMask`, called only on those load-state changes). */
+  /** Only the transform — called on every `render()`, including a plain pan where nothing has loaded, failed, or been removed, so this must never touch `mask-image` (see `applyEdgeMask`, called only on those load-state changes). */
   private position(el: HTMLElement, x: number, y: number, unitScale: number): void {
-    const { translateX, translateY, scale } = tileOverlayTransform(x, y, unitScale, this.options.k, this.options.bleed);
+    const { translateX, translateY, scale } = tileOverlayTransform(this.options.origins[`${x},${y}`], unitScale, this.options.k);
     el.style.left = "0";
     el.style.top = "0";
     el.style.transformOrigin = "0 0";
     el.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-  }
-
-  /** Cell keys of this layer's own tiles that are actually loaded and in the DOM right now — the "neighbour exists" `tileClipInset` needs: clipping toward a neighbour is only ever correct once that neighbour is itself drawing the shared strip, never merely listed in the static manifest (a neighbour still `"loading"`, or forever `"failed"` since a failure is never retried, would otherwise leave the shared strip undrawn by either tile). */
-  private loadedNeighbourCells(): Array<[number, number]> {
-    const loaded: Array<[number, number]> = [];
-    for (const [key, value] of this.elements) {
-      if (value === "loading" || value === "failed") continue;
-      const [cx, cy] = key.split(",").map(Number);
-      loaded.push([cx, cy]);
-    }
-    return loaded;
   }
 
   /** The manifest's own cells, minus any that have already `"failed"` to load — the "neighbour exists at all" `tileEdgeMask` needs for its outer-edge fade: a cell the manifest never listed and a cell whose fetch permanently failed read the same way here, both absent, so either one fades the shared edge instead of ending it hard. A cell still `"loading"` (or not yet attempted) stays present — it may yet load, so its edge is not treated as outer. */
@@ -485,14 +445,8 @@ export class TileLayer {
     return this.options.availableTiles.filter(([cx, cy]) => this.elements.get(`${cx},${cy}`) !== "failed");
   }
 
-  /** Recompute and (re)apply `clip-path`/`mask-image` for `el`, the tile wrapper at `(x, y)` — the only place either style is ever written, so the only way they change is a call here, never a plain `render()` pan. Both operate on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly (the same local/viewBox unit space an `<svg width height>` gave the old inline-tile element for free) — so an inset or fade distance in canvas units (`tileClipInset`/`tileEdgeMask`, both in units of `bleed * k`) lands in exactly the right place regardless of `unitScale`/zoom, and clips or fades the wrapper's raster AND its rivers overlay together as one composited unit. */
-  private applyClipAndMask(el: HTMLElement, x: number, y: number): void {
-    const { bottom, left } = tileClipInset(x, y, this.loadedNeighbourCells(), this.options.k, this.options.bleed);
-    el.style.clipPath = bottom > 0 || left > 0 ? `inset(0 0 ${bottom}px ${left}px)` : "";
-    // Same local/viewBox unit space as the `clip-path` above — an edge this
-    // tile shares with a real, LOADED neighbour is never also one of its
-    // own OUTER edges (manifest-present and not failed), so the two never
-    // fight over the same side.
+  /** Recompute and (re)apply `mask-image` for `el`, the tile wrapper at `(x, y)` — the only place it is ever written, so it changes only by a call here, never on a plain `render()` pan. The mask works on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly, so a fade distance in canvas units (`tileEdgeMask`) lands in the right place regardless of `unitScale`/zoom, and fades the wrapper's raster AND its rivers overlay together as one composited unit. A tile is never clipped toward a neighbour: a fractional clip edge antialiases into a one-pixel light line, and the tiles carry no filter edge effects that would need hiding. */
+  private applyEdgeMask(el: HTMLElement, x: number, y: number): void {
     const mask = tileEdgeMask(x, y, this.nonFailedManifestCells(), this.options.k);
     el.style.maskImage = mask ?? "";
     el.style.webkitMaskImage = mask ?? "";
@@ -502,11 +456,11 @@ export class TileLayer {
     }
   }
 
-  /** Re-run `applyClipAndMask` for each of `(x, y)`'s own up-to-four loaded neighbours — called whenever `(x, y)` itself finishes loading or fails, the two moments that can change what a NEIGHBOUR should draw at the shared edge, independent of any camera move. */
-  private refreshNeighbourClipAndMask(x: number, y: number): void {
+  /** Re-run `applyEdgeMask` for each of `(x, y)`'s own up-to-four loaded neighbours — called when `(x, y)` fails to load, the one moment that changes what a NEIGHBOUR should fade at the shared edge (a failed cell is no longer present), independent of any camera move. */
+  private refreshNeighbourEdgeMask(x: number, y: number): void {
     for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
       const neighbour = this.elements.get(`${nx},${ny}`);
-      if (neighbour && neighbour !== "loading" && neighbour !== "failed") this.applyClipAndMask(neighbour.el, nx, ny);
+      if (neighbour && neighbour !== "loading" && neighbour !== "failed") this.applyEdgeMask(neighbour.el, nx, ny);
     }
   }
 }

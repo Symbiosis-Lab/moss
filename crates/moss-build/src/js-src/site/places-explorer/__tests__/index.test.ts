@@ -12,7 +12,7 @@ import { initPlacesExplorer } from "../index";
 
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const PLACES_JSON = { works: [], places: [] };
-const TILES_JSON = { k: 4, bleed: 0.1, cells: [] as Array<[number, number]> };
+const TILES_JSON = { k: 4, columns: 36, rows: 18, origins: {}, cells: [] as Array<[number, number]> };
 const LABELS_JSON = { languages: ["en"], en: { cities: [], ranges: [], peaks: [], rivers: [] } };
 
 function handshakeFigure(withLabels = false): string {

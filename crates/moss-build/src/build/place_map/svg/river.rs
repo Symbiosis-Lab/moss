@@ -22,7 +22,7 @@ impl Writer<'_> {
     ) {
         let mut by_width: BTreeMap<u32, Vec<Vec<(f64, f64)>>> = BTreeMap::new();
         for feature in &grouped[4] {
-            let centi_px = (river_width(feature.band) * 100.0).round() as u32;
+            let centi_px = (river_width(feature.band) * self.stroke_scale() * 100.0).round() as u32;
             let paths = by_width.entry(centi_px).or_default();
             for part in &feature.parts {
                 paths.extend(projection.project_part(part, quantisation));

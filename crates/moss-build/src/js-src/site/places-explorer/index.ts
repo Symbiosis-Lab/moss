@@ -71,11 +71,13 @@ async function fetchLocal(url: string): Promise<Response> {
   return response;
 }
 
-/** `tiles.json`'s own shape (`emit::place_map_assets::emit`'s `TileIndex`): `k`, the factor a tile is drawn at over the world's own scale (`place_map::geometry::TILE_K`), `bleed`, how far a tile's own canvas was padded past its nominal cell (`place_map::geometry::TILE_BLEED`), alongside a `[x, y]` pair per emitted regional tile — both travel with the cells they were rendered at so the runtime's own detail ceiling and placement transform can never drift from them. */
+/** `tiles.json`'s own shape (`emit::place_map_assets::emit`'s `TileIndex`): `k`, the factor a tile is drawn at over the world's own scale (`place_map::geometry::TILE_K`), `origins`, each tile's canvas top-left in whole canvas units keyed `"x,y"`, `columns` and `rows`, the grid's size in cells, alongside a `[x, y]` pair per emitted regional tile — all travel with the cells they were rendered at so the runtime's own detail ceiling and placement transform can never drift from them. */
 interface TileIndex {
   k: number;
-  bleed: number;
+  columns: number;
+  rows: number;
   cells: Array<[number, number]>;
+  origins: Record<string, [number, number]>;
 }
 
 /** Exported so a test can call it directly without waiting on jsdom's `DOMContentLoaded`, which has already fired by the time a test module attaches a listener for it — the same pattern `scroll-row.ts` uses. `root` defaults to `document`; a render gate or a future second explorer on one page can pass a narrower scope. */
@@ -128,7 +130,9 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
       labels,
       tileCells: tiles.cells,
       tileK: tiles.k,
-      tileBleed: tiles.bleed,
+      tileOrigins: tiles.origins,
+      tileColumns: tiles.columns,
+      tileRows: tiles.rows,
       tilesBaseUrl,
       lang: document.documentElement.lang,
     });

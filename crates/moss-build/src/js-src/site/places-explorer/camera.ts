@@ -159,25 +159,24 @@ export function detailMaxZoom(viewport: Viewport): number {
   return DETAIL_MAX_SCALE / coverScale(viewport);
 }
 
+/** Degrees of longitude one CSS px covers at the deepest zoom: about 500 m at the equator. The tiles hold about 0.01 degree per coordinate unit and the pack's own geometry stops near there, so zooming past this would only enlarge data that is no longer there. */
+export const TILE_DETAIL_DEGREES_PER_PX = 0.005;
+
 /**
- * The screen scale at which a regional tile is shown at native, 1:1
- * resolution: `k` times the world map's own ceiling, since a tile is drawn
- * in the SAME Patterson projection as the world map at `k` times its scale
- * and clipped to its own cell (`PattersonProjection::for_tile` in
- * `crates/moss-build/src/build/place_map/geometry.rs`) — past this, the
- * explorer would be upscaling a tile past its own detail, the same "don't
- * render past what the geometry actually resolves" reasoning
- * `DETAIL_MAX_SCALE` applies to the world map. `k` is read from
- * `tiles.json` (the build's own `TILE_K`), never hardcoded here, so the
- * two can never drift apart — see that file's own module doc.
+ * The screen scale (CSS px per world unit) at the deepest zoom a reader can
+ * reach once regional tiles are in view: one CSS px covers
+ * `TILE_DETAIL_DEGREES_PER_PX` of longitude. A world unit is
+ * `360 / WORLD_WIDTH` degrees of longitude, so this reads off the
+ * projection's own width and no longer depends on how finely the build
+ * quantises a tile (`tiles.json`'s `k`).
  */
-export function tileDetailMaxScale(k: number): number {
-  return DETAIL_MAX_SCALE * k;
+export function tileDetailMaxScale(): number {
+  return 360 / (TILE_DETAIL_DEGREES_PER_PX * WORLD_WIDTH);
 }
 
-/** The zoom multiplier at which `screenScale` reaches `tileDetailMaxScale(k)` for this viewport — the raised ceiling once the camera has tiles to show. */
-export function tileDetailMaxZoom(viewport: Viewport, k: number): number {
-  return tileDetailMaxScale(k) / coverScale(viewport);
+/** The zoom multiplier at which `screenScale` reaches `tileDetailMaxScale()` for this viewport — the raised ceiling once the camera has tiles to show. The zoom controls disable here. */
+export function tileDetailMaxZoom(viewport: Viewport): number {
+  return tileDetailMaxScale() / coverScale(viewport);
 }
 
 /** How far, in world units, the camera centre may sit from the world's own centre on one axis before an empty band would show, at the given scale. */
@@ -341,7 +340,7 @@ export function fitWork(
   points: Point[],
   viewport: Viewport,
   frame: Rect = wholeViewport(viewport),
-  maxZoom: number = tileDetailMaxZoom(viewport, 4),
+  maxZoom: number = tileDetailMaxZoom(viewport),
 ): Camera {
   // A viewport with no area (an embed mounted while hidden) has no scale to
   // fit against: 0/0 would reach `clamp` as NaN and poison x/y. The caller

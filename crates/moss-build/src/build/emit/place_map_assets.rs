@@ -46,20 +46,26 @@ use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, Transform
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::place_map;
-use crate::build::place_map::{TILE_BLEED, TILE_K};
+use crate::build::place_map::{TILE_COLUMNS, TILE_K, TILE_ROWS};
 use crate::build::served_path::ServedPath;
 use crate::moss_paths::MossPaths;
 use crate::vault::places::Gazetteer;
 
-/// `tiles.json`'s own shape: `k` and `bleed` alongside the emitted cells, so
-/// the runtime never has to hardcode or re-derive the factor a tile was
-/// rendered at, or the margin its own canvas was padded by beyond its
-/// nominal cell (see this module's own doc, and `geometry::TILE_BLEED`).
+/// `tiles.json`'s own shape: `k` and the grid's `columns`/`rows` alongside
+/// the emitted cells, so the runtime never has to hardcode or re-derive the
+/// factor a tile was rendered at or the grid it was cut from (see this
+/// module's own doc).
+/// `origins` maps `"x,y"` to the tile's canvas top-left in whole canvas
+/// units (`1 / k` world units): every tile rounds its vertices to integers
+/// from an origin on that one lattice, so the runtime must place it exactly
+/// there.
 #[derive(serde::Serialize)]
 struct TileIndex<'a> {
     k: f64,
-    bleed: f64,
+    columns: u32,
+    rows: u32,
     cells: &'a [(i16, i16)],
+    origins: std::collections::BTreeMap<String, (i64, i64)>,
 }
 
 /// Bumped whenever `place_map::emit_world_svg`/`emit_tile_svg` changes in a
@@ -84,7 +90,33 @@ struct TileIndex<'a> {
 /// sub-pixel disagreement that same seam was partly made of. Neither change
 /// touches the compiled-in pack bytes, so a pre-existing site's cached
 /// tiles would otherwise keep serving the seam forever.
-pub const GENERATOR_VERSION: u32 = 4;
+/// 5: a tile's canvas now starts on a whole canvas unit of the world's
+/// lattice and is a whole number of units wide and tall, and `tiles.json`
+/// carries each tile's origin; tiles cached at the old fractional origin
+/// would be placed a fraction of a unit off.
+pub const GENERATOR_VERSION: u32 = 5;
+
+#[cfg(test)]
+mod generator_version_guard {
+    use super::*;
+
+    /// Pins the emitter's output against `GENERATOR_VERSION`. A site that
+    /// rebuilds keeps every cached asset whose key (which folds the version
+    /// in) is unchanged, so output that changes under an unchanged version
+    /// leaves old tiles in place beneath the new manifest.
+    #[test]
+    fn the_generator_version_must_change_when_the_emitters_output_does() {
+        let context = place_map::PlaceMapContext::embedded().unwrap();
+        let tile = compute_binary_hash(place_map::emit_tile_svg(&context, 20, 12).as_bytes());
+        let world = compute_binary_hash(place_map::emit_world_svg(&context).as_bytes());
+        assert_eq!(
+            (GENERATOR_VERSION, tile.as_str(), world.as_str()),
+            (5, "2fef236394428a37", "593d9e7750c79f3a"),
+            "the emitter's output changed: bump GENERATOR_VERSION before updating the pinned digests, \
+             because every site that rebuilds would otherwise keep its old tiles under the new manifest"
+        );
+    }
+}
 
 /// The hash naming this build's `_moss/map.<hash>/` directory: the pack's
 /// own fingerprint (its source manifest digest, from the embedded
@@ -297,7 +329,13 @@ pub fn emit(
     // caching on its own.
     let index_sp = ServedPath::for_place_map_asset(&hash, "tiles.json")
         .map_err(|e| format!("Invalid place-map tile index path: {e}"))?;
-    let index_json = serde_json::to_vec(&TileIndex { k: TILE_K, bleed: TILE_BLEED, cells: &regional_tiles })
+    let index_json = serde_json::to_vec(&TileIndex {
+        k: TILE_K,
+        columns: TILE_COLUMNS,
+        rows: TILE_ROWS,
+        cells: &regional_tiles,
+        origins: regional_tiles.iter().map(|&(x, y)| (format!("{x},{y}"), place_map::tile_origin_units(x, y))).collect(),
+    })
         .map_err(|e| format!("Failed to serialize tiles.json: {e}"))?;
     BuildContext::for_render(output_dir, pending)
         .emit(&index_sp, &index_json, HashBucket::Files)
@@ -521,13 +559,14 @@ mod tests {
         #[derive(serde::Deserialize)]
         struct Owned {
             k: f64,
-            bleed: f64,
+            columns: u32,
+            rows: u32,
             cells: Vec<(i16, i16)>,
         }
         let index: Owned = serde_json::from_slice(&std::fs::read(dir.join("tiles.json")).unwrap()).unwrap();
         assert!(index.cells.is_empty());
         assert_eq!(index.k, TILE_K);
-        assert_eq!(index.bleed, TILE_BLEED);
+        assert_eq!((index.columns, index.rows), (36, 18));
         assert_eq!(std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).count(), 2, "world.svg + tiles.json only");
     }
 
