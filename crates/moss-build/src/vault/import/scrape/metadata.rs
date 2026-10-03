@@ -263,30 +263,46 @@ pub(crate) static SEPARATOR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*(?:\||·|::)\s*|\s+[-—–]\s+").expect("title separator regex"));
 
 pub(crate) fn same_name(segment: &str, name: &str) -> bool {
-    segment.trim().to_lowercase() == name.trim().to_lowercase()
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    norm(segment) == norm(name)
 }
 
-/// Drop a trailing or leading segment of `title` that equals one of `names`.
-/// Never returns an empty title: a title that is only the site name, or whose
-/// stripping would leave nothing, comes back unchanged.
+/// `title` without `name` when the whole name sits at either edge behind a
+/// separator (`Page | Name`, `Name — Page`), compared case-insensitively with
+/// whitespace normalised. The name is matched as one string, so a name that
+/// holds a separator itself (`Studio - Costume design`) still goes. `None`
+/// when the name is not at an edge or stripping would leave nothing.
+pub(crate) fn strip_edge_name(title: &str, name: &str) -> Option<String> {
+    let title = title.trim();
+    if name.trim().is_empty() {
+        return None;
+    }
+    let trailing = SEPARATOR
+        .find_iter(title)
+        .find(|m| same_name(&title[m.end()..], name))
+        .map(|m| title[..m.start()].trim());
+    let leading = || {
+        SEPARATOR
+            .find_iter(title)
+            .filter(|m| same_name(&title[..m.start()], name))
+            .last()
+            .map(|m| title[m.end()..].trim())
+    };
+    trailing.or_else(leading).filter(|rest| !rest.is_empty()).map(str::to_string)
+}
+
+/// Drop the site name from either edge of `title`, per [`strip_edge_name`],
+/// for the first of `names` that matches at each edge. Never returns an empty
+/// title: a title that is only the site name comes back unchanged.
 pub(crate) fn strip_site_name(title: &str, names: &[&str]) -> String {
-    let mut out = title.trim();
-    let matches_name = |seg: &str| names.iter().any(|n| !n.trim().is_empty() && same_name(seg, n));
-    if let Some(last) = SEPARATOR.find_iter(out).last() {
-        let tail = &out[last.end()..];
-        let head = out[..last.start()].trim();
-        if matches_name(tail) && !head.is_empty() {
-            out = head;
+    let mut out = title.trim().to_string();
+    for _ in 0..2 {
+        match names.iter().find_map(|n| strip_edge_name(&out, n)) {
+            Some(next) => out = next,
+            None => break,
         }
     }
-    if let Some(first) = SEPARATOR.find(out) {
-        let head = &out[..first.start()];
-        let rest = out[first.end()..].trim();
-        if matches_name(head) && !rest.is_empty() {
-            out = rest;
-        }
-    }
-    out.to_string()
+    out
 }
 
 /// "Article Title | Site Name" split at the last separator into the article
@@ -920,5 +936,14 @@ mod tests {
             assert_eq!(strip_site_name(&format!("About{sep}Studio Name"), &["Studio Name"]), "About");
         }
         assert_eq!(strip_site_name("Spider-Man", &["Man"]), "Spider-Man");
+    }
+
+    #[test]
+    fn a_site_name_that_contains_a_separator_is_stripped_from_the_edge() {
+        let name = "Studio Name - Costume and set design";
+        assert_eq!(strip_site_name(&format!("DT 17 — {name}"), &[name]), "DT 17");
+        assert_eq!(strip_site_name(&format!("{name} | Press"), &[name]), "Press");
+        assert_eq!(strip_site_name(name, &[name]), name);
+        assert_eq!(strip_site_name("Press | Studio Name", &["Studio Name"]), "Press");
     }
 }

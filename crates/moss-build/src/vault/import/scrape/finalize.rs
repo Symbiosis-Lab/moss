@@ -24,7 +24,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::metadata::{same_name, strip_site_name, SEPARATOR};
+use super::metadata::{same_name, strip_edge_name, strip_site_name};
 use super::service::escape_yaml_string;
 
 /// A shared site name is only trusted over at least this many pages besides
@@ -101,8 +101,8 @@ fn is_folder_index(written: &[String], relative: &str) -> bool {
 }
 
 /// The home page's own name (its `title:` or `publisher:`) when every other
-/// titled page carries it as a segment at the same edge — all trailing, or all
-/// leading. `None` when there is no home page, no such name, or too few pages.
+/// titled page carries it at an edge behind a separator.
+/// `None` when there is no home page, no such name, or too few pages.
 fn shared_site_name(pages: &[Page]) -> Option<String> {
     let home = pages.iter().find(|p| p.relative == "index.md")?;
     let others: Vec<&str> = pages
@@ -112,14 +112,8 @@ fn shared_site_name(pages: &[Page]) -> Option<String> {
         .collect();
     let candidates = [home.title.clone(), frontmatter_text(&home.content, "publisher")];
     candidates.into_iter().flatten().find(|name| {
-        let at_edge = |pick: fn(Vec<&str>) -> Option<&str>| {
-            others.iter().filter(|t| !same_name(t, name)).all(|t| {
-                let parts: Vec<&str> = SEPARATOR.split(t).collect();
-                parts.len() > 1 && pick(parts).is_some_and(|s| same_name(s, name))
-            })
-        };
-        let enough = others.iter().filter(|t| !same_name(t, name)).count() >= MIN_OTHER_PAGES;
-        enough && (at_edge(|p| p.last().copied()) || at_edge(|p| p.first().copied()))
+        let others: Vec<&&str> = others.iter().filter(|t| !same_name(t, name)).collect();
+        others.len() >= MIN_OTHER_PAGES && others.iter().all(|t| strip_edge_name(t, name).is_some())
     })
 }
 
@@ -294,6 +288,23 @@ mod tests {
 
         for (rel, t) in &titles[1..] {
             assert_eq!(read(root, rel), page(t), "{rel}");
+        }
+    }
+
+    #[test]
+    fn a_home_name_that_contains_a_separator_is_stripped_from_every_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let name = "Studio Name - Costume and set design";
+        put(root, "index.md", &page(name));
+        for p in ["a", "b", "c"] {
+            put(root, &format!("{p}.md"), &page(&format!("{p} — {name}")));
+        }
+
+        run(root, &["index.md", "a.md", "b.md", "c.md"]);
+
+        for p in ["a", "b", "c"] {
+            assert!(read(root, &format!("{p}.md")).contains(&format!("title: \"{p}\"\n")));
         }
     }
 
