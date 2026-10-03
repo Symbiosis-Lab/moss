@@ -17,6 +17,7 @@ use tokio::sync::Semaphore;
 
 use super::converter::{extract_article_with_snapshot, rewrite_image_links};
 use super::crawl_state::CrawlState;
+use super::design::{self, norm_url, Capture, ChromeSummary, HomePage};
 use super::crawler::{
     extract_canonical_url, extract_links, host_of, is_non_page_file_url, looks_like_html_page,
 };
@@ -129,6 +130,9 @@ pub struct ScrapeResult {
     /// every fetch stayed under every host's rate limit for the whole
     /// crawl, same as before pacing existed.
     pub rate_limited_hosts: Vec<RateLimitedHost>,
+    /// What the import wrote for the site's chrome (name, nav, logo, footer,
+    /// icon). Default when the run did not look: a single-page import.
+    pub chrome: ChromeSummary,
     pub error: Option<String>,
 }
 
@@ -285,6 +289,10 @@ where
     let mut state = CrawlState::new(&config.start_url, &sitemap);
     // Paths (relative to the output folder) of the pages this run wrote.
     let mut written: Vec<String> = Vec::new();
+    // Normalised page URL → the note written for it, for the chrome pass.
+    let mut written_urls: HashMap<String, String> = HashMap::new();
+    // Where the site's chrome is read from: the start page, else the first page.
+    let mut home_page: Option<HomePage> = None;
 
     while let Some(url) = state.frontier.pop() {
         if state.frontier.is_visited(&url) {
@@ -364,6 +372,13 @@ where
         // further links or images either.
         if !looks_like_html_page(&content_type, &html) {
             break 'page PageOutcome::Skipped;
+        }
+
+        if config.recursive {
+            let is_start = norm_url(&url) == norm_url(&config.start_url);
+            if home_page.as_ref().is_none_or(|h| is_start && !h.is_start) {
+                home_page = Some(HomePage { url: url.clone(), html: html.clone(), is_start });
+            }
         }
 
         // The page's own declared identity — same-host `<link
@@ -504,6 +519,9 @@ where
             PageOutcome::Written(note, widgets) => {
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &note)?;
+                if let Some(key) = norm_url(&url) {
+                    written_urls.insert(key, relative.clone());
+                }
                 written.push(relative);
                 state.tally.record_scraped();
                 state.tally.record_widgets(&widgets);
@@ -544,6 +562,22 @@ where
         }
     }
 
+    // The site's chrome is written first: the home note's title becomes the
+    // site name, which is the name the pass below strips from every title.
+    let chrome = match &home_page {
+        Some(home) => {
+            let capture = Capture {
+                out_dir,
+                scope: &scope,
+                user_agent: &config.user_agent,
+                home,
+                written: &written_urls,
+            };
+            design::capture_site_chrome(&capture, &mut state.pacer).await?
+        }
+        None => ChromeSummary::default(),
+    };
+
     // What only the finished crawl can decide: a folder written after its
     // index page, and the site name every title shares.
     super::finalize::finalize_written_pages(out_dir, &written)?;
@@ -582,6 +616,7 @@ where
         sitemap_urls: sitemap.urls.len(),
         sitemap_truncated: sitemap.truncated,
         rate_limited_hosts,
+        chrome,
         error: None,
     })
 }

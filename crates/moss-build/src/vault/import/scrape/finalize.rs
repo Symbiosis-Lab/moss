@@ -27,10 +27,6 @@ use std::path::Path;
 use super::metadata::{same_name, strip_site_name, SEPARATOR};
 use super::service::escape_yaml_string;
 
-/// The one line added to a folder index, in the shape the importer's
-/// frontmatter writer uses for every other key.
-const CHILDREN_OFF: &str = "children: false\n";
-
 /// A shared site name is only trusted over at least this many pages besides
 /// the home page; one other page proves nothing.
 const MIN_OTHER_PAGES: usize = 2;
@@ -127,22 +123,33 @@ fn shared_site_name(pages: &[Page]) -> Option<String> {
     })
 }
 
-/// `content` with `children: false` appended as the last frontmatter line;
-/// `None` when there is nothing to do (no YAML frontmatter, or the key is
-/// already there). Spliced in as text so every other byte stays as written.
-fn with_children_off(content: &str) -> Option<String> {
+/// `content` with each `(key, value)` appended as a frontmatter line unless the
+/// key is already there; `value` is the YAML text as it is written (quote a
+/// string with [`escape_yaml_string`] first). `None` when there is nothing to
+/// add (no YAML frontmatter, or every key present). Spliced in as text so every
+/// other byte stays as written.
+pub(super) fn with_fields_absent(content: &str, fields: &[(&str, String)]) -> Option<String> {
     let span = moss_core::frontmatter::frontmatter_span(content)?;
-    if span.kind != moss_core::frontmatter::FrontmatterKind::Yaml
-        || moss_core::frontmatter::frontmatter_map(content).contains_key("children")
-    {
+    if span.kind != moss_core::frontmatter::FrontmatterKind::Yaml {
         return None;
     }
+    let present = moss_core::frontmatter::frontmatter_map(content);
+    let lines: String = fields
+        .iter()
+        .filter(|(key, _)| !present.contains_key(*key))
+        .map(|(key, value)| format!("{key}: {value}\n"))
+        .collect();
     let at = span.fields.end;
-    Some(format!("{}{CHILDREN_OFF}{}", &content[..at], &content[at..]))
+    (!lines.is_empty()).then(|| format!("{}{lines}{}", &content[..at], &content[at..]))
+}
+
+/// `content` with `children: false` appended as the last frontmatter line.
+fn with_children_off(content: &str) -> Option<String> {
+    with_fields_absent(content, &[("children", "false".to_string())])
 }
 
 /// `content` with its `title:` line replaced, every other byte kept.
-fn with_title(content: &str, title: &str) -> Option<String> {
+pub(super) fn with_title(content: &str, title: &str) -> Option<String> {
     let span = moss_core::frontmatter::frontmatter_span(content)?;
     let fields = &content[span.fields.clone()];
     let line = fields.split_inclusive('\n').find(|l| l.starts_with("title:"))?;

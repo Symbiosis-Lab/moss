@@ -18,6 +18,7 @@
 // article extractor the fixture suite exercises. The stages below are the
 // pipeline's own business.
 pub mod converter;
+pub mod design;
 pub mod run;
 pub mod service;
 

@@ -155,7 +155,7 @@ fn flatten_into(value: Value, out: &mut Vec<Value>) {
     }
 }
 
-fn has_type(entry: &Value, types: &[&str]) -> bool {
+pub(crate) fn has_type(entry: &Value, types: &[&str]) -> bool {
     let Some(t) = entry.get("@type") else {
         return false;
     };
@@ -170,7 +170,7 @@ fn has_type(entry: &Value, types: &[&str]) -> bool {
     }
 }
 
-fn entry_string(entry: &Value, key: &str) -> Option<String> {
+pub(crate) fn entry_string(entry: &Value, key: &str) -> Option<String> {
     entry
         .get(key)
         .and_then(|v| v.as_str())
@@ -190,7 +190,7 @@ pub fn schema_email(doc: &Html) -> Option<String> {
 /// Read OpenGraph + standard meta tags into a map keyed by `og:title`,
 /// `og:description`, `og:site_name`, `og:image`, `article:published_time`,
 /// `article:author`, `description`, `author`. Values are trimmed.
-fn read_meta_map(doc: &Html) -> std::collections::HashMap<String, String> {
+pub(crate) fn read_meta_map(doc: &Html) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
     let mut out = HashMap::new();
     let sel = Selector::parse("meta").unwrap();
@@ -289,18 +289,20 @@ pub(crate) fn strip_site_name(title: &str, names: &[&str]) -> String {
     out.to_string()
 }
 
-/// "Article Title | Site Name" → "Article Title". Splits at the last
-/// separator, since a site brand is always the final segment, and drops that
-/// segment when it looks like a brand (i.e. when the article half is at least
-/// as long). The guess for a page that does not name its site.
+/// "Article Title | Site Name" split at the last separator into the article
+/// half and the brand half — only when the article half is at least as long,
+/// which is what a brand looks like next to a title. The one guess both
+/// [`strip_site_suffix`] reads.
+fn split_brand(s: &str) -> Option<(&str, &str)> {
+    let last = SEPARATOR.find_iter(s).last()?;
+    let (head, tail) = (s[..last.start()].trim(), s[last.end()..].trim());
+    (!head.is_empty() && !tail.is_empty() && head.len() >= tail.len()).then_some((head, tail))
+}
+
+/// "Article Title | Site Name" → "Article Title". The guess for a page that
+/// does not name its site.
 fn strip_site_suffix(s: &str) -> String {
-    if let Some(last) = SEPARATOR.find_iter(s).last() {
-        let (head, tail) = (s[..last.start()].trim(), s[last.end()..].trim());
-        if !head.is_empty() && !tail.is_empty() && head.len() >= tail.len() {
-            return head.to_string();
-        }
-    }
-    s.to_string()
+    split_brand(s).map_or_else(|| s.to_string(), |(head, _)| head.to_string())
 }
 
 fn pick_description(

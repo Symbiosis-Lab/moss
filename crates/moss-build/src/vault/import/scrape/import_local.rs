@@ -160,6 +160,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         sitemap_urls: 0,
         sitemap_truncated: false,
         rate_limited_hosts: Vec::new(),
+        chrome: Default::default(),
         error: None,
     })
 }
