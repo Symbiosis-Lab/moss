@@ -78,6 +78,13 @@ pub fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> Str
     push_string(&mut out, "lang", metadata.lang.as_deref());
     push_string(&mut out, "description", metadata.description.as_deref());
     push_string(&mut out, "cover", metadata.cover.as_deref());
+    // An event never writes `date`: that stays the page's own published date.
+    push_string(&mut out, "start", metadata.event.start.as_deref());
+    push_string(&mut out, "end", metadata.event.end.as_deref());
+    push_string(&mut out, "location", metadata.event.location.as_deref());
+    push_string(&mut out, "status", metadata.event.status.as_deref());
+    push_string(&mut out, "tickets", metadata.event.tickets.as_deref());
+    push_string(&mut out, "online", metadata.event.online.as_deref());
     // `moss import` records provenance, not syndication: the source page's
     // address becomes `origin` (`moss_core::schema_fields::BUILTIN_FIELDS`),
     // a single URL. Unlike POSSE `syndicated:` — which means the content also
@@ -312,6 +319,7 @@ mod tests {
             cover: Some("./assets/imported/abcd.jpg".into()),
             og_image: None,
             chrome_images: Vec::new(),
+            event: Default::default(),
         };
         let fm = generate_frontmatter(&meta, "https://x.example/post");
         assert!(fm.starts_with("---\n"));
@@ -514,5 +522,27 @@ mod tests {
         let meta = ArticleMetadata { title: Some("Hello".into()), ..Default::default() };
         let page = generate_frontmatter(&meta, "https://example.com/hello");
         assert!(!page.contains("listed"), "a normal page stays listed; got:\n{page}");
+    }
+
+    #[test]
+    fn generate_frontmatter_writes_event_keys_and_no_date_for_an_event_only_page() {
+        let html = r#"<html><head><script type="application/ld+json">
+          {"@type":"Event","name":"Example Night","startDate":"2026-11-01T19:30:00-04:00",
+           "endDate":"2026-11-01T21:00:00-04:00","eventStatus":"https://schema.org/EventPostponed",
+           "offers":{"url":"https://tickets.example/night"},
+           "location":[{"@type":"Place","name":"Example Hall"},
+                       {"@type":"VirtualLocation","url":"https://stream.example/night"}]}
+          </script></head><body></body></html>"#;
+        let fm = generate_frontmatter(&super::super::metadata::derive(html), "https://example.com/night");
+        assert!(!fm.contains("\ndate:"), "an event never writes date; got:\n{fm}");
+        let at = |k: &str| fm.find(&format!("\n{k}: ")).unwrap_or_else(|| panic!("{k} missing in:\n{fm}"));
+        assert!(fm.contains("\nstart: \"2026-11-01 19:30\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\nend: \"2026-11-01 21:00\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\nlocation: \"Example Hall\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\nstatus: \"postponed\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\ntickets: \"https://tickets.example/night\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\nonline: \"https://stream.example/night\"\n"), "got:\n{fm}");
+        let keys = ["start", "end", "location", "status", "tickets", "online"];
+        assert!(keys.windows(2).all(|w| at(w[0]) < at(w[1])), "key order; got:\n{fm}");
     }
 }

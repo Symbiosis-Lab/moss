@@ -18,6 +18,9 @@ use url::Url;
 
 use super::converter::{resolve_url, IMG_PATTERN};
 
+mod event;
+pub use event::{derive_event, EventMetadata};
+
 /// Metadata ready to drop into YAML frontmatter, with keys aligned to
 /// moss-core's `BUILTIN_FIELDS` table.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -49,6 +52,8 @@ pub struct ArticleMetadata {
     /// from the full document, since the extractor has already stripped the
     /// chrome by the time the cover is chosen. Never written to YAML.
     pub chrome_images: Vec<String>,
+    /// Fields read from a schema.org `Event` block; never touches `date`.
+    pub event: EventMetadata,
 }
 
 const ARTICLE_TYPES: &[&str] = &[
@@ -93,6 +98,7 @@ pub fn derive(html: &str) -> ArticleMetadata {
         cover: None,
         og_image: og.get("og:image").cloned(),
         chrome_images: chrome_images(&doc),
+        event: derive_event(&entries),
     }
 }
 
