@@ -27,7 +27,9 @@
 //!    fonts, CSS background-image thumbnails, JS-filled slots) survives an
 //!    HTML→Markdown pass as a bare `[](url)`. An `aria-label`/`title` on
 //!    such an anchor becomes its visible text instead; otherwise the anchor
-//!    is dropped. A fragment target (`<a id>`/`<a name>`, no `href`) is
+//!    is dropped. An anchor whose `href` is empty or only a query string
+//!    (`?itemId=…`, a lightbox or filter view of the same page) is unwrapped:
+//!    its image or text stays, the link does not. A fragment target (`<a id>`/`<a name>`, no `href`) is
 //!    never touched. Deciding this on the already-parsed tree, keyed by
 //!    each anchor's own node id, needs no second pass over the HTML.
 //!
@@ -434,6 +436,10 @@ const ANCHOR_MEDIA_DESCENDANTS: &str = "img, picture, svg, video";
 
 /// What to do with one `<a href>` once its content is known.
 enum AnchorAction {
+    /// The `href` is empty or only a query string (`?itemId=…`): a
+    /// client-side view of the same page, with nothing behind it in a
+    /// static copy. The anchor goes, its content (image or text) stays.
+    Unwrap,
     /// Has text and/or a media descendant — leave it exactly as written.
     Keep,
     /// Empty, and named by an `aria-label`/`title` — becomes the anchor's
@@ -447,6 +453,10 @@ enum AnchorAction {
 /// Decide one anchor's fate. `media_selector` is passed in rather than
 /// reparsed per anchor — it never varies.
 fn decide_anchor_action(a: &ElementRef<'_>, media_selector: &Selector) -> AnchorAction {
+    let href = a.attr("href").unwrap_or("").trim();
+    if href.is_empty() || href.starts_with('?') {
+        return AnchorAction::Unwrap;
+    }
     let text: String = a.text().collect();
     let has_media = a.select(media_selector).next().is_some();
     if !text.trim().is_empty() || has_media {
@@ -495,6 +505,13 @@ fn resolve_empty_anchors(doc: &mut Html, scope_id: NodeId) {
     for (id, action) in actions {
         match action {
             AnchorAction::Keep => {}
+            AnchorAction::Unwrap => {
+                let mut node = doc.tree.get_mut(id).unwrap();
+                while let Some(child) = node.first_child().map(|c| c.id()) {
+                    node.insert_id_before(child);
+                }
+                node.detach();
+            }
             AnchorAction::Drop => {
                 doc.tree.get_mut(id).unwrap().detach();
             }
@@ -810,6 +827,49 @@ mod tests {
             md.contains("[Search](https://example.test/search)"),
             "got: {md}"
         );
+    }
+
+    fn extract_md(body: &str) -> String {
+        let html = format!(
+            "<html><body><article><p>Some text to satisfy the content scorer here.</p>{body}</article></body></html>"
+        );
+        htmd::convert(&extract_main_content(&html)).unwrap()
+    }
+
+    #[test]
+    fn query_only_image_anchors_unwrap_to_bare_images() {
+        let md = extract_md(
+            r#"<a href="?itemId=abc123"><img src="https://gallery.example/a.jpg" alt="A"></a>
+               <a href=" ?itemId=def456 "><img src="https://gallery.example/b.jpg" alt="B"></a>"#,
+        );
+        assert!(md.contains("![A](https://gallery.example/a.jpg)"), "got: {md}");
+        assert!(md.contains("![B](https://gallery.example/b.jpg)"), "got: {md}");
+        assert!(!md.contains("[!["), "images must not be wrapped: {md}");
+        assert!(!md.contains("itemId"), "got: {md}");
+    }
+
+    #[test]
+    fn query_only_text_anchor_becomes_plain_text() {
+        let md = extract_md(r#"<p><a href="?category=dance">Dance</a></p>"#);
+        assert!(md.contains("Dance"), "got: {md}");
+        assert!(!md.contains("[Dance]"), "got: {md}");
+        assert!(!md.contains("category"), "got: {md}");
+    }
+
+    #[test]
+    fn empty_href_anchor_becomes_plain_text() {
+        let md = extract_md(r#"<p><a href="">bare</a></p>"#);
+        assert!(md.contains("bare"), "got: {md}");
+        assert!(!md.contains("[bare]"), "got: {md}");
+    }
+
+    #[test]
+    fn fragment_and_path_anchors_keep_their_links() {
+        let md = extract_md(
+            r##"<p><a href="#top">Top</a> <a href="/work/dance">Dance</a></p>"##,
+        );
+        assert!(md.contains("[Top](#top)"), "got: {md}");
+        assert!(md.contains("[Dance](/work/dance)"), "got: {md}");
     }
 
     #[test]
