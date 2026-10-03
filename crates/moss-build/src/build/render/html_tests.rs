@@ -6099,16 +6099,16 @@ fn folder_index_without_cover_prepends_folder_title_h1() {
 }
 
 #[test]
-fn no_cover_folder_heading_suppressed_for_nav_folder() {
-    // A folder index that is a nav item (nav: true) gets no folder title —
-    // the nav bar already shows it.
+fn no_cover_folder_heading_hidden_for_nav_folder() {
+    // A folder index that is a nav item (nav: true) hides its folder title —
+    // the nav bar already shows it — but keeps the `<h1>` for screen readers.
     let doc = crate::build::types::ParsedDocument {
         nav: Some(true),
         ..Default::default()
     };
     assert_eq!(
         super::no_cover_folder_heading(&doc, "Projects", true, false),
-        ""
+        r#"<h1 class="moss-folder-title visually-hidden">Projects</h1>"#
     );
 }
 
@@ -6125,6 +6125,23 @@ fn no_cover_folder_heading_present_for_non_nav_folder() {
             .contains(r#"<h1 class="moss-folder-title">Projects</h1>"#),
         "non-nav folder index must keep its title"
     );
+}
+
+#[test]
+fn no_cover_folder_heading_empty_when_body_opens_with_h1() {
+    // The body's own `# Title` is already the page's h1, nav folder or not.
+    for nav in [Some(true), None] {
+        let doc = crate::build::types::ParsedDocument {
+            nav,
+            content: "# Projects\n\nBody.".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::no_cover_folder_heading(&doc, "Projects", true, false),
+            "",
+            "nav = {nav:?}"
+        );
+    }
 }
 
 // home_file_winner_tests have been moved to page_map.rs

@@ -25,6 +25,6 @@ pub mod text;
 pub use anchor::obsidian_heading_anchor;
 pub use extract::{extract_headings, extract_headings_with_config, HeadingInfo};
 pub use state::{
-    hero_at_top_owns_title, compute, filename_text, filename_text_with_root, HeadingInputs,
+    body_opens_with_h1, hero_at_top_owns_title, compute, filename_text, filename_text_with_root, HeadingInputs,
     HeadingSource, HeadingState,
 };

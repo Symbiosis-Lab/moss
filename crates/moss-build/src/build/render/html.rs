@@ -181,23 +181,31 @@ pub fn generate_html_collect_og<'d>(
 
 /// The folder-index heading to prepend in the no-cover branch: the shared
 /// `<h1 class="moss-folder-title">`, unless something else on the page is
-/// already showing the title. Two things can be —
+/// already showing the title. Three things can be —
 ///
-/// - the folder renders as a nav item, so the nav bar shows it, or
-/// - the body opens with a `:::hero` that carries its own heading.
+/// - the body opens with its own `# Title`, which is then both the visible
+///   title and the heading landmark: nothing is emitted, for nav and non-nav
+///   folders alike,
+/// - the body opens with a `:::hero` that carries its own heading: nothing is
+///   emitted, since the hero already supplies the `<h1>`, or
+/// - the folder renders as a nav item, so the nav bar shows its title: the
+///   title is still emitted, visually hidden, because a page with no `<h1>`
+///   leaves screen-reader navigation with no heading landmark.
 ///
 /// Covered folder indexes bypass this helper entirely (they render the label
 /// inside the cover via `folder_cover::render`), and synthetic folder indexes
 /// are generated in `render/blocking.rs` and never reach it — so this is the
-/// only folder-title site that suppresses.
+/// only folder-title site that omits or hides it.
 fn no_cover_folder_heading(
     doc: &crate::build::types::ParsedDocument,
     h1_text: &str,
     has_content_folders: bool,
     emit_source_fm: bool,
 ) -> String {
-    if crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders) {
+    if moss_core::heading::body_opens_with_h1(&doc.content) {
         String::new()
+    } else if crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders) {
+        crate::build::components::folder_title::render(h1_text, emit_source_fm, true)
     } else if moss_core::heading::hero_at_top_owns_title(&doc.content) {
         // The same rule the article path applies, which this site never asked.
         // A folder note that opens with a hero carrying its own heading got

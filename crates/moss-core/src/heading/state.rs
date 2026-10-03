@@ -203,6 +203,19 @@ pub fn hero_at_top_owns_title(body_markdown: &str) -> bool {
     crate::ast::extract_hero::hero_body_has_overlay_content(args, &body)
 }
 
+/// True when the body's first real line is an ATX level-1 heading (`# Title`,
+/// not `##`). Blank lines and one-line HTML comments before it don't count as
+/// content. Such a body already carries the page's `<h1>`, so a folder index
+/// must not add a second one on top.
+pub fn body_opens_with_h1(body_markdown: &str) -> bool {
+    let first = body_markdown.lines().map(str::trim).find(|line| {
+        !line.is_empty() && !(line.starts_with("<!--") && line.ends_with("-->"))
+    });
+    first
+        .and_then(|line| line.strip_prefix('#'))
+        .is_some_and(|rest| rest.starts_with([' ', '\t']) && !rest.trim().is_empty())
+}
+
 /// Compute the full heading state for a page.
 pub fn compute(input: HeadingInputs<'_>) -> HeadingState {
     let path = std::path::Path::new(input.file_path);
@@ -269,6 +282,16 @@ mod tests {
             is_home_override: false,
             slot_only: false,
         }
+    }
+
+    #[test]
+    fn body_opens_with_h1_cases() {
+        assert!(body_opens_with_h1("# Title\n\ntext"));
+        assert!(body_opens_with_h1("\n<!-- note -->\n\n# Title"));
+        assert!(!body_opens_with_h1("## Title\n\ntext"));
+        assert!(!body_opens_with_h1("Intro paragraph\n\n# Title"));
+        assert!(!body_opens_with_h1("#hashtag"));
+        assert!(!body_opens_with_h1(""));
     }
 
     // ── filename_text ────────────────────────────────────────────────
