@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::crawler::{host_of, path_identity};
 use super::sitemap::{block_if_locale_alternate, SitemapDiscovery};
+use crate::vault::import::widgets::WidgetCount;
 
 /// The crawl's frontier (cap bookkeeping), duplicate detection, the asset
 /// map, the outcome tally, and per-host request pacing — everything the
@@ -495,6 +496,8 @@ pub(crate) struct Tally {
     duplicate: usize,
     unreachable_variants: usize,
     unreachable_files: usize,
+    widgets_carried: usize,
+    widgets_dropped: usize,
 }
 
 impl Tally {
@@ -522,6 +525,14 @@ impl Tally {
         self.unreachable_files
     }
 
+    pub(crate) fn widgets_carried(&self) -> usize {
+        self.widgets_carried
+    }
+
+    pub(crate) fn widgets_dropped(&self) -> usize {
+        self.widgets_dropped
+    }
+
     pub(crate) fn record_scraped(&mut self) {
         self.scraped += 1;
     }
@@ -544,6 +555,11 @@ impl Tally {
 
     pub(crate) fn record_unreachable_file(&mut self) {
         self.unreachable_files += 1;
+    }
+
+    pub(crate) fn record_widgets(&mut self, found: &WidgetCount) {
+        self.widgets_carried += found.carried;
+        self.widgets_dropped += found.dropped;
     }
 }
 

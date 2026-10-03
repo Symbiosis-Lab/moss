@@ -9,7 +9,8 @@
 //!    `data-test-id`, `data-component`, `data-hook`) matches one of the
 //!    journalism-site clutter tokens (ad, social, sidebar, comment, …).
 //!    Also drops hidden elements (inline `display:none` / `visibility:hidden`
-//!    style or `hidden`/`invisible` class) and small images (width or height
+//!    style or a `hidden`/`invisible` class token — not the `hidden`
+//!    attribute, which tab and accordion panels use for real content) and small images (width or height
 //!    `< 33`), and promotes a lazy-load `data-src`/`data-lazy-src`/
 //!    `data-original`/`data-echo` onto `src` when `src` itself is missing
 //!    or empty — otherwise a lazy-loaded gallery image is invisible to
@@ -73,10 +74,13 @@ pub fn extract_main_content(html: &str) -> String {
 /// Roughly the union of defuddle's `EXACT_SELECTORS` tag entries with
 /// the obvious non-article tags.
 const STRIP_TAGS: &[&str] = &[
-    "script", "style", "noscript", "iframe", "nav", "aside", "footer",
-    "header", "form", "button", "input", "select", "textarea", "meta",
-    "link", "object", "embed", "dialog",
+    "script", "style", "noscript", "iframe", "form", "button", "input",
+    "select", "textarea", "meta", "link", "object", "embed", "dialog",
 ];
+
+/// Site-level landmark tags, stripped like [`STRIP_TAGS`] and also the tags
+/// that make an element chrome in [`is_chrome_element`].
+const LANDMARK_TAGS: &[&str] = &["header", "footer", "nav", "aside"];
 
 /// Tokens we look for in `class` / `id` / a semantic-hook attribute
 /// (`data-testid`, `data-test-id`, `data-component`, `data-hook`).
@@ -189,7 +193,10 @@ fn contains_token_boundary(word: &str, token: &str) -> bool {
     false
 }
 
-fn looks_hidden(class: &str, style: &str) -> bool {
+/// Hidden by class token (`hidden`, `invisible`) or by inline style. The
+/// `hidden` attribute is deliberately not tested: tab, accordion and FAQ
+/// panels carry it and hold real content.
+pub(crate) fn looks_hidden(class: &str, style: &str) -> bool {
     // Word-boundary check: only treat the class as hidden if a *whole*
     // class token is "hidden" or "invisible". `class="hidden-foo"` should
     // NOT match (it's the start of a different word).
@@ -215,7 +222,7 @@ fn small_image_px(attr: Option<&str>) -> Option<u32> {
 /// client-side on scroll — so a static fetch sees an `<img>` with no `src`
 /// at all and htmd silently drops it. Checked in this order; first match
 /// wins.
-const LAZY_SRC_ATTRS: &[&str] = &["data-src", "data-lazy-src", "data-original", "data-echo"];
+pub(crate) const LAZY_SRC_ATTRS: &[&str] = &["data-src", "data-lazy-src", "data-original", "data-echo"];
 
 /// Promote a lazy-load `data-*` attribute onto `src` when `src` is missing
 /// or empty, so the image survives into the markdown like any other.
@@ -240,11 +247,30 @@ fn promote_lazy_src(
     Ok(())
 }
 
+/// Containers whose class/id never marks them as clutter — site-wide state
+/// classes ("logged-in", "cookies-not-set") on `<body>` would otherwise nuke
+/// the entire page.
+fn is_structural(tag: &str) -> bool {
+    matches!(tag, "html" | "body" | "head" | "main" | "article")
+}
+
+/// Whether an element is page chrome rather than content: a site-level
+/// landmark tag, or a class / id / semantic-hook / role matching
+/// [`CLUTTER_TOKENS`]. Shared by [`strip_clutter`] and the widget pre-pass,
+/// so a widget is only carried when the stripper would have kept its parent.
+pub(crate) fn is_chrome_element(tag: &str, class: &str, id: &str, hook: &str, role: &str) -> bool {
+    if is_structural(tag) {
+        return false;
+    }
+    LANDMARK_TAGS.contains(&tag)
+        || token_matches(&format!("{class} {id} {hook} {role}"), CLUTTER_TOKENS)
+}
+
 /// Run lol_html over the input HTML, removing clutter. Returns clean HTML.
 fn strip_clutter(html: &str) -> String {
     let mut output: Vec<u8> = Vec::with_capacity(html.len());
 
-    let strip_selector = STRIP_TAGS.join(",");
+    let strip_selector = [STRIP_TAGS, LANDMARK_TAGS].concat().join(",");
 
     let mut rewriter = HtmlRewriter::new(
         Settings {
@@ -281,13 +307,6 @@ fn strip_clutter(html: &str) -> String {
                 // entire page.
                 element!("*", |el| {
                     let tag = el.tag_name();
-                    if matches!(
-                        tag.as_str(),
-                        "html" | "body" | "head" | "main" | "article"
-                    ) {
-                        return Ok(());
-                    }
-
                     let class = el.get_attribute("class").unwrap_or_default();
                     let id = el.get_attribute("id").unwrap_or_default();
                     let testid = el
@@ -298,14 +317,14 @@ fn strip_clutter(html: &str) -> String {
                         .unwrap_or_default();
                     let role = el.get_attribute("role").unwrap_or_default();
 
-                    let blob = format!("{} {} {} {}", class, id, testid, role);
-                    if token_matches(&blob, CLUTTER_TOKENS) {
+                    if is_chrome_element(&tag, &class, &id, &testid, &role) {
                         el.remove();
                         return Ok(());
                     }
 
+                    // Structural containers are exempt from the hidden filter too.
                     let style = el.get_attribute("style").unwrap_or_default();
-                    if looks_hidden(&class, &style) {
+                    if !is_structural(&tag) && looks_hidden(&class, &style) {
                         el.remove();
                     }
                     Ok(())
@@ -557,6 +576,16 @@ mod tests {
         assert!(!out.contains("sidebar stuff"));
         assert!(!out.contains("footer stuff"));
         assert!(out.contains("Real body"));
+    }
+
+    #[test]
+    fn strip_keeps_content_marked_with_the_hidden_attribute() {
+        let html = r#"<html><body><article>
+            <div class="panel" hidden><p>Collapsed answer</p></div>
+            <div class="invisible">gone</div><p>Real body</p></article></body></html>"#;
+        let out = strip_clutter(html);
+        assert!(out.contains("Collapsed answer") && out.contains("Real body"));
+        assert!(!out.contains("gone"));
     }
 
     #[test]

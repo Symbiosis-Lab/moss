@@ -147,3 +147,16 @@ fn portfolio_listing_extracts_outbound_article_links() {
         assert!(md.contains(url), "outbound article link missing: {url}");
     }
 }
+
+#[test]
+fn studio_contact_page_keeps_what_a_static_page_can_carry() {
+    let html = fixture("studio-contact-page");
+    let art = extract_article(&html, "https://studio.example/visit/");
+    let md = &art.markdown;
+
+    assert!(md.contains("![[https://www.youtube.com/watch?v=dQw4w9WgXcQ]]"), "{md}");
+    assert!(md.contains("[Support the print run](https://pay.example/donate/123)"), "{md}");
+    assert!(md.contains("[hello@studio.example](mailto:hello@studio.example)"), "{md}");
+    assert!(!md.contains("<form") && !md.contains("intercom") && !md.contains("list-manage"), "{md}");
+    assert_eq!((art.widgets.carried, art.widgets.dropped), (2, 0));
+}

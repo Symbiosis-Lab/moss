@@ -18,6 +18,7 @@ use url::Url;
 
 use super::extractor::extract_main_content;
 use super::metadata::{derive, ArticleMetadata};
+use crate::vault::import::widgets::{carry_widgets, html_to_markdown, WidgetCount};
 
 /// Output of the extraction pipeline.
 pub struct Article {
@@ -28,6 +29,9 @@ pub struct Article {
     /// Metadata fields ready for YAML frontmatter, schema-aligned with
     /// moss's `BUILTIN_FIELDS`.
     pub metadata: ArticleMetadata,
+    /// Widgets (iframes, forms) the markup carried: links kept, and those
+    /// with no static form dropped.
+    pub widgets: WidgetCount,
 }
 
 /// What a per-site adapter can supply. Body may be pre-converted markdown
@@ -97,6 +101,7 @@ pub fn extract_article_with_snapshot(
     // Metadata is parsed from the raw HTML so JSON-LD / OG /
     // <html lang> survive the clutter strip.
     let mut metadata = derive(html);
+    let mut widgets = WidgetCount::default();
 
     // Main content as markdown. Known sites whose DOM defeats the generic
     // scorer get an explicit adapter first (which may hand back ready
@@ -120,8 +125,13 @@ pub fn extract_article_with_snapshot(
             htmd::convert(&h).unwrap_or(h)
         }
         None => {
-            let h = extract_main_content(html);
-            htmd::convert(&h).unwrap_or_else(|_| h.clone())
+            // Widgets are classified before the strip removes them.
+            // A page with no URL (a local file) still resolves absolute links.
+            let page_url = base.clone().unwrap_or_else(|| Url::parse("about:blank").expect("static url"));
+            let (carried, found) = carry_widgets(html, &page_url);
+            widgets = found;
+            let h = extract_main_content(&carried);
+            html_to_markdown(&h).unwrap_or_else(|_| h.clone())
         }
     };
 
@@ -175,6 +185,7 @@ pub fn extract_article_with_snapshot(
         markdown,
         media_urls,
         metadata,
+        widgets,
     }
 }
 

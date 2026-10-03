@@ -151,6 +151,8 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         duplicate_pages: 0,
         unreachable_variants: 0,
         unreachable_files: 0,
+        widgets_carried: article.widgets.carried,
+        widgets_dropped: article.widgets.dropped,
         capped: false,
         remaining_urls: 0,
         sitemap_urls: 0,

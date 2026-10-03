@@ -100,6 +100,15 @@ pub fn run(args: &[String]) -> i32 {
                         res.unreachable_files
                     );
                 }
+                // Widgets a static site cannot run: say what was kept as a
+                // link and what had no static form (each of those also
+                // logged by page and kind).
+                if res.widgets_carried > 0 || res.widgets_dropped > 0 {
+                    eprintln!(
+                        "  ↳ {} widget(s) carried as links, {} with no static form",
+                        res.widgets_carried, res.widgets_dropped
+                    );
+                }
                 // Silent when the site declared no sitemap at all — the
                 // ordinary case, and the one this line must not clutter.
                 if res.sitemap_urls > 0 {
@@ -156,7 +165,7 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{})",
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{})",
         totals.pages,
         folder.display(),
         totals.failed_pages,
@@ -169,6 +178,14 @@ pub fn run(args: &[String]) -> i32 {
         },
         if totals.unreachable_files > 0 {
             format!(", {} linked file(s) unreachable", totals.unreachable_files)
+        } else {
+            String::new()
+        },
+        if totals.widgets_carried > 0 || totals.widgets_dropped > 0 {
+            format!(
+                ", {} widget(s) carried as links, {} with no static form",
+                totals.widgets_carried, totals.widgets_dropped
+            )
         } else {
             String::new()
         },
@@ -195,6 +212,8 @@ struct ImportTotals {
     duplicate_pages: usize,
     unreachable_variants: usize,
     unreachable_files: usize,
+    widgets_carried: usize,
+    widgets_dropped: usize,
     capped_leftovers: usize,
     hard_errors: usize,
 }
@@ -207,6 +226,8 @@ impl ImportTotals {
         self.duplicate_pages += res.duplicate_pages;
         self.unreachable_variants += res.unreachable_variants;
         self.unreachable_files += res.unreachable_files;
+        self.widgets_carried += res.widgets_carried;
+        self.widgets_dropped += res.widgets_dropped;
         if res.capped {
             self.capped_leftovers += res.remaining_urls;
         }

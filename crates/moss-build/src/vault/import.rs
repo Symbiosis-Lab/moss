@@ -22,3 +22,4 @@ pub mod readymag;
 pub mod scrape;
 pub mod state_json;
 pub mod strikingly;
+pub mod widgets;

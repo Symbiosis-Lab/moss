@@ -24,6 +24,7 @@ use super::fetch::{download_asset, fetch_page, observe_pace};
 use super::scope::{is_within_scope, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
 use super::writer::{rename_for_collision, url_to_file_path};
+use crate::vault::import::widgets::WidgetCount;
 
 // Re-exported at this module's old path: a consumer outside this crate
 // already names `refuse_unsafe_scrape_url` here, from before the SSRF/fetch
@@ -98,6 +99,13 @@ pub struct ScrapeResult {
     /// and — like `skipped_pages` — never counted against `max_pages`: the
     /// URL was never a page candidate to begin with, fetch or no fetch.
     pub unreachable_files: usize,
+    /// Iframes and forms replaced by a link (a hosted page, or the page's
+    /// contact address) because a static site cannot run them.
+    pub widgets_carried: usize,
+    /// Iframes and forms with no static form at all (a contact form and no
+    /// address anywhere on the page): removed, and counted here instead of
+    /// marked in the page.
+    pub widgets_dropped: usize,
     /// True when `max_pages` stopped a recursive crawl before every
     /// discovered in-scope URL had been visited — distinct from a crawl that
     /// finished because its queue simply ran out.
@@ -140,7 +148,7 @@ pub struct RateLimitedHost {
 /// What became of one URL popped from the crawl queue.
 enum PageOutcome {
     /// Composed into a note; the full markdown ready to write.
-    Written(String),
+    Written(String, WidgetCount),
     /// Fetched (or attempted) but refused with a reason — written as the
     /// error placeholder, so an in-scope link elsewhere that points at it
     /// still resolves to a real file on disk.
@@ -479,7 +487,7 @@ where
                 // by canonical (rule 1) or by same-path body (rule 2) — is
                 // caught. See `Dedupe::record_written`.
                 state.dedupe.record_written(&url, canonical.as_deref(), body_hash);
-                PageOutcome::Written(note)
+                PageOutcome::Written(note, article.widgets)
             }
             None => PageOutcome::Failed(
                 "no article content found (unsupported page or empty body)".to_string(),
@@ -488,10 +496,11 @@ where
         };
 
         match outcome {
-            PageOutcome::Written(note) => {
+            PageOutcome::Written(note, widgets) => {
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &note)?;
                 state.tally.record_scraped();
+                state.tally.record_widgets(&widgets);
                 state.cap.record_progress(is_declared);
             }
             PageOutcome::Failed(reason) => {
@@ -556,6 +565,8 @@ where
         duplicate_pages: state.tally.duplicate(),
         unreachable_variants: state.tally.unreachable_variants(),
         unreachable_files: state.tally.unreachable_files(),
+        widgets_carried: state.tally.widgets_carried(),
+        widgets_dropped: state.tally.widgets_dropped(),
         capped: state.cap.capped(),
         remaining_urls,
         sitemap_urls: sitemap.urls.len(),

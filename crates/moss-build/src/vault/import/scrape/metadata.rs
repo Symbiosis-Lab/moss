@@ -156,6 +156,15 @@ fn entry_string(entry: &Value, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// The first schema.org `email` the page declares (an Organization or Person
+/// entry), without any `mailto:` prefix.
+pub fn schema_email(doc: &Html) -> Option<String> {
+    parse_schema_org(doc)
+        .iter()
+        .find_map(|entry| entry_string(entry, "email"))
+        .map(|e| e.trim_start_matches("mailto:").to_string())
+}
+
 /// Read OpenGraph + standard meta tags into a map keyed by `og:title`,
 /// `og:description`, `og:site_name`, `og:image`, `article:published_time`,
 /// `article:author`, `description`, `author`. Values are trimmed.

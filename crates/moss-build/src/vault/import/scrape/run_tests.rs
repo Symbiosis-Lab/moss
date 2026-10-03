@@ -1657,3 +1657,42 @@ async fn a_link_to_a_non_alternate_page_under_the_same_locale_prefix_is_still_fo
         "a page under the same prefix but not a declared alternate must still import"
     );
 }
+
+/// Widgets found while composing a page reach the run summary: a hosted
+/// iframe is carried as a link, a contact form with no address anywhere is
+/// dropped and counted — and neither leaves a trace in the written page.
+#[tokio::test]
+async fn widget_counts_reach_the_scrape_result() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let index = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><article><p>Real page body, long enough to be extracted as content \
+             by the scorer without any trouble at all.</p>\
+             <iframe src=\"https://pay.example/donate/123\" title=\"Give\"></iframe>\
+             <form action=\"/send\"><input name=\"name\"><textarea name=\"m\"></textarea></form>\
+             </article></body></html>",
+        )
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let res = scrape_to_folder(ScrapeConfig::new(format!("{base}/"), tmp.path()), |_| {})
+        .await
+        .expect("the crawl itself succeeds");
+    index.assert_async().await;
+
+    assert_eq!((res.widgets_carried, res.widgets_dropped), (1, 1));
+    let note = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+        .expect("the page is written");
+    let body = std::fs::read_to_string(note).unwrap();
+    assert!(body.contains("[Give](https://pay.example/donate/123)"), "{body}");
+    assert!(!body.contains("<form"), "{body}");
+}
