@@ -98,6 +98,8 @@ const GATE_PORT_KEYS = [
   'places-explorer-embed',
   'places-explorer-real',
   'places-explorer-perf',
+  'places-explorer-vertical',
+  'places-explorer-single',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

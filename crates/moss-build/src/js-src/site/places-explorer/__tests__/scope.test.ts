@@ -17,7 +17,7 @@ const cityB: Place = { id: "places/beta", name: "Beta", parent: "places/freedoni
 const places: Place[] = [country, cityA, cityB];
 
 function work(id: string, placeIds: string[]): Work {
-  return { id, title: id, url: `/${id}`, byline: [], places: placeIds, companions: [] };
+  return { id, title: id, url: `/${id}`, byline: [], authors: [], places: placeIds, companions: [] };
 }
 
 const workAlpha = work("alpha-piece", ["places/alpha"]);

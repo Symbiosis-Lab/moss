@@ -21,6 +21,19 @@ describe("normalizePlacesData", () => {
     expect(data.works[0].byline).toEqual([]);
   });
 
+  test("an omitted authors list defaults to [] and a present one is kept", () => {
+    const wire: PlacesDataWire = {
+      works: [
+        { id: "a", title: "A", url: "/a/", places: [], companions: [] },
+        { id: "b", title: "B", url: "/b/", authors: ["Jane Doe"], places: [], companions: [] },
+      ],
+      places: [],
+    };
+    const data = normalizePlacesData(wire);
+    expect(data.works[0].authors).toEqual([]);
+    expect(data.works[1].authors).toEqual(["Jane Doe"]);
+  });
+
   test("a work that already carries byline keeps it, not re-defaulted", () => {
     const wire: PlacesDataWire = {
       works: [{ id: "a", title: "A", url: "/a/", byline: ["Jane Doe"], places: [], companions: [] }],

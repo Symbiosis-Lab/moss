@@ -44,6 +44,8 @@ export interface PlacesStrings {
   chipShowHidden: string;
   /** `{name}` placeholder, filled with the embed's own place or article display name (`data-embed-name`, Rust-emitted, never translated — it is a proper noun) — the `title` on a `style:map`/locator embed's lazily-hydrated iframe (`embed.ts`'s `buildIframe`). */
   mapEmbedTitle: string;
+  /** Between the names of several authors on a card; the author-to-date separator is a fixed middle dot instead (`cards.ts`). */
+  listSeparator: string;
   /** `{key}` placeholder, filled with the platform's own zoom-modifier key name (`⌘` / `Ctrl`) — the cooperative-gesture hint shown the first time a reader wheels over a collapsed embed without it held. */
   cooperativeHint: string;
 }
@@ -69,6 +71,7 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     chipShowHidden: "Show hidden places",
     mapEmbedTitle: "Map: {name}",
     cooperativeHint: "Hold {key} and scroll to zoom the map",
+    listSeparator: ", ",
   },
   "zh-hans": {
     map: "地图。使用方向键平移，加号及减号缩放。",
@@ -90,6 +93,7 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     chipShowHidden: "显示隐藏地点",
     mapEmbedTitle: "地图：{name}",
     cooperativeHint: "按住 {key} 滚动以缩放地图",
+    listSeparator: "、",
   },
   "zh-hant": {
     map: "地圖。使用方向鍵平移，加號及減號縮放。",
@@ -111,6 +115,7 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     chipShowHidden: "顯示隱藏地點",
     mapEmbedTitle: "地圖：{name}",
     cooperativeHint: "按住 {key} 捲動以縮放地圖",
+    listSeparator: "、",
   },
 };
 

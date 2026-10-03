@@ -12,13 +12,21 @@
 //! rather than re-deriving it: **only the home page's own `location:`
 //! drives a work's entry**, even when a companion names a place of its
 //! own — `inherit.rs` calls this the explorer's "one-dot-per-work" display
-//! choice. A companion is folded into its work's `companions` list and is
-//! never independently evaluated; every other located page — one with no
-//! work folder, or the home page of an ordinary section that isn't a work
-//! — becomes its own standalone entry with no companions.
+//! choice. A companion is folded into its work's `companions` list only when
+//! the work is itself on the map (public, located, with coordinates) and the
+//! companion's location equals the home's; every other located page — one
+//! with a place of its own, one under a home that is not on the map, one
+//! with no work folder, or the home page of an ordinary section that isn't
+//! a work — becomes its own standalone entry with no companions.
+//!
+//! A folder whose self-named home page names no place is not a work at all
+//! ([`group_by_work`] leaves it out): its pages are evaluated one by one, so
+//! a located page inside it is its own entry and an unlocated one is simply
+//! not on the map.
 //!
 //! A work (or standalone page) whose declared locations resolve to no
-//! coordinates at all is skipped outright — the same rule
+//! coordinates at all is skipped outright, and its located companions are
+//! then judged on their own — the same rule
 //! [`super::PlaceMapTarget::has_coordinates`] gates the static map
 //! renderer with, so a place line that only ever showed as text never
 //! grows a dot with no coordinate behind it.
@@ -61,6 +69,10 @@ struct WorkEntry {
     date: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     byline: Vec<String>,
+    /// The page's `author:` names — what a collapsed card shows. The byline
+    /// is a free-form credit line and stays for the expanded detail.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    authors: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -341,6 +353,7 @@ fn build_entry(
         // name, `[Name](/people/name/)`) for the page's own credit line;
         // the explorer's compact card reads it as plain text, never HTML.
         byline: home.byline.iter().map(|b| strip_markdown_inline(b)).collect(),
+        authors: home.author.clone(),
         description: plain_description(home.description.as_deref(), &home.content, math),
         cover: resolve_cover(home.cover.as_deref(), home.cover_type.as_deref(), dir_overrides),
         places: place_ids,
@@ -375,10 +388,6 @@ pub fn emit_places_data(
     let parents = context.parents();
     let works = group_by_work(documents);
     let mut claimed: HashSet<usize> = HashSet::new();
-    for group in works.values() {
-        claimed.insert(group.home_idx);
-        claimed.extend(group.companions.iter().copied());
-    }
 
     let mut entries = Vec::new();
     let mut places: BTreeMap<String, PlaceEntry> = BTreeMap::new();
@@ -404,21 +413,28 @@ pub fn emit_places_data(
     };
 
     for group in works.values() {
-        if !documents[group.home_idx].is_public_page() {
+        let home = &documents[group.home_idx];
+        if !home.is_public_page() {
             continue;
         }
+        // Only a companion at the home's own place is folded into the work;
+        // one that names a place of its own is judged as its own work below.
+        let folded: Vec<usize> =
+            group.companions.iter().copied().filter(|&i| documents[i].location.is_empty() || documents[i].location == home.location).collect();
         if let Some((entry, resolved)) = build_entry(
             maps,
             gazetteer,
             namespace,
             documents,
             group.home_idx,
-            &group.companions,
+            &folded,
             math,
             dir_overrides,
         ) {
             fold_places(resolved, &mut places);
             entries.push(entry);
+            claimed.insert(group.home_idx);
+            claimed.extend(folded);
         }
     }
 
@@ -663,6 +679,24 @@ mod tests {
         assert_eq!(w["description"], "See this report for more.", "{json}");
     }
 
+    /// `author:` names reach the wire as their own list, apart from the
+    /// byline credit line, and the key is absent when a page has none.
+    #[test]
+    fn authors_serialize_apart_from_the_byline_and_are_absent_when_empty() {
+        let mut authored = standalone("posts/kyoto-report.md", "posts/kyoto-report/", "Kyoto Report", &["Kyoto"]);
+        authored.author = vec!["Ana Reyes".to_string(), "Bo Lind".to_string()];
+        authored.byline = vec!["Photographs: [Cy](/people/cy/)".to_string()];
+        let unauthored = standalone("posts/nara-diary.md", "posts/nara-diary/", "Nara Diary", &["Nara"]);
+        let json = emit_places_data(&[authored, unauthored], &context(gazetteer()), true, &HashMap::new());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let works = parsed["works"].as_array().unwrap();
+        let kyoto = works.iter().find(|w| w["title"] == "Kyoto Report").unwrap();
+        assert_eq!(kyoto["authors"], serde_json::json!(["Ana Reyes", "Bo Lind"]), "{json}");
+        assert_eq!(kyoto["byline"], serde_json::json!(["Photographs: Cy"]), "{json}");
+        let nara = works.iter().find(|w| w["title"] == "Nara Diary").unwrap();
+        assert!(nara.get("authors").is_none(), "authors must be absent, not [] or null: {json}");
+    }
+
     #[test]
     fn a_places_parent_reaches_a_roll_up_only_ancestor_with_no_gazetteer_row() {
         // Japan has no row of its own in `gazetteer()` — only Kyoto's and
@@ -865,6 +899,92 @@ mod tests {
         let works = parsed["works"].as_array().unwrap();
         assert_eq!(works.len(), 1);
         assert_eq!(works[0]["places"], serde_json::json!(["places/kyoto"]), "Osaka never leaks in: {json}");
+    }
+
+    fn work_ids(json: &str) -> Vec<String> {
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        parsed["works"].as_array().unwrap().iter().map(|w| w["id"].as_str().unwrap().to_string()).collect()
+    }
+
+    fn located_companion(source_path: &str, url_path: &str, title: &str, location: &[&str]) -> ParsedDocument {
+        standalone(source_path, url_path, title, location)
+    }
+
+    #[test]
+    fn a_companion_with_a_different_location_is_its_own_work_under_a_located_home() {
+        let docs = vec![
+            home("works/kyoto-walk/kyoto-walk.md", "works/kyoto-walk/", "Kyoto Walk", &["Kyoto"]),
+            located_companion("works/kyoto-walk/detour.md", "works/kyoto-walk/detour/", "Detour", &["Nara"]),
+        ];
+        let json = emit_places_data(&docs, &context(gazetteer()), true, &HashMap::new());
+        assert_eq!(work_ids(&json), vec!["/works/kyoto-walk/", "/works/kyoto-walk/detour/"], "{json}");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["works"][0]["companions"], serde_json::json!([]), "the detour is not also a companion: {json}");
+    }
+
+    #[test]
+    fn a_located_companion_under_a_non_public_home_is_its_own_work() {
+        let mut work = home("works/kyoto-walk/kyoto-walk.md", "works/kyoto-walk/", "Kyoto Walk", &["Kyoto"]);
+        work.draft = Some(true);
+        let docs = vec![
+            work,
+            located_companion("works/kyoto-walk/morning.md", "works/kyoto-walk/morning/", "Morning", &["Kyoto"]),
+        ];
+        let json = emit_places_data(&docs, &context(gazetteer()), true, &HashMap::new());
+        assert_eq!(work_ids(&json), vec!["/works/kyoto-walk/morning/"], "{json}");
+    }
+
+    #[test]
+    fn a_located_companion_under_a_home_with_no_coordinates_is_its_own_work() {
+        // Osaka has no `lng`, so the home never resolves to a point.
+        let docs = vec![
+            home("works/osaka-notes/osaka-notes.md", "works/osaka-notes/", "Osaka Notes", &["Osaka"]),
+            located_companion("works/osaka-notes/day-trip.md", "works/osaka-notes/day-trip/", "Day Trip", &["Nara"]),
+        ];
+        let json = emit_places_data(&docs, &context(gazetteer()), true, &HashMap::new());
+        assert_eq!(work_ids(&json), vec!["/works/osaka-notes/day-trip/"], "{json}");
+    }
+
+    /// A section folder (self-named index note with no `location:`) holding
+    /// located essays: each essay is its own work, the unlocated sibling is
+    /// not on the map, and the section's home is not either.
+    #[test]
+    fn a_located_page_under_an_unlocated_home_is_its_own_work() {
+        let docs = vec![
+            home("essays/essays.md", "essays/", "Essays", &[]),
+            standalone("essays/kyoto-essay.md", "essays/kyoto-essay/", "Kyoto Essay", &["Kyoto"]),
+            companion("essays/preface.md", "essays/preface/", "Preface"),
+        ];
+        let json = emit_places_data(&docs, &context(gazetteer()), true, &HashMap::new());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let works = parsed["works"].as_array().unwrap();
+        assert_eq!(works.len(), 1, "{json}");
+        assert_eq!(works[0]["id"], "/essays/kyoto-essay/", "{json}");
+        assert_eq!(works[0]["companions"], serde_json::json!([]), "{json}");
+    }
+
+    #[test]
+    fn an_unlocated_page_under_an_unlocated_home_is_not_on_the_map() {
+        let docs = vec![
+            home("essays/essays.md", "essays/", "Essays", &[]),
+            companion("essays/preface.md", "essays/preface/", "Preface"),
+        ];
+        let json = emit_places_data(&docs, &context(gazetteer()), true, &HashMap::new());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["works"].as_array().unwrap().len(), 0, "{json}");
+    }
+
+    #[test]
+    fn an_unlocated_chapter_under_a_located_home_stays_its_companion() {
+        let docs = vec![
+            home("works/kyoto-walk/kyoto-walk.md", "works/kyoto-walk/", "Kyoto Walk", &["Kyoto"]),
+            companion("works/kyoto-walk/morning.md", "works/kyoto-walk/morning/", "Morning"),
+        ];
+        let json = emit_places_data(&docs, &context(gazetteer()), true, &HashMap::new());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let works = parsed["works"].as_array().unwrap();
+        assert_eq!(works.len(), 1, "{json}");
+        assert_eq!(works[0]["companions"].as_array().unwrap().len(), 1, "{json}");
     }
 
     #[test]

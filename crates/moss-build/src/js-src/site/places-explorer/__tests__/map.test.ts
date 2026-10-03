@@ -55,8 +55,8 @@ function keyboardPan(viewportEl: HTMLElement, key: string, times: number): void 
 describe("mountPlacesMap — embed seams", () => {
   const PLACES = {
     works: [
-      { id: "w1", title: "W1", byline: [], companions: [], places: ["p1"], date: "2024-01-01", description: "", cover: null, url: "/w1/" },
-      { id: "w2", title: "W2", byline: [], companions: [], places: ["p1"], date: "2024-01-02", description: "", cover: null, url: "/w2/" },
+      { id: "w1", title: "W1", byline: [], authors: [], companions: [], places: ["p1"], date: "2024-01-01", description: "", cover: null, url: "/w1/" },
+      { id: "w2", title: "W2", byline: [], authors: [], companions: [], places: ["p1"], date: "2024-01-02", description: "", cover: null, url: "/w2/" },
     ],
     places: [{ id: "p1", name: "P1", lat: 10, lng: 10, precision: "city", parent: null }],
   } as any;
@@ -236,7 +236,7 @@ describe("mountPlacesMap — embed seams", () => {
 
 describe("mountPlacesMap — a work's fit ceiling follows tile coverage", () => {
   const PLACES = {
-    works: [{ id: "w1", title: "W1", byline: [], companions: [], places: ["p1"], date: "2024-01-01", description: "", cover: null, url: "/w1/" }],
+    works: [{ id: "w1", title: "W1", byline: [], authors: [], companions: [], places: ["p1"], date: "2024-01-01", description: "", cover: null, url: "/w1/" }],
     places: [{ id: "p1", name: "P1", lat: 15, lng: 25, precision: "city", parent: null }],
   } as any;
   function fitZoom(tileCells: Array<[number, number]>): number {
@@ -398,7 +398,7 @@ describe("mountPlacesMap — the label layer actually reserves the breadcrumb ch
       en: { cities: [{ name: "Testopolis", lat: 10, lng: 20, rank: 0 }], ranges: [], peaks: [], rivers: [] },
     };
     const place: Place = { id: "p1", name: "Place One", precision: "city", lat: 1, lng: 1 };
-    const work: Work = { id: "w1", title: "Work One", url: "/w1", byline: [], places: ["p1"], companions: [] };
+    const work: Work = { id: "w1", title: "Work One", url: "/w1", byline: [], authors: [], places: ["p1"], companions: [] };
     const controller = mountPlacesMap(figure, {
       worldSvgText: WORLD_SVG,
       tilesBaseUrl: "/_moss/map.abc/",

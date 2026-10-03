@@ -19,7 +19,7 @@ const COUNTRY = { id: "places/portugal", name: "Portugal", precision: "country",
 const PLACES = [LISBON, PORTO, COUNTRY];
 
 function work(id: string, places: string[]): Work {
-  return { id, title: id, url: `/${id}/`, byline: [], places, companions: [] };
+  return { id, title: id, url: `/${id}/`, byline: [], authors: [], places, companions: [] };
 }
 
 describe("pointsForWorks", () => {

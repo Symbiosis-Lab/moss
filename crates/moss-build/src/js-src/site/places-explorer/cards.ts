@@ -11,6 +11,9 @@
 import type { Place, Work } from "./types";
 import type { PlacesStrings } from "./strings";
 
+/** Between the author and the date on the collapsed meta line; non-breaking so the line stays one ellipsised row. */
+const META_SEPARATOR = "\u00a0\u00b7\u00a0";
+
 /** `work.date`, or `""` so an undated work always sorts after every dated one — never mistaken for the oldest. */
 function dateKey(work: Work): string {
   return work.date ?? "";
@@ -154,15 +157,16 @@ export class CardRow {
     title.className = "moss-card-title";
     title.textContent = work.title || this.strings.untitled;
     body.append(title);
-    // One compact meta line — the first byline entry, then the date — never
-    // the full byline: a work with several linked contributors used to print
+    // One compact meta line — the author names (the page's `author:`, falling
+    // back to the first byline entry for a page with none), then the date —
+    // never the credit text, never the full byline: a work with several linked contributors used to print
     // its whole credit line here with nothing to stop it wrapping, which is
     // what made an ordinary card hundreds of px tall. The full byline moves
     // to the expanded detail below. Each part is its own span so CSS can
     // ellipsise the author while the date never shrinks (places-explorer.css);
     // the separator is real text in the date span, so a copy or a screen
     // reader gets "Author · 2024-06-10", and a lone date has none.
-    const author = work.byline[0];
+    const author = work.authors.length ? work.authors.join(this.strings.listSeparator) : work.byline[0];
     if (author || work.date) {
       const meta = document.createElement("span");
       meta.className = "moss-card-meta";
@@ -175,7 +179,7 @@ export class CardRow {
       if (work.date) {
         const part = document.createElement("span");
         part.className = "moss-card-meta-date";
-        part.textContent = author ? `\u00a0\u00b7\u00a0${work.date}` : work.date;
+        part.textContent = author ? `${META_SEPARATOR}${work.date}` : work.date;
         meta.append(part);
       }
       body.append(meta);
@@ -220,10 +224,20 @@ export class CardRow {
       detail.append(byline);
     }
 
-    const placeNames = work.places.map((id) => this.placesById.get(id)?.name).filter((name): name is string => Boolean(name));
-    if (placeNames.length) {
+    // A place's own page lives at its id: the id is the term's URL directory (`moss_core::terms::term_folder_key`).
+    const placeList = work.places
+      .map((id) => ({ id, name: this.placesById.get(id)?.name }))
+      .filter((place): place is { id: string; name: string } => Boolean(place.name));
+    if (placeList.length) {
       const places = document.createElement("p");
-      places.textContent = placeNames.join(" · ");
+      placeList.forEach((place, index) => {
+        if (index) places.append(META_SEPARATOR);
+        const link = document.createElement("a");
+        link.href = `/${place.id}/`;
+        openInTopWhenEmbedded(link);
+        link.textContent = place.name;
+        places.append(link);
+      });
       detail.append(places);
     }
 

@@ -183,6 +183,48 @@ test.describe("style:map embed", () => {
     expect(intersects(chipBox, expandBoxExpanded)).toBe(false);
   });
 
+  // Over white map (ice, a polar band) the exit control must still read: a
+  // solid surface and an icon at WCAG AA contrast against it.
+  test("the exit-fullscreen control is an opaque surface with a legible icon", async ({ page, browserName }) => {
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    await clickFullscreenButton(page, browserName);
+    await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
+    const button = page.locator(".immersive-fullscreen-btn");
+    const channels = (css: string) => css.match(/[\d.]+/g)!.map(Number);
+    const read = () => button.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      return { background: cs.backgroundColor, color: cs.color, width: box.width, height: box.height };
+    });
+    // Waits out the colour transition the base rule starts from.
+    await expect.poll(async () => {
+      const bg = channels((await read()).background);
+      return bg.length === 3 ? 1 : bg[3];
+    }, { timeout: 3000, message: "background must become opaque" }).toBe(1);
+    const style = await read();
+    const luminance = ([r, g, b]: number[]) => {
+      const lin = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    };
+    const [hi, lo] = [luminance(channels(style.background)), luminance(channels(style.color))].sort((a, b) => b - a);
+    expect((hi + 0.05) / (lo + 0.05), `icon ${style.color} on ${style.background}`).toBeGreaterThanOrEqual(4.5);
+    expect(style.width).toBe(36);
+    expect(style.height).toBe(36);
+  });
+
+  // The embed document keeps the site's "Skip to content" link, which points
+  // nowhere useful inside a map the size of a card: Tab from the iframe goes
+  // straight to the map.
+  test("Tab from the iframe lands on the map viewport, not a skip link", async ({ page }) => {
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    await page.locator(IFRAME).focus();
+    await page.keyboard.press("Tab");
+    const frame = page.frameLocator(IFRAME);
+    await expect(frame.locator(".moss-places-viewport")).toBeFocused();
+  });
+
   test("collapsed mode runs cooperative gestures", async ({ page }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);

@@ -230,7 +230,8 @@ export function windowCenter(values: number[], width: number, fallbackMid: numbe
     if (right < left) right = left;
     while (right < sorted.length && sorted[right] - sorted[left] <= width) right++;
     const count = right - left;
-    const center = sorted[left] + width / 2;
+    // Centred on the points the window covers, not anchored at the first of them: a lone point (or a tight group) then sits mid-window instead of on its edge.
+    const center = (sorted[left] + sorted[right - 1]) / 2;
     if (!best || count > best.count || (count === best.count && Math.abs(center - fallbackMid) < Math.abs(best.center - fallbackMid))) {
       best = { count, center };
     }

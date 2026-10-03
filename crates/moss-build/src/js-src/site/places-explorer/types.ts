@@ -55,6 +55,8 @@ export interface Work {
   url: string;
   date?: string;
   byline: string[];
+  /** The page's `author:` names, `[]` when it has none (see {@link normalizePlacesData}). */
+  authors: string[];
   description?: string;
   cover?: string;
   /** Ids into the sibling `places` array. */
@@ -87,6 +89,7 @@ export interface WorkWire {
   url: string;
   date?: string;
   byline?: string[];
+  authors?: string[];
   description?: string;
   cover?: string;
   places: string[];
@@ -99,10 +102,10 @@ export interface PlacesDataWire {
   places: Place[];
 }
 
-/** Reconcile a fetched `places.<hash>.json` payload into the shape every reader in this directory actually relies on — today, just defaulting an omitted `byline` to `[]`. The one normalization boundary: call this once, right where the JSON is parsed ({@link import("./index").initPlacesExplorer}), not at each read site. */
+/** Reconcile a fetched `places.<hash>.json` payload into the shape every reader in this directory actually relies on — defaulting an omitted `byline` and `authors` to `[]`. The one normalization boundary: call this once, right where the JSON is parsed ({@link import("./index").initPlacesExplorer}), not at each read site. */
 export function normalizePlacesData(wire: PlacesDataWire): PlacesData {
   return {
-    works: wire.works.map((work) => ({ ...work, byline: work.byline ?? [] })),
+    works: wire.works.map((work) => ({ ...work, byline: work.byline ?? [], authors: work.authors ?? [] })),
     places: wire.places,
   };
 }

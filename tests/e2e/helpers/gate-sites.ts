@@ -2356,12 +2356,13 @@ const PLACES_EXPLORER_TALL_COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" 
 const PLACES_EXPLORER_WIDE_COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="60" viewBox="0 0 400 60"><rect width="400" height="60" fill="#8caf6a"/></svg>
 `;
 
-function placesExplorerWork(uid: string, title: string, location: string, date: string, cover = "cover.svg", byline = "Field notes"): string {
+function placesExplorerWork(uid: string, title: string, location: string, date: string, cover = "cover.svg", byline = "Field notes", author?: string): string {
+  const authorLine = author ? `\nauthor: "${author}"` : "";
   return `---
 title: ${title}
 uid: "${uid}"
 location: "${location}"
-date: ${date}
+date: ${date}${authorLine}
 byline: "${byline}"
 description: "A short note from ${title}."
 cover: ${cover}
@@ -2444,11 +2445,11 @@ A claim with a source.[^1]
 
 [^1]: The source.
 `,
-    "lisbon-walk.md": placesExplorerWork("pex001aa", "Lisbon Walk", "Lisbon", "2024-06-10", "cover.svg", "Ana"),
+    "lisbon-walk.md": placesExplorerWork("pex001aa", "Lisbon Walk", "Lisbon", "2024-06-10", "cover.svg", "Photographs: Cy", "Ana"),
     "lisbon-harbor-light.md": placesExplorerWork("pex002bb", "Lisbon Harbor Light", "Lisbon Harbor", "2024-06-05", "cover-tall.svg"),
     "porto-steps.md": placesExplorerWork("pex003cc", "Porto Steps", "Porto", "2024-05-20", "cover-wide.svg"),
     "coimbra-library.md": placesExplorerWork("pex004dd", "Coimbra Library", "Coimbra", "2024-05-01"),
-    "portugal-overview.md": placesExplorerWork("pex013mm", "Portugal Overview", "Portugal", "2024-07-01", "cover.svg", "Alexandria Papadopoulos Konstantinou"),
+    "portugal-overview.md": placesExplorerWork("pex013mm", "Portugal Overview", "Portugal", "2024-07-01", "cover.svg", "Field notes", "Alexandria Papadopoulos Konstantinou"),
     "kyoto-garden.md": placesExplorerWork("pex005ee", "Kyoto Garden", "Kyoto", "2024-04-15"),
     "osaka-market.md": placesExplorerWork("pex006ff", "Osaka Market", "Osaka", "2024-04-01"),
     "tokyo-crossing.md": placesExplorerWork("pex007gg", "Tokyo Crossing", "Tokyo", "2024-03-10"),
@@ -2848,5 +2849,102 @@ Body text below the hero.
     // -1 is relative to the WHOLE page, not just the hero, and this layer
     // (at the default stacking level, effectively 0) would paint over it.
     ".moss/theme/style.css": `body::before { content: ""; position: fixed; inset: 0; background: #fff; z-index: 0; }`,
+  },
+};
+
+/**
+ * A horizontal site whose places root holds exactly one work: a located home
+ * page with a chapter and no cover. The initial frame has nothing to compare
+ * the lone marker against, so it must still keep it clear of the card row and
+ * the chip, and no card may open before a click. Served by
+ * playwright/places-explorer-single.config.ts.
+ */
+export const PLACES_EXPLORER_SINGLE_GATE: ScratchSiteSpec = {
+  name: "places-explorer-single-gate",
+  files: {
+    "places/index.md": `---
+title: Places
+---
+
+Every work this site locates, gathered on one map.
+`,
+    "voyage/voyage.md": `---
+title: The Long Voyage
+uid: "pes001aa"
+location: "Cambridge"
+date: 2024-06-10
+---
+
+A work with chapters and no description of its own.
+`,
+    "voyage/first-chapter.md": `---
+title: First Chapter
+uid: "pes002bb"
+---
+
+The first chapter.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+locator = "align-right"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+`,
+    ".moss/places.toml": `["Cambridge"]
+lat = 52.205
+lng = 0.119
+precision = "city"
+`,
+    ".moss/theme/style.css": null,
+  },
+};
+
+/**
+ * A vertical-typesetting site with a places explorer and one located page.
+ * The map is a horizontal widget: under `[site] typesetting = "vertical"` the
+ * explorer page's figure and the locator's hydrated embed page must still be
+ * as wide as the window, and the embed's map must paint its whole box.
+ * Served by playwright/places-explorer-vertical.config.ts.
+ */
+export const PLACES_EXPLORER_VERTICAL_GATE: ScratchSiteSpec = {
+  name: "places-explorer-vertical-gate",
+  files: {
+    "places/index.md": `---
+title: Places
+---
+
+Every work this site locates, gathered on one map.
+`,
+    "harbour.md": `---
+title: Harbour Morning
+uid: "pev001aa"
+location: "Lisbon"
+date: 2024-06-10
+author: Ines Moreau
+---
+
+The ferry leaves before the light is fully up.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+locator = "align-right"
+typesetting = "vertical"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+`,
+    ".moss/places.toml": `["Lisbon"]
+lat = 38.722
+lng = -9.139
+precision = "exact"
+`,
+    ".moss/theme/style.css": null,
   },
 };

@@ -48,6 +48,17 @@ describe("coverCamera", () => {
     expect(camera.y).toBeGreaterThan(centred.y);
   });
 
+  test("a lone point on the cropped axis lands mid-viewport, not on its edge", () => {
+    // A portrait phone crops the world's width. Anchoring the window at its
+    // first point put a single marker on the viewport's left edge.
+    const viewport = { width: 390, height: 700 };
+    const point = { x: 400, y: 240 };
+    const camera = coverCamera([point], viewport);
+    const screen = worldToScreen(point, camera, viewport);
+    expect(screen.x).toBeGreaterThan(viewport.width * 0.4);
+    expect(screen.x).toBeLessThan(viewport.width * 0.6);
+  });
+
   test("a frame narrower than the viewport raises zoom enough to re-centre on it without opening a gap", () => {
     const viewport = { width: 1000, height: 600 };
     // At this viewport, zoom=1 exactly covers the HEIGHT axis with zero

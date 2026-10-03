@@ -2734,17 +2734,17 @@ header:has(+ .moss-hero) .main-nav {
      sea-deep; the renderer places each band on that ramp stretched to the
      bands present in the frame (gamma 0.45 on the sea side, so shelf steps
      stay distinct). */
-  --moss-place-water: #e9eff2;
-  --moss-place-globe-water: #e9eff2;
-  --moss-place-land: #d7d5c9;
-  --moss-place-land-mid: #e3dcc8;
-  --moss-place-land-high: #f6f1e4;
-  --moss-place-sea-deep: #bfd0dc;
-  --moss-place-globe-land: #d7d5c9;
+  --moss-place-water: #dbe7ea;
+  --moss-place-globe-water: #dbe7ea;
+  --moss-place-land: #e3e6d5;
+  --moss-place-land-mid: #ece4cc;
+  --moss-place-land-high: #f7f2e6;
+  --moss-place-sea-deep: #b9cdd6;
+  --moss-place-globe-land: #e3e6d5;
   --moss-place-coast: #f5f6f4;
   --moss-place-coast-opacity: 0.6;
   --moss-place-globe-coast: #f5f6f4;
-  --moss-place-globe-edge: #d7d5c9;
+  --moss-place-globe-edge: #e3e6d5;
   /* The site's own accent, not a second hardcoded green — a marker must
      outrank terrain regardless of what a custom theme does to
      --moss-color-accent. */
@@ -2766,8 +2766,8 @@ header:has(+ .moss-hero) .main-nav {
      filter's gains, which are the larger of the two themes'. */
   --moss-place-light-warm-strength: 1;
   --moss-place-light-cool-strength: 0.8889;
-  --moss-place-rivers: #5b93bd;
-  --moss-place-lakes: #a9c6d8;
+  --moss-place-rivers: #7fa6bd;
+  --moss-place-lakes: #bcd3de;
   --moss-place-ice: #fbfcfd;
   --moss-place-built-up: #c9bdb4;
   --moss-place-salt: #e3dcc8;
@@ -8393,11 +8393,25 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   top: auto;
   left: auto;
   z-index: 10001;
-  background: rgba(128, 128, 128, 0.3);
+  /* The exit control sits over whatever the map shows, including white ice,
+     so it is a solid surface with the same circle and shadow as the map's own
+     zoom controls instead of a translucent tint. */
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--moss-color-surface);
+  box-shadow: var(--moss-elevation-1);
+  color: var(--moss-color-text);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .immersive-fs-active .immersive-fullscreen-btn:hover {
-  background: rgba(128, 128, 128, 0.5);
+  background: var(--moss-color-surface);
+}
+
+.immersive-fs-active .immersive-fullscreen-btn:focus-visible {
+  outline-color: var(--moss-color-ui-accent);
 }
 
 .immersive-fs-active .immersive-new-window-btn {

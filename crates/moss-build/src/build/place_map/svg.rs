@@ -554,7 +554,7 @@ impl Writer<'_> {
         let height = length(self.canvas_height);
         write!(
             self.output,
-            "<g id=\"{id}\" data-map-layer=\"water\"><rect width=\"{width}\" height=\"{height}\" fill=\"var(--moss-place-water, #e9eff2)\"/></g>",
+            "<g id=\"{id}\" data-map-layer=\"water\"><rect width=\"{width}\" height=\"{height}\" fill=\"var(--moss-place-water, #dbe7ea)\"/></g>",
         )
         .expect("writing to String cannot fail");
     }
@@ -638,7 +638,7 @@ impl Writer<'_> {
         write!(self.output, "<g id=\"{}\" data-map-layer=\"land\">", self.ids.get("layer-land"))
             .expect("writing to String cannot fail");
         for id in &self.land_paths {
-            write!(self.output, "<use href=\"#{id}\" fill=\"var(--moss-place-land, #d7d5c9)\"/>")
+            write!(self.output, "<use href=\"#{id}\" fill=\"var(--moss-place-land, #e3e6d5)\"/>")
                 .expect("writing to String cannot fail");
         }
         self.output.push_str("</g>");
@@ -656,8 +656,8 @@ impl Writer<'_> {
         let fill = |color: &str| format!("fill=\"{color}\"");
         self.emit_merged_layer(quantisation, projection, grouped, 5, "ice", &fill("var(--moss-place-ice, #fbfcfd)"));
         self.emit_merged_layer(quantisation, projection, grouped, 7, "salt", &fill("var(--moss-place-salt, #e3dcc8)"));
-        self.emit_merged_layer(quantisation, projection, grouped, 3, "lakes", &fill("var(--moss-place-lakes, #a9c6d8)"));
-        self.emit_river_layer(quantisation, projection, grouped, "var(--moss-place-rivers, #5b93bd)");
+        self.emit_merged_layer(quantisation, projection, grouped, 3, "lakes", &fill("var(--moss-place-lakes, #bcd3de)"));
+        self.emit_river_layer(quantisation, projection, grouped, "var(--moss-place-rivers, #7fa6bd)");
         // Natural Earth's reefs are lines, not areas.
         self.emit_merged_layer(quantisation, projection, grouped, 6, "reefs", "fill=\"none\" stroke=\"var(--moss-place-reefs, #b9d6cf)\" stroke-width=\"1.2\"");
         self.emit_merged_layer(quantisation, projection, grouped, 8, "built-up", "fill=\"var(--moss-place-built-up, #c9bdb4)\" fill-opacity=\"0.7\"");
@@ -878,7 +878,7 @@ impl Writer<'_> {
                 longitude: 0.0,
                 latitude: 0.0,
             });
-        write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #e9eff2)\"/>").expect("writing to String cannot fail");
+        write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #dbe7ea)\"/>").expect("writing to String cannot fail");
         // The world tier holds land alone: its rings are the globe's land
         // and, stroked first, its coast.
         let quantisation = context.pack().header.quantisation;
@@ -906,7 +906,7 @@ impl Writer<'_> {
                 .flat_map(|part| globe_rings(part, center, quantisation))
                 .collect();
             if let Some(path) = serialize_path(&rings, true, FINE) {
-                write!(self.output, "<path d=\"{path}\" fill=\"var(--moss-place-globe-land, #d7d5c9)\" fill-rule=\"evenodd\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
+                write!(self.output, "<path d=\"{path}\" fill=\"var(--moss-place-globe-land, #e3e6d5)\" fill-rule=\"evenodd\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
             }
         }
         draw_globe_line(self, target, center, quantisation);
@@ -930,7 +930,7 @@ impl Writer<'_> {
             )
             .expect("writing to String cannot fail");
         }
-        write!(self.output, "</g><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"none\" stroke=\"var(--moss-place-globe-edge, #d7d5c9)\" stroke-width=\"1\" data-map-globe-inset=\"true\"/>").expect("writing to String cannot fail");
+        write!(self.output, "</g><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"none\" stroke=\"var(--moss-place-globe-edge, #e3e6d5)\" stroke-width=\"1\" data-map-globe-inset=\"true\"/>").expect("writing to String cannot fail");
     }
 }
 
@@ -1243,9 +1243,9 @@ mod tests {
             body[start..start + body[start..].find('>').unwrap()].to_string()
         };
         let top = last_group("relief");
-        assert!(top.contains("--moss-place-land-high, #f6f1e4) 100%"), "{top}");
+        assert!(top.contains("--moss-place-land-high, #f7f2e6) 100%"), "{top}");
         let deepest = last_group("seafloor");
-        assert!(deepest.contains("--moss-place-sea-deep, #bfd0dc) 100%"), "{deepest}");
+        assert!(deepest.contains("--moss-place-sea-deep, #b9cdd6) 100%"), "{deepest}");
     }
 
     /// The approved design's markers: an exact or city place is a 4 px dot
@@ -1612,7 +1612,7 @@ mod tests {
     #[test]
     fn river_width_tapers_by_rank_to_a_floor() {
         let widths: Vec<f64> = [0, 1, 3, 6, 7, 8, 12].into_iter().map(river::river_width).collect();
-        let expected = [1.6, 1.46, 1.18, 0.76, 0.62, 0.5, 0.5];
+        let expected = [0.8, 0.73, 0.59, 0.38, 0.31, 0.25, 0.25];
         for (width, expected) in widths.iter().zip(expected) {
             assert!((width - expected).abs() < 1e-9, "{widths:?}");
         }
@@ -1624,7 +1624,7 @@ mod tests {
     fn locator_rivers_taper_by_their_scalerank() {
         let svg = locator_for(35.5, 33.89, Precision::Exact);
         let rivers = layer_body(&svg, "rivers");
-        for width in ["1.46", "0.76"] {
+        for width in ["0.73", "0.38"] {
             assert!(rivers.contains(&format!("stroke-width=\"{width}\"")), "no {width} stroke in {rivers:.300}");
         }
     }
@@ -1685,7 +1685,7 @@ mod tests {
                 .collect()
         };
         let coasts = features("stroke=\"var(--moss-place-globe-coast, #f5f6f4)\"");
-        let lands = features("fill=\"var(--moss-place-globe-land, #d7d5c9)\"");
+        let lands = features("fill=\"var(--moss-place-globe-land, #e3e6d5)\"");
         assert!(!lands.is_empty());
         assert!(lands.iter().all(|land| coasts.contains(land)), "coast {coasts:?}, land {lands:?}");
     }

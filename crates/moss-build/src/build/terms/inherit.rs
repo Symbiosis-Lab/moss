@@ -56,9 +56,6 @@ use crate::build::types::ParsedDocument;
 pub fn inherit_work_locations(documents: &mut [ParsedDocument]) {
     for group in group_by_work(documents).into_values() {
         let home_location = documents[group.home_idx].location.clone();
-        if home_location.is_empty() {
-            continue;
-        }
         for i in group.companions {
             if documents[i].location.is_empty() {
                 documents[i].location = home_location.clone();
@@ -79,8 +76,9 @@ pub(crate) struct WorkGroup {
 /// the design's test verbatim: the folder's real home (`PageKind::Folder`,
 /// the build's own election result) must be self-named to its folder, not
 /// an index-stem winner and not a `home: true` override that landed on a
-/// differently-named file. A folder that fails any of those — including a
-/// lone document with no companion, or no home at all — is simply absent
+/// differently-named file, and the home must name a place. A folder that
+/// fails any of those — including a lone document with no companion, or no
+/// home at all — is simply absent
 /// from the result; every caller's "is this a work" question is answered by
 /// `.contains_key` on the returned map.
 ///
@@ -114,6 +112,12 @@ pub(crate) fn group_by_work(documents: &[ParsedDocument]) -> BTreeMap<String, Wo
         else {
             continue;
         };
+
+        // A home that names no place makes the folder a section for every
+        // caller: nothing to inherit, nothing to group under.
+        if documents[home_idx].location.is_empty() {
+            continue;
+        }
 
         let home_stem = documents[home_idx]
             .source_path
@@ -176,6 +180,15 @@ mod tests {
         let group = works.get("works/kyoto-walk").expect("kyoto-walk is a work");
         assert_eq!(group.home_idx, 1, "the self-named home, found by election, not by position");
         assert_eq!(group.companions, vec![0, 2], "companions in source order, home excluded");
+    }
+
+    #[test]
+    fn group_by_work_leaves_out_a_folder_whose_home_names_no_place() {
+        let docs = vec![
+            home("works/kyoto-walk/kyoto-walk.md", &[]),
+            companion("works/kyoto-walk/morning.md", &["Nara"]),
+        ];
+        assert!(group_by_work(&docs).is_empty());
     }
 
     #[test]

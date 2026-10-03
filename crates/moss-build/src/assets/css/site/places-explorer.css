@@ -39,7 +39,8 @@
 html[data-moss-embed] header,
 html[data-moss-embed] footer,
 html[data-moss-embed] .moss-colophon,
-html[data-moss-embed] .moss-nav-island {
+html[data-moss-embed] .moss-nav-island,
+html[data-moss-embed] .moss-skip-link {
   display: none;
 }
 /* The places root's own `<h1>`/intro content (if any) sits in the same
@@ -52,6 +53,12 @@ html[data-moss-embed] .moss-nav-island {
 html[data-moss-embed] main article.container > :not(figure[data-moss-places-explorer]) {
   display: none;
 }
+/* The article's own block margin (64px on a typical theme) would push the
+   figure's 100svh past the iframe's height, and the overflow shows up as a
+   vertical scrollbar that costs a classic-scrollbar engine its width. */
+html[data-moss-embed] main article.container {
+  margin-block: 0;
+}
 /* Design decision 7 below floors the full page's own figure at 480px tall
    so a short viewport still gets a usable map — exactly wrong for a small
    collapsed embed, which wants to fill whatever (possibly much shorter)
@@ -63,6 +70,23 @@ html[data-moss-embed] main article.container > :not(figure[data-moss-places-expl
    specificity, not to reach further. */
 html[data-moss-embed] main article.container > figure[data-moss-places-explorer] {
   block-size: 100svh;
+}
+
+/* The map is a horizontal widget. Under `typesetting = "vertical"`,
+   site/vertical.css turns `body` into a fixed-height vertical-rl column, and
+   a figure sized with `100cqi` inside it paints half outside the column.
+   The explorer page and its embed page therefore set the body back to
+   horizontal flow: nothing about the map is typeset text, and the site's own
+   header keeps its chrome. The embed also drops the column's head margin and
+   fixed height, which would otherwise crop the iframe's map. Chosen over
+   leaving `data-typesetting` off the page because the embed is only known
+   from the URL at runtime, never at render time. */
+body[data-typesetting="vertical"]:has(main article.container > figure[data-moss-places-explorer]),
+html[data-moss-embed] body[data-typesetting="vertical"] {
+  writing-mode: horizontal-tb;
+  margin-top: 0;
+  height: auto;
+  overflow: visible;
 }
 
 /* ---------------------------------------------------------------------------
@@ -180,7 +204,7 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   touch-action: none;
   cursor: grab;
   border-radius: 8px;
-  background: var(--moss-place-water, #e9eff2);
+  background: var(--moss-place-water, #dbe7ea);
   block-size: 100%;
 }
 .moss-places-viewport[data-dragging] {
@@ -411,7 +435,7 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
 .moss-places-label[data-kind="river"] {
   font-style: italic;
   font-size: 0.75rem;
-  color: color-mix(in oklch, var(--moss-color-text-secondary) 70%, var(--moss-place-water, #e9eff2) 30%);
+  color: color-mix(in oklch, var(--moss-color-text-secondary) 70%, var(--moss-place-water, #dbe7ea) 30%);
 }
 
 .moss-places-label-dot {
@@ -1158,9 +1182,12 @@ button.moss-places-chip-crumb {
    date (which carries its own " · " separator as text) never shrinks or wraps. */
 .moss-places-card-select .moss-card-meta {
   display: flex;
+  gap: 0;
 }
 .moss-card-meta-author {
-  flex: 1 1 auto;
+  /* Shrinks to ellipsise but never grows: a growing author box pushed the
+     date, and the dot it carries, to the far end of the card. */
+  flex: 0 1 auto;
   min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1207,6 +1234,19 @@ button.moss-places-chip-crumb {
 .moss-places-card-detail p {
   font-size: var(--moss-size-xs);
   color: var(--moss-color-text-secondary);
+}
+/* The card's own rhythm: a theme's body line-height on `li`/`a` made wrapped
+   chapter links stand a line and a half apart. */
+.moss-places-card-detail :is(p, li, a) {
+  line-height: 1.4;
+}
+.moss-places-card-detail p a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.moss-places-card-detail p a:hover {
+  color: var(--moss-color-accent);
 }
 .moss-places-card-detail ul {
   list-style: none;

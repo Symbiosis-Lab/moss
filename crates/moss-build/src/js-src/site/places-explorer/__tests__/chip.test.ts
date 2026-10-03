@@ -24,7 +24,7 @@ const braga: Place = { id: "places/braga", name: "Braga", parent: "places/portug
 const places: Place[] = [portugal, porto, coimbra, braga];
 
 function work(id: string, title: string, placeIds: string[], date: string): Work {
-  return { id, title, url: `/${id}/`, byline: [], places: placeIds, companions: [], date };
+  return { id, title, url: `/${id}/`, byline: [], authors: [], places: placeIds, companions: [], date };
 }
 
 const portoSteps = work("porto-steps", "Porto Steps", ["places/porto"], "2024-05-20");

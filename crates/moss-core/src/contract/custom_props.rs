@@ -253,7 +253,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
     CustomProp {
         name: "--moss-place-water",
         owner: "moss-places-viewport",
-        default: "#e9eff2",
+        default: "#dbe7ea",
         description: "First-paint background of the explorer's own pannable viewport, before the inlined world SVG's own identically-coloured water layer has loaded — never itself set independently of `.moss-place-map`'s own `--moss-place-water`, which already carries the site's light/dark values.",
     },
     CustomProp {
@@ -267,6 +267,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "[data-map-layer=\"rivers\"]",
         default: "1",
         description: "Scale applied to a river path's own baked stroke-width (`--river-w`, set once per path by raster.ts's `splitMapSvg`), so rivers keep a constant on-screen width as `applyCamera` zooms the world layer instead of thickening with it. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
+    },
+    CustomProp {
+        name: "--moss-sidenote-inset",
+        owner: "body",
+        default: "0px",
+        description: "How far the page gives up on the right for the sidenote gutter, derived by site.css from `--moss-sidenote-reserve` and applied as `<body>` padding. The places explorer's full-width figure adds it back so the map still reaches the window's edge. Not a theme hook: set `--moss-sidenote-reserve` instead.",
     },
     CustomProp {
         name: "--moss-place-figure-top",

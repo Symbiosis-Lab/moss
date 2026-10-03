@@ -78,13 +78,16 @@ export const WORLD_RELIEF_STRENGTH = 1;
  * stroke in it would fall back to its hardcoded (light-mode) default
  * regardless of the reader's actual theme, exactly the way an externally
  * loaded `<img>` was measured losing `--moss-place-river-scale` (the
- * reason rivers stay live DOM instead, see `splitMapSvg`). Reading off
- * `document.documentElement` — where `data-theme` actually lives — rather
- * than some element inside the explorer keeps this correct even before
- * the explorer's own figure exists.
+ * reason rivers stay live DOM instead, see `splitMapSvg`). Read off the map
+ * figure (`.moss-place-map`), not `document.documentElement`: site.css
+ * declares the tokens on that class, so the root never carried them and the
+ * runtime baked every layer with the SVG's hardcoded fallbacks — a site's own
+ * palette override never reached the live map. The figure's computed style
+ * also carries `data-theme`'s dark values through the cascade. Before any
+ * figure exists the root is the fallback.
  */
 export function capturePlaceMapTheme(): string {
-  const computed = getComputedStyle(document.documentElement);
+  const computed = getComputedStyle(document.querySelector(".moss-place-map") ?? document.documentElement);
   return BASE_TOKENS.map((name) => [name, computed.getPropertyValue(name).trim()] as const)
     .filter(([, value]) => value !== "")
     .map(([name, value]) => `${name}:${value}`)

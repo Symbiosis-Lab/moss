@@ -4,11 +4,11 @@ use std::fmt::Write;
 use super::{serialize_path, Feature, Projection, Writer, BY_AREA};
 
 /// Stroke width for a river of Natural Earth `scalerank` (the pack keeps it
-/// in the feature's band): 1.6 for the largest rivers, 0.14 thinner per
-/// rank, never under 0.5. This is the approved design's taper. It draws
+/// in the feature's band): 0.8 for the largest rivers, 0.07 thinner per
+/// rank, never under 0.25. This is the approved design's taper. It draws
 /// every rank and lets the taper, not a cutoff, keep small rivers quiet.
 pub(super) fn river_width(rank: i16) -> f64 {
-    (1.6 - 0.14 * f64::from(rank)).clamp(0.5, 1.6)
+    (0.8 - 0.07 * f64::from(rank)).clamp(0.25, 0.8)
 }
 
 impl Writer<'_> {

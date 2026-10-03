@@ -237,7 +237,7 @@ test("cards: every collapsed cover image fills one shared box", async ({ page })
   }
 });
 
-// The collapsed meta line is author then date, always both, on one line. The
+// The collapsed meta line is the author names then the date, always both, on one line. The
 // author is ellipsised when the pair does not fit ("Alexandria Papadopoulos
 // Konstantinou" is wider than the line on its own); the date, which carries
 // its own " · " separator as text, is never cut or wrapped.
@@ -261,6 +261,7 @@ test("cards: meta line always shows the date whole and ellipsises only the autho
         authorText: author?.textContent ?? null,
         authorLeft: author?.getBoundingClientRect().left ?? null,
         dateLeft: dr?.left ?? null,
+        authorTextRight: author ? (() => { const r = document.createRange(); r.selectNodeContents(author); return r.getBoundingClientRect().right; })() : null,
         dateFullyShown: dr ? dr.top >= box.top - 0.5 && dr.bottom <= box.bottom + 0.5 && dr.right <= box.right + 0.5 : null,
         dateOneLine: dr ? dr.height <= lineHeight + 0.5 : null,
         authorClipped: author ? author.scrollWidth > author.clientWidth : null,
@@ -268,8 +269,12 @@ test("cards: meta line always shows the date whole and ellipsises only the autho
     }),
   );
   const wide = metas.find((m) => m?.title === "Lisbon Walk")!;
+  // The card shows the `author:` name, not the byline's credit text.
   expect(wide.text).toBe("Ana\u00a0\u00b7\u00a02024-06-10");
+  // A page with only a byline falls back to its first entry.
+  expect(metas.find((m) => m?.title === "Coimbra Library")!.text).toBe("Field notes\u00a0\u00b7\u00a02024-05-01");
   expect(wide.authorLeft!, "author before date").toBeLessThan(wide.dateLeft!);
+  expect(wide.dateLeft! - wide.authorTextRight!, "the dot sits against the author's text, in no wide gap").toBeLessThanOrEqual(1);
   expect(wide.dateFullyShown, "both fit: the date is shown").toBe(true);
   expect(wide.authorClipped, "both fit: no ellipsis").toBe(false);
 

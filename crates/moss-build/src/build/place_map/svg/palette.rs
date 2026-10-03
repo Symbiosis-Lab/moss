@@ -65,20 +65,20 @@ pub(super) fn band_tint(name: &str, band: i16, present: &[i16]) -> String {
     let position = band_position(name, band, present);
     let (from, to, share) = if name != "relief" {
         (
-            "var(--moss-place-water, #e9eff2)",
-            "var(--moss-place-sea-deep, #bfd0dc)",
+            "var(--moss-place-water, #dbe7ea)",
+            "var(--moss-place-sea-deep, #b9cdd6)",
             position,
         )
     } else if position <= 0.5 {
         (
-            "var(--moss-place-land, #d7d5c9)",
-            "var(--moss-place-land-mid, #e3dcc8)",
+            "var(--moss-place-land, #e3e6d5)",
+            "var(--moss-place-land-mid, #ece4cc)",
             position / 0.5,
         )
     } else {
         (
-            "var(--moss-place-land-mid, #e3dcc8)",
-            "var(--moss-place-land-high, #f6f1e4)",
+            "var(--moss-place-land-mid, #ece4cc)",
+            "var(--moss-place-land-high, #f7f2e6)",
             (position - 0.5) / 0.5,
         )
     };
@@ -109,11 +109,11 @@ mod tests {
         let present = [100, 1600];
         assert_eq!(
             band_tint("relief", 1600, &present),
-            "color-mix(in srgb, var(--moss-place-land-mid, #e3dcc8), var(--moss-place-land-high, #f6f1e4) 100%)"
+            "color-mix(in srgb, var(--moss-place-land-mid, #ece4cc), var(--moss-place-land-high, #f7f2e6) 100%)"
         );
         assert_eq!(
             band_tint("seafloor", -10, &[-10, -2000]),
-            "color-mix(in srgb, var(--moss-place-water, #e9eff2), var(--moss-place-sea-deep, #bfd0dc) 0%)"
+            "color-mix(in srgb, var(--moss-place-water, #dbe7ea), var(--moss-place-sea-deep, #b9cdd6) 0%)"
         );
     }
 }

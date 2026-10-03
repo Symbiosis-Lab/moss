@@ -17,7 +17,6 @@ Slots are named injection points in the HTML template where plugins can insert c
 | `after-title` | Inside <article>, after the title/date row — for article metadata (e.g. book block, review colophon). | no |
 | `before-article-end` | Inside <article>, before </article> — for article addenda. | no |
 | `after-article` | Between </article> and </main> — for comments, reactions (NOT part of the article). | no |
-| `footer-shape` | The data-moss-shape attribute value on the <footer> open tag. Advanced: controls footer chrome mode. | no |
 | `footer-left` | Inside footer, leading position — filled by footer.md or any file with slot: footer-left frontmatter. | yes |
 | `footer-end` | Inside footer, trailing position — for the auto-injected subscribe form and plugin widgets. | no |
 | `body-end` | Before </body> — for scripts that must run after DOM is ready. | no |

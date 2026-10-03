@@ -33,10 +33,10 @@ const TOP_RELIEF_BAND = '[data-map-layer="relief"] > g[data-map-band]';
 const DEEPEST_SEAFLOOR_BAND = '[data-map-layer="seafloor"] > g[data-map-band]';
 const PLACE_MAP_FIGURE = ".moss-place-map";
 
-// #e9eff2 / #1b242c — the approved design's shallow-sea endpoint, light
+// #dbe7ea / #1b242c — the approved design's shallow-sea endpoint, light
 // and dark. Held as literals because that is the point of the assertion: a
 // token-name check would pass even if site.css defined the token wrong.
-const LIGHT_WATER = "rgb(233, 239, 242)";
+const LIGHT_WATER = "rgb(219, 231, 234)";
 const DARK_WATER = "rgb(27, 36, 44)";
 
 // --moss-place-land-high and --moss-place-sea-deep, light and dark, as the
@@ -50,9 +50,9 @@ const DARK_WATER = "rgb(27, 36, 44)";
 // the fallback, so the fill check alone already catches a missing dark
 // declaration, but this test reads the property there too, for the same
 // reason and so a failure says which half broke.
-const LIGHT_LAND_HIGH_HEX = "#f6f1e4";
+const LIGHT_LAND_HIGH_HEX = "#f7f2e6";
 const DARK_LAND_HIGH_HEX = "#565b57";
-const LIGHT_SEA_DEEP_HEX = "#bfd0dc";
+const LIGHT_SEA_DEEP_HEX = "#b9cdd6";
 const DARK_SEA_DEEP_HEX = "#10161c";
 
 /** The `.moss-place-map` figure's own resolved custom-property value — proof the cascade defined it, independent of what it painted. */
@@ -122,7 +122,7 @@ test("a coastal locator's water layer resolves to the approved sea colour, light
   ).not.toBe("dark");
   await expect(
     page.locator(WATER_RECT).first(),
-    `light water must resolve to ${LIGHT_WATER} (--moss-place-water: #e9eff2); ` +
+    `light water must resolve to ${LIGHT_WATER} (--moss-place-water: #dbe7ea); ` +
       "a stale or missing site.css declaration would instead show the Rust " +
       "fallback baked into the SVG's own var() call",
   ).toHaveCSS("fill", LIGHT_WATER);

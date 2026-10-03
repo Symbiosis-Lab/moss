@@ -19,10 +19,10 @@ import {
 } from "../raster";
 
 const SAMPLE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480" role="img" aria-label="A map">
-  <g data-map-layer="water"><rect width="720" height="480" fill="var(--moss-place-water, #e9eff2)"/></g>
+  <g data-map-layer="water"><rect width="720" height="480" fill="var(--moss-place-water, #dbe7ea)"/></g>
   <g data-map-layer="relief"><g data-map-band="1" style="fill:#000"><path d="M0 0"/></g></g>
   <g data-map-layer="lighting"><g opacity="0.5"><path d="M0 0"/></g></g>
-  <g data-map-layer="rivers"><path d="M0 0L10 10" stroke-width="1.60" fill="none" stroke="var(--moss-place-rivers, #5b93bd)"/></g>
+  <g data-map-layer="rivers"><path d="M0 0L10 10" stroke-width="1.60" fill="none" stroke="var(--moss-place-rivers, #7fa6bd)"/></g>
 </svg>`;
 
 const SAMPLE_SVG_NO_RIVERS = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
@@ -34,6 +34,7 @@ afterEach(() => {
   // capturePlaceMapTheme reads document.documentElement's own computed
   // style — never leak one test's tokens into the next.
   document.documentElement.removeAttribute("style");
+  document.body.replaceChildren();
 });
 
 describe("splitMapSvg", () => {
@@ -93,6 +94,17 @@ describe("capturePlaceMapTheme", () => {
   test("includes a token that's actually set, formatted as name:value", () => {
     document.documentElement.style.setProperty("--moss-place-land", "#abcdef");
     expect(capturePlaceMapTheme()).toContain("--moss-place-land:#abcdef");
+  });
+
+  test("reads the tokens off the map figure, where site.css declares them, not the root", () => {
+    const figure = document.createElement("figure");
+    figure.className = "moss-place-map";
+    figure.style.setProperty("--moss-place-water", "#112233");
+    document.body.append(figure);
+    document.documentElement.style.setProperty("--moss-place-water", "#999999");
+    const split = splitMapSvg(SAMPLE_SVG, 1)!;
+    expect(split.base.getAttribute("style")).toContain("--moss-place-water:#112233");
+    expect(capturePlaceMapTheme()).not.toContain("#999999");
   });
 
   test("omits a token nothing has set, rather than emitting an empty declaration", () => {
