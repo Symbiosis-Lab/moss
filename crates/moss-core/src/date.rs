@@ -109,6 +109,41 @@ fn date_from_filename_prefix(filename: &str) -> Option<String> {
     Some(format!("{:04}-{:02}-{:02}", y, m, d))
 }
 
+/// A number written as exactly `n` ASCII digits.
+pub(crate) fn fixed_digits(p: &str, n: usize) -> Option<u32> {
+    if p.len() == n && p.bytes().all(|b| b.is_ascii_digit()) {
+        p.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// Strictly parse `YYYY-MM-DD` (four, two and two ASCII digits, a real
+/// calendar day, year 1 or later). The one home of the calendar rules.
+pub(crate) fn parse_ymd(s: &str) -> Option<(u16, u8, u8)> {
+    let mut parts = s.split('-');
+    let (y, m, d) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let (y, m, d) = (fixed_digits(y, 4)?, fixed_digits(m, 2)?, fixed_digits(d, 2)?);
+    if y < 1 || !(1..=days_in_month(y, m)).contains(&d) {
+        return None;
+    }
+    Some((y as u16, m as u8, d as u8))
+}
+
+/// Days in a month of the proleptic Gregorian calendar; 0 for a month outside 1..=12.
+pub(crate) fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
 /// Normalize a date-ish string to `YYYY-MM-DD`.
 fn normalize_date(s: &str) -> Option<String> {
     let s = s.trim();

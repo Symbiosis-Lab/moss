@@ -90,7 +90,7 @@ These fields control how a [[structure#^folder-page|folder page]] displays its c
 |-------|------|---------|-------------|
 | `children` | boolean | `true` | Show child page list on section pages |
 | `children_style` | string | `"list"` | `"list"`, `"summary"`, `"card"`, or `"minimal"` |
-| `children_group` | string | `"none"` | Group by `"year"` or `"none"` |
+| `children_group` | string | `"none"` | Group by `"year"`, `"none"`, or `"upcoming"` |
 | `children_depth` | string | `"direct"` | `"direct"` (immediate children) or `"all"` (all descendants) |
 | `children_source` | string | (none) | Wikilink to folder whose children to show instead |
 <!-- auto:end:frontmatter-children -->
@@ -139,6 +139,21 @@ The legacy `order: [...]` field is a back-compat alias for `sort: [...]`.
 ## Places
 
 `location:` names one or more places from `.moss/places.toml`, in the order you write them; a site with a place-typed term shows each named place on a map, sized to the coarsest precision among them (`exact`/`city` a small dot, `region`/`country` a soft area). Set `route: true` alongside an already-ordered `location:` list to draw that order as a route instead: a dashed line through the stops with numbered badges, on the page's own map and its locator. A country-precision stop is too coarse a point to draw a line through, so it blocks the whole route and prints a build diagnostic naming the page and that stop; a region-precision stop still joins the route, at the centre of its own area marker, with its badge drawn as an outline rather than filled. The automatic "Location: …" line can be dropped for the whole site with `line = false` in the place-typed `[terms.<key>]` table of `.moss/config.toml`; the default is `true`. With it off, no page renders the line, while `location:` keeps feeding listing cards, the places root, each place's page and every map exactly as before. Like `explorer`, the key is read only for a place-typed kind and ignored elsewhere. `map:` is the page's own map switch: `map: false` hides the locator on a located article, and `map: true` shows it even when the site's `locator` is `none`; unset follows the site. On a place page the key keeps its own meaning — that page's term map, on or off — and a place page never also gets a locator, even with `location:` and `map: true`, so `map` has exactly one meaning per page. In vertical typesetting the locator is not floated: it follows the opening text as a block of its own in the column flow, starting at the same head edge as the other columns, and at phone width it keeps that position at full width.
+
+## Events
+
+A page becomes an event by carrying `start:`. `date:` stays the posted date; `start:` is when the event happens. If you are porting from a generator where `date` is the event time, move that value to `start`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `start` | string | (none) | When the event starts: `YYYY-MM-DD` for an all-day event, or `YYYY-MM-DD HH:MM` |
+| `end` | string | (none) | When it ends, same forms as `start`; an all-day `end` includes that day |
+| `timezone` | string | (none) | IANA zone the times are in, e.g. `Asia/Taipei` |
+| `status` | string | (none) | `"cancelled"`, `"postponed"`, `"moved-online"`, or `"rescheduled"`; absent means scheduled |
+| `tickets` | string | (none) | URL for tickets or registration |
+| `online` | string | (none) | URL to attend online |
+
+Times are wall-clock time where the event happens: write `14:00`, not an offset or `Z`, and name the zone in `timezone:`. An all-day multi-day event ends on its last day, so `start: 2026-11-01` with `end: 2026-11-03` runs through the 3rd. moss warns when `end` is before `start`.
 
 ## Media
 

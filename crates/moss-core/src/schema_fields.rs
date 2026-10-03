@@ -29,6 +29,10 @@
 //!   2. "Child Pages"       — controls how children are listed
 //!   3. "Child Styles"      — visual/layout controls for child listings
 //!   4. "Whole Site"        — properties read from the homepage to affect the whole site
+//!
+//! Event fields (`start`, `end`, `timezone`, `status`, `tickets`, `online`) sit in
+//! their own "Event" group beside these scopes: they describe the page itself, but
+//! only matter once a page carries `start`.
 //!   5. "Other"             — unknown user-authored fields (catch-all, TS side only)
 //!
 //! ## Scoring
@@ -100,7 +104,7 @@ pub struct BuiltinField {
     pub skip_schema: bool,
     /// UI group for the add-property dropdown. Fields with the same group
     /// are displayed together. Empty string for skip_schema fields.
-    /// One of: "This Page", "Child Pages", "Child Styles", "Whole Site".
+    /// One of: "This Page", "Event", "Child Pages", "Child Styles", "Whole Site".
     /// The "Other" group is handled entirely on the TS side for unknown fields.
     pub group: &'static str,
     /// For `Widget::FilePicker` fields, the extension kinds the picker should restrict
@@ -562,6 +566,77 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         group: "This Page",
         ..FIELD_DEFAULTS
     },
+    // ── Event ───────────────────────────────────────────────────────────
+    // A page becomes an event by carrying `start`. `date` stays the posted date.
+    BuiltinField {
+        name: "start",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        format: Some("event-time"),
+        // Frequency=2, Importance=4 → score = 100 - (2*6 + 4*4) = 100 - 28 = 72
+        score: 72,
+        description: "When the event starts, as local wall-clock time where it happens: YYYY-MM-DD for an all-day event, or YYYY-MM-DD HH:MM. No offset or Z; set `timezone` for the zone. A page with `start` is an event; `date` stays the posted date.",
+        label_key: "chip.start.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "end",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        format: Some("event-time"),
+        // Frequency=2, Importance=3 → score = 100 - (2*6 + 3*4) = 100 - 24 = 76
+        score: 76,
+        description: "When the event ends, same forms as `start`. For an all-day event the last day is included: `end: 2026-11-03` runs through the 3rd. Must not be before `start`.",
+        label_key: "chip.end.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "timezone",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=3 → score = 100 - (1*6 + 3*4) = 100 - 18 = 82
+        score: 82,
+        description: "IANA time zone the event's `start`/`end` are in, e.g. Asia/Taipei. Only its Area/City shape is checked.",
+        label_key: "chip.timezone.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "status",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["cancelled", "postponed", "moved-online", "rescheduled"]),
+        // Frequency=1, Importance=3 → score = 100 - (1*6 + 3*4) = 100 - 18 = 82; +1 so it sorts after timezone
+        score: 83,
+        description: "Event status when it is not going ahead as planned: cancelled, postponed, moved-online or rescheduled. Absent means scheduled.",
+        label_key: "chip.status.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "tickets",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=2 → score = 100 - (1*6 + 2*4) = 100 - 14 = 86
+        score: 86,
+        description: "URL where tickets or registration are available.",
+        label_key: "chip.tickets.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "online",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=2 → score = 100 - (1*6 + 2*4) = 100 - 14 = 86; +1 so it sorts after tickets
+        score: 87,
+        description: "URL to attend the event online.",
+        label_key: "chip.online.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
     BuiltinField {
         name: "lang",
         field_type: FieldType::String,
@@ -824,10 +899,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "children_group",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["year", "none"]),
+        enum_values: Some(&["year", "none", "upcoming"]),
         // Frequency=2, Importance=2 → score=80
         score: 80,
-        description: "How children are grouped: year (default for list) or none (default for card)",
+        description: "How children are grouped: year (default for list), none (default for card), or upcoming",
         label: Some("Group"),
         label_key: "chip.children_group.label",
         group: "Child Styles",

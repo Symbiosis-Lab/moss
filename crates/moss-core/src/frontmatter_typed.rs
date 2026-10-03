@@ -307,6 +307,22 @@ pub struct FrontMatter {
     /// domain(s) against this field's host to keep old links working across
     /// a port.
     pub origin: Option<String>,
+    /// Event start: a local date (all-day) or local date-time, `YYYY-MM-DD` or
+    /// `YYYY-MM-DD HH:MM`. Wall-clock time where the event happens; no offset.
+    /// A page with `start` is an event. Kept as text (see [`crate::event`]).
+    pub start: Option<String>,
+    /// Event end, same forms as `start`. A multi-day all-day `end` is inclusive.
+    pub end: Option<String>,
+    /// IANA zone name the `start`/`end` wall-clock times are in, e.g.
+    /// `Asia/Taipei`. moss-core checks only its shape, not a zone database.
+    pub timezone: Option<String>,
+    /// Event status: `cancelled`, `postponed`, `moved-online` or
+    /// `rescheduled`. Absent means scheduled.
+    pub status: Option<String>,
+    /// Where to get tickets: a URL.
+    pub tickets: Option<String>,
+    /// Where to attend online: a URL.
+    pub online: Option<String>,
     /// Analytics configuration for privacy-focused analytics
     pub analytics: Option<AnalyticsConfig>,
     /// Site logo image path (rendered before site name in nav)
@@ -953,6 +969,12 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
             match key {
                 "title" => frontmatter.title = Some(value.to_string()),
                 "date" => frontmatter.date = Some(value.to_string()),
+                "start" => frontmatter.start = Some(value.to_string()),
+                "end" => frontmatter.end = Some(value.to_string()),
+                "timezone" => frontmatter.timezone = Some(value.to_string()),
+                "status" => frontmatter.status = Some(value.to_string()),
+                "tickets" => frontmatter.tickets = Some(value.to_string()),
+                "online" => frontmatter.online = Some(value.to_string()),
                 "weight" => frontmatter.weight = value.parse().ok(),
                 "url" => frontmatter.url = Some(value.to_string()),
                 "cover" => frontmatter.cover = Some(value.to_string()),
@@ -1873,5 +1895,44 @@ mod url_path_tests {
             simplified_frontmatter_keys("Just prose.\n"),
             Vec::<String>::new()
         );
+    }
+
+    // ── event fields ──────────────────────────────────────────────────────
+    // `start`/`end` are venue-local wall-clock text. A YAML 1.1 loader turns an
+    // unquoted `2026-11-01 14:00` into a UTC timestamp and shifts the hour;
+    // serde_yaml does not, and these tests pin that so a parser swap cannot
+    // silently change an event's time.
+
+    #[test]
+    fn event_times_arrive_as_their_original_text_in_the_yaml_dialect() {
+        let m: serde_yaml::Mapping = serde_yaml::from_str(
+            "start: 2026-11-01 14:00\nend: 2026-11-03\ntimezone: Asia/Taipei\nstatus: cancelled\ntickets: https://tickets.example/x\nonline: https://live.example/x\n",
+        )
+        .expect("yaml parses");
+        let (fm, warnings) = project_typed(&m);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(fm.start.as_deref(), Some("2026-11-01 14:00"));
+        assert_eq!(fm.end.as_deref(), Some("2026-11-03"));
+        assert_eq!(fm.timezone.as_deref(), Some("Asia/Taipei"));
+        assert_eq!(fm.status.as_deref(), Some("cancelled"));
+        assert_eq!(fm.tickets.as_deref(), Some("https://tickets.example/x"));
+        assert_eq!(fm.online.as_deref(), Some("https://live.example/x"));
+        let t: FrontMatter = serde_yaml::from_str("start: 2026-11-01T14:00\n").expect("parse");
+        assert_eq!(t.start.as_deref(), Some("2026-11-01T14:00"));
+    }
+
+    #[test]
+    fn event_times_arrive_as_their_original_text_in_the_simplified_dialect() {
+        let (fm, _) = parse_simplified_frontmatter(
+            "start: 2026-11-01 14:00\nend: 2026-11-03\ntimezone: Asia/Taipei\nstatus: cancelled\ntickets: https://tickets.example/x\nonline: https://live.example/x\n---\nbody\n",
+        );
+        assert_eq!(fm.start.as_deref(), Some("2026-11-01 14:00"));
+        assert_eq!(fm.end.as_deref(), Some("2026-11-03"));
+        assert_eq!(fm.timezone.as_deref(), Some("Asia/Taipei"));
+        assert_eq!(fm.status.as_deref(), Some("cancelled"));
+        assert_eq!(fm.tickets.as_deref(), Some("https://tickets.example/x"));
+        assert_eq!(fm.online.as_deref(), Some("https://live.example/x"));
+        let (day, _) = parse_simplified_frontmatter("start: 2026-11-01\n---\nbody\n");
+        assert_eq!(day.start.as_deref(), Some("2026-11-01"));
     }
 }

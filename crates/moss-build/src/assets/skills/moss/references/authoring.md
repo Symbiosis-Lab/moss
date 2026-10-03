@@ -304,6 +304,18 @@ A place namespace's root page can also carry an interactive explorer layered ove
 
 The automatic place line can be dropped for the whole site with `line = false` in the same `[terms.<key>]` table; the default is `true`. With it off, no page renders the "Location: …" line, while `location:` keeps feeding listing cards, the places root, each place's page and every map exactly as before. Like `explorer`, the key is read only for a place-typed kind and ignored elsewhere.
 
+### Events
+
+A page becomes an event by carrying `start:`. `date:` stays the posted date; `start:` is the event time, so when porting from a generator where `date` is the event time, move that value to `start`.
+
+- `start` — when it starts: `YYYY-MM-DD` (all-day) or `YYYY-MM-DD HH:MM`.
+- `end` — when it ends, same forms; an all-day `end` is inclusive (`end: 2026-11-03` runs through the 3rd) and must not be before `start`.
+- `timezone` — IANA zone the times are in, e.g. `Asia/Taipei`.
+- `status` — `cancelled`, `postponed`, `moved-online` or `rescheduled`; absent means scheduled.
+- `tickets`, `online` — URLs.
+
+Times are venue-local wall-clock time: write `14:00`, never an offset or `Z`, and name the zone in `timezone:`.
+
 ### Long archives
 
 moss has **no pagination**: no `paginate:`, no `offset`, no `/page/2/`. Do not

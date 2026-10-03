@@ -71,7 +71,7 @@ fn test_all_non_skip_fields_have_a_group() {
 
 #[test]
 fn test_groups_are_valid_scope_groups() {
-    const VALID: &[&str] = &["This Page", "Child Pages", "Child Styles", "Whole Site"];
+    const VALID: &[&str] = &["This Page", "Event", "Child Pages", "Child Styles", "Whole Site"];
     for field in BUILTIN_FIELDS {
         if !field.skip_schema {
             assert!(
@@ -182,4 +182,19 @@ fn term_claim_fields_is_exactly_the_five_term_claim_fields() {
         names,
         std::collections::HashSet::from(["author_page", "tag_page", "editor_page", "jury_page", "place_page"])
     );
+}
+
+#[test]
+fn test_event_fields_are_registered() {
+    let field = |n: &str| BUILTIN_FIELDS.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("{n} missing"));
+    for name in ["start", "end", "timezone", "status", "tickets", "online"] {
+        assert_eq!(field(name).group, "Event", "{name}");
+    }
+    assert_eq!(field("start").format, Some("event-time"));
+    assert_eq!(field("end").format, Some("event-time"));
+    assert_eq!(
+        field("status").enum_values,
+        Some(&["cancelled", "postponed", "moved-online", "rescheduled"][..])
+    );
+    assert!(field("children_group").enum_values.unwrap().contains(&"upcoming"));
 }

@@ -100,7 +100,7 @@
         "crates/moss-build/src/js-src/bridge": 16,
         "crates/moss-build/src/js-src/site": 25,
         "crates/moss-build/src/plugins": 19,
-        "crates/moss-core/src": 39,
+        "crates/moss-core/src": 41,
         "crates/moss-core/src/ast": 24,
         "crates/moss-core/src/resolve": 16,
         "crates/moss-build/src/ops/serve": 19,

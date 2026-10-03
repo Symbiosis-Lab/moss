@@ -347,7 +347,9 @@ mod tests {
         // URL, replacing `moss import`'s prior POSSE-flavored `syndicated:`.)
         // (`map` added 2026-09 — opt out of the term map a claimed term page
         // or a real folder index at a place namespace root hosts.)
-        assert_eq!(schema.frontmatter.fields.len(), 50);
+        // (`start`/`end`/`timezone`/`status`/`tickets`/`online` added 2026-10 — the
+        // event fields; see moss_core::event.)
+        assert_eq!(schema.frontmatter.fields.len(), 56);
     }
 
     #[test]

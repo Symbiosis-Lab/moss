@@ -187,6 +187,17 @@ pub fn validate_frontmatter(
                     }
                 }
 
+                if def.format.as_deref() == Some("event-time") {
+                    if let Some(s) = value.as_str() {
+                        diags.extend(crate::event::validation::check_event_time(name, s));
+                    }
+                }
+                if name == "timezone" {
+                    if let Some(s) = value.as_str() {
+                        diags.extend(crate::event::validation::check_timezone(s));
+                    }
+                }
+
                 // Array item type check.
                 if def.field_type == FieldType::Array {
                     if let (Some(items_def), Some(seq)) = (&def.items, value.as_sequence()) {
@@ -239,6 +250,8 @@ pub fn validate_frontmatter(
             column: None,
         });
     }
+
+    diags.extend(crate::event::validation::check_end_not_before_start(fm));
 
     diags
 }
@@ -323,57 +336,15 @@ fn yaml_type_name(value: &serde_yaml::Value) -> &'static str {
 /// renders `1697-09` as "1697 · 09" and a bare year as itself, and the sort axis
 /// compares the strings lexically, which orders mixed precision by year.
 fn is_valid_date(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() > 3 {
-        return false;
-    }
-    let is_fixed_digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|b| b.is_ascii_digit());
-
-    if !is_fixed_digits(parts[0], 4) {
-        return false;
-    }
-    let Ok(year) = parts[0].parse::<u32>() else {
-        return false;
-    };
-    if year < 1 {
-        return false;
-    }
-    let Some(month_str) = parts.get(1) else {
-        return true;
-    };
-    if !is_fixed_digits(month_str, 2) {
-        return false;
-    }
-    let Ok(month) = month_str.parse::<u32>() else {
-        return false;
-    };
-    if !(1..=12).contains(&month) {
-        return false;
-    }
-    let Some(day_str) = parts.get(2) else {
-        return true;
-    };
-    if !is_fixed_digits(day_str, 2) {
-        return false;
-    }
-    let Ok(day) = day_str.parse::<u32>() else {
-        return false;
-    };
-
-    let days_in_month = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
-                29
-            } else {
-                28
-            }
-        }
+    // Pad a reduced-precision date to a full one, so the calendar rules
+    // (month range, days per month, leap years) have one owner: `parse_ymd`.
+    let padded = match s.split('-').count() {
+        1 => format!("{s}-01-01"),
+        2 => format!("{s}-01"),
+        3 => s.to_string(),
         _ => return false,
     };
-
-    (1..=days_in_month).contains(&day)
+    crate::date::parse_ymd(&padded).is_some()
 }
 
 // ---------------------------------------------------------------------------
