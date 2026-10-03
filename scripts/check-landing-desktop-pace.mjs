@@ -4,6 +4,9 @@
 // when its copy has arrived, the carry travels slowly enough to watch it, and
 // the close darkens in place through its own recording without stopping
 // halfway. The reader keeps the scrollbar, the keys and a flick's speed.
+// A gesture counts scenes, not pixels: a swipe moves one scene whatever its
+// speed or length (scene 1 is a third of a screen below the title, so a pixel
+// rule skips it), and only a release far beyond a swipe's speed earns more.
 // Scene 2's Publish cue is one ring at a time, and a resting scene redraws
 // nothing it does not show. WebKit only: headless Chromium renders the
 // desktop simulation in software at about a frame a second.
@@ -192,6 +195,9 @@ try {
   await page.waitForTimeout(1500);
   const handoff = await page.evaluate(() => { const end = __handoff.find((f) => f.shown === 2 && !f.running); return end ? __handoff.filter((f) => f.t >= end.t && f.t <= end.t + 1000) : null; });
   assert(handoff && handoff.length > 10, 'no frames recorded after the wash into scene 3 ended');
+  // the check means nothing unless the recording saw the print up and then gone
+  const seen = await page.evaluate(() => { const up = __handoff.findIndex((f) => f.print); return { up, down: up < 0 ? -1 : __handoff.findIndex((f, i) => i > up && !f.print), hidden: __handoff.filter((f) => !f.print).length }; });
+  assert(seen.up >= 0 && seen.down > seen.up, `the scroll into scene 3 did not show its print and then hide it, so the handoff was not exercised: ${JSON.stringify(seen)}`);
   const dim = handoff.filter((f) => !f.print && (f.sk < .99 || f.nb < .99));
   assert(!dim.length, `scene 3's art faded in again after its wash landed: ${dim.length} frames with the print hidden, lowest sketch ${Math.min(...dim.map((f) => f.sk))}, notebook ${Math.min(...dim.map((f) => f.nb))}`);
   console.log('webkit 1440×900: scene 3\'s sketch and notebook are whole the frame its wash lands');
@@ -310,22 +316,116 @@ try {
   assert(peak > 2 * pace, `a trackpad flick was slowed to the pace: ${Math.round(peak)}px/s against ${Math.round(pace)}`);
   console.log('webkit 1440×900: a drag is never fought, keys step scenes (also from the editor demo) and stay with it once used, a flick keeps its speed');
   await control.close();
-  // a hard flick from scene 1 passes as many scenes as its speed would coast it
-  const hard = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await hard.goto(base);
-  await hard.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
-  await hard.mouse.move(1300, 450);
-  for (let i = 0; i < 3; i++) { await hard.mouse.wheel(0, 40); await hard.waitForTimeout(30); }
-  await hard.waitForFunction(() => Math.abs(scrollY - __restY(0)) <= 1 && !__state().running, null, { timeout: 15000 });
-  for (const d of [60, 100, 140, 160, 160, 160]) { await hard.mouse.wheel(0, d); await hard.waitForTimeout(16); }
-  // read once the release has been taken for a fling, not at a fixed delay a loaded machine can outrun
-  await hard.waitForFunction(() => carryFling > 0 || !__state().running, null, { timeout: 5000 });
-  const flung = await hard.evaluate(() => __state().carryGoal);
-  assert(flung >= 3, `a hard flick from scene 1 was stopped at scene ${flung + 1}`);
-  await hard.waitForFunction((g) => !__state().running && Math.abs(scrollY - __restY(g)) <= 1, flung, { timeout: 20000 })
-    .catch(() => { throw new Error(`a hard flick did not arrive at scene ${flung + 1}`); });
-  console.log(`webkit 1440×900: a hard flick from scene 1 passes on to scene ${flung + 1}`);
-  await hard.close();
+  // A gesture counts scenes, not pixels. The ticks are dispatched from inside the page, one per
+  // animation frame, because a Playwright wheel call takes tens of milliseconds to arrive and
+  // would divide every speed below by three. Speeds are in screens a second (900px here).
+  const stepTo = async (page, n) => {
+    for (let i = 0; i <= n; i++) {
+      await page.keyboard.press('PageDown');
+      await page.waitForFunction((i) => !__state().running && Math.abs(scrollY - __restY(i)) <= 1, i, { timeout: 15000 });
+    }
+  };
+  // Ticks leave on a 60 Hz clock of their own, not the display's: a tick's size is its speed, so a page
+  // drawn at another frame rate must not turn the same swipe into a faster or a slower one. A zero is a
+  // beat with no tick, which the page's listener ignores. A tick carries the time it was due, as a real one carries the
+  // time the hand made it however late the page gets to it: a timer that fires late delivers ticks in a burst, and a
+  // speed read off their delivery times would be several times the swipe's own.
+  // `stall` is the number of beats after which the page's animation frames are held back until the swipe is over,
+  // as a page busy capturing prints does (frames stall for 100 ms and more, most of all just after load): the rest
+  // of the ticks are all handled between two frames and the run is over before the next one. With 1 no frame
+  // watches the run at all; with 4 one has seen it begin.
+  const frames = (page, deltas, stall = 0) => page.evaluate(async ([deltas, stall]) => {
+    const real = window.requestAnimationFrame, queue = [], beat = 1000 / 60, frame = () => new Promise((r) => real(r));
+    let t0 = performance.now(), i = 0;
+    const run = async (end) => {
+      for (; i < end; i++) {
+        const wait = t0 + i * beat - performance.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        const e = new WheelEvent('wheel', { deltaY: deltas[i], bubbles: true, cancelable: true });
+        Object.defineProperty(e, 'timeStamp', { value: t0 + i * beat });
+        document.body.dispatchEvent(e);
+      }
+    };
+    await run(stall || deltas.length);
+    if (stall) {
+      await frame(); await frame();
+      window.requestAnimationFrame = (cb) => queue.push(cb);
+      t0 = performance.now() - i * beat;
+      await run(deltas.length);
+      // longer than the hold gap, so the first frame back finds the run over
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    window.requestAnimationFrame = real; queue.forEach((cb) => real(cb));
+  }, [deltas, stall]);
+  // a trackpad swipe: a finger phase that ramps up and ends at its top speed, then a decaying tail, all scaled by k
+  const FINGER = [8, 14, 20, 26, 30, 30, 28], TAIL = [24, 20, 16, 12, 9, 7, 5, 4, 3, 2, 2, 1, 1, 1];
+  const swipe = (k, sign = 1, finger = FINGER, tail = TAIL) => [...finger, ...tail].map((d) => sign * Math.max(1, Math.round(d * k)));
+  const restOf = async (page) => {
+    await page.waitForTimeout(500);
+    const read = () => page.evaluate(() => ({ y: Math.round(scrollY), running: __state().running, at: [0, 1, 2, 3, 4, 5].map((i) => __restY(i - 1)).findLastIndex((r) => r <= scrollY + 1) - 1, on: [0, 1, 2, 3, 4, 5].some((i) => Math.abs(__restY(i - 1) - scrollY) <= 1), fling: window.__peak }));
+    const t0 = Date.now(); let s = await read();
+    while ((s.running || !s.on) && Date.now() - t0 < 20000) { await page.waitForTimeout(100); s = await read(); }
+    return s;
+  };
+  const misses = [];
+  const open = async (context, from) => {
+    const page = await context.newPage();
+    await page.goto(base);
+    await page.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
+    await page.mouse.move(1300, 450);
+    if (from >= 0) await stepTo(page, from);
+    // the fastest release speed the carry was handed, in screens a second
+    await page.evaluate(() => { window.__peak = 0; const f = () => { window.__peak = Math.max(window.__peak, carryFling / innerHeight); requestAnimationFrame(f); }; requestAnimationFrame(f); });
+    return page;
+  };
+  const wheelCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  for (const [name, from, ticks, want, ok, stall] of [
+    ['an ordinary swipe (about 400px) from the title', -1, swipe(1, 1, FINGER, [26, 24, 22, 20, 18, 16, 14, 12, 10, 8, 7, 6, 5, 4, 3, 2, 2, 1, 1, 1]), 'scene 1', (s) => s.at === 0],
+    ['a firm swipe (a 350px finger phase) from the title', -1, swipe(2.24), 'scene 1', (s) => s.at === 0],
+    ['a brisk swipe (3.6 screens a second) from scene 1', 0, swipe(1, 1, [12, 24, 36, 48, 54, 54, 54], [48, 42, 36, 30, 24, 18, 12, 8, 5, 3, 2, 1]), 'scene 2', (s) => s.at === 1],
+    ['a firm swipe from scene 1', 0, swipe(2.24), 'scene 2', (s) => s.at === 1],
+    ['three quick notches from the title', -1, [100, 0, 0, 100, 0, 0, 100], 'scene 1', (s) => s.at === 0],
+    ['an 850px upward swipe from scene 2', 1, swipe(1, -1, [14, 25, 35, 46, 56, 60, 60], [60, 58, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 9, 6, 4, 2, 1]), 'scene 1', (s) => s.at === 0],
+    // the finger travels under 1000px, so the page's own drag ends at scene 2 and only the speed of the release can carry it further
+    ['a hard flick (under 1000px of finger, 10 screens a second) from scene 1', 0, [4, 4, 4, 4, 4, 4, 4, 300, 300, 300], 'at least scene 4', (s) => s.at >= 3],
+    // the same, with no animation frame during the run: a swipe is known from its ticks, not from a frame having watched it
+    ['a firm swipe from the title, with the frames stalled after the fourth beat', -1, swipe(2.24), 'scene 1', (s) => s.at === 0, 4],
+    ['a firm swipe from the title, with the frames stalled from the first beat', -1, swipe(2.24), 'scene 1', (s) => s.at === 0, 1],
+    ['a hard flick from scene 1, with the frames stalled from the first beat', 0, [4, 4, 4, 4, 4, 4, 4, 300, 300, 300], 'at least scene 4', (s) => s.at >= 3, 1],
+    ['three quick notches from the title, with the frames stalled from the first beat', -1, [100, 0, 0, 100, 0, 0, 100], 'scene 1', (s) => s.at === 0, 1],
+  ]) {
+    const page = await open(wheelCtx, from);
+    await frames(page, ticks, stall);
+    const s = await restOf(page);
+    if (!ok(s)) misses.push(`${name} rested at scrollY ${s.y} (scene ${s.at + 1}, released at ${s.fling.toFixed(1)} screens a second), not ${want}`);
+    else console.log(`webkit 1440×900: ${name} rests on ${want} (released at ${s.fling.toFixed(1)} screens a second)`);
+    await page.close();
+  }
+  await wheelCtx.close();
+  // A touch is read off the page's own movement, which the browser makes: the drag is emulated the way
+  // the carry sees one, a touch pointerdown, a scroll write per frame, a pointerup. The release goes the
+  // way the drag went, whatever the last frames did: it never turns a drag back into a step forward.
+  const touchCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, hasTouch: true });
+  const touchDrag = (page, steps) => page.evaluate((steps) => new Promise((done) => {
+    const fire = (type) => dispatchEvent(new PointerEvent(type, { pointerType: 'touch', bubbles: true }));
+    fire('pointerdown'); let i = 0;
+    const step = () => { if (i === steps.length) { fire('pointerup'); done(); return; } scrollTo(0, scrollY + steps[i++]); requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }), steps);
+  for (const [name, steps, want, ok] of [
+    ['a touch drag up 280px that ends 20px back down', [...Array(10).fill(-28), ...Array(6).fill(3.4)], 'scene 1', (s) => s.at === 0],
+    ['a touch drag up 280px', Array(10).fill(-28), 'scene 1', (s) => s.at === 0],
+    ['a touch held still', [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 'scene 2', (s) => s.at === 1],
+  ]) {
+    const page = await open(touchCtx, 1);
+    await touchDrag(page, steps);
+    const s = await restOf(page);
+    if (!ok(s)) misses.push(`${name} rested at scrollY ${s.y} (scene ${s.at + 1}), not ${want}`);
+    else console.log(`webkit 1440×900 touch: ${name} rests on ${want}`);
+    await page.close();
+  }
+  await touchCtx.close();
+  assert(!misses.length, misses.join('; '));
   // a page opened narrow and widened past the phone layout still gets its title's wash
   const narrow = await browser.newPage({ viewport: { width: 800, height: 900 } });
   await narrow.goto(base);
