@@ -19,6 +19,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A responsive image size that failed to save is regenerated on the next build instead of staying missing until the source changes, and a failed cache write now says whether its cache folder was not downloaded.
 - A section page whose folder has `nav: true` now keeps a heading for screen readers. Its title is still hidden on the page, because the nav bar already shows it, but the page used to have no `<h1>` at all unless the body wrote one; the title is now present and visually hidden. A folder page whose body opens with its own `# Title` no longer gets a second, injected title above it, nav or not.
 - On the `/places/` map, a page with its own `location:` is never missing any more. It used to disappear when its folder's home page was at a different place, was a draft, or had a place with no coordinates. A page now joins its folder home's dot only when that home is on the map and the page is at the same place; every other located page is its own work.
 - On the `/places/` map, a card's authors are listed with the language's own separator (a comma in English, the enumeration comma in Chinese) and the dot between author and date sits against the author's name instead of at the far end of the card. A page with a single marker is framed in the middle of the map on a phone rather than on its left edge, and an opened card's places link to their place pages, with chapter links set at a normal line height.

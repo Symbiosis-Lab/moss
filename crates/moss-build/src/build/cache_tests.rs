@@ -702,6 +702,40 @@ fn test_store_bytes_roundtrip() {
     assert_eq!(on_disk, data);
 }
 
+/// A pending write the filesystem refuses must say what state the shard
+/// directory is in: the warning that prints this error is the only place a
+/// failed store is diagnosed.
+#[cfg(unix)]
+#[test]
+fn a_refused_pending_write_names_the_shard_directory_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Gives the directory its write bit back so the temp tree can be removed.
+    struct Unlock(PathBuf);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let dir = make_test_dir("refused_pending_write");
+    let store = ObjectStore::new(dir.join("objects"));
+    let shard = store.blob_path(&format!("{:x}", Sha256::digest(b"refused bytes"))).parent().unwrap().to_path_buf();
+    fs::create_dir_all(&shard).unwrap();
+    fs::set_permissions(&shard, fs::Permissions::from_mode(0o555)).unwrap();
+    let _unlock = Unlock(shard);
+
+    let from_bytes = store.store_bytes(b"refused bytes").expect_err("the write is refused");
+    let source = write_temp_file(&dir, "src.bin", b"refused bytes");
+    let from_file = store.store_file(&source).expect_err("the write is refused");
+
+    for err in [from_bytes, from_file] {
+        assert!(err.contains("pending"), "still says what failed: {err}");
+        assert!(err.contains("shard dir exists=true"), "carries the shard state: {err}");
+        assert!(err.contains("dataless=false"), "carries the shard state: {err}");
+    }
+}
+
 #[test]
 fn test_store_bytes_idempotent() {
     let dir = make_test_dir("store_bytes_idemp");

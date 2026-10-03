@@ -123,22 +123,50 @@ impl ObjectStore {
         Ok(format!("{:x}", hasher.finalize()))
     }
 
+    /// What is known about `dest`'s shard directory, in words that do not vary
+    /// between two builds that fail the same way. This much is safe inside a
+    /// returned `Err(String)`; [`failure_context`](Self::failure_context) adds
+    /// the parts that are not.
+    fn shard_state(dest: &Path) -> String {
+        let shard = dest.parent().unwrap_or(dest);
+        format!(
+            "shard dir exists={} dataless={}",
+            shard.is_dir(),
+            crate::build::icloud::is_dataless_dir(shard)
+        )
+    }
+
     /// The state around a failed store or link, as ONE log line at the failure
     /// site. Kept out of the returned `Err(String)` on purpose: that string
     /// reaches advisory text, which dedups on its exact wording, so a varying
     /// field in it would warn once per rebuild instead of once.
     fn failure_context(&self, dest: &Path, tmp: Option<&Path>) -> String {
-        let shard = dest.parent().unwrap_or(dest);
-        let mut line = format!(
-            "shard dir exists={} dataless={}",
-            shard.is_dir(),
-            crate::build::icloud::is_dataless_dir(shard)
-        );
+        let mut line = Self::shard_state(dest);
         if let Some(tmp) = tmp {
             line.push_str(&format!("; pending tmp exists={}", tmp.symlink_metadata().is_ok()));
         }
         line.push_str(&format!("; {}", last_gc_summary(&self.base)));
         line
+    }
+
+    /// Move the fully written `tmp` to its content-addressed `dest`.
+    fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path) -> Result<(), String> {
+        // allow:unlink a temp inside the CAS shard dir, not staging
+        let Err(rename_err) = fs::rename(tmp, dest) else { return Ok(()) };
+        // Another thread may have won the race and placed the blob.
+        if dest.exists() {
+            // allow:unlink a temp inside the CAS shard dir, not staging
+            let _ = fs::remove_file(tmp);
+            return Ok(());
+        }
+        // Cross-device fallback: copy then remove temp.
+        fs::copy(tmp, dest).map_err(|e| {  // allow:raw_write CAS blob under .moss/cache — cloud-excluded, dest is content-addressed
+            log::warn!("CAS store of {} failed: {}", oid, self.failure_context(dest, Some(tmp)));
+            format!("rename failed ({}), copy fallback also failed: {}", rename_err, e)
+        })?;
+        // allow:unlink a temp inside the CAS shard dir, not staging
+        let _ = fs::remove_file(tmp);
+        Ok(())
     }
 
     /// Store a file in the object store, returning its SHA-256 OID.
@@ -160,6 +188,9 @@ impl ObjectStore {
         // skip the write. If the blob is corrupt (0-byte but source is
         // non-empty), validate_blob removes it and we fall through to
         // re-store.
+        // Best-effort: a probe that cannot tell (permission, not-a-directory,
+        // an undownloaded shard) reads as absent and falls through to the
+        // write, which handles its own directory failures and reports them.
         if dest.exists() {
             if self.validate_blob(&oid, source_size).is_ok() {
                 return Ok(oid);
@@ -187,7 +218,7 @@ impl ObjectStore {
         //       https://eclecticlight.co/2024/07/09/excluding-folders-and-files-from-time-machine-spotlight-and-icloud-drive/
         let tmp = dest.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
         fs::copy(source, &tmp)  // allow:raw_write the temp blob this call just minted, under .moss/cache
-            .map_err(|e| format!("Failed to copy to pending {}: {}", tmp.display(), e))?;
+            .map_err(|e| format!("Failed to copy to pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
         // Post-copy validation: reject 0-byte temp files when source is
         // non-empty (e.g., fs::copy raced with iCloud materialization).
@@ -202,29 +233,7 @@ impl ObjectStore {
             ));
         }
 
-        // allow:unlink a temp inside the CAS shard dir, not staging
-        match fs::rename(&tmp, &dest) {
-            Ok(()) => {}
-            Err(rename_err) => {
-                // Another thread may have won the race and placed the blob.
-                // If dest now exists, that's success — return Ok(oid).
-                if dest.exists() {
-                    // allow:unlink a temp inside the CAS shard dir, not staging
-                    let _ = fs::remove_file(&tmp);
-                    return Ok(oid);
-                }
-                // Cross-device fallback: copy then remove temp.
-                fs::copy(&tmp, &dest).map_err(|e| {  // allow:raw_write CAS blob under .moss/cache — cloud-excluded, dest is content-addressed
-                    log::warn!("CAS store of {} failed: {}", oid, self.failure_context(&dest, Some(&tmp)));
-                    format!(
-                        "rename failed ({}), copy fallback also failed: {}",
-                        rename_err, e
-                    )
-                })?;
-                // allow:unlink a temp inside the CAS shard dir, not staging
-                let _ = fs::remove_file(&tmp);
-            }
-        }
+        self.place_pending(&oid, &tmp, &dest)?;
 
         Ok(oid)
     }
@@ -255,28 +264,9 @@ impl ObjectStore {
         // Use `.pending.<uuid>` — see store_file() comment for iCloud Drive rationale.
         let tmp = dest.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
         fs::write(&tmp, data)  // allow:raw_write the temp blob this call just minted, under .moss/cache
-            .map_err(|e| format!("Failed to write pending {}: {}", tmp.display(), e))?;
+            .map_err(|e| format!("Failed to write pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
-        // allow:unlink a temp inside the CAS shard dir, not staging
-        match fs::rename(&tmp, &dest) {
-            Ok(()) => {}
-            Err(rename_err) => {
-                if dest.exists() {
-                    // allow:unlink a temp inside the CAS shard dir, not staging
-                    let _ = fs::remove_file(&tmp);
-                    return Ok(oid);
-                }
-                fs::copy(&tmp, &dest).map_err(|e| {  // allow:raw_write CAS blob under .moss/cache — cloud-excluded, dest is content-addressed
-                    log::warn!("CAS store of {} failed: {}", oid, self.failure_context(&dest, Some(&tmp)));
-                    format!(
-                        "rename failed ({}), copy fallback also failed: {}",
-                        rename_err, e
-                    )
-                })?;
-                // allow:unlink a temp inside the CAS shard dir, not staging
-                let _ = fs::remove_file(&tmp);
-            }
-        }
+        self.place_pending(&oid, &tmp, &dest)?;
 
         Ok(oid)
     }

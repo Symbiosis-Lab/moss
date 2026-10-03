@@ -2638,6 +2638,87 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
     );
 }
 
+/// An image a previous build converted: 1000x600 on disk, its base `.webp` cached
+/// as `b"CACHED BASE"` and its hash-index entry primed, but no rung record or
+/// file. `scan_dimensions` is what the scan reported for it, which decides
+/// which rungs the encoder promises. Returns the context and the staging dir.
+fn unchanged_image_with_cached_base(root: &Path, scan_dimensions: (u32, u32)) -> (BackgroundContext, PathBuf) {
+    let rel = "photo.jpg";
+    make_big_jpeg(&root.join(rel), 1000, 600);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+    let paths = MossPaths::from_moss_dir(moss_dir.clone());
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(rel)).unwrap();
+    let fingerprint = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(rel), &cfg)
+        .expect("source exists and is stat-able");
+    prime_disk_hash_index(&moss_dir, rel, &fingerprint, &source_oid);
+    prime_cached_transform(
+        &crate::build::cache::ObjectStore::for_site(&paths),
+        &crate::build::cache::TransformCache::for_site(&paths),
+        &source_oid,
+        "image/webp",
+        &cfg.to_params(),
+        b"CACHED BASE",
+    );
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from(rel),
+            source_oid,
+            ext: "jpg".to_string(),
+            dimensions: Some(scan_dimensions),
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir,
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    (ctx, staging)
+}
+
+/// An unchanged image whose base output is cached but whose promised 800w rung has
+/// no record: nothing but the worker writes a rung record, so skipping the image
+/// left that srcset candidate missing until the source changed. It goes to the
+/// worker, which reuses the cached base and encodes the rung.
+#[test]
+fn an_unchanged_image_missing_a_promised_rung_is_dispatched_to_produce_it() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    assert_eq!(moss_core::asset_paths::ladder_rungs(1000, 600, false), &[800][..], "premise");
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+
+    assert!(staging.join("photo.w800.webp").exists(), "the missing rung is produced");
+    assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused, not re-encoded");
+}
+
+/// No rung is promised for an image the scan found no wider than the first rung,
+/// so a missing rung record is not a gap. The file on disk is made wider than the
+/// scan says so that a wrongly dispatched image would visibly produce a rung.
+#[test]
+fn an_unchanged_image_with_no_promised_rung_is_still_skipped() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (700, 420));
+    assert!(moss_core::asset_paths::ladder_rungs(700, 420, false).is_empty(), "premise");
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+
+    assert!(staging.join("photo.webp").exists(), "the base is carried forward");
+    assert!(!staging.join("photo.w800.webp").exists(), "skipped: the worker never ran");
+}
+
 #[test]
 fn test_image_dispatch_applies_dir_overrides_to_served_path() {
     // Fix for I3: end-to-end check that `ctx.dir_overrides` flows

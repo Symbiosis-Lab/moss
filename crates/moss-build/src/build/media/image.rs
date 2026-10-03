@@ -2844,7 +2844,40 @@ pub(crate) fn dispatch_image_conversions(
                 (false, None)
             };
 
-            if let (Some(source_oid), true) = (disk_source_oid.as_deref(), outputs_present) {
+            // The ladder rungs are part of "unchanged and present": a rung the
+            // encoder promises for this image that is neither on disk nor
+            // healable from the store sends the image to the worker, which
+            // reuses the cached base and encodes only the cold rungs. Skipping
+            // it instead left that rung without a transform record for ever,
+            // since nothing but the worker writes one. Rungs the encoder does
+            // not produce are not in `promised_rungs` (source too narrow,
+            // collided with a user file) or are suppressed, so they never count.
+            let rung_verdicts: Vec<(String, bool, Option<String>)> = match disk_source_oid.as_deref() {
+                Some(source_oid) if outputs_present => promised_rungs(item, &mapped, &ctx.rung_collisions)
+                    .into_iter()
+                    .map(|(rung, rung_rel)| {
+                        let (present, oid) = heal_and_verify_variant(
+                            &heal_objects,
+                            &heal_transforms,
+                            &heal_params,
+                            &mut staged,
+                            &ctx.staging_dir.join(&rung_rel),
+                            &format!("image/webp-w{}", rung),
+                            source_oid,
+                            heal_suppressed.contains(&rung_rel),
+                            &mut healed_count,
+                        );
+                        (rung_rel, present, oid)
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let missing_rung = rung_verdicts
+                .iter()
+                .find(|(rel, present, _)| !present && !heal_suppressed.contains(rel))
+                .map(|(rel, _, _)| rel.clone());
+
+            if disk_source_oid.is_some() && outputs_present && missing_rung.is_none() {
                 // Re-register every key the encode path delivers for this
                 // image so seal() keeps them. `emit_image_outputs_via_channel`'s
                 // existence check drops any key whose staging file is absent
@@ -2872,38 +2905,14 @@ pub(crate) fn dispatch_image_conversions(
                     }
                 }
 
-                // Ladder rungs ride the same skip-path registration +
-                // self-heal (Task 5), only for an image that is itself
-                // skipping — a dispatched image gets fresh rungs from
-                // `run_image_conversion`. Without this, a text-only
-                // rebuild's stale cleanup would delete every rung file —
-                // they'd be absent from the manifest. Collided paths belong
-                // to the user's own file and are skipped with the same
-                // membership test as everywhere else.
-                for (rung, rung_rel) in promised_rungs(item, &mapped, &ctx.rung_collisions) {
-                    let rung_staging = ctx.staging_dir.join(&rung_rel);
-                    let rung_transform = format!("image/webp-w{}", rung);
-                    // Same fix as the base image just above, and for the same
-                    // reason: registering a rung must be tied to the heal's
-                    // own verdict, carrying its own verified CAS oid rather
-                    // than an independent presence check or no oid at all —
-                    // a rung transform the current oid never produced (e.g.
-                    // rungs shipped after this content was last encoded)
-                    // must NOT register whatever stale file an older
-                    // generation left at this exact path, and one it DID
-                    // produce must ship with the same overlap protection the
-                    // base image gets, not the weaker Fingerprint fallback.
-                    let (rung_present, rung_oid) = heal_and_verify_variant(
-                        &heal_objects,
-                        &heal_transforms,
-                        &heal_params,
-                        &mut staged,
-                        &rung_staging,
-                        &rung_transform,
-                        source_oid,
-                        heal_suppressed.contains(&rung_rel),
-                        &mut healed_count,
-                    );
+                // Ladder rungs ride the same skip-path registration, each
+                // carrying the CAS oid its own heal verified (a rung the
+                // current content never produced must NOT register whatever
+                // stale file an older generation left at its path, and one it
+                // did produce ships with the same overlap protection as the
+                // base). Only suppressed rungs can be absent here; they stay
+                // unregistered.
+                for (rung_rel, rung_present, rung_oid) in rung_verdicts {
                     if rung_present {
                         skip_paths.push((rung_rel.clone(), rung_oid));
                         if let Some(ref asset_reg) = svc.assets {
@@ -2915,18 +2924,14 @@ pub(crate) fn dispatch_image_conversions(
                             }
                         }
                     }
-                    // Else: this rung isn't verifiably encoded for the
-                    // current content — leave it unregistered rather than
-                    // register a lie. It stays Pending behind the
-                    // LQIP/passthrough placeholder until some future
-                    // dispatch actually produces it.
                 }
             } else {
                 if disk_source_oid.is_some() {
                     log::info!(
-                        "Image '{}' unchanged but its .webp is missing — \
+                        "Image '{}' unchanged but {} is missing — \
                          re-dispatching to self-heal instead of skipping",
-                        rel_source
+                        rel_source,
+                        missing_rung.as_deref().unwrap_or("its .webp")
                     );
                 }
                 to_dispatch.push(ImageConversionItem { fingerprint, ..item.clone() });
