@@ -283,6 +283,8 @@ where
     // mutables threaded through the loop by hand — see `crawl_state` for
     // the rules each sub-record owns and why.
     let mut state = CrawlState::new(&config.start_url, &sitemap);
+    // Paths (relative to the output folder) of the pages this run wrote.
+    let mut written: Vec<String> = Vec::new();
 
     while let Some(url) = state.frontier.pop() {
         if state.frontier.is_visited(&url) {
@@ -434,7 +436,8 @@ where
 
         // Prefer og:image for the card cover — it is explicitly declared for
         // social sharing and is always the best choice. Fall back to the first
-        // in-order body image when og:image is absent. We capture the REMOTE
+        // in-order content image (never a header/nav/footer logo or an icon, see
+        // `metadata::fallback_cover`) when og:image is absent. We capture the REMOTE
         // URL here so we can look up the local hash filename after the download
         // loop below. If the chosen image's download fails, `cover_remote`
         // simply isn't in the asset map and the `cover:` frontmatter stays
@@ -444,7 +447,9 @@ where
             .metadata
             .og_image
             .clone()
-            .or_else(|| super::converter::first_image_url(&article.markdown, &url));
+            .or_else(|| {
+                super::metadata::fallback_cover(&article.markdown, &article.metadata.chrome_images, &url)
+            });
 
         for media_url in &article.media_urls {
             if state.assets.contains(media_url) {
@@ -499,6 +504,7 @@ where
             PageOutcome::Written(note, widgets) => {
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &note)?;
+                written.push(relative);
                 state.tally.record_scraped();
                 state.tally.record_widgets(&widgets);
                 state.cap.record_progress(is_declared);
@@ -537,6 +543,10 @@ where
             }
         }
     }
+
+    // What only the finished crawl can decide: a folder written after its
+    // index page, and the site name every title shares.
+    super::finalize::finalize_written_pages(out_dir, &written)?;
 
     on_progress(ScrapeProgress {
         pages_scraped: state.tally.scraped(),

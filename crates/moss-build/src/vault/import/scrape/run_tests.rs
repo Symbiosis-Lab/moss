@@ -1696,3 +1696,91 @@ async fn widget_counts_reach_the_scrape_result() {
     assert!(body.contains("[Give](https://pay.example/donate/123)"), "{body}");
     assert!(!body.contains("<form"), "{body}");
 }
+
+/// A recursive crawl ends with `children: false` on the pages that are folder
+/// indexes — the root, and `events` because `events/` exists — and nowhere
+/// else. The folder is written after its page here (`events.md` lands before
+/// `events/2026/one.md`), which is why the decision is made after the crawl.
+#[tokio::test]
+async fn a_recursive_crawl_marks_folder_indexes_children_false_and_leaves_leaves_alone() {
+    let mut server = mockito::Server::new_async().await;
+    let page = |links: &str| {
+        format!(
+            "<html><body><article><p>Page body, long enough to be extracted as content \
+             by the generic scorer.</p>{links}</article></body></html>"
+        )
+    };
+    let mut mocks = Vec::new();
+    for (path, body) in [
+        ("/", page("<a href=\"/events\">Events</a> <a href=\"/about\">About</a>")),
+        ("/events", page("<a href=\"/events/2026/one\">One</a>")),
+        ("/events/2026/one", page("")),
+        ("/about", page("")),
+    ] {
+        mocks.push(
+            server
+                .mock("GET", path)
+                .with_status(200)
+                .with_header("content-type", "text/html")
+                .with_body(body)
+                .create_async()
+                .await,
+        );
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{}/", server.url()), tmp.path());
+    config.recursive = true;
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    assert_eq!(res.total_pages, 4);
+
+    let read = |rel: &str| std::fs::read_to_string(tmp.path().join(rel)).unwrap();
+    for rel in ["index.md", "events.md"] {
+        assert!(read(rel).contains("\nchildren: false\n---\n"), "{rel}:\n{}", read(rel));
+    }
+    for rel in ["about.md", "events/2026/one.md"] {
+        assert!(!read(rel).contains("children"), "{rel}:\n{}", read(rel));
+    }
+}
+
+/// No page declares its site name (no `og:site_name`, no JSON-LD), but the home
+/// page's title is the name and every other page's `<title>` ends in it — the
+/// crawl strips it from those once it has seen them all.
+#[tokio::test]
+async fn a_title_segment_shared_by_every_crawled_page_is_stripped() {
+    let mut server = mockito::Server::new_async().await;
+    let page = |title: &str, links: &str| {
+        format!(
+            "<html><head><title>{title}</title></head><body><article><p>Page body, long \
+             enough to be extracted as content by the generic scorer.</p>{links}</article>\
+             </body></html>"
+        )
+    };
+    let mut mocks = Vec::new();
+    for (path, body) in [
+        ("/", page("Studio Name", "<a href=\"/about\">A</a> <a href=\"/press\">P</a>")),
+        ("/about", page("About | Studio Name", "")),
+        ("/press", page("Press | Studio Name", "")),
+    ] {
+        mocks.push(
+            server
+                .mock("GET", path)
+                .with_status(200)
+                .with_header("content-type", "text/html")
+                .with_body(body)
+                .create_async()
+                .await,
+        );
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{}/", server.url()), tmp.path());
+    config.recursive = true;
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    assert_eq!(res.total_pages, 3);
+
+    for (rel, want) in [("index.md", "Studio Name"), ("about.md", "About"), ("press.md", "Press")] {
+        let md = std::fs::read_to_string(tmp.path().join(rel)).unwrap();
+        assert!(md.contains(&format!("title: \"{want}\"\n")), "{rel}:\n{md}");
+    }
+}

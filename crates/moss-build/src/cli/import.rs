@@ -320,6 +320,14 @@ fn resolve_folder(arg: Option<&str>) -> Result<PathBuf, String> {
         None => std::env::current_dir()
             .map_err(|e| format!("could not determine current directory: {}", e))?,
     };
+    // A target the caller named but that is not there yet is created, parents
+    // included: an agent running `moss import <url> <new-folder>` should not
+    // need a separate `mkdir`. Only an explicit argument is created; the
+    // current directory always exists.
+    if arg.is_some() && !folder.exists() {
+        std::fs::create_dir_all(&folder)
+            .map_err(|e| format!("could not create folder {}: {}", folder.display(), e))?;
+    }
     if !folder.exists() {
         return Err(format!("folder does not exist: {}", folder.display()));
     }
@@ -541,5 +549,14 @@ mod tests {
         let args = ["--bogus".to_string(), "https://x.example/".to_string()];
         let err = parse_args(&args).expect_err("an unknown option must not parse");
         assert!(err.contains("--bogus"), "the message must name it: {err}");
+    }
+
+    #[test]
+    fn a_missing_target_folder_is_created_with_its_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("new").join("site");
+        let resolved = resolve_folder(target.to_str()).expect("a missing folder is created");
+        assert!(target.is_dir());
+        assert!(resolved.ends_with("site"));
     }
 }

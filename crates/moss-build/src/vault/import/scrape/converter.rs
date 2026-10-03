@@ -252,23 +252,7 @@ fn extract_image_urls_in_markdown(md: &str) -> Vec<String> {
         .collect()
 }
 
-/// Return the first non-`data:` image URL in the markdown, resolved against
-/// `base_url`. Used by the import pipeline to populate `cover:` frontmatter
-/// from the article's hero image. Returns `None` if no image survives the
-/// extraction.
-pub fn first_image_url(md: &str, base_url: &str) -> Option<String> {
-    let base = Url::parse(base_url).ok();
-    IMG_PATTERN.captures_iter(md).find_map(|c| {
-        let raw = c[2].to_string();
-        if raw.is_empty() || raw.starts_with("data:") {
-            None
-        } else {
-            resolve_url(&raw, &base)
-        }
-    })
-}
-
-fn resolve_url(href: &str, base: &Option<Url>) -> Option<String> {
+pub(crate) fn resolve_url(href: &str, base: &Option<Url>) -> Option<String> {
     if let Some(b) = base {
         b.join(href).ok().map(|u| u.to_string())
     } else {
@@ -284,7 +268,7 @@ fn resolve_url(href: &str, base: &Option<Url>) -> Option<String> {
 // non-paren, non-whitespace character OR a single balanced `(…)` group, which
 // covers the full CommonMark spec allowance for one level of nested parens in
 // link destinations (CommonMark spec §6.6, link destination grammar).
-static IMG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static IMG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"!\[([^\]]*)\]\(((?:[^()\s"'<>]|\([^()]*\))+)\)"#).expect("img regex")
 });
 
@@ -442,14 +426,6 @@ mod tests {
         assert!(
             out.contains("./assets/imported/photo2024.jpg"),
             "rewrite_image_links did not substitute URL with parens; got: {out}"
-        );
-
-        // first_image_url must also resolve correctly
-        let first = first_image_url(md, "https://cdn.example.com/");
-        assert_eq!(
-            first.as_deref(),
-            Some("https://cdn.example.com/photo(2024).jpg"),
-            "first_image_url returned wrong URL: {first:?}"
         );
     }
 

@@ -89,7 +89,9 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         .metadata
         .og_image
         .clone()
-        .or_else(|| super::converter::first_image_url(&article.markdown, base_for_urls));
+        .or_else(|| {
+            super::metadata::fallback_cover(&article.markdown, &article.metadata.chrome_images, base_for_urls)
+        });
 
     // Write embedded assets (MHTML) to disk; remote images in a plain .html
     // import are left as absolute URLs (the local path never hits the network).

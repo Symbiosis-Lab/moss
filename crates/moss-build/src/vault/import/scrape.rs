@@ -26,6 +26,7 @@ mod crawl_state;
 pub(crate) mod extractor;
 pub(crate) mod fetch;
 pub(crate) mod import_local;
+mod finalize;
 pub(crate) mod metadata;
 pub(crate) mod mhtml;
 pub(crate) mod scope;

@@ -110,7 +110,7 @@ pub fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> Str
 /// real frontmatter early — confirmed to drop `title` entirely rather than
 /// fail safe. Escaping keeps the whole value on one physical line, so no
 /// line inside it can ever trim down to exactly `---`.
-fn escape_yaml_string(s: &str) -> String {
+pub(super) fn escape_yaml_string(s: &str) -> String {
     let clean = moss_core::frontmatter::strip_control_chars_str(s);
     clean
         .replace('\\', "\\\\")
@@ -184,13 +184,14 @@ pub fn generate_error_page(source_url: &str, error: &str) -> String {
 /// Unlike [`generate_frontmatter`], this function does not require an
 /// [`ArticleMetadata`] struct — error pages are not articles and should not
 /// pretend to be one. The frontmatter contains only the minimal keys that are
-/// meaningful for an error record: `title`, `external_url`, and `scrape_error`.
+/// meaningful for an error record: `title`, `external_url`, `scrape_error`, and
+/// `listed: false`, so the stub stays out of navigation and listings.
 pub fn render_error_markdown(source_url: &str, error: &str) -> String {
     let escaped_url = escape_yaml_string(source_url);
     let escaped_error = escape_yaml_string(error);
 
     let frontmatter = format!(
-        "---\ntitle: \"Page Unavailable\"\nexternal_url: \"{}\"\nscrape_error: \"{}\"\n---\n\n",
+        "---\ntitle: \"Page Unavailable\"\nexternal_url: \"{}\"\nscrape_error: \"{}\"\nlisted: false\n---\n\n",
         escaped_url, escaped_error
     );
     let body = generate_error_page(source_url, error);
@@ -310,6 +311,7 @@ mod tests {
             lang: Some("en".into()),
             cover: Some("./assets/imported/abcd.jpg".into()),
             og_image: None,
+            chrome_images: Vec::new(),
         };
         let fm = generate_frontmatter(&meta, "https://x.example/post");
         assert!(fm.starts_with("---\n"));
@@ -455,7 +457,7 @@ mod tests {
         );
         assert_eq!(
             doc.frontmatter.len(),
-            3,
+            4,
             "no extra key (e.g. the forged 'sneaky') may land in frontmatter; got:\n{:#?}",
             doc.frontmatter
         );
@@ -502,5 +504,15 @@ mod tests {
             fm.contains("origin: \"https://example.com/post\"\n"),
             "got:\n{fm}"
         );
+    }
+
+    #[test]
+    fn failed_page_stub_is_unlisted_and_a_normal_page_is_not() {
+        let stub = render_error_markdown("https://example.com/gone", "404 Not Found");
+        assert!(stub.contains("\nlisted: false\n"), "stub must be unlisted; got:\n{stub}");
+
+        let meta = ArticleMetadata { title: Some("Hello".into()), ..Default::default() };
+        let page = generate_frontmatter(&meta, "https://example.com/hello");
+        assert!(!page.contains("listed"), "a normal page stays listed; got:\n{page}");
     }
 }
