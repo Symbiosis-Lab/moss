@@ -1716,6 +1716,13 @@ function holdCanvas(src, tgt, scene, fwd, mobileTransition = false) {
   } else stage.classList.add('morphing');
 }
 function releasePigmentCover() {
+  // The print the wash lands on already shows the scene whole, so the live
+  // scene must stand finished the frame the print goes: without this, dropping
+  // `morphing` starts the siblings' staggered entrance fade from 0 (scene 3's
+  // sketch and notebook), and the art blinks out for about a third of a second
+  // just after it consolidated. A scene reached with no wash never had
+  // `morphing`, so its entrance still plays.
+  if (stage.classList.contains('morphing')) snapStage();
   stage.classList.remove('morphing', 'mobile-handoff');
   stage.style.removeProperty('--wash-cover');
   cell.style.transform = '';

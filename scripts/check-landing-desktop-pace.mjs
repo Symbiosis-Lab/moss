@@ -178,6 +178,23 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !shFrame.contentDocument.querySelector('.moss-modal--receipt.visible'), null, { timeout: 3000 });
   console.log('webkit 1440×900: scene 2\'s Publish opens the example site\'s publish receipt, which settles to live');
+  // A wash that lands has already shown scene 3 whole in its print, so when the
+  // print is hidden the sketch and notebook must already stand at full opacity:
+  // an entrance fade replayed under the live scene is the art vanishing for
+  // about a third of a second right after it consolidated.
+  await page.evaluate(() => {
+    window.__handoff = [];
+    const tick = (now) => { const s = __state(); __handoff.push({ t: now, shown: s.shown, running: s.running, print: getComputedStyle(document.getElementById('gl')).display !== 'none', sk: +getComputedStyle(document.getElementById('sib-sk')).opacity, nb: +getComputedStyle(document.getElementById('sib-nb')).opacity }); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+  await page.evaluate(() => scrollTo(0, __restY(2)));
+  await page.waitForFunction(() => __state().shown === 2 && !__state().running, null, { timeout: 30000 });
+  await page.waitForTimeout(1500);
+  const handoff = await page.evaluate(() => { const end = __handoff.find((f) => f.shown === 2 && !f.running); return end ? __handoff.filter((f) => f.t >= end.t && f.t <= end.t + 1000) : null; });
+  assert(handoff && handoff.length > 10, 'no frames recorded after the wash into scene 3 ended');
+  const dim = handoff.filter((f) => !f.print && (f.sk < .99 || f.nb < .99));
+  assert(!dim.length, `scene 3's art faded in again after its wash landed: ${dim.length} frames with the print hidden, lowest sketch ${Math.min(...dim.map((f) => f.sk))}, notebook ${Math.min(...dim.map((f) => f.nb))}`);
+  console.log('webkit 1440×900: scene 3\'s sketch and notebook are whole the frame its wash lands');
   // Standing in scene 3, the sketch and notebook keep running through the
   // retakes of its print. Each retake wakes them for its own frames, so they
   // are read between retakes, never during one.
