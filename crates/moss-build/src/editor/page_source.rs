@@ -223,4 +223,110 @@ mod tests {
         let r = resolve_page_source("", dir.path()).unwrap();
         assert!(r.source_path.unwrap().ends_with("index.md"));
     }
+
+    /// The takeover branch: a URL no page backs, and what the editor offers.
+    mod folder_home {
+        use super::*;
+        use crate::editor::resolve::takeover::TakeoverKind;
+
+        fn slashed(s: &str) -> String {
+            s.replace('\\', "/")
+        }
+
+        /// The (dir, display) a `FolderHome` takeover would write its home into.
+        fn folder_home(ps: &PageSource) -> Option<(String, String)> {
+            let t = ps.takeover.as_ref()?;
+            assert_eq!(t.kind, TakeoverKind::FolderHome);
+            Some((slashed(&t.files.last()?.dir), t.display.clone()))
+        }
+
+        fn write_map(dir: &Path, map: serde_json::Value) {
+            std::fs::write(dir.join(".moss/build.nosync/article-map.json"), map.to_string()).unwrap();
+        }
+
+        #[test]
+        fn a_nested_index_is_a_page_not_a_directory_surface() {
+            let dir = vault(&[], &[], &["blog/2024/index.md"]);
+            let r = resolve_page_source("blog/2024/", dir.path()).unwrap();
+            assert!(!r.is_dir);
+        }
+
+        #[test]
+        fn a_root_with_no_intentional_home_offers_the_takeover_not_a_random_page() {
+            // Neither `index.md`, a self-named note nor a `home: true` marker:
+            // the alphabetical fallback the build elects a home with must not
+            // open `apple.md` as the root's source.
+            let parent = tempfile::tempdir().unwrap();
+            let root = parent.path().join("wild garden");
+            std::fs::create_dir_all(root.join(".moss/build.nosync")).unwrap();
+            write_map(&root, serde_json::json!({ "articles": {}, "pages": {} }));
+            std::fs::write(root.join("apple.md"), "---\ntitle: Apple\n---\nbody").unwrap();
+            std::fs::write(root.join("banana.md"), "---\ntitle: Banana\n---\nbody").unwrap();
+            let r = resolve_page_source("", &root).unwrap();
+            assert!(r.is_dir, "the root is still a directory surface");
+            assert!(r.source_path.is_none());
+            let t = r.takeover.expect("the root offers to create its home");
+            assert_eq!(t.kind, TakeoverKind::RootHome);
+        }
+
+        /// A real folder with no map entry of its own: the editor recovers the
+        /// on-disk name from the served slug, from a child's source or the disk.
+        #[test]
+        fn a_no_home_subfolder_resolves_its_lone_article_as_the_home() {
+            let dir = vault(&[("field-notes/hello", "Field Notes/hello.md")], &[], &["Field Notes/hello.md"]);
+            let r = resolve_page_source("field-notes/", dir.path()).unwrap();
+            assert!(r.source_path.as_deref().is_some_and(|p| p.ends_with("hello.md")), "{:?}", r.source_path);
+            assert!(r.is_dir, "a real folder reports is_dir");
+            assert!(r.takeover.is_none(), "a folder whose article is its home is not offered a second one");
+        }
+
+        #[test]
+        fn a_nested_no_home_subfolder_resolves_its_lone_article_as_the_home() {
+            let dir = vault(
+                &[("field-notes/2024/post", "Field Notes/2024/post.md")],
+                &[],
+                &["Field Notes/2024/post.md"],
+            );
+            let r = resolve_page_source("field-notes/2024/", dir.path()).unwrap();
+            assert!(r.source_path.as_deref().is_some_and(|p| p.ends_with("post.md")), "{:?}", r.source_path);
+            assert!(r.is_dir);
+            assert!(r.takeover.is_none());
+        }
+
+        #[test]
+        fn an_empty_on_disk_subfolder_offers_a_folder_home_under_its_real_name() {
+            let dir = vault(&[], &[], &[]);
+            std::fs::create_dir_all(dir.path().join("Open Shelf")).unwrap();
+            let r = resolve_page_source("open-shelf/", dir.path()).unwrap();
+            assert_eq!(r.source_path, None);
+            assert!(r.is_dir);
+            let want = format!("{}/Open Shelf", slashed(&dir.path().to_string_lossy()));
+            assert_eq!(folder_home(&r), Some((want, "Open Shelf".into())));
+        }
+
+        /// The served slug (`photos`) differs from the directory (`写真`); the
+        /// override the build recorded is what reverses it.
+        #[test]
+        fn an_empty_folder_renamed_by_a_dir_override_still_maps_back_to_its_directory() {
+            let dir = vault(&[], &[], &[]);
+            std::fs::create_dir_all(dir.path().join("写真")).unwrap();
+            write_map(
+                dir.path(),
+                serde_json::json!({ "articles": {}, "pages": {}, "dir_overrides": { "写真": "photos" } }),
+            );
+            let r = resolve_page_source("photos/", dir.path()).unwrap();
+            assert!(r.is_dir);
+            let want = format!("{}/写真", slashed(&dir.path().to_string_lossy()));
+            assert_eq!(folder_home(&r), Some((want, "写真".into())));
+        }
+
+        #[test]
+        fn a_synthesized_page_with_no_backing_directory_offers_no_takeover() {
+            let dir = vault(&[], &[], &[]);
+            std::fs::create_dir_all(dir.path().join("Notes")).unwrap();
+            let r = resolve_page_source("feed/", dir.path()).unwrap();
+            assert_eq!(r.takeover, None, "no backing directory, no folder button");
+            assert!(!r.is_dir);
+        }
+    }
 }
