@@ -8,9 +8,9 @@
 //!   child pages under its index page's content. A page imported from a live
 //!   site never had that listing — the source already has its own — so the
 //!   result came out many times taller than the original. Any `index.md`, and
-//!   any `<name>.md` with a sibling folder `<name>/` (moss's folder-note
-//!   convention), gets `children: false`; the folder can be written after the
-//!   page that owns it.
+//!   any `<name>.md` beside a folder `<name>/` (moss's folder-note convention), gets `children: false` when the folder it indexes holds
+//!   another written page; the folder can be written after the page that owns
+//!   it. A bundle leaf, or a folder note over an empty folder, gets nothing.
 //! - **The site name is not part of a page title.** A segment of every page's
 //!   title that is the site's own name (`About | Studio Name`) is stripped. The
 //!   site's name is the one fact taken from the home page: its `title:` as
@@ -55,7 +55,7 @@ pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Resu
 
     for page in &pages {
         let mut updated = page.content.clone();
-        if is_folder_index(out_dir, &page.relative) {
+        if is_folder_index(written, &page.relative) {
             if let Some(next) = with_children_off(&updated) {
                 updated = next;
             }
@@ -85,12 +85,23 @@ fn frontmatter_text(content: &str, key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn is_folder_index(out_dir: &Path, relative: &str) -> bool {
+/// A page indexes a folder when that folder holds another page written in this
+/// run: an `index.md` indexes its parent, a `<name>.md` indexes `<name>/`.
+/// A bundle leaf (`2026/09/slug/index.md` with only images beside it) indexes
+/// nothing. Decided from the run's own page list, never the file system.
+fn is_folder_index(written: &[String], relative: &str) -> bool {
     let path = Path::new(relative);
     let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
         return false;
     };
-    stem == "index" || out_dir.join(path.with_extension("")).is_dir()
+    let folder = if stem == "index" {
+        path.parent().unwrap_or(Path::new("")).to_path_buf()
+    } else {
+        path.with_extension("")
+    };
+    written
+        .iter()
+        .any(|other| other != relative && Path::new(other).starts_with(&folder))
 }
 
 /// The home page's own name (its `title:` or `publisher:`) when every other
@@ -191,14 +202,45 @@ mod tests {
     }
 
     #[test]
+    fn bundle_leaves_and_folder_notes_over_empty_folders_get_no_children_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let pages = ["index.md", "events.md", "events/2026/one.md", "about.md", "2026/09/slug/index.md"];
+        for p in pages {
+            put(root, p, &page("T"));
+        }
+        fs::write(root.join("2026/09/slug/cover.png"), b"png").unwrap();
+        put(root, "empty.md", &page("T"));
+        fs::create_dir_all(root.join("empty")).unwrap();
+
+        run(root, &[&pages[..], &["empty.md"]].concat());
+
+        for p in ["index.md", "events.md"] {
+            assert!(read(root, p).contains("children: false\n"), "{p}");
+        }
+        for p in ["about.md", "2026/09/slug/index.md", "empty.md", "events/2026/one.md"] {
+            assert_eq!(read(root, p), page("T"), "{p}");
+        }
+    }
+
+    #[test]
+    fn a_lone_home_page_is_not_an_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        put(tmp.path(), "index.md", &page("T"));
+        run(tmp.path(), &["index.md"]);
+        assert_eq!(read(tmp.path(), "index.md"), page("T"));
+    }
+
+    #[test]
     fn a_nested_index_counts_and_a_page_without_frontmatter_is_left_alone() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         put(root, "news/index.md", &page("T"));
-        fs::create_dir_all(root.join("plain")).unwrap();
+        put(root, "news/a.md", &page("T"));
+        put(root, "plain/x.md", &page("T"));
         put(root, "plain.md", "no frontmatter\n");
 
-        run(root, &["news/index.md", "plain.md"]);
+        run(root, &["news/index.md", "news/a.md", "plain/x.md", "plain.md"]);
 
         assert!(read(root, "news/index.md").contains("children: false\n"));
         assert_eq!(read(root, "plain.md"), "no frontmatter\n");

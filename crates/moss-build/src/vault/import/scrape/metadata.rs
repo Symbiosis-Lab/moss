@@ -553,6 +553,10 @@ fn in_chrome(img: &ElementRef) -> bool {
 
 fn is_chrome_element(el: ElementRef) -> bool {
     let v = el.value();
+    // A chrome word on the document root's own class list (`tweak-fixed-header`) must not blanket every image.
+    if matches!(v.name(), "html" | "body") {
+        return false;
+    }
     CHROME_TAGS.contains(&v.name())
         || v.attr("role").is_some_and(|r| CHROME_ROLES.contains(&r.trim()))
         || ["class", "id"].iter().filter_map(|a| v.attr(a)).any(|names| {
@@ -807,6 +811,22 @@ mod tests {
             "<div class=\"site-header\"><img src=\"/logo.png\"></div>\
              {TEXT}<img src=\"/photo.jpg\">{TEXT}"
         ));
+        assert_eq!(cover.as_deref(), Some("https://example.com/photo.jpg"));
+    }
+
+    #[test]
+    fn a_chrome_word_on_the_body_class_does_not_make_the_whole_page_chrome() {
+        let html = format!(
+            "<html><head><title>T</title></head><body class=\"tweak-fixed-header page\">\
+             <header><img src=\"/logo.png\"></header>\
+             <section>{TEXT}<img src=\"/photo.jpg\">{TEXT}</section></body></html>"
+        );
+        let article = super::super::converter::extract_article(&html, "https://example.com/page");
+        let cover = fallback_cover(
+            &article.markdown,
+            &article.metadata.chrome_images,
+            "https://example.com/page",
+        );
         assert_eq!(cover.as_deref(), Some("https://example.com/photo.jpg"));
     }
 
