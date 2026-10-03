@@ -13,7 +13,7 @@
 // -- each print's dispersion recorded once, then played forward/backward and
 // crossfaded in optical thickness for a transition).
 import { V, WATER, PIG, MEAN, GROW, PACK, PLAY, buildShowShader } from './shaders.js';
-import { clamp01, smooth } from './math.js';
+import { clamp01, smooth, endpointPresence, drain, isDarkPage } from './math.js';
 import { DEFAULT_PRESET, recordingSteps, recordingFrameCount, type WatercolorPreset } from './preset.js';
 import { createPaper, type Paper } from '../paper/default.js';
 
@@ -35,6 +35,8 @@ export interface CreateSimOptions {
   preset?: Partial<WatercolorPreset>;
   /** Splices one of `DIAG_VIEWS` into the display shader in place of the normal composite; 0 (the default) leaves the normal composite. */
   diagMode?: number;
+  /** What lies under the canvas. `'paper'` (the default) draws the wash over the page colour read from `--bg`, as a layer that is clear only where nothing is inked on a light page and opaque on a dark one. `'transparent'` draws only pigment over nothing: the canvas is the print, paper included, at both ends of a leg, and its pigment thins toward `drainFloor` through the middle of it (`drain` in `engine/math.ts`), so whatever the host has behind it shows through the film. Light pages darken what is behind them, dark pages lighten it, by plain source-over. */
+  ground?: 'paper' | 'transparent';
 }
 
 export interface StepOptions {
@@ -71,7 +73,11 @@ export interface RecordingSide {
   skip: boolean;
 }
 
-export interface Pair { sides: [RecordingSide, RecordingSide]; }
+export interface Pair {
+  sides: [RecordingSide, RecordingSide];
+  /** With a transparent ground and an incoming side that was never recorded: the leg ends on nothing instead of on the incoming print. The outgoing print is exact at p = 0, its pigment is gone (the canvas fully clear) from the middle of the leg on, and nothing of the incoming print is drawn; the host shows its own incoming page from there. Ignored on a paper ground. If the incoming side was recorded, it is drained away unseen. */
+  toNothing?: boolean;
+}
 
 export interface WatercolorSim {
   dispose(): void;
@@ -79,7 +85,8 @@ export interface WatercolorSim {
   reset(): void;
   step(fwd: boolean, t: number, cure: number, stir?: number, tilt?: number, relift?: number, options?: StepOptions): void;
   probe(x: number, y: number): number[][];
-  draw(fwd: boolean, cure: number, clearance?: number): void;
+  /** `p`, if given, is the position through the leg (0 the outgoing print, 1 the incoming): at either end the canvas shows that print exactly, and the wash's own look fades in over `endpointMargin`. Left out, the full look is drawn. */
+  draw(fwd: boolean, cure: number, clearance?: number, p?: number): void;
   pair(options?: PairOptions): Pair;
   record(pair: Pair, firstFwd: boolean, budget: number): void;
   recorded(pair: Pair): boolean;
@@ -93,7 +100,7 @@ export interface WatercolorSim {
 }
 
 export function createSim(opts: CreateSimOptions): WatercolorSim | null {
-  const { canvas, texW, texH, divisor, rect, diagMode = 0 } = opts;
+  const { canvas, texW, texH, divisor, rect, diagMode = 0, ground = 'paper' } = opts;
   const preset: WatercolorPreset = { ...DEFAULT_PRESET, ...opts.preset };
   const paperSource = opts.paper ?? createPaper();
   // The shaders sample the paper with a hard-coded period (`t / 256.0`), so a
@@ -120,6 +127,7 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
   const compile = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader compile failed'); return s; };
   const W = Math.round(texW / divisor), H = Math.round(texH / divisor);
   const tint = (() => { const c = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(); const n = parseInt(c.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; })();
+  const dark = isDarkPage(tint);
   // the texture units and constants every pass shares are set once, at link;
   // per step only the framebuffers, the state textures and the prints change
   const UNITS: Record<string, number> = { uW: 0, uS: 1, uD: 2, uNear: 3, uWhole: 4, uPaper: 8, uSrc: 9, uTgt: 10, uSrcLo: 11, uTgtLo: 12, uSrcFt: 13, uTgtFt: 14,
@@ -128,7 +136,8 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'program link failed');
     const u: Record<string, WebGLUniformLocation | null> = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i)!.name; u[nm] = gl.getUniformLocation(p, nm); }
     gl.useProgram(p); for (const k in UNITS) if (u[k]) gl.uniform1i(u[k], UNITS[k]);
-    if (u.uSize) gl.uniform2f(u.uSize, W, H); if (u.uTint) gl.uniform3f(u.uTint, tint[0], tint[1], tint[2]);
+    if (u.uSize) gl.uniform2f(u.uSize, W, H); if (u.uTint) gl.uniform3f(u.uTint, tint[0], tint[1], tint[2]); if (u.uDark) gl.uniform1f(u.uDark, dark ? 1 : 0);
+    if (u.uGround) gl.uniform1f(u.uGround, ground === 'transparent' ? 1 : 0);
     return { p, u }; };
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
@@ -182,6 +191,12 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
 
   const bind = (unit: number, t: WebGLTexture) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); };
   const draw = () => gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  // the one place a position becomes the display's envelope (the program in use must be bound)
+  const setEndpoint = (u: Record<string, WebGLUniformLocation | null>, p: number, toNothing = false) => {
+    // a leg that ends on nothing is fully drained at its middle and stays so: its envelope stops there
+    const gone = toNothing && ground === 'transparent', q = gone ? Math.min(p, 0.5) : p; // 0.5 is where `drain` bottoms out
+    gl.uniform1f(u.uPresence, endpointPresence(q, preset.endpointMargin)); gl.uniform1f(u.uDrain, drain(q, gone ? 0 : preset.drainFloor)); gl.uniform1f(u.uEnd, p >= 0.5 ? 1 : 0);
+  };
   // a pass with the prints bound in the wash's direction
   const common = (pr: { p: WebGLProgram }, fwd: boolean) => {
     const [S, T] = fwd ? [prints.src!, prints.tgt!] : [prints.tgt!, prints.src!];
@@ -259,9 +274,10 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
       return out;
     },
     // the display pass onto the canvas
-    draw(fwd, cure, clearance = -.2) {
+    draw(fwd, cure, clearance = -.2, p = 0.5) {
       place();
       common(show, fwd);
+      setEndpoint(show.u, p);
       bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]);
       gl.uniform1f(show.u.uCure, cure);
       gl.uniform1f(show.u.uClearance, clearance);
@@ -323,13 +339,15 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
         const x = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x), j = Math.min(i + 1, n - 1);
         return { k0: side.frames[i], k1: side.frames[j], f: x - i, print: (side.fwd ? prints.src : prints.tgt)!.full }; };
       let x: any = at(out, p / preset.playOut), y: any = at(inc, (1 - p) / (1 - preset.playIn)), k = smooth(preset.playOut, preset.playIn, p);
-      if (!y) { y = x; k = 0; }
+      // an incoming side with nothing recorded yet shows the outgoing wash, but its print is still the one the leg ends on
+      if (!y) { y = { ...x, print: (out.fwd ? prints.tgt : prints.src)!.full }; k = 0; }
       if (!x) return false;
       place();
       gl.useProgram(play.p);
       bind(0, x.k0.s); bind(1, x.k0.d); bind(2, x.k1.s); bind(3, x.k1.d);
       bind(4, y.k0.s); bind(5, y.k0.d); bind(6, y.k1.s); bind(7, y.k1.d);
       bind(8, paper); bind(9, x.print); bind(10, y.print);
+      setEndpoint(play.u, p, pair.toNothing);
       gl.uniform1f(play.u.uFx, x.f); gl.uniform1f(play.u.uFy, y.f); gl.uniform1f(play.u.uK, k);
       draw();
       return true;

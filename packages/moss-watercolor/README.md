@@ -48,7 +48,17 @@ sim.setPrints(outgoingPrintCanvas, incomingPrintCanvas);
 sim.show(pair, true, 0.5); // records up to one frame's budget, then plays p=0.5
 ```
 
+A host that hands off to its own page at `p = 0` and `p = 1` gets the prints themselves there: `show(pair, fwd, 0)` draws the outgoing print and `show(pair, fwd, 1)` the incoming one, with no refraction, absorption change, paper clearing or wash colour. All of those fade in together over `DEFAULT_PRESET.endpointMargin` (0.08) of the leg at each end, through one envelope, `endpointPresence(p, margin)`; mid-leg frames are unchanged. A host drawing with `draw(fwd, cure, clearance)` passes its position as a fourth argument to get the same ends. `pnpm --filter @symbiosis-lab/moss-watercolor run test:browser` renders both ends in headless Chromium and compares them with the prints.
+
+A page whose `--bg` has a luma below 0.5 is drawn the other way round: the wash runs on the complement, so the print's light marks are the pigment and clear sheet is the paper, instead of shadow taken out of a light page. Nothing is passed for this; it is decided once, from `--bg`.
+
 The consumer owns the clock or scroll position; nothing in this package decides how `p` or `t` advances.
+
+## A transparent ground
+
+By default the canvas is drawn over the page colour the host publishes as `--bg`. A host whose page is a live background behind the canvas (an animated grid, say) passes `ground: "transparent"` to `createSim` instead. The canvas is then the print, paper included, and fully opaque at both ends of a leg; within the first 8% of the leg the paper goes and only pigment is left over transparency; the pigment thins smoothly to a share of its thickness (`drainFloor`, default 0.35, in the preset; 0 clears the canvas entirely at the middle of the leg) and the next print thickens back out of it (`drain` in `engine/math.ts`). On a light page the pigment darkens what is behind it, on a dark page it lightens it, both by plain source-over.
+
+A leg whose incoming print is not on hand yet can end on nothing: compose a pair whose incoming side was never recorded (`sim.pair({ only: true }).sides[1]`) and set `toNothing: true` on it. The outgoing print is exact at `p = 0`, its pigment is fully drained by the middle of the leg (whatever `drainFloor` is) and stays so to `p = 1`, and none of the incoming print is drawn, so the host can fade its own incoming page in over the clear canvas. It is ignored on a paper ground. If the incoming side was recorded, it is drained away unseen.
 
 ## Requirements
 

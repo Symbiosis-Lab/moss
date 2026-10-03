@@ -38,6 +38,10 @@ interface WatercolorPreset {
   playOut: number;
   /** A transition's incoming side gathers from this fraction of the position. */
   playIn: number;
+  /** The share of a leg, at each end, over which refraction, pigment and paper clearing fade in from the plain print. */
+  endpointMargin: number;
+  /** With a transparent ground, the share of its pigment a leg still shows at the middle of it, in [0, 1]: 1 never thins it, 0 clears it entirely. Ignored on a paper ground. */
+  drainFloor: number;
 }
 declare const DEFAULT_PRESET: WatercolorPreset;
 //#endregion
@@ -64,6 +68,8 @@ interface CreateSimOptions {
   preset?: Partial<WatercolorPreset>;
   /** Splices one of `DIAG_VIEWS` into the display shader in place of the normal composite; 0 (the default) leaves the normal composite. */
   diagMode?: number;
+  /** What lies under the canvas. `'paper'` (the default) draws the wash over the page colour read from `--bg`, as a layer that is clear only where nothing is inked on a light page and opaque on a dark one. `'transparent'` draws only pigment over nothing: the canvas is the print, paper included, at both ends of a leg, and its pigment thins toward `drainFloor` through the middle of it (`drain` in `engine/math.ts`), so whatever the host has behind it shows through the film. Light pages darken what is behind them, dark pages lighten it, by plain source-over. */
+  ground?: 'paper' | 'transparent';
 }
 interface StepOptions {
   standing?: boolean;
@@ -98,6 +104,8 @@ interface RecordingSide {
 }
 interface Pair {
   sides: [RecordingSide, RecordingSide];
+  /** With a transparent ground and an incoming side that was never recorded: the leg ends on nothing instead of on the incoming print. The outgoing print is exact at p = 0, its pigment is gone (the canvas fully clear) from the middle of the leg on, and nothing of the incoming print is drawn; the host shows its own incoming page from there. Ignored on a paper ground. If the incoming side was recorded, it is drained away unseen. */
+  toNothing?: boolean;
 }
 interface WatercolorSim {
   dispose(): void;
@@ -105,7 +113,8 @@ interface WatercolorSim {
   reset(): void;
   step(fwd: boolean, t: number, cure: number, stir?: number, tilt?: number, relift?: number, options?: StepOptions): void;
   probe(x: number, y: number): number[][];
-  draw(fwd: boolean, cure: number, clearance?: number): void;
+  /** `p`, if given, is the position through the leg (0 the outgoing print, 1 the incoming): at either end the canvas shows that print exactly, and the wash's own look fades in over `endpointMargin`. Left out, the full look is drawn. */
+  draw(fwd: boolean, cure: number, clearance?: number, p?: number): void;
   pair(options?: PairOptions): Pair;
   record(pair: Pair, firstFwd: boolean, budget: number): void;
   recorded(pair: Pair): boolean;

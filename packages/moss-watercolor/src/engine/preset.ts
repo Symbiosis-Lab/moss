@@ -50,6 +50,10 @@ export interface WatercolorPreset {
   playOut: number;
   /** A transition's incoming side gathers from this fraction of the position. */
   playIn: number;
+  /** The share of a leg, at each end, over which refraction, pigment and paper clearing fade in from the plain print. */
+  endpointMargin: number;
+  /** With a transparent ground, the share of its pigment a leg still shows at the middle of it, in [0, 1]: 1 never thins it, 0 clears it entirely. Ignored on a paper ground. */
+  drainFloor: number;
 }
 
 export const DEFAULT_PRESET: WatercolorPreset = {
@@ -71,6 +75,8 @@ export const DEFAULT_PRESET: WatercolorPreset = {
   recLight: 0.28,
   playOut: 0.42,
   playIn: 0.58,
+  endpointMargin: 0.08,
+  drainFloor: 0.35,
 };
 
 /** Derived from `recDuration`/`dt`/`recEvery`: never store these independently, or a preset override can silently desync the recorded step count from the frames actually kept. */

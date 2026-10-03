@@ -33,6 +33,7 @@
     "build": "tsdown",
     "dev": "tsdown --watch --no-clean",
     "test": "vitest run",
+    "test:browser": "node ../../scripts/check-watercolor-endpoints.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

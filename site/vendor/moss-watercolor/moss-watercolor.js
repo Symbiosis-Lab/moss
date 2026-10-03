@@ -37,16 +37,64 @@ var MossWatercolor = (() => {
 in vec2 q; out vec2 vUv; void main(){ vUv = q; gl_Position = vec4(q * 2.0 - 1.0, 0.0, 1.0); }`;
   var HEAD = `#version 300 es
 precision highp float; precision highp sampler2D;
-in vec2 vUv; uniform vec2 uSize; uniform sampler2D uPaper; uniform vec3 uTint;
+in vec2 vUv; uniform vec2 uSize; uniform sampler2D uPaper; uniform vec3 uTint; uniform float uDark;
+// The one endpoint envelope (engine/math.ts endpointPresence): 0 at either end of a leg, 1 mid-leg.
+// uEnd is which print that end is: 0 the outgoing, 1 the incoming.
+uniform float uPresence, uEnd;
+// A transparent ground (uGround, set once) draws the wash over nothing, not over the page; uDrain
+// (engine/math.ts drain) is how much of its pigment a position keeps: 1 at either end, the preset's drainFloor mid-leg.
+uniform float uGround, uDrain;
 // The prints at three resolutions, each a plain texture: full, the sim grid,
 // and a quarter of it for the footprint. They are downscaled on the 2D canvas
 // rather than by generateMipmap, so no driver's mip chain is in the picture.
 uniform sampler2D uSrc, uTgt, uSrcLo, uTgtLo, uSrcFt, uTgtFt;
 vec4 P(vec2 t){ return mix(texture(uPaper, t / 256.0), texture(uPaper, t / 977.0 + 0.37), 0.45); }
 float wetOf(float h){ return smoothstep(0.0004, 0.004, h); }
-// ink density of a printed pixel: what it takes out of the paper's light;
-// a soft-edged or shadowed pixel is its colour laid over the page at its alpha
-vec3 absorb(vec4 c){ vec3 r = mix(vec3(1.0), clamp(c.rgb / uTint, 0.0, 1.0), c.a); return -log(max(r, vec3(0.02))); }
+// On a light page the pigment is shadow: ink density is what a printed pixel
+// takes out of the page's light; a soft-edged or shadowed pixel is its colour
+// laid over the page at its alpha. On a dark page (uDark) the same model runs
+// on the complement: the page is dark paper, a print's light marks are the
+// pigment, and a pixel's density is how far its complement falls below the
+// paper's, so the pigment keeps its own colour and clear sheet is the paper.
+// A page channel at 1 has no complement to take density from, so on a dark page that channel is clear
+// whatever the print holds there (dividing by it gives 0/0, and a stand-in epsilon would read the clear
+// sheet itself as dense in that channel and drown the others' pigment).
+vec3 absorb(vec4 c){
+  vec3 d = 1.0 - uTint;
+  vec3 r = uDark > 0.5 ? mix((1.0 - c.rgb) / max(d, vec3(1e-3)), vec3(1.0), lessThan(d, vec3(1e-3))) : c.rgb / uTint;
+  return -log(max(mix(vec3(1.0), clamp(r, 0.0, 1.0), c.a), vec3(0.02)));
+}
+// The pixel the display writes for a density A. Light page: a premultiplied
+// transmittance layer, clear where nothing is inked or wet, so the host's page
+// shows through. Dark page: opaque, the paper itself with the light pigment on
+// it; and since a mark darker than the paper has no density to show, the
+// plain print (at either end of a leg: the print itself) is blended back in by
+// the envelope, so the ends are exactly the print.
+vec4 composite(vec3 A, vec4 plain){
+  if (uGround > 0.5) {
+    // Transparent ground: the drained pigment over nothing, with the page's own paper under it only
+    // while the wash has not yet begun (opaque at the ends, gone by the end of the endpoint margin).
+    // The pigment is a premultiplied layer (colour c, coverage a) that, over the paper colour, gives
+    // the opaque pixel above. Light: c = tint*(T-m), the shadow layer. Dark: c = (1-tint)(1-T) +
+    // tint*a, the light pigment; both lie in [0, a], so plain source-over places them on any background.
+    // The pigment's thickness is a pure scale (uDrain), so a thinned film stays translucent.
+    vec3 T = clamp(exp(-A * uDrain), 0.0, 1.0); float m = min(T.r, min(T.g, T.b)), a = 1.0 - m;
+    vec3 c = uDark > 0.5 ? (1.0 - uTint) * (1.0 - T) + uTint * a : uTint * (T - m);
+    float g = 1.0 - uPresence;
+    vec4 s = vec4(c + (1.0 - a) * g * uTint, a + (1.0 - a) * g);
+    // a print rarely sits on exactly the paper colour, and a mark on the wrong side of it has no
+    // density to show: the plain print itself, opaque, covers the ends
+    return mix(vec4(mix(uTint, plain.rgb, plain.a), 1.0), s, uPresence);
+  }
+  vec3 T = clamp(exp(-A), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
+  if (uDark > 0.5) return vec4(mix(mix(uTint, plain.rgb, plain.a), 1.0 - (1.0 - uTint) * T, uPresence), 1.0);
+  return vec4(uTint * (T - (1.0 - a)), a);
+}
+// Everything the wash does to a print goes through these two, so the envelope
+// lives in one place: the print seen through the water bends only as far as
+// it is present, and the shown density is the plain print's at either end.
+vec2 bend(vec2 uv, vec2 slope, float wet){ return uv + slope * 0.03 * wet * uPresence; }
+vec3 present(vec3 shown, vec3 plain){ return mix(plain, shown, uPresence); }
 // the wetted sheet: the prints' footprint blurred (coarse mip) and broken by
 // the fibres, so the wet edge is ragged like a wet-in-wet wash, not a frame
 // the sheet under the scene: the union of the two prints' silhouettes (not their
@@ -253,8 +301,8 @@ void main(){
     // how much of the old print has dissolved
     9: "vec3(0.5 + texture(uW, uv).gb * 0.5, 0.5)",
     // velocity: red +x, green +y, grey still
-    10: "vec3(length(gh * 0.03 * wet) * uSize.x * 0.5)"
-    // refraction offset
+    10: "vec3(length(bend(vec2(0.0), gh, wet)) * uSize.x * 0.5)"
+    // refraction offset, as the display bends it
   };
   function buildShowShader(diagMode = 0) {
     const diagView = DIAG_VIEWS[diagMode];
@@ -266,7 +314,7 @@ void main(){
   vec4 w = texture(uW, uv); float h = w.r; float wet = wetOf(h);
   // the print seen through standing water bends with the surface
   vec2 gh = vec2(texture(uW, uv + vec2(px.x, 0.0)).r - texture(uW, uv - vec2(px.x, 0.0)).r, texture(uW, uv + vec2(0.0, px.y)).r - texture(uW, uv - vec2(0.0, px.y)).r);
-  vec2 at = uv + gh * 0.03 * wet;
+  vec2 at = bend(uv, gh, wet);
   ${diagView ? `o = vec4(${diagView}, 1.0); return;` : ""}
   vec4 dd = texture(uD, uv); float l = dd.a;
   vec3 s = texture(uS, uv).rgb;
@@ -285,8 +333,8 @@ void main(){
   // the deepest channel's absorption and the colour carries the rest.
   // Clear the pigment along the paper grain, without a coloured overlay.
   A *= mix(.22, 1.0, smoothstep(uClearance - .12, uClearance + .12, pap.g));
-  vec3 T = clamp(exp(-A), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
-  o = vec4(uTint * (T - (1.0 - a)), a);
+  vec4 plain = uEnd > .5 ? texture(uTgt, uv) : texture(uSrc, uv);
+  o = composite(present(A, absorb(plain)), plain);
 }`;
   }
   var GROW = HEAD + `
@@ -318,7 +366,7 @@ vec3 side(sampler2D a0, sampler2D b0, sampler2D a1, sampler2D b1, float f, sampl
   float wet = wetOf(sh.a);
   float hx = mix(texture(a0, uv + vec2(px.x, 0.0)).a, texture(a1, uv + vec2(px.x, 0.0)).a, f) - mix(texture(a0, uv - vec2(px.x, 0.0)).a, texture(a1, uv - vec2(px.x, 0.0)).a, f);
   float hy = mix(texture(a0, uv + vec2(0.0, px.y)).a, texture(a1, uv + vec2(0.0, px.y)).a, f) - mix(texture(a0, uv - vec2(0.0, px.y)).a, texture(a1, uv - vec2(0.0, px.y)).a, f);
-  vec2 at = uv + vec2(hx, hy) * 0.03 * wet;
+  vec2 at = bend(uv, vec2(hx, hy), wet);
   vec3 s = sh.rgb; float sl = dot(s, vec3(1.0 / 3.0)); vec3 sc = max(sl + (s - sl) * 2.2, 0.0);
   vec3 ink = min(dl.rgb * g + 0.85 * sc * g, vec3(4.0));
   return absorb(texture(pr, at)) * (1.0 - dl.a) + ink * (1.0 + 0.2 * wet);
@@ -329,8 +377,8 @@ void main(){
   vec3 A = uK <= 0.0 ? side(uXa0, uXb0, uXa1, uXb1, uFx, uXP, uv, g)
          : uK >= 1.0 ? side(uYa0, uYb0, uYa1, uYb1, uFy, uYP, uv, g)
          : mix(side(uXa0, uXb0, uXa1, uXb1, uFx, uXP, uv, g), side(uYa0, uYb0, uYa1, uYb1, uFy, uYP, uv, g), uK);
-  vec3 T = clamp(exp(-A), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
-  o = vec4(uTint * (T - (1.0 - a)), a);
+  vec4 plain = uEnd > .5 ? texture(uYP, uv) : texture(uXP, uv);
+  o = composite(present(A, absorb(plain)), plain);
 }`;
 
   // packages/moss-watercolor/src/engine/math.ts
@@ -339,6 +387,13 @@ void main(){
     const x = clamp01((t - a) / (b - a));
     return x * x * (3 - 2 * x);
   };
+  var endpointPresence = (p, margin) => margin > 0 ? smooth(0, margin, p) * smooth(0, margin, 1 - p) : p > 0 && p < 1 ? 1 : 0;
+  var drain = (p, floor) => {
+    const f = Number.isFinite(floor) ? clamp01(floor) : 1;
+    const s = Math.sin(Math.PI * clamp01(p));
+    return 1 - (1 - f) * s * s;
+  };
+  var isDarkPage = (rgb) => 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] < 0.5;
 
   // packages/moss-watercolor/src/engine/preset.ts
   var DEFAULT_PRESET = {
@@ -359,7 +414,9 @@ void main(){
     recRinse: 0.02,
     recLight: 0.28,
     playOut: 0.42,
-    playIn: 0.58
+    playIn: 0.58,
+    endpointMargin: 0.08,
+    drainFloor: 0.35
   };
   function recordingSteps(preset) {
     return Math.round(preset.recDuration / preset.dt);
@@ -421,7 +478,7 @@ void main(){
 
   // packages/moss-watercolor/src/engine/solver.ts
   function createSim(opts) {
-    const { canvas, texW, texH, divisor, rect, diagMode = 0 } = opts;
+    const { canvas, texW, texH, divisor, rect, diagMode = 0, ground = "paper" } = opts;
     const preset = { ...DEFAULT_PRESET, ...opts.preset };
     const paperSource = opts.paper ?? createPaper();
     if (paperSource.width !== 256 || paperSource.height !== 256) {
@@ -456,6 +513,7 @@ void main(){
       const n = parseInt(c.slice(1), 16);
       return [(n >> 16) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
     })();
+    const dark = isDarkPage(tint);
     const UNITS = {
       uW: 0,
       uS: 1,
@@ -497,6 +555,8 @@ void main(){
       for (const k in UNITS) if (u[k]) gl.uniform1i(u[k], UNITS[k]);
       if (u.uSize) gl.uniform2f(u.uSize, W, H);
       if (u.uTint) gl.uniform3f(u.uTint, tint[0], tint[1], tint[2]);
+      if (u.uDark) gl.uniform1f(u.uDark, dark ? 1 : 0);
+      if (u.uGround) gl.uniform1f(u.uGround, ground === "transparent" ? 1 : 0);
       return { p, u };
     };
     const buf = gl.createBuffer();
@@ -605,6 +665,12 @@ void main(){
       gl.bindTexture(gl.TEXTURE_2D, t);
     };
     const draw = () => gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    const setEndpoint = (u, p, toNothing = false) => {
+      const gone = toNothing && ground === "transparent", q = gone ? Math.min(p, 0.5) : p;
+      gl.uniform1f(u.uPresence, endpointPresence(q, preset.endpointMargin));
+      gl.uniform1f(u.uDrain, drain(q, gone ? 0 : preset.drainFloor));
+      gl.uniform1f(u.uEnd, p >= 0.5 ? 1 : 0);
+    };
     const common = (pr, fwd) => {
       const [S, T] = fwd ? [prints.src, prints.tgt] : [prints.tgt, prints.src];
       gl.useProgram(pr.p);
@@ -734,9 +800,10 @@ void main(){
         return out;
       },
       // the display pass onto the canvas
-      draw(fwd, cure, clearance = -0.2) {
+      draw(fwd, cure, clearance = -0.2, p = 0.5) {
         place();
         common(show, fwd);
+        setEndpoint(show.u, p);
         bind(0, wT[wi]);
         bind(1, pT[pi][0]);
         bind(2, pT[pi][1]);
@@ -824,7 +891,7 @@ void main(){
         };
         let x = at(out, p / preset.playOut), y = at(inc, (1 - p) / (1 - preset.playIn)), k = smooth(preset.playOut, preset.playIn, p);
         if (!y) {
-          y = x;
+          y = { ...x, print: (out.fwd ? prints.tgt : prints.src).full };
           k = 0;
         }
         if (!x) return false;
@@ -841,6 +908,7 @@ void main(){
         bind(8, paper);
         bind(9, x.print);
         bind(10, y.print);
+        setEndpoint(play.u, p, pair.toNothing);
         gl.uniform1f(play.u.uFx, x.f);
         gl.uniform1f(play.u.uFy, y.f);
         gl.uniform1f(play.u.uK, k);
