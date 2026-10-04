@@ -315,3 +315,75 @@ fn a_link_to_a_redirected_html_address_or_the_feed_alias_is_not_dead() {
     let html = r#"<a href="/scale-compare.html">old</a><a href="/feed.xml">feed</a>"#;
     assert!(hrefs(html, &["scale-compare.html", "feed.xml", "rss.xml"]).is_empty());
 }
+
+// ── entity-encoded attribute values ─────────────────────────────────────────
+
+/// The renderer escapes an apostrophe in a file name as `&#39;`. The file is
+/// on disk under its real name, so the reference is satisfied.
+#[test]
+fn an_entity_encoded_apostrophe_matches_the_real_file_name() {
+    let html = r#"<img src="/media/A_Carpenter&#39;s_Workshop.jpg">"#;
+    assert!(hrefs(html, &["media/A_Carpenter's_Workshop.jpg"]).is_empty());
+    // And a truly missing file is still reported, with the href as written.
+    assert_eq!(hrefs(html, &[]), vec!["/media/A_Carpenter&#39;s_Workshop.jpg"]);
+}
+
+#[test]
+fn an_encoded_ampersand_in_a_file_name_matches_too() {
+    let html = r#"<a href="/files/Q&amp;A.pdf">"#;
+    assert!(hrefs(html, &["files/Q&A.pdf"]).is_empty());
+}
+
+#[test]
+fn an_entity_hash_is_not_mistaken_for_a_fragment() {
+    // `&#39;` contains a `#`; splitting on it before decoding would cut the
+    // path at "/media/A_Carpenter&".
+    let keys = candidate_keys("/media/it&#39;s.jpg").unwrap();
+    assert_eq!(keys[0], "media/it's.jpg");
+}
+
+// ── the printed list ────────────────────────────────────────────────────────
+
+#[test]
+fn the_summary_no_longer_points_at_debug_logs() {
+    let line = summary_line(&dead_links(&[("a.html", "/x")])).unwrap();
+    assert!(!line.contains("debug"), "{line}");
+}
+
+#[test]
+fn the_list_names_every_link_with_its_page() {
+    let lines = list_lines(&dead_links(&[("a.html", "/x"), ("b.html", "/y")]));
+    assert_eq!(lines, vec!["  '/x' in 'a.html'", "  '/y' in 'b.html'"]);
+}
+
+#[test]
+fn a_long_list_is_capped_and_counts_the_rest() {
+    let pairs: Vec<(String, String)> =
+        (0..23).map(|i| (format!("p{i}.html"), format!("/gone{i}"))).collect();
+    let refs: Vec<(&str, &str)> = pairs.iter().map(|(p, h)| (p.as_str(), h.as_str())).collect();
+    let lines = list_lines(&dead_links(&refs));
+    assert_eq!(lines.len(), LIST_CAP + 1, "{lines:?}");
+    assert_eq!(lines[LIST_CAP - 1], "  '/gone19' in 'p19.html'");
+    assert_eq!(lines[LIST_CAP], "  and 3 more");
+}
+
+#[test]
+fn no_dead_links_print_no_list() {
+    assert!(list_lines(&[]).is_empty());
+}
+
+/// The list goes through the uncounted output path, so it cannot raise the
+/// `--strict` problem count however many links it names.
+#[test]
+fn printing_the_list_does_not_count_as_a_problem() {
+    let _ = crate::build::cli_output::take_cli_problems();
+    print_list(&dead_links(&[("a.html", "/x"), ("b.html", "/y")]));
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 0);
+}
+
+#[test]
+fn printed_links_show_the_decoded_href_not_the_entity_text() {
+    let links = dead_links(&[("a.html", "/media/it&#39;s.jpg")]);
+    assert_eq!(list_lines(&links), vec!["  '/media/it's.jpg' in 'a.html'"]);
+    assert!(summary_line(&links).unwrap().contains("'/media/it's.jpg' in 'a.html'"));
+}

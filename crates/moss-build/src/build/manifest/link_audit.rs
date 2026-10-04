@@ -93,6 +93,9 @@ pub struct DeadLink {
 /// writes `slug/index.html` and authors write `/slug/`, `/slug`, and
 /// `/slug/index.html` interchangeably.
 pub fn candidate_keys(href: &str) -> Option<Vec<String>> {
+    // The value is attribute text, so entities come off first: `&#39;` holds a
+    // `#` that would otherwise read as a fragment, and `&amp;` is not a file name.
+    let href = moss_core::html_entities::decode(href);
     let path = href.split(['?', '#']).next().unwrap_or("");
     if !path.starts_with('/') || path.starts_with("//") {
         return None;
@@ -211,6 +214,11 @@ pub fn audit(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
 /// this module used to produce.
 const SUMMARY_EXAMPLES: usize = 3;
 
+/// How many dead links the printed list names before "and N more". The summary
+/// stays one log line so a log bundle is not flooded; this list is terminal-only
+/// output, so it can afford enough lines to act on.
+const LIST_CAP: usize = 20;
+
 /// The one-line WARN summary for `dead`, or `None` when there's nothing to
 /// report. Split out from `audit_and_report` so the wording is testable
 /// without capturing the global `log` sink.
@@ -221,7 +229,7 @@ fn summary_line(dead: &[DeadLink]) -> Option<String> {
     let examples: Vec<String> = dead
         .iter()
         .take(SUMMARY_EXAMPLES)
-        .map(|link| format!("'{}' in '{}'", link.href, link.page))
+        .map(|link| format!("'{}' in '{}'", shown(link), link.page))
         .collect();
     let remainder = dead.len() - examples.len();
     let suffix = if remainder > 0 {
@@ -230,11 +238,40 @@ fn summary_line(dead: &[DeadLink]) -> Option<String> {
         String::new()
     };
     Some(format!(
-        "Dead links: {} root-relative reference(s) this build wrote no page or asset for ({}{}) — see debug logs for the full list",
+        "Dead links: {} root-relative reference(s) this build wrote no page or asset for ({}{})",
         dead.len(),
         examples.join(", "),
         suffix,
     ))
+}
+
+/// The href as the matcher read it, with entities decoded: `&#39;` printed raw
+/// would send the author grepping for text their source does not contain.
+fn shown(link: &DeadLink) -> String {
+    moss_core::html_entities::decode(&link.href)
+}
+
+/// One line per dead link (`'<href>' in '<page>'`), at most [`LIST_CAP`], then
+/// "and N more". Empty when there is nothing to list.
+fn list_lines(dead: &[DeadLink]) -> Vec<String> {
+    let mut lines: Vec<String> = dead
+        .iter()
+        .take(LIST_CAP)
+        .map(|link| format!("  '{}' in '{}'", shown(link), link.page))
+        .collect();
+    if dead.len() > LIST_CAP {
+        lines.push(format!("  and {} more", dead.len() - LIST_CAP));
+    }
+    lines
+}
+
+/// Print [`list_lines`] with `cli_eprintln!`: unlike `cli_warn!` it leaves the
+/// `--strict` problem count alone, and unlike `log::warn!` it never enters a
+/// log bundle.
+fn print_list(dead: &[DeadLink]) {
+    for line in list_lines(dead) {
+        crate::cli_eprintln!("{line}");
+    }
 }
 
 /// Run the audit and say what it found. The entry point the seal tail calls.
@@ -246,7 +283,9 @@ fn summary_line(dead: &[DeadLink]) -> Option<String> {
 /// signatures) — a user's bundle held nothing but `link_audit` lines. The
 /// per-link detail moves to `log::debug!`, which the headless logger still
 /// captures for anyone re-running with verbose logging; only the warn-level
-/// signature is what a bundle's summary competes over.
+/// signature is what a bundle's summary competes over. The terminal also gets
+/// the links themselves (see [`print_list`]), since an author told "32 dead
+/// links" could not act on a count and three examples.
 ///
 /// Returns the full list (still advisory) so the caller can additionally
 /// scope it down to this build's own unfulfilled promises — see
@@ -257,6 +296,7 @@ pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLi
     // stays out of the `--strict` count.
     if let Some(line) = summary_line(&dead) {
         log::warn!("{line}");
+        print_list(&dead);
     }
     for link in &dead {
         log::debug!(
