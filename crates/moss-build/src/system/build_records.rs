@@ -93,7 +93,7 @@ pub struct BuildRecords {
     /// the last build of this folder emitted stubs from. Redirect-stub bytes
     /// are a pure function of this map, so an unchanged map means the stub
     /// set this build would write is byte-identical to what is already
-    /// staged — see `feeds::redirects::emit_redirect_stubs`.
+    /// staged — see `feeds::redirects::emit_redirect_table`.
     redirect_signature: FolderSlot<BTreeMap<String, String>>,
 }
 

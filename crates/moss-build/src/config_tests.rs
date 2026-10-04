@@ -168,3 +168,41 @@ fn schema_version_ahead_reads_off_the_same_parse_that_swallowed_the_error() {
     .unwrap();
     assert_eq!(current.schema_version_ahead(), None);
 }
+
+#[test]
+fn redirects_table_is_optional() {
+    let cfg = ConfigFile::parse("schema_version = 6\n[site]\nlang = \"en\"\n").unwrap();
+    assert!(cfg.declared_redirects().is_empty());
+}
+
+#[test]
+fn redirects_are_read_as_old_to_new_pairs_with_any_slash_spelling() {
+    let cfg = ConfigFile::parse(
+        "schema_version = 6\n[redirects]\n\"/old/\" = \"/new/\"\n\"gone.html\" = \"https://example.com/x\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.declared_redirects(),
+        vec![
+            ("/old/".to_string(), "/new/".to_string()),
+            ("gone.html".to_string(), "https://example.com/x".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn a_redirect_that_is_not_a_string_is_one_advisory_and_the_rest_still_read() {
+    let _ = crate::build::cli_output::take_cli_problems();
+    let cfg =
+        ConfigFile::parse("schema_version = 6\n[redirects]\n\"/a/\" = 3\n\"/b/\" = \"/c/\"\n").unwrap();
+    assert_eq!(cfg.declared_redirects(), vec![("/b/".to_string(), "/c/".to_string())]);
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+}
+
+#[test]
+fn a_redirects_value_that_is_not_a_table_is_an_advisory_not_a_crash() {
+    let _ = crate::build::cli_output::take_cli_problems();
+    let cfg = ConfigFile::parse("schema_version = 6\nredirects = \"nope\"\n").unwrap();
+    assert!(cfg.declared_redirects().is_empty());
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+}

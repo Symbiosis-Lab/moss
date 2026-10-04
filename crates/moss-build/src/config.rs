@@ -266,6 +266,28 @@ impl ConfigFile {
         kinds
     }
 
+    /// The `[redirects]` table: old address, new address, as the author wrote
+    /// them. Optional — a config without it is a config with no hand-declared
+    /// redirects, and adding the table needs no schema bump. A value that is
+    /// not a string, or a `redirects` that is not a table, is reported and
+    /// skipped; the entries around it still read.
+    pub fn declared_redirects(&self) -> Vec<(String, String)> {
+        use crate::build::cli_output::log_warn_problem;
+        let Some(value) = self.root.get("redirects") else { return Vec::new() };
+        let Some(table) = value.as_table() else {
+            log_warn_problem!("[redirects] must be a table of old address = new address; ignoring it");
+            return Vec::new();
+        };
+        let mut pairs = Vec::new();
+        for (from, to) in table {
+            match to.as_str() {
+                Some(to) => pairs.push((from.clone(), to.to_string())),
+                None => log_warn_problem!("[redirects] \"{from}\" must be a string address; skipping it"),
+            }
+        }
+        pairs
+    }
+
     /// A boolean field under `[terms]`, e.g. `author`, `tags`: the legacy,
     /// pre-kinds toggle `terms_kinds` folds into the two built-ins' `fields`.
     /// `None` means the key is absent, which is not the same as `false` —

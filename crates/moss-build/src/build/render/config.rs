@@ -92,6 +92,9 @@ pub struct SiteConfig {
     /// value instead of deriving the URL from `.moss/state.toml`. `None` means
     /// "derive from deployment state as usual". Consumed by Task 2.5.
     pub site_url_override: Option<String>,
+    /// `[redirects]` from the config the build parsed once: old address, new
+    /// address, as the author wrote them.
+    pub declared_redirects: Vec<(String, String)>,
     /// `[site].ai_policy` — site-level AI crawler policy that drives the
     /// generated robots.txt. One of `"standard"` (default), `"unrestricted"`,
     /// or `"restricted"`. `None` falls back to the standard policy.
@@ -156,6 +159,7 @@ impl Default for SiteConfig {
             floating_nav: false,
             header: crate::build::components::nav::HeaderMode::Brand,
             site_url_override: None,
+            declared_redirects: Vec::new(),
             ai_policy: None,
             search: false,
             term_kinds: Vec::new(),

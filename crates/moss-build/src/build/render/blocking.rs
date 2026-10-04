@@ -2740,12 +2740,12 @@ pub fn generate_blocking_content_for_build(
             )
             .into_bytes();
 
-            // Site 10 (Pattern A): emit rss.xml and its legacy alias.
-            for path in crate::build::feeds::rss::site_feed_paths(&source_path_buf) {
-                BuildContext::for_render(output_dir, pending)
-                    .emit_held(&path, rss_content.clone(), HashBucket::Files)
-                    .map_err(|e| format!("Failed to emit {}: {}", path.as_str(), e))?;
-            }
+            // Site 10 (Pattern A): emit rss.xml. Its former address, feed.xml,
+            // is an entry of the redirect table, written with the rest of it.
+            let rss_path = ServedPath::for_rss("").unwrap();
+            BuildContext::for_render(output_dir, pending)
+                .emit_held(&rss_path, rss_content, HashBucket::Files)
+                .map_err(|e| format!("Failed to emit {}: {}", rss_path.as_str(), e))?;
         }
 
         // sitemap.xml is emitted further down, once every page is registered.
@@ -3001,16 +3001,27 @@ pub fn generate_blocking_content_for_build(
         log::warn!("⚠️ Failed to save inventory: {}", e);
     }
 
-    // Gap #3 fix: emit redirect stubs into the pending manifest so the seal
-    // (and therefore the generation-id) covers them. The baseline is the record
+    // Gap #3 fix: emit the redirect table into the pending manifest so the seal
+    // (and therefore the generation-id) covers it. The baseline is the record
     // of what the last publish put live (`.moss/deploy/`), so it reflects the
     // URLs serving at the point a new build starts.
     // We use the IN-MEMORY `article_map` — not a re-read from disk — because
     // `article_map.save()` may not have flushed yet and, more importantly,
     // the in-memory value is the authoritative result of this build.
-    match crate::build::feeds::redirects::emit_redirect_stubs(
+    //
+    // A term whose namespace moved (`author` declared under `[terms.people]`)
+    // keeps serving its old `authors/<slug>/` URL: those moves are recomputed
+    // from the kinds table every build and stored nowhere, so they ride in
+    // beside the persisted rename history.
+    let table_inputs = crate::build::feeds::redirects::TableInputs {
+        kind_moves: crate::build::terms::kind_move_stubs(&term_index),
+        has_deployed_url: site_url.is_deployed(),
+        declared: site_config.declared_redirects.clone(),
+    };
+    match crate::build::feeds::redirects::emit_redirect_table(
         &paths,
         &article_map,
+        &table_inputs,
         output_dir,
         pending,
     ) {
@@ -3041,46 +3052,7 @@ pub fn generate_blocking_content_for_build(
                 );
             }
         }
-        Err(e) => log::warn!("Failed to emit redirect stubs: {}", e),
-    }
-
-    // A term whose namespace moved (`author` declared under `[terms.people]`)
-    // keeps serving its old `authors/<slug>/` URL. Separate from the block
-    // above because the two answer different questions from different
-    // sources: that one merges a persisted rename history keyed on note UIDs,
-    // this one is recomputed from the kinds table every build and stored
-    // nowhere. Same emit pattern, so both land in `pending` and the seal
-    // covers them.
-    {
-        use crate::build::context::BuildContext;
-        use crate::build::feeds::redirects::{
-            current_build_urls, generate_redirect_html, pretty_url_to_fs_path,
-        };
-        use crate::build::manifest::HashBucket;
-        use crate::build::served_path::ServedPath;
-        // A stub must never aim at a URL a real page already serves this
-        // build — the root stub (`authors/`) can collide with an unrelated
-        // page at that address, and a per-name stub can collide with a page
-        // a member reused its old slug for. The manifest is last-write-wins,
-        // so either collision would silently bury the real page.
-        let served_urls = current_build_urls(&article_map);
-        for (old_url, new_url) in crate::build::terms::kind_move_stubs(&term_index) {
-            if served_urls.contains(&old_url) {
-                continue;
-            }
-            let fs_path = pretty_url_to_fs_path(&old_url);
-            let html = generate_redirect_html(&new_url);
-            match ServedPath::from_source(&fs_path) {
-                Ok(sp) => {
-                    if let Err(e) = BuildContext::for_render(output_dir, pending)
-                        .emit(&sp, html.as_bytes(), HashBucket::Files)
-                    {
-                        log::warn!("Failed to emit kind-move stub '{}': {}", fs_path, e);
-                    }
-                }
-                Err(e) => log::warn!("Invalid kind-move stub path '{}': {}", fs_path, e),
-            }
-        }
+        Err(e) => log::warn!("Failed to emit the redirect table: {}", e),
     }
 
     // Generate _previews.json for hover link previews

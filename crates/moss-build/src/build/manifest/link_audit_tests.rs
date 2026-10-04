@@ -307,3 +307,11 @@ fn a_summary_past_the_example_cap_names_a_few_and_counts_the_rest() {
     // Exactly SUMMARY_EXAMPLES (3) occurrences named, not all 5.
     assert_eq!(line.matches("'/x' in").count(), 3, "{line}");
 }
+
+/// A redirect stub for a hand-made `.html` address, and the feed's alias copy,
+/// are manifest keys like any other file: a link to either resolves.
+#[test]
+fn a_link_to_a_redirected_html_address_or_the_feed_alias_is_not_dead() {
+    let html = r#"<a href="/scale-compare.html">old</a><a href="/feed.xml">feed</a>"#;
+    assert!(hrefs(html, &["scale-compare.html", "feed.xml", "rss.xml"]).is_empty());
+}

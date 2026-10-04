@@ -104,6 +104,8 @@ fn ships_from_stage_by_design(key: &str) -> bool {
     (key.starts_with("_moss/") && content_named)
         // Config-derived (site URL, `ai_policy`): moves only on a config edit.
         || key == "robots.txt"
+        // Every redirect, by old address: moves only on a rename or a `[redirects]` edit.
+        || key == "_moss/redirects.json"
         || (key.starts_with("qr/") && key.ends_with(".svg"))
         // Moves only when the favicon source does.
         || key.starts_with("assets/favicon")

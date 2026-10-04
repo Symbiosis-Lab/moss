@@ -332,14 +332,13 @@ fn build_result_returns_the_count_it_drained() {
     );
 }
 
-/// A `redirects.json` entry whose key has a leading slash is not a valid
-/// redirect source (`ServedPath::from_source` rejects an absolute path). The
-/// rejection has to reach `--strict` the same way every other build
-/// diagnostic does, and a well-formed entry sitting beside the bad one must
-/// still get its stub — one mistyped line must not silently drop every
-/// redirect after it in the file.
+/// A `redirects.json` entry whose key escapes the site (`..`) is not a valid
+/// redirect source (`ServedPath::from_source` rejects it). The rejection has
+/// to reach `--strict` the same way every other build diagnostic does, and a
+/// well-formed entry sitting beside the bad one must still get its stub — one
+/// mistyped line must not silently drop every redirect after it in the file.
 #[test]
-fn a_redirect_entry_with_a_leading_slash_counts_as_a_cli_problem() {
+fn a_redirect_entry_outside_the_site_counts_as_a_cli_problem() {
     let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -356,9 +355,9 @@ fn a_redirect_entry_with_a_leading_slash_counts_as_a_cli_problem() {
     let output_dir = tmp.path().join("output");
     std::fs::create_dir_all(&output_dir).unwrap();
 
-    // A mistyped entry (leading slash) beside a well-formed one.
+    // A mistyped entry (escapes the site) beside a well-formed one.
     let mut redirects = std::collections::BTreeMap::new();
-    redirects.insert("/old-page/".to_string(), "new-page/".to_string());
+    redirects.insert("../old-page/".to_string(), "new-page/".to_string());
     redirects.insert("good-page/".to_string(), "new-page/".to_string());
     crate::build::feeds::redirects::save_redirects(&data_dir, &redirects).unwrap();
 
@@ -367,9 +366,10 @@ fn a_redirect_entry_with_a_leading_slash_counts_as_a_cli_problem() {
     let mut pending =
         crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
 
-    crate::build::feeds::redirects::emit_redirect_stubs(
+    crate::build::feeds::redirects::emit_redirect_table(
         &paths,
         &current_map,
+        &Default::default(),
         &output_dir,
         &mut pending,
     )
@@ -378,7 +378,7 @@ fn a_redirect_entry_with_a_leading_slash_counts_as_a_cli_problem() {
     assert_eq!(
         take_cli_problems(),
         1,
-        "the leading-slash entry is exactly one --strict problem; the good entry beside it is not"
+        "the escaping entry is exactly one --strict problem; the good entry beside it is not"
     );
 
     let sealed = pending.seal();

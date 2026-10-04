@@ -110,7 +110,7 @@ async fn record_what_is_live(
             // below moves it — `prev_snapshot` is this target's own last
             // publish (what `change_set::classify` diffs against);
             // `prev_baseline` is the cross-target union `detect_renames`
-            // reads, the same baseline `feeds::redirects::emit_redirect_stubs`
+            // reads, the same baseline `feeds::redirects::emit_redirect_table`
             // loads at build time for the identical reason.
             let prev_snapshot = published_record::load_for(mp, Some(target));
             let prev_change_set = change_set::classify(prev_snapshot.as_ref(), sealed);

@@ -13,7 +13,7 @@
 //! Three answers, cheapest first, and a reference needs only one of them:
 //!
 //! 1. **A manifest key**, exact or as `<path>/index.html` for a directory URL.
-//!    Redirect stubs are in here too — `feeds::redirects::emit_redirect_stubs`
+//!    Redirect stubs are in here too — `feeds::redirects::emit_redirect_table`
 //!    writes a real meta-refresh file through the same `emit`, so a link to a
 //!    renamed page's OLD url resolves against the stub and this module needs no
 //!    knowledge of `.moss/data/redirects.json` at all.

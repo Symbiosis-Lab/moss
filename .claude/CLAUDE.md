@@ -26,7 +26,7 @@ Build output is checked byte-for-byte by a snapshot suite: `cargo test -p moss-b
 
 ## Served paths are published URLs
 
-A path the build writes (the feed, the sitemap, a page's URL) is stored by people and machines outside this repository the moment a site is published. Changing one is never a refactor: every stored link and subscription to the old path starts returning 404, and nothing in the test suite goes red, because the tests that pin the path are edited in the same change. Keep the old path resolving in the same commit — an alias for a file (`feeds::rss::site_feed_paths`), a redirect stub for a page — and give the alias its own test. The feed moved from `feed.xml` to `rss.xml` without one in 2026-05, and subscribers to existing sites got a 404 until 2026-10.
+A path the build writes (the feed, the sitemap, a page's URL) is stored by people and machines outside this repository the moment a site is published. Changing one is never a refactor: every stored link and subscription to the old path starts returning 404, and nothing in the test suite goes red, because the tests that pin the path are edited in the same change. Keep the old path resolving in the same commit — a file or a page gets an entry in the redirect table (`feeds::redirect_table::FORMER_PATHS` for a path the generator renamed, `[redirects]` in `.moss/config.toml` for an author's own rename), which writes the stub or copy and lists it in `_moss/redirects.json` — and give the alias its own test. The feed moved from `feed.xml` to `rss.xml` without one in 2026-05, and subscribers to existing sites got a 404 until 2026-10.
 
 ## Worktrees
 

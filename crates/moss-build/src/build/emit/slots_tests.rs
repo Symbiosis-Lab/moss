@@ -169,7 +169,7 @@ fn a_page_with_no_slot_marker_ships_by_oid_cold_and_warm() {
     let site = Site::new();
     site.write("index.md", "# Home");
     site.write("about.md", "# About\n\nNot a redirect target.");
-    // Seeds `emit_redirect_stubs`: the old URL is not a live page, so the stub
+    // Seeds `emit_redirect_table`: the old URL is not a live page, so the stub
     // survives the merge and is emitted as `old-about/index.html`.
     site.write(".moss/data/redirects.json", r#"{"old-about/": "about/"}"#);
 

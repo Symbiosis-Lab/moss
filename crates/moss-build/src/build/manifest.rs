@@ -582,6 +582,11 @@ impl PendingManifest {
         self.touched.iter().filter(|k| k.ends_with(".html"))
     }
 
+    /// This build wrote or carried `key` — unlike `files()`, never a leftover.
+    pub(crate) fn is_registered(&self, key: &str) -> bool {
+        self.touched.contains(key)
+    }
+
     /// Read-only access to the accumulated `source_to_output` map.
     ///
     /// Used by `generate_blocking_content`'s post-emission debug-assert that

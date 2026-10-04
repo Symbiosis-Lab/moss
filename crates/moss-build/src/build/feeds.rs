@@ -2,6 +2,7 @@
 //! the full-text search index.
 
 pub mod llms_txt;
+pub mod redirect_table;
 pub mod redirects;
 pub mod rss;
 pub mod search;
