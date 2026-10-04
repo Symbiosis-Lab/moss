@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`order: [...]` no longer draws the foreign-field hint toward `weight`.** New `validation::foreign_field_warning(name, value)` owns the build's foreign-field wording and returns `None` for `order` with a list value, the documented alias for `sort`; a single `order` value now gets advice naming `weight` and `sort`. `foreign_field_suggestion` is unchanged.
 - **`date` validation accepts a full ISO timestamp** (`YYYY-MM-DDTHH:MM[:SS[.fraction]]` with an optional `Z` or `±HH:MM`), matching what `normalize_date` already renders. The warning text now names the form.
 - **`sort_by_resolved`'s explicit-order list now matches a folder by its own name, not its home file's `clean_stem`.** `SortableDoc` gains `order_match_name()` (default: `clean_stem()`, unchanged for a leaf); `ParsedDocument` overrides it to read the folder's own name off its URL. A folder's home file is very often the generic `index.md`, whose `clean_stem` is the fixed string "index" — a `sort: [a, appendix]` naming that subfolder matched only by accident before, when the folder happened to be self-named (`appendix/appendix.md`).
 - Renaming or deleting a file no longer skips a link written with the angle-bracket destination form (`[text](<a note.md>)`), the syntax Markdown allows so a destination can contain a space. Renaming now updates it and keeps the brackets, since the new path may still need them; deleting now finds it.

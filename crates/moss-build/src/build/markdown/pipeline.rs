@@ -212,15 +212,15 @@ fn frontmatter_invalid_yaml_warning(
 /// or vim got no signal at all. Table (shared with that editor hint):
 /// [`moss_core::validation::foreign_field_suggestion`]. Pure so the wiring is
 /// testable; phrased as a question because a template may read its own `image:`.
-fn foreign_frontmatter_warnings(file_path: &str, keys: &[&str]) -> Vec<String> {
+fn foreign_frontmatter_warnings(
+    file_path: &str,
+    keys: &[&str],
+    values: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> Vec<String> {
     keys.iter()
         .filter_map(|key| {
-            moss_core::validation::foreign_field_suggestion(key).map(|moss_field| {
-                format!(
-                    "[{}] frontmatter: '{}' has no meaning to moss and was ignored — did you mean '{}'? (Harmless if it is your own field.)",
-                    file_path, key, moss_field
-                )
-            })
+            moss_core::validation::foreign_field_warning(key, values.get(*key))
+                .map(|w| format!("[{file_path}] frontmatter: {w}"))
         })
         .collect()
 }
@@ -440,7 +440,7 @@ pub fn process_markdown_file(
             // parser drops unknown keys, so ask for them separately.
             let keys = moss_core::frontmatter_typed::simplified_frontmatter_keys(content);
             let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-            for warning in foreign_frontmatter_warnings(file_path, &key_refs) {
+            for warning in foreign_frontmatter_warnings(file_path, &key_refs, &Default::default()) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
             let fm_lines = content.lines().count().saturating_sub(body.lines().count());
@@ -477,12 +477,17 @@ pub fn process_markdown_file(
             }
             let (mut fm, warnings) = moss_core::frontmatter_typed::project_typed(&mapping);
             for w in &warnings {
+                // A key the foreign-field table explains (`order: 3`, read as
+                // `sort` and rejected) gets that clearer warning, not both.
+                if moss_core::validation::foreign_field_warning(&w.key, parsed.frontmatter.get(&w.key)).is_some() {
+                    continue;
+                }
                 crate::build::cli_output::cli_warn!("[{}] frontmatter: {}", file_path, w.message);
             }
             // Keys another generator uses for a job moss also does. See
             // `foreign_frontmatter_warnings` for why these are not silent.
             let keys: Vec<&str> = mapping.keys().filter_map(|k| k.as_str()).collect();
-            for warning in foreign_frontmatter_warnings(file_path, &keys) {
+            for warning in foreign_frontmatter_warnings(file_path, &keys, &parsed.frontmatter) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
             // Schema validation — type mismatches, enum violations, bad dates.

@@ -83,6 +83,34 @@ pub fn foreign_field_suggestion(name: &str) -> Option<&'static str> {
         .map(|(_, moss_field)| *moss_field)
 }
 
+/// [`foreign_field_suggestion`], aware of the one name that is foreign only for
+/// some values: `order` with a list is the documented alias for `sort` and
+/// works, so it earns no hint; any other `order` value is ignored and does.
+/// `value` is `None` where the caller has only the key (the simplified dialect).
+pub fn foreign_field_suggestion_for(
+    name: &str,
+    value: Option<&serde_yaml::Value>,
+) -> Option<&'static str> {
+    if name == "order" && matches!(value, Some(serde_yaml::Value::Sequence(_))) {
+        return None;
+    }
+    foreign_field_suggestion(name)
+}
+
+/// The build's warning for a foreign key, or `None` when it earns none.
+///
+/// Owns the wording so a caller loops over keys with no per-key cases: the
+/// `order` alias exception and its tailored advice live here, next to the table
+/// they come from.
+pub fn foreign_field_warning(name: &str, value: Option<&serde_yaml::Value>) -> Option<String> {
+    let moss_field = foreign_field_suggestion_for(name, value)?;
+    Some(if name == "order" {
+        "'order' is only read as a list (an alias for 'sort'); this value was ignored — use 'weight: <number>' to position the page, or 'sort: [a, b]' to order a folder's children.".to_string()
+    } else {
+        format!("'{name}' has no meaning to moss and was ignored — did you mean '{moss_field}'? (Harmless if it is your own field.)")
+    })
+}
+
 /// Diagnostic severity levels (LSP-compatible integer values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
@@ -235,7 +263,7 @@ pub fn validate_frontmatter(
         }
         // Name a moss equivalent when the key is one another generator uses,
         // so the hint is actionable instead of merely true.
-        let message = match foreign_field_suggestion(key) {
+        let message = match foreign_field_suggestion_for(key, fm.get(key)) {
             Some(moss_field) => format!(
                 "unknown field '{}' is not defined in the schema — did you mean '{}'?",
                 key, moss_field
@@ -839,6 +867,26 @@ mod tests {
         // Hugo, Jekyll, Zola and Astro. moss spells it `url:` and used to
         // ignore `slug:` without a word.
         assert_eq!(foreign_field_suggestion("slug"), Some("url"));
+    }
+
+    #[test]
+    fn order_with_a_list_is_the_sort_alias_and_earns_no_hint() {
+        let list: serde_yaml::Value = serde_yaml::from_str("[a, b]").unwrap();
+        let num: serde_yaml::Value = serde_yaml::from_str("3").unwrap();
+        assert_eq!(foreign_field_suggestion_for("order", Some(&list)), None);
+        assert_eq!(foreign_field_suggestion_for("order", Some(&num)), Some("weight"));
+        assert_eq!(foreign_field_suggestion_for("order", None), Some("weight"));
+        // Only `order` is an alias; other foreign names are unaffected by a list.
+        assert_eq!(foreign_field_suggestion_for("slug", Some(&list)), Some("url"));
+    }
+
+    #[test]
+    fn order_warning_says_what_to_use_and_other_names_keep_the_hint() {
+        let num: serde_yaml::Value = serde_yaml::from_str("3").unwrap();
+        let w = foreign_field_warning("order", Some(&num)).unwrap();
+        assert!(w.contains("'weight: <number>'") && w.contains("'sort: [a, b]'"), "{w}");
+        assert!(foreign_field_warning("slug", None).unwrap().contains("did you mean 'url'"));
+        assert_eq!(foreign_field_warning("bogus", None), None);
     }
 
     #[test]

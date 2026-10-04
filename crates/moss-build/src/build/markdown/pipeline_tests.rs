@@ -3571,7 +3571,7 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
 /// `cli_eprintln!` loop from the pipeline is caught.
 #[test]
 fn foreign_frontmatter_field_warns_and_names_the_moss_equivalent() {
-    let warnings = foreign_frontmatter_warnings("privacy.md", &["title", "slug"]);
+    let warnings = foreign_frontmatter_warnings("privacy.md", &["title", "slug"], &Default::default());
     assert_eq!(
         warnings.len(),
         1,
@@ -3592,13 +3592,37 @@ fn foreign_frontmatter_field_warns_and_names_the_moss_equivalent() {
     );
 }
 
+/// `order: [a, b]` is the documented alias for `sort` and works, so the build
+/// must not tell the author it was ignored; a single value really is ignored and
+/// does warn. Through the real page entry point, so the value reaches the check.
+#[test]
+fn order_list_is_the_sort_alias_but_a_single_value_warns() {
+    let empty_map = HashMap::new();
+    let problems = |order: &str| {
+        let _ = crate::build::cli_output::take_cli_problems();
+        let md = format!("---\ntitle: t\norder: {order}\n---\n\nbody\n");
+        process_markdown_file(
+            "index.md", &md, "site", &empty_map, false, Language::ZhHant, None,
+            SiteMarkdown::default(), None, None, None, PageContext::default(),
+        )
+        .expect("should parse");
+        crate::build::cli_output::take_cli_problems()
+    };
+    assert_eq!(problems("[b, a]"), 0, "an order list is the sort alias");
+    assert_eq!(problems("3"), 1, "one mistake, one message: the foreign-field warning only");
+}
+
 /// The other half of the contract: a genuinely custom field stays silent.
 /// Plugins and templates read their own keys, and warning on every one would
 /// make the signal above worthless.
 #[test]
 fn ordinary_custom_frontmatter_fields_do_not_warn() {
     let warnings =
-        foreign_frontmatter_warnings("post.md", &["title", "date", "my_field", "data", "uid"]);
+        foreign_frontmatter_warnings(
+        "post.md",
+        &["title", "date", "my_field", "data", "uid"],
+        &Default::default(),
+    );
     assert!(
         warnings.is_empty(),
         "builtin and custom fields must not warn, got: {warnings:?}"
