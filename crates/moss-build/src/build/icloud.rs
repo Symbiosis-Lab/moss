@@ -124,7 +124,15 @@ pub(crate) mod pretend {
     /// Each marked path with the number of questions about it still to answer "on disk".
     static MARKED: Mutex<Vec<(PathBuf, usize)>> = Mutex::new(Vec::new());
 
+    /// Paths that stay in the cloud until a download is requested for them.
+    static ARRIVING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    /// Every path a download was requested for, one entry per request.
+    static REQUESTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
     pub(crate) fn marked(path: &Path) -> bool {
+        if ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|p| p == path) {
+            return true;
+        }
         let mut marked = MARKED.lock().unwrap_or_else(|e| e.into_inner());
         match marked.iter_mut().find(|(p, _)| p == path) {
             Some((_, on_disk_for)) if *on_disk_for > 0 => {
@@ -149,10 +157,30 @@ pub(crate) mod pretend {
         Guard(path.to_path_buf())
     }
 
+    /// Mark `path` cloud-only until a download is requested for it, the way a
+    /// provider delivers a file once asked.
+    pub(crate) fn evicted_until_requested(path: &Path) -> Guard {
+        ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).push(path.to_path_buf());
+        Guard(path.to_path_buf())
+    }
+
+    /// Called by `request_download`: records the request and lets an arriving file land.
+    pub(crate) fn requested(path: &Path) {
+        REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).push(path.to_path_buf());
+        ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| p != path);
+    }
+
+    /// How many downloads were requested for `path`.
+    pub(crate) fn requests_for(path: &Path) -> usize {
+        REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|p| *p == path).count()
+    }
+
     pub(crate) struct Guard(PathBuf);
 
     impl Drop for Guard {
         fn drop(&mut self) {
+            ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != self.0);
+            REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != self.0);
             MARKED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| *p != self.0);
         }
     }
@@ -250,7 +278,8 @@ pub fn is_still_in_the_cloud(path: &Path) -> bool {
 /// later," and neither is evidence of absence. Anything else — a real
 /// `NotFound`, a permission error, bad I/O — is not this.
 pub fn is_offline_not_absent(path: &Path, err: &std::io::Error) -> bool {
-    is_dataless_unavailable(err)
+    pretended(path)
+        || is_dataless_unavailable(err)
         || (err.kind() == std::io::ErrorKind::NotFound && !is_definitely_absent(path, err))
 }
 

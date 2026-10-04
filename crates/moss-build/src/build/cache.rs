@@ -36,6 +36,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod blob_wait;
 mod records;
 pub use records::{Merged, RecordMode};
 
@@ -283,56 +284,27 @@ impl ObjectStore {
             return Some(p);
         }
         // A plain miss is ordinary and silent; one line per object would be a
-        // cold cache's worth of noise. Only a blob that is there is logged.
+        // cold cache's worth of noise. Only a blob that is there is logged. One
+        // the cloud holds is normal on a second machine: asked for so a later
+        // build finds it, recomputed now.
         if p.exists() {
-            log::warn!("[CAS] unusable blob at {}, treating as missing", oid);
+            if crate::build::icloud::is_evicted(&p) {
+                crate::build::cloud_readiness::request_download(&p);
+                log::debug!("[CAS] blob {} is in the cloud, requested; treating as missing", oid);
+            } else {
+                log::warn!("[CAS] unusable blob at {}, treating as missing", oid);
+            }
         }
         None
     }
 
-    /// A cached output the read path may use now: the blob's path for a hit,
-    /// `None` for a miss the caller fills by regenerating and storing.
-    ///
-    /// Present ⇒ hit. In the cloud ⇒ its download is requested and waited
-    /// for, bounded by the blob's size, and the arrival is hashed once ⇒ hit,
-    /// or removed as corrupt ⇒ miss. Absent, or not arrived in time ⇒ miss.
-    /// This is the one read that inverts "dataless is absent": a blob is the
-    /// same bytes on every machine that shares the cache and carries its own
-    /// checksum, so waiting for it is correct in a way waiting for `staging/`
-    /// never is. The hash runs only on an arrival, never on an ordinary hit.
-    pub fn ready_blob(&self, oid: &str) -> Option<PathBuf> {
-        let p = self.blob_path(oid);
-        if crate::build::io_utils::output_present(&p) {
-            return Some(p);
-        }
-        if !crate::build::icloud::is_still_in_the_cloud(&p) {
-            return self.get_path(oid);
-        }
-        let size = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-        let arrived = crate::build::cloud_readiness::retry_after_materialize(&p, download_deadline(size), || {
-            Self::hash_file_once(&p)
-        });
-        match arrived {
-            Ok(hash) if hash == oid => Some(p),
-            Ok(hash) => {
-                log::warn!("[CAS] blob {} arrived from the cloud hashing to {} — removed, regenerating", oid, hash);
-                // allow:unlink a blob that fails its own checksum under cache/objects, not staging
-                let _ = fs::remove_file(&p);
-                None
-            }
-            Err(e) => {
-                log::info!("[CAS] blob {} is in the cloud and did not arrive in time ({}) — regenerating", oid, e);
-                None
-            }
-        }
-    }
-
     /// Validate a stored blob's size against the expected source size.
     ///
-    /// If the source was non-empty but the blob is not a usable output (a
-    /// 0-byte stub, or dataless after an eviction raced `fs::copy`), it is
-    /// removed so that [`store_file`](Self::store_file)
-    /// can write fresh content, and an `Err` is returned.
+    /// If the source was non-empty but the blob is a downloaded 0-byte stub, it
+    /// is removed so that [`store_file`](Self::store_file) can write fresh
+    /// content, and an `Err` is returned. A blob the cloud holds is present, not
+    /// corrupt: its key is its hash, so it is the same bytes on every machine,
+    /// and removing or rewriting it would propagate to all of them.
     ///
     /// This is the single place where blob integrity is checked and
     /// self-healing happens. Called by `store_file` (idempotency check).
@@ -346,6 +318,9 @@ impl ObjectStore {
             return Ok(());
         }
         let path = self.blob_path(oid);
+        if crate::build::icloud::is_still_in_the_cloud(&path) {
+            return Ok(());
+        }
         match crate::build::io_utils::probe_path(&path) {
             Presence::Present => Ok(()),
             Presence::Unverified(e) => Err(format!("Unverifiable blob {}: {}", oid, e)),
@@ -412,14 +387,35 @@ impl ObjectStore {
     /// here could take a concurrent `link_to`'s temp for the same target
     /// mid-rename.
     pub fn link_to(&self, oid: &str, target: &Path) -> Result<(), String> {
-        self.link_to_inode(oid, target).map(drop)
+        self.link_to_inode(oid, target, None).map(drop)
     }
 
     /// [`link_to`](Self::link_to), returning the inode it renamed into place
     /// where the platform reports one — so a caller recording the target's
     /// stat can tell its own link from one a concurrent build renamed over it.
-    pub(crate) fn link_to_inode(&self, oid: &str, target: &Path) -> Result<Option<u64>, String> {
-        let blob = self.blob_path(oid);
+    pub(crate) fn link_to_inode(&self, oid: &str, target: &Path, local: Option<&Path>) -> Result<Option<u64>, String> {
+        let mut blob = self.blob_path(oid);
+        // A blob in the cloud is never read as it is. Where the caller holds
+        // the same bytes (`local`: a file whose content is `oid`) they are the
+        // source and the blob is only asked for, so a later build finds it;
+        // otherwise it is waited for, once, and checked against its name.
+        if crate::build::icloud::is_still_in_the_cloud(&blob) {
+            match local.filter(|l| !crate::build::icloud::is_evicted(l)) {
+                Some(local) => {
+                    crate::build::cloud_readiness::request_download(&blob);
+                    blob = local.to_path_buf();
+                }
+                None if self.ready_blob(oid).is_none() => {
+                    return Err(format!(
+                        "Failed to copy {} -> {}: blob {} is in the cloud and did not arrive intact in time",
+                        blob.display(),
+                        target.display(),
+                        oid
+                    ));
+                }
+                None => {}
+            }
+        }
         if !blob.exists() {
             log::warn!("CAS link of {} failed, blob absent: {}", oid, self.failure_context(&blob, None));
             return Err(format!("Blob {} does not exist in object store", oid));
@@ -538,6 +534,7 @@ pub struct TransformRecord {
     pub source_size: u64,
     /// Map of transform name (e.g., "thumbnail", "webp") to its output
     /// entry.
+    #[serde(serialize_with = "records::sorted")]
     pub transforms: HashMap<String, TransformEntry>,
 }
 
@@ -1442,15 +1439,6 @@ pub struct GcResult {
 /// can say whether a sweep ran just before it went missing.
 static LAST_GC: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, (std::time::Instant, usize)>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
-
-/// How long to wait for a blob the cloud holds: ten seconds plus one per MiB,
-/// capped at ten minutes. A video-sized blob's download wins by construction
-/// against a minutes-long re-encode; a small blob resolves either way in
-/// seconds.
-fn download_deadline(size: u64) -> std::time::Duration {
-    let per_mib = std::time::Duration::from_secs(size / (1024 * 1024));
-    (std::time::Duration::from_secs(10) + per_mib).min(std::time::Duration::from_secs(600))
-}
 
 fn record_gc(objects_dir: &Path, objects_removed: usize) {
     if let Ok(mut map) = LAST_GC.lock() {

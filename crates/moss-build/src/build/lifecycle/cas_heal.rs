@@ -95,7 +95,7 @@ pub(crate) fn rematerialize_with_oid(
     let Some(oid) = transforms.find_cached_output(source_oid, transform, params, crate::build::cache::RecordMode::Wait) else {
         return HealOutcome::NotCached;
     };
-    match staged.link(objects, &oid, staging_path) {
+    match staged.link(objects, &oid, staging_path, None) {
         Placement::Held => HealOutcome::AlreadyPresent { oid: Some(oid) },
         Placement::Linked => {
             log::debug!("[cas-heal] re-materialized {} from CAS ({})", staging_path.display(), oid);
@@ -226,6 +226,7 @@ impl StagedLinks {
         objects: &crate::build::cache::ObjectStore,
         oid: &str,
         staging_path: &Path,
+        local: Option<&Path>,
     ) -> Placement {
         use crate::build::io_utils::Presence;
         let key = staging_path.strip_prefix(&self.staging).ok().map(|rel| rel.to_string_lossy().into_owned());
@@ -238,7 +239,7 @@ impl StagedLinks {
         }
         // Sampled before the bytes land, like every other record's clock.
         let recorded_at = crate::build::stat::recording_clock();
-        let written_inode = match objects.link_to_inode(oid, staging_path) {
+        let written_inode = match objects.link_to_inode(oid, staging_path, local) {
             Ok(inode) => inode,
             Err(e) => return Placement::Failed(e),
         };

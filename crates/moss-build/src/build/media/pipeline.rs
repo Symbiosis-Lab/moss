@@ -880,6 +880,7 @@ struct BlobPlacement<'a> {
     log_label: &'a str,
     report_path: &'a str,
     ext: &'a str,
+    local: Option<&'a Path>,
 }
 
 /// Link the blob into output — unless `staged` vouches the file there is
@@ -893,7 +894,7 @@ fn place_blob(
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
 ) -> bool {
     use crate::build::lifecycle::cas_heal::Placement;
-    match staged.link(object_store, placement.link_oid, placement.target) {
+    match staged.link(object_store, placement.link_oid, placement.target, placement.local) {
         Placement::Held | Placement::Linked => {}
         Placement::Unverified(e) => {
             log::warn!("[background-assets] Not linking over unverifiable {}: {}", placement.log_label, e);
@@ -1411,7 +1412,7 @@ pub(crate) fn copy_deferred_assets(
 
                 let target = output_dir.join(&mapped_path);
                 let placement =
-                    BlobPlacement { link_oid: &link_oid, target: &target, log_label: &mapped_path, report_path: &mapped_path, ext: &ext };
+                    BlobPlacement { link_oid: &link_oid, target: &target, log_label: &mapped_path, report_path: &mapped_path, ext: &ext, local: (link_oid == oid).then_some(file_path) };
                 if !place_blob(&object_store, &mut staged, placement, reporter) {
                     continue;
                 }
@@ -1608,7 +1609,7 @@ pub(crate) fn copy_deferred_assets(
                         .to_lowercase();
                     let log_label = format!(".moss/theme/{}", relative_path);
                     let placement =
-                        BlobPlacement { link_oid: &oid, target: &target, log_label: &log_label, report_path: out_path.as_str(), ext: &moss_ext };
+                        BlobPlacement { link_oid: &oid, target: &target, log_label: &log_label, report_path: out_path.as_str(), ext: &moss_ext, local: Some(file_path) };
                     if !place_blob(&object_store, &mut staged, placement, reporter) {
                         continue;
                     }

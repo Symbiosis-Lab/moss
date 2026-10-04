@@ -2597,13 +2597,14 @@ fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {
 
     let good = store.store_bytes(b"the bytes the oid names").expect("stored");
     cache.put(&record_with(&"1111".repeat(16), &good)).expect("record");
-    let _in_cloud = crate::build::icloud::pretend::evicted(&store.blob_path(&good));
+    let _short = ShortWaits::new();
+    let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&good));
     assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait).as_deref(), Some(good.as_str()));
 
     let forged = "ffff".repeat(16);
     put_object(&objects_dir, &forged, b"not what its name says");
     cache.put(&record_with(&"2222".repeat(16), &forged)).expect("record");
-    let _also_in_cloud = crate::build::icloud::pretend::evicted(&store.blob_path(&forged));
+    let _also_in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&forged));
     assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
     assert!(!store.blob_path(&forged).exists(), "a blob that fails its checksum is removed");
 }
@@ -2684,4 +2685,216 @@ fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
         assert!(record.exists(), "{name}: the live transform record was deleted");
         assert!(result.is_err(), "{name}: an unreadable mark input must abort the sweep, got {result:?}");
     }
+}
+
+// -----------------------------------------------------------------------
+// Blobs the cloud has not downloaded
+// -----------------------------------------------------------------------
+
+/// Log lines of every thread, so a test can say a path warned or did not. Keyed
+/// on the unique oid a test puts in the message.
+static LOG_LINES: std::sync::Mutex<Vec<(log::Level, String)>> = std::sync::Mutex::new(Vec::new());
+
+struct Capture;
+
+impl log::Log for Capture {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).push((record.level(), record.args().to_string()));
+    }
+    fn flush(&self) {}
+}
+
+fn logged_at(level: log::Level, about: &str) -> bool {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = log::set_logger(&Capture);
+        log::set_max_level(log::LevelFilter::Debug);
+    });
+    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(l, m)| *l == level && m.contains(about))
+}
+
+/// A store holding one blob of `source`'s bytes, with the blob's file replaced
+/// by `stand_in` so a test can tell whether it was rewritten.
+fn store_with_blob(name: &str, source: &[u8], stand_in: &[u8]) -> (ObjectStore, PathBuf, String, PathBuf) {
+    let dir = make_test_dir(name);
+    let store = ObjectStore::new(dir.join("objects"));
+    let src = write_temp_file(&dir, "source.bin", source);
+    let oid = store.store_file(&src).expect("stored");
+    fs::write(store.blob_path(&oid), stand_in).expect("replace the blob's bytes");
+    (store, src, oid.clone(), dir)
+}
+
+#[test]
+fn store_file_and_store_bytes_leave_a_blob_in_the_cloud_alone() {
+    let (store, src, oid, _dir) = store_with_blob("cloud_blob_left_alone", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    assert_eq!(store.store_file(&src).expect("present in the cloud is present"), oid);
+    assert_eq!(fs::read(&blob).expect("still there"), b"stand-in", "store_file must not remove or rewrite it");
+
+    let bytes_oid = store.store_bytes(b"small json").expect("stored");
+    let bytes_blob = store.blob_path(&bytes_oid);
+    fs::write(&bytes_blob, b"stand-in").unwrap();
+    let _also_in_cloud = crate::build::icloud::pretend::evicted(&bytes_blob);
+    assert_eq!(store.store_bytes(b"small json").expect("present"), bytes_oid);
+    assert_eq!(fs::read(&bytes_blob).unwrap(), b"stand-in", "store_bytes must not rewrite it");
+}
+
+#[test]
+fn a_downloaded_empty_blob_is_still_replaced() {
+    let (store, src, oid, _dir) = store_with_blob("downloaded_empty_blob", b"the original bytes", b"");
+    assert_eq!(store.store_file(&src).expect("replaced"), oid);
+    assert_eq!(fs::read(store.blob_path(&oid)).unwrap(), b"the original bytes");
+}
+
+/// Shorten every cloud wait on this thread for the life of the guard.
+struct ShortWaits;
+
+impl ShortWaits {
+    fn new() -> Self {
+        crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(Some(std::time::Duration::from_millis(20))));
+        Self
+    }
+}
+
+impl Drop for ShortWaits {
+    fn drop(&mut self) {
+        crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(None));
+    }
+}
+
+fn waits_run() -> u32 {
+    crate::build::cloud_readiness::WAITS_RUN.with(|n| n.get())
+}
+
+/// A blob of `bytes` in `store`, with its file marked as in the cloud.
+fn blob_in_the_cloud(store: &ObjectStore, bytes: &[u8]) -> (String, PathBuf, crate::build::icloud::pretend::Guard) {
+    let oid = store.store_bytes(bytes).expect("stored");
+    let blob = store.blob_path(&oid);
+    let guard = crate::build::icloud::pretend::evicted(&blob);
+    (oid, blob, guard)
+}
+
+#[test]
+fn link_to_requests_a_blob_in_the_cloud_once_and_links_it_when_it_arrives() {
+    let _short = ShortWaits::new();
+    let (store, _src, oid, dir) = store_with_blob("link_requests_blob", b"the original bytes", b"the original bytes");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
+    let target = dir.join("out").join("copy.bin");
+    store.link_to(&oid, &target).expect("linked once the blob arrived");
+    assert_eq!(fs::read(&target).unwrap(), b"the original bytes");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "one request, no polling loop of requests");
+}
+
+#[test]
+fn a_blob_in_the_cloud_with_local_bytes_is_placed_from_them_without_waiting() {
+    let (store, src, oid, dir) = store_with_blob("link_uses_local", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    let target = dir.join("out").join("copy.bin");
+    let before = waits_run();
+    store.link_to_inode(&oid, &target, Some(&src)).expect("placed from the local file");
+    assert_eq!(fs::read(&target).unwrap(), b"the original bytes", "the local file's bytes");
+    assert_eq!(waits_run(), before, "no wait for the cloud");
+    assert_eq!(fs::read(&blob).unwrap(), b"stand-in", "the placeholder is not touched");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "one background request, so a later build finds it");
+}
+
+#[test]
+fn a_blob_that_stays_in_the_cloud_fails_after_a_bounded_wait_and_three_in_a_row_stop_the_waiting() {
+    let _short = ShortWaits::new();
+    let dir = make_test_dir("blob_breaker");
+    let store = ObjectStore::new(dir.join("objects"));
+    let target = dir.join("out").join("copy.bin");
+    let blobs: Vec<_> = (0..4u8).map(|n| blob_in_the_cloud(&store, &[n; 16])).collect();
+
+    for (n, (oid, _, _)) in blobs.iter().take(3).enumerate() {
+        let before = waits_run();
+        let err = store.link_to(oid, &target).expect_err("the blob never arrived");
+        assert!(err.contains("Failed to copy") && err.contains("in the cloud"), "{err}");
+        assert_eq!(waits_run(), before + 1, "wait {n} ran");
+    }
+    assert!(!target.exists(), "nothing half-written at the target");
+
+    let (oid, blob, _) = &blobs[3];
+    let before = waits_run();
+    store.link_to(oid, &target).expect_err("still in the cloud");
+    assert_eq!(waits_run(), before, "the fourth does not wait");
+    assert_eq!(crate::build::icloud::pretend::requests_for(blob), 1, "but it still asks for the file");
+
+    let other = ObjectStore::new(make_test_dir("blob_breaker_other").join("objects"));
+    let (oid, _, _guard) = blob_in_the_cloud(&other, &[9u8; 16]);
+    let before = waits_run();
+    other.link_to(&oid, &target).expect_err("never arrives");
+    assert_eq!(waits_run(), before + 1, "another objects root is unaffected");
+}
+
+#[test]
+fn a_blob_that_arrives_resets_the_count_of_waits_that_ran_out() {
+    let _short = ShortWaits::new();
+    let dir = make_test_dir("blob_breaker_reset");
+    let store = ObjectStore::new(dir.join("objects"));
+    let target = dir.join("out").join("copy.bin");
+    let stuck: Vec<_> = (0..4u8).map(|n| blob_in_the_cloud(&store, &[n; 16])).collect();
+    let oid = store.store_bytes(b"arrives when asked").unwrap();
+    let _arriving = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&oid));
+
+    store.link_to(&stuck[0].0, &target).expect_err("timeout 1");
+    store.link_to(&stuck[1].0, &target).expect_err("timeout 2");
+    store.link_to(&oid, &target).expect("arrived");
+    store.link_to(&stuck[2].0, &target).expect_err("timeout 1 again");
+    let before = waits_run();
+    store.link_to(&stuck[3].0, &target).expect_err("timeout 2 again");
+    assert_eq!(waits_run(), before + 1, "two timeouts since the arrival are not three in a row");
+}
+
+#[test]
+fn a_blob_that_arrives_with_the_wrong_content_is_not_linked() {
+    let _short = ShortWaits::new();
+    let (store, _src, oid, dir) = store_with_blob("link_rejects_wrong_arrival", b"the original bytes", b"not what the name says");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
+    let target = dir.join("out").join("copy.bin");
+    store.link_to(&oid, &target).expect_err("the arrival does not hash to its name");
+    assert!(!target.exists(), "nothing linked");
+}
+
+#[test]
+fn one_blob_linked_to_two_targets_waits_once() {
+    let _short = ShortWaits::new();
+    let dir = make_test_dir("blob_two_targets");
+    let store = ObjectStore::new(dir.join("objects"));
+    let (oid, _blob, _cloud) = blob_in_the_cloud(&store, &[7u8; 16]);
+    let before = waits_run();
+    store.link_to(&oid, &dir.join("out").join("a.bin")).expect_err("never arrives");
+    store.link_to(&oid, &dir.join("out").join("b.bin")).expect_err("never arrives");
+    assert_eq!(waits_run(), before + 1, "the second target reuses the first one's wait");
+}
+
+#[test]
+fn a_blob_in_the_cloud_is_held_without_being_requested() {
+    let dir = make_test_dir("holds_cloud_blob");
+    let store = ObjectStore::new(dir.join("objects"));
+    let (oid, blob, _cloud) = blob_in_the_cloud(&store, b"kept version bytes");
+    assert!(store.holds(&oid));
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 0);
+    assert!(!store.holds(&"0".repeat(64)), "an absent blob is not held");
+}
+
+#[test]
+fn a_cheap_lookup_of_a_blob_in_the_cloud_requests_it_without_a_warning() {
+    let (store, _src, oid, _dir) = store_with_blob("cheap_lookup_requests", b"rendered page bytes", b"rendered page bytes");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    assert_eq!(store.get_path(&oid), None, "recomputed this build");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "asked for, so a later build finds it");
+    assert!(!logged_at(log::Level::Warn, &oid), "in the cloud is the normal state of a second machine");
+
+    let (store, _src, empty, _dir) = store_with_blob("cheap_lookup_empty", b"other bytes", b"");
+    assert_eq!(store.get_path(&empty), None);
+    assert!(logged_at(log::Level::Warn, &empty), "a downloaded blob that is unusable still warns");
 }

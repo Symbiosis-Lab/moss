@@ -151,7 +151,28 @@ static PREFETCH: std::sync::LazyLock<crate::build::cloud_prefetch::Prefetcher> =
 ///
 /// [`cloud_prefetch::READERS`]: crate::build::cloud_prefetch::READERS
 pub fn request_download(path: &Path) {
+    #[cfg(test)]
+    icloud::pretend::requested(path);
     PREFETCH.read(path);
+}
+
+// On this thread, shorten the blob download deadline (and the poll) so a test of a
+// file that never arrives does not wait out the real one. `WAITS_RUN` counts
+// the waits on this thread that did not return on the first look.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_DEADLINE: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+    pub(crate) static WAITS_RUN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn test_poll(poll: Duration) -> Duration {
+    if TEST_DEADLINE.with(|d| d.get()).is_some() { Duration::from_millis(1) } else { poll }
+}
+
+#[cfg(not(test))]
+fn test_poll(poll: Duration) -> Duration {
+    poll
 }
 
 /// Queue depth and in-flight count. Not the user-facing progress — the sweep
@@ -188,6 +209,8 @@ pub fn await_ready(
     if classify(prev, curr) == Readiness::Ready {
         return Settled::Ready;
     }
+    #[cfg(test)]
+    WAITS_RUN.with(|n| n.set(n.get() + 1));
     if prev.dataless || curr.dataless {
         request_download(path);
     }
@@ -199,7 +222,7 @@ pub fn await_ready(
         if cancel() {
             return Settled::Cancelled;
         }
-        std::thread::sleep(poll);
+        std::thread::sleep(test_poll(poll));
         let curr = sample(path);
         match next_step(prev, curr, start.elapsed(), deadline) {
             Step::Done(s) => return s,
@@ -669,31 +692,38 @@ const RECORD_WAIT_PAUSE: Duration = Duration::from_secs(60);
 pub struct WaitBreaker {
     /// Timed-out waits in a row, and when the pause ends if one is running.
     state: Mutex<(u32, Option<Instant>)>,
+    /// What is being waited for, for the one warning a pause gives.
+    what: &'static str,
 }
 
 impl WaitBreaker {
     pub const fn new() -> Self {
-        Self { state: Mutex::new((0, None)) }
+        Self::of("cache records")
     }
 
-    fn is_paused(&self, now: Instant) -> bool {
+    pub const fn of(what: &'static str) -> Self {
+        Self { state: Mutex::new((0, None)), what }
+    }
+
+    pub(crate) fn is_paused(&self, now: Instant) -> bool {
         // Poisoned: wait, as `wait_budget_allows` does.
         self.state.lock().map_or(false, |s| s.1.is_some_and(|until| now < until))
     }
 
-    fn timed_out(&self, now: Instant) {
+    pub(crate) fn timed_out(&self, now: Instant) {
         let Ok(mut s) = self.state.lock() else { return };
         s.0 += 1;
         if s.0 >= RECORD_WAITS_BEFORE_PAUSE {
             *s = (0, Some(now + RECORD_WAIT_PAUSE));
             log::warn!(
-                "cache records are not downloading — skipping record waits for {}s; the work they cache will be redone locally",
+                "{} are not downloading — skipping waits for them for {}s; the work they cache will be redone locally",
+                self.what,
                 RECORD_WAIT_PAUSE.as_secs()
             );
         }
     }
 
-    fn succeeded(&self) {
+    pub(crate) fn succeeded(&self) {
         if let Ok(mut s) = self.state.lock() {
             s.0 = 0;
         }
@@ -703,12 +733,16 @@ impl WaitBreaker {
 /// One breaker per site cache, keyed by the cache's root: the desktop app holds
 /// several folders open in one process, and a folder on an unreachable drive
 /// must not stop another folder's records from being waited for.
-static RECORD_BREAKERS: std::sync::LazyLock<Mutex<HashMap<PathBuf, std::sync::Arc<WaitBreaker>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+pub(crate) type Breakers = std::sync::LazyLock<Mutex<HashMap<PathBuf, std::sync::Arc<WaitBreaker>>>>;
+
+static RECORD_BREAKERS: Breakers = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+pub(crate) fn breaker_for(all: &Breakers, root: &Path, what: &'static str) -> std::sync::Arc<WaitBreaker> {
+    let Ok(mut all) = all.lock() else { return std::sync::Arc::new(WaitBreaker::of(what)) };
+    all.entry(root.to_path_buf()).or_insert_with(|| std::sync::Arc::new(WaitBreaker::of(what))).clone()
+}
 
 fn record_breaker(root: &Path) -> std::sync::Arc<WaitBreaker> {
-    let Ok(mut all) = RECORD_BREAKERS.lock() else { return std::sync::Arc::new(WaitBreaker::new()) };
-    all.entry(root.to_path_buf()).or_insert_with(|| std::sync::Arc::new(WaitBreaker::new())).clone()
+    breaker_for(&RECORD_BREAKERS, root, "cache records")
 }
 
 /// The steps of one record read, so the tests can supply each of them.

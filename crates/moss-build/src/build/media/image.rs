@@ -1268,8 +1268,6 @@ pub(crate) fn convert_single_image(
             };
         }
     };
-    // allow:unlink the encode temp this call wrote under cache/tmp
-    let _ = fs::remove_file(&temp_path);
 
     // ---- Step 8: link to staging + canonical ----
     //
@@ -1301,7 +1299,12 @@ pub(crate) fn convert_single_image(
     // link almost always implies a successful canonical link (same blob,
     // same disk). A canonical-link failure here is almost always a real
     // I/O error worth surfacing.
-    if let Err(e) = objects.link_to(&oid, &output_webp) {
+    // The temp is these bytes, so a blob another machine cached that has not
+    // downloaded here is not waited for. Removed once the link is done.
+    let linked = objects.link_to_inode(&oid, &output_webp, Some(&temp_path)).map(drop);
+    // allow:unlink the encode temp this call wrote under cache/tmp
+    let _ = fs::remove_file(&temp_path);
+    if let Err(e) = linked {
         log::error!(
             "Failed to link WebP to staging ({}): {}",
             output_webp.display(),

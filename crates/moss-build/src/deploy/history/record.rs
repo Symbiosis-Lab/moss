@@ -288,7 +288,7 @@ pub(crate) fn record_one(
     // the manifest's own hash is still the honest answer to "what was
     // published".
     let oversize = manifest_size.is_some_and(|s| s > store::HISTORY_MEDIA_CEILING);
-    let already_kept = store.get_path(manifest_hash).is_some();
+    let already_kept = store.holds(manifest_hash);
     if !already_kept && !oversize && !is_evicted(&full) {
         match store.store_file(&full) {
             Ok(oid) if oid != manifest_hash => {

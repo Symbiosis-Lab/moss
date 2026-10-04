@@ -532,7 +532,7 @@ impl StoreFailures {
 fn place_page(root: &std::path::Path, path: &std::path::Path, oid: Option<&str>, bytes: Option<&str>,
     objects: &crate::build::cache::ObjectStore, staged: &mut StagedLinks) -> Result<bool, BuildStopped> {
     if let Some(oid) = oid {
-        match staged.link(objects, oid, path) {
+        match staged.link(objects, oid, path, None) {
             Placement::Held => return Ok(false),
             Placement::Linked => return Ok(true),
             Placement::Unverified(e) => return Err(io_stop(root, "check staged page", path, e)),

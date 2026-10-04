@@ -52,8 +52,18 @@ impl RecordRead {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Merged {
     Written,
-    /// The existing record was unreadable and was left as it is.
+    /// The existing record was left as it is: unreadable, or already what the
+    /// edit would write.
     Kept,
+}
+
+/// Serialize a record's transforms in name order, so two equal records are
+/// byte-equal and a re-save by another machine changes nothing.
+pub(super) fn sorted<S: serde::Serializer>(
+    transforms: &HashMap<String, super::TransformEntry>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(transforms.iter().collect::<std::collections::BTreeMap<_, _>>())
 }
 
 /// Files already reported as unusable in this process, so a build that meets the
@@ -146,16 +156,19 @@ impl TransformCache {
         load: &dyn Fn(&Path, RecordMode) -> io::Result<String>,
         edit: impl FnOnce(&mut TransformRecord),
     ) -> Result<Merged, String> {
-        let mut record = match self.read_via(source_oid, mode, load) {
-            RecordRead::Present(record) => record,
-            RecordRead::Absent => TransformRecord {
-                source_oid: source_oid.to_string(),
-                source_size,
-                transforms: HashMap::new(),
-            },
+        let (mut record, read) = match self.read_via(source_oid, mode, load) {
+            RecordRead::Present(record) => (record.clone(), Some(record)),
+            RecordRead::Absent => {
+                (TransformRecord { source_oid: source_oid.to_string(), source_size, transforms: HashMap::new() }, None)
+            }
             RecordRead::Unreadable => return Ok(Merged::Kept),
         };
         edit(&mut record);
+        // Rewriting an identical record would make a file the sync provider
+        // uploads again, on every machine sharing the folder.
+        if read.as_ref() == Some(&record) {
+            return Ok(Merged::Kept);
+        }
         self.put(&record).map(|()| Merged::Written)
     }
 }
@@ -428,5 +441,41 @@ mod tests {
         crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
         assert!(c.get_with(OID, RecordMode::Request).is_none(), "Request does not wait");
         assert!(c.get_with(OID, RecordMode::Request).is_some(), "and the record is there for the next read");
+    }
+
+    #[test]
+    fn an_edit_that_changes_nothing_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = seeded(dir.path(), &["image/webp"]);
+        let path = c.record_path(OID);
+        let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(long_ago).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+
+        let merged = c.merge(OID, 10, RecordMode::Request, |r| {
+            r.transforms.insert("image/webp".to_string(), entry("image/webp"));
+        });
+
+        assert_eq!(merged, Ok(Merged::Kept));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), long_ago, "the file was not replaced");
+    }
+
+    #[test]
+    fn equal_records_serialize_to_the_same_bytes_whatever_the_insertion_order() {
+        let names: Vec<String> = (0..24).map(|n| format!("transform-{n}")).collect();
+        let bytes_of = |order: &mut dyn Iterator<Item = &String>| {
+            let dir = tempfile::tempdir().unwrap();
+            let c = cache(dir.path());
+            c.merge(OID, 10, RecordMode::Request, |r| {
+                for n in order {
+                    r.transforms.insert(n.clone(), entry(n));
+                }
+            })
+            .unwrap();
+            std::fs::read_to_string(c.record_path(OID)).unwrap()
+        };
+        let (forward, backward) = (bytes_of(&mut names.iter()), bytes_of(&mut names.iter().rev()));
+        assert!(forward == backward, "same entries, different bytes:\n{forward}\n{backward}");
     }
 }

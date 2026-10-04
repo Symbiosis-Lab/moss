@@ -615,7 +615,7 @@ fn decorate(
         .filter_map(|row| {
             let record = by_id.get(&row.id)?;
             let kept = page.map(|path| match (record.entries.get(path), &objects) {
-                (Some(entry), Some(objects)) => objects.get_path(&entry.hash).is_some(),
+                (Some(entry), Some(objects)) => objects.holds(&entry.hash),
                 // Absent entry is not "not kept" — the page simply is not in
                 // this version, which the timeline fold already decided is
                 // still worth a stop (a manual/restore record, most often).

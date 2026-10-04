@@ -102,7 +102,7 @@ pub(crate) fn read_version(root: &Path, id: &str, path: &str) -> Result<Vec<u8>,
     let entry = record.entries.get(path).ok_or_else(|| format!("{path} is not in this version"))?;
     let store = object_store(root);
     let blob = store
-        .get_path(&entry.hash)
+        .ready_blob(&entry.hash)
         .ok_or_else(|| format!("the content of {path} at this version was not kept"))?;
     // allow:raw_read .moss/history/ — cloud-synced now, but content-addressed and write-once: a missing/evicted blob already reads as "not kept," never silently as fresh
     std::fs::read(&blob).map_err(|e| format!("could not read {}: {e}", blob.display()))

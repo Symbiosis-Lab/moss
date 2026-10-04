@@ -2196,3 +2196,51 @@ async fn ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry() {
          post-seal degrade pass exists to strip: {shipped}"
     );
 }
+
+/// A second machine finds an original's cached copy in the cloud, not yet
+/// downloaded. The site's own file holds the same bytes, so the output is
+/// placed from it rather than missing until the download lands.
+#[test]
+fn copy_deferred_assets_places_an_original_from_its_own_file_when_the_cached_copy_is_in_the_cloud() {
+    use crate::types::assets::{AssetRegistry, AssetState};
+    use sha2::{Digest, Sha256};
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = tmp.path().join(".moss");
+    let staging = moss_dir.join("build/site-stage");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::create_dir_all(moss_dir.join("cache/objects")).unwrap();
+    let bytes: &[u8] = b"%PDF-1.4 the site's own bytes";
+    std::fs::write(source.join("paper.pdf"), bytes).unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        blocking_keys: Default::default(),
+        dir_overrides: Default::default(),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+    let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    assert_eq!(std::fs::read(staging.join("paper.pdf")).unwrap(), bytes, "the first build places it");
+
+    // The cache is now what a second machine sees: the blob is a placeholder.
+    let objects = crate::build::cache::ObjectStore::new(moss_dir.join("cache/objects"));
+    let blob = objects.blob_path(&format!("{:x}", Sha256::digest(bytes)));
+    std::fs::write(&blob, b"placeholder").unwrap();
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    std::fs::remove_file(staging.join("paper.pdf")).unwrap();
+
+    let registry = Arc::new(AssetRegistry::new());
+    let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, Some(registry.clone()));
+
+    assert_eq!(std::fs::read(staging.join("paper.pdf")).unwrap(), bytes, "placed from the site's own file");
+    assert_eq!(std::fs::read(&blob).unwrap(), b"placeholder", "the placeholder is left alone");
+    assert!(matches!(registry.get("paper.pdf"), Some(AssetState::Ready)), "and registered");
+}
