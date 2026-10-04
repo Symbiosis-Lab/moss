@@ -722,6 +722,12 @@ const footnoteConfig = {
 			cx.addElement(cx.elt("FootnoteMark", cx.lineStart + labelEnd - 1, cx.lineStart + labelEnd + 1));
 			line.moveBase(bodyStart);
 			return null;
+		},
+		endLeaf(_cx, line) {
+			if (line.indent - line.baseIndent >= 4) return false;
+			const text = line.text;
+			const labelEnd = scanLabel((i) => i < text.length ? text.charCodeAt(i) : -1, line.pos, text.length);
+			return labelEnd >= 0 && text.charCodeAt(labelEnd) === COLON;
 		}
 	}]
 };

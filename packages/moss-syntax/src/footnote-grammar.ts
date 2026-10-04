@@ -185,6 +185,17 @@ export const footnoteConfig: MarkdownConfig = {
         line.moveBase(bodyStart);
         return null;
       },
+
+      // A `[^x]:` line ends the paragraph above it, as in pulldown-cmark. Without
+      // this, `[^1]: a` directly followed by `[^long]: b` folded the second line
+      // into the first note as lazy continuation, so `[^long]` had no definition
+      // and its markers rendered as plain text.
+      endLeaf(_cx: BlockContext, line: Line): boolean {
+        if (line.indent - line.baseIndent >= 4) return false;
+        const text = line.text;
+        const labelEnd = scanLabel((i) => (i < text.length ? text.charCodeAt(i) : -1), line.pos, text.length);
+        return labelEnd >= 0 && text.charCodeAt(labelEnd) === COLON;
+      },
     },
   ],
 };

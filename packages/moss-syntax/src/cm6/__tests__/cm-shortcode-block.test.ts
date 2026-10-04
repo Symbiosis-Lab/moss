@@ -87,23 +87,25 @@ function stateAt(doc: string, cursor: number): EditorState {
   }));
 }
 
-describe('fences are always hung and token-highlighted, regardless of caret', () => {
-  test('open fence and closing fence carry cm-hang, regardless of caret position', () => {
+describe('fences stay in the text column and are token-highlighted, regardless of caret', () => {
+  test('open and closing fence characters are muted, never hung, regardless of caret position', () => {
     const doc = 'above\n\n:::hero {image=a.jpg}\nbody\n:::\n';
     const above = inspectDecorations(stateAt(doc, 0));       // caret above the block
     const inside = inspectDecorations(stateAt(doc, doc.indexOf('body')));
     for (const { marks, lineClasses } of [above, inside]) {
-      expect(marks.some((m) => m.cls.includes('cm-hang') && m.from === doc.indexOf(':::') && m.to === doc.indexOf(':::') + 3)).toBe(true);
-      expect(lineClasses.some((c) => c.includes('cm-hung'))).toBe(true);
-      expect(marks.some((m) => m.cls === 'cm-sc-name')).toBe(true); // "hero" still visible, not hung
+      expect(marks.some((m) => m.cls === 'cm-sc-delim' && m.from === doc.indexOf(':::') && m.to === doc.indexOf(':::') + 3)).toBe(true);
+      expect(marks.some((m) => m.cls.includes('cm-hang'))).toBe(false);
+      expect(lineClasses.some((c) => c.includes('cm-hung'))).toBe(false);
+      expect(marks.some((m) => m.cls === 'cm-sc-name')).toBe(true); // "hero" still visible
     }
   });
 
-  test('a `+++` cell divider carries cm-hang and is never replaced', () => {
+  test('a `+++` cell divider is muted text, not hung, and never replaced', () => {
     const doc = ':::grid 2\nleft\n+++\nright\n:::\n';
     const { marks, replaces } = inspectDecorations(stateAt(doc, doc.indexOf('left')));
     const plus = doc.indexOf('+++');
-    expect(marks.some((m) => m.cls.includes('cm-hang') && m.from === plus && m.to === plus + 3)).toBe(true);
+    expect(marks.some((m) => m.cls === 'cm-sc-delim' && m.from === plus && m.to === plus + 3)).toBe(true);
+    expect(marks.some((m) => m.cls.includes('cm-hang'))).toBe(false);
     expect(replaces).toBe(0);
   });
 
@@ -214,14 +216,16 @@ describe('nested fences + dividers render the same at every caret position', () 
     expect(inspectDecorations(stateAt(doc, doc.indexOf('[a]'))).replaces).toBe(0);
   });
 
-  test('both open fences (grid and nested buttons) are hung', () => {
+  test('every fence line (grid and nested buttons, open and close) is a fence line, none hung', () => {
     const { lineClasses } = inspectDecorations(stateAt(doc, 0));
-    expect(lineClasses.filter((c) => c.includes('cm-sc-line-fence') && c.includes('cm-hung')).length).toBe(4); // 2 open + 2 close
+    expect(lineClasses.filter((c) => c.includes('cm-sc-line-fence')).length).toBe(4); // 2 open + 2 close
+    expect(lineClasses.some((c) => c.includes('cm-hung'))).toBe(false);
   });
 
-  test('the `+++` divider is hung, not drawn as a CSS rule over hidden text', () => {
+  test('the `+++` divider is a divider line with its characters on screen, not hung', () => {
     const { lineClasses } = inspectDecorations(stateAt(doc, 0));
-    expect(lineClasses.some((c) => c.includes('cm-sc-line-divider') && c.includes('cm-hung'))).toBe(true);
+    expect(lineClasses.some((c) => c.includes('cm-sc-line-divider'))).toBe(true);
+    expect(lineClasses.some((c) => c.includes('cm-hung'))).toBe(false);
   });
 });
 
@@ -230,10 +234,7 @@ describe('fence token highlighting (caret-invariant)', () => {
   // token-highlighted, not plain: colons/braces muted (cm-sc-delim), the name
   // in keyword weight (cm-sc-name), attr keys secondary (cm-sc-attr-key),
   // values plain.
-  // Token match, not exact-string match: a fence's delimiter mark now also
-  // carries `cm-hang` (it hangs into the margin), so checking for the plain
-  // `cm-sc-delim` class must not fail just because the mark carries a second
-  // class alongside it.
+  // Token match, not exact-string match, so an extra class never fails it.
   const has = (
     marks: { cls: string; from: number; to: number }[],
     cls: string, from: number, to: number,
@@ -278,7 +279,7 @@ describe('fence token highlighting (caret-invariant)', () => {
     const doc = 'above\n\n:::hero {image=a.jpg}\nbody\n:::\n';
     const { marks } = inspectDecorations(stateAt(doc, 0));
     const open = doc.indexOf(':::');
-    expect(marks.some((m) => m.cls.includes('cm-hang') && m.from === open && m.to === open + 3)).toBe(true);
+    expect(marks.some((m) => m.cls === 'cm-sc-delim' && m.from === open && m.to === open + 3)).toBe(true);
   });
 });
 

@@ -19,3 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - A footnote reference (`[^1]`) and a shortcode fence's delimiters now render identically regardless of caret position; previously both revealed their raw source characters while the caret was inside them.
+- A shortcode fence's `:::` characters and a `+++` cell divider are no longer tagged `cm-hang`/`cm-hung`: they stay in the text column, muted by `cm-sc-delim`. Only a heading's or quote's marker hangs into the margin, and the consumer's CSS no longer needs an override to undo it.
+
+### Fixed
+
+- Two footnote definitions on adjacent lines (`[^1]: a` then `[^b]: b`, no blank line) are two notes, as in the build. The second line was folded into the first as lazy paragraph continuation, so `[^b]` had no definition and its references were left unstyled.

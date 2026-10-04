@@ -779,8 +779,8 @@ function mossHighlightExtension() {
 * positions are always current for tr.state — no stale offsets, no glitches.
 *
 * The document alone decides how a block renders, never the caret: every
-* fence hangs into the margin and is token-highlighted; body lines are
-* tinted; a `+++` cell divider hangs too. Editing a line ABOVE the block
+* fence is shown as source and token-highlighted; body lines are tinted;
+* nothing hangs into the margin. Editing a line ABOVE the block
 * does not change anything below it — there is nothing caret-driven left to
 * toggle.
 *
@@ -993,14 +993,13 @@ var LegacyDividerHintWidget = class extends WidgetType {
 	}
 };
 const MARK_SC_DELIM = Decoration.mark({ class: "cm-sc-delim" });
-const MARK_SC_FENCE = Decoration.mark({ class: "cm-sc-delim cm-hang" });
+const MARK_SC_FENCE = Decoration.mark({ class: "cm-sc-delim" });
 const MARK_SC_NAME = Decoration.mark({ class: "cm-sc-name" });
 const MARK_SC_ATTR_KEY = Decoration.mark({ class: "cm-sc-attr-key" });
 /**
 * Token marks for an OPEN fence line (`:::name {k=v}`): the repeated fence
-* characters hang (`cm-hang`, moved to the margin by the `cm-hung` line
-* class), braces muted, name in keyword weight, attr keys secondary, values
-* plain. Reuses the fence grammar's own regex and the attr parser — no second
+* characters are muted like the braces, name in keyword weight, attr keys
+* secondary, values plain. Reuses the fence grammar's own regex and the attr parser — no second
 * parser. Marks are emitted left-to-right so the RangeSetBuilder stays sorted.
 */
 function addOpenFenceTokenMarks(builder, ln) {
@@ -1020,10 +1019,9 @@ function addOpenFenceTokenMarks(builder, ln) {
 	const close = ln.text.lastIndexOf("}");
 	if (close > brace) builder.add(ln.from + close, ln.from + close + 1, MARK_SC_DELIM);
 }
-/** Hangs the trimmed content of a line that is nothing but repeated fence
-*  characters — the closing `:::` or a `+++` cell divider. Both are "a line
-*  prefix with nothing after it", so the whole trimmed text is the hang. */
-function addHungLineMark(builder, ln) {
+/** Mutes the trimmed content of a line that is nothing but repeated fence
+*  characters — the closing `:::` or a `+++` cell divider. */
+function addFenceLineMark(builder, ln) {
 	const indent = ln.text.length - ln.text.trimStart().length;
 	const len = ln.text.trim().length;
 	if (len > 0) builder.add(ln.from + indent, ln.from + indent + len, MARK_SC_FENCE);
@@ -1042,14 +1040,14 @@ function buildBlockDecorations(state, strings) {
 		while (pos <= top.to) {
 			const ln = state.doc.lineAt(pos);
 			if (openByStart.has(ln.from)) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-fence cm-hung" }));
+				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-fence" }));
 				addOpenFenceTokenMarks(builder, ln);
 			} else if (closeByStart.has(ln.from)) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-fence cm-hung" }));
-				addHungLineMark(builder, ln);
+				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-fence" }));
+				addFenceLineMark(builder, ln);
 			} else if (isCellDividerLine(ln.text) && dividesCellsAt(ln.from, subtree)) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-divider cm-hung" }));
-				addHungLineMark(builder, ln);
+				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-divider" }));
+				addFenceLineMark(builder, ln);
 			} else if (isLegacyDividerLine(ln.text) && legacyDividesCellsAt(ln.from, subtree)) {
 				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-legacy-divider" }));
 				builder.add(ln.to, ln.to, Decoration.widget({
