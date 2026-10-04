@@ -95,6 +95,13 @@ advisory_strings! {
     // so preview keeps rendering, but silently wrong. This is the notice that
     // says so; publish refuses outright instead (see `push.rs`).
     config_schema_version_ahead => { en: "Your site's settings were saved by a newer version of moss (schema {found}); this app only understands up to {max}, so some settings may be showing their defaults here. Update moss to see and publish the real configuration.", zh_hans: "你的网站设置是由较新版本的青苔保存的（schema {found}）；此应用只支持到 {max}，因此这里的部分设置可能显示为默认值。请更新青苔以查看并发布真实的配置。", zh_hant: "你的網站設定是由較新版本的青苔儲存的（schema {found}）；此應用程式只支援到 {max}，因此這裡的部分設定可能顯示為預設值。請更新青苔以檢視並發佈真實的設定。" },
+    // Addresses the last publish served that this build does not, with no
+    // deleted source to explain them. No " — " here: `groupNotices` splits on it.
+    addresses_going_offline => {
+        en: "Addresses your site has served would stop working if you published now: {list}. Run `moss deploy --dry-run` to see why, then add a redirect or accept losing them.",
+        zh_hans: "如果现在发布，网站已经提供过的这些地址将失效：{list}。用 `deploy --dry-run` 查看原因，然后添加重定向，或确认接受失去它们。",
+        zh_hant: "如果現在發佈，網站已經提供過的這些位址將失效：{list}。用 `deploy --dry-run` 查看原因，然後新增重新導向，或確認接受失去它們。"
+    },
     // `duplicate_note_id` — the non-live half of this pair — stood here and was
     // deleted on 2026-08-30. It fired only when moss had picked correctly and
     // nothing was at stake: either no page under that ID was published, or the

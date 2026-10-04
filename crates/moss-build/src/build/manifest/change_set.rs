@@ -301,6 +301,12 @@ pub struct RemovedAddress {
     /// Lets a later step offer the redirect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_to: Option<String>,
+    /// The source file the last publish recorded for this address: a page's
+    /// or a folder file's. Absent for a generated file, and for a record too
+    /// old to name folder files. It is what tells "still in your folder but no
+    /// longer published" from "no longer produced".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// The resting answer to "what will publishing do?".
@@ -615,7 +621,8 @@ pub fn removed_addresses(
                     .find(|now| now.as_str() != out)
                     .cloned()
             });
-            RemovedAddress { path: out.to_string(), reason, moved_to }
+            let source = recorded.and_then(|srcs| srcs.first()).map(|s| s.to_string());
+            RemovedAddress { path: out.to_string(), reason, moved_to, source }
         })
         .collect();
     removed.sort_by(|a, b| a.path.cmp(&b.path));

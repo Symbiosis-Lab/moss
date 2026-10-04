@@ -66,6 +66,8 @@ impl crate::build::ports::deploy::DeployPorts for HeadlessDeployPorts {
 pub(crate) struct CapturingAnnouncer {
     inner: std::sync::Arc<dyn crate::build::ports::announcer::SealAnnouncer>,
     sealed: std::sync::Arc<std::sync::Mutex<Option<SealedManifest>>>,
+    /// What the seal said publishing would change — see [`Captured`].
+    change_set: std::sync::Arc<std::sync::Mutex<Option<crate::build::manifest::change_set::ChangeSet>>>,
 }
 
 #[async_trait::async_trait]
@@ -85,6 +87,7 @@ impl crate::build::ports::announcer::SealAnnouncer for CapturingAnnouncer {
         project_root: &Path,
         change_set: Option<crate::build::manifest::change_set::ChangeSet>,
     ) {
+        *self.change_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = change_set.clone();
         self.inner.publish_change_set(project_root, change_set).await;
     }
 }
@@ -100,13 +103,27 @@ impl crate::build::ports::announcer::SealAnnouncer for CapturingAnnouncer {
 pub(crate) fn capture_seal(
     host: &mut crate::build::HostPorts,
 ) -> std::sync::Arc<std::sync::Mutex<Option<SealedManifest>>> {
-    let sealed: std::sync::Arc<std::sync::Mutex<Option<SealedManifest>>> =
-        std::sync::Arc::default();
+    capture(host).sealed
+}
+
+/// What the build's seal handed the announcer: the manifest, and the change
+/// set it classified against the last publish (`--dry-run` reads that instead
+/// of classifying again).
+pub(crate) struct Captured {
+    pub sealed: std::sync::Arc<std::sync::Mutex<Option<SealedManifest>>>,
+    pub change_set:
+        std::sync::Arc<std::sync::Mutex<Option<crate::build::manifest::change_set::ChangeSet>>>,
+}
+
+/// [`capture_seal`] with the change set too.
+pub(crate) fn capture(host: &mut crate::build::HostPorts) -> Captured {
+    let captured = Captured { sealed: Default::default(), change_set: Default::default() };
     host.announcer = std::sync::Arc::new(CapturingAnnouncer {
         inner: host.announcer.clone(),
-        sealed: sealed.clone(),
+        sealed: captured.sealed.clone(),
+        change_set: captured.change_set.clone(),
     });
-    sealed
+    captured
 }
 
 /// One headless build and what it sealed. The hosted deploy, the plugin
@@ -115,10 +132,19 @@ pub(crate) fn capture_seal(
 /// action, not just the build) and decides when to `require_sealed`.
 pub(crate) async fn build_and_seal(
     root: &crate::vault::paths::VaultRoot,
-    mut host: crate::build::HostPorts,
+    host: crate::build::HostPorts,
     plugins: crate::build::PluginMode,
 ) -> Result<Option<SealedManifest>, String> {
-    let sealed_slot = capture_seal(&mut host);
+    Ok(build_and_describe(root, host, plugins).await?.0)
+}
+
+/// [`build_and_seal`], and the change set the seal computed along the way.
+pub(crate) async fn build_and_describe(
+    root: &crate::vault::paths::VaultRoot,
+    mut host: crate::build::HostPorts,
+    plugins: crate::build::PluginMode,
+) -> Result<(Option<SealedManifest>, Option<crate::build::manifest::change_set::ChangeSet>), String> {
+    let captured = capture(&mut host);
     let message = crate::build::run_pipeline(crate::build::PipelineConfig {
         root: root.clone(),
         progress: crate::build::stdout_sink(),
@@ -140,8 +166,9 @@ pub(crate) async fn build_and_seal(
     // waits out any ui-bound background work, which is a no-op headless today
     // and a guarantee rather than a coincidence.
     crate::build::cli_output::finish_cli_build(&message, root.as_str(), false).await;
-    let taken = sealed_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-    Ok(taken)
+    let taken = captured.sealed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    let change_set = captured.change_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    Ok((taken, change_set))
 }
 
 /// A sealed manifest of the tree as it stands right now, built on the spot —
@@ -218,6 +245,12 @@ mod tests {
     /// exactly this reason.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_one_shot_build_hands_its_manifest_to_the_host_announcer() {
+        // Test constraint: `register_session` drains every session in the
+        // process-global registry, so another test registering one while this
+        // build runs shuts this build's session down, its promotion is
+        // withheld or superseded, and the slot stays empty. Tests that
+        // register sessions serialize on this lock.
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // `../../` deliberately: the workspace `/target`, which is gitignored.
         // `crates/moss-build/target/` is not, and in a shared checkout that is
         // one peer session's `git add -A` away from being committed — the

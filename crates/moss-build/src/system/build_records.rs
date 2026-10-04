@@ -21,9 +21,10 @@
 //! forward slashes), and a raw-string reader and a canonicalized writer would
 //! otherwise produce mismatched keys, leaving build verdicts unreadable.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
 
+use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
 use crate::build::manifest::link_audit::DeadLink;
 use crate::build::types::PublishPreflightProjection;
 use crate::types::content::SiteHashes;
@@ -95,6 +96,12 @@ pub struct BuildRecords {
     /// set this build would write is byte-identical to what is already
     /// staged — see `feeds::redirects::emit_redirect_table`.
     redirect_signature: FolderSlot<BTreeMap<String, String>>,
+    /// The public addresses the last seal of this folder found the last
+    /// publish serving and this build does not — see `refuse_publish`.
+    removed_addresses: FolderSlot<Vec<RemovedAddress>>,
+    /// The exact set of unexplained removals the author accepted losing. Kept
+    /// across rebuilds: the same set does not ask again, a new address does.
+    accepted_removals: FolderSlot<BTreeSet<String>>,
 }
 
 impl BuildRecords {
@@ -163,6 +170,39 @@ impl BuildRecords {
     /// "clean", the same distinction the preflight projection draws.
     pub fn stale_sources(&self, folder_path: &str) -> Option<Vec<String>> {
         self.stale_sources.get(&Self::key(folder_path))
+    }
+
+    /// Always called, including with an empty `Vec`: a rebuild that restores
+    /// the address must clear the refusal, and only an unconditional write
+    /// does that.
+    pub fn record_removed_addresses(&self, folder_path: &str, removed: Vec<RemovedAddress>) {
+        self.removed_addresses.record(Self::key(folder_path), removed);
+    }
+
+    /// What the last seal of `folder_path` found going offline. `None` means
+    /// no seal has recorded a verdict, which is not "clean".
+    pub fn removed_addresses(&self, folder_path: &str) -> Option<Vec<RemovedAddress>> {
+        self.removed_addresses.get(&Self::key(folder_path))
+    }
+
+    /// Accept losing exactly the unexplained addresses the last seal found,
+    /// replacing any earlier acceptance. Not a standing permission: an address
+    /// that only shows up in a later build is not in this set.
+    pub fn accept_unexplained_removals(&self, folder_path: &str) {
+        let accepted = self
+            .removed_addresses(folder_path)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.reason == RemovalReason::Unexplained)
+            .map(|r| r.path)
+            .collect();
+        self.accepted_removals.record(Self::key(folder_path), accepted);
+    }
+
+    /// The set recorded by [`accept_unexplained_removals`](Self::accept_unexplained_removals);
+    /// `None` when the author has accepted nothing for this folder.
+    pub fn accepted_removals(&self, folder_path: &str) -> Option<BTreeSet<String>> {
+        self.accepted_removals.get(&Self::key(folder_path))
     }
 
     /// Drop the content-hash baseline for a folder moss is no longer

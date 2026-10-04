@@ -1940,6 +1940,13 @@ async fn advertise_sealed(
     // docs on the publish/media race this closes.
     record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path);
 
+    // The addresses this build stops serving, for the publish gate. Recorded
+    // on every seal, empty included, like the promise verdict above.
+    crate::system::build_records::records().record_removed_addresses(
+        folder_path,
+        crate::build::manifest::backfill::removed_for_seal(mp, &sealed),
+    );
+
     // Persist so the next build's load_previous_hashes reads a complete
     // manifest. This is the "hashes.json incremental baseline": it needs only
     // the in-memory `sealed` manifest and `stage_dir`, both final at this

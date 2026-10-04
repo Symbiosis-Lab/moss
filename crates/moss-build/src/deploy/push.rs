@@ -701,6 +701,19 @@ async fn push_site_inner_impl(
 }
 
 
+/// The two refusals a terminal publish can be told to go past. Named fields,
+/// because two adjacent booleans compile silently when swapped and the two
+/// mean opposite things for a live site.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PublishOverrides {
+    /// `--overwrite-newer`: publish over a live site another copy published
+    /// after this folder's last publish.
+    pub overwrite_newer: bool,
+    /// `--accept-removals`: accept losing exactly the addresses the build
+    /// found going offline unasked.
+    pub accept_removals: bool,
+}
+
 /// One moss-hosted publish, from a folder to a result — the build included.
 ///
 /// The twin of [`super::prebuilt::run_prebuilt_deploy`] for the route that
@@ -736,7 +749,7 @@ pub async fn run_hosted_deploy(
     host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
     plugins: crate::build::PluginMode,
     requested_site_id: Option<&str>,
-    overwrite_newer: bool,
+    overrides: PublishOverrides,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<PushResult, String> {
     let folder_str = folder.to_string_lossy().to_string();
@@ -745,7 +758,7 @@ pub async fn run_hosted_deploy(
     // well it builds, and an evicted identity key is knowable at t=0 — asking
     // for it is usually what makes it arrive.
     let Some((site_id, identity)) =
-        crate::deploy::resolve_publish_inputs(folder, requested_site_id, overwrite_newer, sink).await?
+        crate::deploy::resolve_publish_inputs(folder, requested_site_id, overrides.overwrite_newer, sink).await?
     else {
         return Ok(PushResult::NeedsSetup);
     };
@@ -762,6 +775,9 @@ pub async fn run_hosted_deploy(
 
     // Only after the build: the verdict this reads is the build's own, and
     // asking before it would refuse on the previous run's answer or on none.
+    if overrides.accept_removals {
+        crate::system::build_records::records().accept_unexplained_removals(&folder_str);
+    }
     crate::deploy::refuse_publish(&folder_str)?;
 
     let sealed = super::one_shot::require_sealed(taken)?;
@@ -1316,12 +1332,16 @@ mod tests {
 
     /// `run_hosted_deploy` exactly as `moss deploy` calls it, minus plugins.
     async fn cli_deploy(folder: &Path, overwrite_newer: bool) -> Result<PushResult, String> {
+        cli_deploy_accepting(folder, PublishOverrides { overwrite_newer, accept_removals: false }).await
+    }
+
+    async fn cli_deploy_accepting(folder: &Path, overrides: PublishOverrides) -> Result<PushResult, String> {
         run_hosted_deploy(
             folder,
             &crate::cli::host::cli_host_ports,
             crate::build::PluginMode::Skip,
             None,
-            overwrite_newer,
+            overrides,
             &progress::silent(),
         )
         .await
@@ -1358,6 +1378,105 @@ mod tests {
         assert!(err.contains("published from another copy"), "got: {err}");
         let probe = String::from_utf8_lossy(&probe.await.expect("the probe is the one request made")).to_string();
         assert!(probe.starts_with("GET /api/sites/behind-test/generation"), "got: {probe}");
+    }
+
+    /// A folder whose last publish served `/feed.xml`, which this build does
+    /// not produce: the address would go offline with nobody having asked.
+    fn folder_that_lost_its_feed() -> tempfile::TempDir {
+        let tmp = folder_that_last_published(false);
+        crate::build::manifest::published_record::save(
+            &MossPaths::new(tmp.path()),
+            &crate::build::manifest::change_set::PublishedSnapshot {
+                generation_id: "ours".to_string(),
+                target: "moss:behind-test".to_string(),
+                published_at: "2026-09-20T09:12:30+00:00".to_string(),
+                files: [("legacy-feed.xml".to_string(), "100644:abc".to_string())].into(),
+                asset_source_to_output: Some(Default::default()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        tmp
+    }
+
+    /// The rule that stops a publish taking an address offline unasked. The
+    /// server answers only the copy-behind probe: the refusal comes after the
+    /// build and before anything is synced or uploaded. Ablated by deleting
+    /// the rule from `refuse_publish`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_deploy_that_would_take_an_address_offline_is_refused_with_both_ways_out() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_lost_its_feed();
+        let addr = mock_seta_sequence(vec![json_200(r#"{"generation_id":"ours"}"#)]).await;
+
+        let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
+
+        let err = result.expect_err("an unexplained removal must stop the publish");
+        assert!(err.contains("/legacy-feed.xml"), "{err}");
+        assert!(err.contains("--accept-removals"), "{err}");
+    }
+
+    /// The whole path for a moved page: the refusal prints the `[redirects]`
+    /// line, and the very line it printed, added to the config, lets the next
+    /// publish through with no `--accept-removals`. Ablated by dropping the
+    /// redirect emission (the line stays in the config and the refusal stands).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_moved_page_publishes_once_the_printed_redirect_is_added() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(false);
+        std::fs::write(folder.path().join("moved.md"), "---\ntitle: Moved\n---\n\nNew home.\n").unwrap();
+        crate::build::manifest::published_record::save(
+            &MossPaths::new(folder.path()),
+            &crate::build::manifest::change_set::PublishedSnapshot {
+                generation_id: "ours".to_string(),
+                target: "moss:behind-test".to_string(),
+                published_at: "2026-09-20T09:12:30+00:00".to_string(),
+                source_to_output: [("moved.md".to_string(), "old/index.html".to_string())].into(),
+                files: [("old/index.html".to_string(), "100644:abc".to_string())].into(),
+                asset_source_to_output: Some(Default::default()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let addr = mock_seta_sequence(vec![
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"live"}"#),
+            json_200(r#"{"need":[],"remove":[]}"#),
+        ])
+        .await;
+
+        let refused = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
+        let text = refused.expect_err("the page moved and nothing answers at the old address");
+        let line = text
+            .split_once("add ")
+            .and_then(|(_, rest)| rest.split_once(" under [redirects]"))
+            .map(|(line, _)| line.to_string())
+            .unwrap_or_else(|| panic!("the refusal prints the redirect line: {text}"));
+        assert_eq!(line, "\"/old/\" = \"/moved/\"");
+
+        std::fs::write(folder.path().join(".moss/config.toml"), format!("[redirects]\n{line}\n")).unwrap();
+        let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
+
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+    }
+
+    /// `--accept-removals` records the set this build found and the publish
+    /// goes on to the sync, which reports nothing to change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn accepting_the_removals_publishes() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_lost_its_feed();
+        let addr = mock_seta_sequence(vec![
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"live"}"#),
+            json_200(r#"{"need":[],"remove":[]}"#),
+        ])
+        .await;
+
+        let result = with_seta_url(addr, cli_deploy_accepting(folder.path(), PublishOverrides { accept_removals: true, ..Default::default() })).await;
+
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
     }
 
     /// `--overwrite-newer` publishes over it: the build runs and the push

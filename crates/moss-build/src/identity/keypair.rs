@@ -31,6 +31,11 @@ const IDENTITY_VERSION: u32 = 3;
 // ---------------------------------------------------------------------------
 
 /// Returns the path to the identity key file: `<project_path>/.moss/identity/secret-key`
+/// The legacy (v1) identity file carries the private key itself.
+fn holds_legacy_private_key(raw: &serde_json::Value) -> bool {
+    raw.get("privkey").is_some()
+}
+
 pub(crate) fn key_file_path(project_path: &Path) -> PathBuf {
     project_path.join(".moss").join("identity").join("secret-key")
 }
@@ -268,7 +273,7 @@ impl Identity {
 
         // Detect format: v1 has "privkey" field
         let raw: serde_json::Value = serde_json::from_str(&contents)?;
-        let has_privkey = raw.get("privkey").is_some();
+        let has_privkey = holds_legacy_private_key(&raw);
         let file_version = raw.get("version").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
 
         let identity: Identity = if has_privkey {
@@ -424,6 +429,25 @@ impl Identity {
     pub fn exists(project_path: &Path) -> bool {
         let path = Self::identity_path(project_path);
         path.exists() || crate::build::icloud::is_still_in_the_cloud(&path)
+    }
+
+    /// Does this project have a signing key a publish can use, as
+    /// [`load`](Self::load) plus `signing_key()` would find one? The key file,
+    /// or the legacy form that keeps the private key inside `public.json` and
+    /// that `load` migrates. Read-only: nothing is migrated or written, so a
+    /// dry run can ask what `IdentityService::ensure_signing_key` would find
+    /// before it would regenerate.
+    pub fn has_usable_signing_key(project_path: &Path) -> bool {
+        if key_file_path(project_path).exists() {
+            return true;
+        }
+        crate::build::cloud_readiness::read_to_string_with_materialize_wait(
+            &Self::identity_path(project_path),
+            crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+        )
+        .ok()
+            .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
+            .is_some_and(|raw| holds_legacy_private_key(&raw))
     }
 
     /// Get the path to the identity file.

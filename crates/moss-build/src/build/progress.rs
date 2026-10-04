@@ -1278,6 +1278,46 @@ pub fn make_config_version_ahead_advisory(found: u32) -> Option<PipelineEvent> {
     )
 }
 
+/// The notice for public addresses this build stops serving without the
+/// author having removed their source. An advisory: it asks nothing of the
+/// build and moves no problem count; the publish gate is what refuses.
+///
+/// Addresses the author deleted are not news, and an empty list is a
+/// [`clear_tick`] so a fixed condition clears.
+pub fn make_removed_addresses_advisory(
+    removed: &[crate::build::manifest::change_set::RemovedAddress],
+) -> PipelineEvent {
+    use crate::build::manifest::change_set::RemovalReason;
+    let lost: Vec<String> = removed
+        .iter()
+        .filter(|r| r.reason == RemovalReason::Unexplained)
+        .map(|r| crate::build::served_path::served_address(&r.path))
+        .collect();
+    let shown = lost.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+    let list = match lost.len().saturating_sub(3) {
+        0 => shown,
+        rest => format!("{shown}, and {rest} more"),
+    };
+    advisory_event(
+        "addresses",
+        if lost.is_empty() {
+            vec![]
+        } else {
+            vec![Advisory {
+                scope: Scope::Config,
+                severity: Severity::NeedsAction,
+                item: None,
+                what: crate::infra::app_advisory::fmt(
+                    "addresses_going_offline",
+                    &[("list", &list)],
+                ),
+                action: Action::None,
+            }]
+        },
+    )
+    .unwrap_or_else(|| clear_tick("addresses"))
+}
+
 // `make_live_record_advisory` stood here and was deleted on 2026-08-29 — see
 // the tombstone in `infra::app_advisory` for why. It is a log fact now.
 
@@ -1640,5 +1680,59 @@ mod route_tests {
             }
             other => panic!("expected BackgroundProgress, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod removed_addresses_advisory_tests {
+    use super::*;
+    use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
+
+    fn removed(path: &str, reason: RemovalReason) -> RemovedAddress {
+        RemovedAddress { path: path.into(), reason, moved_to: None, source: None }
+    }
+
+    fn advisories(event: PipelineEvent) -> Vec<Advisory> {
+        match event {
+            PipelineEvent::BackgroundProgress { task, advisories, .. } => {
+                assert_eq!(task, "addresses");
+                advisories
+            }
+            other => panic!("expected a background tick, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unexplained_removals_are_announced_as_one_advisory_naming_them() {
+        let found = advisories(make_removed_addresses_advisory(&[
+            removed("feed.xml", RemovalReason::Unexplained),
+            removed("gone/index.html", RemovalReason::AuthorRemoved),
+        ]));
+        assert_eq!(found.len(), 1);
+        assert!(found[0].what.contains("/feed.xml"), "{}", found[0].what);
+        assert!(!found[0].what.contains("/gone/"), "an address the author removed is not news: {}", found[0].what);
+        assert!(found[0].what.contains("moss deploy --dry-run"), "{}", found[0].what);
+    }
+
+    /// Nothing to say still says so, so a fixed condition clears.
+    #[test]
+    fn nothing_unexplained_is_a_clear_tick() {
+        assert!(advisories(make_removed_addresses_advisory(&[])).is_empty());
+        assert!(advisories(make_removed_addresses_advisory(&[removed("a/index.html", RemovalReason::AuthorRemoved)]))
+            .is_empty());
+    }
+
+    /// An advisory, not a problem: printing it must not move the count that
+    /// `--strict` turns into an exit status.
+    #[test]
+    fn the_terminal_prints_it_without_counting_a_problem() {
+        use crate::build::ports::reporter::{BuildReporter, StdoutReporter};
+        let _ = crate::build::cli_output::take_cli_problems();
+        let event = make_removed_addresses_advisory(&[removed("feed.xml", RemovalReason::Unexplained)]);
+
+        assert!(crate::ops::serve::events::shows_on_terminal(&event));
+        StdoutReporter.report(&event);
+
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 0);
     }
 }

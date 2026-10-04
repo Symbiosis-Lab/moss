@@ -209,6 +209,21 @@ model (dark mode, quiet chrome, `@layer` rules), see
   date with that copy (usually `git pull`) and deploy again. `--overwrite-newer`
   undoes the other publish — use it only when the human says to. A
   `[hooks] deploy` plugin's destination is not checked.
+- **Before every real publish, dry-run it:** `moss deploy <folder> --dry-run`
+  builds exactly as a deploy builds (the build may use the network as any
+  build does: plugins the flags allow, link previews from third-party sites), prints the pages added, edited and deleted and
+  the addresses that would go offline, and stops. It uploads nothing and
+  records nothing, and exits 1 where a deploy would be refused by the checks it
+  ran. It does not check what needs the server (whether another copy published
+  since), so a passing dry run is not a promise the deploy goes ahead.
+- **Refused because an address would go offline:** an address the site has
+  served must not vanish unasked. When a build would stop serving one for a
+  reason other than the human deleting its source (a page whose address
+  changed, a generated file no longer produced), `deploy` and `--dry-run`
+  list each address with its cause and refuse. Keep the address working
+  (for a moved page, add the printed `"/old/" = "/new/"` line under
+  `[redirects]` in `.moss/config.toml`), or pass `--accept-removals` — only when
+  the human has said to lose those addresses.
 - **Custom domain:** `moss domain list <folder>` / `moss domain link <folder>
   example.com`.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`

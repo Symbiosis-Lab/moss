@@ -513,7 +513,7 @@ fn a_publish_removing_only_internal_files_is_not_empty() {
 fn a_set_with_only_removed_addresses_is_not_empty() {
     let set = ChangeSet {
         classified: true,
-        removed: vec![RemovedAddress { path: "feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None }],
+        removed: vec![RemovedAddress { path: "feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None }],
         ..ChangeSet::default()
     };
     assert!(!set.is_empty());
@@ -535,9 +535,9 @@ fn removed_addresses_ride_on_an_unclassified_set_too() {
 
 #[test]
 fn removed_addresses_serialize_snake_case_and_omit_an_absent_moved_to() {
-    let bare = RemovedAddress { path: "a".into(), reason: RemovalReason::AuthorRemoved, moved_to: None };
+    let bare = RemovedAddress { path: "a".into(), reason: RemovalReason::AuthorRemoved, moved_to: None, source: None };
     assert_eq!(serde_json::to_value(bare).unwrap(), serde_json::json!({"path": "a", "reason": "author_removed"}));
-    let moved = RemovedAddress { path: "a/".into(), reason: RemovalReason::Unexplained, moved_to: Some("b/".into()) };
+    let moved = RemovedAddress { path: "a/".into(), reason: RemovalReason::Unexplained, moved_to: Some("b/".into()), source: None };
     assert_eq!(
         serde_json::to_value(moved).unwrap(),
         serde_json::json!({"path": "a/", "reason": "unexplained", "moved_to": "b/"})
@@ -569,4 +569,18 @@ fn a_renamed_source_with_a_stub_at_the_old_address_is_not_removed() {
     );
 
     assert!(removed_of(&prev, &cur).is_empty());
+}
+
+/// The recorded source rides on the removal, so a consumer can say "still in
+/// your folder" for a file and "no longer produced" for a generated one.
+#[test]
+fn a_removal_carries_the_recorded_source_when_there_is_one() {
+    let prev = snapshot(&sealed_with_assets(&[], &[("feed.xml", &b"F"[..])], &["docs/a.pdf"], &[]));
+    let cur = sealed_with_assets(&[], &[], &[], &["docs/a.pdf"]);
+
+    let by_path: std::collections::HashMap<_, _> =
+        removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| (r.path.clone(), r)).collect();
+
+    assert_eq!(by_path["docs/a.pdf"].source.as_deref(), Some("docs/a.pdf"));
+    assert_eq!(by_path["feed.xml"].source, None);
 }

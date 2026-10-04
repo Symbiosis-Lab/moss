@@ -99,6 +99,7 @@ pub async fn run_plugin_deploy(
     folder: &Path,
     host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
     plugins: crate::build::PluginMode,
+    accept_removals: bool,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<DeployResult, String> {
     let folder_str = folder.to_string_lossy().to_string();
@@ -134,6 +135,11 @@ pub async fn run_plugin_deploy(
     // `one_shot::require_sealed` inside the inner body — see its doc for why
     // the absence is a promotion failure and not a missing description.
     let sealed = super::one_shot::build_and_seal(&root, host, plugins).await?;
+
+    // Between the build that found the removals and the gate that reads them.
+    if accept_removals {
+        crate::system::build_records::records().accept_unexplained_removals(&folder_str);
+    }
 
     let ports = super::one_shot::HeadlessDeployPorts;
     run_plugin_deploy_inner(&PluginDeployContext {

@@ -158,7 +158,7 @@ pub async fn for_seal(
     })
 }
 
-fn publish_target(mp: &MossPaths) -> Option<String> {
+pub(crate) fn publish_target(mp: &MossPaths) -> Option<String> {
     crate::build::site_config::get_domain_config(&mp.project_root().to_string_lossy())
         .ok()
         .and_then(|c| c.publish_target())

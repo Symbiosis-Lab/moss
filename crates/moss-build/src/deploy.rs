@@ -16,6 +16,8 @@
 //! session state. A terminal publish has neither. So the Tauri commands, that
 //! resolution, and the build-liveness listener stayed.
 
+pub mod dry_run;
+pub(crate) mod removal_gate;
 pub mod freeze;
 pub mod mass_remove;
 pub mod landed;
@@ -121,6 +123,8 @@ pub enum DeployReport {
         url: String,
         message: Option<String>,
     },
+    /// `--dry-run`: the build ran, nothing was sent.
+    DryRun(Box<dry_run::DryRun>),
 }
 
 impl DeployReport {
@@ -132,6 +136,7 @@ impl DeployReport {
         match self {
             DeployReport::Push(result) => result.landed(),
             DeployReport::Plugin { .. } => true,
+            DeployReport::DryRun(_) => false,
         }
     }
 }
@@ -364,6 +369,12 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// refuses: not because the site is wrong, but because shipping it without
 /// saying so would let a source stay stale indefinitely with no signal that
 /// anything needed attention.
+///
+/// Also refused: the build would stop serving an address the last publish
+/// served, and not because the author deleted its source —
+/// `removal_gate`. An address is a promise to every link and subscription
+/// stored elsewhere; the author keeps it working or accepts losing it
+/// (`moss deploy --accept-removals`), and the same set never asks twice.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
     let records = crate::system::build_records::records();
     if let Some(projection) = records.publish_preflight(folder_path) {
@@ -380,6 +391,9 @@ pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
         if !stale.is_empty() {
             return Err(stale_source_refusal_text(&stale));
         }
+    }
+    if let Some(refusal) = removal_gate::refusal_for(folder_path) {
+        return Err(refusal);
     }
     Ok(())
 }
@@ -1016,3 +1030,7 @@ mod promised_dead_links_gate_tests;
 #[cfg(test)]
 #[path = "deploy/stale_sources_gate_tests.rs"]
 mod stale_sources_gate_tests;
+
+#[cfg(test)]
+#[path = "deploy/removal_gate_tests.rs"]
+mod removal_gate_tests;

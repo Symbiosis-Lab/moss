@@ -227,13 +227,54 @@ impl crate::build::ports::announcer::SealAnnouncer for CarrierAnnouncer {
 
     async fn publish_change_set(
         &self,
-        _project_root: &std::path::Path,
+        project_root: &std::path::Path,
         change_set: Option<crate::build::manifest::change_set::ChangeSet>,
     ) {
+        // The removed addresses reach a terminal as an advisory; the rest of
+        // the set has no headless listener.
         if let Some(cs) = change_set {
-            log::debug!(target: "publish", "publish change set: {cs:?}");
+            static ANNOUNCED: std::sync::Mutex<Option<std::collections::HashSet<std::path::PathBuf>>> =
+                std::sync::Mutex::new(None);
+            let mut announced = ANNOUNCED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let announced = announced.get_or_insert_with(Default::default);
+            if let Some(event) = removal_announcement(announced, project_root, &cs.removed) {
+                crate::build::ports::reporter::BuildReporter::report(&CarrierReporter, &event);
+            }
         }
     }
+}
+
+/// The event to publish for this build's removed addresses, or `None`. A
+/// non-empty list is announced every build; an empty one says nothing, except
+/// the one clearing event after a build that had announced a list, so an
+/// advisory a watching browser shows goes away once the author fixes it.
+/// `announced` is the folders whose last announcement was non-empty. A folder
+/// that never had removals puts nothing on the shared event bus.
+fn removal_announcement(
+    announced: &mut std::collections::HashSet<std::path::PathBuf>,
+    folder: &std::path::Path,
+    removed: &[crate::build::manifest::change_set::RemovedAddress],
+) -> Option<crate::build::progress::PipelineEvent> {
+    let event = crate::build::progress::make_removed_addresses_advisory(removed);
+    if shows_on_terminal(&event) {
+        announced.insert(folder.to_path_buf());
+        Some(event)
+    } else {
+        announced.remove(folder).then_some(event)
+    }
+}
+
+/// Does a headless build print this event on the terminal?
+///
+/// The plugin events are its console voice (see [`CarrierReporter`]), and so
+/// is the removed-addresses advisory: it is how a `moss build` user learns a
+/// publish would take an address offline. Other advisories stay with the
+/// carrier's listeners.
+pub fn shows_on_terminal(event: &crate::build::progress::PipelineEvent) -> bool {
+    use crate::build::progress::PipelineEvent;
+    matches!(event, PipelineEvent::PluginProgress(_) | PipelineEvent::PluginNeedsConnection { .. })
+        || matches!(event, PipelineEvent::BackgroundProgress { task, advisories, .. }
+            if task == "addresses" && !advisories.is_empty())
 }
 
 pub struct CarrierReporter;
@@ -247,7 +288,7 @@ impl crate::build::ports::reporter::BuildReporter for CarrierReporter {
         // line must reach stderr and the `--strict` count — the outcome a
         // plugin-bearing `moss build` once hid behind "Build complete", exit 0.
         // `StdoutReporter` owns the wording; this is the one delegation.
-        if matches!(event, PipelineEvent::PluginProgress(_) | PipelineEvent::PluginNeedsConnection { .. }) {
+        if shows_on_terminal(event) {
             crate::build::ports::reporter::StdoutReporter.report(event);
         }
         if let Some(m) = crate::types::events::moss_event_for(event) {
@@ -257,5 +298,60 @@ impl crate::build::ports::reporter::BuildReporter for CarrierReporter {
 
     fn is_terminal(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod removal_announcement_tests {
+    use super::removal_announcement;
+    use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
+    use crate::build::progress::PipelineEvent;
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    fn lost() -> Vec<RemovedAddress> {
+        vec![RemovedAddress {
+            path: "feed.xml".into(),
+            reason: RemovalReason::Unexplained,
+            moved_to: None,
+            source: None,
+        }]
+    }
+
+    fn advisories(event: PipelineEvent) -> usize {
+        match event {
+            PipelineEvent::BackgroundProgress { advisories, .. } => advisories.len(),
+            other => panic!("expected a background tick, got {other:?}"),
+        }
+    }
+
+    /// A folder that never had removals puts nothing on the shared bus.
+    #[test]
+    fn a_build_that_never_had_removals_emits_nothing() {
+        let mut announced = HashSet::new();
+        assert!(removal_announcement(&mut announced, Path::new("/site"), &[]).is_none());
+        assert!(removal_announcement(&mut announced, Path::new("/site"), &[]).is_none());
+    }
+
+    /// Under `--serve --watch` the advisory a browser shows must clear once
+    /// the author fixes it: one clearing event after a non-empty list, then
+    /// silence again.
+    #[test]
+    fn the_build_after_a_removal_is_fixed_emits_one_clearing_event() {
+        let mut announced = HashSet::new();
+        let shown = removal_announcement(&mut announced, Path::new("/site"), &lost()).expect("announced");
+        assert_eq!(advisories(shown), 1);
+
+        let cleared = removal_announcement(&mut announced, Path::new("/site"), &[]).expect("a clearing event");
+        assert_eq!(advisories(cleared), 0);
+        assert!(removal_announcement(&mut announced, Path::new("/site"), &[]).is_none());
+    }
+
+    /// Folders are independent: another folder's fix clears nothing here.
+    #[test]
+    fn the_clearing_event_is_per_folder() {
+        let mut announced = HashSet::new();
+        removal_announcement(&mut announced, Path::new("/a"), &lost());
+        assert!(removal_announcement(&mut announced, Path::new("/b"), &[]).is_none());
     }
 }

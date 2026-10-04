@@ -45,6 +45,17 @@ pub fn is_public_address(path: &str) -> bool {
     !path.starts_with("_moss/")
 }
 
+/// The URL an output path is served at. Only an `index.html` is served at its
+/// directory (`a/index.html` is `/a/`); every other output, a hand-made
+/// `x.html` included, is served at its full path, which is also the form the
+/// `[redirects]` table matches.
+pub fn served_address(output: &str) -> String {
+    match output.strip_suffix("index.html") {
+        Some(dir) if dir.is_empty() || dir.ends_with('/') => format!("/{dir}"),
+        _ => format!("/{output}"),
+    }
+}
+
 /// Reserved prefix for the email-fallback math PNGs. Append-only by design:
 /// an entry here is never dropped for being unreadable, because
 /// the published site still serves it and un-promising it would delete it

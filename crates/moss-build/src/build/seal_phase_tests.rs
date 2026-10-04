@@ -19,6 +19,12 @@ use crate::types::services::BuildServices;
 use std::sync::{Arc, RwLock};
 
 struct Vault {
+    // `register_session` drains every session in the process-global registry,
+    // so a test that registers one (a deploy, a one-shot build, any other
+    // `Vault`) shuts down the session of a seal test running beside it, and
+    // that test's seal never promotes. Tests that register sessions serialize
+    // on this lock; it is held for the vault's whole life.
+    _serial: std::sync::MutexGuard<'static, ()>,
     _tmp: tempfile::TempDir,
     folder: std::path::PathBuf,
     folder_key: String,
@@ -36,6 +42,7 @@ impl Drop for Vault {
 
 impl Vault {
     fn new() -> Self {
+        let serial = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("test-tmp");
         std::fs::create_dir_all(&base).unwrap();
         let tmp = tempfile::Builder::new().prefix("moss-seal-phase").tempdir_in(&base).unwrap();
@@ -46,7 +53,7 @@ impl Vault {
         let mp = crate::moss_paths::MossPaths::new(&folder);
         let record = crate::build::lifecycle::lock_for(&mp);
         std::fs::write(folder.join("index.md"), "---\ntitle: Home\n---\n\nv0\n").unwrap();
-        Self { _tmp: tmp, folder, folder_key, mp, session, served: Arc::new(RwLock::new(std::path::PathBuf::new())), _record: record }
+        Self { _serial: serial, _tmp: tmp, folder, folder_key, mp, session, served: Arc::new(RwLock::new(std::path::PathBuf::new())), _record: record }
     }
 
     /// One long-lived-arm build (`exits_after_build: false`, a real
@@ -463,32 +470,6 @@ async fn the_flush_on_live_runs_the_held_seal_then_one_index() {
     assert_eq!(crate::build::feeds::search::index_build_count() - before, 1, "exactly once");
 }
 
-/// Keeps the change set the seal publishes, and forwards everything else.
-struct ChangeSetTap {
-    inner: Arc<dyn crate::build::ports::announcer::SealAnnouncer>,
-    seen: Arc<std::sync::Mutex<Option<crate::build::manifest::change_set::ChangeSet>>>,
-}
-
-#[async_trait::async_trait]
-impl crate::build::ports::announcer::SealAnnouncer for ChangeSetTap {
-    fn promoted(&self, generation_id: &str) {
-        self.inner.promoted(generation_id);
-    }
-
-    async fn adopt_sealed(&self, sealed: crate::build::manifest::SealedManifest) {
-        self.inner.adopt_sealed(sealed).await;
-    }
-
-    async fn publish_change_set(
-        &self,
-        project_root: &std::path::Path,
-        change_set: Option<crate::build::manifest::change_set::ChangeSet>,
-    ) {
-        *self.seen.lock().unwrap() = change_set.clone();
-        self.inner.publish_change_set(project_root, change_set).await;
-    }
-}
-
 /// A first publish to a new host compares against nothing of its own. The
 /// older host's record lists a feed this build does not make, and the seal
 /// must still say that address is going away.
@@ -512,8 +493,7 @@ async fn a_first_publish_to_a_new_target_still_reports_what_another_target_serve
     .unwrap();
 
     let mut host = vault.host();
-    let seen = Arc::new(std::sync::Mutex::new(None));
-    host.announcer = Arc::new(ChangeSetTap { inner: host.announcer.clone(), seen: seen.clone() });
+    let seen = crate::deploy::one_shot::capture(&mut host).change_set;
     vault.build_with(host).await;
     vault.drained().await;
     settle(&vault.mp).await;
@@ -552,9 +532,8 @@ impl Vault {
         &self,
     ) -> (crate::build::manifest::SealedManifest, crate::build::manifest::change_set::ChangeSet) {
         let mut host = self.host();
-        let captured = capture_seal(&mut host);
-        let seen = Arc::new(std::sync::Mutex::new(None));
-        host.announcer = Arc::new(ChangeSetTap { inner: host.announcer.clone(), seen: seen.clone() });
+        let captured_both = crate::deploy::one_shot::capture(&mut host);
+        let (captured, seen) = (captured_both.sealed, captured_both.change_set);
         self.build_with(host).await;
         self.drained().await;
         settle(&self.mp).await;
