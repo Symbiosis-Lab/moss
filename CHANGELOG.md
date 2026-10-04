@@ -20,6 +20,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A language's home page lists that language's own posts again, linked under its own address, instead of the default language's posts.
 - The RSS feed is served at `/feed.xml` again, with the same content as `/rss.xml`, so readers subscribed to its old address stop getting a 404. `/rss.xml` is still the address the site links to.
 - A responsive image size that is missing from the cache is regenerated on the next build instead of staying missing until the source changes.
 - A failed cache write now says whether its cache folder was not downloaded.

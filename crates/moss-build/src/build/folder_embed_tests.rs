@@ -466,7 +466,7 @@ fn children_more_emits_link_even_on_self_listing_when_truncated() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -501,7 +501,7 @@ fn children_more_unresolved_target_omits_more_link() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -576,7 +576,7 @@ fn children_more_link_text_uses_target_title() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -1350,7 +1350,7 @@ fn synthesize_marker_from_frontmatter() {
     let mut doc = ParsedDocument::default();
     doc.children_style = Some(moss_core::Resolved::frontmatter("grid".to_string()));
     doc.children_limit = Some(5);
-    let marker = synthesize_children_marker(&doc, "projects", "index.md", false);
+    let marker = synthesize_children_marker(&doc, "projects", "index.md");
     assert!(marker.contains("path=/projects/"));
     assert!(marker.contains("from=index.md"));
     assert!(marker.contains("style=grid"));
@@ -1359,15 +1359,15 @@ fn synthesize_marker_from_frontmatter() {
 
 #[test]
 fn synthesize_marker_homepage_defaults_depth_all() {
-    let doc = ParsedDocument::default();
-    let marker = synthesize_children_marker(&doc, "", "index.md", true);
+    let doc = ParsedDocument { url_path: "index.html".to_string(), ..Default::default() };
+    let marker = synthesize_children_marker(&doc, "", "index.md");
     assert!(marker.contains("depth=all"));
 }
 
 #[test]
 fn synthesize_marker_folder_index_no_depth_default() {
     let doc = ParsedDocument::default();
-    let marker = synthesize_children_marker(&doc, "articles", "articles/index.md", false);
+    let marker = synthesize_children_marker(&doc, "articles", "articles/index.md");
     assert!(!marker.contains("depth="));
 }
 
@@ -1393,7 +1393,7 @@ fn root_homepage_multilingual_excludes_language_subtrees() {
     let project = multilingual_project();
     let dir_overrides = std::collections::HashMap::new();
     // Drive the real root-home path: is_homepage = true (sets scope_default_tree + depth=all).
-    let marker = synthesize_children_marker(&docs[0], "", "index.md", true);
+    let marker = synthesize_children_marker(&docs[0], "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -1433,7 +1433,7 @@ fn single_language_root_homepage_lists_all() {
     let docs = vec![home, a, b];
     let project = test_project(); // has_language_trees = false
     let dir_overrides = std::collections::HashMap::new();
-    let marker = synthesize_children_marker(&docs[0], "", "index.md", true);
+    let marker = synthesize_children_marker(&docs[0], "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -1461,7 +1461,7 @@ fn coincidental_language_named_folder_excluded_from_root_home() {
     let docs = vec![home, a, en];
     let project = multilingual_project(); // scan would set this true given en/
     let dir_overrides = std::collections::HashMap::new();
-    let marker = synthesize_children_marker(&docs[0], "", "index.md", true);
+    let marker = synthesize_children_marker(&docs[0], "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -1481,55 +1481,21 @@ fn coincidental_language_named_folder_excluded_from_root_home() {
     );
 }
 
-/// Regression guard for the EXISTING mechanism: a language-subtree home is a
-/// folder index (is_homepage = false) scoped by its folder prefix, not by the
-/// new flag. It lists its own subtree and excludes root docs. (Review A: the
-/// `/en/` home is folder_prefix-scoped — this drives that real path.)
-#[test]
-fn language_home_excludes_root_docs_via_folder_prefix() {
-    let mut en_home = make_folder_doc("en/index.html", "En Home");
-    en_home.children_depth = Some("all".to_string());
-    let en_doc = make_doc("en/writing/xray.html", "Xray", Some("2025-03-01"));
-    let zh_doc = make_doc("alpha.html", "Alpha", Some("2025-01-01"));
-    let docs = vec![en_home.clone(), en_doc, zh_doc];
-    let project = multilingual_project();
-    let dir_overrides = std::collections::HashMap::new();
-    // is_homepage = false → folder-index path (scope_default_tree stays false).
-    let marker = synthesize_children_marker(&en_home, "en", "en/index.md", false);
-    let out = resolve_markers(
-        &marker,
-        "en/index.md",
-        &docs,
-        &project,
-        &dir_overrides,
-        crate::i18n::Language::En,
-        None,
-        None,
-        true,
-    );
-    assert!(out.contains(">Xray<"), "en/ doc must be listed: {}", out);
-    assert!(
-        !out.contains(">Alpha<"),
-        "root doc excluded via folder_prefix: {}",
-        out
-    );
-}
-
 /// A `children_source` homepage targets another folder by user intent, so it is
 /// NOT scoped to the default tree (scope_default_tree stays false).
 #[test]
 fn synthesize_marker_children_source_not_scoped() {
     let mut doc = ParsedDocument::default();
     doc.children_source = Some("projects".to_string());
-    let marker = synthesize_children_marker(&doc, "projects", "index.md", true);
+    let marker = synthesize_children_marker(&doc, "projects", "index.md");
     assert!(!marker.contains("scope_default_tree"), "marker: {}", marker);
 }
 
 /// The root homepage default-mode marker carries the scope flag.
 #[test]
 fn synthesize_marker_root_homepage_sets_scope_default_tree() {
-    let doc = ParsedDocument::default();
-    let marker = synthesize_children_marker(&doc, "", "index.md", true);
+    let doc = ParsedDocument { url_path: "index.html".to_string(), ..Default::default() };
+    let marker = synthesize_children_marker(&doc, "", "index.md");
     assert!(marker.contains("scope_default_tree"), "marker: {}", marker);
 }
 
@@ -1584,7 +1550,7 @@ fn root_wikilink_with_depth_all_lists_every_page_not_folders_or_self() {
     let (mut everything, docs) = whole_site_listing_fixture();
     everything.children_depth = Some("all".to_string());
 
-    let marker = synthesize_children_marker(&everything, "", "everything.md", false);
+    let marker = synthesize_children_marker(&everything, "", "everything.md");
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
     let out = resolve_markers(
@@ -1625,7 +1591,7 @@ fn root_wikilink_without_depth_lists_direct_folders_only() {
     let (everything, docs) = whole_site_listing_fixture();
     // children_depth left unset — render_one defaults to "direct".
 
-    let marker = synthesize_children_marker(&everything, "", "everything.md", false);
+    let marker = synthesize_children_marker(&everything, "", "everything.md");
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
     let out = resolve_markers(
@@ -1837,7 +1803,7 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
     // The frontmatter path: the SAME folder and children, synthesized as the
     // folder index's own automatic listing would be.
     let docs = vec![folder.clone(), a, b];
-    let marker = synthesize_children_marker(&folder, "lab", "lab/index.md", false);
+    let marker = synthesize_children_marker(&folder, "lab", "lab/index.md");
     let out = resolve_markers(
         &marker,
         "lab/index.md",
@@ -1933,7 +1899,7 @@ fn children_style_list_always_emits_data_layout_minimal() {
     let dir_overrides = std::collections::HashMap::new();
 
     // Synthesize the marker exactly as html.rs does for a folder-index page.
-    let marker = synthesize_children_marker(&folder, "archive", "archive/index.md", false);
+    let marker = synthesize_children_marker(&folder, "archive", "archive/index.md");
 
     let out = resolve_markers(
         &marker,
@@ -2531,7 +2497,7 @@ fn children_covers_only_keeps_newest_covered_pages() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -2566,7 +2532,7 @@ fn children_covers_absent_keeps_default_behavior() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",

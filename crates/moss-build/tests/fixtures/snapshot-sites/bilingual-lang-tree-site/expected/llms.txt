@@ -2,6 +2,18 @@
 
 ---
 
+## 港口笔记
+
+来自港口的笔记。
+
+---
+
+## Harbor Notes
+
+Notes from the harbor.
+
+---
+
 ## About
 
 About this site.

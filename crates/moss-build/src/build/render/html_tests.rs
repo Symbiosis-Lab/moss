@@ -9134,7 +9134,7 @@ mod sequence_siblings_tests {
             ];
             let index = &docs[2];
 
-            let marker = synthesize_children_marker(index, "serial", "serial/index.md", false);
+            let marker = synthesize_children_marker(index, "serial", "serial/index.md");
             let listing = resolve_markers(
                 &marker,
                 "serial/index.md",

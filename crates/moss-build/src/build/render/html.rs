@@ -591,24 +591,24 @@ fn generate_html_inner<'d>(
             let has_sidebar = doc.from_sidebar_alias.unwrap_or(false)
                 || doc.children_in.as_deref() == Some("sidebar");
 
-            // Resolve the target folder path for the marker synthesis (the
-            // double-listing suppression check that also consumed it was removed
-            // with the children-style revert; only the synthesis remains).
+            // A home lists its own tree: "" for the root home, `en` for
+            // `en/index.html`. `children_source` redirects it elsewhere.
+            let own_tree = crate::build::folder_embed::home_scope(&doc.url_path).0;
             let target_folder_path = doc.children_source.as_deref()
                 .map(|r| resolve_children_source_folder_path(r, all_docs))
-                .unwrap_or_default();
+                .unwrap_or_else(|| own_tree.to_string());
+            let from_md_path = if own_tree.is_empty() { "index.md".to_string() } else { format!("{own_tree}/index.md") };
 
             let show_children = !has_sidebar && doc.children.unwrap_or(true);
             if show_children {
                 let marker = crate::build::folder_embed::synthesize_children_marker(
                     doc,
                     &target_folder_path,
-                    "index.md",
-                    true,  // is_homepage = true
+                    &from_md_path,
                 );
                 let resolved_html = crate::build::folder_embed::resolve_markers(
                     &marker,
-                    "index.md",
+                    &from_md_path,
                     all_docs,
                     project,
                     &dir_overrides,
@@ -937,7 +937,6 @@ fn generate_html_inner<'d>(
                         doc,
                         &folder_path,
                         &from_md_path,
-                        false, // is_homepage = false
                     );
                     let resolved_html = crate::build::folder_embed::resolve_markers(
                         &marker,

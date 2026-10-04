@@ -1124,6 +1124,12 @@ pub(crate) fn select_children_by_slug<'a>(
         .collect()
 }
 
+/// A home's listing folder (`""` root, `en` for `en/index.html`) and whether
+/// the root-home defaults apply; shared by render and incremental group keys.
+pub(crate) fn home_scope(url_path: &str) -> (&str, bool) {
+    (moss_core::home::lang_tree_prefix(url_path).unwrap_or(""), url_path == "index.html")
+}
+
 /// Render a single resolved marker. Falls back to a `moss-embed-missing` div
 /// on lookup failure. `is_embed` — see [`resolve_markers_impl`] — passes
 /// straight through to [`generate_children`], which is where it actually
@@ -1545,34 +1551,22 @@ fn resolve_more_link_target<'a>(
 ///
 /// `from_md_path` — source markdown path for relative path resolution in render_one.
 ///
-/// `is_homepage` — true for the homepage path: applies depth="all" default and
-/// enables the lang-tree + nav-item filters. False for folder-index pages.
+/// Only the root home lists the whole default-language tree (depth "all"),
+/// so it alone drops other languages' folders and top-level nav-item folders
+/// (the nav bar already shows those), unless `children_source` names another folder on purpose.
+/// Any other host, a language home included, lists its own `folder_path` at
+/// depth "direct", unfiltered: scoping by the root's rules would list the wrong tree.
 pub fn synthesize_children_marker(
     doc: &crate::build::types::ParsedDocument,
     folder_path: &str,
     from_md_path: &str,
-    is_homepage: bool,
 ) -> String {
     use moss_core::resolve::embed_renderer::folder_list::{FolderEmbedParams, emit_marker};
 
-    // Homepage defaults depth to "all" when unset; folder index defaults to "direct".
-    let depth = doc.children_depth.clone().or_else(|| {
-        if is_homepage {
-            Some("all".to_string())
-        } else {
-            None // render_one defaults to "direct" when absent
-        }
-    });
+    let is_root_home = home_scope(&doc.url_path).1;
+    let depth = doc.children_depth.clone().or_else(|| is_root_home.then(|| "all".to_string()));
 
-    // Homepage default-mode (the root home listing its own tree): scope to the
-    // default language tree and exclude top-level nav-item folders. Only the root
-    // home is `is_homepage` (other folder homes go through the folder-index path and
-    // are scoped by their folder prefix), so its tree is always the default tree.
-    // Cross-folder mode (children_source set) explicitly targets another folder —
-    // user intent overrides these filters.
-    let has_children_source = doc.children_source.is_some();
-    let homepage_default_mode = is_homepage && !has_children_source;
-
+    let root_default_mode = is_root_home && doc.children_source.is_none();
     let params = FolderEmbedParams {
         limit: doc.children_limit.map(|n| n as usize),
         sort: None,  // sort comes from target doc's direct_children_sort cache
@@ -1586,8 +1580,8 @@ pub fn synthesize_children_marker(
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
-        scope_default_tree: homepage_default_mode,
-        exclude_nav: homepage_default_mode,
+        scope_default_tree: root_default_mode,
+        exclude_nav: root_default_mode,
         // A frontmatter listing has no pothole to read placement or a
         // caption out of; both are body-embed vocabulary.
         placement: Default::default(),

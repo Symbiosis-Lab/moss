@@ -7,7 +7,15 @@
 <loc>https://example.com/about/</loc>
 </url>
 <url>
+<loc>https://example.com/harbor/</loc>
+<lastmod>2026-03-01</lastmod>
+</url>
+<url>
 <loc>https://example.com/zh-hans/about/</loc>
+</url>
+<url>
+<loc>https://example.com/zh-hans/harbor/</loc>
+<lastmod>2026-03-02</lastmod>
 </url>
 <url>
 <loc>https://example.com/zh-hans/</loc>

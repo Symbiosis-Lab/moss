@@ -325,22 +325,21 @@ pub fn hosts_listing(doc: &ParsedDocument) -> bool {
 pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<Vec<GroupKey>> {
     let mut keys: Vec<GroupKey> = Vec::new();
 
-    // (a) A locale's own homepage — not just the site-default's at the bare
-    //     `index.html`: `<lang>/index.html` reads the same groups, which
-    //     carrying it forward unchanged used to miss entirely (it was never
-    //     even recognized as a listing host by `hosts_listing` above).
-    //     `synthesize_children_marker(.., is_homepage: true)` defaults depth
-    //     to "all" and — in default mode only, i.e. with no `children_source`
-    //     redirecting the listing — turns on both homepage filters.
+    // (a) A home page — the root's or a language's own `<lang>/index.html`.
+    //     `synthesize_children_marker` lists the tree the home sits at (`""`
+    //     for the root, `<lang>` otherwise) unless `children_source` redirects
+    //     it; only the root home defaults depth to "all" and turns on both
+    //     filters (in default mode, i.e. with no `children_source`).
     if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
-        let default_mode = doc.children_source.is_none();
+        let (tree, is_root) = crate::build::folder_embed::home_scope(&doc.url_path);
+        let default_mode = is_root && doc.children_source.is_none();
         let folder_slug = match doc.children_source.as_deref() {
-            None => String::new(),
+            None => tree.to_string(),
             Some(reference) => resolve_children_source_slug(reference, documents)?,
         };
         keys.push(GroupKey {
             folder_slug,
-            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), true),
+            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), is_root),
             scope_default_tree: default_mode,
             exclude_nav: default_mode,
         });

@@ -972,6 +972,76 @@ fn every_locale_home_carries_data_page_home() {
     );
 }
 
+/// Build a site written inline into a scratch directory.
+fn build_inline_site(files: &[(&str, &str)]) -> (Cleanup, PathBuf) {
+    let temp_dir = std::env::temp_dir().join(format!("moss_snapshot_test_{}", uuid::Uuid::new_v4()));
+    let cleanup = Cleanup(temp_dir.clone());
+    for (rel, body) in files {
+        let path = temp_dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+        fs::write(path, body).expect("write file");
+    }
+    let result = build_sync(&temp_dir.to_string_lossy(), false);
+    assert!(result.is_ok(), "Build failed: {:?}", result);
+    (cleanup, temp_dir.join(".moss/build.nosync/staging"))
+}
+
+/// A default-language root with three posts and an `en/` tree with its own
+/// home and two posts. `en_home_extra` is spliced into the `en/` home's
+/// frontmatter.
+fn bilingual_site_with_posts(en_home_extra: &str) -> (Cleanup, PathBuf) {
+    let post = |title: &str, lang: &str| {
+        format!("---\ntitle: {title}\nlang: {lang}\ndate: 2026-03-01\n---\n\nBody of {title}.\n")
+    };
+    let en_home = format!("---\ntitle: English Home\nlang: en\n{en_home_extra}---\n\nWelcome.\n");
+    build_inline_site(&[
+        (".moss/config.toml", "[site]\ndomain = \"example.com\"\n"),
+        ("index.md", "---\ntitle: Root Home\nlang: zh-hans\n---\n\nHello.\n"),
+        ("harbor-notes.md", &post("Harbor Notes", "zh-hans")),
+        ("orchard-notes.md", &post("Orchard Notes", "zh-hans")),
+        ("quarry-notes.md", &post("Quarry Notes", "zh-hans")),
+        ("en/index.md", &en_home),
+        ("en/lantern-notes.md", &post("Lantern Notes", "en")),
+        ("en/meadow-notes.md", &post("Meadow Notes", "en")),
+    ])
+}
+
+fn assert_homes_list_only_their_own_language(en_home_extra: &str) {
+    let (_cleanup, out) = bilingual_site_with_posts(en_home_extra);
+    let root = fs::read_to_string(out.join("index.html")).expect("root home built");
+    let en = fs::read_to_string(out.join("en/index.html")).expect("en home built");
+    for page in [&root, &en] {
+        assert!(page.contains(r#"data-page="home""#), "every home carries data-page=home");
+    }
+    for title in ["Lantern Notes", "Meadow Notes"] {
+        assert!(en.contains(title), "en home must list {title}:\n{en}");
+        assert!(!root.contains(title), "root home must not list {title}:\n{root}");
+    }
+    for title in ["Harbor Notes", "Orchard Notes", "Quarry Notes"] {
+        assert!(root.contains(title), "root home must list {title}:\n{root}");
+        assert!(!en.contains(title), "en home must not list {title}:\n{en}");
+    }
+    for slug in ["harbor-notes", "orchard-notes", "quarry-notes"] {
+        assert!(
+            !en.contains(&format!("href=\"/{slug}")) && !en.contains(&format!("href=\"{slug}")),
+            "en home links a default-language address ({slug}):\n{en}"
+        );
+    }
+    assert!(en.contains("/en/lantern-notes"), "en home links under its own prefix:\n{en}");
+}
+
+/// Each language's home lists its own tree: the `en/` home lists only `en/`
+/// posts (linked under `/en/`), the root home only the default tree.
+#[test]
+fn language_homes_list_only_their_own_language_tree() {
+    assert_homes_list_only_their_own_language("");
+}
+
+#[test]
+fn language_home_with_children_depth_all_lists_only_its_own_tree() {
+    assert_homes_list_only_their_own_language("children_depth: all\n");
+}
+
 #[test]
 fn snapshot_flat_site() {
     run_snapshot_test("flat-site");

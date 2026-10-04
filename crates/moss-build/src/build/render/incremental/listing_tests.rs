@@ -362,6 +362,51 @@ fn hosts_are_mapped_to_the_groups_they_actually_read() {
     assert!(!hosts_listing(&article("writings/alpha/index.html", "")), "a plain article hosts nothing");
 }
 
+/// A language home lists its own folder at depth `direct`, with none of the
+/// root home's filters; the root home's key is unchanged beside it.
+#[test]
+fn a_language_home_reads_its_own_folder_not_the_root_tree() {
+    let mut docs = vault();
+    docs.push(folder("en/index.html"));
+
+    let en_home = docs.iter().find(|d| d.url_path == "en/index.html").unwrap();
+    let keys = groups_read_by(en_home, &docs).expect("a language home is a modelled shape");
+    assert_eq!(keys, vec![key("en")]);
+
+    let home = docs.iter().find(|d| d.url_path == "index.html").unwrap();
+    assert_eq!(groups_read_by(home, &docs).unwrap(), vec![root_key()]);
+}
+
+/// Editing a post under `en/` must dirty the language home's group and not the
+/// root home's, and editing a root post the reverse.
+#[test]
+fn a_post_edit_dirties_only_the_home_of_its_own_language() {
+    let mut docs = vault();
+    docs.push(folder("en/index.html"));
+    let digest_of = |docs: &[ParsedDocument], host: &str| {
+        let host = docs.iter().find(|d| d.url_path == host).unwrap();
+        let mut p = project();
+        p.has_language_trees = true;
+        let groups = ListingGroups::build(docs, &p, false);
+        groups_read_by(host, docs)
+            .unwrap()
+            .iter()
+            .map(|k| groups.digest(k).cloned().unwrap_or_else(|| panic!("group {} was not built", k.id())))
+            .collect::<Vec<_>>()
+    };
+    let (en_before, root_before) = (digest_of(&docs, "en/index.html"), digest_of(&docs, "index.html"));
+
+    let mut en_edited = docs.clone();
+    en_edited.iter_mut().find(|d| d.url_path == "en/hello/index.html").unwrap().content = "changed lede".into();
+    assert_ne!(digest_of(&en_edited, "en/index.html"), en_before, "en edit must dirty the en home");
+    assert_eq!(digest_of(&en_edited, "index.html"), root_before, "en edit must not dirty the root home");
+
+    let mut root_edited = docs.clone();
+    root_edited.iter_mut().find(|d| d.url_path == "writings/alpha/index.html").unwrap().content = "changed lede".into();
+    assert_ne!(digest_of(&root_edited, "index.html"), root_before, "root edit must dirty the root home");
+    assert_eq!(digest_of(&root_edited, "en/index.html"), en_before, "root edit must not dirty the en home");
+}
+
 /// An unrecognised host shape re-renders. Over-approximation is the only safe
 /// default (rustc keeps `eval_always` for the same reason), and it is what
 /// every host shape did before this model.

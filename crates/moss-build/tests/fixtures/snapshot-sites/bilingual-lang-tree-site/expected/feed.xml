@@ -5,5 +5,22 @@
 <link>https://example.com</link>
 <description>My Bilingual Site</description>
 <atom:link href="https://example.com/rss.xml" rel="self" type="application/rss+xml"/>
+<item>
+<title>港口笔记</title>
+<link>https://example.com/zh-hans/harbor/index.html?utm_source=rss&amp;utm_medium=feed</link>
+<guid>https://example.com/zh-hans/harbor/index.html?utm_source=rss&amp;utm_medium=feed</guid>
+<pubDate>02 Mar 2026 00:00:00 +0000</pubDate>
+<description><![CDATA[<h1 class="moss-article-title">港口笔记</h1>
+<p>来自港口的笔记。</p>
+]]></description>
+</item>
+<item>
+<title>Harbor Notes</title>
+<link>https://example.com/harbor/index.html?utm_source=rss&amp;utm_medium=feed</link>
+<guid>https://example.com/harbor/index.html?utm_source=rss&amp;utm_medium=feed</guid>
+<pubDate>01 Mar 2026 00:00:00 +0000</pubDate>
+<description><![CDATA[<p>Notes from the harbor.</p>
+]]></description>
+</item>
 </channel>
 </rss>
