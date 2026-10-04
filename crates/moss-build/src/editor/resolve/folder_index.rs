@@ -130,15 +130,7 @@ impl EditorFolderIndex {
         // there is ONE exclusion rule, not two.
         let walker = walkdir::WalkDir::new(&self.root)
             .into_iter()
-            .filter_entry(|e| {
-                // depth 0 is the vault root itself: its own name is not subject
-                // to the exclusion rule (a vault may legitimately live in a
-                // dot-directory, and pruning it would empty the whole walk).
-                if e.depth() == 0 || !e.file_type().is_dir() {
-                    return true;
-                }
-                !crate::build::scan::classify::is_excluded_dir_name(&e.file_name().to_string_lossy())
-            });
+            .filter_entry(|e| !crate::build::scan::classify::is_excluded_walk_entry(e));
 
         for entry in walker.flatten() {
             let rel = match entry.path().strip_prefix(&self.root) {

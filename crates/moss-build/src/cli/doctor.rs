@@ -205,18 +205,12 @@ fn report_summary(total_spans: usize, files_with_math: usize) {
 }
 
 /// Every markdown file the build would read, using the build's own directory
-/// exclusions (`is_excluded_dir_name` prunes `.moss`, `.git`, dotfiles,
+/// exclusions (`is_excluded_walk_entry` prunes `.moss`, `.git`, dotfiles,
 /// `node_modules`) so the report covers exactly the files that get published.
 fn markdown_files(folder: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = walkdir::WalkDir::new(folder)
         .into_iter()
-        .filter_entry(|e| {
-            if !e.file_type().is_dir() {
-                return true;
-            }
-            let name = e.file_name().to_string_lossy();
-            !crate::build::scan::classify::is_excluded_dir_name(&name)
-        })
+        .filter_entry(|e| !crate::build::scan::classify::is_excluded_walk_entry(e))
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
         .map(|e| e.into_path())
@@ -351,5 +345,15 @@ mod tests {
     fn missing_math_flag_is_a_usage_error() {
         assert_eq!(run(&[]), 2);
         assert_eq!(run(&["--links".to_string()]), 2);
+    }
+
+    #[test]
+    fn a_dot_named_folder_is_listed_but_dot_folders_inside_it_are_not() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join(".dotsite");
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join("a.md"), "x").unwrap();
+        std::fs::write(root.join(".hidden/b.md"), "x").unwrap();
+        assert_eq!(markdown_files(&root), vec![root.join("a.md")]);
     }
 }

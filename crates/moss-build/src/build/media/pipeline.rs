@@ -980,7 +980,6 @@ pub(crate) fn copy_deferred_assets(
     asset_registry: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
 ) -> AssetPipelineRunStats {
     use crate::build::cache::ObjectStore;
-    use crate::build::scan::classify::is_excluded_dir_name;
     use crate::build::render::resolve_path_with_overrides;
     use walkdir::WalkDir;
 
@@ -1101,15 +1100,9 @@ pub(crate) fn copy_deferred_assets(
 
     for entry in WalkDir::new(source_root)
         .into_iter()
-        .filter_entry(|e| {
-            // Only directories may be excluded by name; file entries (e.g.
-            // `_43A2045.jpg`) must always pass through.
-            if !e.file_type().is_dir() {
-                return true;
-            }
-            let name = e.file_name().to_string_lossy();
-            !is_excluded_dir_name(&name)
-        })
+        // Directories only (a file like `_43A2045.jpg` always passes), and never
+        // the source root itself.
+        .filter_entry(|e| !crate::build::scan::classify::is_excluded_walk_entry(e))
     {
         let entry = match entry {
             Ok(e) => e,

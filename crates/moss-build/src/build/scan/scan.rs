@@ -16,7 +16,7 @@
 use crate::types::content::{FileInfo, MediaMetadata, ProjectStructure};
 use crate::build::stat::FileStat;
 use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry};
-use super::classify::{classify_extension, is_excluded_dir_name, skip_root_agent_config, ScanBucket};
+use super::classify::{classify_extension, is_excluded_walk_entry, skip_root_agent_config, ScanBucket};
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;
 use std::cell::OnceCell;
@@ -1009,7 +1009,7 @@ pub fn scan_folder_with_dedup_emit(
             if !e.file_type().is_dir() {
                 return !skip_root_agent_config(&name, e.depth());
             }
-            if is_excluded_dir_name(&name) {
+            if is_excluded_walk_entry(e) {
                 return false;
             }
             // Nested-vault boundary (2026-08-19 design §4): a descendant

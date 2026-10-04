@@ -8,16 +8,14 @@ use std::process::{Command, Stdio};
 #[test]
 fn dead_links_are_listed_on_stderr_without_failing_strict() {
     let moss_home = tempfile::tempdir().expect("tempdir for MOSS_HOME");
-    // A dot-named temp folder is hidden from the scan, so build in a plain subfolder.
-    let parent = tempfile::tempdir().expect("tempdir for the site");
-    let site = parent.path().join("site");
-    std::fs::create_dir(&site).unwrap();
+    let site = tempfile::tempdir().expect("tempdir for the site");
+    let site = site.path();
     std::fs::write(
         site.join("index.md"),
         "---\ntitle: Home\n---\n\n[one](/gone-one/) and [two](/gone-two/)\n",
     )
     .unwrap();
-    let site_dir = std::fs::canonicalize(&site).unwrap();
+    let site_dir = std::fs::canonicalize(site).unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
         .arg("build")

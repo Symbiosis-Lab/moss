@@ -46,6 +46,19 @@ pub fn is_excluded_dir_name(name: &str) -> bool {
     EXCLUDED_DIR_NAMES.iter().any(|&n| n.to_lowercase() == lower)
 }
 
+/// Whether a walk of the site folder should prune this entry: a directory whose
+/// name [`is_excluded_dir_name`] rejects, anywhere *below* the walk's root.
+///
+/// The root is never pruned. Its name is the author's choice, not an entry
+/// inside the site, and a site living in `.mysite` would otherwise have its
+/// whole walk emptied. Every `WalkDir` over the site folder asks this instead of
+/// calling the name rule directly, so the root exemption is written once.
+pub fn is_excluded_walk_entry(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() > 0
+        && entry.file_type().is_dir()
+        && is_excluded_dir_name(&entry.file_name().to_string_lossy())
+}
+
 /// Agent-instruction filenames that conventionally live at a project root.
 ///
 /// Every coding agent that reads a root-anchored instruction file uses one of
