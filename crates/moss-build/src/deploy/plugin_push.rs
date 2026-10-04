@@ -138,7 +138,7 @@ pub async fn run_plugin_deploy(
 
     // Between the build that found the removals and the gate that reads them.
     if accept_removals {
-        crate::system::build_records::records().accept_unexplained_removals(&folder_str);
+        crate::system::build_records::records().accept_all_pending_removals(&folder_str);
     }
 
     let ports = super::one_shot::HeadlessDeployPorts;

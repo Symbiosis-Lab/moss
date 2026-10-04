@@ -309,6 +309,67 @@ pub struct RemovedAddress {
     pub source: Option<String>,
 }
 
+/// Why an unexplained removal happened, with the data a message needs. The
+/// one classification: the refusal text, the dry run and the build advisory
+/// are all worded from it, and a caller that wants its own language renders
+/// the enum itself.
+#[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RemovalCause {
+    /// A file moss generates that this build no longer produces (or a record
+    /// too old to say more).
+    Generated,
+    /// The page that lived here is now served at `to` (served form), and
+    /// nothing answers at the old address.
+    Moved { to: String },
+    /// The source file is still in the folder but is no longer published.
+    StillInFolder { source: String },
+}
+
+/// A removal that would refuse a publish: unexplained and not accepted.
+#[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
+pub struct PendingRemoval {
+    /// The build output path, e.g. `feed.xml` or `a/index.html`. What
+    /// `accept_unexplained_removals` takes.
+    pub path: String,
+    /// The same, as a visitor addresses it: `/feed.xml`, `/a/`.
+    pub address: String,
+    pub cause: RemovalCause,
+}
+
+impl RemovedAddress {
+    /// The one place a removal is classified into a [`RemovalCause`].
+    pub fn cause(&self) -> RemovalCause {
+        match (&self.moved_to, &self.source) {
+            (Some(to), _) => RemovalCause::Moved { to: crate::build::served_path::served_address(to) },
+            (None, Some(source)) => RemovalCause::StillInFolder { source: source.clone() },
+            (None, None) => RemovalCause::Generated,
+        }
+    }
+
+    pub fn pending(&self) -> PendingRemoval {
+        PendingRemoval {
+            path: self.path.clone(),
+            address: crate::build::served_path::served_address(&self.path),
+            cause: self.cause(),
+        }
+    }
+}
+
+/// The removals that would refuse a publish: unexplained, and not in
+/// `accepted`.
+pub fn pending_removals(
+    removed: &[RemovedAddress],
+    accepted: Option<&std::collections::BTreeSet<String>>,
+) -> Vec<PendingRemoval> {
+    removed
+        .iter()
+        .filter(|r| r.reason == RemovalReason::Unexplained)
+        .filter(|r| !accepted.is_some_and(|set| set.contains(&r.path)))
+        .map(RemovedAddress::pending)
+        .collect()
+}
+
 /// The resting answer to "what will publishing do?".
 #[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Default)]
 pub struct ChangeSet {

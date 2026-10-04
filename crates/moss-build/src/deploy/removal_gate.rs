@@ -8,27 +8,11 @@
 //! (`manifest::change_set::removed_addresses`); this module owns what the gate
 //! does with it and how it reads.
 
-use std::collections::BTreeSet;
-
-use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
+use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalReason, RemovedAddress};
 use crate::build::served_path::served_address;
 
 /// How many addresses a message names before counting the rest.
 pub(crate) const LIST_CAP: usize = 20;
-
-/// The unexplained removals the author has not accepted. A set accepted once
-/// covers exactly the addresses in it: a new address asks again.
-pub(crate) fn unaccepted_unexplained(
-    removed: &[RemovedAddress],
-    accepted: Option<&BTreeSet<String>>,
-) -> Vec<RemovedAddress> {
-    removed
-        .iter()
-        .filter(|r| r.reason == RemovalReason::Unexplained)
-        .filter(|r| !accepted.is_some_and(|set| set.contains(&r.path)))
-        .cloned()
-        .collect()
-}
 
 /// One address and what became of it, in plain words.
 pub(crate) fn cause_line(r: &RemovedAddress) -> String {
@@ -39,16 +23,21 @@ pub(crate) fn cause_line(r: &RemovedAddress) -> String {
             None => format!("{at} is gone because you deleted its file."),
         };
     }
-    match (&r.moved_to, &r.source) {
-        (Some(to), _) => {
-            let to = served_address(to);
-            format!(
-                "{at} now lives at {to}. To keep the old link working, add \"{at}\" = \"{to}\" \
-                 under [redirects] in .moss/config.toml."
-            )
+    pending_line(&r.pending())
+}
+
+/// The words for a pending removal, built from its structured cause.
+pub(crate) fn pending_line(p: &PendingRemoval) -> String {
+    let at = &p.address;
+    match &p.cause {
+        RemovalCause::Moved { to } => format!(
+            "{at} now lives at {to}. To keep the old link working, add \"{at}\" = \"{to}\" \
+             under [redirects] in .moss/config.toml."
+        ),
+        RemovalCause::StillInFolder { source } => {
+            format!("{at} is still in your folder ({source}) but is no longer published.")
         }
-        (None, Some(src)) => format!("{at} is still in your folder ({src}) but is no longer published."),
-        (None, None) => format!("{at} is no longer produced by your site."),
+        RemovalCause::Generated => format!("{at} is no longer produced by your site."),
     }
 }
 
@@ -74,7 +63,7 @@ pub(crate) fn capped_lines_cut<T>(
 
 /// The refusal, which has to stand on its own: a caller with no accept button
 /// shows only this text.
-pub(crate) fn refusal_text(pending: &[RemovedAddress]) -> String {
+pub(crate) fn refusal_text(pending: &[PendingRemoval]) -> String {
     let (head, them) = if pending.len() == 1 {
         ("1 address your site has served would stop working, and you did not remove it".to_string(), "it")
     } else {
@@ -83,7 +72,7 @@ pub(crate) fn refusal_text(pending: &[RemovedAddress]) -> String {
     format!(
         "Nothing published — {head}:\n{}Either keep {} working (for a moved page, add the redirect shown), \
          or accept losing {them} and publish with `moss deploy --accept-removals`.",
-        capped_lines(pending, cause_line),
+        capped_lines(pending, pending_line),
         if pending.len() == 1 { "the address" } else { "the addresses" },
     )
 }
@@ -91,10 +80,6 @@ pub(crate) fn refusal_text(pending: &[RemovedAddress]) -> String {
 /// The refusal for `folder_path`, or `None` when the last build found nothing
 /// the author has not accepted.
 pub(crate) fn refusal_for(folder_path: &str) -> Option<String> {
-    let records = crate::system::build_records::records();
-    let pending = unaccepted_unexplained(
-        &records.removed_addresses(folder_path)?,
-        records.accepted_removals(folder_path).as_ref(),
-    );
+    let pending = crate::system::build_records::records().pending_removals(folder_path);
     (!pending.is_empty()).then(|| refusal_text(&pending))
 }

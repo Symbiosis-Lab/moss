@@ -776,7 +776,7 @@ pub async fn run_hosted_deploy(
     // Only after the build: the verdict this reads is the build's own, and
     // asking before it would refuse on the previous run's answer or on none.
     if overrides.accept_removals {
-        crate::system::build_records::records().accept_unexplained_removals(&folder_str);
+        crate::system::build_records::records().accept_all_pending_removals(&folder_str);
     }
     crate::deploy::refuse_publish(&folder_str)?;
 

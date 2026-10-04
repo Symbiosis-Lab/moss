@@ -53,6 +53,16 @@ impl<V: Clone> FolderSlot<V> {
         self.0.lock().expect("FolderSlot lock poisoned — a thread panicked while holding it").get(key).cloned()
     }
 
+    /// Read-modify-write under the one lock, for a value whose parts must
+    /// change together.
+    fn update<R>(&self, key: String, f: impl FnOnce(&mut V) -> R) -> R
+    where
+        V: Default,
+    {
+        let mut slots = self.0.lock().expect("FolderSlot lock poisoned — a thread panicked while holding it");
+        f(slots.entry(key).or_default())
+    }
+
     fn forget(&self, key: &str) {
         self.0.lock().expect("FolderSlot lock poisoned — a thread panicked while holding it").remove(key);
     }
@@ -96,12 +106,35 @@ pub struct BuildRecords {
     /// set this build would write is byte-identical to what is already
     /// staged — see `feeds::redirects::emit_redirect_table`.
     redirect_signature: FolderSlot<BTreeMap<String, String>>,
-    /// The public addresses the last seal of this folder found the last
-    /// publish serving and this build does not — see `refuse_publish`.
-    removed_addresses: FolderSlot<Vec<RemovedAddress>>,
-    /// The exact set of unexplained removals the author accepted losing. Kept
-    /// across rebuilds: the same set does not ask again, a new address does.
-    accepted_removals: FolderSlot<BTreeSet<String>>,
+    /// What the last seal found going offline, and what the author accepted
+    /// losing — see `refuse_publish`. One slot, because the two change
+    /// together: a seal prunes the accepted set against its own list, and an
+    /// acceptance reads the list it accepts from. Under separate locks an
+    /// acceptance could straddle a seal and accept an address the seal had
+    /// just stopped reporting.
+    removals: FolderSlot<FolderRemovals>,
+}
+
+/// See [`BuildRecords::removals`].
+#[derive(Clone, Default)]
+struct FolderRemovals {
+    /// `None` until a seal records a verdict, which is not "clean".
+    removed: Option<Vec<RemovedAddress>>,
+    /// Unexplained removals the author accepted. Kept across rebuilds while
+    /// they stay removals: the same set does not ask again, a new address
+    /// does, and one that stops being a removal leaves the set at the next
+    /// seal. Always a subset of `removed`'s unexplained paths.
+    accepted: BTreeSet<String>,
+}
+
+impl FolderRemovals {
+    fn unexplained(&self) -> impl Iterator<Item = &str> {
+        self.removed
+            .iter()
+            .flatten()
+            .filter(|r| r.reason == RemovalReason::Unexplained)
+            .map(|r| r.path.as_str())
+    }
 }
 
 impl BuildRecords {
@@ -175,34 +208,70 @@ impl BuildRecords {
     /// Always called, including with an empty `Vec`: a rebuild that restores
     /// the address must clear the refusal, and only an unconditional write
     /// does that.
+    ///
+    /// Also drops from the accepted set every address this seal does not
+    /// find as an unexplained removal (the author fixed it, or redirected
+    /// it), so one that goes offline again later is asked about again.
     pub fn record_removed_addresses(&self, folder_path: &str, removed: Vec<RemovedAddress>) {
-        self.removed_addresses.record(Self::key(folder_path), removed);
+        self.removals.update(Self::key(folder_path), |r| {
+            r.removed = Some(removed);
+            let current: BTreeSet<String> = r.unexplained().map(str::to_string).collect();
+            r.accepted.retain(|path| current.contains(path));
+        });
     }
 
     /// What the last seal of `folder_path` found going offline. `None` means
     /// no seal has recorded a verdict, which is not "clean".
     pub fn removed_addresses(&self, folder_path: &str) -> Option<Vec<RemovedAddress>> {
-        self.removed_addresses.get(&Self::key(folder_path))
+        self.removals.get(&Self::key(folder_path)).and_then(|r| r.removed)
     }
 
-    /// Accept losing exactly the unexplained addresses the last seal found,
-    /// replacing any earlier acceptance. Not a standing permission: an address
-    /// that only shows up in a later build is not in this set.
-    pub fn accept_unexplained_removals(&self, folder_path: &str) {
-        let accepted = self
-            .removed_addresses(folder_path)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|r| r.reason == RemovalReason::Unexplained)
-            .map(|r| r.path)
-            .collect();
-        self.accepted_removals.record(Self::key(folder_path), accepted);
+    /// Accept losing the addresses in `paths`: those of them that are
+    /// unexplained removals of the last seal, added to what was accepted
+    /// before. Nothing else is accepted, so a caller that showed a person a
+    /// list passes that list and an address a rebuild added since stays
+    /// pending. Returns the `paths` that were not accepted (not a current
+    /// unexplained removal), so a caller can tell the list went stale.
+    pub fn accept_unexplained_removals(&self, folder_path: &str, paths: &[String]) -> Vec<String> {
+        self.removals.update(Self::key(folder_path), |r| {
+            let current: BTreeSet<String> = r.unexplained().map(str::to_string).collect();
+            let (taken, ignored): (Vec<String>, Vec<String>) =
+                paths.iter().cloned().partition(|p| current.contains(p));
+            r.accepted.extend(taken);
+            ignored
+        })
     }
 
-    /// The set recorded by [`accept_unexplained_removals`](Self::accept_unexplained_removals);
-    /// `None` when the author has accepted nothing for this folder.
-    pub fn accepted_removals(&self, folder_path: &str) -> Option<BTreeSet<String>> {
-        self.accepted_removals.get(&Self::key(folder_path))
+    /// The removals that would refuse a publish of `folder_path` now.
+    pub fn pending_removals(&self, folder_path: &str) -> Vec<crate::build::manifest::change_set::PendingRemoval> {
+        let r = self.removals.get(&Self::key(folder_path)).unwrap_or_default();
+        crate::build::manifest::change_set::pending_removals(r.removed.as_deref().unwrap_or(&[]), Some(&r.accepted))
+    }
+
+    /// Accept every removal pending now: what `moss deploy --accept-removals`
+    /// does, in a single run where nothing can change between the build and
+    /// this call. Crate-private: a caller that shows a person a list must
+    /// accept that list with [`accept_unexplained_removals`](Self::accept_unexplained_removals).
+    pub(crate) fn accept_all_pending_removals(&self, folder_path: &str) {
+        self.removals.update(Self::key(folder_path), |r| {
+            let current: Vec<String> = r.unexplained().map(str::to_string).collect();
+            r.accepted.extend(current);
+        });
+    }
+
+    /// Accepted paths that the last seal does not report as unexplained
+    /// removals, read under the one lock: the invariant says there are none.
+    #[cfg(test)]
+    pub(crate) fn accepted_but_not_removed(&self, folder_path: &str) -> Vec<String> {
+        self.removals.update(Self::key(folder_path), |r| {
+            let current: BTreeSet<&str> = r.unexplained().collect();
+            r.accepted.iter().filter(|p| !current.contains(p.as_str())).cloned().collect()
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn accepted_removals(&self, folder_path: &str) -> BTreeSet<String> {
+        self.removals.get(&Self::key(folder_path)).unwrap_or_default().accepted
     }
 
     /// Drop the content-hash baseline for a folder moss is no longer

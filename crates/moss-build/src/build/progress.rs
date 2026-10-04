@@ -1287,11 +1287,9 @@ pub fn make_config_version_ahead_advisory(found: u32) -> Option<PipelineEvent> {
 pub fn make_removed_addresses_advisory(
     removed: &[crate::build::manifest::change_set::RemovedAddress],
 ) -> PipelineEvent {
-    use crate::build::manifest::change_set::RemovalReason;
-    let lost: Vec<String> = removed
-        .iter()
-        .filter(|r| r.reason == RemovalReason::Unexplained)
-        .map(|r| crate::build::served_path::served_address(&r.path))
+    let lost: Vec<String> = crate::build::manifest::change_set::pending_removals(removed, None)
+        .into_iter()
+        .map(|p| p.address)
         .collect();
     let shown = lost.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
     let list = match lost.len().saturating_sub(3) {

@@ -660,7 +660,7 @@ mod dry_run_tests {
         assert_eq!(fx.record_bytes(), before, "a dry run must not write a published record");
         let key = fx.dir.path().to_string_lossy().to_string();
         assert!(
-            crate::system::build_records::records().accepted_removals(&key).is_none(),
+            crate::system::build_records::records().accepted_removals(&key).is_empty(),
             "a dry run must not record an acceptance"
         );
     }
