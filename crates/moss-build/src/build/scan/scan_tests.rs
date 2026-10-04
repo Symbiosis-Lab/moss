@@ -1,4 +1,6 @@
 use super::*;
+use crate::build::cache::TransformRecord;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -2602,4 +2604,31 @@ fn a_scan_keeps_the_page_hashes_the_parse_cache_recorded_and_prunes_deleted_page
     let pruned = HashIndex::load(&index_path);
     assert!(pruned.entries.contains_key("index.md"));
     assert!(!pruned.entries.contains_key("posts/first.md"), "a deleted page's entry must still be pruned");
+}
+
+/// The scan records media metadata by merging into the source's record, which
+/// may also hold image or video outputs. When that record cannot be read the
+/// metadata goes unrecorded; the record is not replaced by a one-entry stub.
+#[test]
+fn media_metadata_is_not_written_over_a_record_that_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let objects = ObjectStore::new(dir.path().join("objects"));
+    let transform_cache = TransformCache::new(dir.path().join("transforms"), objects.clone());
+    let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+    transform_cache
+        .merge(hash, 10, crate::build::cache::RecordMode::Wait, |record| {
+            record.transforms.insert(
+                "image/webp".to_string(),
+                crate::build::cache::TransformEntry { oid: "w".into(), size: 1, params: serde_json::Value::Null },
+            );
+        })
+        .unwrap();
+    let record_file = transform_cache.root().join(&hash[..2]).join(&hash[2..4]).join(format!("{hash}.json"));
+    let before = fs::read(&record_file).unwrap();
+
+    crate::build::io_utils::fault::fail_reads(&record_file, libc::EACCES, 1);
+    let meta = CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: None, lqip_data_uri: None, is_animated: false };
+    write_cached_meta(&objects, &transform_cache, hash, 10, &meta);
+
+    assert_eq!(fs::read(&record_file).unwrap(), before);
 }

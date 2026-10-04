@@ -740,7 +740,7 @@ pub(crate) fn heal_cached_ladder(
 ) -> Result<LadderHeal, String> {
     let Some((members, oids, params)) = cached_ladder(transforms, source_oid, config) else {
         let has_ladder_keys = transforms
-            .get(source_oid)
+            .get_with(source_oid, crate::build::cache::RecordMode::Wait)
             .is_some_and(|record| record.transforms.keys().any(|k| k.starts_with(HLS_TRANSFORM_PREFIX)));
         return Ok(if has_ladder_keys { LadderHeal::NeedsDispatch } else { LadderHeal::Nothing });
     };

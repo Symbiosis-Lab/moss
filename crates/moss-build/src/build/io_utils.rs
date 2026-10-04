@@ -133,6 +133,16 @@ pub fn create_output_dir_all(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Read a transform record's text. The one read step of a record, so a test can
+/// make it fail the way a provider or a file system does ([`fault::fail_reads`]).
+pub(crate) fn read_record_file(path: &Path) -> io::Result<String> {
+    #[cfg(test)]
+    if let Some(e) = fault::read_failure(path) {
+        return Err(e);
+    }
+    fs::read_to_string(path)
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Refusal {
     /// A `create_dir_all` reaching through the refused directory.
@@ -162,6 +172,24 @@ pub(crate) mod fault {
 
     thread_local! {
         static REFUSED: RefCell<Option<(PathBuf, bool)>> = const { RefCell::new(None) };
+        static FAILING_READS: RefCell<Option<(PathBuf, i32, u32)>> = const { RefCell::new(None) };
+    }
+
+    /// On this thread, make the next `times` record reads of `path` fail with the
+    /// operating-system error `errno`.
+    pub(crate) fn fail_reads(path: &Path, errno: i32, times: u32) {
+        FAILING_READS.with(|f| *f.borrow_mut() = Some((path.to_path_buf(), errno, times)));
+    }
+
+    pub(super) fn read_failure(path: &Path) -> Option<std::io::Error> {
+        FAILING_READS.with(|f| {
+            let mut f = f.borrow_mut();
+            let (target, errno, left) = f.as_mut()?;
+            (path == target && *left > 0).then(|| {
+                *left -= 1;
+                std::io::Error::from_raw_os_error(*errno)
+            })
+        })
     }
 
     /// On this thread, refuse `dir` the way a provider refuses a dataless

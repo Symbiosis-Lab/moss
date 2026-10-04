@@ -513,7 +513,7 @@ pub(crate) fn should_skip(
     // recomputes fresh, same as before this cache existed.
     if !source_oid.is_empty() {
         if let Some(cached_oid) =
-            transforms.find_cached_output(source_oid, FORMAT_PROBE_TRANSFORM, &params)
+            transforms.find_cached_output(source_oid, FORMAT_PROBE_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
         {
             if let Some(blob_path) = transforms.objects().get_path(&cached_oid) {
                 if let Ok(bytes) = fs::read(&blob_path) {
@@ -549,22 +549,17 @@ pub(crate) fn should_skip(
     if !source_oid.is_empty() {
         if let Ok(json_bytes) = serde_json::to_vec(&verdict) {
             if let Ok(blob_oid) = transforms.objects().store_bytes(&json_bytes) {
-                let mut record = transforms.get(source_oid).unwrap_or(
-                    crate::build::cache::TransformRecord {
-                        source_oid: source_oid.to_string(),
-                        source_size: file_size,
-                        transforms: std::collections::HashMap::new(),
-                    },
-                );
-                record.transforms.insert(
-                    FORMAT_PROBE_TRANSFORM.to_string(),
-                    crate::build::cache::TransformEntry {
-                        oid: blob_oid,
-                        size: json_bytes.len() as u64,
-                        params,
-                    },
-                );
-                if let Err(e) = transforms.put(&record) {
+                let merged = transforms.merge(source_oid, file_size, crate::build::cache::RecordMode::Request, |record| {
+                    record.transforms.insert(
+                        FORMAT_PROBE_TRANSFORM.to_string(),
+                        crate::build::cache::TransformEntry {
+                            oid: blob_oid,
+                            size: json_bytes.len() as u64,
+                            params,
+                        },
+                    );
+                });
+                if let Err(e) = merged {
                     log::warn!("[format-probe] failed to write transform record: {}", e);
                 }
             }
@@ -996,7 +991,7 @@ pub(crate) fn convert_single_image(
     // that path — the user's file wins there. See `rung_collision_map`.
     rung_collisions: &HashMap<String, PathBuf>,
 ) -> ImageConversionOutcome {
-    use crate::build::cache::{TransformEntry, TransformRecord};
+    use crate::build::cache::TransformEntry;
 
     let filename = Path::new(relative_webp)
         .file_name()
@@ -1022,14 +1017,12 @@ pub(crate) fn convert_single_image(
     // params=Null) naturally miss against current params and fall through to
     // re-encode. The new record overwrites the sentinel on `transforms.put`.
     let output_webp = staging_dir.join(relative_webp);
-    if let Some(cached_oid) = transforms.find_cached_output(source_oid, "image/webp", &params) {
+    if let Some(cached) = transforms.find_cached_entry(source_oid, "image/webp", &params, crate::build::cache::RecordMode::Wait) {
+        let cached_oid = cached.oid;
         // Self-healing size guard (mirrors video.rs): compare cache record's
         // recorded size against actual blob size to catch iCloud-truncation
         // and similar short-write races.
-        let recorded_size = transforms
-            .get(source_oid)
-            .and_then(|r| r.transforms.get("image/webp").map(|e| e.size))
-            .unwrap_or(0);
+        let recorded_size = cached.size;
         let blob_path = objects.get_path(&cached_oid);
         let actual_size = blob_path
             .as_ref()
@@ -1323,20 +1316,17 @@ pub(crate) fn convert_single_image(
         };
     }
     // ---- Step 9: merge-preserve transform record ----
-    let mut record = transforms.get(source_oid).unwrap_or(TransformRecord {
-        source_oid: source_oid.to_string(),
-        source_size: original_size,
-        transforms: std::collections::HashMap::new(),
+    let merged = transforms.merge(source_oid, original_size, crate::build::cache::RecordMode::Wait, |record| {
+        record.transforms.insert(
+            "image/webp".to_string(),
+            TransformEntry {
+                oid: oid.clone(),
+                size: encoded_len,
+                params: params.clone(),
+            },
+        );
     });
-    record.transforms.insert(
-        "image/webp".to_string(),
-        TransformEntry {
-            oid: oid.clone(),
-            size: encoded_len,
-            params: params.clone(),
-        },
-    );
-    if let Err(e) = transforms.put(&record) {
+    if let Err(e) = merged {
         log::warn!("Failed to write transform record: {}", e);
     }
 

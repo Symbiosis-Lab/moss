@@ -42,7 +42,7 @@
 use std::path::Path;
 
 use crate::build::assets::paths::compute_binary_hash;
-use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, TransformRecord};
+use crate::build::cache::{ObjectStore, TransformCache, TransformEntry};
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::place_map;
@@ -256,17 +256,13 @@ pub fn emit(
         // module doc. A gazetteer edit that adds a place elsewhere changes
         // `hash` but never this record's key, so the lookup still hits.
         let cache_key = asset.cache_key(context);
-        let mut record = transforms.get(&cache_key).unwrap_or_else(|| TransformRecord {
-            source_oid: cache_key.clone(),
-            source_size: 0,
-            transforms: std::collections::HashMap::new(),
-        });
+        let cached_entry = transforms.get_with(&cache_key, crate::build::cache::RecordMode::Request).and_then(|record| record.transforms.get(&name).cloned());
 
         // A cached entry carries its own xxHash3 manifest digest (stashed in
         // `params` at render time below), so a hit needs neither a re-read
         // of the blob nor a re-hash of its bytes to register — see the
         // module doc.
-        let cached_xxh3 = record.transforms.get(&name).and_then(|entry| {
+        let cached_xxh3 = cached_entry.as_ref().and_then(|entry| {
             let generator_matches = entry.params.get("generator_version").and_then(serde_json::Value::as_u64)
                 == Some(u64::from(GENERATOR_VERSION));
             generator_matches.then(|| entry.params.get("xxh3")?.as_str().map(str::to_string)).flatten()
@@ -286,7 +282,7 @@ pub fn emit(
         }
 
         let cached = cached_xxh3.and_then(|xxh3| {
-            let oid = record.transforms.get(&name).map(|entry| entry.oid.clone())?;
+            let oid = cached_entry.as_ref().map(|entry| entry.oid.clone())?;
             objects.ready_blob(&oid).is_some().then_some((oid, xxh3))
         });
 
@@ -304,19 +300,20 @@ pub fn emit(
                 let oid = objects
                     .store_bytes(bytes)
                     .map_err(|e| format!("Failed to store place-map asset '{name}': {e}"))?;
-                record.transforms.insert(
-                    name.clone(),
-                    TransformEntry {
-                        oid,
-                        size: bytes.len() as u64,
-                        params: serde_json::json!({ "generator_version": GENERATOR_VERSION, "xxh3": xxh3 }),
-                    },
-                );
                 BuildContext::for_render(output_dir, pending)
                     .emit(&served, bytes, HashBucket::Files)
                     .map_err(|e| format!("Failed to emit place-map asset '{name}': {e}"))?;
                 transforms
-                    .put(&record)
+                    .merge(&cache_key, 0, crate::build::cache::RecordMode::Request, |record| {
+                        record.transforms.insert(
+                            name.clone(),
+                            TransformEntry {
+                                oid,
+                                size: bytes.len() as u64,
+                                params: serde_json::json!({ "generator_version": GENERATOR_VERSION, "xxh3": xxh3 }),
+                            },
+                        );
+                    })
                     .map_err(|e| format!("Failed to save place-map asset cache record for '{name}': {e}"))?;
                 rendered += 1;
             }

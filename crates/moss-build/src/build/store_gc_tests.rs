@@ -374,7 +374,7 @@ fn the_object_store_is_swept_only_when_no_build_holds_a_cache_lease() {
     let lease = crate::build::lifecycle::cache_write_lease(&mp);
     assert!(maybe_gc_cache(&mp).is_none(), "no sweep while a build holds its lease");
     assert!(objects.blob_path(&blob).exists(), "the blob the writer just stored survives");
-    assert!(transforms.get(&source).is_some(), "and so does its transform record");
+    assert!(transforms.get_with(&source, crate::build::cache::RecordMode::Request).is_some(), "and so does its transform record");
 
     drop(lease);
     assert!(maybe_gc_cache(&mp).is_some(), "with no lease open the sweep runs");

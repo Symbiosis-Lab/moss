@@ -15,12 +15,11 @@
 
 use crate::types::content::{FileInfo, MediaMetadata, ProjectStructure};
 use crate::build::stat::FileStat;
-use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry, TransformRecord};
+use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry};
 use super::classify::{classify_extension, is_excluded_dir_name, skip_root_agent_config, ScanBucket};
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;
 use std::cell::OnceCell;
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
@@ -394,7 +393,7 @@ pub(crate) fn read_cached_meta(
     content_hash: &str,
 ) -> Option<CachedMediaMeta> {
     let params = serde_json::json!({ "v": MEDIA_META_VERSION });
-    let meta_oid = transform_cache.find_cached_output(content_hash, MEDIA_META_TRANSFORM, &params)?;
+    let meta_oid = transform_cache.find_cached_output(content_hash, MEDIA_META_TRANSFORM, &params, crate::build::cache::RecordMode::Request)?;
     let blob_path = objects.get_path(&meta_oid)?;
     let raw = std::fs::read(blob_path).ok()?;
     serde_json::from_slice(&raw).ok()
@@ -448,16 +447,10 @@ pub(crate) fn write_cached_meta(
     // Merge with existing record to preserve other transforms (video/mp4, video/thumbnail).
     // Without this, writing media/meta would overwrite the entire TransformRecord,
     // destroying previously cached video conversion results.
-    let mut record = transform_cache
-        .get(content_hash)
-        .unwrap_or_else(|| TransformRecord {
-            source_oid: content_hash.to_string(),
-            source_size,
-            transforms: HashMap::new(),
-        });
-    record.transforms.insert(MEDIA_META_TRANSFORM.to_string(), new_entry);
-
-    if let Err(e) = transform_cache.put(&record) {
+    let merged = transform_cache.merge(content_hash, source_size, crate::build::cache::RecordMode::Request, |record| {
+        record.transforms.insert(MEDIA_META_TRANSFORM.to_string(), new_entry);
+    });
+    if let Err(e) = merged {
         log::warn!("Failed to write media meta transform record: {}", e);
     }
 }

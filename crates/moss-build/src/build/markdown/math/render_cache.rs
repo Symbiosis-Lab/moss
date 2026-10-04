@@ -78,7 +78,7 @@ pub fn set_disk_cache(cache: crate::build::cache::TransformCache) {
 pub(super) fn disk_cache_lookup(key: &str) -> Option<TypesetMath> {
     let cache = DISK_CACHE.lock().ok()?.clone()?;
     let params = serde_json::json!({ "v": RENDER_CACHE_VERSION });
-    let oid = cache.find_cached_output(key, RENDER_CACHE_TRANSFORM, &params)?;
+    let oid = cache.find_cached_output(key, RENDER_CACHE_TRANSFORM, &params, crate::build::cache::RecordMode::Request)?;
     let blob_path = cache.objects().get_path(&oid)?;
     let bytes = std::fs::read(blob_path).ok()?;
     serde_json::from_slice(&bytes).ok()
@@ -98,22 +98,17 @@ pub(super) fn disk_cache_store(key: &str, value: &TypesetMath) {
         return;
     };
     let params = serde_json::json!({ "v": RENDER_CACHE_VERSION });
-    let mut record = cache
-        .get(key)
-        .unwrap_or_else(|| crate::build::cache::TransformRecord {
-            source_oid: key.to_string(),
-            source_size: bytes.len() as u64,
-            transforms: std::collections::HashMap::new(),
-        });
-    record.transforms.insert(
-        RENDER_CACHE_TRANSFORM.to_string(),
-        crate::build::cache::TransformEntry {
-            oid: blob_oid,
-            size: bytes.len() as u64,
-            params,
-        },
-    );
-    if let Err(e) = cache.put(&record) {
+    let merged = cache.merge(key, bytes.len() as u64, crate::build::cache::RecordMode::Request, |record| {
+        record.transforms.insert(
+            RENDER_CACHE_TRANSFORM.to_string(),
+            crate::build::cache::TransformEntry {
+                oid: blob_oid,
+                size: bytes.len() as u64,
+                params,
+            },
+        );
+    });
+    if let Err(e) = merged {
         log::warn!("[math-render] failed to write render-cache record: {e}");
     }
 }

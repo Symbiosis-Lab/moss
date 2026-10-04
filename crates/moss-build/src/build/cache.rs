@@ -36,6 +36,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod records;
+pub use records::{Merged, RecordMode};
+
 /// Size of the read buffer used by [`ObjectStore::hash_file`].
 ///
 /// 64 KB is a good trade-off between syscall overhead and memory use.
@@ -608,13 +611,12 @@ impl TransformCache {
         &self.objects
     }
 
-    /// Read and deserialize a transform record for the given source OID.
-    ///
-    /// Returns `None` if the record file doesn't exist or can't be parsed.
-    pub fn get(&self, source_oid: &str) -> Option<TransformRecord> {
-        let path = self.record_path(source_oid);
-        let data = fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&data).ok()
+    /// Read and deserialize a transform record for the given source OID: `None` if it
+    /// is absent, unreadable or unparsable. Writers that merge into a record use
+    /// [`merge`](Self::merge), which tells those apart. There is no default mode:
+    /// a lookup that guards an encode must say [`RecordMode::Wait`].
+    pub fn get_with(&self, source_oid: &str, mode: RecordMode) -> Option<TransformRecord> {
+        self.read(source_oid, mode).present()
     }
 
     /// Write a transform record atomically.
@@ -709,9 +711,22 @@ impl TransformCache {
         source_oid: &str,
         transform: &str,
         current_params: &serde_json::Value,
+        mode: RecordMode,
     ) -> Option<String> {
+        self.find_cached_entry(source_oid, transform, current_params, mode).map(|entry| entry.oid)
+    }
+
+    /// [`find_cached_output`](Self::find_cached_output), returning the whole entry
+    /// so a caller that wants its recorded size does not read the record again.
+    pub fn find_cached_entry(
+        &self,
+        source_oid: &str,
+        transform: &str,
+        current_params: &serde_json::Value,
+        mode: RecordMode,
+    ) -> Option<TransformEntry> {
         // 1. Record exists?
-        let record = self.get(source_oid)?;
+        let record = self.get_with(source_oid, mode)?;
 
         // 2. Transform entry exists?
         let entry = record.transforms.get(transform)?;
@@ -724,7 +739,7 @@ impl TransformCache {
         // 4. Output blob usable, or arriving?
         self.objects.ready_blob(&entry.oid)?;
 
-        Some(entry.oid.clone())
+        Some(entry.clone())
     }
 
     /// Compute the path where a transform record is stored on disk, under the

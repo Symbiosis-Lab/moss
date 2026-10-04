@@ -483,7 +483,7 @@ pub(crate) fn sized_raster_oid_for_original(
         return produce_sized_raster(&job, objects, transforms);
     }
     // ---- Cache hit? (checked BEFORE reading the source at all) ----
-    let cached = || transforms.find_cached_output(source_oid, SIZED_RASTER_TRANSFORM, &params);
+    let cached = || transforms.find_cached_output(source_oid, SIZED_RASTER_TRANSFORM, &params, crate::build::cache::RecordMode::Wait);
     if let Some(hit) = cached() {
         return Some(hit);
     }
@@ -517,7 +517,7 @@ fn produce_sized_raster(
     objects: &crate::build::cache::ObjectStore,
     transforms: &crate::build::cache::TransformCache,
 ) -> Option<String> {
-    use crate::build::cache::{TransformEntry, TransformRecord};
+    use crate::build::cache::TransformEntry;
 
     let SizedRasterJob { source_file, source_oid, ext, fallback_edge, quality, params } = *job;
     let is_png = ext == "png";
@@ -635,20 +635,18 @@ fn produce_sized_raster(
     // When keep_source, out_oid == source_oid so the cached decision resolves to
     // a verbatim link on the next build without re-encoding.
     if !source_oid.is_empty() {
-        let mut record = transforms.get(source_oid).unwrap_or(TransformRecord {
-            source_oid: source_oid.to_string(),
-            source_size: fs::metadata(source_file).map(|m| m.len()).unwrap_or(0),
-            transforms: std::collections::HashMap::new(),
+        let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
+        let merged = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, |record| {
+            record.transforms.insert(
+                SIZED_RASTER_TRANSFORM.to_string(),
+                TransformEntry {
+                    oid: out_oid.clone(),
+                    size: out_size,
+                    params: params.clone(),
+                },
+            );
         });
-        record.transforms.insert(
-            SIZED_RASTER_TRANSFORM.to_string(),
-            TransformEntry {
-                oid: out_oid.clone(),
-                size: out_size,
-                params: params.clone(),
-            },
-        );
-        if let Err(e) = transforms.put(&record) {
+        if let Err(e) = merged {
             log::warn!("[sized-raster] failed to write transform record: {}", e);
         }
     }

@@ -428,7 +428,7 @@ fn cached_slot_record(
 ) -> Option<SlotInjectRecord> {
     let (source_oid, params) = slot_cache_key(html, page_path, slots);
     transforms
-        .find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params)
+        .find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
         .and_then(|record_oid| read_slot_inject_record(objects, &record_oid))
 }
 
@@ -903,7 +903,7 @@ fn slot_inject_record_residual_round_trips_through_the_cache() {
     write_slot_inject_record(&objects, &transforms, "xxh3:deadbeef", 4, &params, &record);
 
     let record_oid = transforms
-        .find_cached_output("xxh3:deadbeef", SLOT_INJECT_TRANSFORM, &params)
+        .find_cached_output("xxh3:deadbeef", SLOT_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
         .expect("cache hit");
     let read_back = read_slot_inject_record(&objects, &record_oid).expect("record readable");
     assert_eq!(read_back.residual, vec!["footer-end".to_string()]);

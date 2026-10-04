@@ -60,23 +60,6 @@ pub(crate) fn acquire_encode_permit<'a>(
     }
 }
 
-/// A source's existing transform record, or a fresh empty one keyed to
-/// `source_file`'s current size. Shared load step for both `record_transforms`
-/// and `record_ladder` below, which differ only in what they do to
-/// `record.transforms` before writing it back.
-fn load_transform_record(
-    transforms: &crate::build::cache::TransformCache,
-    source_oid: &str,
-    source_file: &Path,
-) -> crate::build::cache::TransformRecord {
-    use crate::build::cache::TransformRecord;
-    transforms.get(source_oid).unwrap_or_else(|| TransformRecord {
-        source_oid: source_oid.to_string(),
-        source_size: fs::metadata(source_file).map(|m| m.len()).unwrap_or(0),
-        transforms: std::collections::HashMap::new(),
-    })
-}
-
 /// Merge transform entries into a source's record, preserving everything else
 /// already in it — scan metadata, and outputs written by an earlier step of the
 /// same conversion.
@@ -84,13 +67,11 @@ fn mutate_transform_record(
     transforms: &crate::build::cache::TransformCache,
     source_oid: &str,
     source_file: &Path,
-    mutate: impl FnOnce(&mut crate::build::cache::TransformRecord) -> bool,
+    mutate: impl FnOnce(&mut crate::build::cache::TransformRecord),
 ) {
-    let mut record = load_transform_record(transforms, source_oid, source_file);
-    if mutate(&mut record) {
-        if let Err(e) = transforms.put(&record) {
-            log::warn!("Failed to write transform record: {}", e);
-        }
+    let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
+    if let Err(e) = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, mutate) {
+        log::warn!("Failed to write transform record: {}", e);
     }
 }
 
@@ -102,7 +83,6 @@ fn record_transforms(
 ) {
     mutate_transform_record(transforms, source_oid, source_file, |record| {
         record.transforms.extend(entries);
-        true
     });
 }
 
@@ -132,7 +112,6 @@ pub(crate) fn record_ladder(
     mutate_transform_record(transforms, source_oid, source_file, |record| {
         record.transforms.retain(|k, _| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX));
         record.transforms.extend(entries);
-        true
     });
 }
 
@@ -160,7 +139,7 @@ fn clear_stale_ladder(
     source_oid: &str,
     source_file: &Path,
 ) {
-    let Some(record) = transforms.get(source_oid) else {
+    let Some(record) = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait) else {
         return;
     };
     if !record.transforms.keys().any(|k| k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX)) {
@@ -168,7 +147,6 @@ fn clear_stale_ladder(
     }
     mutate_transform_record(transforms, source_oid, source_file, |record| {
         record.transforms.retain(|k, _| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX));
-        true
     });
 }
 
@@ -416,8 +394,8 @@ pub(crate) fn convert_single_video(
     }
 
     // Step 1: Check transform cache for both MP4 and thumbnail
-    let cached_mp4 = transforms.find_cached_output(source_oid, "video/mp4", mp4_params);
-    let cached_thumb = transforms.find_cached_output(source_oid, "video/thumbnail", thumb_params);
+    let cached_mp4 = transforms.find_cached_output(source_oid, "video/mp4", mp4_params, crate::build::cache::RecordMode::Wait);
+    let cached_thumb = transforms.find_cached_output(source_oid, "video/thumbnail", thumb_params, crate::build::cache::RecordMode::Wait);
 
     // Hoisted above Step 2 as well as Step 4: the poster-only self-heal
     // branch needs it to record a fresh thumbnail entry exactly the way a
@@ -2356,7 +2334,7 @@ pub(crate) mod tests {
 
         clear_stale_ladder(&transforms, source_oid, &source);
 
-        let after = transforms.get(source_oid).expect("the record itself must survive");
+        let after = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request).expect("the record itself must survive");
         assert!(
             after.transforms.keys().all(|k| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX)),
             "every video/hls/ key must be gone: {:?}",
@@ -2389,7 +2367,7 @@ pub(crate) mod tests {
         let untouched_oid = "oid-never-had-a-record";
         clear_stale_ladder(&transforms, untouched_oid, &source);
         assert!(
-            transforms.get(untouched_oid).is_none(),
+            transforms.get_with(untouched_oid, crate::build::cache::RecordMode::Request).is_none(),
             "a source with no record at all must still have none"
         );
 
@@ -2412,7 +2390,7 @@ pub(crate) mod tests {
         clear_stale_ladder(&transforms, mp4_only_oid, &source);
 
         assert_eq!(
-            transforms.get(mp4_only_oid).expect("the record must still be there"),
+            transforms.get_with(mp4_only_oid, crate::build::cache::RecordMode::Request).expect("the record must still be there"),
             seeded,
             "a record with no video/hls/ keys must come back exactly as seeded"
         );
@@ -2791,7 +2769,7 @@ pub(crate) mod tests {
         let objects = ObjectStore::for_site(&paths);
         let transforms = TransformCache::for_site(&paths);
         let source_oid = ObjectStore::hash_file(&vault.join(item)).unwrap();
-        let mut record = transforms.get(&source_oid).expect("seed_cached_video just wrote this record");
+        let mut record = transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).expect("seed_cached_video just wrote this record");
 
         let config = crate::build::media::ffmpeg::VideoCompressionConfig::default();
         let rungs = asset_paths::video_ladder_rungs_by_count(rung_count)
@@ -2886,7 +2864,7 @@ pub(crate) mod tests {
         let objects = ObjectStore::for_site(&paths);
         let transforms = TransformCache::for_site(&paths);
         let source_oid = ObjectStore::hash_file(&vault.join(item)).unwrap();
-        let mut record = transforms.get(&source_oid).expect("seed_cached_video just wrote this record");
+        let mut record = transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).expect("seed_cached_video just wrote this record");
 
         let config = crate::build::media::ffmpeg::VideoCompressionConfig::default();
         let params = crate::build::media::hls::legacy_form_params(&config, shape);

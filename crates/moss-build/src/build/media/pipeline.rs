@@ -392,15 +392,10 @@ fn write_spa_inject_record(
         size: json_bytes.len() as u64,
         params: params.clone(),
     };
-    let mut rec = transform_cache
-        .get(source_oid)
-        .unwrap_or_else(|| crate::build::cache::TransformRecord {
-            source_oid: source_oid.to_string(),
-            source_size,
-            transforms: std::collections::HashMap::new(),
-        });
-    rec.transforms.insert(SPA_INJECT_TRANSFORM.to_string(), entry);
-    if let Err(e) = transform_cache.put(&rec) {
+    let merged = transform_cache.merge(source_oid, source_size, crate::build::cache::RecordMode::Request, |rec| {
+        rec.transforms.insert(SPA_INJECT_TRANSFORM.to_string(), entry);
+    });
+    if let Err(e) = merged {
         log::warn!("Failed to write spa/inject transform record: {}", e);
     }
 }
@@ -442,7 +437,7 @@ fn maybe_inject_spa_cached(
     let params = spa_inject_params(defaults);
 
     if let Some(record_oid) =
-        transform_cache.find_cached_output(source_oid, SPA_INJECT_TRANSFORM, &params)
+        transform_cache.find_cached_output(source_oid, SPA_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
     {
         if let Some(record) = read_spa_inject_record(object_store, &record_oid) {
             match record.content_oid {

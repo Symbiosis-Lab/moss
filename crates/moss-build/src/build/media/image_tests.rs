@@ -345,7 +345,7 @@ fn convert_single_image_happy_path() {
     );
 
     // Transform record has an image/webp entry with that oid.
-    let record = h.transforms.get(&source_oid).unwrap();
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     let entry = record.transforms.get("image/webp").unwrap();
     assert_eq!(entry.oid, oid);
     assert_eq!(entry.size, outcome.webp_size);
@@ -475,7 +475,7 @@ fn rung_encode_produces_exact_width_ladder_files() {
     // Rungs are cached under their own transform kinds (mirrors the
     // "image/sized-raster" idiom) so warm rebuilds link instead of
     // re-encoding.
-    let record = h.transforms.get(&source_oid).unwrap();
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     assert!(record.transforms.contains_key("image/webp-w800"));
     assert!(record.transforms.contains_key("image/webp-w1600"));
 
@@ -1184,7 +1184,7 @@ fn convert_single_image_caches_placeholder_meta_under_stat_key() {
     // media/meta is now cached under the stat key with real placeholder data.
     let record = h
         .transforms
-        .get(stat_key)
+        .get_with(stat_key, crate::build::cache::RecordMode::Request)
         .expect("media/meta should be cached under the stat key");
     let entry = record
         .transforms
@@ -1328,7 +1328,7 @@ fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
     );
 
     // Sentinel record overwritten with a real entry.
-    let record = h.transforms.get(&source_oid).unwrap();
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     let entry = record.transforms.get("image/webp").unwrap();
     assert!(!entry.oid.is_empty(), "sentinel oid must be replaced");
     assert_ne!(entry.params, serde_json::Value::Null);
@@ -1376,7 +1376,7 @@ fn convert_single_image_writes_webp_even_when_larger_than_source() {
         "WebP file must land on disk"
     );
 
-    let record = h.transforms.get(&source_oid).unwrap();
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     let entry = record.transforms.get("image/webp").unwrap();
     assert!(
         !entry.oid.is_empty(),
@@ -2108,7 +2108,7 @@ fn format_probe_cache_recomputes_on_corrupt_blob() {
         "premise: populates the format-probe cache entry"
     );
 
-    let record = h.transforms.get(&source_oid).expect("cache entry must exist");
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).expect("cache entry must exist");
     let entry = record
         .transforms
         .get(FORMAT_PROBE_TRANSFORM)
@@ -2226,7 +2226,7 @@ fn format_probe_cache_ignores_empty_source_oid() {
          jpeg must not inherit the CMYK verdict from a shared \"\" cache key"
     );
     assert!(
-        h.transforms.get("").is_none(),
+        h.transforms.get_with("", crate::build::cache::RecordMode::Request).is_none(),
         "an empty source_oid must never be written to the transform cache"
     );
 }
@@ -2289,7 +2289,7 @@ fn prime_cached_transform(
     webp_bytes: &[u8],
 ) -> String {
     let blob_oid = objects.store_bytes(webp_bytes).expect("test blob store");
-    let mut record = transforms.get(source_oid).unwrap_or(crate::build::cache::TransformRecord {
+    let mut record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request).unwrap_or(crate::build::cache::TransformRecord {
         source_oid: source_oid.to_string(),
         source_size: 0,
         transforms: HashMap::new(),
@@ -5959,7 +5959,7 @@ fn an_unreadable_source_is_never_cached_as_not_an_image() {
          still register the variant promise, which NotAnImage would skip"
     );
     assert!(
-        h.transforms.get(oid).is_none(),
+        h.transforms.get_with(oid, crate::build::cache::RecordMode::Request).is_none(),
         "nothing about content nobody read may reach the cache: the verdict is \
          keyed by content oid, and an evicted file's content never changes, so \
          a cached verdict here would outlive the eviction forever"
@@ -6016,7 +6016,7 @@ fn a_readable_non_image_is_still_cached() {
         Some(SkipReason::NotAnImage)
     );
     assert!(
-        h.transforms.get(oid).is_some(),
+        h.transforms.get_with(oid, crate::build::cache::RecordMode::Request).is_some(),
         "a verdict read from real bytes is still worth keeping"
     );
 }
@@ -6724,8 +6724,8 @@ async fn the_worker_takes_the_hash_the_index_holds_for_an_unchanged_file_instead
 
         vault.dispatch(items.clone(), BuildServices::headless()).await;
 
-        assert_eq!(transforms.get(&planted).is_some(), trusted, "trusted={trusted}: the worker's hash came from the wrong place");
-        assert!(transforms.get(&real).is_some() != trusted, "trusted={trusted}: the file's own hash is used exactly when the index cannot vouch");
+        assert_eq!(transforms.get_with(&planted, crate::build::cache::RecordMode::Request).is_some(), trusted, "trusted={trusted}: the worker's hash came from the wrong place");
+        assert!(transforms.get_with(&real, crate::build::cache::RecordMode::Request).is_some() != trusted, "trusted={trusted}: the file's own hash is used exactly when the index cannot vouch");
     }
 }
 

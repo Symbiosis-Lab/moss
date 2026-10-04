@@ -144,7 +144,7 @@ pub(crate) fn encode_rungs(
     decoded: Option<&image::DynamicImage>,
     base_webp_len: u64,
 ) -> Vec<RungOutcome> {
-    use crate::build::cache::{TransformEntry, TransformRecord};
+    use crate::build::cache::TransformEntry;
     use moss_core::asset_paths;
 
     // Oriented dims: from the decoded image when we have it (post-EXIF by
@@ -232,7 +232,7 @@ pub(crate) fn encode_rungs(
         };
 
         // ---- Warm path: reuse the cached rung blob. ----
-        if let Some(cached) = transforms.find_cached_output(source_oid, &kind, &params) {
+        if let Some(cached) = transforms.find_cached_output(source_oid, &kind, &params, crate::build::cache::RecordMode::Wait) {
             // Cheap 0-byte guard (iCloud-eviction class); a bad blob falls
             // through to re-encode, self-healing the cache entry. The stat's
             // length doubles as the anomaly-log input — no extra I/O.
@@ -327,20 +327,18 @@ pub(crate) fn encode_rungs(
         }
         // Merge-preserve transform record (same read-modify-write idiom as
         // the base and the sized-raster pass).
-        let mut record = transforms.get(source_oid).unwrap_or(TransformRecord {
-            source_oid: source_oid.to_string(),
-            source_size: fs::metadata(source_file).map(|m| m.len()).unwrap_or(0),
-            transforms: std::collections::HashMap::new(),
+        let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
+        let merged = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, |record| {
+            record.transforms.insert(
+                kind,
+                TransformEntry {
+                    oid: oid.clone(),
+                    size: webp_bytes.len() as u64,
+                    params: params.clone(),
+                },
+            );
         });
-        record.transforms.insert(
-            kind,
-            TransformEntry {
-                oid: oid.clone(),
-                size: webp_bytes.len() as u64,
-                params: params.clone(),
-            },
-        );
-        if let Err(e) = transforms.put(&record) {
+        if let Err(e) = merged {
             log::warn!("[image] failed to write rung transform record: {}", e);
         }
         outcomes.push(RungOutcome { width: rung, oid: Some(oid), error: None });

@@ -2067,7 +2067,7 @@ async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
         crate::build::cache::ObjectStore::new(mp.cache_objects()),
     );
     let first_source = crate::build::cache::ObjectStore::hash_file(&vault.join("videos/first.mov")).unwrap();
-    let first = transforms.get(&first_source).expect("the first video's encode was recorded");
+    let first = transforms.get_with(&first_source, crate::build::cache::RecordMode::Request).expect("the first video's encode was recorded");
     let mp4 = first.transforms["video/mp4"].oid.clone();
     // Big enough to be worth sweeping.
     for i in 0..2_048 {
@@ -2076,7 +2076,7 @@ async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
 
     crate::build::collect_build_store(&mp, "none", &std::collections::HashSet::new());
 
-    assert!(transforms.get(&first_source).is_some(), "the finished video's transform record survives the sweep");
+    assert!(transforms.get_with(&first_source, crate::build::cache::RecordMode::Request).is_some(), "the finished video's transform record survives the sweep");
     assert!(objects.blob_path(&mp4).exists(), "and so does its mp4 blob");
     std::fs::write(temp.path().join("release"), b"go").unwrap();
     for _ in 0..500 {

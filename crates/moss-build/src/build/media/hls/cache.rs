@@ -131,7 +131,7 @@ pub(super) fn cached_ladder(
     source_oid: &str,
     config: &VideoCompressionConfig,
 ) -> Option<(Vec<String>, Vec<String>, serde_json::Value)> {
-    let record = transforms.get(source_oid)?;
+    let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait)?;
     // `effective` below stands in for the table slice `record_table_rungs`
     // would otherwise return; only its length matters here.
     let rung_count = record_table_rungs(&record)?.len();
@@ -151,7 +151,7 @@ pub(super) fn cached_ladder(
     let params = ladder_params(config, &effective, source);
     let oids: Option<Vec<String>> = members
         .iter()
-        .map(|name| transforms.find_cached_output(source_oid, &transform_name(name), &params))
+        .map(|name| transforms.find_cached_output(source_oid, &transform_name(name), &params, crate::build::cache::RecordMode::Wait))
         .collect();
     Some((members, oids?, params))
 }
@@ -185,7 +185,7 @@ pub(super) fn legacy_cached_ladder(
     config: &VideoCompressionConfig,
     probe: &SourceVideo,
 ) -> Option<(Vec<String>, Vec<String>, serde_json::Value)> {
-    let record = transforms.get(source_oid)?;
+    let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait)?;
     let table_rungs = record_table_rungs(&record)?;
     // Unconditionally the full table, not `super::ladder_members`: every
     // record old enough to land here predates the fix that lets a silent
