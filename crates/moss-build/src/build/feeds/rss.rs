@@ -10,6 +10,23 @@ use crate::build::types::ParsedDocument;
 use moss_core::asset_snapshot::AssetSnapshot;
 use std::collections::HashSet;
 
+/// Every path the site-root feed is written to, canonical path first.
+///
+/// The feed was published at `feed.xml` before it moved to `rss.xml`. Feed
+/// readers and aggregators store the URL they subscribed to, so the old path
+/// must keep resolving; a future rename of the feed must add an alias here the
+/// same way. Only `rss.xml` is linked from pages or listed in the sitemap.
+/// A `feed.xml` the site folder provides itself is the author's and is left
+/// alone, regardless of write order.
+pub fn site_feed_paths(site_root: &std::path::Path) -> Vec<crate::build::served_path::ServedPath> {
+    use crate::build::served_path::ServedPath;
+    let mut paths = vec![ServedPath::for_rss("").unwrap()];
+    if !site_root.join("feed.xml").exists() {
+        paths.push(ServedPath::for_legacy_feed());
+    }
+    paths
+}
+
 /// True when the document has an absolute `external_url:` in its frontmatter —
 /// a linkblog page whose canonical home is the outlet, not the local site.
 /// Thin wrapper over the shared `scan::page_map::external_url` helper.

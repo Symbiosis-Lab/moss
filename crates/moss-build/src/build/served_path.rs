@@ -312,6 +312,12 @@ impl ServedPath {
         Ok(ServedPath(inner))
     }
 
+    /// The feed's former address, kept as a byte-identical copy of `rss.xml`.
+    /// Use `feeds::rss::site_feed_paths` to write it; never link to it.
+    pub fn for_legacy_feed() -> Self {
+        ServedPath("feed.xml".to_string())
+    }
+
     /// LLMs.txt. Path is fixed.
     pub fn for_llms_txt() -> Self {
         ServedPath("llms.txt".to_string())

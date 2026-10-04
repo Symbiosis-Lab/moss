@@ -71,7 +71,7 @@ footer: true
 ---
 ```
 
-Set `[site] rss_footer = true` in `.moss/config.toml` to add an RSS feed link to the left footer. It only appears once your site actually has a feed — a preview or otherwise undeployed build resolves no site URL and writes no `rss.xml`, so the toggle alone never links to a feed that isn't there.
+Set `[site] rss_footer = true` in `.moss/config.toml` to add an RSS feed link to the left footer. It only appears once your site actually has a feed — a preview or otherwise undeployed build resolves no site URL and writes no `rss.xml`, so the toggle alone never links to a feed that isn't there. The feed lives at `/rss.xml`; the same feed is also served at `/feed.xml`, its address before it moved, so existing subscribers keep working.
 
 A footer with nothing to show — no `footer.md`, no `footer: true` pages, no feed link, no subscribe form — doesn't render at all: no empty band, no divider, nothing between your content and moss's own colophon line at the foot of the page.
 

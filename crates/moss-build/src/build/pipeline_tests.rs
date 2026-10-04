@@ -6437,6 +6437,30 @@ fn build_test_at_site_url(folder_path: &str) -> Result<Vec<String>, String> {
     build_test_sealed_at(folder_path, Some("https://example.com"))
 }
 
+/// A site that keeps its own `feed.xml` (a podcast feed, one carried over from
+/// an imported site) keeps it: the alias for the feed's old address is only
+/// written where nothing else claims the path. Checked on a first build and on
+/// a rebuild, since the folder's files are copied in after the feed is written.
+#[test]
+fn a_feed_xml_the_folder_provides_is_never_replaced_by_the_alias() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("feed.xml"), "<rss>the author's own feed</rss>").unwrap();
+    let staging = test_dir.join(".moss/build.nosync/staging");
+
+    for build in ["first build", "rebuild"] {
+        build_test_at_site_url(folder_path).expect(build);
+        assert_eq!(
+            fs::read_to_string(staging.join("feed.xml")).unwrap(),
+            "<rss>the author's own feed</rss>",
+            "{build}: the folder's own feed.xml must win"
+        );
+        let generated = fs::read_to_string(staging.join("rss.xml")).unwrap();
+        assert!(generated.contains("<atom:link"), "{build}: rss.xml is still the generated feed: {generated}");
+    }
+}
+
 /// Pages whose source files disappear from disk without moss being told — a
 /// `git pull` bringing in someone else's deletion — must leave every
 /// whole-site listing on the very next build, not just stop being rendered.

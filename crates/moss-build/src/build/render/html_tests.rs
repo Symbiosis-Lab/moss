@@ -9442,6 +9442,63 @@ mod rss_footer_feed_gate_tests {
     }
 }
 
+/// A deployed build also serves the feed at its old address, `feed.xml`,
+/// with the same bytes, and an undeployed build writes neither.
+mod legacy_feed_alias_tests {
+    use crate::build::render::blocking::SiteConfig;
+    use std::fs;
+
+    fn build(site_url_override: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "moss_feed_alias_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+        let site_config = SiteConfig {
+            site_url_override: site_url_override.map(str::to_string),
+            ..SiteConfig::default()
+        };
+        super::render_for_build(&dir, site_config, true)
+    }
+
+    #[test]
+    fn a_deployed_build_serves_feed_xml_with_the_bytes_of_rss_xml() {
+        let out = build(Some("https://example.com"));
+        let rss = fs::read(out.join("rss.xml")).expect("rss.xml should exist");
+        let legacy = fs::read(out.join("feed.xml")).expect("feed.xml should exist");
+        assert_eq!(rss, legacy);
+    }
+
+    /// The folder's own files are copied in after this phase, so the alias
+    /// must not rest on that ordering: it is never written over a path the
+    /// folder provides.
+    #[test]
+    fn the_alias_is_not_written_where_the_folder_has_its_own_feed_xml() {
+        let dir = std::env::temp_dir().join(format!(
+            "moss_feed_alias_own_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+        fs::write(dir.join("feed.xml"), "<rss>own</rss>").unwrap();
+        let site_config = SiteConfig {
+            site_url_override: Some("https://example.com".to_string()),
+            ..SiteConfig::default()
+        };
+        let out = super::render_for_build(&dir, site_config, true);
+        assert!(out.join("rss.xml").exists());
+        assert!(!out.join("feed.xml").exists());
+    }
+
+    #[test]
+    fn an_undeployed_build_writes_neither_feed_path() {
+        let out = build(None);
+        assert!(!out.join("rss.xml").exists());
+        assert!(!out.join("feed.xml").exists());
+    }
+}
+
 /// End-to-end proof that a downloaded og:image becomes a real local cover
 /// (`build::media::remote_cover`), rendered exactly like an internal page's
 /// cover — never the remote URL — on the SAME build that introduces the

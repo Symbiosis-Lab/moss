@@ -2726,29 +2726,26 @@ pub fn generate_blocking_content_for_build(
         let url = site_url.as_str();
         // Generate RSS feed (always when a real https URL is resolved)
         {
-            let rss_site_title = documents
-                .iter()
-                .find(|d| d.url_path == "index.html")
+            let home = documents.iter().find(|d| d.url_path == "index.html");
+            let rss_site_title = home
                 .map(|d| d.title.as_str())
                 .unwrap_or(crate::i18n::t(site_lang, "site"));
-
-            let rss_analytics = documents
-                .iter()
-                .find(|d| d.url_path == "index.html")
-                .and_then(|d| d.analytics.as_ref());
 
             let rss_content = crate::build::feeds::rss::generate_rss_feed(
                 &documents,
                 rss_site_title,
                 url,
                 None,
-                rss_analytics,
-            );
+                home.and_then(|d| d.analytics.as_ref()),
+            )
+            .into_bytes();
 
-            // Site 10 (Pattern A): emit rss.xml.
-            BuildContext::for_render(output_dir, pending)
-                .emit_held(&ServedPath::for_rss("").unwrap(), rss_content.into_bytes(), HashBucket::Files)
-                .map_err(|e| format!("Failed to emit rss.xml: {}", e))?;
+            // Site 10 (Pattern A): emit rss.xml and its legacy alias.
+            for path in crate::build::feeds::rss::site_feed_paths(&source_path_buf) {
+                BuildContext::for_render(output_dir, pending)
+                    .emit_held(&path, rss_content.clone(), HashBucket::Files)
+                    .map_err(|e| format!("Failed to emit {}: {}", path.as_str(), e))?;
+            }
         }
 
         // sitemap.xml is emitted further down, once every page is registered.

@@ -24,6 +24,10 @@ Always run `cargo test --workspace` from the repo root, not from inside a single
 
 Build output is checked byte-for-byte by a snapshot suite: `cargo test -p moss-build --test snapshot_tests`. Regenerate its fixtures deliberately, never to silence a failure you haven't read, with `SNAPSHOTS=overwrite cargo test -p moss-build --test snapshot_tests`.
 
+## Served paths are published URLs
+
+A path the build writes (the feed, the sitemap, a page's URL) is stored by people and machines outside this repository the moment a site is published. Changing one is never a refactor: every stored link and subscription to the old path starts returning 404, and nothing in the test suite goes red, because the tests that pin the path are edited in the same change. Keep the old path resolving in the same commit — an alias for a file (`feeds::rss::site_feed_paths`), a redirect stub for a page — and give the alias its own test. The feed moved from `feed.xml` to `rss.xml` without one in 2026-05, and subscribers to existing sites got a 404 until 2026-10.
+
 ## Worktrees
 
 One worktree per agent, under `.worktrees/` at the repo root. Never switch the branch of the root checkout. Before landing, resolve the base to a SHA once (`git rev-parse origin/develop`) rather than re-reading the remote-tracking ref later — it is shared across worktrees and can move under you while you work.
