@@ -114,6 +114,13 @@ async fn record_what_is_live(
             // loads at build time for the identical reason.
             let prev_snapshot = published_record::load_for(mp, Some(target));
             let prev_change_set = change_set::classify(prev_snapshot.as_ref(), sealed);
+            // The list this build computed at its seal, against the baseline
+            // the gate used. Recomputing here could disagree with it if another
+            // target's publish moved the baseline since; only a landing with no
+            // build in this process (nothing recorded) computes it afresh.
+            let removed = crate::system::build_records::records()
+                .removed_addresses(&mp.project_root().to_string_lossy())
+                .unwrap_or_else(|| crate::build::manifest::backfill::removed_for_seal(mp, sealed));
             match live_baseline::load(mp) {
                 live_baseline::Baseline::Present(projection) => {
                     let renames = redirects::detect_renames(&projection, &live.article_map);
@@ -122,6 +129,7 @@ async fn record_what_is_live(
                         &renames,
                         &live.article_map,
                         &projection.entries,
+                        &removed,
                     )
                 }
                 live_baseline::Baseline::Absent | live_baseline::Baseline::Unreadable(_) => {
@@ -130,6 +138,7 @@ async fn record_what_is_live(
                         &HashMap::new(),
                         &live.article_map,
                         &[],
+                        &removed,
                     )
                 }
             }

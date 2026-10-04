@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::build::manifest::change_set::{self, ChangeSet, PageVerb};
 use crate::build::manifest::{backfill, published_record};
-use crate::deploy::removal_gate::{capped_lines, cause_line};
+use crate::deploy::removal_gate::{capped_lines, capped_lines_cut, cause_line};
 use crate::deploy::route::DeployRoute;
 use crate::moss_paths::MossPaths;
 
@@ -53,15 +53,7 @@ impl DryRun {
                 "Pages: {} added, {} edited, {} deleted, {} restyled\n",
                 set.added, set.edited, set.deleted, set.restyled
             ));
-            out.push_str(&capped_lines(&set.pages, |p| {
-                let verb = match p.verb {
-                    PageVerb::Added => "added",
-                    PageVerb::Edited => "edited",
-                    PageVerb::Deleted => "deleted",
-                    PageVerb::Restyled => "restyled",
-                };
-                format!("{verb:<8} {}", p.source_path)
-            }));
+            out.push_str(&page_lines(&set.pages));
         } else {
             out.push_str("Pages: not classified, because there is no record of an earlier publish from this folder to this target.\n");
         }
@@ -94,6 +86,48 @@ impl DryRun {
              A real deploy can still stop there.\n",
         );
         out
+    }
+}
+
+/// The pages, the ones the author changed first: added, edited, deleted, then
+/// restyled (the order of the summary line), by path within a verb, so the cap
+/// cuts restyled pages, whose source did not change, before any other.
+fn page_lines(pages: &[change_set::ChangedPage]) -> String {
+    let rank = |v: PageVerb| match v {
+        PageVerb::Added => 0,
+        PageVerb::Edited => 1,
+        PageVerb::Deleted => 2,
+        PageVerb::Restyled => 3,
+    };
+    let mut ordered: Vec<&change_set::ChangedPage> = pages.iter().collect();
+    ordered.sort_by(|a, b| (rank(a.verb), &a.source_path).cmp(&(rank(b.verb), &b.source_path)));
+    capped_lines_cut(
+        &ordered,
+        |p| format!("{:<8} {}", verb_word(p.verb), p.source_path),
+        |rest| {
+            // What was cut, per verb: "and 60 more restyled", or
+            // "and 5 more: 2 edited, 3 deleted".
+            let per_verb: Vec<String> = [PageVerb::Added, PageVerb::Edited, PageVerb::Deleted, PageVerb::Restyled]
+                .into_iter()
+                .filter_map(|v| {
+                    let n = rest.iter().filter(|p| p.verb == v).count();
+                    (n > 0).then(|| format!("{n} {}", verb_word(v)))
+                })
+                .collect();
+            match per_verb.as_slice() {
+                [only] => format!("and {} more {}", rest.len(), only.split_once(' ').map_or("", |(_, w)| w)),
+                _ => format!("and {} more: {}", rest.len(), per_verb.join(", ")),
+            }
+        },
+    )
+}
+
+fn verb_word(verb: PageVerb) -> &'static str {
+    match verb {
+        PageVerb::Added => "added",
+        PageVerb::Edited => "edited",
+        PageVerb::Deleted => "deleted",
+        PageVerb::Restyled => "restyled",
     }
 }
 
@@ -221,6 +255,55 @@ mod tests {
             would_register: None,
             would_create_key: false,
         }
+    }
+
+    /// The one page the author changed must be in the list however many pages
+    /// were only restyled: verbs first (added, edited, deleted, restyled), then
+    /// path, and the cap cuts restyled pages before any other.
+    #[test]
+    fn the_one_edited_page_is_listed_ahead_of_seventy_nine_restyled_ones() {
+        let mut pages: Vec<ChangedPage> = (0..79)
+            .map(|i| ChangedPage { source_path: format!("a-{i:02}.md"), verb: PageVerb::Restyled })
+            .collect();
+        pages.push(ChangedPage { source_path: "z-edited.md".into(), verb: PageVerb::Edited });
+        pages.sort_by(|a, b| a.source_path.cmp(&b.source_path));
+        let dry = DryRun {
+            change_set: ChangeSet { classified: true, edited: 1, restyled: 79, pages, ..ChangeSet::default() },
+            transfer: Transfer::NoRecord,
+            refusal: None,
+            would_register: None,
+            would_create_key: false,
+        };
+
+        let text = dry.render();
+
+        assert!(text.contains("Pages: 0 added, 1 edited, 0 deleted, 79 restyled\n  edited   z-edited.md\n  restyled a-00.md\n"), "{text}");
+        assert!(text.contains("  and 60 more restyled\n"), "{text}");
+    }
+
+    fn listing(pages: &[(PageVerb, usize)]) -> String {
+        let pages = pages
+            .iter()
+            .flat_map(|(verb, n)| {
+                (0..*n).map(move |i| ChangedPage { source_path: format!("{verb:?}-{i:02}.md"), verb: *verb })
+            })
+            .collect::<Vec<_>>();
+        page_lines(&pages)
+    }
+
+    /// More than the cap of pages the author changed: the cut line says what
+    /// was cut, per verb, and no restyled page is listed before an added one.
+    #[test]
+    fn more_than_twenty_changed_pages_say_what_was_cut_per_verb() {
+        let text = listing(&[(PageVerb::Added, 18), (PageVerb::Edited, 4), (PageVerb::Deleted, 3), (PageVerb::Restyled, 5)]);
+        assert!(text.contains("  edited   Edited-01.md\n"), "{text}");
+        assert!(!text.contains("Edited-02") && !text.contains("  restyled "), "{text}");
+        assert!(text.ends_with("  and 10 more: 2 edited, 3 deleted, 5 restyled\n"), "{text}");
+    }
+
+    #[test]
+    fn a_cut_of_one_verb_names_just_that_verb() {
+        assert!(listing(&[(PageVerb::Added, 25)]).ends_with("  and 5 more added\n"));
     }
 
     #[test]

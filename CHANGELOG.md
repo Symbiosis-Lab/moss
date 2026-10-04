@@ -22,6 +22,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss deploy --dry-run` lists the pages you changed first: added, then edited, then deleted, then restyled, by path within each, and the cap cuts restyled pages before any other, saying how many (`and 60 more restyled`). Before, a long list of restyled pages sorted ahead of the one page you edited and pushed it out of the list.
 - A language's home page lists that language's own posts again, linked under its own address, instead of the default language's posts.
 - Videos with capital letters in their file name keep adaptive streaming across rebuilds. Before, the next build deleted the already-encoded streaming files before the page was written, so the page fell back to the single MP4; the same build also deleted any JupyterLite bundle file whose folder name has capitals.
 - A site whose own folder name starts with a dot (such as `.mysite`) now builds its pages. The build treated the root's name as one of the dot-named entries it skips inside a site, so each page came out as an empty stub with no content or links and nothing was reported.

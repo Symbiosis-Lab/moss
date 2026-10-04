@@ -14,7 +14,7 @@ use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
 use crate::build::served_path::served_address;
 
 /// How many addresses a message names before counting the rest.
-const LIST_CAP: usize = 20;
+pub(crate) const LIST_CAP: usize = 20;
 
 /// The unexplained removals the author has not accepted. A set accepted once
 /// covers exactly the addresses in it: a new address asks again.
@@ -52,12 +52,22 @@ pub(crate) fn cause_line(r: &RemovedAddress) -> String {
     }
 }
 
-/// `lines` indented two spaces, one per line, the first `LIST_CAP` and then
-/// "and N more".
+/// `items` indented two spaces, one per line, the first `LIST_CAP`, then a cut
+/// line saying how many more.
 pub(crate) fn capped_lines<T>(items: &[T], line: impl Fn(&T) -> String) -> String {
+    capped_lines_cut(items, line, |rest| format!("and {} more", rest.len()))
+}
+
+/// [`capped_lines`] with the cut line worded by the caller, who can say what
+/// was cut (`rest` is everything past the cap).
+pub(crate) fn capped_lines_cut<T>(
+    items: &[T],
+    line: impl Fn(&T) -> String,
+    cut: impl Fn(&[T]) -> String,
+) -> String {
     let mut out: String = items.iter().take(LIST_CAP).map(|i| format!("  {}\n", line(i))).collect();
     if items.len() > LIST_CAP {
-        out.push_str(&format!("  and {} more\n", items.len() - LIST_CAP));
+        out.push_str(&format!("  {}\n", cut(&items[LIST_CAP..])));
     }
     out
 }

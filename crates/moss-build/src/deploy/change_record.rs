@@ -21,9 +21,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::build::manifest::change_set::{ChangeSet, PageVerb};
+use crate::build::manifest::change_set::{ChangeSet, PageVerb, RemovalReason, RemovedAddress};
 use crate::build::manifest::live_baseline::LiveEntry;
 use crate::build::scan::article_map::ArticleMap;
+use crate::build::served_path::served_address;
 
 /// What kind of row a page's change renders as in the receipt.
 #[derive(Clone, Copy, Debug, Serialize, specta::Type, PartialEq, Eq)]
@@ -46,6 +47,22 @@ pub struct PageChangeRecord {
     pub old_path: Option<String>,
 }
 
+/// A public address this publish stopped serving that is not a page row: a
+/// file the author deleted, a generated file whose loss was accepted, a page
+/// whose address changed with no redirect.
+///
+/// Page records ([`PageChangeRecord`]) carry paths WITHOUT a leading slash;
+/// this list carries served addresses, WITH one, by the one rule the publish
+/// gate prints them by.
+#[derive(Clone, Debug, Serialize, specta::Type, PartialEq)]
+pub struct RemovedAddressRecord {
+    pub path: String,
+    pub reason: RemovalReason,
+    /// Where the page that lived here is now served, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<String>,
+}
+
 /// The completion-scoped change record a publish receipt renders.
 #[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Default)]
 pub struct PageChangeSummary {
@@ -56,6 +73,9 @@ pub struct PageChangeSummary {
     /// set is Added/Moved/Removed only.
     pub pages_updated: u32,
     pub records: Vec<PageChangeRecord>,
+    /// Removed public addresses that no removed or moved page row already
+    /// names, each once. Nothing here is a page row.
+    pub removed_addresses: Vec<RemovedAddressRecord>,
 }
 
 /// Merge a change set, detected renames, and the current/previous article
@@ -70,6 +90,7 @@ pub fn build_page_change_records(
     renames: &HashMap<String, String>,
     current_map: &ArticleMap,
     prev_triples: &[LiveEntry],
+    removed: &[RemovedAddress],
 ) -> PageChangeSummary {
     // Step 1: source_path -> current url, and source_path -> the old live entry.
     let source_to_url: HashMap<&str, &str> = current_map
@@ -141,6 +162,36 @@ pub fn build_page_change_records(
         });
     }
 
+    // Removed public addresses that are not pages. A removed page has its
+    // Removed row and a renamed one its Moved row, so an address one of those
+    // names is skipped; no address appears twice.
+    let represented: HashSet<String> = records
+        .iter()
+        .filter(|r| r.kind == PageChangeKind::Removed)
+        .map(|r| r.path.as_str())
+        .chain(records.iter().filter_map(|r| r.old_path.as_deref()))
+        .map(|p| p.trim_start_matches('/').to_string())
+        .collect();
+    let deleted_pages: HashSet<&str> = change_set
+        .pages
+        .iter()
+        .filter(|p| p.verb == PageVerb::Deleted)
+        .map(|p| p.source_path.as_str())
+        .collect();
+    let removed_addresses: Vec<RemovedAddressRecord> = removed
+        .iter()
+        .filter(|a| {
+            let pretty = crate::build::scan::article_map::to_pretty_url(&a.path);
+            !represented.contains(&pretty)
+                && !a.source.as_deref().is_some_and(|src| deleted_pages.contains(src))
+        })
+        .map(|a| RemovedAddressRecord {
+            path: served_address(&a.path),
+            reason: a.reason,
+            moved_to: a.moved_to.as_deref().map(served_address),
+        })
+        .collect();
+
     // Step 6: one ring, sorted by path.
     records.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -157,6 +208,7 @@ pub fn build_page_change_records(
         pages_removed,
         pages_updated: change_set.edited + change_set.restyled,
         records,
+        removed_addresses,
     }
 }
 

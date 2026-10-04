@@ -186,6 +186,97 @@ async fn a_publish_summarizes_a_rename_and_a_new_page_since_the_last_one() {
     assert_eq!(added.title, "Page B");
 }
 
+/// A file the author deleted is named in the receipt data, not only counted:
+/// one address record in served form, the page records untouched.
+#[tokio::test]
+async fn a_publish_names_a_folder_file_the_author_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mp = MossPaths::new(dir.path());
+    std::fs::create_dir_all(mp.build_dir()).unwrap();
+    std::fs::write(
+        mp.article_map(),
+        br##"{"articles":{"a/":{"source_path":"a.md","title":"Page A","content":"c","url_path":"a/","uid":"u-a"}}}"##,
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("guide.pdf"), b"%PDF").unwrap();
+    let history_dir = tempfile::tempdir().unwrap();
+    let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
+
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    let page = ServedPath::from_source("a/index.html").unwrap();
+    pending.register(&page, b"A", crate::build::manifest::HashBucket::Files);
+    pending.register_source_mapping("a.md".into(), &page);
+    let meta = |h: &str| SourceMetadata { hash: h.into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None };
+    pending.register_page_source_hash("a.md".into(), meta("h-a"));
+    let pdf = ServedPath::from_source("guide.pdf").unwrap();
+    pending.register(&pdf, b"%PDF", crate::build::manifest::HashBucket::Files);
+    pending.register_page_source_hash("guide.pdf".into(), meta("h-pdf"));
+    super::record_what_is_live(&mp, &pending.seal(), TARGET, &history).await;
+
+    std::fs::remove_file(dir.path().join("guide.pdf")).unwrap();
+    let second = super::record_what_is_live(&mp, &sealed(&[("a.md", "a/index.html", "h-a", b"A")]), TARGET, &history).await;
+
+    assert_eq!(address_records(&second), [("/guide.pdf".to_string(), crate::build::manifest::change_set::RemovalReason::AuthorRemoved)]);
+    assert!(second.records.is_empty(), "a file is not a page row: {:?}", second.records);
+}
+
+fn address_records(
+    summary: &crate::deploy::change_record::PageChangeSummary,
+) -> Vec<(String, crate::build::manifest::change_set::RemovalReason)> {
+    summary.removed_addresses.iter().map(|r| (r.path.clone(), r.reason)).collect()
+}
+
+/// One publish after another, the second dropping `gone` from the output set
+/// (with or without a stub left at the address).
+async fn second_publish_summary(
+    first_outputs: &[&str],
+    second_outputs: &[&str],
+) -> crate::deploy::change_record::PageChangeSummary {
+    let dir = tempfile::tempdir().unwrap();
+    let mp = MossPaths::new(dir.path());
+    std::fs::create_dir_all(mp.build_dir()).unwrap();
+    std::fs::write(
+        mp.article_map(),
+        br##"{"articles":{"a/":{"source_path":"a.md","title":"Page A","content":"c","url_path":"a/","uid":"u-a"}}}"##,
+    )
+    .unwrap();
+    let history_dir = tempfile::tempdir().unwrap();
+    let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
+    let build = |extra: &[&str]| {
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let page = ServedPath::from_source("a/index.html").unwrap();
+        pending.register(&page, b"A", crate::build::manifest::HashBucket::Files);
+        pending.register_source_mapping("a.md".into(), &page);
+        pending.register_page_source_hash(
+            "a.md".into(),
+            SourceMetadata { hash: "h".into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        );
+        for out in extra {
+            pending.register(&ServedPath::from_source(out).unwrap(), b"x", crate::build::manifest::HashBucket::Files);
+        }
+        pending.seal()
+    };
+    super::record_what_is_live(&mp, &build(first_outputs), TARGET, &history).await;
+    super::record_what_is_live(&mp, &build(second_outputs), TARGET, &history).await
+}
+
+/// A generated file whose loss the author accepted is named, with its reason.
+#[tokio::test]
+async fn an_accepted_unexplained_removal_is_named_in_the_receipt_data() {
+    let summary = second_publish_summary(&["legacy-feed.xml"], &[]).await;
+    assert_eq!(
+        address_records(&summary),
+        [("/legacy-feed.xml".to_string(), crate::build::manifest::change_set::RemovalReason::Unexplained)]
+    );
+}
+
+/// An address a stub still answers was not lost, so there is nothing to name.
+#[tokio::test]
+async fn an_address_that_a_stub_still_answers_yields_no_record() {
+    let summary = second_publish_summary(&["old.html"], &["old.html"]).await;
+    assert!(address_records(&summary).is_empty(), "{:?}", summary.removed_addresses);
+}
+
 // ── Publish history (slice 1) ──────────────────────────────────
 
 /// The end-to-end wiring: `record_landed` — not just the lower-level

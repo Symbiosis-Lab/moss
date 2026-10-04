@@ -481,12 +481,12 @@ pub enum PublishReceiptPageKind {
 }
 
 /// `change_record::PageChangeKind` (the pure merge module's vocabulary) to
-/// this wire type. The single conversion both receipt-side consumers —
-/// `deploy.rs`'s `page_change_record_to_receipt_page` and `app_seam.rs`'s
-/// `PageVerdict` construction — call, so a third `PageChangeKind` variant
-/// only needs fixing here. Kept as its own impl rather than folded into one
-/// enum: `PageChangeKind` is moss-build's pure merge output and this is the
-/// receipt's specta-exported wire type, and collapsing them would let a
+/// this wire type. The single conversion both receipt-side consumers call:
+/// the one that turns a page change record into a receipt row, and the one
+/// that builds the post-publish check for each page. A third `PageChangeKind`
+/// variant only needs fixing here. Kept as its own impl rather than folded
+/// into one enum: `PageChangeKind` is moss-build's pure merge output and this
+/// is the receipt's specta-exported wire type, and collapsing them would let a
 /// receipt-shape change ripple into the pure merge module for no reason.
 impl From<crate::deploy::change_record::PageChangeKind> for PublishReceiptPageKind {
     fn from(kind: crate::deploy::change_record::PageChangeKind) -> Self {
