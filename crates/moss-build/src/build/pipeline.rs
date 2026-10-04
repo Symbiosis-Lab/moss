@@ -2083,8 +2083,8 @@ pub fn load_previous_hashes(folder_path: &str) -> SiteHashes {
 /// that diverge from what the new build pipeline produces.
 ///
 /// Migrated:
-/// - keys of `files: HashMap<String, String>`
-/// - elements of `image_outputs`, `video_outputs`, `notebook_outputs` sets
+/// - keys of `files: HashMap<String, String>`, except the notebook bundle's
+/// - elements of `image_outputs`, `video_outputs` sets
 /// - **values** of `source_to_output: HashMap<String, String>` (output paths;
 ///   keys legitimately keep source case as they look up output by source)
 ///
@@ -2101,17 +2101,20 @@ fn migrate_to_normalized_paths(hashes: &mut SiteHashes) {
     use crate::build::served_path::ServedPath;
     use std::collections::{HashMap, HashSet};
 
-    fn migrate_map_keys<V: Clone>(map: &mut HashMap<String, V>) -> usize {
+    /// The slug form of `path`, or `None` for a generated path (`_moss/...`),
+    /// which fails `from_source` and needs no migration.
+    fn normalized(path: &str) -> Option<String> {
+        ServedPath::from_source(path).ok().map(ServedPath::into_string)
+    }
+
+    fn migrate_map_keys<V: Clone>(map: &mut HashMap<String, V>, keep: &HashSet<String>) -> usize {
         let mut migrated = 0;
         let keys: Vec<String> = map.keys().cloned().collect();
         for k in keys {
-            // Generated artifact paths (e.g. _moss/og/..., _moss/style.css) will fail
-            // from_source validation — they don't need directory-slug migration since
-            // their paths are fixed by named constructors. Skip them.
-            let normalized = match ServedPath::from_source(&k) {
-                Ok(sp) => sp.into_string(),
-                Err(_) => continue,
-            };
+            if keep.contains(&k) {
+                continue;
+            }
+            let Some(normalized) = normalized(&k) else { continue };
             if normalized != k {
                 if let Some(v) = map.remove(&k) {
                     map.insert(normalized, v);
@@ -2126,12 +2129,7 @@ fn migrate_to_normalized_paths(hashes: &mut SiteHashes) {
         let mut migrated = 0;
         let items: Vec<String> = set.iter().cloned().collect();
         for k in items {
-            // Generated artifact paths (e.g. _moss/og/...) will fail from_source
-            // validation — skip them; they don't need directory-slug migration.
-            let normalized = match ServedPath::from_source(&k) {
-                Ok(sp) => sp.into_string(),
-                Err(_) => continue,
-            };
+            let Some(normalized) = normalized(&k) else { continue };
             if normalized != k {
                 set.remove(&k);
                 set.insert(normalized);
@@ -2144,11 +2142,7 @@ fn migrate_to_normalized_paths(hashes: &mut SiteHashes) {
     fn migrate_map_values(map: &mut HashMap<String, String>) -> usize {
         let mut migrated = 0;
         for v in map.values_mut() {
-            // Generated artifact paths will fail from_source — skip them.
-            let normalized = match ServedPath::from_source(v) {
-                Ok(sp) => sp.into_string(),
-                Err(_) => continue,
-            };
+            let Some(normalized) = normalized(v) else { continue };
             if normalized != *v {
                 *v = normalized;
                 migrated += 1;
@@ -2157,10 +2151,14 @@ fn migrate_to_normalized_paths(hashes: &mut SiteHashes) {
         migrated
     }
 
-    let total = migrate_map_keys(&mut hashes.files)
+    // The notebook bundle is recorded through `for_jupyterlite_asset`, which keeps
+    // case verbatim because the bundle's runtime loads files by exact name. Its
+    // writer already produces final paths, so neither its own set nor its entries
+    // in the general file map are rewritten.
+    let bundle = hashes.notebook_outputs.clone();
+    let total = migrate_map_keys(&mut hashes.files, &bundle)
         + migrate_set(&mut hashes.image_outputs)
         + migrate_set(&mut hashes.video_outputs)
-        + migrate_set(&mut hashes.notebook_outputs)
         + migrate_map_values(&mut hashes.source_to_output);
 
     if total > 0 {

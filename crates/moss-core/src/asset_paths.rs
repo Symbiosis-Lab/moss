@@ -879,8 +879,14 @@ pub const HLS_MASTER_NAME: &str = "master.m3u8";
 /// ladder is silently never offered, leaving seventeen encoded files on every
 /// build that no page ever references.
 pub fn hls_master_stem(url: &str) -> Option<&str> {
-    let dir = url.strip_suffix(HLS_MASTER_NAME)?.strip_suffix('/')?;
-    dir.strip_suffix(".hls")
+    hls_dir_stem(url.strip_suffix(HLS_MASTER_NAME)?.strip_suffix('/')?)
+}
+
+/// The source stem a ladder directory is named after: `a/clip.hls` →
+/// `Some("a/clip")`. The directory is a bundle named after a file, so a path
+/// normaliser must leave its spelling alone; see [`to_hls_dir`].
+pub fn hls_dir_stem(dir: &str) -> Option<&str> {
+    dir.strip_suffix(".hls").filter(|stem| !stem.is_empty())
 }
 
 /// The names inside one ladder's directory, master first — what the ENCODER

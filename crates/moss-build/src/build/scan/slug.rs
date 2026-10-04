@@ -13,6 +13,8 @@ use moss_core::PageKind;
 pub use moss_core::slug::{generate_slug, slugify_path_segments};
 
 /// Lowercase directory segments only; preserve the final basename verbatim.
+/// A ladder directory (`Clip.hls`) is the exception among the directories: it
+/// is a bundle named after a video file, so it keeps that file's spelling.
 ///
 /// This is the rule used by [`ServedPath::from_source`][crate::build::served_path::ServedPath::from_source]
 /// for build-pipeline output paths. The bug it fixes is **case-sensitivity
@@ -55,7 +57,7 @@ pub fn slugify_dir_path(path: &str) -> String {
         .iter()
         .enumerate()
         .map(|(i, seg)| {
-            if i == last {
+            if i == last || moss_core::asset_paths::hls_dir_stem(seg).is_some() {
                 seg.to_string()
             } else {
                 seg.to_lowercase()

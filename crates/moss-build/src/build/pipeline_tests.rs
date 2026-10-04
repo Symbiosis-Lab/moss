@@ -1381,6 +1381,148 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
     );
 }
 
+/// Build twice, the second time over a staging tree holding a ladder that the
+/// first build's manifest names as `recorded_dir`/`file`. Returns the second
+/// build's page and whether the ladder is still in staging.
+///
+/// `stem` is the video's file stem, `staged_dir` where the encoder wrote the
+/// ladder, `recorded_dir` the spelling the manifest carries for it.
+fn second_build_over_a_recorded_ladder(stem: &str, staged_dir: &str, recorded_dir: &str) -> (String, bool) {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+
+    fs::write(test_dir.join("index.md"), format!("# Test\n\n![[{stem}.mov]]\n")).unwrap();
+    fs::write(test_dir.join(format!("{stem}.mov")), "fake video data").unwrap();
+
+    let first = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
+    assert!(first.is_ok(), "first build should succeed: {:?}", first);
+
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    let ladder = staging.join(staged_dir);
+    fs::create_dir_all(&ladder).unwrap();
+    let mut recorded = Vec::new();
+    for member in moss_core::asset_paths::hls_members(&moss_core::asset_paths::VIDEO_LADDER) {
+        fs::write(ladder.join(&member), "fake ladder member").unwrap();
+        recorded.push(format!("{recorded_dir}/{member}"));
+    }
+    record_outputs(&test_dir, "video_outputs", recorded);
+
+    let services = BuildServices::headless();
+    let second = build_test(folder_path, None, None, None, Some(&services), &ResolvedSlots::empty());
+    assert!(second.is_ok(), "second build should succeed: {:?}", second);
+
+    let html = fs::read_to_string(staging.join("index.html")).unwrap();
+    (html, ladder.join("master.m3u8").exists())
+}
+
+/// Add `paths` to a bucket of the manifest the last build wrote, as that
+/// bucket's writer would have recorded them.
+fn record_outputs(test_dir: &std::path::Path, bucket: &str, paths: Vec<String>) {
+    let hashes_path = test_dir.join(".moss/build.nosync/hashes.json");
+    let mut hashes: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&hashes_path).unwrap()).unwrap();
+    hashes[bucket]
+        .as_array_mut()
+        .unwrap()
+        .extend(paths.into_iter().map(serde_json::Value::from));
+    fs::write(&hashes_path, serde_json::to_string(&hashes).unwrap()).unwrap();
+}
+
+/// A ladder directory is named after its video, capitals and all, and the
+/// build records it that way. Loading that manifest used to lowercase every
+/// directory segment, so the sweep that follows saw `clip-one.hls/...` in the
+/// manifest, found `Clip-One.hls/...` on disk, called the whole ladder stale
+/// and deleted it before the renderer looked for it.
+#[test]
+fn a_ladder_named_with_capitals_is_not_swept_before_it_is_rendered() {
+    let (html, kept) = second_build_over_a_recorded_ladder("Clip-One", "Clip-One.hls", "Clip-One.hls");
+    assert!(kept, "the sweep deleted a valid ladder");
+    assert!(html.contains("Clip-One.hls/master.m3u8"), "got:\n{html}");
+}
+
+#[test]
+fn a_ladder_name_with_a_space_or_a_non_ascii_capital_survives_the_next_build() {
+    for stem in ["Clip One", "Éclair 视频"] {
+        let dir = format!("{stem}.hls");
+        let (_, kept) = second_build_over_a_recorded_ladder(stem, &dir, &dir);
+        assert!(kept, "the sweep deleted the ladder of {stem:?}");
+    }
+}
+
+/// Only the ladder's own segment keeps its spelling. A manifest from before
+/// directories were lowercased may carry `Assets/` above it; that segment is
+/// still migrated, or the record would name a directory that is not there.
+#[test]
+fn a_ladder_under_a_capitalised_folder_is_migrated_above_it_and_kept_below() {
+    let (html, kept) = second_build_over_a_recorded_ladder("Clip-One", "assets/Clip-One.hls", "Assets/Clip-One.hls");
+    assert!(kept, "the sweep deleted a valid ladder");
+    assert!(html.contains("Clip-One"), "got:\n{html}");
+
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Test\n").unwrap();
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+    record_outputs(&test_dir, "video_outputs", vec!["Assets/Clip-One.hls/master.m3u8".into()]);
+    let loaded = load_previous_hashes(folder_path);
+    assert!(
+        loaded.video_outputs.contains("assets/Clip-One.hls/master.m3u8"),
+        "recorded as {:?}",
+        loaded.video_outputs
+    );
+}
+
+/// JupyterLite's own files are recorded verbatim, directory case included,
+/// because the bundle's runtime loads them by those exact names, and they are
+/// recorded twice: in `notebook_outputs` and in the general file map. Neither
+/// record may be rewritten, or the sweep deletes the file.
+#[test]
+fn a_case_preserved_bundle_file_survives_the_next_build() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Test\n").unwrap();
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+
+    let key = "jupyter/build/Vendor/Bundle.js";
+    let file = test_dir.join(".moss/build.nosync/staging").join(key);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "bundle").unwrap();
+    record_outputs(&test_dir, "notebook_outputs", vec![key.into()]);
+    record_file(&test_dir, key);
+
+    let loaded = load_previous_hashes(folder_path);
+    assert!(loaded.notebook_outputs.contains(key), "{:?}", loaded.notebook_outputs);
+    assert!(loaded.files.contains_key(key), "{:?}", loaded.files.keys().collect::<Vec<_>>());
+
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+    assert!(file.exists(), "the sweep deleted a recorded bundle file");
+}
+
+/// What marks a bundle file is the set its writer recorded it in, not its
+/// spelling. An author's own folder that happens to be called `jupyter` is
+/// still lowercased like any other source folder.
+#[test]
+fn an_author_folder_named_jupyter_is_still_lowercased() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Test\n").unwrap();
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+
+    record_file(&test_dir, "jupyter/Notes/page.html");
+    record_file(&test_dir, "Jupyter/Notes/other.html");
+    let loaded = load_previous_hashes(folder_path);
+    assert!(loaded.files.contains_key("jupyter/notes/page.html"));
+    assert!(loaded.files.contains_key("jupyter/notes/other.html"));
+}
+
+/// Add `path` to the manifest's general file map.
+fn record_file(test_dir: &std::path::Path, path: &str) {
+    let hashes_path = test_dir.join(".moss/build.nosync/hashes.json");
+    let mut hashes: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&hashes_path).unwrap()).unwrap();
+    hashes["files"][path] = "100644:0000000000000000".into();
+    fs::write(&hashes_path, serde_json::to_string(&hashes).unwrap()).unwrap();
+}
+
 // =========================================================================
 // BuildComplete
 // =========================================================================
