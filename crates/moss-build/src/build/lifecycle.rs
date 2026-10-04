@@ -393,7 +393,11 @@ fn serves(mp: &MossPaths, gen_id: &str) -> bool {
         return false;
     }
     #[cfg(unix)]
-    return std::fs::read_link(mp.current_ptr()).is_ok_and(|target| target == mp.generation_dir(gen_id));
+    return std::fs::read_link(mp.current_ptr()).is_ok_and(|target| {
+        // The relative form the build writes now, or the absolute one a folder
+        // built by an older moss still carries.
+        target == Path::new("generations").join(gen_id) || target == mp.generation_dir(gen_id)
+    });
     // `set_current_ptr` writes the marker only once `current` is whole.
     #[cfg(not(unix))]
     return mp.current_ptr().is_dir();

@@ -510,7 +510,9 @@ impl MossPaths {
 
     /// `.moss/build.nosync/current` — symlink to the active generation directory.
     ///
-    /// Always points to an absolute path inside `generations/`. Replaced
+    /// Points at `generations/<id>`, relative to the link's own directory, so a
+    /// copy of the site folder resolves inside the copy. Folders built by an
+    /// older moss still carry an absolute link to the same place. Replaced
     /// atomically via `set_current_ptr`.
     pub fn current_ptr(&self) -> PathBuf {
         self.build_dir().join("current")
@@ -519,28 +521,31 @@ impl MossPaths {
     /// Atomically replace `.moss/build.nosync/current` → `generations/<gen_id>/`.
     ///
     /// Uses write-then-rename so no reader ever sees an absent `current` pointer.
-    /// Symlink target is absolute to avoid cwd ambiguity.
+    /// The symlink target is relative (`generations/<gen_id>`): a relative target
+    /// resolves against the link's own directory, never the working directory,
+    /// so there is no cwd ambiguity — and an absolute one would send a copied
+    /// folder's `current` back into the original's files.
     ///
     /// **Unordered.** Production seal tails must go through
     /// `build::lifecycle::promote`, which refuses a promotion from a build older
     /// than the one already on `current`.
     pub fn set_current_ptr(&self, gen_id: &str) -> std::io::Result<()> {
-        let gen_dir = self.generation_dir(gen_id);
         let current = self.current_ptr();
 
         #[cfg(unix)]
         {
             // Atomic repoint: write-then-rename so no reader ever sees an absent
-            // `current` pointer. Symlink target is absolute to avoid cwd ambiguity.
+            // `current` pointer.
             let tmp = current.with_extension("tmp");
             // allow:unlink the pointer's own temp; the rename below swaps `current` atomically
             let _ = std::fs::remove_file(&tmp);
-            std::os::unix::fs::symlink(&gen_dir, &tmp)?;
+            std::os::unix::fs::symlink(std::path::Path::new("generations").join(gen_id), &tmp)?;
             // allow:unlink the pointer's own temp; the rename below swaps `current` atomically
             std::fs::rename(&tmp, &current)?;
         }
         #[cfg(windows)]
         {
+            let gen_dir = self.generation_dir(gen_id);
             // Marker first: a failed copy below must not leave it vouching for
             // a torn `current` (unix swaps in one rename, so needs no such step).
             // allow:unlink the marker is rewritten below once `current` is whole
@@ -1534,8 +1539,12 @@ mod tests {
         {
             assert!(link.is_symlink(), "current should be a symlink");
             let target = std::fs::read_link(&link).unwrap();
-            assert!(target.is_absolute(), "symlink target must be absolute");
-            assert_eq!(target, gen_dir, "symlink must point to the generation dir");
+            assert_eq!(
+                target,
+                std::path::Path::new("generations/gen001"),
+                "the link is relative to its own directory, so a copy of the folder stays self-contained"
+            );
+            assert_eq!(std::fs::canonicalize(&link).unwrap(), std::fs::canonicalize(&gen_dir).unwrap());
         }
         #[cfg(windows)]
         {
@@ -1598,12 +1607,40 @@ mod tests {
             link.exists(),
             "current must resolve (not dangle) for a relative project root"
         );
-        // The dangling-relative-target regression is unix-symlink-specific; on
-        // Windows `current` is a copy, so there is no target to absolutize.
+        // On Windows `current` is a copy, so there is no link target to check.
         #[cfg(unix)]
         assert!(
-            std::fs::read_link(&link).unwrap().is_absolute(),
-            "current symlink target must be absolute"
+            std::fs::read_link(&link).unwrap().is_relative(),
+            "current symlink target is relative to the link's own directory"
+        );
+    }
+
+    /// A copy of a site folder must not read or delete the original's files
+    /// through `current`: the link resolves inside whichever folder holds it.
+    #[cfg(unix)]
+    #[test]
+    fn a_copied_folder_current_resolves_inside_the_copy() {
+        let tmp = make_tmp();
+        let original = tmp.path().join("original");
+        let mp = make_paths(&original);
+        std::fs::create_dir_all(mp.generation_dir("gen001")).unwrap();
+        std::fs::write(mp.generation_dir("gen001").join("page.html"), b"x").unwrap();
+        mp.set_current_ptr("gen001").unwrap();
+
+        let copy = tmp.path().join("copy");
+        let status = std::process::Command::new("cp")
+            .arg("-R")
+            .arg(&original)
+            .arg(&copy)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let resolved = std::fs::canonicalize(make_paths(&copy).current_ptr()).unwrap();
+        assert!(
+            resolved.starts_with(std::fs::canonicalize(&copy).unwrap()),
+            "current in the copy resolved to {}",
+            resolved.display()
         );
     }
 
@@ -1627,7 +1664,7 @@ mod tests {
         #[cfg(unix)]
         assert_eq!(
             std::fs::read_link(mp.current_ptr()).unwrap(),
-            mp.generation_dir("gen002")
+            std::path::Path::new("generations/gen002")
         );
         // No stale current.tmp
         assert!(!mp.current_ptr().with_extension("tmp").exists());

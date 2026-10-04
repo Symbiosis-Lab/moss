@@ -227,3 +227,25 @@ fn only_a_generation_neither_copied_nor_already_served_skips_the_repoint() {
     assert!(repoint_needed(true, || true), "a re-copy must reach Windows' copied `current`");
     assert!(repoint_needed(true, || false));
 }
+
+/// Folders built before `current` became a relative link still carry an
+/// absolute one. Re-promoting what they already serve must not see a mismatch
+/// and rewrite the pointer on every build.
+#[cfg(unix)]
+#[test]
+fn serves_accepts_the_relative_link_and_the_absolute_one_older_folders_carry() {
+    let (_tmp, mp) = vault(&[("g1", "a"), ("g2", "a")]);
+    mp.set_current_ptr("g1").unwrap();
+    assert!(serves(&mp, "g1"), "the relative link the build writes now");
+    assert!(!serves(&mp, "g2"), "the marker names g1, so g2 is not served");
+
+    // What an older moss left: an absolute link to the same generation.
+    std::fs::remove_file(mp.current_ptr()).unwrap();
+    std::os::unix::fs::symlink(mp.generation_dir("g1"), mp.current_ptr()).unwrap();
+    assert!(serves(&mp, "g1"), "an old absolute link to the generation still counts");
+
+    // A link to a different generation is not served, in either form.
+    std::fs::remove_file(mp.current_ptr()).unwrap();
+    std::os::unix::fs::symlink("generations/g2", mp.current_ptr()).unwrap();
+    assert!(!serves(&mp, "g1"), "marker says g1 but the link says g2");
+}
