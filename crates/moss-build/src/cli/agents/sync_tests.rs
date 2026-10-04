@@ -590,3 +590,121 @@ fn a_binary_that_is_gone_falls_back_to_the_bare_name() {
     std::fs::remove_file(&real).unwrap();
     assert_eq!(super::usable_cli_path(Some(real)), bare, "a since-removed path falls back");
 }
+
+// ── whose binary a cloud-synced folder names ────────────────────────────────
+
+const POINTER_FILES: [&str; 3] = [
+    ".claude/skills/moss/SKILL.md",
+    ".cursor/rules/moss.mdc",
+    ".moss/agents/SKILL.md",
+];
+
+/// A project with every agent present, synced once by `first`.
+fn project_synced_by(first: &Path) -> (tempfile::TempDir, PathBuf, tempfile::TempDir) {
+    let (tmp, project) = make_project();
+    std::fs::create_dir_all(project.join(".claude")).unwrap();
+    std::fs::create_dir_all(project.join(".cursor")).unwrap();
+    let home = empty_home();
+    sync_with_home(&project, Some(home.path()), first).expect("first sync");
+    (tmp, project, home)
+}
+
+/// A real file standing in for a binary, so `exists()` is true.
+fn fake_binary(dir: &Path, name: &str) -> PathBuf {
+    let p = dir.join(name);
+    std::fs::write(&p, b"#!/bin/sh\n").unwrap();
+    std::fs::canonicalize(&p).unwrap()
+}
+
+fn assert_all_name(project: &Path, binary: &Path) {
+    for rel in POINTER_FILES {
+        let text = std::fs::read_to_string(project.join(rel)).expect(rel);
+        assert!(
+            text.contains(&format!("> Run moss as `{}`.", binary.display())),
+            "{rel} does not name {}:\n{text}",
+            binary.display()
+        );
+    }
+}
+
+/// Site folders are commonly cloud-synced, so a build on one machine rewrites
+/// the file every other machine reads. A development binary must not replace the
+/// path of a binary that is still there.
+#[test]
+fn a_build_by_another_binary_keeps_a_path_that_still_exists() {
+    let bins = tempfile::tempdir().unwrap();
+    let installed = fake_binary(bins.path(), "moss-installed");
+    let dev = fake_binary(bins.path(), "moss-dev");
+    let (_tmp, project, home) = project_synced_by(&installed);
+
+    sync_with_home(&project, Some(home.path()), &dev).expect("dev sync");
+
+    assert_all_name(&project, &installed);
+}
+
+#[test]
+fn a_path_that_no_longer_exists_is_replaced() {
+    let bins = tempfile::tempdir().unwrap();
+    let old = fake_binary(bins.path(), "moss-old");
+    let dev = fake_binary(bins.path(), "moss-dev");
+    let (_tmp, project, home) = project_synced_by(&old);
+    std::fs::remove_file(&old).unwrap();
+
+    sync_with_home(&project, Some(home.path()), &dev).expect("dev sync");
+
+    assert_all_name(&project, &dev);
+}
+
+/// The installed app is the binary every machine is meant to use, so it takes
+/// the path back from a development binary that got there first.
+#[test]
+fn the_installed_app_replaces_a_development_binary() {
+    let bins = tempfile::tempdir().unwrap();
+    let dev = fake_binary(bins.path(), "moss-dev");
+    let (_tmp, project, home) = project_synced_by(&dev);
+
+    sync_with_home(&project, Some(home.path()), &cli()).expect("app sync");
+
+    assert_all_name(&project, &cli());
+}
+
+#[test]
+fn only_a_binary_inside_an_app_bundle_counts_as_the_installed_app() {
+    assert!(is_installed_app(Path::new("/Applications/moss.app/Contents/MacOS/moss")));
+    assert!(is_installed_app(Path::new("/Users/a/Applications/moss.app/Contents/MacOS/moss")));
+    assert!(!is_installed_app(Path::new("/repo/target/debug/moss")));
+    assert!(!is_installed_app(Path::new("/opt/moss/Contents/MacOS/moss")));
+    assert!(!is_installed_app(Path::new("moss")));
+}
+
+/// The app lives at `/Applications` on one machine and `~/Applications` on
+/// another. Each build must leave the other's path alone, or the two trade the
+/// line back and forth for as long as the folder syncs.
+#[test]
+fn an_installed_app_does_not_replace_another_installed_app_that_exists() {
+    let bins = tempfile::tempdir().unwrap();
+    let other_app_dir = bins.path().join("Other.app/Contents/MacOS");
+    std::fs::create_dir_all(&other_app_dir).unwrap();
+    let other_app = fake_binary(&other_app_dir, "moss");
+    assert!(is_installed_app(&other_app));
+    let (_tmp, project, home) = project_synced_by(&other_app);
+
+    sync_with_home(&project, Some(home.path()), &cli()).expect("app sync");
+
+    assert_all_name(&project, &other_app);
+}
+
+/// `exists()` is true for a directory, which no agent can run.
+#[test]
+fn a_directory_at_the_named_path_is_replaced() {
+    let bins = tempfile::tempdir().unwrap();
+    let dev = fake_binary(bins.path(), "moss-dev");
+    let dir = bins.path().join("moss-was-a-dir");
+    std::fs::create_dir(&dir).unwrap();
+    let dir = std::fs::canonicalize(&dir).unwrap();
+    let (_tmp, project, home) = project_synced_by(&dir);
+
+    sync_with_home(&project, Some(home.path()), &dev).expect("dev sync");
+
+    assert_all_name(&project, &dev);
+}

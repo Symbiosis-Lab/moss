@@ -38,10 +38,15 @@
 //!
 //! ## None of it belongs in a commit
 //!
-//! Every file above interpolates the absolute path of the moss binary that
-//! wrote it, so it is machine-local by construction — see [`ensure_ignored`],
-//! which adds the pattern to a `.gitignore` inside each directory moss writes
-//! into. Never the project's root `.gitignore`: that one is the author's.
+//! Every file above names the absolute path of a moss binary, so it describes one
+//! machine — see [`ensure_ignored`], which adds the pattern to a `.gitignore`
+//! inside each directory moss writes into. Never the project's root `.gitignore`:
+//! that one is the author's.
+//!
+//! A site folder is often cloud-synced all the same, so a file one machine writes
+//! is read by every other. That is why [`cli_binding_for`] keeps a path that is
+//! still on disk instead of overwriting it with whichever binary happened to build
+//! last: a development build must not repoint every machine's agents at itself.
 //!
 //! ## Why a version stamp
 //!
@@ -174,6 +179,65 @@ fn cli_binding(cli: &Path) -> String {
          > your shell resolves it, and reopen this folder in moss to refresh this file.\n",
         cli.display()
     )
+}
+
+/// The binary `file` should name: the one it already names, if that is still a
+/// file on disk; otherwise `running`.
+///
+/// Site folders are commonly cloud-synced, so these "machine-local" files are in
+/// practice shared, and a build by a development or per-machine binary used to
+/// replace the installed app's path for every machine and every agent. What this
+/// guarantees, and no more:
+///
+/// - A path that is still a *file* on this machine is kept, so a development
+///   binary no longer replaces a working installed-app path. (A directory at
+///   that path is not a binary an agent can run, so it is replaced.)
+/// - The installed app takes the line back from a development binary, but not
+///   from another installed app that exists here.
+///
+/// It does not make the line stable across machines in general: a path written
+/// on another machine (another user's home directory, say) is usually not a file
+/// here and is replaced, so the line can still alternate between them. It is
+/// stable when the same path exists on both, such as an app in the shared
+/// applications folder.
+///
+/// A relative path (the bare-`moss` fallback) is never "kept" — whether it
+/// exists depends on the working directory, not on the file.
+fn cli_binding_for(file: &Path, running: &Path) -> String {
+    let existing = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| named_cli_path(&text))
+        .filter(|p| p.is_absolute() && p.is_file());
+    let kept = match existing {
+        Some(p) if is_installed_app(running) && !is_installed_app(&p) => None,
+        other => other,
+    };
+    cli_binding(kept.as_deref().unwrap_or(running))
+}
+
+/// The path in a file's "Run moss as `<path>`." line, if it has one.
+fn named_cli_path(content: &str) -> Option<PathBuf> {
+    let rest = content.split_once("> Run moss as `")?.1;
+    let path = rest.split_once('`')?.0;
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+/// Whether `cli` is the installed desktop app's binary: `<name>.app/Contents/MacOS/<bin>`.
+///
+/// The one shape of "bundled binary" moss recognises (`moss desktop` looks only
+/// for `moss.app`, and only on macOS). Linux and Windows have no such shape in
+/// this codebase, so there nothing counts as the installed app and the keep-
+/// while-it-exists rule alone applies; a path that is gone is still replaced.
+fn is_installed_app(cli: &Path) -> bool {
+    let name_is = |p: Option<&Path>, want: &str| {
+        p.and_then(Path::file_name).is_some_and(|n| n == want)
+    };
+    let macos = cli.parent();
+    let contents = macos.and_then(Path::parent);
+    let app = contents.and_then(Path::parent);
+    name_is(macos, "MacOS")
+        && name_is(contents, "Contents")
+        && app.and_then(Path::extension).is_some_and(|e| e == "app")
 }
 
 /// Prefix `body` with the stamp, without displacing a leading frontmatter block.
@@ -525,9 +589,11 @@ fn sync_with_home(project: &Path, home: Option<&Path>, cli: &Path) -> Result<Syn
         // whole directory is moss's, so `*` — which ignores the `.gitignore`
         // itself, leaving nothing for `git status` to report.
         record(&dest.join(".gitignore"), Some(ensure_ignored(&real_root, &dest, "*")?));
-        let binding = cli_binding(cli);
         let skill = dest.join("SKILL.md");
-        let body = stamped_with(&skill_package::render_pointer_with_frontmatter(), &binding);
+        let body = stamped_with(
+            &skill_package::render_pointer_with_frontmatter(),
+            &cli_binding_for(&skill, cli),
+        );
         record(&skill, write_managed(&real_root, &skill, &body)?);
         // The references are stubs now, and are written only where a previous
         // moss already put a file. Writing them unconditionally would create
@@ -539,7 +605,10 @@ fn sync_with_home(project: &Path, home: Option<&Path>, cli: &Path) -> Result<Syn
             if !path.is_file() {
                 continue;
             }
-            let stub = stamped_with(&skill_package::render_reference_stub(&topic), &binding);
+            let stub = stamped_with(
+                &skill_package::render_reference_stub(&topic),
+                &cli_binding_for(&path, cli),
+            );
             record(&path, write_managed(&real_root, &path, &stub)?);
         }
     }
@@ -553,7 +622,7 @@ fn sync_with_home(project: &Path, home: Option<&Path>, cli: &Path) -> Result<Syn
             Some(ensure_ignored(&real_root, &rules, "moss.mdc")?),
         );
         let path = rules.join("moss.mdc");
-        let body = stamped_with(&skill_package::render_cursor_mdc(), &cli_binding(cli));
+        let body = stamped_with(&skill_package::render_cursor_mdc(), &cli_binding_for(&path, cli));
         record(&path, write_managed(&real_root, &path, &body)?);
     }
 
@@ -562,7 +631,7 @@ fn sync_with_home(project: &Path, home: Option<&Path>, cli: &Path) -> Result<Syn
     // the only guidance at all for an agent-neutral tool (Codex, Gemini CLI,
     // aider) with no `.claude`/`.cursor` directory to detect.
     let neutral = project.join(".moss/agents/SKILL.md");
-    let body = stamped_with(&skill_package::render_pointer(), &cli_binding(cli));
+    let body = stamped_with(&skill_package::render_pointer(), &cli_binding_for(&neutral, cli));
     record(&neutral, write_managed(&real_root, &neutral, &body)?);
 
     if !report.is_noop() {
