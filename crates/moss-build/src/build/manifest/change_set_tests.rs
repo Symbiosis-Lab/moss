@@ -22,10 +22,56 @@ fn sealed(
         );
     }
     for (out, bytes) in unmapped {
-        let sp = ServedPath::from_source(out).unwrap();
+        // `from_cached` admits the generated `_moss/` namespace `from_source` refuses.
+        let sp = ServedPath::from_cached(out).unwrap();
         pending.register(&sp, bytes, crate::build::manifest::HashBucket::Files);
     }
     pending.seal()
+}
+
+/// [`sealed`] plus folder-provided source files: each of `assets` is a source
+/// path whose output is registered at the same path, with its hash in
+/// `sources` (the half the asset walk writes — registered through the page
+/// writer here because a unit test has no walk).
+fn sealed_with_assets(
+    pages: &[(&str, &str, &str, &[u8])],
+    unmapped: &[(&str, &[u8])],
+    assets: &[&str],
+    unshipped_sources: &[&str],
+) -> crate::build::manifest::SealedManifest {
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    for (src, out, hash, bytes) in pages {
+        let sp = ServedPath::from_source(out).unwrap();
+        pending.register(&sp, bytes, crate::build::manifest::HashBucket::Files);
+        pending.register_source_mapping(src.to_string(), &sp);
+        pending.register_page_source_hash(src.to_string(), meta(hash));
+    }
+    for (out, bytes) in unmapped {
+        let sp = ServedPath::from_source(out).unwrap();
+        pending.register(&sp, bytes, crate::build::manifest::HashBucket::Files);
+    }
+    for src in assets {
+        let sp = ServedPath::from_source(src).unwrap();
+        pending.register(&sp, b"asset", crate::build::manifest::HashBucket::Files);
+        pending.register_page_source_hash(src.to_string(), meta("h-asset"));
+    }
+    for src in unshipped_sources {
+        pending.register_page_source_hash(src.to_string(), meta("h-unshipped"));
+    }
+    pending.seal()
+}
+
+fn meta(hash: &str) -> SourceMetadata {
+    SourceMetadata { hash: hash.to_string(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None }
+}
+
+/// "The source exists" as this build saw it. The real caller asks the folder.
+fn in_build(cur: &crate::build::manifest::SealedManifest) -> impl Fn(&str) -> bool + '_ {
+    |src| cur.sources().contains_key(src) || cur.source_to_output().contains_key(src)
+}
+
+fn removed_of(prev: &PublishedSnapshot, cur: &crate::build::manifest::SealedManifest) -> Vec<(String, RemovalReason)> {
+    removed_addresses(prev, cur, in_build(cur)).into_iter().map(|r| (r.path, r.reason)).collect()
 }
 
 fn snapshot(m: &crate::build::manifest::SealedManifest) -> PublishedSnapshot {
@@ -351,4 +397,176 @@ fn diff_hashes_is_silent_about_an_unchanged_path() {
     let current = HashMap::from([("a.md".to_string(), "h".to_string())]);
 
     assert!(diff_hashes(&previous, &current).is_empty());
+}
+
+// ── Removed public addresses ──
+
+/// A file moss generates (a feed) that this build no longer produces has no
+/// source to point at, so nothing says the author wanted it gone.
+#[test]
+fn a_generated_file_no_longer_produced_is_unexplained() {
+    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[("feed.xml", &b"F"[..])]));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("feed.xml".to_string(), RemovalReason::Unexplained)]);
+}
+
+#[test]
+fn a_page_whose_source_was_deleted_is_author_removed() {
+    let prev = snapshot(&sealed(
+        &[("a.md", "a/index.html", "h", b"A"), ("b.md", "b/index.html", "h", b"B")],
+        &[],
+    ));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("b/index.html".to_string(), RemovalReason::AuthorRemoved)]);
+}
+
+/// The source is still there but its address moved and nothing answers at the
+/// old one: the author did not ask for that 404.
+#[test]
+fn a_moved_page_with_no_stub_is_unexplained_and_with_a_stub_is_not_removed() {
+    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[]));
+
+    let bare = sealed(&[("a.md", "b/index.html", "h", b"A")], &[]);
+    assert_eq!(removed_of(&prev, &bare), [("a/index.html".to_string(), RemovalReason::Unexplained)]);
+
+    let stubbed = sealed(&[("a.md", "b/index.html", "h", b"A")], &[("a/index.html", &b"redirect"[..])]);
+    assert!(removed_of(&prev, &stubbed).is_empty(), "an old address the build still serves is not removed");
+}
+
+#[test]
+fn a_deleted_folder_file_is_author_removed() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.pdf"], &[]));
+    assert_eq!(
+        prev.asset_source_to_output,
+        Some(std::collections::HashMap::from([("docs/a.pdf".to_string(), "docs/a.pdf".to_string())]))
+    );
+    let cur = sealed_with_assets(&[], &[], &[], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("docs/a.pdf".to_string(), RemovalReason::AuthorRemoved)]);
+}
+
+#[test]
+fn a_folder_file_that_still_exists_but_is_not_shipped_is_unexplained() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.pdf"], &[]));
+    let cur = sealed_with_assets(&[], &[], &[], &["docs/a.pdf"]);
+
+    assert_eq!(removed_of(&prev, &cur), [("docs/a.pdf".to_string(), RemovalReason::Unexplained)]);
+}
+
+/// A record from before `asset_source_to_output` cannot say who made a file,
+/// so every non-page removal in it is unexplained.
+#[test]
+fn a_record_that_predates_asset_sources_explains_no_file_removal() {
+    let mut prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.pdf"], &[]));
+    prev.asset_source_to_output = None;
+    let cur = sealed_with_assets(&[], &[], &[], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("docs/a.pdf".to_string(), RemovalReason::Unexplained)]);
+}
+
+#[test]
+fn internal_assets_are_never_public_addresses_and_the_list_is_sorted() {
+    let prev = snapshot(&sealed(
+        &[("a.md", "a/index.html", "h", b"A")],
+        &[("_moss/og/card.png", &b"x"[..]), ("z.xml", &b"z"[..]), ("b.xml", &b"b"[..])],
+    ));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    let removed = removed_of(&prev, &cur);
+    assert_eq!(
+        removed,
+        [("b.xml".to_string(), RemovalReason::Unexplained), ("z.xml".to_string(), RemovalReason::Unexplained)]
+    );
+}
+
+/// `removed_assets` is what the desktop app has always read: every vanished
+/// non-page output including `_moss/`, from the own-target record, never a
+/// page. It is not derived from the address list.
+#[test]
+fn removed_assets_counts_every_vanished_non_page_output_including_internal_ones() {
+    let prev = snapshot(&sealed(
+        &[("a.md", "a/index.html", "h", b"A"), ("b.md", "b/index.html", "h", b"B")],
+        &[("feed.xml", &b"F"[..]), ("_moss/og/c.png", &b"I"[..])],
+    ));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+
+    assert_eq!(set.removed_assets, 2, "the removed page is a Deleted verb; the internal card still counts");
+    assert_eq!(set.removed.len(), 2, "the list holds public addresses only: the page and the feed");
+}
+
+#[test]
+fn a_publish_removing_only_internal_files_is_not_empty() {
+    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[("_moss/og/c.png", &b"I"[..])]));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+
+    assert!(set.removed.is_empty());
+    assert!(!set.is_empty(), "a deleted file is still something to publish");
+}
+
+#[test]
+fn a_set_with_only_removed_addresses_is_not_empty() {
+    let set = ChangeSet {
+        classified: true,
+        removed: vec![RemovedAddress { path: "feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None }],
+        ..ChangeSet::default()
+    };
+    assert!(!set.is_empty());
+}
+
+/// Removed addresses are attached to whatever set results, including the
+/// unclassified one a missing own-target record yields.
+#[test]
+fn removed_addresses_ride_on_an_unclassified_set_too() {
+    let prev = snapshot(&sealed(&[], &[("feed.xml", &b"F"[..])]));
+    let cur = sealed(&[], &[]);
+
+    let set = classify(None, &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+
+    assert!(!set.classified);
+    assert_eq!(set.removed.len(), 1);
+    assert_eq!(set.removed_assets, 0, "an unclassified set shows no count from another target's record");
+}
+
+#[test]
+fn removed_addresses_serialize_snake_case_and_omit_an_absent_moved_to() {
+    let bare = RemovedAddress { path: "a".into(), reason: RemovalReason::AuthorRemoved, moved_to: None };
+    assert_eq!(serde_json::to_value(bare).unwrap(), serde_json::json!({"path": "a", "reason": "author_removed"}));
+    let moved = RemovedAddress { path: "a/".into(), reason: RemovalReason::Unexplained, moved_to: Some("b/".into()) };
+    assert_eq!(
+        serde_json::to_value(moved).unwrap(),
+        serde_json::json!({"path": "a/", "reason": "unexplained", "moved_to": "b/"})
+    );
+}
+
+/// The page is still in the folder and now publishes elsewhere with nothing
+/// at the old address: unexplained, and the removal says where it went.
+#[test]
+fn a_moved_page_with_no_stub_records_where_it_went() {
+    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[]));
+    let cur = sealed(&[("a.md", "b/index.html", "h", b"A")], &[]);
+
+    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].moved_to.as_deref(), Some("b/index.html"));
+    assert_eq!(removed[0].reason, RemovalReason::Unexplained);
+}
+
+/// A note renamed on disk keeps its address through a redirect stub, so
+/// nothing is removed at all.
+#[test]
+fn a_renamed_source_with_a_stub_at_the_old_address_is_not_removed() {
+    let prev = snapshot(&sealed(&[("old-name.md", "old/index.html", "h", b"A")], &[]));
+    let cur = sealed(
+        &[("new-name.md", "new/index.html", "h", b"A")],
+        &[("old/index.html", &b"redirect"[..])],
+    );
+
+    assert!(removed_of(&prev, &cur).is_empty());
 }

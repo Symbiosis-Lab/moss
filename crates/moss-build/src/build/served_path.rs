@@ -39,6 +39,12 @@ use std::fmt;
 /// trigger (`build.rs`), both of which recognize cards by this prefix alone.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
 
+/// Is this output path an address a visitor can have stored — anything outside
+/// the content-addressed, rotating `_moss/` namespace?
+pub fn is_public_address(path: &str) -> bool {
+    !path.starts_with("_moss/")
+}
+
 /// Reserved prefix for the email-fallback math PNGs. Append-only by design:
 /// an entry here is never dropped for being unreadable, because
 /// the published site still serves it and un-promising it would delete it

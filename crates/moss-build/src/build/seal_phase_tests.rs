@@ -462,3 +462,171 @@ async fn the_flush_on_live_runs_the_held_seal_then_one_index() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert_eq!(crate::build::feeds::search::index_build_count() - before, 1, "exactly once");
 }
+
+/// Keeps the change set the seal publishes, and forwards everything else.
+struct ChangeSetTap {
+    inner: Arc<dyn crate::build::ports::announcer::SealAnnouncer>,
+    seen: Arc<std::sync::Mutex<Option<crate::build::manifest::change_set::ChangeSet>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::build::ports::announcer::SealAnnouncer for ChangeSetTap {
+    fn promoted(&self, generation_id: &str) {
+        self.inner.promoted(generation_id);
+    }
+
+    async fn adopt_sealed(&self, sealed: crate::build::manifest::SealedManifest) {
+        self.inner.adopt_sealed(sealed).await;
+    }
+
+    async fn publish_change_set(
+        &self,
+        project_root: &std::path::Path,
+        change_set: Option<crate::build::manifest::change_set::ChangeSet>,
+    ) {
+        *self.seen.lock().unwrap() = change_set.clone();
+        self.inner.publish_change_set(project_root, change_set).await;
+    }
+}
+
+/// A first publish to a new host compares against nothing of its own. The
+/// older host's record lists a feed this build does not make, and the seal
+/// must still say that address is going away.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_first_publish_to_a_new_target_still_reports_what_another_target_served() {
+    use crate::build::manifest::change_set::{PublishedSnapshot, RemovalReason};
+    let vault = Vault::new();
+    std::fs::create_dir_all(vault.folder.join(".moss")).unwrap();
+    std::fs::write(vault.folder.join(".moss/state.toml"), "[deployment]\nsite_id = \"new-site\"\n").unwrap();
+    crate::build::manifest::published_record::save(
+        &vault.mp,
+        &PublishedSnapshot {
+            generation_id: "old".into(),
+            target: "moss:old-site".into(),
+            published_at: "2026-08-20T00:00:00Z".into(),
+            files: [("legacy-feed.xml".to_string(), "100644:abc".to_string())].into(),
+            asset_source_to_output: Some(Default::default()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let mut host = vault.host();
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    host.announcer = Arc::new(ChangeSetTap { inner: host.announcer.clone(), seen: seen.clone() });
+    vault.build_with(host).await;
+    vault.drained().await;
+    settle(&vault.mp).await;
+
+    let set = seen.lock().unwrap().take().expect("the seal published a change set");
+    assert!(!set.classified, "verbs stay target-strict: the new target has no record of its own");
+    assert_eq!(
+        set.removed.iter().map(|r| (r.path.as_str(), r.reason)).collect::<Vec<_>>(),
+        [("legacy-feed.xml", RemovalReason::Unexplained)]
+    );
+}
+
+/// The record's folder-file map is read off a real seal: a file the author put
+/// in the folder is recorded against the address it ships at.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_real_seal_records_which_folder_file_shipped_at_which_address() {
+    let vault = Vault::new();
+    std::fs::create_dir_all(vault.folder.join("docs")).unwrap();
+    std::fs::write(vault.folder.join("docs/Guide.pdf"), b"%PDF-1.4 fixture").unwrap();
+    let mut host = vault.host();
+    let captured = capture_seal(&mut host);
+    vault.build_with(host).await;
+    vault.drained().await;
+    settle(&vault.mp).await;
+
+    let sealed = captured.lock().unwrap().take().expect("a sealed manifest");
+    let record = crate::build::manifest::change_set::PublishedSnapshot::from_sealed(&sealed, "moss:s", String::new());
+    let assets = record.asset_source_to_output.expect("a sealed record knows its folder files");
+    assert_eq!(assets.get("docs/Guide.pdf").map(String::as_str), Some("docs/Guide.pdf"), "{assets:?}");
+}
+
+impl Vault {
+    /// One build and seal, returning the manifest and the change set the seal
+    /// published.
+    async fn seal_and_tap(
+        &self,
+    ) -> (crate::build::manifest::SealedManifest, crate::build::manifest::change_set::ChangeSet) {
+        let mut host = self.host();
+        let captured = capture_seal(&mut host);
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        host.announcer = Arc::new(ChangeSetTap { inner: host.announcer.clone(), seen: seen.clone() });
+        self.build_with(host).await;
+        self.drained().await;
+        settle(&self.mp).await;
+        let sealed = captured.lock().unwrap().take().expect("a sealed manifest");
+        let set = seen.lock().unwrap().take().expect("a change set");
+        (sealed, set)
+    }
+
+    /// Record `sealed` as live on the target this folder publishes to.
+    fn publish(&self, sealed: &crate::build::manifest::SealedManifest) {
+        std::fs::create_dir_all(self.folder.join(".moss")).unwrap();
+        std::fs::write(self.folder.join(".moss/state.toml"), "[deployment]\nsite_id = \"s1\"\n").unwrap();
+        let record = crate::build::manifest::change_set::PublishedSnapshot::from_sealed(
+            sealed,
+            "moss:s1",
+            "2026-09-01T00:00:00Z".into(),
+        );
+        crate::build::manifest::published_record::save(&self.mp, &record).unwrap();
+    }
+}
+
+fn removed_pairs(
+    set: &crate::build::manifest::change_set::ChangeSet,
+) -> Vec<(String, crate::build::manifest::change_set::RemovalReason)> {
+    set.removed.iter().map(|r| (r.path.clone(), r.reason)).collect()
+}
+
+/// Publish, delete a folder file, build again: the author removed it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_folder_file_deleted_after_a_publish_reads_author_removed() {
+    use crate::build::manifest::change_set::RemovalReason::AuthorRemoved;
+    let vault = Vault::new();
+    std::fs::write(vault.folder.join("guide.pdf"), b"%PDF-1.4 fixture").unwrap();
+    let (first, _) = vault.seal_and_tap().await;
+    vault.publish(&first);
+
+    std::fs::remove_file(vault.folder.join("guide.pdf")).unwrap();
+    let (_, set) = vault.seal_and_tap().await;
+
+    assert!(set.classified);
+    assert_eq!(removed_pairs(&set), [("guide.pdf".to_string(), AuthorRemoved)]);
+}
+
+/// A page still in the folder that drops out of the build — bytes that are not
+/// UTF-8, or a file the process cannot read — is not something the author
+/// removed. The existence test reads the folder, not the build's source list.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_that_stops_building_is_not_blamed_on_the_author() {
+    use crate::build::manifest::change_set::RemovalReason::Unexplained;
+    use std::os::unix::fs::PermissionsExt;
+    for unreadable in [false, true] {
+        let vault = Vault::new();
+        let path = vault.folder.join("about.md");
+        std::fs::write(&path, "---\ntitle: About\n---\n\nhello\n").unwrap();
+        let (first, _) = vault.seal_and_tap().await;
+        assert!(first.source_to_output().contains_key("about.md"), "sanity: the page built");
+        vault.publish(&first);
+
+        if unreadable {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        } else {
+            std::fs::write(&path, b"---\ntitle: About\n---\n\n\xff\xfe\n").unwrap();
+        }
+        let (second, set) = vault.seal_and_tap().await;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(!second.source_to_output().contains_key("about.md"), "sanity: it dropped out of the build");
+        assert_eq!(
+            removed_pairs(&set),
+            [("about/index.html".to_string(), Unexplained)],
+            "unreadable={unreadable}"
+        );
+    }
+}

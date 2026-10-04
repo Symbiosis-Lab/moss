@@ -14,6 +14,7 @@ fn snap_for(target: &str) -> PublishedSnapshot {
         files: HashMap::from([("a/index.html".to_string(), "100644:deadbeef".to_string())]),
         uids: HashMap::from([("a.md".to_string(), "aabbccdd".to_string())]),
         triples: None,
+        asset_source_to_output: None,
     }
 }
 
@@ -248,4 +249,63 @@ fn the_key_is_stable_and_distinct_per_target() {
     assert_eq!(path_for(&paths, MOSS), path_for(&paths, MOSS), "same target ⇒ same file");
     assert_ne!(path_for(&paths, MOSS), path_for(&paths, "moss:site-2"));
     assert_ne!(path_for(&paths, MOSS), path_for(&paths, ONION));
+}
+
+fn snap_at(target: &str, published_at: &str) -> PublishedSnapshot {
+    PublishedSnapshot { published_at: published_at.into(), ..snap_for(target) }
+}
+
+/// A first publish to a new host has no record of its own. The address
+/// baseline is then the newest record of any host, while `load_for` stays
+/// strict so page verbs are not diffed against another host's tree.
+#[test]
+fn a_new_target_borrows_the_newest_record_of_any_target_for_addresses() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = MossPaths::new(dir.path());
+    save(&paths, &snap_at(ONION, "2026-08-01T00:00:00Z")).unwrap();
+    save(&paths, &snap_at("moss:site-2", "2026-09-01T00:00:00Z")).unwrap();
+
+    assert_eq!(load_for(&paths, Some(MOSS)), None);
+    assert_eq!(
+        load_address_baseline(&paths, Some(MOSS)).map(|s| s.target),
+        Some("moss:site-2".to_string())
+    );
+}
+
+#[test]
+fn the_own_target_record_is_the_address_baseline_whatever_its_age() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = MossPaths::new(dir.path());
+    save(&paths, &snap_at(MOSS, "2026-01-01T00:00:00Z")).unwrap();
+    save(&paths, &snap_at(ONION, "2026-09-01T00:00:00Z")).unwrap();
+
+    assert_eq!(load_address_baseline(&paths, Some(MOSS)).map(|s| s.target), Some(MOSS.to_string()));
+}
+
+/// Records are read by old and new apps alike: a record without the field
+/// loads as unknown, and a field this version has never heard of is ignored.
+#[test]
+fn records_load_without_the_asset_field_and_with_unknown_extra_fields() {
+    let mut value = serde_json::to_value(snap()).unwrap();
+    value.as_object_mut().unwrap().remove("asset_source_to_output");
+    let old: PublishedSnapshot = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(old.asset_source_to_output, None, "absent means unknown, not 'no assets'");
+
+    value.as_object_mut().unwrap().insert("field_from_the_future".into(), serde_json::json!([1, 2]));
+    assert!(serde_json::from_value::<PublishedSnapshot>(value).is_ok());
+}
+
+/// Text order and time order disagree across UTC offsets: the first string
+/// sorts later but is the earlier instant.
+#[test]
+fn the_newest_record_is_chosen_by_instant_not_by_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = MossPaths::new(dir.path());
+    save(&paths, &snap_at(ONION, "2026-09-01T01:00:00+02:00")).unwrap();
+    save(&paths, &snap_at("moss:site-2", "2026-09-01T00:00:00+00:00")).unwrap();
+
+    assert_eq!(
+        load_address_baseline(&paths, Some(MOSS)).map(|s| s.target),
+        Some("moss:site-2".to_string())
+    );
 }

@@ -142,11 +142,7 @@ pub async fn for_seal(
     describable: Option<&SealedManifest>,
 ) -> Option<SealVerdict> {
     let sealed = describable?;
-    let target = crate::build::site_config::get_domain_config(
-        &mp.project_root().to_string_lossy(),
-    )
-    .ok()
-    .and_then(|c| c.publish_target());
+    let target = publish_target(mp);
     if let Some(record) = published_record::load_for(mp, target.as_deref()) {
         return Some(SealVerdict::Ready(change_set::classify(Some(&record), sealed)));
     }
@@ -160,6 +156,24 @@ pub async fn for_seal(
         Some(files) => SealVerdict::Ready(change_set::flat_against(&files, sealed)),
         None => SealVerdict::AskServer,
     })
+}
+
+fn publish_target(mp: &MossPaths) -> Option<String> {
+    crate::build::site_config::get_domain_config(&mp.project_root().to_string_lossy())
+        .ok()
+        .and_then(|c| c.publish_target())
+}
+
+/// The public addresses a seal would stop serving, against the most recent
+/// publish on any target. Separate from [`for_seal`] because the verdict there
+/// is target-strict, and this must reach every verdict, including the
+/// unclassified one and the ask-the-server path.
+pub fn removed_for_seal(mp: &MossPaths, sealed: &SealedManifest) -> Vec<change_set::RemovedAddress> {
+    published_record::load_address_baseline(mp, publish_target(mp).as_deref())
+        .map(|baseline| change_set::removed_addresses(&baseline, sealed, |src| {
+                mp.project_root().join(src).symlink_metadata().is_ok()
+            }))
+        .unwrap_or_default()
 }
 
 /// The server's own `(need, remove)` for a sealed manifest — the arm for a

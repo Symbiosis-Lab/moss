@@ -414,6 +414,7 @@ async fn run_materialize_phase(req: PendingSeal) {
     use crate::build::manifest::backfill::{self, SealVerdict};
     let backfill_verdict =
         backfill::for_seal(&mp, backfill::tail_speaks(&sealed, mat_ok, owns_shared)).await;
+    let removed = backfill_verdict.as_ref().map(|_| backfill::removed_for_seal(&mp, &sealed));
     let server_ask = match (&backfill_verdict, &ports.server_diff) {
         (Some(SealVerdict::AskServer), Some(_)) => {
             Some((sealed.files().clone(), sealed.generation_id().to_string()))
@@ -440,6 +441,8 @@ async fn run_materialize_phase(req: PendingSeal) {
             _ => Default::default(),
         }),
     };
+    // The removed addresses ride on whichever set resulted, classified or not.
+    let change_set = change_set.zip(removed).map(|(set, removed)| set.with_removed(removed));
     announcer.publish_change_set(mp.project_root(), change_set).await;
 
     // Emit the "Sealed" progress tick (mat_ok-gated) — the counterpart of the

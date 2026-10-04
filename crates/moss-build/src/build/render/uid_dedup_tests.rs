@@ -726,6 +726,7 @@ fn a_record_with_triples_resolves_the_collision_without_the_heuristic() {
                 source_path: "posts/original.md".into(),
                 title: String::new(),
             }]),
+            asset_source_to_output: None,
         },
     )
     .unwrap();
@@ -768,6 +769,7 @@ fn a_half_updated_record_defers_instead_of_reaching_the_heuristic() {
             files: Default::default(),
             uids: [("posts/original.md".to_string(), "aabbccdd".to_string())].into(),
             triples: None,
+            asset_source_to_output: None,
         },
     )
     .unwrap();

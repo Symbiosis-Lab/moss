@@ -60,7 +60,7 @@ pub(super) fn check_mass_removal(
     /// fraction of the derived live count.
     const MASS_REMOVE_FRACTION: f64 = 0.5;
 
-    let content_remove = remove.iter().filter(|p| !p.starts_with("_moss/")).count();
+    let content_remove = remove.iter().filter(|p| crate::build::served_path::is_public_address(p)).count();
 
     if content_remove == 0 || allow_override {
         return Ok(());

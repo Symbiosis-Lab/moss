@@ -31,6 +31,7 @@ fn record(target: &str, pages: &[(&str, &str, &str)]) -> PublishedSnapshot {
         files: pages.iter().map(|(_, out, _)| ((*out).into(), "h".into())).collect(),
         uids: pages.iter().map(|(src, _, uid)| ((*src).into(), (*uid).into())).collect(),
         triples: None,
+        asset_source_to_output: None,
     }
 }
 
