@@ -1888,7 +1888,7 @@ async function runJoin() {
         // With no simulation (reduced motion, or no float render targets) a
         // wash is a cut, and so is a boundary whose print never arrived; a wash
         // that runs may be re-pointed or turned around inside.
-        if (reach !== shown) { shown = await pour(reach); wentStale(); }
+        if (reach !== shown) { shown = await pour(reach); }
         else { passThrough(shown, to); shown = to; }
       }
       if (target === SHARE && xfAt() >= 1) { standAtTerminalClose(); break; }
@@ -2727,8 +2727,8 @@ async function takeOthers(list = neighbours(shown)) {
   // Neighbour prints are immutable handoff state once warmed. Re-entering a
   // live scene to refresh an already-held print changes its measured shell
   // width and data-scene for several frames; that mutation is visible even
-  // when the capture itself is hidden under the wash canvas. A stale neighbour
-  // can safely keep its existing print until the next real wash replaces it.
+  // when the capture itself is hidden under the wash canvas. A neighbour keeps
+  // the print taken while the reader stood in it.
   list = list.filter((other) => !sheets[other]);
   if (!list.length) return;
   const from = shown;
@@ -2825,22 +2825,9 @@ async function retakeShown() {
 const IDLE_REST = 180, WARM_MS = 1000, IDLE_WAIT = 300;
 const whenIdle = window.requestIdleCallback ? (fn) => requestIdleCallback(fn, { timeout: IDLE_WAIT }) : (fn) => setTimeout(fn, 1);
 const atRest = () => !running() && !document.hidden && performance.now() - restSince >= IDLE_REST;
-// The prints a wash has just left behind. The scene it came from was being
-// typed into a moment before, so the print taken of it is no longer what the
-// live scene shows — it stays on hand, because a wash back is better run onto a
-// stale print than cut, and it is retaken at the next rest.
-const stale = new Set();
-const wentStale = () => { for (const n of neighbours(shown)) stale.add(n); warmSoon(0); };
-async function refreshStale() {
-  if (retaking || running() || !washing()) return false;
-  const scene = [...stale][0];
-  if (scene == null) return false;
-  stale.delete(scene);
-  retaking = true;
-  try { await takeOthers([scene]); } catch (e) { console.warn('stale print skipped:', e.message); }
-  finally { retaking = false; }
-  return true;
-}
+// A neighbour keeps the print taken while the reader stood in it, and only the
+// scene on screen is retaken: a wash back is better run onto a print that is a
+// moment old than cut, and `takeOthers` never re-enters a scene that has one.
 let warmTimer = null;
 function warmSoon(ms = WARM_MS) { if (warmTimer != null) return; warmTimer = setTimeout(() => { warmTimer = null; whenIdle(warm); }, ms); }
 async function warm() {
@@ -2851,11 +2838,9 @@ async function warm() {
   // waits for one — but a reader standing in a scene is enough, rest or not.
   const standing = mobileLayout() && !running() && target === shown && Math.abs(progressAt() - shown) < .002;
   if (!atRest() && !standing && !(target !== shown && !primed() && !mobileLayout())) return;
-  stale.delete(shown);   // the scene on screen has its own retake
   // One thing a tick, in this order: a print a jump may ask for that nobody has
-  // taken, then one a wash has just left behind, then the scene on screen, whose
-  // print goes off because the scene moves.
-  if (!await fillPrints() && !await refreshStale()) await retakeShown();
+  // taken, then the scene on screen, whose print goes off because the scene moves.
+  if (!await fillPrints()) await retakeShown();
   maybeJoin();
 }
 warmSoon();
