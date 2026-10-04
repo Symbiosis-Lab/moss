@@ -55,7 +55,7 @@
     const c2=document.querySelectorAll('#c2 .btns a');if(c2[0]){c2[0].textContent=c.editor;c2[0].href=c.docs.editor}if(c2[1]){c2[1].textContent=c.theme;c2[1].href=c.docs.theme}
     const c3=document.querySelectorAll('#c3 .btns a');if(c3[0]){c3[0].textContent=c.media;c3[0].href=c.docs.media}if(c3[1])c3[1].textContent=c.requestType;
     const c4=document.querySelectorAll('#c4 .btns a');if(c4[0]){c4[0].textContent=c.plugin;c4[0].href=c.docs.plugin}if(c4[1])c4[1].textContent=c.registry;
-    text('#five-headline','closeH');text('.closing-lede','closeB');attr('#downloads','aria-label','download');
+    text('#five-headline','closeH');html('.closing-lede','closeB');attr('#downloads','aria-label','download');
     const notes=document.querySelectorAll('#downloads .availability');if(notes[0])notes[0].textContent=c.macNote;if(notes[1])notes[1].textContent=c.soon;if(notes[2])notes[2].textContent=c.soon;attr('[data-platform="macos"]','title','macTitle');attr('[data-platform="windows"]','aria-label','windowsAria');attr('[data-platform="linux"]','aria-label','linuxAria');
     attr('#commands','aria-label','install');document.querySelectorAll('.command button').forEach((b,i)=>{b.textContent=c.copy;b.setAttribute('aria-label',i?c.copyBrew:c.copyNpm)});
     text('#beta-title','betaH');text('#beta > div p','betaB');text('label[for="beta-email"]','email');attr('#beta-email','placeholder','email');text('#beta-form button','request');

@@ -12,6 +12,9 @@ for (const engine of [chromium, webkit]) {
    await page.goto(new URL(locale,baseURL).href);
    await page.locator('a[href="#beta"]').first().click();
    await page.waitForFunction(()=>document.activeElement?.id==='beta-email',null,{timeout:20000});
+   // a catalog string that carries a line break has to be set as markup: set as text, the reader sees its tag
+   const shown=await page.evaluate(()=>document.body.innerText), tag=shown.match(/.{0,40}<\/?[a-z][^>]*>.{0,40}/i);
+   if(tag)throw Error(`Markup shown as text on ${locale||'en'}: ${tag[0]}`);
    const input=page.locator('#beta-email'), button=page.locator('#beta-form button'), message=page.locator('#beta-form .form-status');
    await input.fill('invalid');await button.click();if(calls.length)throw Error('Invalid email was submitted');
    for (const scenario of ['new','existing','malformed','server']) {
