@@ -4,8 +4,9 @@
      stayed is black. Nothing is cut, so every boundary in the mark is a real
      gap or a real taper in the ink.
      Pipeline and all variants: Symbiosis-Lab/moss-logo (build-leaf.sh).
-     Both inks move under prefers-color-scheme: dark, because a favicon has no
-     say over the tab strip it is painted on: the black turns white and the
+     Both inks move under prefers-color-scheme: dark, because the tab icon
+     emitted from this file sits on a round ground that goes near-black there
+     (see ground_default_favicon in moss-build): the black turns white and the
      green lifts from #4f7031 to #a3d483. Left where it is, the green lands a
      shade above a dark ground beside ink at full white, the two-tone reading
      inverts, and the tips go to a smudge.
@@ -21,8 +22,8 @@
      two inline copies of the small mark are retinted the same way from
      stylesheets that cannot reach in here; mark_sync_test holds the three
      in step.
-     This file ships verbatim as every site's favicon, so a line added here is a
-     line on every published site: the ink deliberately stays #fff where
+     This file is the base of every site's default favicon, so a line added here
+     is a line on every published site: the ink deliberately stays #fff where
      mark.css holds the small mark to #ccc, and mark.css's dark block is where
      that is argued. Do not reconcile the two.
      Do NOT rescale the viewBox to shrink this file: the mark is two compound

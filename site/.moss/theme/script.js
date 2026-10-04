@@ -1,9 +1,10 @@
 // Favicon dark-mode swap. The moss mark's SVG favicon (site/assets/brand/favicon.svg,
 // same file whether it's the landing page's own <link> or the one moss's docs-page
 // build rasterizes from) carries a `<style>@media (prefers-color-scheme:dark)` rule
-// that inverts the ink to white/#a3d483 — but Safari (through at least 26.0) fetches
-// and renders an SVG favicon's base styles only, never evaluating @media inside it, so
-// Safari shows the light-mode mark regardless of OS theme. There is no reliable way to
+// that darkens the disc under the mark and turns the ink to white/#a3d483 — but Safari
+// (through at least 26.0) fetches and renders an SVG favicon's base styles only, never
+// evaluating @media inside it, so Safari shows the light-mode icon regardless of OS
+// theme. There is no reliable way to
 // fix that with markup alone: Safari's support for the alternative, separate
 // `<link rel="icon" media="...">` elements, is undocumented and inconsistently
 // reported. So this swaps the icon links' `href` directly with a `matchMedia`

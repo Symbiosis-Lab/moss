@@ -3822,12 +3822,12 @@ pub(super) fn resolve_favicon(
         let rel = format!("assets/{}", name);
         (name, rel, hash, false)
     } else {
-        // Tab-only crop, applied only in this written copy — see
-        // `tighten_default_favicon_viewbox`'s doc comment for why.
-        let tight_favicon = crate::build::site_meta::favicon::tighten_default_favicon_viewbox(crate::build::page::shell::DEFAULT_FAVICON);
-        crate::build::io_utils::write_output(&favicon_dest_dir.join("favicon.svg"), tight_favicon.as_bytes())
+        // The tab icon carries its own round ground, applied only in this
+        // written copy — see `ground_default_favicon`'s doc comment for why.
+        let grounded_favicon = crate::build::site_meta::favicon::ground_default_favicon(crate::build::page::shell::DEFAULT_FAVICON);
+        crate::build::io_utils::write_output(&favicon_dest_dir.join("favicon.svg"), grounded_favicon.as_bytes())
             .map_err(|e| format!("Failed to write default favicon: {}", e))?;
-        let hash = compute_content_hash(&tight_favicon);
+        let hash = compute_content_hash(&grounded_favicon);
         (
             "favicon.svg".to_string(),
             "assets/favicon.svg".to_string(),
@@ -3894,16 +3894,15 @@ mod favicon_tests {
 
         let written = fs::read_to_string(output.path().join("assets/favicon.svg")).expect("read written");
         assert!(written.contains("<svg"), "moss logo should be SVG");
-        // The favicon-emitted copy is DEFAULT_FAVICON with its viewBox
-        // tightened to the ink bbox (moss's 2026-09-14 fix) — not the
-        // padded box every other mark consumer expects. See
-        // `favicon::tighten_default_favicon_viewbox`.
+        // The favicon-emitted copy is DEFAULT_FAVICON on its round ground,
+        // not the bare mark in the padded box every other consumer expects.
+        // See `favicon::ground_default_favicon`.
         assert_eq!(
             written,
-            crate::build::site_meta::favicon::tighten_default_favicon_viewbox(
+            crate::build::site_meta::favicon::ground_default_favicon(
                 crate::build::page::shell::DEFAULT_FAVICON
             ),
-            "fallback should write DEFAULT_FAVICON with a tightened viewBox, path data untouched"
+            "fallback should write DEFAULT_FAVICON on its round ground, path data untouched"
         );
         assert_ne!(
             written,

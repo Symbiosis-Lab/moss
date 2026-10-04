@@ -5,7 +5,7 @@
 // real browser's tab-strip icon; instead it checks the mechanism that has to
 // be right for that to happen: which icon URL each page's <link> resolves to
 // under each OS color scheme, and that fetching and rasterizing THAT URL
-// produces the right ink color. See site/.moss/theme/script.js and the inline
+// produces the right ground and ink colors. See site/.moss/theme/script.js and the inline
 // script in site/index.html for why this is a runtime href swap rather than
 // relying on the SVG's own embedded @media rule (Safari doesn't evaluate it).
 import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
@@ -22,7 +22,10 @@ const pages = [
   { path: 'zh-hant/開始使用/', name: 'docs-zh-hant' },
   { path: 'get-started/', name: 'docs-en' },
 ];
-const expectRGB = { light: '0,0,0', dark: '255,255,255' };
+// The icon is a disc under the mark, so its two most common colours are the
+// ground, then the ink: paper under black in light, this site's dark
+// background under white in dark.
+const expectRGB = { light: '250,248,245 0,0,0', dark: '23,24,22 255,255,255' };
 const failures = [];
 const results = [];
 
@@ -78,12 +81,10 @@ for (const engineName of engineNames) {
                 const key = `${data[i]},${data[i + 1]},${data[i + 2]}`;
                 counts.set(key, (counts.get(key) || 0) + 1);
               }
-              let best = null, bestCount = 0;
-              for (const [key, count] of counts) if (count > bestCount) { best = key; bestCount = count; }
-              return best;
+              return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([key]) => key).join(' ');
             }, new URL(svgIcon.href, page.url()).href);
-            results.push({ engine: engineName, scheme, page: name, href: svgIcon.href, dominantInkRGB: dominant });
-            if (dominant !== expectRGB[scheme]) failures.push({ engine: engineName, scheme, page: name, problem: `Dominant ink ${dominant} for ${svgIcon.href}, expected ${expectRGB[scheme]} (${scheme} scheme)` });
+            results.push({ engine: engineName, scheme, page: name, href: svgIcon.href, groundAndInkRGB: dominant });
+            if (dominant !== expectRGB[scheme]) failures.push({ engine: engineName, scheme, page: name, problem: `Ground and ink ${dominant} for ${svgIcon.href}, expected ${expectRGB[scheme]} (${scheme} scheme)` });
           } finally {
             await page.close();
           }

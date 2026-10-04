@@ -32,8 +32,13 @@ const SIZES: &[u32] = &[16, 32, 180];
 /// that read these files at all are Safari before 26.0, which is exactly where
 /// that is undocumented.
 fn paper() -> tiny_skia::Color {
-    tiny_skia::Color::from_rgba8(0xfa, 0xf8, 0xf5, 0xff)
+    let [r, g, b] = PAPER_RGB;
+    tiny_skia::Color::from_rgba8(r, g, b, 0xff)
 }
+
+/// The one place the paper colour is written; the rasters and the disc's light
+/// fill are both built from it.
+const PAPER_RGB: [u8; 3] = [0xfa, 0xf8, 0xf5];
 
 
 pub struct FaviconAssets {
@@ -46,59 +51,115 @@ pub struct FaviconAssets {
 /// that file's own header — because `mark.css` carries a hand-measured
 /// proportion table keyed to this exact box for every OTHER consumer of the
 /// mark (the app UI, the inline small-mark copies). This constant exists so
-/// [`tighten_default_favicon_viewbox`] can find-and-replace only the
-/// `viewBox`, never the path data, in the copy it emits — `icon.svg` on disk
-/// is untouched.
+/// [`ground_default_favicon`] can find-and-replace only the `viewBox`, never
+/// the path data, in the copy it emits — `icon.svg` on disk is untouched.
 const DEFAULT_FAVICON_VIEWBOX_ATTR: &str = r#"viewBox="-647 -373 3145 3145""#;
 
-/// The tab-only crop. Measured 2026-09-14 by rendering `icon.svg` at 1:1
-/// scale (3145x3145) and scanning alpha for the ink's pixel bounding box:
-/// x=[9,1776] y=[8,2111] within the shipped box — about 56% of the width and
-/// 67% of the height, which read as a barely-there speck in a browser tab
-/// (reported on a real site, 2026-09-14). This
-/// box centers that bbox with an even ~12%-of-side margin on all four edges:
-/// `x0 = cx - side/2 - margin`, `side = max(bbox_w, bbox_h)`, so the ink
-/// fills roughly 68-80% of the canvas instead of ~38% of its area.
-///
-/// Every other consumer of the mark (app UI, inline small-mark copies) sizes
-/// it explicitly and already compensates for the padded box via `mark.css`'s
-/// proportion table — re-fitting the shared `icon.svg` would silently
-/// invalidate that table with nothing to catch it. The favicon is the only
-/// consumer that cannot compensate, because the browser paints the whole box
-/// into the tab strip verbatim; that is the real distinction, not a
-/// workaround around it.
-const DEFAULT_FAVICON_TIGHT_VIEWBOX_ATTR: &str = r#"viewBox="-411 -244 2608 2608""#;
+/// The dark rule `icon.svg` carries; the ground's dark colour is added inside it.
+const DEFAULT_FAVICON_DARK_RULE: &str = "@media (prefers-color-scheme:dark){";
 
-/// Tighten moss's bundled default favicon glyph to its ink bounding box.
+/// The round ground the tab icon carries under the mark.
 ///
-/// Only the `viewBox` attribute changes; every path coordinate is untouched,
-/// so the mark's ~2000-unit fidelity floor (see `icon.svg`'s header) is never
+/// A tab icon cannot learn the colour of the tab strip it lands on, and bare
+/// ink has almost no contrast with some strips (the green tips on a mid-blue
+/// one, white ink on a pale one). So the icon brings its own ground: a disc,
+/// paper when the browser reports light and near-black when it reports dark,
+/// and the ink never touches the strip.
+///
+/// Measured from the two paths in `icon.svg`: the smallest circle enclosing all
+/// the ink is centred at (1023.2, 1042.2) with radius 1175.5. The disc is that
+/// circle widened to `r = 1469`, so the ink reaches 80% of the radius: the tips
+/// stop 20% short of the edge and the mark has room inside the disc. The cost
+/// is a mark 20% smaller than a disc drawn tight around the ink's
+/// enclosing circle would give. The icon's `viewBox` is the disc's own box,
+/// which is also what crops the three rasters. The geometry test below renders
+/// the real mark and fails if a future mark outgrows the disc.
+struct RoundGround {
+    cx: i32,
+    cy: i32,
+    r: i32,
+    /// Fill when the browser reports light; paper, see [`paper`].
+    light: [u8; 3],
+    /// Fill when the browser reports dark; the dark `--moss-color-bg`.
+    dark: &'static str,
+}
+
+const DEFAULT_GROUND: RoundGround = RoundGround {
+    cx: 1023,
+    cy: 1042,
+    r: 1469,
+    light: PAPER_RGB,
+    dark: "#1c1914",
+};
+
+impl RoundGround {
+    fn view_box_attr(&self) -> String {
+        format!(
+            r#"viewBox="{} {} {} {}""#,
+            self.cx - self.r,
+            self.cy - self.r,
+            2 * self.r,
+            2 * self.r
+        )
+    }
+
+    fn circle(&self) -> String {
+        format!(
+            r##"<circle cx="{}" cy="{}" r="{}" fill="#{:02x}{:02x}{:02x}"/>"##,
+            self.cx, self.cy, self.r, self.light[0], self.light[1], self.light[2]
+        )
+    }
+}
+
+/// Turn moss's bundled default favicon into the tab icon moss emits: the mark
+/// on its own round ground.
+///
+/// Three things change, and no path coordinate: the `viewBox` becomes the
+/// disc's box, a `<circle>` is inserted before the first path, and the dark
+/// rule gains `circle{fill:…}` so the disc follows the browser's colour scheme.
+/// The mark's ~2000-unit fidelity floor (see `icon.svg`'s header) is never
 /// engaged and `mark_sync_test`'s path-string comparison still holds. Applies
 /// ONLY to moss's own default mark, written fresh at favicon-emit time —
-/// never to a vault-supplied `assets/favicon.svg`, whose padding is the
-/// author's decision, and never to `icon.svg`/`mark-small.svg`/`mark.css` on
-/// disk, which stay exactly as every other mark consumer expects them.
+/// never to a site-supplied `assets/favicon.svg`, whose look is the author's
+/// decision, and never to `icon.svg`/`mark-small.svg`/`mark.css` on disk.
 ///
 /// `svg` is expected to be [`crate::build::page::shell::DEFAULT_FAVICON`]
-/// verbatim. A mismatched `viewBox` means the source file changed without
-/// this crop being re-measured; that is a bug, but it is caught by the unit
-/// test below, which runs against the real constant, so here it only warns
-/// and returns the SVG untightened. A padded tab icon is cosmetic; refusing
-/// to build the site is not.
-pub fn tighten_default_favicon_viewbox(svg: &str) -> String {
-    if !svg.contains(DEFAULT_FAVICON_VIEWBOX_ATTR) {
-        // Fail open, like the rasterization step below: a padded tab icon is a
-        // cosmetic regression, a failed build is the whole site. The unit test
-        // runs this against the real DEFAULT_FAVICON, so a drifted icon.svg is
-        // caught in CI rather than here.
+/// verbatim. A missing anchor means the source file changed without this being
+/// updated; that is a bug, caught by the unit test below, which runs against
+/// the real constant, so here each missing anchor only warns and that one step
+/// is skipped. An ungrounded tab icon is cosmetic; refusing to build the site
+/// is not.
+pub fn ground_default_favicon(svg: &str) -> String {
+    let ground = &DEFAULT_GROUND;
+    let mut out = svg.to_string();
+
+    let view_box = ground.view_box_attr();
+    if out.contains(DEFAULT_FAVICON_VIEWBOX_ATTR) {
+        out = out.replacen(DEFAULT_FAVICON_VIEWBOX_ATTR, &view_box, 1);
+    } else {
         log::warn!(
-            "default favicon viewBox is not the measured {} — shipping it untightened; \
-             re-run the ink-bbox measurement and update DEFAULT_FAVICON_TIGHT_VIEWBOX_ATTR",
+            "default favicon viewBox is not {} — shipping it uncropped; \
+             update DEFAULT_FAVICON_VIEWBOX_ATTR",
             DEFAULT_FAVICON_VIEWBOX_ATTR
         );
-        return svg.to_string();
     }
-    svg.replacen(DEFAULT_FAVICON_VIEWBOX_ATTR, DEFAULT_FAVICON_TIGHT_VIEWBOX_ATTR, 1)
+
+    if let Some(at) = out.find("<path") {
+        out.insert_str(at, &ground.circle());
+    } else {
+        log::warn!("default favicon has no <path> to put the round ground under — shipping it without one");
+    }
+
+    if out.contains(DEFAULT_FAVICON_DARK_RULE) {
+        let dark = format!("{}circle{{fill:{}}}", DEFAULT_FAVICON_DARK_RULE, ground.dark);
+        out = out.replacen(DEFAULT_FAVICON_DARK_RULE, &dark, 1);
+    } else {
+        log::warn!(
+            "default favicon has no `{}` rule — the round ground will stay light in dark mode",
+            DEFAULT_FAVICON_DARK_RULE
+        );
+    }
+    out
 }
 
 /// Whether `svg` embeds a raster image via an SVG `<image>` element.
@@ -218,34 +279,33 @@ mod tests {
         assert_eq!(height, expected_size);
     }
 
-    /// A real site's too-small favicon glyph (moss's 2026-09-14 fix):
-    /// tightening the default mark's viewBox must touch only that attribute,
-    /// never the path data — path coordinates are the ~2000-unit fidelity
-    /// floor `mark_sync_test` compares byte-for-byte.
+    /// The emitted default is the mark on its disc: disc viewBox, the circle
+    /// under the first path, a dark rule for the disc, and every other byte —
+    /// the path data — untouched (`mark_sync_test` compares it byte-for-byte).
     #[test]
-    fn tighten_default_favicon_viewbox_only_changes_the_viewbox() {
-        let tightened = tighten_default_favicon_viewbox(
-            crate::build::page::shell::DEFAULT_FAVICON,
-        );
+    fn ground_default_favicon_adds_the_disc_and_leaves_the_paths_alone() {
+        let src = crate::build::page::shell::DEFAULT_FAVICON;
+        let out = ground_default_favicon(src);
+        let g = &DEFAULT_GROUND;
+        assert!(out.contains(r#"viewBox="-446 -427 2938 2938""#), "disc viewBox missing");
+        assert!(!out.contains(DEFAULT_FAVICON_VIEWBOX_ATTR), "padded viewBox must not survive");
+        let circle = r##"<circle cx="1023" cy="1042" r="1469" fill="#faf8f5"/>"##;
+        assert_eq!(g.circle(), circle);
+        assert!(out.contains(&format!("{circle}<path")), "circle must sit right before the first path");
+        let dark = "circle{fill:#1c1914}";
+        let at = out.find(dark).expect("dark rule for the disc missing");
         assert!(
-            tightened.contains(DEFAULT_FAVICON_TIGHT_VIEWBOX_ATTR),
-            "expected the tightened viewBox; got: {}",
-            &tightened[..200.min(tightened.len())]
+            at > out.find("@media").unwrap() && at < out.find("</style>").unwrap(),
+            "the disc's dark fill must live inside the @media rule"
         );
-        assert!(
-            !tightened.contains(DEFAULT_FAVICON_VIEWBOX_ATTR),
-            "the padded viewBox must not survive the crop"
-        );
-        // Every other byte — the whole path data — must be untouched: the
-        // two strings must be identical once each one's own viewBox
-        // attribute is removed.
-        let original_without_viewbox =
-            crate::build::page::shell::DEFAULT_FAVICON.replacen(DEFAULT_FAVICON_VIEWBOX_ATTR, "", 1);
-        let tightened_without_viewbox =
-            tightened.replacen(DEFAULT_FAVICON_TIGHT_VIEWBOX_ATTR, "", 1);
+        let stripped = out
+            .replacen(&g.view_box_attr(), "", 1)
+            .replacen(circle, "", 1)
+            .replacen(dark, "", 1);
         assert_eq!(
-            original_without_viewbox, tightened_without_viewbox,
-            "tightening must not touch anything but the viewBox attribute"
+            stripped,
+            src.replacen(DEFAULT_FAVICON_VIEWBOX_ATTR, "", 1),
+            "grounding must not touch anything but the viewBox, the circle and the dark rule"
         );
     }
 
@@ -253,13 +313,93 @@ mod tests {
     /// cosmetic, the build is not. CI catches the drift via the test above,
     /// which runs against the real `DEFAULT_FAVICON`.
     #[test]
-    fn tighten_default_favicon_viewbox_passes_an_unexpected_source_through() {
+    fn ground_default_favicon_passes_an_unexpected_source_through() {
         let foreign = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>"#;
         assert_eq!(
-            tighten_default_favicon_viewbox(foreign),
+            ground_default_favicon(foreign),
             foreign,
-            "an unrecognized viewBox should ship untightened, not panic"
+            "an unrecognized source should ship as it came, not panic"
         );
+    }
+
+    /// The icon is round, and the mark fits inside it. The finished icon is
+    /// rendered on a transparent pixmap: its four corners stay clear and the
+    /// four rim midpoints are covered. Separately the bare mark is rendered in
+    /// its own padded box, so the check does not depend on the disc's box, and
+    /// every pixel it paints must lie within the disc's radius. A future mark
+    /// that grows past the disc fails here rather than shipping clipped.
+    #[test]
+    fn default_favicon_is_round_and_holds_all_the_ink() {
+        let render = |svg: &str, n: u32| {
+            let tree = usvg::Tree::from_str(
+                &crate::build::svg_util::strip_media_queries(svg),
+                &usvg::Options::default(),
+            )
+            .expect("parse");
+            let mut pm = tiny_skia::Pixmap::new(n, n).unwrap();
+            let s = n as f32 / tree.size().width();
+            resvg::render(&tree, tiny_skia::Transform::from_scale(s, s), &mut pm.as_mut());
+            pm
+        };
+        let src = crate::build::page::shell::DEFAULT_FAVICON;
+
+        let n = 256;
+        let icon = render(&ground_default_favicon(src), n);
+        let (mid, last) = (n / 2, n - 1);
+        for (x, y) in [(0, 0), (last, 0), (0, last), (last, last)] {
+            assert_eq!(icon.pixel(x, y).unwrap().alpha(), 0, "corner ({x},{y}) must be transparent");
+        }
+        // Inside the disc and outside the ink, so opaque only if the disc is there.
+        for (x, y) in [(mid, 2), (mid, last - 2), (2, mid), (last - 2, mid)] {
+            assert_eq!(icon.pixel(x, y).unwrap().alpha(), 255, "rim point ({x},{y}) must be inside the disc");
+        }
+
+        // The padded box `icon.svg` ships with. Asserted first so a drifted
+        // source fails as drift, not as a puzzling distance below.
+        assert!(
+            src.contains(DEFAULT_FAVICON_VIEWBOX_ATTR),
+            "icon.svg's viewBox is no longer {DEFAULT_FAVICON_VIEWBOX_ATTR}; update the constant"
+        );
+        let [box_x, box_y, box_w, _] = DEFAULT_FAVICON_VIEWBOX_ATTR
+            .trim_start_matches(r#"viewBox=""#)
+            .trim_end_matches('"')
+            .split_whitespace()
+            .map(|v| v.parse::<f32>().expect("viewBox number"))
+            .collect::<Vec<_>>()[..]
+        else {
+            panic!("viewBox must hold four numbers")
+        };
+        let n = 1024;
+        let mark = render(src, n);
+        let unit = box_w / n as f32;
+        let g = &DEFAULT_GROUND;
+        let mut painted = 0;
+        for (i, p) in mark.pixels().iter().enumerate() {
+            if p.alpha() == 0 {
+                continue;
+            }
+            painted += 1;
+            let x = box_x + ((i as u32 % n) as f32 + 0.5) * unit;
+            let y = box_y + ((i as u32 / n) as f32 + 0.5) * unit;
+            let d = ((x - g.cx as f32).powi(2) + (y - g.cy as f32).powi(2)).sqrt();
+            assert!(d <= g.r as f32, "ink at ({x:.0},{y:.0}) is {d:.0} from the centre, outside the radius {}", g.r);
+        }
+        assert!(painted > 0, "the mark alone rendered nothing");
+    }
+
+    /// The landing site's own `favicon.svg` is generated by
+    /// `scripts/generate-landing-locales.mjs` with this same geometry and only
+    /// a different dark ground (`#171816`). The two copies of the numbers agree
+    /// exactly when this holds.
+    #[test]
+    fn landing_site_favicon_matches_the_generated_default() {
+        let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../site/assets/favicon.svg");
+        let on_disk = std::fs::read_to_string(&site)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", site.display()));
+        let generated = ground_default_favicon(crate::build::page::shell::DEFAULT_FAVICON)
+            .replace(DEFAULT_GROUND.dark, "#171816");
+        assert_eq!(generated, on_disk);
     }
 
     #[test]

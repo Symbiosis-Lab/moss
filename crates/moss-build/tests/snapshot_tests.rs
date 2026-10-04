@@ -2148,13 +2148,12 @@ fn test_default_favicon_when_no_user_favicon() {
         "Default favicon should be written to assets/favicon.svg when user has none"
     );
 
-    // The fallback writes the mark with its viewBox tightened to the tab-only
-    // ink bbox (moss's 2026-09-14 fix) — not icon.svg verbatim.
+    // The fallback writes the mark on its round ground — not icon.svg verbatim.
     let favicon_content = fs::read_to_string(&favicon_path).unwrap();
     assert_eq!(
         favicon_content,
-        moss_build::build::site_meta::favicon::tighten_default_favicon_viewbox(MOSS_MARK),
-        "Default favicon should be icons/icon.svg with the tightened viewBox"
+        moss_build::build::site_meta::favicon::ground_default_favicon(MOSS_MARK),
+        "Default favicon should be icons/icon.svg on its round ground"
     );
 
     // HTML should contain a <link> tag for the favicon
