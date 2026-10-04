@@ -346,6 +346,75 @@ pub(crate) fn encode_rungs(
     outcomes
 }
 
+/// A short memory of responsive sizes a re-dispatch failed to produce.
+///
+/// An unchanged image whose responsive size is missing from the cache is sent
+/// back to the conversion worker to encode it. When the cause persists (the
+/// store refuses the blob, the link into the output fails, the encoder declines
+/// the size) that would repeat on every build, so a re-dispatch that did not
+/// produce its size is noted here, and the skip decision leaves that size alone
+/// for [`WINDOW`]. The note lives in memory only: a new process tries again.
+pub(crate) mod redispatch_note {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, LazyLock, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// How long a size that was not produced is left alone.
+    pub(crate) const WINDOW: Duration = Duration::from_secs(10 * 60);
+
+    /// The clock, injected so tests move it instead of sleeping.
+    pub(crate) type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
+    pub(crate) fn system_clock() -> Clock {
+        Arc::new(Instant::now)
+    }
+
+    /// (cache root, source oid, output path of the size) -> when it was not produced.
+    static NOTES: LazyLock<Mutex<HashMap<(PathBuf, String, String), Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    fn key(root: &Path, oid: &str, rung_rel: &str) -> (PathBuf, String, String) {
+        (root.to_path_buf(), oid.to_string(), rung_rel.to_string())
+    }
+
+    fn is_fresh(root: &Path, oid: &str, rung_rel: &str, now: Instant) -> bool {
+        let Ok(notes) = NOTES.lock() else { return false };
+        notes.get(&key(root, oid, rung_rel)).is_some_and(|at| now.saturating_duration_since(*at) < WINDOW)
+    }
+
+    /// The first of the missing sizes whose last re-dispatch is not recent: the reason to send the image back.
+    pub(crate) fn to_retry<'a>(root: &Path, oid: &str, missing: &[&'a str], now: Instant) -> Option<&'a str> {
+        missing.iter().copied().find(|rel| {
+            let held = is_fresh(root, oid, rel, now);
+            if held {
+                log::debug!("{rel} was not produced by the last re-dispatch; not retrying yet");
+            }
+            !held
+        })
+    }
+
+    /// After a re-dispatch has run: a size now in staging is forgotten, one still
+    /// missing is noted, and notes past their window are dropped. A cancelled run
+    /// never reached some images, so it forgets what is present but notes nothing.
+    /// Presence is probed before the lock is taken: the staging directory may be
+    /// slow, and the lock is shared by every site's dispatch decision.
+    pub(crate) fn settle(root: &Path, staging_dir: &Path, redispatched: &[(String, String)], now: Instant, cancelled: bool) {
+        let probed: Vec<_> = redispatched
+            .iter()
+            .map(|(oid, rung_rel)| (key(root, oid, rung_rel), crate::build::io_utils::output_present(&staging_dir.join(rung_rel))))
+            .collect();
+        let Ok(mut notes) = NOTES.lock() else { return };
+        notes.retain(|_, at| now.saturating_duration_since(*at) < WINDOW);
+        for (k, present) in probed {
+            if present {
+                notes.remove(&k);
+            } else if !cancelled {
+                notes.insert(k, now);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

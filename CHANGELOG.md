@@ -19,6 +19,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A responsive image size that is missing from the cache is regenerated on the next build instead of staying missing until the source changes.
 - A failed cache write now says whether its cache folder was not downloaded.
 - On a cloud-synced folder, a cache record that has not been downloaded is now fetched instead of being treated as missing, so opening the site on a second computer no longer re-optimizes every image or drops responsive image sizes from the shared cache.
 - On a cloud-synced folder, cached files that have not been downloaded are fetched when needed instead of being deleted and rewritten, so two computers sharing a site no longer re-upload each other's cache, and a build waits a bounded time for them, using the site's own file in their place where it has one, so a computer that is offline can still build.

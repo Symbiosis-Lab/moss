@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 // The rung encode unit lives in the sibling `rungs` module (extracted per
 // MIGRATION-STATE's image.rs debt row, Task 10.5). The dispatch-side rung loop
 // and the fingerprint-skip heal block stay here and CALL into it.
-use super::rungs::{decode_oriented, encode_rungs, RungOutcome};
+use super::rungs::{decode_oriented, encode_rungs, redispatch_note, RungOutcome};
 use super::sniff::{is_animated_gif, is_animated_webp, is_cmyk_jpeg};
 
 // ---------------------------------------------------------------------------
@@ -1835,7 +1835,8 @@ fn record_deliveries(
 /// the preview as they land; the accumulators are `Mutex`/atomic and reduced
 /// after the scope, and the shared `AssetRegistry`, coordinator `Sender`,
 /// singleflight and `end_ui_bound` counter are internally synchronized.
-pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunContext) {
+/// Returns whether the run was cancelled.
+pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunContext) -> bool {
     use crate::build::cache::{ObjectStore, TransformCache};
     use moss_core::asset_paths;
     use crate::build::render::resolve_path_with_overrides;
@@ -1844,7 +1845,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
     let total = ctx.items.len() as u32;
     if total == 0 {
-        return;
+        return false;
     }
 
     // The per-image work below runs in PARALLEL on raw OS threads (see the
@@ -2351,7 +2352,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             converted_count
         );
         emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, suppressed, services.assets.as_deref());
-        return;
+        return true;
     }
 
     // Fold in whatever `dispatch_image_conversions` carried forward for
@@ -2409,6 +2410,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // this replaced claimed video dispatch "runs on every build" and left the
     // receipt to it; it does not, so image-only sites emitted no `BuildComplete`
     // at all and their preview never refreshed after the first build.
+    false
 }
 
 /// Send produced `.webp` paths to the manifest coordinator via channel.
@@ -2702,6 +2704,17 @@ pub(crate) fn dispatch_image_conversions(
     ctx: &BackgroundContext,
     tx: Option<mpsc::Sender<EmitMessage>>,
 ) {
+    dispatch_image_conversions_at(services, ctx, tx, &redispatch_note::system_clock());
+}
+
+/// [`dispatch_image_conversions`] with its clock supplied, which only the
+/// re-dispatch note reads.
+pub(crate) fn dispatch_image_conversions_at(
+    services: Option<&BuildServices>,
+    ctx: &BackgroundContext,
+    tx: Option<mpsc::Sender<EmitMessage>>,
+    clock: &redispatch_note::Clock,
+) {
     if ctx.image_items.is_empty() {
         return;
     }
@@ -2737,6 +2750,8 @@ pub(crate) fn dispatch_image_conversions(
         let mut joined: usize = 0;
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
+        // Sizes sent back to the worker to be produced; see `redispatch_note`.
+        let mut redispatched: Vec<(String, String)> = Vec::new();
         // Advisories re-emitted on behalf of an image this dispatch skips
         // (fingerprint matched, output present) — read from the fingerprint
         // cache, never recomputed. See `ImageRunContext::carried_advisories`.
@@ -2837,7 +2852,36 @@ pub(crate) fn dispatch_image_conversions(
                 (false, None)
             };
 
-            if let (Some(source_oid), true) = (disk_source_oid.as_deref(), outputs_present) {
+            // The promised rungs are part of "unchanged and present": one that is neither on
+            // disk nor healable from the store sends the image to the worker, which reuses the
+            // cached base and encodes only the cold rungs. Suppressed rungs never count.
+            let rung_verdicts: Vec<(String, bool, Option<String>)> = match disk_source_oid.as_deref() {
+                Some(source_oid) if outputs_present => promised_rungs(item, &mapped, &ctx.rung_collisions)
+                    .into_iter()
+                    .map(|(rung, rung_rel)| {
+                        let (present, oid) = heal_and_verify_variant(
+                            &heal_objects,
+                            &heal_transforms,
+                            &heal_params,
+                            &mut staged,
+                            &ctx.staging_dir.join(&rung_rel),
+                            &format!("image/webp-w{}", rung),
+                            source_oid,
+                            heal_suppressed.contains(&rung_rel),
+                            &mut healed_count,
+                        );
+                        (rung_rel, present, oid)
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let missing_rungs: Vec<&str> =
+                rung_verdicts.iter().filter(|(rel, present, _)| !present && !heal_suppressed.contains(rel)).map(|(rel, _, _)| rel.as_str()).collect();
+            // A size an earlier re-dispatch did not produce is left alone for a while, so a
+            // cause that persists does not re-encode this image on every build.
+            let missing_rung = redispatch_note::to_retry(&ctx.moss_dir, disk_source_oid.as_deref().unwrap_or_default(), &missing_rungs, clock());
+
+            if disk_source_oid.is_some() && outputs_present && missing_rung.is_none() {
                 // Re-register every key the encode path delivers for this
                 // image so seal() keeps them. `emit_image_outputs_via_channel`'s
                 // existence check drops any key whose staging file is absent
@@ -2865,38 +2909,9 @@ pub(crate) fn dispatch_image_conversions(
                     }
                 }
 
-                // Ladder rungs ride the same skip-path registration +
-                // self-heal (Task 5), only for an image that is itself
-                // skipping — a dispatched image gets fresh rungs from
-                // `run_image_conversion`. Without this, a text-only
-                // rebuild's stale cleanup would delete every rung file —
-                // they'd be absent from the manifest. Collided paths belong
-                // to the user's own file and are skipped with the same
-                // membership test as everywhere else.
-                for (rung, rung_rel) in promised_rungs(item, &mapped, &ctx.rung_collisions) {
-                    let rung_staging = ctx.staging_dir.join(&rung_rel);
-                    let rung_transform = format!("image/webp-w{}", rung);
-                    // Same fix as the base image just above, and for the same
-                    // reason: registering a rung must be tied to the heal's
-                    // own verdict, carrying its own verified CAS oid rather
-                    // than an independent presence check or no oid at all —
-                    // a rung transform the current oid never produced (e.g.
-                    // rungs shipped after this content was last encoded)
-                    // must NOT register whatever stale file an older
-                    // generation left at this exact path, and one it DID
-                    // produce must ship with the same overlap protection the
-                    // base image gets, not the weaker Fingerprint fallback.
-                    let (rung_present, rung_oid) = heal_and_verify_variant(
-                        &heal_objects,
-                        &heal_transforms,
-                        &heal_params,
-                        &mut staged,
-                        &rung_staging,
-                        &rung_transform,
-                        source_oid,
-                        heal_suppressed.contains(&rung_rel),
-                        &mut healed_count,
-                    );
+                // Ladder rungs register with the CAS oid their own heal verified, so a rung the
+                // current content never produced is not registered from a stale file at its path.
+                for (rung_rel, rung_present, rung_oid) in rung_verdicts {
                     if rung_present {
                         skip_paths.push((rung_rel.clone(), rung_oid));
                         if let Some(ref asset_reg) = svc.assets {
@@ -2908,19 +2923,17 @@ pub(crate) fn dispatch_image_conversions(
                             }
                         }
                     }
-                    // Else: this rung isn't verifiably encoded for the
-                    // current content — leave it unregistered rather than
-                    // register a lie. It stays Pending behind the
-                    // LQIP/passthrough placeholder until some future
-                    // dispatch actually produces it.
                 }
             } else {
                 if disk_source_oid.is_some() {
                     log::info!(
-                        "Image '{}' unchanged but its .webp is missing — \
+                        "Image '{}' unchanged but {} is missing — \
                          re-dispatching to self-heal instead of skipping",
-                        rel_source
+                        rel_source,
+                        missing_rung.unwrap_or("its .webp")
                     );
+                    let oid = disk_source_oid.as_deref().unwrap_or_default();
+                    redispatched.extend(missing_rungs.iter().map(|rel| (oid.to_string(), rel.to_string())));
                 }
                 to_dispatch.push(ImageConversionItem { fingerprint, ..item.clone() });
             }
@@ -3066,12 +3079,15 @@ pub(crate) fn dispatch_image_conversions(
                 deploy_video_max_size_mb: svc.deploy_video_max_size_mb,
             });
             log::info!("Spawning background image conversion for {} images", total);
+            let clock = clock.clone();
             spawner.spawn_blocking(Box::new(move || {
-                run_image_conversion(&services_arc, &run_ctx);
+                let cancelled = run_image_conversion(&services_arc, &run_ctx);
+                redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
             }));
         } else {
             log::info!("Running headless image conversion for {} images", total);
-            run_image_conversion(svc, &run_ctx);
+            let cancelled = run_image_conversion(svc, &run_ctx);
+            redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
         }
     }
 }

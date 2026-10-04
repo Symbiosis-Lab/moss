@@ -2638,6 +2638,215 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
     );
 }
 
+/// An image a previous build converted: 1000x600 on disk, its base `.webp` cached
+/// as `b"CACHED BASE"` and its hash-index entry primed, but no rung record or
+/// file. `scan_dimensions` is what the scan reported for it, which decides
+/// which rungs the encoder promises. Returns the context and the staging dir.
+fn unchanged_image_with_cached_base(root: &Path, scan_dimensions: (u32, u32)) -> (BackgroundContext, PathBuf) {
+    let rel = "photo.jpg";
+    make_big_jpeg(&root.join(rel), 1000, 600);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+    let paths = MossPaths::from_moss_dir(moss_dir.clone());
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(rel)).unwrap();
+    let fingerprint = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(rel), &cfg)
+        .expect("source exists and is stat-able");
+    prime_disk_hash_index(&moss_dir, rel, &fingerprint, &source_oid);
+    prime_cached_transform(
+        &crate::build::cache::ObjectStore::for_site(&paths),
+        &crate::build::cache::TransformCache::for_site(&paths),
+        &source_oid,
+        "image/webp",
+        &cfg.to_params(),
+        b"CACHED BASE",
+    );
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from(rel),
+            source_oid,
+            ext: "jpg".to_string(),
+            dimensions: Some(scan_dimensions),
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir,
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    (ctx, staging)
+}
+
+/// An unchanged image whose base output is cached but whose promised 800w rung has
+/// no record: nothing but the worker writes a rung record, so skipping the image
+/// left that srcset candidate missing until the source changed. It goes to the
+/// worker, which reuses the cached base and encodes the rung.
+#[test]
+fn an_unchanged_image_missing_a_promised_rung_is_dispatched_to_produce_it() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    assert_eq!(moss_core::asset_paths::ladder_rungs(1000, 600, false), &[800][..], "premise");
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+
+    assert!(staging.join("photo.w800.webp").exists(), "the missing rung is produced");
+    assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused, not re-encoded");
+}
+
+/// No rung is promised for an image the scan found no wider than the first rung,
+/// so a missing rung record is not a gap. The file on disk is made wider than the
+/// scan says so that a wrongly dispatched image would visibly produce a rung.
+#[test]
+fn an_unchanged_image_with_no_promised_rung_is_still_skipped() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (700, 420));
+    assert!(moss_core::asset_paths::ladder_rungs(700, 420, false).is_empty(), "premise");
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+
+    assert!(staging.join("photo.webp").exists(), "the base is carried forward");
+    assert!(!staging.join("photo.w800.webp").exists(), "skipped: the worker never ran");
+}
+
+/// A clock the test moves by hand.
+fn hand_clock() -> (redispatch_note::Clock, std::sync::Arc<Mutex<std::time::Instant>>) {
+    let now = std::sync::Arc::new(Mutex::new(std::time::Instant::now()));
+    let shared = now.clone();
+    (std::sync::Arc::new(move || *shared.lock().unwrap()), now)
+}
+
+fn advance(now: &Mutex<std::time::Instant>, by: std::time::Duration) {
+    *now.lock().unwrap() += by;
+}
+
+/// Make the 800w rung impossible to produce: a directory sits where its file goes.
+fn block_rung(staging: &Path) {
+    fs::create_dir_all(staging.join("photo.w800.webp")).unwrap();
+}
+
+fn unblock_rung(staging: &Path) {
+    fs::remove_dir_all(staging.join("photo.w800.webp")).unwrap();
+}
+
+/// Put the image back in the state of a cache that lost its rung: no file, no record entry.
+fn forget_rung(ctx: &BackgroundContext, staging: &Path) {
+    let paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
+    let transforms = crate::build::cache::TransformCache::for_site(&paths);
+    let oid = &ctx.image_items[0].source_oid;
+    let mut record = transforms.get_with(oid, crate::build::cache::RecordMode::Request).unwrap();
+    record.transforms.remove("image/webp-w800");
+    transforms.put(&record).unwrap();
+    let _ = fs::remove_file(staging.join("photo.w800.webp"));
+}
+
+fn rung_produced(staging: &Path) -> bool {
+    staging.join("photo.w800.webp").is_file()
+}
+
+/// A rung whose re-dispatch did not produce it is left alone for the note's window,
+/// so a cause that persists does not re-encode the image on every build; after the
+/// window it is tried again.
+#[test]
+fn a_rung_a_redispatch_did_not_produce_is_not_retried_within_the_window() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    let (clock, now) = hand_clock();
+    let svc = BuildServices::headless();
+
+    block_rung(&staging);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "premise: the blocked rung is not produced");
+
+    unblock_rung(&staging);
+    advance(&now, std::time::Duration::from_secs(9 * 60));
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "within the window the image is not dispatched again");
+
+    advance(&now, std::time::Duration::from_secs(2 * 60));
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(rung_produced(&staging), "after the window it is tried again");
+}
+
+/// A size that is present when a re-dispatch settles forgets its note: when it goes
+/// missing again it is re-dispatched at once, not held back for the rest of the
+/// window. Drives `settle` directly with the size present while its note is fresh,
+/// since the dispatch path never re-dispatches a size inside its window.
+#[test]
+fn a_produced_rung_clears_the_note() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    let (clock, _now) = hand_clock();
+    let svc = BuildServices::headless();
+
+    block_rung(&staging);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "premise: the blocked rung is not produced and is noted");
+
+    unblock_rung(&staging);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "premise: the note holds the size back inside the window");
+
+    // The size turns up while its note is fresh, and a settle sees it present.
+    fs::write(staging.join("photo.w800.webp"), b"RUNG").unwrap();
+    let redispatched = vec![(ctx.image_items[0].source_oid.clone(), "photo.w800.webp".to_string())];
+    redispatch_note::settle(&ctx.moss_dir, &staging, &redispatched, clock(), false);
+
+    forget_rung(&ctx, &staging);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(rung_produced(&staging), "missing again, it is re-dispatched immediately");
+}
+
+/// A run cancelled before it reached an image did not fail to produce that image's
+/// size, so it leaves no note: the next dispatch sends the image back at once.
+#[tokio::test]
+async fn a_cancelled_run_notes_nothing_it_did_not_attempt() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    let (clock, _now) = hand_clock();
+
+    let mut cancelled = BuildServices::headless();
+    cancelled.session = Some(crate::system::folder_session::FolderSession::new(tmp.path().to_path_buf()));
+    cancelled.session.as_ref().unwrap().cancel.cancel();
+    dispatch_image_conversions_at(Some(&cancelled), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "premise: the cancelled run never reached the image");
+
+    dispatch_image_conversions_at(Some(&BuildServices::headless()), &ctx, None, &clock);
+    assert!(rung_produced(&staging), "no note was left, so the image is dispatched again");
+}
+
+/// Notes belong to one site cache: another site holding the same image is unaffected.
+#[test]
+fn a_note_in_one_cache_root_does_not_hold_back_another() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let (tmp_a, tmp_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (ctx_a, staging_a) = unchanged_image_with_cached_base(tmp_a.path(), (1000, 600));
+    let (ctx_b, staging_b) = unchanged_image_with_cached_base(tmp_b.path(), (1000, 600));
+    assert_eq!(ctx_a.image_items[0].source_oid, ctx_b.image_items[0].source_oid, "premise: the same image bytes");
+    let (clock, _now) = hand_clock();
+    let svc = BuildServices::headless();
+
+    block_rung(&staging_a);
+    dispatch_image_conversions_at(Some(&svc), &ctx_a, None, &clock);
+    assert!(!rung_produced(&staging_a), "premise: the first site's attempt failed and was noted");
+
+    dispatch_image_conversions_at(Some(&svc), &ctx_b, None, &clock);
+    assert!(rung_produced(&staging_b), "the other site still regenerates its rung");
+}
+
 #[test]
 fn test_image_dispatch_applies_dir_overrides_to_served_path() {
     // Fix for I3: end-to-end check that `ctx.dir_overrides` flows
