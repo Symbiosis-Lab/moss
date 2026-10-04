@@ -212,26 +212,44 @@ pub fn build_page_change_records(
     }
 }
 
-/// The combined page-row cap the receipt renders (task 4-5,
-/// `publish-receipt.ts`'s `MAX_PAGE_ROWS`) — named here too because the
-/// post-landing verification burst (task 4-6) must probe exactly the rows
-/// the receipt shows, never more.
-pub const MAX_PAGE_ROWS: usize = 3;
+/// How many rows the receipt shows in all — page rows and removed-address
+/// rows together. The post-publish check probes exactly the rows shown, never
+/// more, and the receipt's page-row renderer applies the same number.
+pub const MAX_RECEIPT_ROWS: usize = 3;
 
 /// Group `records` by kind — Added, Moved, Removed, in that fixed order
-/// (design §5 "Anatomy"; mirrors `publish-receipt.ts`'s `orderedPageRows`)
 /// — preserving each kind's own path-sorted order, then keep only the first
-/// [`MAX_PAGE_ROWS`]. Pure, so both the receipt's own renderer and the
-/// verification burst read the identical selection without either
-/// re-deriving it differently.
+/// [`MAX_RECEIPT_ROWS`]. Pure, so the receipt and the post-publish check read
+/// the identical selection without either re-deriving it differently.
 pub fn capped_page_rows(records: &[PageChangeRecord]) -> Vec<&PageChangeRecord> {
+    ordered_page_rows(records).take(MAX_RECEIPT_ROWS).collect()
+}
+
+fn ordered_page_rows(records: &[PageChangeRecord]) -> impl Iterator<Item = &PageChangeRecord> {
     const ORDER: [PageChangeKind; 3] =
         [PageChangeKind::Added, PageChangeKind::Moved, PageChangeKind::Removed];
-    ORDER
-        .iter()
-        .flat_map(|kind| records.iter().filter(move |r| r.kind == *kind))
-        .take(MAX_PAGE_ROWS)
-        .collect()
+    ORDER.iter().flat_map(move |kind| records.iter().filter(move |r| r.kind == *kind))
+}
+
+/// The receipt's rows: the page rows first, the removed addresses filling the
+/// slots they leave, and how many rows of either kind did not fit.
+pub struct CappedRows<'a> {
+    pub pages: Vec<&'a PageChangeRecord>,
+    pub addresses: Vec<&'a RemovedAddressRecord>,
+    pub hidden: usize,
+}
+
+/// The one selection of which rows the receipt shows within
+/// [`MAX_RECEIPT_ROWS`]; the check that probes them and the payload that
+/// names them both come from here.
+pub fn capped_rows<'a>(records: &'a [PageChangeRecord], addresses: &'a [RemovedAddressRecord]) -> CappedRows<'a> {
+    let pages = capped_page_rows(records);
+    let room = MAX_RECEIPT_ROWS - pages.len();
+    CappedRows {
+        hidden: records.len() + addresses.len() - pages.len() - addresses.len().min(room),
+        addresses: addresses.iter().take(room).collect(),
+        pages,
+    }
 }
 
 #[cfg(test)]

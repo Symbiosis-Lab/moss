@@ -147,8 +147,7 @@ fn records_are_sorted_by_path() {
 
 /// task 4-6's verification burst must probe exactly the rows the receipt
 /// shows: grouped by kind (Added, Moved, Removed), capped at
-/// `MAX_PAGE_ROWS`, never re-sorted within a kind — mirrors
-/// `publish-receipt.ts`'s `orderedPageRows` + `MAX_PAGE_ROWS` slice.
+/// `MAX_RECEIPT_ROWS`, never re-sorted within a kind.
 #[test]
 fn capped_page_rows_groups_by_kind_and_caps_at_three() {
     let records = vec![
@@ -167,6 +166,42 @@ fn capped_page_rows_groups_by_kind_and_caps_at_three() {
 
     let paths: Vec<&str> = capped.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(paths, vec!["a1", "a2", "m1"], "Added before Moved before Removed, capped at 3");
+}
+
+fn address_record(path: &str) -> RemovedAddressRecord {
+    RemovedAddressRecord { path: path.into(), reason: RemovalReason::Unexplained, moved_to: None }
+}
+
+fn page_record(kind: PageChangeKind, path: &str) -> PageChangeRecord {
+    PageChangeRecord { kind, path: path.into(), title: path.into(), old_path: None }
+}
+
+/// Pages come first; addresses fill what is left; what does not fit is counted.
+#[test]
+fn capped_rows_fill_the_slots_pages_leave_and_count_the_rest() {
+    let records = vec![page_record(PageChangeKind::Added, "a"), page_record(PageChangeKind::Removed, "r")];
+    let addresses = vec![address_record("/x"), address_record("/y"), address_record("/z")];
+
+    let rows = capped_rows(&records, &addresses);
+
+    assert_eq!(rows.pages.len(), 2);
+    assert_eq!(rows.addresses.iter().map(|a| a.path.as_str()).collect::<Vec<_>>(), ["/x"]);
+    assert_eq!(rows.hidden, 2);
+}
+
+#[test]
+fn capped_rows_with_pages_over_the_cap_show_no_address() {
+    let records: Vec<_> = ["a", "b", "c", "d"].iter().map(|p| page_record(PageChangeKind::Added, p)).collect();
+    let addresses = [address_record("/x")];
+    let rows = capped_rows(&records, &addresses);
+    assert_eq!((rows.pages.len(), rows.addresses.len(), rows.hidden), (3, 0, 2));
+}
+
+#[test]
+fn capped_rows_with_room_to_spare_hide_nothing() {
+    let addresses = [address_record("/x")];
+    let rows = capped_rows(&[], &addresses);
+    assert_eq!((rows.pages.len(), rows.addresses.len(), rows.hidden), (0, 1, 0));
 }
 
 fn gone(path: &str, reason: RemovalReason, source: Option<&str>) -> RemovedAddress {

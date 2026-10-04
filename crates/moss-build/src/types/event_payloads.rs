@@ -562,7 +562,20 @@ pub struct PublishReceipt {
     pub live: PublishReceiptLive,
     pub newsletter: Option<PublishReceiptNewsletter>,
     pub domain: Option<PublishReceiptDomain>,
+    /// Where the site is reachable (its URL forms, such as a gateway or an
+    /// identifier) — standing facts, not what this publish removed; see
+    /// `removed_public_addresses` for that.
     pub addresses: Vec<crate::config::deployment::DeployAddress>,
+    /// Public addresses (served form, e.g. `/feed.xml`) this publish stopped
+    /// serving that no removed or moved page row in `pages` already names:
+    /// files, and pages whose address went offline without the page being
+    /// deleted. Only the ones the receipt shows (they share the page rows'
+    /// cap); `hidden_rows` counts the rest. Empty until the page-change
+    /// summary is folded in.
+    pub removed_public_addresses: Vec<String>,
+    /// How many receipt rows, page rows and removed-address rows together,
+    /// did not fit the cap and are not shown.
+    pub hidden_rows: u32,
 }
 
 /// Derive a receipt's `host` from a publish URL — the same reading
@@ -615,6 +628,8 @@ impl PublishReceipt {
             newsletter: None,
             domain: None,
             addresses: Vec::new(),
+            removed_public_addresses: Vec::new(),
+            hidden_rows: 0,
         }
     }
 }
@@ -644,5 +659,21 @@ mod publish_receipt_tests {
         // successful commit, so nothing is left permanently unverifiable.
         assert_eq!(receipt.live, PublishReceiptLive::Checking);
         assert!(receipt.pages.is_empty());
+        assert!(receipt.removed_public_addresses.is_empty());
+        assert_eq!(receipt.hidden_rows, 0);
+    }
+
+    /// The new field is additive: it serializes beside the existing ones and
+    /// leaves their shape alone.
+    #[test]
+    fn removed_public_addresses_serialize_beside_the_existing_fields() {
+        let mut receipt = PublishReceipt::from_moss_push("https://example.test", 1, 0, false, "g".to_string());
+        receipt.removed_public_addresses = vec!["/feed.xml".to_string()];
+        receipt.hidden_rows = 2;
+        let json = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(json["removed_public_addresses"], serde_json::json!(["/feed.xml"]));
+        assert_eq!(json["hidden_rows"], 2);
+        assert_eq!(json["pages"], serde_json::json!([]));
+        assert_eq!(json["addresses"], serde_json::json!([]));
     }
 }
