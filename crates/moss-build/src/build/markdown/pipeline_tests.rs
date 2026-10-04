@@ -3653,6 +3653,26 @@ fn schema_bad_date_format_warns_at_build() {
     );
 }
 
+/// A full ISO timestamp renders the right date, so the build must not count it
+/// as a problem — `--strict` reads that count. Drives the real page entry
+/// point, because the count is bumped there, not in the pure warning builder.
+#[test]
+fn timestamp_date_is_not_a_build_problem() {
+    let empty_map = HashMap::new();
+    let _ = crate::build::cli_output::take_cli_problems();
+    let md = "---\ntitle: t\ndate: 2019-10-16T07:42:16.551Z\n---\n\nbody\n";
+    process_markdown_file(
+        "a.md", md, "site", &empty_map, false, Language::ZhHant, None,
+        SiteMarkdown::default(), None, None, None, PageContext::default(),
+    )
+    .expect("should parse");
+    assert_eq!(
+        crate::build::cli_output::take_cli_problems(),
+        0,
+        "a timestamp date is valid and must not trip --strict"
+    );
+}
+
 /// The critical negative: `title` is the schema's one required field, and
 /// `validate_frontmatter` reports an `Error` when it is absent — but moss
 /// deliberately falls back to the filename, so most correct pages omit it.

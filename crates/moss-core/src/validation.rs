@@ -176,7 +176,7 @@ pub fn validate_frontmatter(
                             diags.push(Diagnostic {
                                 severity: Severity::Warning,
                                 message: format!(
-                                    "field '{}' has invalid date format '{}'; expected YYYY, YYYY-MM or YYYY-MM-DD",
+                                    "field '{}' has invalid date format '{}'; expected YYYY, YYYY-MM, YYYY-MM-DD or an ISO timestamp",
                                     name, s
                                 ),
                                 path: Some(name.clone()),
@@ -328,14 +328,22 @@ fn yaml_type_name(value: &serde_yaml::Value) -> &'static str {
     }
 }
 
-/// Validate a frontmatter date: `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.
+/// Validate a frontmatter date: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or a full ISO
+/// timestamp (`YYYY-MM-DDTHH:MM[:SS[.fraction]]`, optionally followed by `Z` or `±HH:MM`).
 ///
 /// Reduced precision is accepted because a date is often known only to the year
 /// or the month, and padding the rest to `-01-01` is a claim the card then
 /// prints as a real "· 01". The other layers already agree: `format_date_string`
 /// renders `1697-09` as "1697 · 09" and a bare year as itself, and the sort axis
 /// compares the strings lexically, which orders mixed precision by year.
+///
+/// A timestamp is accepted because `normalize_date` already reads one by
+/// splitting on `T`; a validator stricter than the renderer would flag a page
+/// that renders correctly. The zone suffix is optional, as it is there.
 fn is_valid_date(s: &str) -> bool {
+    if let Some((date, time)) = s.split_once('T') {
+        return date.split('-').count() == 3 && is_valid_date(date) && is_valid_time(time);
+    }
     // Pad a reduced-precision date to a full one, so the calendar rules
     // (month range, days per month, leap years) have one owner: `parse_ymd`.
     let padded = match s.split('-').count() {
@@ -345,6 +353,50 @@ fn is_valid_date(s: &str) -> bool {
         _ => return false,
     };
     crate::date::parse_ymd(&padded).is_some()
+}
+
+/// `HH:MM[:SS[.fraction]]` optionally followed by `Z` or `±HH:MM`.
+fn is_valid_time(s: &str) -> bool {
+    let (clock, zone) = match s.find(['Z', '+', '-']) {
+        Some(i) => s.split_at(i),
+        None => (s, ""),
+    };
+    let zone_ok = match zone.as_bytes() {
+        [] | [b'Z'] => true,
+        [b'+' | b'-', rest @ ..] => {
+            let rest = std::str::from_utf8(rest).unwrap_or("");
+            two_digits(rest.get(..2), 23)
+                && rest.get(2..3) == Some(":")
+                && two_digits(rest.get(3..), 59)
+        }
+        _ => false,
+    };
+    if !zone_ok {
+        return false;
+    }
+    let mut parts = clock.splitn(3, ':');
+    let (Some(h), Some(m)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    if !two_digits(Some(h), 23) || !two_digits(Some(m), 59) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(sec) => {
+            let (whole, frac) = match sec.split_once('.') {
+                Some((w, f)) => (w, Some(f)),
+                None => (sec, None),
+            };
+            two_digits(Some(whole), 59)
+                && frac.map_or(true, |f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()))
+        }
+    }
+}
+
+/// Exactly two ASCII digits whose value is at most `max`.
+fn two_digits(s: Option<&str>, max: u32) -> bool {
+    s.and_then(|s| crate::date::fixed_digits(s, 2)).is_some_and(|v| v <= max)
 }
 
 // ---------------------------------------------------------------------------
@@ -716,6 +768,26 @@ mod tests {
             diags.iter().any(|d| d.message.contains("'bogus'")),
             "genuinely unknown field 'bogus' must still produce an unknown-field hint"
         );
+    }
+
+    #[test]
+    fn iso_timestamps_are_valid_dates() {
+        assert!(is_valid_date("2019-10-16T07:42:16.551Z"));
+        assert!(is_valid_date("2019-10-16T07:42:16Z"));
+        assert!(is_valid_date("2019-10-16T07:42"));
+        assert!(is_valid_date("2019-10-16T07:42:16+08:00"));
+        assert!(is_valid_date("2019-10-16T07:42:16.5-05:30"));
+        // The date half keeps the calendar rules.
+        assert!(!is_valid_date("2019-02-30T07:42:16Z"));
+        // The time half is checked by hand.
+        assert!(!is_valid_date("2019-10-16T"));
+        assert!(!is_valid_date("2019-10-16Tgarbage"));
+        assert!(!is_valid_date("2019-10-16T25:00:00Z"));
+        assert!(!is_valid_date("2019-10-16T07:61:00Z"));
+        assert!(!is_valid_date("2019-10-16T07:42:16.Z"));
+        assert!(!is_valid_date("2019-10-16T07:42:16+0800"));
+        assert!(!is_valid_date("2019-10-16T07:42:16 Z"));
+        assert!(!is_valid_date("2019/10/16T07:42:16Z"));
     }
 
     #[test]

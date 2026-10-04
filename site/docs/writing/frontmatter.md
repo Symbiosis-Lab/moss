@@ -38,7 +38,7 @@ These fields describe what the page is.
 |-------|------|---------|-------------|
 | `title` | string | filename | Page title |
 | `description` | string | (none) | SEO meta description and list previews |
-| `date` | string | (none) | Publication date (`YYYY-MM-DD`) |
+| `date` | string | (none) | Publication date (`YYYY-MM-DD`; a year or year and month alone, or a full timestamp like `2024-06-15T09:30:00Z`, is also accepted) |
 | `tags` | list | (none) | Content tags |
 | `lang` | string | auto-detected | Language override (`"en"`, `"zh-hans"`, `"zh-hant"`) |
 <!-- auto:end:frontmatter-identity -->

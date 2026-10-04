@@ -22,6 +22,7 @@ All notable changes to moss will be documented here.
 
 - A language's home page lists that language's own posts again, linked under its own address, instead of the default language's posts.
 - Videos with capital letters in their file name keep adaptive streaming across rebuilds. Before, the next build deleted the already-encoded streaming files before the page was written, so the page fell back to the single MP4; the same build also deleted any JupyterLite bundle file whose folder name has capitals.
+- A page whose `date:` is a full timestamp such as `2019-10-16T07:42:16.551Z` is no longer reported as a build problem, so `--strict` no longer fails on it; the date was always rendered correctly.
 - The RSS feed is served at `/feed.xml` again, with the same content as `/rss.xml`, so readers subscribed to its old address stop getting a 404. `/rss.xml` is still the address the site links to.
 - A responsive image size that is missing from the cache is regenerated on the next build instead of staying missing until the source changes.
 - A failed cache write now says whether its cache folder was not downloaded.
