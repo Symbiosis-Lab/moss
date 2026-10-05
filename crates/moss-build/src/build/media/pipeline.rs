@@ -380,7 +380,7 @@ fn write_spa_inject_record(
             return;
         }
     };
-    let record_oid = match object_store.store_bytes(&json_bytes) {
+    let record_oid = match object_store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
             log::warn!("Failed to store spa/inject record blob: {}", e);
@@ -464,7 +464,7 @@ fn maybe_inject_spa_cached(
         Some(new_hash) => {
             let injected_bytes = std::fs::read(target)
                 .map_err(|e| format!("read back {} after inject: {}", target.display(), e))?;
-            let content_oid = object_store.store_bytes(&injected_bytes)?;
+            let content_oid = object_store.store_bytes(&injected_bytes, crate::build::cache::RecordMode::Request)?;
             (
                 Some((new_hash.clone(), content_oid.clone())),
                 SpaInjectRecord {
@@ -1363,7 +1363,7 @@ pub(crate) fn copy_deferred_assets(
             Ok(oid)
         } else {
             cache_misses += 1;
-            object_store.store_file(file_path)
+            object_store.store_file(file_path, crate::build::cache::RecordMode::Wait)
         };
 
         match oid_result {
@@ -1592,7 +1592,7 @@ pub(crate) fn copy_deferred_assets(
                 continue;
             }
 
-            match object_store.store_file(file_path) {
+            match object_store.store_file(file_path, crate::build::cache::RecordMode::Wait) {
                 Ok(oid) => {
                     let target = out_path.to_disk(output_dir);
                     let moss_ext = file_path

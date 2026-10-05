@@ -94,7 +94,7 @@ pub(super) fn disk_cache_store(key: &str, value: &TypesetMath) {
     let Ok(bytes) = serde_json::to_vec(value) else {
         return;
     };
-    let Ok(blob_oid) = cache.objects().store_bytes(&bytes) else {
+    let Ok(blob_oid) = cache.objects().store_bytes(&bytes, crate::build::cache::RecordMode::Request) else {
         return;
     };
     let params = serde_json::json!({ "v": RENDER_CACHE_VERSION });

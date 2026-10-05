@@ -275,7 +275,7 @@ pub(crate) fn record_one(
                 // re-derived from `store_bytes`'s own oid, though the two are
                 // definitionally the same sha256.
                 let hash = format!("{:x}", Sha256::digest(target_str.as_bytes()));
-                if let Err(e) = store.store_bytes(target_str.as_bytes()) {
+                if let Err(e) = store.store_bytes(target_str.as_bytes(), crate::build::cache::RecordMode::Wait) {
                     log::debug!("history: could not store the symlink blob for {src}: {e}");
                 }
                 out.insert(src.to_string(), Entry { mode: MODE_SYMLINK.to_string(), hash, size: None });
@@ -290,7 +290,7 @@ pub(crate) fn record_one(
     let oversize = manifest_size.is_some_and(|s| s > store::HISTORY_MEDIA_CEILING);
     let already_kept = store.holds(manifest_hash);
     if !already_kept && !oversize && !is_evicted(&full) {
-        match store.store_file(&full) {
+        match store.store_file(&full, crate::build::cache::RecordMode::Wait) {
             Ok(oid) if oid != manifest_hash => {
                 // A page the parse cache skipped carries its previous hash
                 // forward, and an mtime-preserving sync client can deliver new

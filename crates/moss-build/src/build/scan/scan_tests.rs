@@ -1884,7 +1884,7 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
         is_animated: false,
     };
     let json_bytes = serde_json::to_vec(&stale).unwrap();
-    let meta_oid = fx.objects.store_bytes(&json_bytes).unwrap();
+    let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
     let old_entry = TransformEntry {
         oid: meta_oid,
         size: json_bytes.len() as u64,
@@ -1895,7 +1895,7 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
         source_size: 1,
         transforms: HashMap::from([(MEDIA_META_TRANSFORM.to_string(), old_entry)]),
     };
-    fx.transforms.put(&record).unwrap();
+    fx.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
     assert!(
         read_cached_meta(&fx.transforms, &fx.objects, hash).is_none(),

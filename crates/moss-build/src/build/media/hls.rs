@@ -644,7 +644,7 @@ pub(crate) fn produce_ladder(
             let stored: Result<Vec<String>, String> = result.and_then(|_written| {
                 members
                     .iter()
-                    .map(|name| objects.store_file(&scratch.join(name)))
+                    .map(|name| objects.store_file(&scratch.join(name), crate::build::cache::RecordMode::Wait))
                     .collect()
             });
             // allow:unlink ladder scratch this call created under cache/tmp

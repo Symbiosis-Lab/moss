@@ -237,7 +237,7 @@ fn restore_site_reports_a_failure_without_stopping_the_rest() {
     // Store the one blob that IS kept, matching edit.md's hash exactly.
     let object_store = store::object_store(&history_root);
     fs::write(vault.join("source-for-blob"), b"original body").unwrap();
-    let oid = object_store.store_file(&vault.join("source-for-blob")).unwrap();
+    let oid = object_store.store_file(&vault.join("source-for-blob"), crate::build::cache::RecordMode::Request).unwrap();
     assert_eq!(oid, edit_hash, "the fixture bytes must hash to the entry's own hash");
     let id = write_record_directly(&history_root, "2026-01-01T00:00:00Z", "gen-1", entries);
 

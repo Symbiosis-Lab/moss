@@ -1295,7 +1295,7 @@ fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
             params: serde_json::Value::Null,
         },
     );
-    h.transforms.put(&record).unwrap();
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
     let cfg = ImageCompressionConfig::default();
     let outcome = convert_single_image(
@@ -1761,7 +1761,7 @@ fn should_skip_ignores_legacy_sentinel() {
             params: serde_json::Value::Null,
         },
     );
-    h.transforms.put(&record).unwrap();
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
     let cfg = ImageCompressionConfig {
         min_size_kb: 0,
@@ -2169,7 +2169,7 @@ fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
 
     let stale_verdict: Option<SkipReason> = None;
     let json_bytes = serde_json::to_vec(&stale_verdict).unwrap();
-    let blob_oid = h.objects.store_bytes(&json_bytes).unwrap();
+    let blob_oid = h.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
     let old_params = serde_json::json!({
         "min_size_kb": cfg.min_size_kb,
         "max_edge": cfg.max_edge,
@@ -2188,7 +2188,7 @@ fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
             },
         )]),
     };
-    h.transforms.put(&record).unwrap();
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
     assert_eq!(
         should_skip(&src, "bmp", size, &cfg, &h.transforms, &source_oid, false),
@@ -2288,7 +2288,7 @@ fn prime_cached_transform(
     params: &serde_json::Value,
     webp_bytes: &[u8],
 ) -> String {
-    let blob_oid = objects.store_bytes(webp_bytes).expect("test blob store");
+    let blob_oid = objects.store_bytes(webp_bytes, crate::build::cache::RecordMode::Request).expect("test blob store");
     let mut record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request).unwrap_or(crate::build::cache::TransformRecord {
         source_oid: source_oid.to_string(),
         source_size: 0,
@@ -2298,7 +2298,7 @@ fn prime_cached_transform(
         transform.to_string(),
         crate::build::cache::TransformEntry { oid: blob_oid.clone(), size: webp_bytes.len() as u64, params: params.clone() },
     );
-    transforms.put(&record).expect("test transform-cache put");
+    transforms.put(&record, crate::build::cache::RecordMode::Request).expect("test transform-cache put");
     blob_oid
 }
 
@@ -2746,7 +2746,7 @@ fn forget_rung(ctx: &BackgroundContext, staging: &Path) {
     let oid = &ctx.image_items[0].source_oid;
     let mut record = transforms.get_with(oid, crate::build::cache::RecordMode::Request).unwrap();
     record.transforms.remove("image/webp-w800");
-    transforms.put(&record).unwrap();
+    transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
     let _ = fs::remove_file(staging.join("photo.w800.webp"));
 }
 
@@ -4419,7 +4419,7 @@ fn concurrent_sized_raster_calls_share_one_encode() {
     let transforms = TransformCache::new(tmp.path().join("transforms"), ObjectStore::new(objects_root));
     let src = tmp.path().join("photo.jpg");
     make_detailed_jpeg(&src, 1600, 1200);
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
     let encodes = || TEST_HOOK_ENCODED_SOURCES.lock().unwrap().iter().filter(|p| **p == src).count();
     let size = || sized_raster_oid_for_original(&src, &source_oid, &objects, &transforms, &cfg, SIZED_JPEG_QUALITY);
@@ -4477,7 +4477,7 @@ fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
     // (store_file, pipeline.rs) — the keep-smaller decision points the
     // transform at this source oid, so its blob must exist for the cached
     // verbatim decision to resolve on the next build.
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let out = sized_raster_oid_for_original(
@@ -4557,7 +4557,7 @@ fn sized_raster_oid_shrinks_an_opaque_photographic_png() {
     let src = tmp.path().join("photo.png");
     make_photographic_png(&src, 1200, 900);
     let src_len = fs::metadata(&src).unwrap().len();
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let oid = sized_raster_oid_for_original(
@@ -4685,7 +4685,7 @@ fn sized_raster_oid_keeps_png_verbatim_when_palette_cannot_beat_it() {
     DynamicImage::ImageRgb8(buf)
         .save_with_format(&src, image::ImageFormat::Png)
         .unwrap();
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let out = sized_raster_oid_for_original(
@@ -4727,7 +4727,7 @@ fn sized_raster_oid_caps_the_fallback_at_fallback_max_edge() {
     // (pre-B1) cap would have left this untouched at 1800px.
     let src = tmp.path().join("wide.jpg");
     make_detailed_jpeg(&src, 1800, 1200);
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let oid = sized_raster_oid_for_original(

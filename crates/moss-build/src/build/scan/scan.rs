@@ -429,7 +429,7 @@ pub(crate) fn write_cached_meta(
         }
     };
 
-    let meta_oid = match objects.store_bytes(&json_bytes) {
+    let meta_oid = match objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
             log::warn!("Failed to store media meta blob: {}", e);

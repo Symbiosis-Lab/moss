@@ -38,6 +38,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod blob_wait;
 mod records;
+mod shard_wait;
+use shard_wait::Touch;
 pub use records::{Merged, RecordMode};
 
 /// Size of the read buffer used by [`ObjectStore::hash_file`].
@@ -154,9 +156,12 @@ impl ObjectStore {
     }
 
     /// Move the fully written `tmp` to its content-addressed `dest`.
-    fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path) -> Result<(), String> {
+    fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path, mode: RecordMode) -> Result<(), String> {
         // allow:unlink a temp inside the CAS shard dir, not staging
-        let Err(rename_err) = fs::rename(tmp, dest) else { return Ok(()) };
+        let renamed = shard_wait::in_shard(&self.base, dest, mode, Touch::File, || {
+            fs::rename(tmp, dest)  // allow:unlink a temp inside the CAS shard dir, not staging
+        });
+        let Err(rename_err) = renamed else { return Ok(()) };
         // Another thread may have won the race and placed the blob.
         if dest.exists() {
             // allow:unlink a temp inside the CAS shard dir, not staging
@@ -183,7 +188,10 @@ impl ObjectStore {
     /// If the blob already exists (same hash), this is a no-op — the
     /// existing blob is kept and the OID is returned. This makes the
     /// operation idempotent.
-    pub fn store_file(&self, source: &Path) -> Result<String, String> {
+    ///
+    /// `mode` says what a refusal because the shard is still in the cloud
+    /// costs: see [`RecordMode`].
+    pub fn store_file(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
         let oid = Self::hash_file(source)?;
         let dest = self.blob_path(&oid);
         let source_size = fs::metadata(source).map(|m| m.len()).unwrap_or(0);
@@ -204,8 +212,10 @@ impl ObjectStore {
 
         // Ensure the parent directory (e.g., `base/ab/cd/`) exists.
         if let Some(parent) = dest.parent() {
-            crate::build::io_utils::create_output_dir_all(parent)
-                .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
+            shard_wait::in_shard(&self.base, &dest, mode, Touch::Dir, || {
+                crate::build::io_utils::create_output_dir_all(parent)
+            })
+            .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
         // Write to a temp file in the same directory, then rename.
@@ -221,8 +231,10 @@ impl ObjectStore {
         // Refs: https://www.idownloadblog.com/2019/08/06/icloud-drive-file-folder-name-exclusion-list/
         //       https://eclecticlight.co/2024/07/09/excluding-folders-and-files-from-time-machine-spotlight-and-icloud-drive/
         let tmp = dest.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
-        fs::copy(source, &tmp)  // allow:raw_write the temp blob this call just minted, under .moss/cache
-            .map_err(|e| format!("Failed to copy to pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
+        shard_wait::in_shard(&self.base, &dest, mode, Touch::File, || {
+            fs::copy(source, &tmp)  // allow:raw_write the temp blob this call just minted, under .moss/cache
+        })
+        .map_err(|e| format!("Failed to copy to pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
         // Post-copy validation: reject 0-byte temp files when source is
         // non-empty (e.g., fs::copy raced with iCloud materialization).
@@ -237,7 +249,7 @@ impl ObjectStore {
             ));
         }
 
-        self.place_pending(&oid, &tmp, &dest)?;
+        self.place_pending(&oid, &tmp, &dest, mode)?;
 
         Ok(oid)
     }
@@ -247,8 +259,8 @@ impl ObjectStore {
     /// Like [`store_file`](Self::store_file), the write is atomic (temp +
     /// rename) and idempotent (existing blob is kept). This variant avoids
     /// an intermediate file when the caller already has bytes in memory —
-    /// e.g., a small JSON metadata blob.
-    pub fn store_bytes(&self, data: &[u8]) -> Result<String, String> {
+    /// e.g., a small JSON metadata blob. `mode` is as for `store_file`.
+    pub fn store_bytes(&self, data: &[u8], mode: RecordMode) -> Result<String, String> {
         let oid = {
             let mut hasher = Sha256::new();
             hasher.update(data);
@@ -261,16 +273,20 @@ impl ObjectStore {
         }
 
         if let Some(parent) = dest.parent() {
-            crate::build::io_utils::create_output_dir_all(parent)
-                .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
+            shard_wait::in_shard(&self.base, &dest, mode, Touch::Dir, || {
+                crate::build::io_utils::create_output_dir_all(parent)
+            })
+            .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
         // Use `.pending.<uuid>` — see store_file() comment for iCloud Drive rationale.
         let tmp = dest.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
-        fs::write(&tmp, data)  // allow:raw_write the temp blob this call just minted, under .moss/cache
-            .map_err(|e| format!("Failed to write pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
+        shard_wait::in_shard(&self.base, &dest, mode, Touch::File, || {
+            fs::write(&tmp, data)  // allow:raw_write the temp blob this call just minted, under .moss/cache
+        })
+        .map_err(|e| format!("Failed to write pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
-        self.place_pending(&oid, &tmp, &dest)?;
+        self.place_pending(&oid, &tmp, &dest, mode)?;
 
         Ok(oid)
     }
@@ -625,12 +641,17 @@ impl TransformCache {
     /// excludes `.tmp` files from sync and fileproviderd may remove them.
     /// On ENOENT, retries after re-creating parent AND re-writing the temp
     /// file (the source may have been removed, not just the parent).
-    pub fn put(&self, record: &TransformRecord) -> Result<(), String> {
+    ///
+    /// `mode` says what a refusal because the shard is still in the cloud
+    /// costs: see [`RecordMode`].
+    pub fn put(&self, record: &TransformRecord, mode: RecordMode) -> Result<(), String> {
         let path = self.record_path(&record.source_oid);
 
         if let Some(parent) = path.parent() {
-            crate::build::io_utils::create_output_dir_all(parent)
-                .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
+            shard_wait::in_shard(&self.base, &path, mode, Touch::Dir, || {
+                crate::build::io_utils::create_output_dir_all(parent)
+            })
+            .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
         let json = serde_json::to_string_pretty(record)
@@ -642,11 +663,15 @@ impl TransformCache {
         // race on one temp + a rename of a vanished file. Mirrors store_file/
         // store_bytes. `.pending` (not `.tmp`) so iCloud doesn't exclude it.
         let tmp = path.with_extension(format!("json.pending.{}", uuid::Uuid::new_v4()));
-        fs::write(&tmp, json.as_bytes())  // allow:raw_write temp for the index's own atomic save, under .moss/cache
-            .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
+        shard_wait::in_shard(&self.base, &path, mode, Touch::File, || {
+            fs::write(&tmp, json.as_bytes())  // allow:raw_write temp for the index's own atomic save, under .moss/cache
+        })
+        .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
 
-        // allow:unlink rename into place under cache/transforms, not staging
-        if let Err(first_err) = fs::rename(&tmp, &path) {
+        let renamed = shard_wait::in_shard(&self.base, &path, mode, Touch::File, || {
+            fs::rename(&tmp, &path)  // allow:unlink rename into place under cache/transforms, not staging
+        });
+        if let Err(first_err) = renamed {
             if first_err.kind() == std::io::ErrorKind::NotFound {
                 if let Some(parent) = path.parent() {
                     let _ = crate::build::io_utils::create_output_dir_all(parent);

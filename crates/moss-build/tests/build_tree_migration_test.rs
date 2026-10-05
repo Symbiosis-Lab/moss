@@ -9,7 +9,7 @@ use std::path::Path;
 use moss_build::build::cache::ObjectStore;
 
 fn blob(dir: &Path, bytes: &[u8]) -> String {
-    ObjectStore::new(dir.to_path_buf()).store_bytes(bytes).expect("stored")
+    ObjectStore::new(dir.to_path_buf()).store_bytes(bytes, moss_build::build::cache::RecordMode::Request).expect("stored")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

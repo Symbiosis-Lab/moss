@@ -261,7 +261,7 @@ mod tests {
         std::fs::create_dir_all(&output_dir).unwrap();
 
         let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(&tiny_png_bytes()).unwrap();
+        let oid = store.store_bytes(&tiny_png_bytes(), crate::build::cache::RecordMode::Request).unwrap();
 
         let mut meta = blank_link_meta("https://example.com/post");
         meta.cover_oid = Some(oid);
@@ -297,7 +297,7 @@ mod tests {
         std::fs::create_dir_all(&output_dir).unwrap();
 
         let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(&tiny_png_bytes()).unwrap();
+        let oid = store.store_bytes(&tiny_png_bytes(), crate::build::cache::RecordMode::Request).unwrap();
         let mut meta = blank_link_meta("https://example.com/post");
         meta.cover_oid = Some(oid);
         meta.cover_ext = Some("png".to_string());
@@ -346,7 +346,7 @@ mod tests {
         std::fs::create_dir_all(&output_dir).unwrap();
 
         let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(&tiny_png_bytes()).unwrap();
+        let oid = store.store_bytes(&tiny_png_bytes(), crate::build::cache::RecordMode::Request).unwrap();
 
         let scratch_dir = MossPaths::from_moss_dir(moss_dir.clone()).cache_tmp().join("remote-cover");
         std::fs::create_dir_all(&scratch_dir).unwrap();
@@ -401,7 +401,7 @@ mod tests {
         std::fs::create_dir_all(&output_dir).unwrap();
 
         let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(b"not actually a png").unwrap();
+        let oid = store.store_bytes(b"not actually a png", crate::build::cache::RecordMode::Request).unwrap();
 
         let mut meta = blank_link_meta("https://example.com/post");
         meta.cover_oid = Some(oid);

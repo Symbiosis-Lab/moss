@@ -12,19 +12,22 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-/// What a record lookup does about a record that is a placeholder in the cloud.
+/// What a cache access does about a record, blob or directory that is a
+/// placeholder in the cloud, for a lookup and for a write alike.
 ///
-/// Either way the file is requested, so a later build finds it downloaded. The
-/// modes differ only in whether this lookup waits for it: wait only where a
-/// miss costs an image or video encode. Every other miss (a typeset equation, an
-/// injected slot, a map tile, a metadata probe) is recomputed in milliseconds,
-/// and a wait of up to five seconds per record would hold up the build phase a
-/// preview is waiting on.
+/// Either way the file or directory is requested, so a later build finds it
+/// downloaded. The modes differ only in whether this access waits for it: wait
+/// only where a miss costs an image or video encode, or where the data cannot be
+/// regenerated (original assets, version history). Every other miss (a typeset
+/// equation, an injected slot, a map tile, a metadata probe) is recomputed in
+/// milliseconds, and a wait of seconds per file, each in a different directory,
+/// would hold up the build phase a preview is waiting on; a write in this mode
+/// that is refused is skipped and the caller carries on without it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordMode {
-    /// Request the file and wait for it, up to a short deadline.
+    /// Request it and wait for it, up to a short deadline.
     Wait,
-    /// Request the file and carry on: the record reads as unreadable now.
+    /// Request it and carry on: a record reads as unreadable now, a write is refused now.
     Request,
 }
 
@@ -169,7 +172,7 @@ impl TransformCache {
         if read.as_ref() == Some(&record) {
             return Ok(Merged::Kept);
         }
-        self.put(&record).map(|()| Merged::Written)
+        self.put(&record, mode).map(|()| Merged::Written)
     }
 }
 

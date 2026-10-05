@@ -469,7 +469,7 @@ fn write_slot_inject_record(
             return;
         }
     };
-    let record_oid = match object_store.store_bytes(&json_bytes) {
+    let record_oid = match object_store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
             log::warn!("Failed to store html/slots record blob: {}", e);
@@ -504,7 +504,7 @@ struct StoreFailures {
 impl StoreFailures {
     /// `store_bytes`, with `None` for a page the store could not take.
     fn store(&mut self, object_store: &crate::build::cache::ObjectStore, bytes: &[u8]) -> Option<String> {
-        match object_store.store_bytes(bytes) {
+        match object_store.store_bytes(bytes, crate::build::cache::RecordMode::Request) {
             Ok(oid) => Some(oid),
             Err(reason) => {
                 self.pages += 1;

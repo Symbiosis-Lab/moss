@@ -2071,7 +2071,7 @@ mod tests {
         let cache = tempdir().unwrap();
 
         let object_store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
-        let oid = object_store.store_bytes(b"X").unwrap();
+        let oid = object_store.store_bytes(b"X", crate::build::cache::RecordMode::Request).unwrap();
 
         std::fs::write(stage.path().join("style.css"), b"placeholder").unwrap();
 
@@ -2105,7 +2105,7 @@ mod tests {
         let cache = tempdir().unwrap();
 
         let object_store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
-        let oid = object_store.store_bytes(b"stable bytes").unwrap();
+        let oid = object_store.store_bytes(b"stable bytes", crate::build::cache::RecordMode::Request).unwrap();
 
         // The stage copy existed once but is transiently gone — an eviction,
         // a mid-write, anything short of moss deciding the file is gone.

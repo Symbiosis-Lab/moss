@@ -298,7 +298,7 @@ pub fn emit(
                 let bytes = svg.as_bytes();
                 let xxh3 = compute_binary_hash(bytes);
                 let oid = objects
-                    .store_bytes(bytes)
+                    .store_bytes(bytes, crate::build::cache::RecordMode::Request)
                     .map_err(|e| format!("Failed to store place-map asset '{name}': {e}"))?;
                 BuildContext::for_render(output_dir, pending)
                     .emit(&served, bytes, HashBucket::Files)

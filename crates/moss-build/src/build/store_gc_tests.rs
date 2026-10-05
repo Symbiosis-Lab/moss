@@ -357,8 +357,8 @@ fn the_object_store_is_swept_only_when_no_build_holds_a_cache_lease() {
     }
     let objects = ObjectStore::new(cache.join("objects"));
     let transforms = TransformCache::new(cache.join("transforms"), ObjectStore::new(cache.join("objects")));
-    let blob = objects.store_bytes(b"just encoded").unwrap();
-    let orphan = objects.store_bytes(b"nothing names this").unwrap();
+    let blob = objects.store_bytes(b"just encoded", crate::build::cache::RecordMode::Request).unwrap();
+    let orphan = objects.store_bytes(b"nothing names this", crate::build::cache::RecordMode::Request).unwrap();
     // Its source is not in hash-index.json yet: the writer saves the index last.
     let source = "5".repeat(64);
     transforms
@@ -368,7 +368,7 @@ fn the_object_store_is_swept_only_when_no_build_holds_a_cache_lease() {
             transforms: [("video/mp4".to_string(), TransformEntry { oid: blob.clone(), size: 12, params: serde_json::json!({}) })]
                 .into_iter()
                 .collect(),
-        })
+        }, crate::build::cache::RecordMode::Request)
         .unwrap();
 
     let lease = crate::build::lifecycle::cache_write_lease(&mp);

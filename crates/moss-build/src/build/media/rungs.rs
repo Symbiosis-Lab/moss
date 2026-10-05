@@ -301,7 +301,7 @@ pub(crate) fn encode_rungs(
             continue;
         }
         log_rung_anomaly(webp_bytes.len() as u64);
-        let oid = match objects.store_bytes(&webp_bytes) {
+        let oid = match objects.store_bytes(&webp_bytes, crate::build::cache::RecordMode::Wait) {
             Ok(o) => o,
             Err(e) => {
                 outcomes.push(RungOutcome {

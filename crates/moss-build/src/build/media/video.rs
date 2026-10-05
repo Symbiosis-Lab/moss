@@ -157,7 +157,7 @@ fn stage_mp4(
     file: &Path,
     output_mp4: &Path,
 ) -> Result<String, String> {
-    let oid = objects.store_file(file)?;
+    let oid = objects.store_file(file, crate::build::cache::RecordMode::Wait)?;
     objects.link_to(&oid, output_mp4)?;
     Ok(oid)
 }
@@ -214,7 +214,7 @@ fn regenerate_thumbnail(
             log::debug!("Generated thumbnail for {}", filename);
             let mut oid_result = None;
             let mut linked = false;
-            match objects.store_file(&temp_thumb) {
+            match objects.store_file(&temp_thumb, crate::build::cache::RecordMode::Wait) {
                 Ok(oid) => {
                     match objects.link_to(&oid, output_thumb) {
                         Ok(()) => linked = true,
@@ -2329,7 +2329,7 @@ pub(crate) mod tests {
                 ]
                 .into_iter()
                 .collect(),
-            })
+            }, crate::build::cache::RecordMode::Request)
             .unwrap();
 
         clear_stale_ladder(&transforms, source_oid, &source);
@@ -2385,7 +2385,7 @@ pub(crate) mod tests {
             .into_iter()
             .collect(),
         };
-        transforms.put(&seeded).unwrap();
+        transforms.put(&seeded, crate::build::cache::RecordMode::Request).unwrap();
 
         clear_stale_ladder(&transforms, mp4_only_oid, &source);
 
@@ -2713,7 +2713,7 @@ pub(crate) mod tests {
         let transforms = TransformCache::for_site(&paths);
         let source_oid = ObjectStore::hash_file(&source).unwrap();
         let entry = |bytes: &[u8], params: serde_json::Value| TransformEntry {
-            oid: objects.store_bytes(bytes).unwrap(),
+            oid: objects.store_bytes(bytes, crate::build::cache::RecordMode::Request).unwrap(),
             size: bytes.len() as u64,
             params,
         };
@@ -2728,7 +2728,7 @@ pub(crate) mod tests {
                 ]
                 .into_iter()
                 .collect(),
-            })
+            }, crate::build::cache::RecordMode::Request)
             .unwrap();
         let index_path = paths.cache_hash_index();
         let mut index = HashIndex::load(&index_path);
@@ -2797,13 +2797,13 @@ pub(crate) mod tests {
             record.transforms.insert(
                 format!("video/hls/{name}"),
                 TransformEntry {
-                    oid: objects.store_bytes(bytes.as_bytes()).unwrap(),
+                    oid: objects.store_bytes(bytes.as_bytes(), crate::build::cache::RecordMode::Request).unwrap(),
                     size: bytes.len() as u64,
                     params: params.clone(),
                 },
             );
         }
-        transforms.put(&record).unwrap();
+        transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
         asset_paths::hls_outputs(item, rungs)
     }
@@ -2873,13 +2873,13 @@ pub(crate) mod tests {
             record.transforms.insert(
                 format!("video/hls/{name}"),
                 TransformEntry {
-                    oid: objects.store_bytes(bytes.as_bytes()).unwrap(),
+                    oid: objects.store_bytes(bytes.as_bytes(), crate::build::cache::RecordMode::Request).unwrap(),
                     size: bytes.len() as u64,
                     params: params.clone(),
                 },
             );
         }
-        transforms.put(&record).unwrap();
+        transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
         asset_paths::hls_outputs(item, &asset_paths::VIDEO_LADDER)
     }
@@ -4366,10 +4366,10 @@ pub(crate) mod tests {
         if cached {
             // Both blobs are real and present, so `find_cached_output` takes
             // this as a hit — the failure has to come from staging.
-            let mp4_oid = objects.store_file(&source).expect("store the cached mp4");
+            let mp4_oid = objects.store_file(&source, crate::build::cache::RecordMode::Request).expect("store the cached mp4");
             let poster = tmp.path().join("poster.jpg");
             std::fs::write(&poster, b"not really a jpeg, just non-empty").unwrap();
-            let thumb_oid = objects.store_file(&poster).expect("store the cached poster");
+            let thumb_oid = objects.store_file(&poster, crate::build::cache::RecordMode::Request).expect("store the cached poster");
             transforms
                 .put(&TransformRecord {
                     source_oid: "oid-clip".to_string(),
@@ -4384,7 +4384,7 @@ pub(crate) mod tests {
                             TransformEntry { oid: thumb_oid, size: 1, params: thumb_params.clone() },
                         ),
                     ]),
-                })
+                }, crate::build::cache::RecordMode::Request)
                 .expect("write the transform record");
         }
 
@@ -4502,7 +4502,7 @@ pub(crate) mod tests {
         let thumb_params = serde_json::json!({});
 
         // A real, playable MP4 blob with no poster entry at all.
-        let mp4_oid = objects.store_file(&source).expect("store the cached mp4");
+        let mp4_oid = objects.store_file(&source, crate::build::cache::RecordMode::Request).expect("store the cached mp4");
         let original_mp4_oid = mp4_oid.clone();
         transforms
             .put(&TransformRecord {
@@ -4514,7 +4514,7 @@ pub(crate) mod tests {
                         TransformEntry { oid: mp4_oid, size: 1, params: mp4_params.clone() },
                     ),
                 ]),
-            })
+            }, crate::build::cache::RecordMode::Request)
             .expect("write the transform record");
 
         let staging = tmp.path().join("stage");

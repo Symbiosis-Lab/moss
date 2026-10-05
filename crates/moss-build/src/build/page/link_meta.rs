@@ -680,7 +680,7 @@ fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Durat
     reader.limits(limits);
     reader.decode().ok()?;
     let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
-    let oid = store.store_bytes(&buf).ok()?;
+    let oid = store.store_bytes(&buf, crate::build::cache::RecordMode::Request).ok()?;
     Some((oid, ext.to_string()))
 }
 

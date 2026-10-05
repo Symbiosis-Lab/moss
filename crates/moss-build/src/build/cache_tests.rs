@@ -67,7 +67,7 @@ fn test_store_file_creates_sharded_path() {
     let store = ObjectStore::new(objects_dir.clone());
 
     let src = write_temp_file(&dir, "data.bin", b"some content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let expected = objects_dir.join(&oid[..2]).join(&oid[2..4]).join(&oid);
     assert!(expected.exists(), "blob should exist at sharded path");
@@ -79,8 +79,8 @@ fn test_store_file_idempotent() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"idempotent content");
-    let oid1 = store.store_file(&src).expect("first store");
-    let oid2 = store.store_file(&src).expect("second store");
+    let oid1 = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("first store");
+    let oid2 = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("second store");
 
     assert_eq!(oid1, oid2, "same content should produce the same OID");
 }
@@ -100,7 +100,7 @@ fn test_get_path_exists() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"get_path test");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let path = store.get_path(&oid);
     assert!(path.is_some(), "get_path should return Some after store");
@@ -113,7 +113,7 @@ fn test_get_path_rejects_zero_byte_blob() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"non-empty content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     // Simulate iCloud eviction: zero out the blob's content.
     // iCloud Drive can silently zero out file data to reclaim disk space.
@@ -138,7 +138,7 @@ fn test_link_to_creates_independent_copy() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"independent copy test content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let target = dir.join("output").join("linked_file");
     store.link_to(&oid, &target).expect("link_to");
@@ -171,7 +171,7 @@ fn test_link_to_replaces_existing_target() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"replace test content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     // Create a pre-existing file at the target location.
     let target = dir.join("existing_file.txt");
@@ -189,7 +189,7 @@ fn test_link_to_creates_parent_dirs() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"parent dir test");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     // Target is nested in directories that don't exist yet.
     let target = dir.join("a").join("b").join("c").join("output.bin");
@@ -208,7 +208,7 @@ fn test_link_to_writes_full_blob_no_tmp_leak() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"hello world payload");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let target = dir.join("out").join("hello.bin");
     store.link_to(&oid, &target).expect("link_to");
@@ -234,7 +234,7 @@ fn test_link_to_overwrites_existing_zero_byte_target() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"full content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let target = dir.join("out").join("stub.bin");
     fs::create_dir_all(target.parent().unwrap()).expect("mkdir");
@@ -265,7 +265,7 @@ fn test_validate_blob_removes_zero_byte_blob() {
     let dir = make_test_dir("validate_zero");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "photo.jpg", b"real image data");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
     let blob_path = store.blob_path(&oid);
 
     // Corrupt the blob to 0 bytes (simulating iCloud race).
@@ -282,7 +282,7 @@ fn test_validate_blob_accepts_healthy_blob() {
     let dir = make_test_dir("validate_healthy");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "photo.jpg", b"real image data");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let result = store.validate_blob(&oid, 15);
     assert!(result.is_ok(), "healthy blob should validate");
@@ -294,7 +294,7 @@ fn test_validate_blob_accepts_zero_source_zero_blob() {
     let dir = make_test_dir("validate_zero_source");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "empty.txt", b"");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     // source_size=0 and blob_size=0 is valid (genuinely empty file).
     let result = store.validate_blob(&oid, 0);
@@ -310,7 +310,7 @@ fn test_store_file_self_heals_zero_byte_blob() {
     let dir = make_test_dir("store_self_heal");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "photo.jpg", b"real image data");
-    let oid = store.store_file(&src).expect("first store");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("first store");
     let blob_path = store.blob_path(&oid);
 
     // Corrupt the blob to 0 bytes.
@@ -318,7 +318,7 @@ fn test_store_file_self_heals_zero_byte_blob() {
     assert_eq!(fs::metadata(&blob_path).unwrap().len(), 0);
 
     // Re-storing should self-heal: detect corrupt, remove, re-copy.
-    let oid2 = store.store_file(&src).expect("re-store should succeed");
+    let oid2 = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("re-store should succeed");
     assert_eq!(oid, oid2, "OID should be the same");
     let blob_size = fs::metadata(&blob_path).unwrap().len();
     assert_eq!(blob_size, 15, "blob should be re-stored with correct size");
@@ -329,7 +329,7 @@ fn test_store_file_genuinely_empty_is_fine() {
     let dir = make_test_dir("store_zero_copy");
     let store = ObjectStore::new(dir.join("objects"));
     let empty_src = write_temp_file(&dir, "empty.txt", b"");
-    let result = store.store_file(&empty_src);
+    let result = store.store_file(&empty_src, crate::build::cache::RecordMode::Request);
     assert!(result.is_ok(), "genuinely empty file should store fine");
 }
 
@@ -342,7 +342,7 @@ fn test_link_to_rejects_zero_byte_blob() {
     let dir = make_test_dir("link_zero");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "photo.jpg", b"real image data");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
     let blob_path = store.blob_path(&oid);
 
     // Corrupt the blob to 0 bytes.
@@ -367,7 +367,7 @@ fn test_link_to_verifies_copy_size() {
     let store = ObjectStore::new(dir.join("objects"));
     let content = b"content that should be fully copied";
     let src = write_temp_file(&dir, "data.bin", content);
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let target = dir.join("output").join("data.bin");
     store
@@ -409,7 +409,7 @@ fn test_transform_cache_roundtrip() {
         transforms,
     };
 
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     let loaded = cache.get_with(&record.source_oid, crate::build::cache::RecordMode::Request);
     assert!(loaded.is_some(), "get should return the record we put");
@@ -445,7 +445,7 @@ fn test_find_cached_output_hit() {
 
     // Store a file so there's a real blob for the output OID.
     let src = write_temp_file(&dir, "output.bin", b"transformed output");
-    let output_oid = store.store_file(&src).expect("store output");
+    let output_oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store output");
 
     // Store the source file too.
     let source_src = write_temp_file(&dir, "source.bin", b"original source");
@@ -472,7 +472,7 @@ fn test_find_cached_output_hit() {
         source_size: 15,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     let result = cache.find_cached_output(&source_oid, "thumbnail", &params, crate::build::cache::RecordMode::Wait);
     assert_eq!(result, Some(output_oid));
@@ -484,7 +484,7 @@ fn test_find_cached_output_params_mismatch() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "output.bin", b"transformed output");
-    let output_oid = store.store_file(&src).expect("store output");
+    let output_oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store output");
 
     let source_src = write_temp_file(&dir, "source.bin", b"original source");
     let source_oid = ObjectStore::hash_file(&source_src).expect("hash source");
@@ -512,7 +512,7 @@ fn test_find_cached_output_params_mismatch() {
         source_size: 15,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     let result = cache.find_cached_output(&source_oid, "thumbnail", &query_params, crate::build::cache::RecordMode::Wait);
     assert!(result.is_none(), "different params should not match");
@@ -549,7 +549,7 @@ fn test_find_cached_output_blob_missing() {
         source_size: 15,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     let result = cache.find_cached_output(&source_oid, "thumbnail", &params, crate::build::cache::RecordMode::Wait);
     assert!(
@@ -565,7 +565,7 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
 
     // Store a real blob, then zero it out to simulate iCloud eviction.
     let output_src = write_temp_file(&dir, "output.mp4", b"video data here");
-    let output_oid = store.store_file(&output_src).expect("store output");
+    let output_oid = store.store_file(&output_src, crate::build::cache::RecordMode::Request).expect("store output");
 
     let source_src = write_temp_file(&dir, "source.mov", b"source video");
     let source_oid = ObjectStore::hash_file(&source_src).expect("hash source");
@@ -588,7 +588,7 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
         source_size: 12,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // Verify cache hit works before eviction.
     assert!(
@@ -632,7 +632,7 @@ fn test_transform_cache_remove() {
 
     // Store a file so there's a real blob for the output OID.
     let src = write_temp_file(&dir, "output.bin", b"remove test output");
-    let output_oid = store.store_file(&src).expect("store output");
+    let output_oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store output");
 
     // Hash a source file.
     let source_src = write_temp_file(&dir, "source.bin", b"remove test source");
@@ -659,7 +659,7 @@ fn test_transform_cache_remove() {
         source_size: 18,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // Verify the record exists before removal.
     assert!(
@@ -693,7 +693,7 @@ fn test_store_bytes_roundtrip() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let data = b"hello from store_bytes";
-    let oid = store.store_bytes(data).expect("store_bytes");
+    let oid = store.store_bytes(data, crate::build::cache::RecordMode::Request).expect("store_bytes");
     assert_eq!(oid.len(), 64, "OID should be 64 hex chars");
 
     // Blob should exist and match content.
@@ -725,9 +725,9 @@ fn a_refused_pending_write_names_the_shard_directory_state() {
     fs::set_permissions(&shard, fs::Permissions::from_mode(0o555)).unwrap();
     let _unlock = Unlock(shard);
 
-    let from_bytes = store.store_bytes(b"refused bytes").expect_err("the write is refused");
+    let from_bytes = store.store_bytes(b"refused bytes", crate::build::cache::RecordMode::Request).expect_err("the write is refused");
     let source = write_temp_file(&dir, "src.bin", b"refused bytes");
-    let from_file = store.store_file(&source).expect_err("the write is refused");
+    let from_file = store.store_file(&source, crate::build::cache::RecordMode::Request).expect_err("the write is refused");
 
     for err in [from_bytes, from_file] {
         assert!(err.contains("pending"), "still says what failed: {err}");
@@ -742,8 +742,8 @@ fn test_store_bytes_idempotent() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let data = b"same content twice";
-    let oid1 = store.store_bytes(data).expect("first");
-    let oid2 = store.store_bytes(data).expect("second");
+    let oid1 = store.store_bytes(data, crate::build::cache::RecordMode::Request).expect("first");
+    let oid2 = store.store_bytes(data, crate::build::cache::RecordMode::Request).expect("second");
     assert_eq!(oid1, oid2);
 }
 
@@ -759,7 +759,7 @@ fn test_store_bytes_json_blob() {
         is_animated: false,
     };
     let json = serde_json::to_vec(&meta).expect("serialize");
-    let oid = store.store_bytes(&json).expect("store");
+    let oid = store.store_bytes(&json, crate::build::cache::RecordMode::Request).expect("store");
 
     // Read back and deserialize.
     let blob = store.get_path(&oid).expect("blob exists");
@@ -1338,7 +1338,7 @@ fn test_metadata_cache_hit_returns_stored_meta() {
         is_animated: false,
     };
     let json_bytes = serde_json::to_vec(&meta).expect("ser");
-    let meta_oid = store.store_bytes(&json_bytes).expect("store blob");
+    let meta_oid = store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).expect("store blob");
 
     // Create a fake source OID.
     let source_src = write_temp_file(&dir, "source.bin", b"video file content");
@@ -1364,7 +1364,7 @@ fn test_metadata_cache_hit_returns_stored_meta() {
         source_size: 18,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // Look up → should hit.
     let found_oid = cache.find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait);
@@ -1427,7 +1427,7 @@ fn test_metadata_cache_full_roundtrip() {
 
     // 4. Store metadata as blob in ObjectStore.
     let json_bytes = serde_json::to_vec(&meta).expect("ser");
-    let meta_oid = store.store_bytes(&json_bytes).expect("store blob");
+    let meta_oid = store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).expect("store blob");
 
     // 5. Write TransformRecord.
     let mut transforms = HashMap::new();
@@ -1444,7 +1444,7 @@ fn test_metadata_cache_full_roundtrip() {
         source_size,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // 6. Check TransformCache again → hit!
     let cache2 = TransformCache::new(
@@ -2595,15 +2595,15 @@ fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {
     let cache = TransformCache::new(transforms_dir, ObjectStore::new(objects_dir.clone()));
     let params = serde_json::json!({});
 
-    let good = store.store_bytes(b"the bytes the oid names").expect("stored");
-    cache.put(&record_with(&"1111".repeat(16), &good)).expect("record");
+    let good = store.store_bytes(b"the bytes the oid names", crate::build::cache::RecordMode::Request).expect("stored");
+    cache.put(&record_with(&"1111".repeat(16), &good), crate::build::cache::RecordMode::Request).expect("record");
     let _short = ShortWaits::new();
     let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&good));
     assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait).as_deref(), Some(good.as_str()));
 
     let forged = "ffff".repeat(16);
     put_object(&objects_dir, &forged, b"not what its name says");
-    cache.put(&record_with(&"2222".repeat(16), &forged)).expect("record");
+    cache.put(&record_with(&"2222".repeat(16), &forged), crate::build::cache::RecordMode::Request).expect("record");
     let _also_in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&forged));
     assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
     assert!(!store.blob_path(&forged).exists(), "a blob that fails its checksum is removed");
@@ -2722,7 +2722,7 @@ fn store_with_blob(name: &str, source: &[u8], stand_in: &[u8]) -> (ObjectStore, 
     let dir = make_test_dir(name);
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "source.bin", source);
-    let oid = store.store_file(&src).expect("stored");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("stored");
     fs::write(store.blob_path(&oid), stand_in).expect("replace the blob's bytes");
     (store, src, oid.clone(), dir)
 }
@@ -2732,21 +2732,21 @@ fn store_file_and_store_bytes_leave_a_blob_in_the_cloud_alone() {
     let (store, src, oid, _dir) = store_with_blob("cloud_blob_left_alone", b"the original bytes", b"stand-in");
     let blob = store.blob_path(&oid);
     let _cloud = crate::build::icloud::pretend::evicted(&blob);
-    assert_eq!(store.store_file(&src).expect("present in the cloud is present"), oid);
+    assert_eq!(store.store_file(&src, crate::build::cache::RecordMode::Request).expect("present in the cloud is present"), oid);
     assert_eq!(fs::read(&blob).expect("still there"), b"stand-in", "store_file must not remove or rewrite it");
 
-    let bytes_oid = store.store_bytes(b"small json").expect("stored");
+    let bytes_oid = store.store_bytes(b"small json", crate::build::cache::RecordMode::Request).expect("stored");
     let bytes_blob = store.blob_path(&bytes_oid);
     fs::write(&bytes_blob, b"stand-in").unwrap();
     let _also_in_cloud = crate::build::icloud::pretend::evicted(&bytes_blob);
-    assert_eq!(store.store_bytes(b"small json").expect("present"), bytes_oid);
+    assert_eq!(store.store_bytes(b"small json", crate::build::cache::RecordMode::Request).expect("present"), bytes_oid);
     assert_eq!(fs::read(&bytes_blob).unwrap(), b"stand-in", "store_bytes must not rewrite it");
 }
 
 #[test]
 fn a_downloaded_empty_blob_is_still_replaced() {
     let (store, src, oid, _dir) = store_with_blob("downloaded_empty_blob", b"the original bytes", b"");
-    assert_eq!(store.store_file(&src).expect("replaced"), oid);
+    assert_eq!(store.store_file(&src, crate::build::cache::RecordMode::Request).expect("replaced"), oid);
     assert_eq!(fs::read(store.blob_path(&oid)).unwrap(), b"the original bytes");
 }
 
@@ -2772,7 +2772,7 @@ fn waits_run() -> u32 {
 
 /// A blob of `bytes` in `store`, with its file marked as in the cloud.
 fn blob_in_the_cloud(store: &ObjectStore, bytes: &[u8]) -> (String, PathBuf, crate::build::icloud::pretend::Guard) {
-    let oid = store.store_bytes(bytes).expect("stored");
+    let oid = store.store_bytes(bytes, crate::build::cache::RecordMode::Request).expect("stored");
     let blob = store.blob_path(&oid);
     let guard = crate::build::icloud::pretend::evicted(&blob);
     (oid, blob, guard)
@@ -2840,7 +2840,7 @@ fn a_blob_that_arrives_resets_the_count_of_waits_that_ran_out() {
     let store = ObjectStore::new(dir.join("objects"));
     let target = dir.join("out").join("copy.bin");
     let stuck: Vec<_> = (0..4u8).map(|n| blob_in_the_cloud(&store, &[n; 16])).collect();
-    let oid = store.store_bytes(b"arrives when asked").unwrap();
+    let oid = store.store_bytes(b"arrives when asked", crate::build::cache::RecordMode::Request).unwrap();
     let _arriving = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&oid));
 
     store.link_to(&stuck[0].0, &target).expect_err("timeout 1");

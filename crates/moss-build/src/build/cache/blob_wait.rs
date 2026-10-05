@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 /// One breaker per objects directory, so a cache on an unreachable drive does
 /// not stop another site's blobs from being waited for.
-static BLOB_BREAKERS: Breakers = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+pub(super) static BLOB_BREAKERS: Breakers = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// How long to wait for a blob the cloud holds: ten seconds plus one per MiB,
 /// capped at ten minutes. A video-sized blob's download wins by construction

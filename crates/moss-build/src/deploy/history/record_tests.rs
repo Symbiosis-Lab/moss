@@ -32,7 +32,7 @@ fn dedup_skips_a_hash_already_in_the_store() {
     fs::write(vault.join("post.md"), b"fresh bytes this path must never hash").unwrap();
 
     let store = ObjectStore::new(dir.path().join("objects"));
-    let pre_existing_hash = store.store_bytes(b"already kept").unwrap();
+    let pre_existing_hash = store.store_bytes(b"already kept", crate::build::cache::RecordMode::Request).unwrap();
 
     let mut out = BTreeMap::new();
     record_one(&vault, &store, "post.md", &pre_existing_hash, Some(4), &never_evicted, &mut out);

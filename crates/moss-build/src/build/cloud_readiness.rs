@@ -166,12 +166,12 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn test_poll(poll: Duration) -> Duration {
+pub(crate) fn test_poll(poll: Duration) -> Duration {
     if TEST_DEADLINE.with(|d| d.get()).is_some() { Duration::from_millis(1) } else { poll }
 }
 
 #[cfg(not(test))]
-fn test_poll(poll: Duration) -> Duration {
+pub(crate) fn test_poll(poll: Duration) -> Duration {
     poll
 }
 
@@ -741,7 +741,7 @@ pub(crate) fn breaker_for(all: &Breakers, root: &Path, what: &'static str) -> st
     all.entry(root.to_path_buf()).or_insert_with(|| std::sync::Arc::new(WaitBreaker::of(what))).clone()
 }
 
-fn record_breaker(root: &Path) -> std::sync::Arc<WaitBreaker> {
+pub(crate) fn record_breaker(root: &Path) -> std::sync::Arc<WaitBreaker> {
     breaker_for(&RECORD_BREAKERS, root, "cache records")
 }
 

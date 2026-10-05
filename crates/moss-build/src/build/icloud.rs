@@ -175,6 +175,15 @@ pub(crate) mod pretend {
         REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|p| *p == path).count()
     }
 
+    /// The refusal a provider gives for a write below a directory marked here
+    /// ([`evicted`] for ever, [`evicted_until_requested`] until asked for).
+    pub(crate) fn refusal_below(path: &Path) -> Option<std::io::Error> {
+        let is_above = |dir: &PathBuf| path != dir && path.starts_with(dir);
+        let refused = ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(is_above)
+            || MARKED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(dir, _)| is_above(dir));
+        refused.then(|| std::io::Error::from_raw_os_error(libc::EDEADLK))
+    }
+
     pub(crate) struct Guard(PathBuf);
 
     impl Drop for Guard {
@@ -192,9 +201,10 @@ pub(crate) mod pretend {
 #[cfg(target_os = "macos")]
 pub fn is_dataless_dir(path: &Path) -> bool {
     use std::os::darwin::fs::MetadataExt;
-    std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && (meta.st_flags() & SF_DATALESS) != 0)
-        .unwrap_or(false)
+    pretended(path)
+        || std::fs::symlink_metadata(path)
+            .map(|meta| meta.is_dir() && (meta.st_flags() & SF_DATALESS) != 0)
+            .unwrap_or(false)
 }
 
 #[cfg(not(target_os = "macos"))]
