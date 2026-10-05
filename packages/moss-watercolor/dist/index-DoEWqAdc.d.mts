@@ -1,5 +1,9 @@
 import { t as Paper } from "./default-Cs3xymcD.mjs";
 
+//#region src/engine/math.d.ts
+
+type Colour = string | readonly [number, number, number];
+//#endregion
 //#region src/engine/preset.d.ts
 interface WatercolorPreset {
   /** One simulation step, in paper-time seconds. */
@@ -70,6 +74,8 @@ interface CreateSimOptions {
   diagMode?: number;
   /** What lies under the canvas. `'paper'` (the default) draws the wash over the page colour read from `--bg`, as a layer that is clear only where nothing is inked on a light page and opaque on a dark one. `'transparent'` draws only pigment over nothing: the canvas is the print, paper included, at both ends of a leg, and its pigment thins toward `drainFloor` through the middle of it (`drain` in `engine/math.ts`), so whatever the host has behind it shows through the film. Light pages darken what is behind them, dark pages lighten it, by plain source-over. */
   ground?: 'paper' | 'transparent';
+  /** The page colour the wash is drawn against: `#rgb`, `#rrggbb`, an opaque computed `rgb()`, or `[r, g, b]` in sRGB 0 to 1 (`parseColour`). Defaults to the `--bg` custom property on the document root, read once here; anything unparseable is white. A host whose colours live elsewhere passes it, and changes it later with `setTint`. Its luma below 0.5 draws the wash the other way round. */
+  tint?: Colour;
 }
 interface StepOptions {
   standing?: boolean;
@@ -101,6 +107,8 @@ interface RecordingSide {
   light: number;
   flood: boolean;
   skip: boolean;
+  /** Internal bookkeeping, public only because `pair()` returns this type: the tint's stamp when this side began recording. A side whose stamp is not the sim's current one was measured against another tint and counts as unrecorded. */
+  stamp: number;
 }
 interface Pair {
   sides: [RecordingSide, RecordingSide];
@@ -123,6 +131,8 @@ interface WatercolorSim {
   free(pair: Pair): void;
   /** p in [0, 1] from the outgoing scene (fromFwd: the lower of the pair) to the incoming; returns whether either side had a frame to show. */
   play(pair: Pair, fromFwd: boolean, p: number): boolean;
+  /** Changes the tint the wash is drawn against (a theme toggle). A change of more than 1/255 in any channel makes every side recorded so far count as unrecorded: `recorded()` is false, `play()` draws nothing from it and `record()` starts it again, since its pigment was measured against the old colour. A smaller change is ignored. A leg being played cannot be finished across it; hand off to the host's own page first. */
+  setTint(colour: Colour): void;
   /** Adds a `webglcontextlost` handler; returns an unsubscribe function. The factory listens on the canvas only once the first handler is added, and from then on cancels the event's default action (which is what lets the context be restored). A page may also attach its own listener to the canvas directly. */
   onContextLost(handler: (event: Event) => void): () => void;
 }

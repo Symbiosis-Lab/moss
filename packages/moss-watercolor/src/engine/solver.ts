@@ -13,7 +13,7 @@
 // -- each print's dispersion recorded once, then played forward/backward and
 // crossfaded in optical thickness for a transition).
 import { V, WATER, PIG, MEAN, GROW, PACK, PLAY, buildShowShader } from './shaders.js';
-import { clamp01, smooth, endpointPresence, drain, isDarkPage } from './math.js';
+import { clamp01, smooth, endpointPresence, drain, isDarkPage, parseColour, type Colour } from './math.js';
 import { DEFAULT_PRESET, recordingSteps, recordingFrameCount, type WatercolorPreset } from './preset.js';
 import { createPaper, type Paper } from '../paper/default.js';
 
@@ -37,6 +37,8 @@ export interface CreateSimOptions {
   diagMode?: number;
   /** What lies under the canvas. `'paper'` (the default) draws the wash over the page colour read from `--bg`, as a layer that is clear only where nothing is inked on a light page and opaque on a dark one. `'transparent'` draws only pigment over nothing: the canvas is the print, paper included, at both ends of a leg, and its pigment thins toward `drainFloor` through the middle of it (`drain` in `engine/math.ts`), so whatever the host has behind it shows through the film. Light pages darken what is behind them, dark pages lighten it, by plain source-over. */
   ground?: 'paper' | 'transparent';
+  /** The page colour the wash is drawn against: `#rgb`, `#rrggbb`, an opaque computed `rgb()`, or `[r, g, b]` in sRGB 0 to 1 (`parseColour`). Defaults to the `--bg` custom property on the document root, read once here; anything unparseable is white. A host whose colours live elsewhere passes it, and changes it later with `setTint`. Its luma below 0.5 draws the wash the other way round. */
+  tint?: Colour;
 }
 
 export interface StepOptions {
@@ -71,6 +73,8 @@ export interface RecordingSide {
   light: number;
   flood: boolean;
   skip: boolean;
+  /** Internal bookkeeping, public only because `pair()` returns this type: the tint's stamp when this side began recording. A side whose stamp is not the sim's current one was measured against another tint and counts as unrecorded. */
+  stamp: number;
 }
 
 export interface Pair {
@@ -95,6 +99,8 @@ export interface WatercolorSim {
   free(pair: Pair): void;
   /** p in [0, 1] from the outgoing scene (fromFwd: the lower of the pair) to the incoming; returns whether either side had a frame to show. */
   play(pair: Pair, fromFwd: boolean, p: number): boolean;
+  /** Changes the tint the wash is drawn against (a theme toggle). A change of more than 1/255 in any channel makes every side recorded so far count as unrecorded: `recorded()` is false, `play()` draws nothing from it and `record()` starts it again, since its pigment was measured against the old colour. A smaller change is ignored. A leg being played cannot be finished across it; hand off to the host's own page first. */
+  setTint(colour: Colour): void;
   /** Adds a `webglcontextlost` handler; returns an unsubscribe function. The factory listens on the canvas only once the first handler is added, and from then on cancels the event's default action (which is what lets the context be restored). A page may also attach its own listener to the canvas directly. */
   onContextLost(handler: (event: Event) => void): () => void;
 }
@@ -126,8 +132,17 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
   }
   const compile = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader compile failed'); return s; };
   const W = Math.round(texW / divisor), H = Math.round(texH / divisor);
-  const tint = (() => { const c = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(); const n = parseInt(c.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; })();
-  const dark = isDarkPage(tint);
+  // The one page colour every program is linked with, and the recordings' validity: pigment is measured against
+  // it, so `stamp` counts its real changes and a side made under another stamp is stale.
+  const initial = parseColour(opts.tint ?? getComputedStyle(document.documentElement).getPropertyValue('--bg'));
+  const page = { tint: initial, dark: isDarkPage(initial), stamp: 0 };
+  const linked: { p: WebGLProgram; u: Record<string, WebGLUniformLocation | null> }[] = [];
+  // the one place the tint reaches the shaders; binds the program itself, so it leaves that program in use
+  const applyTint = (pr: { p: WebGLProgram; u: Record<string, WebGLUniformLocation | null> }) => {
+    gl.useProgram(pr.p);
+    if (pr.u.uTint) gl.uniform3f(pr.u.uTint, page.tint[0], page.tint[1], page.tint[2]);
+    if (pr.u.uDark) gl.uniform1f(pr.u.uDark, page.dark ? 1 : 0);
+  };
   // the texture units and constants every pass shares are set once, at link;
   // per step only the framebuffers, the state textures and the prints change
   const UNITS: Record<string, number> = { uW: 0, uS: 1, uD: 2, uNear: 3, uWhole: 4, uPaper: 8, uSrc: 9, uTgt: 10, uSrcLo: 11, uTgtLo: 12, uSrcFt: 13, uTgtFt: 14,
@@ -136,9 +151,18 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'program link failed');
     const u: Record<string, WebGLUniformLocation | null> = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i)!.name; u[nm] = gl.getUniformLocation(p, nm); }
     gl.useProgram(p); for (const k in UNITS) if (u[k]) gl.uniform1i(u[k], UNITS[k]);
-    if (u.uSize) gl.uniform2f(u.uSize, W, H); if (u.uTint) gl.uniform3f(u.uTint, tint[0], tint[1], tint[2]); if (u.uDark) gl.uniform1f(u.uDark, dark ? 1 : 0);
+    if (u.uSize) gl.uniform2f(u.uSize, W, H);
     if (u.uGround) gl.uniform1f(u.uGround, ground === 'transparent' ? 1 : 0);
-    return { p, u }; };
+    const pr = { p, u }; applyTint(pr); linked.push(pr); return pr; };
+  // a recording is valid only for the tint it was made against; `fresh` is the one test of that
+  const fresh = (side: { stamp: number }) => side.stamp === page.stamp;
+  const changeTint = (colour: Colour) => {
+    const t = parseColour(colour);
+    // within 1/255 is no change, unless it crosses the light/dark line: the wash is drawn the other way round there
+    if (isDarkPage(t) === page.dark && t.every((v, i) => Math.abs(v - page.tint[i]) <= 1 / 255)) return;
+    page.tint = t; page.dark = isDarkPage(t); page.stamp++;
+    for (const pr of linked) applyTint(pr);
+  };
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
@@ -299,19 +323,22 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     // one side alone (true: the lower print), for a boundary whose other print
     // is not on hand yet.
     pair({ dose = 1, stir = 1, rinse = preset.recRinse, light = preset.recLight, lift = 1, flood = false, only = null }: PairOptions = {}) {
-      return { sides: [true, false].map((fwd) => ({ fwd, frames: [], n: 0, dose: fwd ? dose : 1, stir: fwd ? stir : 1, lift: fwd ? lift : 1, rinse: fwd ? rinse : preset.recRinse, light: fwd ? light : preset.recLight, flood: fwd && flood, skip: only !== null && fwd !== only })) as unknown as [RecordingSide, RecordingSide] };
+      return { sides: [true, false].map((fwd) => ({ fwd, frames: [], n: 0, dose: fwd ? dose : 1, stir: fwd ? stir : 1, lift: fwd ? lift : 1, rinse: fwd ? rinse : preset.recRinse, light: fwd ? light : preset.recLight, flood: fwd && flood, stamp: -1, skip: only !== null && fwd !== only })) as unknown as [RecordingSide, RecordingSide] };
     },
     // Records up to `budget` steps, the side the transition needs first first:
     // the two sides share the simulation's state, so one runs at a time.
     record(pair, firstFwd, budget) {
       for (const side of firstFwd ? pair.sides : [...pair.sides].reverse()) {
-        if (side.skip || side.n >= REC_STEPS) continue;
+        if (side.skip) continue;
+        // a recording made against another tint is void; start it again
+        if (!fresh(side) && side.frames.length) freeFrames(side);
+        if (side.n >= REC_STEPS) continue;
         // anything else that reset or stepped the sheet meanwhile voids a half-made recording
         if (side.frames.length && owner !== side) freeFrames(side);
         if (!side.frames.length) {
           // the reach the sheet grows by belongs to the pair's footprint, the same for both sides
           if (grownFor !== pair) { gl.viewport(0, 0, W, H); common(grow, true); gl.bindFramebuffer(gl.FRAMEBUFFER, growF); draw(); grownFor = pair; }
-          api.reset(); nStep = 0; owner = side; side.frames.push(keep());
+          api.reset(); nStep = 0; owner = side; side.stamp = page.stamp; side.frames.push(keep());
         }
         recording = true;
         while (budget-- > 0 && side.n < REC_STEPS) {
@@ -325,7 +352,8 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
         return;
       }
     },
-    recorded(pair) { return pair.sides.every((side) => side.skip || side.n >= REC_STEPS); },
+    recorded(pair) { return pair.sides.every((side) => side.skip || (side.n >= REC_STEPS && fresh(side))); },
+    setTint: changeTint,
     // a frame of a recording on screen: a frame's budget recorded ahead, then p
     // drawn; true while there is more to record, so the caller comes back
     show(pair, fromFwd, p) { api.record(pair, fromFwd, preset.stepsPerFrame); api.play(pair, fromFwd, p); return !api.recorded(pair); },
@@ -335,7 +363,7 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
       const [out, inc] = fromFwd ? pair.sides : [pair.sides[1], pair.sides[0]];
       // u = 0 is the solid print, u = 1 the mixed wash; a side still being
       // recorded shows its latest frame
-      const at = (side: any, u: number) => { const n = side.frames.length; if (!n) return null;
+      const at = (side: any, u: number) => { const n = fresh(side) ? side.frames.length : 0; if (!n) return null;
         const x = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x), j = Math.min(i + 1, n - 1);
         return { k0: side.frames[i], k1: side.frames[j], f: x - i, print: (side.fwd ? prints.src : prints.tgt)!.full }; };
       let x: any = at(out, p / preset.playOut), y: any = at(inc, (1 - p) / (1 - preset.playIn)), k = smooth(preset.playOut, preset.playIn, p);

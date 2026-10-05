@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { drain, endpointPresence, isDarkPage } from '../math.js';
+import { describe, expect, it, vi } from 'vitest';
+import { drain, endpointPresence, isDarkPage, parseColour } from '../math.js';
 import { DEFAULT_PRESET } from '../preset.js';
 
 const m = DEFAULT_PRESET.endpointMargin;
@@ -103,5 +103,50 @@ describe('isDarkPage', () => {
   it('weighs green above blue: a saturated blue is dark, a saturated green is not', () => {
     expect(isDarkPage([0, 0, 1])).toBe(true);
     expect(isDarkPage([0, 1, 0])).toBe(false);
+  });
+});
+
+describe('parseColour', () => {
+  it('reads #rrggbb in either case', () => {
+    expect(parseColour('#ff8000')).toEqual([1, 128 / 255, 0]);
+    expect(parseColour('#FAF8F5')).toEqual(parseColour('#faf8f5'));
+  });
+
+  it('expands #rgb', () => {
+    expect(parseColour('#f80')).toEqual([1, 136 / 255, 0]);
+  });
+
+  it('tolerates the whitespace a custom property carries', () => {
+    expect(parseColour(' #000000')).toEqual([0, 0, 0]);
+  });
+
+  it('passes a triple through, clamped', () => {
+    expect(parseColour([0.1, 0.5, 1])).toEqual([0.1, 0.5, 1]);
+    expect(parseColour([-1, 2, 0.5])).toEqual([0, 1, 0.5]);
+  });
+
+  it('reads a CSS computed colour, rgb() or opaque rgba()', () => {
+    expect(parseColour('rgb(255, 128, 0)')).toEqual([1, 128 / 255, 0]);
+    expect(parseColour('rgb(0,0,0)')).toEqual([0, 0, 0]);
+    expect(parseColour(' rgba( 29 , 32 , 30 , 1 ) ')).toEqual([29 / 255, 32 / 255, 30 / 255]);
+  });
+
+  it('warns once per distinct unreadable string, and stays silent for an empty one', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const bad of ['rgba(0, 0, 0, 0.5)', 'oklch(0.2 0.01 150)', '#11223344', 'rgb(256, 0, 0)']) {
+        expect(parseColour(bad)).toEqual([1, 1, 1]);
+        expect(parseColour(bad)).toEqual([1, 1, 1]);
+      }
+      expect(warn).toHaveBeenCalledTimes(4);
+      parseColour(''); parseColour('  ');
+      expect(warn).toHaveBeenCalledTimes(4);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('falls back to white for anything else, never NaN', () => {
+    for (const bad of ['', 'red', '#12', '#12345', '#gggggg', 'var(--bg)']) expect(parseColour(bad)).toEqual([1, 1, 1]);
+    expect(parseColour([NaN, 0, 0])).toEqual([1, 1, 1]);
+    expect(parseColour([0, 0] as unknown as [number, number, number])).toEqual([1, 1, 1]);
   });
 });

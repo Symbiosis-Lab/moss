@@ -1,4 +1,4 @@
-import { c as smooth, t as DEFAULT_PRESET } from "../preset-D1k-auG_.mjs";
+import { l as smooth, t as DEFAULT_PRESET } from "../preset-RER7tjVe.mjs";
 
 //#region src/model/index.ts
 /** The engine's default `playOut`/`playIn`, read from its preset so the two cannot drift apart. */

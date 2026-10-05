@@ -1,4 +1,4 @@
-import { a as drain, c as smooth, i as clamp01, n as recordingFrameCount, o as endpointPresence, r as recordingSteps, s as isDarkPage, t as DEFAULT_PRESET } from "./preset-D1k-auG_.mjs";
+import { a as drain, c as parseColour, i as clamp01, l as smooth, n as recordingFrameCount, o as endpointPresence, r as recordingSteps, s as isDarkPage, t as DEFAULT_PRESET } from "./preset-RER7tjVe.mjs";
 import { t as createPaper } from "./default-D3yqzjlz.mjs";
 
 //#region src/engine/shaders.ts
@@ -383,16 +383,18 @@ function createSim(opts) {
 		return s;
 	};
 	const W = Math.round(texW / divisor), H = Math.round(texH / divisor);
-	const tint = (() => {
-		const c = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
-		const n = parseInt(c.slice(1), 16);
-		return [
-			(n >> 16) / 255,
-			(n >> 8 & 255) / 255,
-			(n & 255) / 255
-		];
-	})();
-	const dark = isDarkPage(tint);
+	const initial = parseColour(opts.tint ?? getComputedStyle(document.documentElement).getPropertyValue("--bg"));
+	const page = {
+		tint: initial,
+		dark: isDarkPage(initial),
+		stamp: 0
+	};
+	const linked = [];
+	const applyTint = (pr) => {
+		gl.useProgram(pr.p);
+		if (pr.u.uTint) gl.uniform3f(pr.u.uTint, page.tint[0], page.tint[1], page.tint[2]);
+		if (pr.u.uDark) gl.uniform1f(pr.u.uDark, page.dark ? 1 : 0);
+	};
 	const UNITS = {
 		uW: 0,
 		uS: 1,
@@ -433,13 +435,23 @@ function createSim(opts) {
 		gl.useProgram(p);
 		for (const k in UNITS) if (u[k]) gl.uniform1i(u[k], UNITS[k]);
 		if (u.uSize) gl.uniform2f(u.uSize, W, H);
-		if (u.uTint) gl.uniform3f(u.uTint, tint[0], tint[1], tint[2]);
-		if (u.uDark) gl.uniform1f(u.uDark, dark ? 1 : 0);
 		if (u.uGround) gl.uniform1f(u.uGround, ground === "transparent" ? 1 : 0);
-		return {
+		const pr = {
 			p,
 			u
 		};
+		applyTint(pr);
+		linked.push(pr);
+		return pr;
+	};
+	const fresh = (side) => side.stamp === page.stamp;
+	const changeTint = (colour) => {
+		const t = parseColour(colour);
+		if (isDarkPage(t) === page.dark && t.every((v, i) => Math.abs(v - page.tint[i]) <= 1 / 255)) return;
+		page.tint = t;
+		page.dark = isDarkPage(t);
+		page.stamp++;
+		for (const pr of linked) applyTint(pr);
 	};
 	const buf = gl.createBuffer();
 	gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -721,12 +733,15 @@ function createSim(opts) {
 				rinse: fwd ? rinse : preset.recRinse,
 				light: fwd ? light : preset.recLight,
 				flood: fwd && flood,
+				stamp: -1,
 				skip: only !== null && fwd !== only
 			})) };
 		},
 		record(pair, firstFwd, budget) {
 			for (const side of firstFwd ? pair.sides : [...pair.sides].reverse()) {
-				if (side.skip || side.n >= REC_STEPS) continue;
+				if (side.skip) continue;
+				if (!fresh(side) && side.frames.length) freeFrames(side);
+				if (side.n >= REC_STEPS) continue;
 				if (side.frames.length && owner !== side) freeFrames(side);
 				if (!side.frames.length) {
 					if (grownFor !== pair) {
@@ -739,6 +754,7 @@ function createSim(opts) {
 					api.reset();
 					nStep = 0;
 					owner = side;
+					side.stamp = page.stamp;
 					side.frames.push(keep());
 				}
 				recording = true;
@@ -761,8 +777,9 @@ function createSim(opts) {
 			}
 		},
 		recorded(pair) {
-			return pair.sides.every((side) => side.skip || side.n >= REC_STEPS);
+			return pair.sides.every((side) => side.skip || side.n >= REC_STEPS && fresh(side));
 		},
+		setTint: changeTint,
 		show(pair, fromFwd, p) {
 			api.record(pair, fromFwd, preset.stepsPerFrame);
 			api.play(pair, fromFwd, p);
@@ -774,7 +791,7 @@ function createSim(opts) {
 		play(pair, fromFwd, p) {
 			const [out, inc] = fromFwd ? pair.sides : [pair.sides[1], pair.sides[0]];
 			const at = (side, u) => {
-				const n = side.frames.length;
+				const n = fresh(side) ? side.frames.length : 0;
 				if (!n) return null;
 				const x$1 = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x$1), j = Math.min(i + 1, n - 1);
 				return {

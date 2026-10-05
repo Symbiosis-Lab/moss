@@ -394,6 +394,23 @@ void main(){
     return 1 - (1 - f) * s * s;
   };
   var isDarkPage = (rgb) => 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] < 0.5;
+  var warned = /* @__PURE__ */ new Set();
+  var parseColour = (c) => {
+    if (typeof c !== "string") return c.length === 3 && c.every(Number.isFinite) ? [clamp01(c[0]), clamp01(c[1]), clamp01(c[2])] : [1, 1, 1];
+    const s = c.trim();
+    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s);
+    if (m) {
+      const h = m[1].length === 3 ? m[1].replace(/./g, "$&$&") : m[1], n = parseInt(h, 16);
+      return [(n >> 16) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+    }
+    const f = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*1(?:\.0*)?\s*)?\)$/i.exec(s);
+    if (f && [f[1], f[2], f[3]].every((v) => +v <= 255)) return [+f[1] / 255, +f[2] / 255, +f[3] / 255];
+    if (s && !warned.has(s)) {
+      warned.add(s);
+      console.warn(`moss-watercolor: cannot read the colour "${s}"; drawing against white`);
+    }
+    return [1, 1, 1];
+  };
 
   // packages/moss-watercolor/src/engine/preset.ts
   var DEFAULT_PRESET = {
@@ -508,12 +525,14 @@ void main(){
       return s;
     };
     const W = Math.round(texW / divisor), H = Math.round(texH / divisor);
-    const tint = (() => {
-      const c = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
-      const n = parseInt(c.slice(1), 16);
-      return [(n >> 16) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
-    })();
-    const dark = isDarkPage(tint);
+    const initial = parseColour(opts.tint ?? getComputedStyle(document.documentElement).getPropertyValue("--bg"));
+    const page = { tint: initial, dark: isDarkPage(initial), stamp: 0 };
+    const linked = [];
+    const applyTint = (pr) => {
+      gl.useProgram(pr.p);
+      if (pr.u.uTint) gl.uniform3f(pr.u.uTint, page.tint[0], page.tint[1], page.tint[2]);
+      if (pr.u.uDark) gl.uniform1f(pr.u.uDark, page.dark ? 1 : 0);
+    };
     const UNITS = {
       uW: 0,
       uS: 1,
@@ -554,10 +573,20 @@ void main(){
       gl.useProgram(p);
       for (const k in UNITS) if (u[k]) gl.uniform1i(u[k], UNITS[k]);
       if (u.uSize) gl.uniform2f(u.uSize, W, H);
-      if (u.uTint) gl.uniform3f(u.uTint, tint[0], tint[1], tint[2]);
-      if (u.uDark) gl.uniform1f(u.uDark, dark ? 1 : 0);
       if (u.uGround) gl.uniform1f(u.uGround, ground === "transparent" ? 1 : 0);
-      return { p, u };
+      const pr = { p, u };
+      applyTint(pr);
+      linked.push(pr);
+      return pr;
+    };
+    const fresh = (side) => side.stamp === page.stamp;
+    const changeTint = (colour) => {
+      const t = parseColour(colour);
+      if (isDarkPage(t) === page.dark && t.every((v, i) => Math.abs(v - page.tint[i]) <= 1 / 255)) return;
+      page.tint = t;
+      page.dark = isDarkPage(t);
+      page.stamp++;
+      for (const pr of linked) applyTint(pr);
     };
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -827,13 +856,15 @@ void main(){
       // one side alone (true: the lower print), for a boundary whose other print
       // is not on hand yet.
       pair({ dose = 1, stir = 1, rinse = preset.recRinse, light = preset.recLight, lift = 1, flood = false, only = null } = {}) {
-        return { sides: [true, false].map((fwd) => ({ fwd, frames: [], n: 0, dose: fwd ? dose : 1, stir: fwd ? stir : 1, lift: fwd ? lift : 1, rinse: fwd ? rinse : preset.recRinse, light: fwd ? light : preset.recLight, flood: fwd && flood, skip: only !== null && fwd !== only })) };
+        return { sides: [true, false].map((fwd) => ({ fwd, frames: [], n: 0, dose: fwd ? dose : 1, stir: fwd ? stir : 1, lift: fwd ? lift : 1, rinse: fwd ? rinse : preset.recRinse, light: fwd ? light : preset.recLight, flood: fwd && flood, stamp: -1, skip: only !== null && fwd !== only })) };
       },
       // Records up to `budget` steps, the side the transition needs first first:
       // the two sides share the simulation's state, so one runs at a time.
       record(pair, firstFwd, budget) {
         for (const side of firstFwd ? pair.sides : [...pair.sides].reverse()) {
-          if (side.skip || side.n >= REC_STEPS) continue;
+          if (side.skip) continue;
+          if (!fresh(side) && side.frames.length) freeFrames(side);
+          if (side.n >= REC_STEPS) continue;
           if (side.frames.length && owner !== side) freeFrames(side);
           if (!side.frames.length) {
             if (grownFor !== pair) {
@@ -846,6 +877,7 @@ void main(){
             api.reset();
             nStep = 0;
             owner = side;
+            side.stamp = page.stamp;
             side.frames.push(keep());
           }
           recording = true;
@@ -868,8 +900,9 @@ void main(){
         }
       },
       recorded(pair) {
-        return pair.sides.every((side) => side.skip || side.n >= REC_STEPS);
+        return pair.sides.every((side) => side.skip || side.n >= REC_STEPS && fresh(side));
       },
+      setTint: changeTint,
       // a frame of a recording on screen: a frame's budget recorded ahead, then p
       // drawn; true while there is more to record, so the caller comes back
       show(pair, fromFwd, p) {
@@ -884,7 +917,7 @@ void main(){
       play(pair, fromFwd, p) {
         const [out, inc] = fromFwd ? pair.sides : [pair.sides[1], pair.sides[0]];
         const at = (side, u) => {
-          const n = side.frames.length;
+          const n = fresh(side) ? side.frames.length : 0;
           if (!n) return null;
           const x2 = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x2), j = Math.min(i + 1, n - 1);
           return { k0: side.frames[i], k1: side.frames[j], f: x2 - i, print: (side.fwd ? prints.src : prints.tgt).full };

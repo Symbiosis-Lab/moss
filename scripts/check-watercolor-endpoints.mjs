@@ -22,6 +22,10 @@ import { loadPlaywright } from './landing-harness.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TOLERANCE = 2;
 const SEARCH = 20;
+// Theme-flip cases, mean abs diff per channel (/255) at p = 0.1 over the dark ground: a correct re-recording measures
+// 32.2, a recording still made against the light tint 202.3. 100 is about the midpoint of the gap (a little nearer
+// the good number), so a drift of the wash in either direction has to be large before the case flips.
+const FLIP_THRESHOLD = 100;
 
 const bundle = await build({
   stdin: {
@@ -301,17 +305,71 @@ async function saturatedInPage({ tolerance }) {
   return { results, png };
 }
 
+// A host's theme can flip under a recording: pigment is measured against the tint, so setTint must void
+// what was recorded, and a re-recording must be right for the new ground. Light prints are recorded
+// against a light tint, then the tint goes dark.
+async function themeFlipInPage({ tolerance, threshold }) {
+  const W = 410, H = 390, LIGHT = '#faf8f5', DARK = '#1a1816';
+  const make = (draw) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'); g.fillStyle = LIGHT; g.fillRect(0, 0, W, H); draw(g); return c; };
+  const printA = make((g) => { g.strokeStyle = '#202020'; g.lineWidth = 2; for (let x = 10; x < W; x += 20) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); } g.fillStyle = '#181818'; g.font = 'bold 64px serif'; g.fillText('Moss', 40, 220); });
+  const printB = make((g) => { g.strokeStyle = '#1a2a60'; g.lineWidth = 3; for (let i = -H; i < W; i += 26) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + H, H); g.stroke(); } g.fillStyle = '#a02818'; g.beginPath(); g.arc(250, 130, 70, 0, 7); g.fill(); });
+  const canvas = document.getElementById('c');
+  const mk = (cv, tint) => { const s = MossWatercolor.createSim({ canvas: cv, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground: 'transparent', tint }); if (!s) throw new Error('no WebGL2 + EXT_color_buffer_float'); s.setPrints(printA, printB); return s; };
+  const finish = (s, pair) => { let n = 0; while (s.show(pair, true, 0.5)) if (++n > 1000) throw new Error('recording never finished'); };
+  const over = (src, ground) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = ground; g.fillRect(0, 0, W, H); g.drawImage(src, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
+  const flat = (print) => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(print, 0, 0); return over(c, DARK); };
+  const meanDiff = (x, y) => { let e = 0, n = 0; for (let i = 0; i < x.length; i += 4) for (let k = 0; k < 3; k++) { e += Math.abs(x[i + k] - y[i + k]); n++; } return e / n; };
+  const maxDiff = (x, y) => { let m = 0; for (let i = 0; i < x.length; i += 4) for (let k = 0; k < 3; k++) m = Math.max(m, Math.abs(x[i + k] - y[i + k])); return m; };
+  const results = [];
+  const sim = mk(canvas, LIGHT);
+  const pair = sim.pair();
+  finish(sim, pair);
+  results.push({ case: 'theme flip: recorded under the light tint', ok: sim.recorded(pair) === true });
+  sim.setTint('#faf8f6');
+  results.push({ case: 'theme flip: a tint within 1/255 keeps the recording', ok: sim.recorded(pair) === true });
+  sim.setTint([0.98, 0.973, 0.961]);
+  results.push({ case: 'theme flip: a triple within 1/255 keeps the recording', ok: sim.recorded(pair) === true });
+  sim.setTint(DARK);
+  results.push({ case: 'theme flip: setTint to the dark tint voids the recording', ok: sim.recorded(pair) === false });
+  results.push({ case: 'theme flip: play() draws nothing from a stale pair', ok: sim.play(pair, true, 0.5) === false });
+  finish(sim, pair);
+  results.push({ case: 'theme flip: re-recorded under the dark tint', ok: sim.recorded(pair) === true });
+  const wantA = over(printA, DARK), wantB = over(printB, DARK);
+  for (const [p, want, name] of [[0, wantA, 'A'], [1, wantB, 'B']]) {
+    sim.show(pair, true, p);
+    results.push({ case: `theme flip: re-recorded show(p=${p}) vs print ${name}: max diff ${maxDiff(over(canvas, DARK), want)}/255`, ok: maxDiff(over(canvas, DARK), want) <= tolerance });
+  }
+  // Past the endpoint margin the canvas over the new ground should still read as the print. A sim that kept
+  // the light tint draws a light page with no pigment (a page as light as its tint is clear sheet), so the
+  // page vanishes into the dark ground. Measured, mean abs diff per channel: re-recorded 32.2/255, stale light tint 202.3/255; FLIP_THRESHOLD sits between.
+  sim.show(pair, true, 0.1);
+  const fresh = meanDiff(over(canvas, DARK), wantA);
+  const staleCanvas = document.createElement('canvas'); const stale = mk(staleCanvas, LIGHT); const sp = stale.pair(); finish(stale, sp); stale.show(sp, true, 0.1);
+  const staleDiff = meanDiff(over(staleCanvas, DARK), wantA);
+  results.push({ case: `theme flip: show(p=0.1) over the new ground, mean diff from the print ${fresh.toFixed(1)}/255 (stale light tint: ${staleDiff.toFixed(1)}/255)`, ok: fresh < threshold && staleDiff > threshold });
+  // A flip in the middle of a recording: the side has frames made against the light tint, so a side stamped when
+  // it ENDS (not when it starts) would keep them and pass as recorded under the dark one.
+  const midCanvas = document.createElement('canvas'); const mid = mk(midCanvas, LIGHT); const mp = mid.pair();
+  mid.record(mp, true, 100);
+  results.push({ case: 'theme flip: a 100-step budget leaves the side part-recorded', ok: mid.recorded(mp) === false });
+  mid.setTint(DARK);
+  finish(mid, mp); mid.show(mp, true, 0.1);
+  const midDiff = meanDiff(over(midCanvas, DARK), wantA);
+  results.push({ case: `theme flip: flipped mid-recording, show(p=0.1) mean diff from the print ${midDiff.toFixed(1)}/255`, ok: midDiff < threshold });
+  return { results, png: {} };
+}
+
 const { chromium } = await loadPlaywright();
 const browser = await chromium.launch();
 let failed = false;
 try {
-  for (const [dark, bg, ground, saturated] of [[false, '#f4efe6'], [true, '#1d201e'], [false, '#f4efe6', 'transparent'], [true, '#1d201e', 'transparent'], [true, '#0000ff', undefined, true]]) {
+  for (const [dark, bg, ground, saturated, flip] of [[false, '#f4efe6'], [true, '#1d201e'], [false, '#f4efe6', 'transparent'], [true, '#1d201e', 'transparent'], [true, '#0000ff', undefined, true], [false, '#faf8f5', 'transparent', false, true]]) {
   const page = await browser.newPage({ viewport: { width: 500, height: 450 }, deviceScaleFactor: 1 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.setContent(`<!doctype html><style>:root{--bg:${bg}}body{margin:0;background:var(--bg)}canvas{position:absolute}</style><canvas id="c"></canvas>`);
   await page.addScriptTag({ content: script });
-  const { results, png } = await page.evaluate(saturated ? saturatedInPage : inPage, { tolerance: TOLERANCE, search: SEARCH, dark, ground });
+  const { results, png } = await page.evaluate(flip ? themeFlipInPage : saturated ? saturatedInPage : inPage, { tolerance: TOLERANCE, search: SEARCH, dark, ground, threshold: FLIP_THRESHOLD });
   if (errors.length) throw new Error(errors.join('\n'));
   if (process.env.WATERCOLOR_PNG_DIR) for (const [p, url] of Object.entries(png)) writeFileSync(`${process.env.WATERCOLOR_PNG_DIR}/${dark ? 'dark' : 'light'}${ground ? '-transparent' : ''}-p${Math.round(p * 100)}.png`, Buffer.from(url.split(',')[1], 'base64'));
   console.log(`-- ${dark ? 'dark' : 'light'} page (${bg})${ground ? `, ground: ${ground}` : ''}`);
