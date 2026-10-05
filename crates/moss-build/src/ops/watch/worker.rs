@@ -196,6 +196,11 @@ pub struct WorkerHandle {
     /// lock-retry wait after a busy spell would end instantly and for free.
     wake_seq: std::sync::atomic::AtomicU64,
     shutdown: std::sync::atomic::AtomicBool,
+    /// Watcher tasks currently running on this handle. A re-armed watch
+    /// reuses the registered handle, so the old task's exit must not shut
+    /// down what the new one still drives; only the last one out does. Only
+    /// touched under the registry lock (see [`attach`] / [`detach`]).
+    watchers: std::sync::atomic::AtomicUsize,
     /// Finish time and wall duration of the most recently COMPLETED admission
     /// — the sweep's measured-from-finish pacing input (phase 3): its
     /// arrival-driven rebuild interval is `max(floor, last build duration)`,
@@ -214,6 +219,7 @@ impl WorkerHandle {
             building: std::sync::atomic::AtomicBool::new(false),
             wake_seq: std::sync::atomic::AtomicU64::new(0),
             shutdown: std::sync::atomic::AtomicBool::new(false),
+            watchers: std::sync::atomic::AtomicUsize::new(0),
             last_completed: Mutex::new(None),
         }
     }
@@ -599,7 +605,18 @@ fn workers() -> std::sync::MutexGuard<'static, std::collections::HashMap<String,
 /// registered (mirrors `FileWatcherState`'s "shouldn't happen, but be safe"),
 /// the old worker is asked to exit.
 pub fn register(folder: &str) -> Arc<WorkerHandle> {
+    register_with(folder, 0)
+}
+
+/// [`register`], with the first watcher task already counted — inserted under
+/// the registry lock so no [`detach`] can run between the two.
+pub fn register_counted(folder: &str) -> WatcherSlot {
+    WatcherSlot { folder: folder.to_string(), handle: register_with(folder, 1) }
+}
+
+fn register_with(folder: &str, watchers: usize) -> Arc<WorkerHandle> {
     let handle = Arc::new(WorkerHandle::new());
+    handle.watchers.store(watchers, Ordering::SeqCst);
     if let Some(old) = workers().insert(folder.to_string(), handle.clone()) {
         old.request_shutdown();
     }
@@ -613,6 +630,46 @@ pub fn deregister(folder: &str, handle: &Arc<WorkerHandle>) {
     if map.get(folder).is_some_and(|h| Arc::ptr_eq(h, handle)) {
         map.remove(folder);
     }
+}
+
+/// One watcher task's claim on `folder`'s worker. Dropping it — at the task's
+/// end, on a panic, or because the task's future was dropped unpolled — is the
+/// only way the claim is released, so no exit path can forget to.
+///
+/// The last claim out asks the worker to exit and removes the registration; an
+/// earlier one (a re-armed watch's predecessor) leaves both alone, since its
+/// successor still drains the slot. Never pair it with [`deregister`].
+pub struct WatcherSlot {
+    folder: String,
+    handle: Arc<WorkerHandle>,
+}
+
+impl WatcherSlot {
+    pub fn handle(&self) -> &Arc<WorkerHandle> {
+        &self.handle
+    }
+}
+
+impl Drop for WatcherSlot {
+    fn drop(&mut self) {
+        let mut map = workers();
+        if self.handle.watchers.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.handle.request_shutdown();
+            if map.get(&self.folder).is_some_and(|h| Arc::ptr_eq(h, &self.handle)) {
+                map.remove(&self.folder);
+            }
+        }
+    }
+}
+
+/// Claim `folder`'s registered worker for a watcher task, or `None` if
+/// nothing is registered. Under the registry lock, so it cannot interleave
+/// with a [`WatcherSlot`] drop that is deciding to tear the handle down.
+pub fn attach(folder: &str) -> Option<WatcherSlot> {
+    let map = workers();
+    let handle = map.get(folder)?.clone();
+    handle.watchers.fetch_add(1, Ordering::SeqCst);
+    Some(WatcherSlot { folder: folder.to_string(), handle })
 }
 
 /// The slot for `folder`, if a watcher (and thus a worker) is running for it.

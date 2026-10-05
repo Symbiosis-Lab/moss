@@ -149,7 +149,14 @@ pub fn register_worker(
     // even when the kill switch routes triggers to the inline body — the
     // publish thaw's catch-up rides the slot either way, and an idle worker
     // costs one parked task.
-    let worker_handle = worker::register(folder_path);
+    spawn_worker(worker::register(folder_path), spawner, attempt)
+}
+
+fn spawn_worker(
+    worker_handle: Arc<worker::WorkerHandle>,
+    spawner: &Arc<dyn Spawner>,
+    attempt: RebuildAttempt,
+) -> Arc<worker::WorkerHandle> {
     log::info!(
         "Rebuild path: {}",
         if worker::worker_enabled() {
@@ -169,7 +176,8 @@ pub fn register_worker(
     worker_handle
 }
 
-/// Ensure a rebuild worker is registered and running for `folder_path`,
+/// Ensure a rebuild worker is registered and running for `folder_path`, and
+/// count the calling watcher task onto it (released when the returned [`worker::WatcherSlot`] drops),
 /// reusing one that is already there instead of always minting a fresh
 /// handle via [`register_worker`].
 ///
@@ -195,11 +203,12 @@ pub fn ensure_worker(
     folder_path: &str,
     spawner: &Arc<dyn Spawner>,
     attempt: RebuildAttempt,
-) -> Arc<worker::WorkerHandle> {
-    match worker::get(folder_path) {
-        Some(existing) => existing,
-        None => register_worker(folder_path, spawner, attempt),
-    }
+) -> worker::WatcherSlot {
+    worker::attach(folder_path).unwrap_or_else(|| {
+        let slot = worker::register_counted(folder_path);
+        spawn_worker(slot.handle().clone(), spawner, attempt);
+        slot
+    })
 }
 
 /// Start file watching for live development mode.
@@ -219,7 +228,7 @@ pub async fn start(config: WatchConfig) {
         cadence,
     } = config;
 
-    let worker_handle = ensure_worker(&folder_path, &spawner, attempt);
+    let worker_slot = ensure_worker(&folder_path, &spawner, attempt);
 
     // The folder's watcher-health ledger (phase 3 — supervision). The pump
     // records liveness into it, the sweep judges strikes against it, and the
@@ -234,6 +243,14 @@ pub async fn start(config: WatchConfig) {
     }
 
     drop(spawner.spawn(Box::pin(async move {
+        // The task's claim on the folder's worker, released on every exit
+        // path (including a panic, or this future being dropped unpolled).
+        // The worker exits with its watcher TASK, not with any one watcher
+        // session: it finishes any in-flight build first (the build is
+        // spawn_blocking and unkillable — never aborted), then drops whatever
+        // is still queued, which is right at folder close.
+        let _worker_slot = worker_slot;
+
         /// Why one watcher session ended — decides whether the next begins.
         enum SessionEnd {
             /// Folder close. The only way the task exits.
@@ -437,12 +454,6 @@ pub async fn start(config: WatchConfig) {
             }
         }
 
-        // The worker exits with its watcher TASK (not with any one watcher
-        // session): it finishes any in-flight build first (the build is
-        // spawn_blocking and unkillable — never aborted), then drops whatever
-        // is still queued, which is right at folder close.
-        worker_handle.request_shutdown();
-        worker::deregister(&folder_path, &worker_handle);
         supervision::deregister(&folder_path, &health);
     })));
 }
@@ -655,3 +666,7 @@ async fn handle_debounced_batch(
     })
     .await;
 }
+
+#[cfg(test)]
+#[path = "watch/rearm_tests.rs"]
+mod rearm_tests;
