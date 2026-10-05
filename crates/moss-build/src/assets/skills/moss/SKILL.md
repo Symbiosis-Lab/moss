@@ -190,6 +190,8 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `moss guide importing`.
 - **Debugging a build, plugin, or shortcode** → read
   `moss guide debugging`.
+- **Reviewing or hiding a site's comments (spam) before publishing** → read
+  `moss guide comments`.
 - **Building a site in more than one language** →
   `moss guide authoring`, Multilingual sites.
 - **Putting the site online** → Publishing below.

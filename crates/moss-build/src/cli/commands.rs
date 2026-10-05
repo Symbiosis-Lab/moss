@@ -100,6 +100,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             args: "[<folder>] [<path>] [--json] | [<folder>] --save [<name>] [--json] | [<folder>] <path> --restore --at <id> [--copy] | [<folder>] --restore --at <id> --yes",
             description: "moss's own version history, kept inside the site at `.moss/history` (not git — a git user already has their own history, and this store never adds commits): every landed publish gets a snapshot, and `--save` takes one on demand. With no path, lists the site's timeline newest first: when, whether it was a publish or a named save, a `live` marker on the version currently published, and what changed. With a path, lists that one page's timeline instead, noting when its content was not kept (over the size ceiling, or unreadable at publish time). `--save [<name>]` builds the site and saves a version of it right now, ending with one line naming the version saved; `--save --json` prints that one version as a single JSON object on stdout instead (build progress and warnings still go to stderr), so a script never has to scrape the saved id out of the build log. `--restore --at <id>` restores that version — a path restores just that page (`--copy` writes it beside the current file instead of overwriting it); with no path it restores the whole site, which needs `--yes` since it can move files to the Trash. `<id>` is a version's id from the timeline, or an unambiguous prefix of one. With no folder, this command operates on the site containing the current directory; pass `<folder>` — a directory that already contains `.moss` — to act on a site from outside it, the same as `moss build <folder>`.",
         },
+        CliCommandInfo {
+            name: "comments",
+            args: "list [<folder>] [--json] | hide [<folder>] <id>... [--source <name>] [--json] | unhide [<folder>] <id>... [--source <name>] [--json]",
+            description: "Review and hide a site's comments. `list` prints every comment, newest first: id, source, the page it is on (address and title once a build has run, otherwise the page uid), author, time, the first 60 characters of its text, and whether it is hidden; it needs no build. `hide` takes one or more ids from `list` and removes those comments, and the replies under them, from the site at the next publish; `unhide` reverses it. Nothing is erased and nothing is sent anywhere: a hide is a signed event in `.moss/data/social/moderation.jsonl`, signed with the site's own key in `.moss/identity`, which moss never creates for this (no key, no hide). A call validates every id first, so an unknown id changes nothing; an id that exists under two sources needs `--source <name>`; an already-hidden comment is left alone. Nothing reviews new comments before they go live, so list them before publishing and hide the spam. `--json` prints rows, or `{\"changed\": [...], \"unchanged\": [...]}` for hide and unhide, and failures as `{\"error\": ...}`. With no folder, this command operates on the site containing the current directory.",
+        },
     ]
 }
 
@@ -165,6 +170,8 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("import", "moss import https://blog.example.com/post/ ~/Sites/me/articles/"),
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
+    ("comments", "moss comments list ~/blog/          # Every comment, newest first, hidden ones marked"),
+    ("comments", "moss comments hide ~/blog/ 12 13    # Keep comments 12 and 13 off the site at the next publish"),
 ];
 
 /// The only two flags that belong to no command. Everything else a command

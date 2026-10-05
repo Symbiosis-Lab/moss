@@ -40,6 +40,8 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     // Lives under `deploy/history/`, not `cli/` (file budget — see the
     // publish-history design's "Placement and budgets").
     ("history", moss_build::deploy::history::cli::run),
+    // Lives beside the comment feature, not in `cli/` (file budget).
+    ("comments", moss_build::build::features::comment::cli::run),
 ];
 
 fn answers(name: &str) -> bool {

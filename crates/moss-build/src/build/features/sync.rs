@@ -130,6 +130,19 @@ fn record_comment_sync_success(folder_path: &str, at: f64) {
     store_comment_sync_state(folder_path, &state);
 }
 
+/// Record one pass's outcome: a success sets the last-success time and clears
+/// the error, a failure keeps the last success and stores the reason.
+pub(in crate::build::features) fn record_comment_sync_result(
+    folder_path: &str,
+    result: &Result<super::comment::sync_remote::CommentSyncOutcome, CommentSyncError>,
+    at: f64,
+) {
+    match result {
+        Ok(_) => record_comment_sync_success(folder_path, at),
+        Err(e) => record_comment_sync_failure(folder_path, at, e),
+    }
+}
+
 fn record_comment_sync_failure(folder_path: &str, at: f64, err: &CommentSyncError) {
     let mut state = load_comment_sync_state(folder_path);
     state.last_attempt_at = Some(at);
@@ -341,20 +354,20 @@ fn run_native_process_sync(
                 "comment fetch",
                 Duration::from_secs(60),
             );
-            match super::comment::process_comments(
+            let result = super::comment::process_comments(
                 folder_path,
                 &server_url,
                 site_name,
                 &comment_articles,
-            ) {
+            );
+            record_comment_sync_result(folder_path, &result, unix_now_secs());
+            match result {
                 Ok(outcome) => {
                     stats.comments_changed = outcome.changed as usize;
-                    record_comment_sync_success(folder_path, unix_now_secs());
                     log::info!(target: "sync", "comments: synced {} articles against {} in {:?} (changed={})", comment_articles.len(), server_url, phase_start.elapsed(), outcome.changed);
                 }
                 Err(e) => {
                     log::warn!(target: "sync", "comment sync failed ({:?}): {}", e.kind, e.detail);
-                    record_comment_sync_failure(folder_path, unix_now_secs(), &e);
                     advisories.push(comment_sync_failure_advisory(&e));
                 }
             }

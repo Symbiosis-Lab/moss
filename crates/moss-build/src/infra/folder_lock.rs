@@ -86,7 +86,14 @@ pub(crate) fn folder_id(folder: &Path) -> String {
 /// for `folder`. Exposed so a test (or a future `moss doctor`) can name the
 /// file without acquiring it.
 pub fn lock_path_for(folder: &Path) -> Result<PathBuf, String> {
-    Ok(crate::infra::home::moss_home()?.join("locks").join(format!("{}.build", folder_id(folder))))
+    lock_path_named(folder, "build")
+}
+
+/// `<moss_home>/locks/<folder-id>.<name>` — one lock file per (folder, name),
+/// so a different job on the same folder can hold its own lock without waiting
+/// on the build's.
+pub fn lock_path_named(folder: &Path, name: &str) -> Result<PathBuf, String> {
+    Ok(crate::infra::home::moss_home()?.join("locks").join(format!("{}.{name}", folder_id(folder))))
 }
 
 /// Acquire the exclusive build lock for `folder`, creating
@@ -102,7 +109,15 @@ pub fn lock_path_for(folder: &Path) -> Result<PathBuf, String> {
 /// this one wait exactly as long as that takes is the correct behavior, not
 /// a fallback.
 pub fn acquire(folder: &Path) -> Result<Held, String> {
-    let path = lock_path_for(folder)?;
+    acquire_named(folder, "build")
+}
+
+/// [`acquire`] for a lock other than the build's, keyed by `name` (for example
+/// `"moderation"`, held only for the instant a comment hide is signed and
+/// appended, which must never wait on a build that holds the build lock for
+/// minutes).
+pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
+    let path = lock_path_named(folder, name)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create {}: {e}", parent.display()))?;
@@ -122,7 +137,11 @@ pub fn acquire(folder: &Path) -> Result<Held, String> {
         // `deploy::stack_activity::hold` for why a contended try-lock's
         // error kind is platform-dependent.
         Err(e) if e.kind() == fs2::lock_contended_error().kind() => {
-            log::info!("waiting for another moss process building this folder");
+            if name == "build" {
+                log::info!("waiting for another moss process building this folder");
+            } else {
+                log::info!("waiting for another moss process holding the {name} lock on this folder");
+            }
             file.lock_exclusive().map_err(|e| format!("lock {}: {e}", path.display()))?;
         }
         Err(e) => return Err(format!("lock {}: {e}", path.display())),

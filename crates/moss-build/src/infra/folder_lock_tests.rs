@@ -1,24 +1,6 @@
 use super::*;
 
-/// Points `MOSS_HOME` at a fresh temp dir for the duration of the closure,
-/// restoring whatever was there before. Takes `infra::home::MOSS_HOME_TEST_LOCK`
-/// for the whole span — env vars are process-global, and `infra::home`'s own
-/// `moss_home_honours_the_env_var_override` mutates the same var, so both
-/// must serialize on the one lock rather than each taking their own.
-fn with_moss_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
-    let _guard = crate::infra::home::MOSS_HOME_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let prior = std::env::var_os("MOSS_HOME");
-    let tmp = tempfile::tempdir().unwrap();
-    std::env::set_var("MOSS_HOME", tmp.path());
-    let result = f(tmp.path());
-    match prior {
-        Some(v) => std::env::set_var("MOSS_HOME", v),
-        None => std::env::remove_var("MOSS_HOME"),
-    }
-    result
-}
+use crate::infra::home::with_moss_home;
 
 /// Two spellings of the same folder — its canonical absolute form and a
 /// relative path through `..` — must name the same lock file. This is the

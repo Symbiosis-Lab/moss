@@ -336,35 +336,57 @@ pub fn fix_self_closing_non_void_tags(html: &str) -> String {
     .to_string()
 }
 
-/// Strips HTML tags from a string, keeping only the text content.
-/// Handles nested tags and decodes common HTML entities (&amp;, &lt;, &gt;, &quot;, &#39;, &nbsp;).
-/// Trims leading/trailing whitespace.
+/// Decodes the common HTML entities (`&lt;`, `&gt;`, `&quot;`, `&#39;`,
+/// `&nbsp;` as U+00A0, `&amp;`) in one pass. `&amp;` goes last: decoding it
+/// first would turn `&amp;lt;` into `<` rather than the text `&lt;`. The one
+/// entity decoder: [`strip_html_tags`] and the importer's escaped-HTML builder
+/// fields both use it.
+pub fn decode_html_entities(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", "\u{a0}")
+        .replace("&amp;", "&")
+}
+
+/// Strips HTML tags from a string, keeping only the text content, decoded with
+/// [`decode_html_entities`]. A block-level tag (`p`, `br`, `div`, `li`,
+/// headings, `blockquote`) becomes a space so adjacent paragraphs do not run
+/// together; inline tags leave no gap. Runs of whitespace (a decoded `&nbsp;`
+/// included) collapse to one space and the ends are trimmed.
 ///
-/// Used to derive plain-text labels from H1 content and from other rich-text
-/// surfaces that need a plain form for nav, breadcrumb, meta tags, and RSS.
+/// Today's caller is the `moss comments` listing, which shows the start of a
+/// comment's text. The function is public so any other plain-text label can
+/// share it.
 pub fn strip_html_tags(html: &str) -> String {
-    let mut result = String::new();
+    let mut text = String::new();
+    let mut tag = String::new();
     let mut in_tag = false;
 
     for c in html.chars() {
         match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => result.push(c),
-            _ => {}
+            '<' => {
+                in_tag = true;
+                tag.clear();
+            }
+            '>' if in_tag => {
+                in_tag = false;
+                let name = tag.trim_start_matches('/').split(|c: char| !c.is_ascii_alphanumeric()).next().unwrap_or("");
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "p" | "br" | "div" | "li" | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                ) {
+                    text.push(' ');
+                }
+            }
+            _ if in_tag => tag.push(c),
+            _ => text.push(c),
         }
     }
 
-    // Decode common HTML entities
-    result
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-        .trim()
-        .to_string()
+    let decoded = decode_html_entities(&text);
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 
@@ -1336,6 +1358,13 @@ mod tests {
     #[test]
     fn test_strip_html_tags_entities() {
         assert_eq!(strip_html_tags("A &amp; B &lt; C"), "A & B < C");
+    }
+
+    #[test]
+    fn test_strip_html_tags_decodes_once_and_separates_paragraphs() {
+        assert_eq!(strip_html_tags("&amp;lt;b&amp;gt;"), "&lt;b&gt;");
+        assert_eq!(strip_html_tags("<p>one</p><p>two</p>"), "one two");
+        assert_eq!(strip_html_tags("<b>Hel</b>lo"), "Hello");
     }
 
     #[test]

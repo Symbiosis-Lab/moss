@@ -383,7 +383,7 @@ pub fn generate_native_slots(
         }
         // site_name must match the artalk site identifier (deploy_config.site_id),
         // not the custom domain — artalk sites are keyed by site_id, not hostname.
-        let site_name = deploy_config.site_id.as_deref().unwrap_or("localhost");
+        let site_name = comment::moderation::site_value(deploy_config.site_id.as_deref());
 
         // Who can hold a conversation? Every page, not just the articles.
         //

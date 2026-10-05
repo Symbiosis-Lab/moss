@@ -29,6 +29,24 @@ pub fn moss_home() -> Result<PathBuf, String> {
 #[cfg(test)]
 pub(crate) static MOSS_HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Points `MOSS_HOME` at a fresh temp dir for the duration of the closure and
+/// restores the prior value, holding [`MOSS_HOME_TEST_LOCK`] throughout. Any
+/// test that takes a lock under `~/.moss/locks` goes through this, so it never
+/// writes into the developer's real home.
+#[cfg(test)]
+pub(crate) fn with_moss_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+    let _guard = MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let prior = std::env::var_os("MOSS_HOME");
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("MOSS_HOME", tmp.path());
+    let result = f(tmp.path());
+    match prior {
+        Some(v) => std::env::set_var("MOSS_HOME", v),
+        None => std::env::remove_var("MOSS_HOME"),
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

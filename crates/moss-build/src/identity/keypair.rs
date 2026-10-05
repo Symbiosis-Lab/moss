@@ -450,6 +450,19 @@ impl Identity {
             .is_some_and(|raw| holds_legacy_private_key(&raw))
     }
 
+    /// The project's public key, read without touching anything on disk: no
+    /// lock, no migration of an older file format, no key file. For read-only
+    /// callers; `None` when there is no readable identity.
+    pub fn read_pubkey(project_path: &Path) -> Option<String> {
+        let contents = crate::build::cloud_readiness::read_to_string_with_materialize_wait(
+            &Self::identity_path(project_path),
+            crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+        )
+        .ok()?;
+        let raw: serde_json::Value = serde_json::from_str(&contents).ok()?;
+        raw.get("pubkey")?.as_str().map(str::to_string)
+    }
+
     /// Get the path to the identity file.
     pub fn identity_path(project_path: &Path) -> PathBuf {
         project_path.join(".moss").join("identity").join("public.json")

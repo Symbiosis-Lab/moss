@@ -3,6 +3,7 @@
 //! Reads comment data from `.moss/data/social/comment.json` (keyed by article uid)
 //! and generates HTML comment sections matching the former comment plugin output.
 
+pub mod cli;
 pub mod event_log;
 pub mod moderation;
 pub mod reduce;

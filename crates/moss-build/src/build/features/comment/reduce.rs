@@ -22,8 +22,18 @@ pub fn resolve<'a>(
     events: &[ModEvent],
     owner_pubkey: &str,
 ) -> Vec<&'a NormalizedComment> {
+    resolve_detailed(comments, events, owner_pubkey).0
+}
+
+/// [`resolve`], plus the `(source, id)` of every comment whose own latest
+/// verified event is a hide, as opposed to one hidden only through its parent.
+pub fn resolve_detailed<'a, 'e>(
+    comments: &'a [NormalizedComment],
+    events: &'e [ModEvent],
+    owner_pubkey: &str,
+) -> (Vec<&'a NormalizedComment>, HashSet<(&'e str, &'e str)>) {
     // Latest verified visibility event per (source, target), ordered by (seq, ts).
-    let mut latest: HashMap<(&str, &str), &ModEvent> = HashMap::new();
+    let mut latest: HashMap<(&'e str, &'e str), &'e ModEvent> = HashMap::new();
     for e in events {
         if (e.kind != "hide" && e.kind != "unhide") || !e.verify(owner_pubkey) {
             continue;
@@ -36,7 +46,7 @@ pub fn resolve<'a>(
             }
         }
     }
-    let directly_hidden: HashSet<(&str, &str)> = latest
+    let directly_hidden: HashSet<(&'e str, &'e str)> = latest
         .iter()
         .filter(|(_, e)| e.kind == "hide")
         .map(|(k, _)| *k)
@@ -65,7 +75,7 @@ pub fn resolve<'a>(
         }
         visible.push(c);
     }
-    visible
+    (visible, directly_hidden)
 }
 
 /// Drop hidden comments from an owned vec in place — the build-path convenience
@@ -89,9 +99,8 @@ mod tests {
     use super::*;
     use k256::schnorr::SigningKey;
 
-    /// A throwaway owner keypair. k256's own generator rather than
-    /// `identity::keypair::Identity`, so this module's tests do not
-    /// reintroduce the app-keyring dependency the production code sheds.
+    /// A throwaway owner keypair from k256's own generator; the reducer only
+    /// needs the public key, so no key file is involved.
     struct Owner {
         sk: SigningKey,
         pubkey: String,

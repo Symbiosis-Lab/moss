@@ -47,7 +47,7 @@ use crate::build::emit::inventory::{inventory_path, InventoryEntry};
 /// which is what a title in Chinese, Japanese or Korean is made of; anything
 /// outside them counts as one. Not a general Unicode width implementation —
 /// combining marks and emoji sequences are close enough for a report.
-fn display_width(s: &str) -> usize {
+pub(crate) fn display_width(s: &str) -> usize {
     s.chars()
         .map(|c| {
             let cp = c as u32;
@@ -70,7 +70,7 @@ fn display_width(s: &str) -> usize {
         .sum()
 }
 
-fn pad(s: &str, width: usize) -> String {
+pub(crate) fn pad(s: &str, width: usize) -> String {
     let w = display_width(s);
     let mut out = s.to_string();
     for _ in w..width {
