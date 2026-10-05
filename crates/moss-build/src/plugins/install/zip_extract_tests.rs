@@ -185,3 +185,17 @@ fn the_path_entry_enforces_the_budget_it_is_given() {
         .expect("the real ceiling must extract a small archive");
     assert_eq!(std::fs::read(target.join("big.bin")).unwrap(), vec![0u8; 100]);
 }
+
+/// The host-facing entry holds the caller's byte ceiling and says why it
+/// stopped, without exposing the error type.
+#[test]
+fn the_capped_entry_holds_the_callers_ceiling() {
+    let zip = zip_with_files(&[("big.bin", &[0u8; 100])]);
+    let dir = tempfile::tempdir().unwrap();
+    let archive = dir.path().join("preview.zip");
+    std::fs::write(&archive, &zip).unwrap();
+
+    let err = extract_zip_capped(&archive, &dir.path().join("over"), 10, 99).expect_err("100 bytes past a 99-byte cap");
+    assert!(err.contains("limit"), "{err}");
+    extract_zip_capped(&archive, &dir.path().join("ok"), 10, 100).expect("100 bytes within a 100-byte cap");
+}

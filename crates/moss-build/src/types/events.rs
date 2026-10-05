@@ -208,8 +208,8 @@ pub use crate::types::event_payloads::{
     PublishReceiptLive, PublishReceiptNewsletter, PublishReceiptPage, PublishReceiptPageKind,
     PublishReceiptUploaded, PublishTarget, PublishVerdict, PublishVerdictOrigin,
     PublishVerdictState, RootClass,
-    SuggestedSite, ThresholdPrompt, ThresholdPromptKind, UpdateAvailable, UpdateCheckResult,
-    UpdateDownloadProgress,
+    StarterFailure, StarterProgress, StarterState, StarterStateRow, SuggestedSite, ThresholdPrompt,
+    ThresholdPromptKind, UpdateAvailable, UpdateCheckResult, UpdateDownloadProgress,
 };
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -461,6 +461,12 @@ pub enum MossEvent {
     /// non-client button handling has no effect on a child (only a real
     /// top-level caption maximizes itself that way).
     SnapOverlayClick,
+
+    /// One starter's whole row changed in the desktop app's starter picker:
+    /// a download began, progressed, finished or failed. Broadcast to every
+    /// webview, since the picker and the preview frame live in different
+    /// ones; each keeps the row with the higher `rev`.
+    StarterState(StarterStateRow),
 }
 
 /// The `PipelineEvent` -> `MossEvent` translation, with nowhere to send it yet.

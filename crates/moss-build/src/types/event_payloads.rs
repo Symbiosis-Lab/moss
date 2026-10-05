@@ -634,6 +634,64 @@ impl PublishReceipt {
     }
 }
 
+/// One starter's whole state in the desktop app's starter picker, emitted as
+/// `MossEvent::StarterState` on every change. `rev` rises with every emit
+/// across all starters, so a webview that also asked for every row on mount
+/// keeps whichever copy of a row is newer and needs no replay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+pub struct StarterStateRow {
+    pub id: String,
+    pub rev: u32,
+    pub state: StarterState,
+    /// "Use this starter" is copying this starter into a folder: its source
+    /// download's progress, `done == total` while it unpacks. Kept apart from
+    /// `state`, which goes on saying what the preview is doing.
+    pub applying: Option<StarterProgress>,
+}
+
+/// One download's progress in bytes, as `f64` for the reason [`StarterState`]
+/// gives.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Type)]
+pub struct StarterProgress {
+    pub done: f64,
+    pub total: f64,
+}
+
+/// What a starter is doing. One owner app-side holds these; nothing else
+/// decides whether a starter's preview is there.
+///
+/// Byte counts and the retry time are `f64`, as in [`UpdateDownloadProgress`]:
+/// specta renders 64-bit integers as JS strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StarterState {
+    /// Nothing fetched: the card and the frame show the bundled poster.
+    Poster,
+    /// A download is running. `done == total` while the archive unpacks.
+    Downloading { done: f64, total: f64 },
+    /// The preview is unpacked and can be served.
+    Ready,
+    /// The last attempt failed. `retry_after` (Unix milliseconds) is when a
+    /// fresh show of interest may try again on its own; `None` means only an
+    /// explicit retry does.
+    Failed { reason: StarterFailure, retry_after: Option<f64> },
+    /// The starter needs a newer moss than this one.
+    Unavailable { needs: String },
+}
+
+/// Why a starter download failed, as far as the person can act on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum StarterFailure {
+    /// The registry could not be reached.
+    Connection,
+    /// Not enough free disk space.
+    Disk,
+    /// The bytes did not match the published hash.
+    Verify,
+    Other,
+}
+
 #[cfg(test)]
 mod publish_receipt_tests {
     use super::*;
