@@ -216,6 +216,11 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "切换主题",
             Language::ZhHant => "切換主題",
         },
+        "hero_pause" => match lang {
+            Language::En => "Pause the changing pictures",
+            Language::ZhHans => "暂停图片轮播",
+            Language::ZhHant => "暫停圖片輪播",
+        },
         "reading_preferences" => match lang {
             Language::En => "Reading preferences",
             Language::ZhHans => "阅读偏好",

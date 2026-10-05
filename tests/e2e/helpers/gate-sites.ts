@@ -1031,6 +1031,52 @@ ${VERTICAL_BODY}
   },
 };
 
+// ── A rotating hero can be paused ────────────────────────────────────────────
+// A multi-image hero crossfades by itself, so WCAG 2.2.2 wants a pause control.
+// Whether it pauses the slides, resumes while it still holds focus, and can be
+// tapped on a phone (the overlay panel is full width at the block end there and
+// once covered it) are all questions about painted layout and the cascade.
+// Served by playwright/hero-pause.config.ts.
+export const HERO_PAUSE_GATE: ScratchSiteSpec = {
+  name: "hero-pause-gate",
+  files: {
+    "a.svg": HERO_LANDSCAPE_SVG,
+    "b.svg": HERO_PORTRAIT_SVG,
+    "index.md": `---
+title: Rotating hero
+uid: "hpg00101"
+---
+
+:::hero {mobile=overlay}
+![[a.svg]]
+![[b.svg]]
+# Two pictures
+
+Some words over the pictures, with [a link](https://example.com/a).
+:::
+
+Body text.
+`,
+    "align-end.md": `---
+title: Rotating hero, panel at the end
+uid: "hpg00102"
+---
+
+:::hero {align=end}
+![[a.svg]]
+![[b.svg]]
+# Two pictures
+
+Short.
+:::
+
+Body text.
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── A pale hero flips its text instead of darkening its picture ──────────────
 // moss reacts to a pale cover by setting `data-hero-tone="light"`. That used to
 // mean "lay the scrim on thicker so white type survives" — 0.78 black at the

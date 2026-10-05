@@ -112,6 +112,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     // line. `None` for callers that don't carry source positions.
     source_line: Option<usize>,
     dominant_color: Option<&str>,
+    lang: crate::i18n::Language,
 ) -> String {
     use crate::build::media::cover::html_escape;
 
@@ -393,6 +394,12 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
             slides.push_str(&format!(r#"<div class="moss-hero-slide">{synth}</div>"#));
         }
         slides.push_str("</div>");
+        // Moving content needs a pause control (WCAG 2.2.2). A checkbox
+        // keeps it script-free: site.css reads `:checked` to stop the slides.
+        slides.push_str(&format!(
+            r#"<label class="moss-hero-pause"><input type="checkbox" aria-label="{}"><span aria-hidden="true"></span></label>"#,
+            html_escape(crate::i18n::t(lang, "hero_pause"))
+        ));
         (slides, format!(r#" data-slides="{}""#, extra_hrefs.len() + 1))
     };
 
@@ -486,7 +493,7 @@ mod tests {
             caption: "封面：河灣渡口老市場清晨開市前的剪影（拍攝：陳遠山）".to_string(),
             ..Default::default()
         };
-        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None);
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
         assert!(
             html.contains(r#"</section><p class="moss-hero-caption">封面：河灣渡口老市場清晨開市前的剪影（拍攝：陳遠山）</p>"#),
             "caption must follow the section, outside it: {html}"
@@ -508,7 +515,7 @@ mod tests {
             caption: "Photo by [A. Photographer](https://example.com)".to_string(),
             ..Default::default()
         };
-        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None);
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
         assert!(
             html.contains(
                 r#"<p class="moss-hero-caption">Photo by <a target="_blank" rel="noopener" href="https://example.com">A. Photographer</a></p>"#
@@ -527,11 +534,32 @@ mod tests {
             ],
             ..Default::default()
         };
-        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None);
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
         assert!(html.contains(r#"data-slides="3""#), "got: {html}");
         assert_eq!(html.matches(r#"<div class="moss-hero-slides">"#).count(), 1, "got: {html}");
         assert_eq!(html.matches(r#"<div class="moss-hero-slide">"#).count(), 3, "got: {html}");
         assert!(html.contains(r#"src="a.jpg""#) && html.contains(r#"src="c.jpg""#), "got: {html}");
+    }
+
+    #[test]
+    fn rotating_hero_carries_a_labelled_pause_control_and_a_single_image_does_not() {
+        let multi = moss_core::ast::HeroShortcode {
+            image: Some(moss_core::ast::Url::resolved("a.jpg", moss_core::ast::UrlKind::Asset)),
+            extra_images: vec![moss_core::ast::Url::resolved("b.jpg", moss_core::ast::UrlKind::Asset)],
+            ..Default::default()
+        };
+        let render = |args, lang| render_hero_html_typed(args, &|s: &str| s.to_string(), None, None, None, lang);
+        let html = render(&multi, crate::i18n::Language::En);
+        assert!(
+            html.contains(r#"<label class="moss-hero-pause"><input type="checkbox" aria-label="Pause the changing pictures">"#),
+            "got: {html}"
+        );
+        assert!(render(&multi, crate::i18n::Language::ZhHant).contains(r#"aria-label="暫停圖片輪播""#));
+        let single = moss_core::ast::HeroShortcode {
+            image: Some(moss_core::ast::Url::resolved("a.jpg", moss_core::ast::UrlKind::Asset)),
+            ..Default::default()
+        };
+        assert!(!render(&single, crate::i18n::Language::En).contains("moss-hero-pause"));
     }
 
     #[test]
@@ -547,7 +575,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None);
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
         assert!(html.contains(r#"data-slides="3""#), "got: {html}");
         assert_eq!(html.matches("<video").count(), 2, "got: {html}");
         assert_eq!(html.matches("autoplay muted loop playsinline").count(), 2, "got: {html}");
@@ -564,7 +592,7 @@ mod tests {
             image: Some(moss_core::ast::Url::resolved("a.jpg", moss_core::ast::UrlKind::Asset)),
             ..Default::default()
         };
-        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None);
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
         assert!(!html.contains("data-slides"), "got: {html}");
         assert!(!html.contains("moss-hero-slide"), "got: {html}");
         assert!(!html.contains("data-captioned"), "got: {html}");
@@ -595,7 +623,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(
             html.contains(r#"data-width="screen""#),
             "got: {html}"
@@ -607,7 +635,7 @@ mod tests {
     fn render_hero_html_typed_default_omits_data_width() {
         let args = moss_core::ast::HeroShortcode::default();
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(
             !html.contains("data-width"),
             "default should omit data-width, got: {html}"
@@ -624,7 +652,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(html.contains(r#"data-fit="plate""#), "got: {html}");
     }
 
@@ -632,7 +660,7 @@ mod tests {
     fn render_hero_html_typed_default_omits_data_fit() {
         let args = moss_core::ast::HeroShortcode::default();
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(!html.contains("data-fit"), "got: {html}");
     }
 
@@ -645,7 +673,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(html.contains(r#"data-fit="plate""#), "got: {html}");
         assert!(html.contains("landing"), "raw class list still passes through: {html}");
     }
@@ -696,7 +724,7 @@ mod tests {
             image: Some(Url::Resolved(ResolvedUrl::new("header.png", UrlKind::Asset))),
             ..Default::default()
         };
-        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), Some(&lookup), None, None);
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), Some(&lookup), None, None, crate::i18n::Language::En);
         assert!(
             html.contains("<picture"),
             "a primed snapshot must take the synth path, not the bare fallback; got: {html}"
@@ -730,7 +758,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(
             !html.contains("moss-heading-anchor"),
             "hero heading must not carry a permalink anchor; got: {html}"
@@ -745,7 +773,7 @@ mod tests {
     fn render_hero_html_typed_emits_source_range_when_source_line_given() {
         let args = moss_core::ast::HeroShortcode::default();
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, Some(5), None);
+        let html = render_hero_html_typed(&args, &resolver, None, Some(5), None, crate::i18n::Language::En);
         assert!(
             html.contains(r#"data-source-range="5-5""#),
             "hero with source_line=Some(5) should emit data-source-range=\"5-5\", got: {html}"
@@ -756,7 +784,7 @@ mod tests {
     fn render_hero_html_typed_omits_source_range_when_none() {
         let args = moss_core::ast::HeroShortcode::default();
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(
             !html.contains("data-source-range"),
             "hero with source_line=None should not emit data-source-range, got: {html}"
@@ -773,7 +801,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, Some("hsla(212, 14%, 29%, 1)"));
+        let html = render_hero_html_typed(&args, &resolver, None, None, Some("hsla(212, 14%, 29%, 1)"), crate::i18n::Language::En);
         assert!(html.contains("data-cover-color"), "section must carry data-cover-color, got: {html}");
         assert!(
             html.contains("--moss-cover-color: hsla(212, 14%, 29%, 1)"),
@@ -787,7 +815,7 @@ mod tests {
     fn render_hero_no_css_vars_when_no_dominant_color() {
         let args = moss_core::ast::HeroShortcode::default();
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(!html.contains("--moss-cover-color"), "got: {html}");
         assert!(!html.contains("data-cover-color"), "got: {html}");
     }
@@ -826,7 +854,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, Some(&lookup), None, None);
+        let html = render_hero_html_typed(&args, &resolver, Some(&lookup), None, None, crate::i18n::Language::En);
         assert!(!html.contains("data-hero-tone"), "got: {html}");
     }
 
@@ -862,7 +890,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        render_hero_html_typed(&args, &resolver, Some(&lookup), None, None)
+        render_hero_html_typed(&args, &resolver, Some(&lookup), None, None, crate::i18n::Language::En)
     }
 
     #[test]
@@ -872,7 +900,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(html.contains(r#"data-mobile="overlay""#), "got: {html}");
     }
 
@@ -883,7 +911,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, Some("hsla(0, 50%, 20%, 1)"));
+        let html = render_hero_html_typed(&args, &resolver, None, None, Some("hsla(0, 50%, 20%, 1)"), crate::i18n::Language::En);
         assert!(!html.contains("--moss-cover-color"), "overlay must suppress cover color var, got: {html}");
         assert!(!html.contains("data-cover-color"), "overlay must suppress data attr, got: {html}");
     }
@@ -892,7 +920,7 @@ mod tests {
     fn render_hero_default_omits_data_mobile() {
         let args = moss_core::ast::HeroShortcode::default();
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(!html.contains("data-mobile"), "got: {html}");
     }
 
@@ -907,7 +935,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(html.contains(r#"data-align="end""#), "got: {html}");
     }
 
@@ -921,7 +949,7 @@ mod tests {
             ..Default::default()
         };
         let resolver = |s: &str| s.to_string();
-        let html = render_hero_html_typed(&args, &resolver, None, None, None);
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(!html.contains("data-align"), "got: {html}");
     }
 

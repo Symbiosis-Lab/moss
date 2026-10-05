@@ -61,6 +61,7 @@ GATES_BUILD=(
   card-cover-ratio
   grid-card-image-inline-size
   hero-caption
+  hero-pause
   content-width-escape
   hero-tone
   hero-overlay-legibility

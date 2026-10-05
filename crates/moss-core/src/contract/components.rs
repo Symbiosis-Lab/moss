@@ -1250,6 +1250,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Wrapper holding the `.moss-hero-slide` images of a multi-image hero; the CSS ambient crossfade cycles one slide visible at a time.",
     },
     ComponentEntry {
+        class: "moss-hero-pause",
+        kind: "instance",
+        parent: "moss-hero",
+        data_attrs: &[],
+        example_html: r#"<label class="moss-hero-pause"><input type="checkbox" aria-label="Pause the changing pictures"><span aria-hidden="true"></span></label>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "Pause toggle of a multi-image hero: a checkbox (no script) that stops the crossfade while checked. Emitted only with `data-slides`; the accessible name is localized. Sits at the block-end inline-end corner (inline-start with `align=end`), 44px hit area, hidden under reduced motion. The rotation also pauses while the hero is hovered or holds keyboard focus. It pauses the crossfade only; a video slide keeps playing.",
+    },
+    ComponentEntry {
         class: "moss-hero-slide",
         kind: "instance",
         parent: "moss-hero",

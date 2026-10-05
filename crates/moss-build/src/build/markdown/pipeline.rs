@@ -2149,6 +2149,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                     self.media_lookup,
                     source_line,
                     hero_mobile_bg.as_deref(),
+                    self.lang,
                 );
                 out.push_str(&html);
             }

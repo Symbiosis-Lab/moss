@@ -6492,8 +6492,8 @@ article a:where(:not(.moss-btn)):focus {
   background: rgba(255,255,255,0.15);
 }
 
-/* Multi-image hero: ambient crossfade, one slide visible at a time, no
-   controls. `.moss-hero-slides` is the positioning context for the rest to
+/* Multi-image hero: ambient crossfade, one slide visible at a time; pausable
+   (see the pause control below). `.moss-hero-slides` is the positioning context for the rest to
    stack inside. Timing: 7s/slide, 1.5s dissolve; per-count keyframe blocks
    (capped at 6). An unmatched count degrades to the static first slide. */
 .moss-hero .moss-hero-slides {
@@ -6537,11 +6537,89 @@ article a:where(:not(.moss-btn)):focus {
   0% { opacity: 0; } 3.6% { opacity: 1; } 16.7% { opacity: 1; }
   20.3% { opacity: 0; } 100% { opacity: 0; }
 }
+/* Pause control (WCAG 2.2.2), script-free: a checkbox read via `:has()`.
+   Keyboard focus anywhere in the hero except the control itself pauses too
+   (the control's own focus must not hold the slides still once it is
+   unchecked), and so does hover, but only where hover is real: on touch it
+   would stay stuck after a tap. Block-end inline-end corner, opposite the
+   default panel (inline-start with `align=end`). */
+.moss-hero[data-slides]:has(.moss-hero-pause input:checked) .moss-hero-slide,
+.moss-hero[data-slides]:has(:focus-visible:not(.moss-hero-pause input)) .moss-hero-slide {
+  animation-play-state: paused;
+}
+@media (hover: hover) {
+  .moss-hero[data-slides]:hover .moss-hero-slide {
+    animation-play-state: paused;
+  }
+}
+.moss-hero-pause {
+  position: absolute;
+  inset-block: auto 0.5rem;
+  inset-inline: auto 0.5rem;
+  z-index: 2; /* above the scrim (1) */
+  display: grid;
+  place-items: center;
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  opacity: 0.7;
+}
+.moss-hero[data-align="end"] .moss-hero-pause {
+  inset-inline: 0.5rem auto;
+}
+@media (width < 48rem) { /* the panel spans the block end (stacked or overlaid): keep the control on the picture */
+  .moss-hero .moss-hero-pause {
+    inset-block: 0.5rem auto;
+  }
+}
+.moss-hero-pause:is(:hover, :has(input:focus-visible)) {
+  opacity: 1;
+}
+.moss-hero-pause:has(input:focus-visible) {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+.moss-hero-pause input {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.moss-hero-pause span {
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
+  background: linear-gradient(to right, currentColor 0 35%, transparent 35% 65%, currentColor 65%);
+  pointer-events: none;
+}
+.moss-hero-pause:has(input:checked) span {
+  background: currentColor;
+  clip-path: polygon(15% 0, 100% 50%, 15% 100%);
+}
+/* Forced colours drop backgrounds and gradients: draw the edge and the glyph
+   in system colours so the control and its focus ring stay visible. */
+@media (forced-colors: active) {
+  .moss-hero-pause {
+    forced-color-adjust: none;
+    background: Canvas;
+    color: CanvasText;
+    border: 2px solid CanvasText;
+    opacity: 1;
+  }
+  .moss-hero-pause:has(input:focus-visible) {
+    outline-color: Highlight;
+  }
+}
 /* Ambient motion is atmosphere, not information: honor reduced motion by
-   pinning the first slide. */
+   pinning the first slide. Nothing moves, so the control goes too. */
 @media (prefers-reduced-motion: reduce) {
   .moss-hero[data-slides] .moss-hero-slide { animation: none; }
   .moss-hero[data-slides] .moss-hero-slide:not(:first-child) { opacity: 0; }
+  .moss-hero-pause { display: none; }
 }
 
 /* Grow to fit overlay text instead of clipping it: media goes absolute and
