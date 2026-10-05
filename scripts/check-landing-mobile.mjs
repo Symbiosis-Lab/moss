@@ -113,6 +113,17 @@ async function checkOpening(viewport) {
   return { viewport, startGap: +start.gap.toFixed(1), travel: +distance.toFixed(1), titleTravel: +(start.title.top - moved.title.top).toFixed(1), movedVisualTop: +moved.visual.top.toFixed(1) };
 }
 
+// The browser scrolls a wheel off the main thread, and scrollY shows it a frame or more later
+// (longer while a wash keeps the page busy). So a wheel is followed by a wait for the page to
+// have moved and come to a stop, not by a fixed pause. A page that never moves is reported by
+// the assertion after the read.
+async function wheel(page, delta) {
+  const from = await page.evaluate(() => scrollY);
+  await page.mouse.wheel(0, delta);
+  if (Math.abs(delta) > 1) await page.waitForFunction((y) => Math.abs(scrollY - y) > 1, from, { timeout: 5000 }).catch(() => {});
+  for (let last = NaN, y = await page.evaluate(() => scrollY), n = 0; y !== last && n < 40; n++) { last = y; await page.waitForTimeout(100); y = await page.evaluate(() => scrollY); }
+}
+
 async function checkSceneTiming() {
   const page = await mobilePage();
   const read = () => page.evaluate(() => {
@@ -122,13 +133,13 @@ async function checkSceneTiming() {
   });
   const wheelTextTopTo = async (desired) => {
     const delta = await page.evaluate((value) => document.querySelector('#c2 .scene-text').getBoundingClientRect().top - value, desired);
-    await page.mouse.wheel(0, delta);
+    await wheel(page, delta);
     await page.waitForTimeout(250);
     return read();
   };
   const wheelIncomingTopTo = async (selector, desired) => {
     const delta = await page.evaluate(({ selector, value }) => document.querySelector(selector).getBoundingClientRect().top - value, { selector, value: desired });
-    await page.mouse.wheel(0, delta);
+    await wheel(page, delta);
     await page.waitForTimeout(300);
     return read();
   };
@@ -227,25 +238,23 @@ try {
   results.mobile = { releasedY, partial, forward, reverse, writes: reverseHeld.writes };
   await page.close();
 
-  const cssPage = await mobilePage('?carry=css');
-  await swipe(cssPage, 720, 400);
-  await cssPage.waitForTimeout(200);
-  const cssState = await mobileState(cssPage);
-  assert(cssState.snap === 'none' && !cssState.mobileSnap, `carry=css enabled mobile snapping: ${JSON.stringify(cssState)}`);
-  await cssPage.close();
-  results.mobileCss = cssState;
+  // A phone scrolls freely: no snapping, whatever the page does on desktop.
+  const freePage = await mobilePage();
+  await swipe(freePage, 720, 400);
+  await freePage.waitForTimeout(200);
+  const freeState = await mobileState(freePage);
+  assert(freeState.snap === 'none' && !freeState.mobileSnap, `a phone snaps its scrolling: ${JSON.stringify(freeState)}`);
+  await freePage.close();
+  results.mobileFree = freeState;
 
-  const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await installOverride(desktop);
-  await desktop.goto(base.href, { waitUntil: 'domcontentloaded' });
-  await ready(desktop);
-  await desktop.mouse.wheel(0, 120);
-  // the carry is paced to be watched, so it is waited for rather than timed
-  await desktop.waitForFunction(() => Math.abs(scrollY - __restY(0)) < 3, null, { timeout: 6000 }).catch(() => {});
-  const desktopState = await desktop.evaluate(() => ({ y: scrollY, rest: __restY(0), carry: __state().carry }));
-  assert(desktopState.carry === 'intent' && Math.abs(desktopState.y - desktopState.rest) < 3, `desktop carry regressed: ${JSON.stringify(desktopState)}`);
-  results.desktop = desktopState;
-  await desktop.close();
+  // A wheel notch on the phone layout belongs to the browser alone: the carry-on rule is desktop's.
+  const wheelPage = await mobilePage();
+  const wheelFrom = await wheelPage.evaluate(() => scrollY);
+  await wheel(wheelPage, 100);
+  const wheeled = await mobileState(wheelPage);
+  assert(wheeled.y > wheelFrom, `a wheel notch did not scroll the phone layout: ${wheelFrom} -> ${wheeled.y}`);
+  assert(wheeled.writes === 0, `a wheel notch made the page write the scroll position ${wheeled.writes} time(s) on the phone layout`);
+  await wheelPage.close();
 } finally {
   await browser.close();
 }

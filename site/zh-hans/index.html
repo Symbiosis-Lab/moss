@@ -343,13 +343,17 @@
   :is(html:not(.js), html[data-static]) #five { position: relative; min-height: 100vh; margin-top: 0; opacity: 1; pointer-events: auto; background: #101110; }
   :is(html:not(.js), html[data-static]) #five-in { width: min(900px, calc(100% - 40px)); }
 
-  /* ?carry=css: the browser's own scroll-snap owns the resting position instead of the
-     hand-rolled settle; setupCssSnap() (in this page's script, beside watchScrollCss) computes
-     each scene's scroll-margin-top so the snap point lands on restY(), the same position the
-     other two paths carry the reader onto. */
+  /* Desktop scrolls and snaps natively. The page must rest on the title, a scene, the close or
+     the footer, and one gesture cannot pass one (scroll-snap-stop). setupSnap() in the page's
+     script gives each scene and the close the scroll-margin-top that puts its snap point on
+     restY(). A phone, and the page without its script, scroll freely. */
   @media (min-width: 901px) {
-    html[data-carry="css"] { scroll-snap-type: y proximity; }
-    html[data-carry="css"] .scene, html[data-carry="css"] #five { scroll-snap-align: start; }
+    html.js:not([data-static]) { scroll-snap-type: y mandatory; }
+    html.js:not([data-static]) :is(#intro, .scene, #five) { scroll-snap-align: start; scroll-snap-stop: always; }
+    html.js:not([data-static]) #footer { scroll-snap-align: end; }
+    /* While the page carries a short scroll on (goOnward in the script), the browser's snap is
+       off, so its return to where the scroll began cannot fight the carry. */
+    html.js.carried:not([data-static]) { scroll-snap-type: none; }
   }
 
   /* Layout pass: the intro owns the first beat, while the stage remains tied
@@ -801,6 +805,33 @@ plateEls.forEach((pl) => { const im = pl.querySelector('img'); im.addEventListen
 // Fit: the cell is a fixed composition; smaller windows scale it as one.
 let SCALE = 1, baseScale = 1;
 const mobileLayout = () => innerWidth <= 900;
+// On desktop the picture follows the page instead of reading it. The browser moves and snaps the
+// page natively, in well under a second, which would rush a wash that is a function of position.
+// A browser's snap cannot be slowed, and a script that slows the page has to guess what the
+// fingers are doing, so the page is left alone and only the picture is slowed. viewY is the
+// position the picture reads (pos()): it sets off at WASH_PACE viewport heights a second the
+// moment the page moves, brakes at WASH_BRAKE to arrive still, and goes faster only as needed to
+// stay within WASH_MAX_LAG seconds of the page. Everything that is picture state reads pos() (and
+// viewLag() for text rects, which the browser places at the real position); rests (restY,
+// closingRestY) are absolute document positions and stay on real geometry. With reduced motion
+// or on a phone following() is false, pos() is scrollY and viewLag() is 0.
+const WASH_PACE = .4, WASH_BRAKE = 1.2, WASH_MAX_LAG = 2;
+let viewY = null, viewDy = 0, viewT = performance.now();
+const following = () => !reduce && !mobileLayout();
+const pos = () => (following() && viewY != null ? viewY : scrollY);
+const viewLag = () => (following() && viewY != null ? scrollY - viewY : 0);
+function stepView(now) {
+  // a long frame still moves the picture its full distance: a step only closes the gap, so it cannot overshoot
+  const dt = Math.min(0.5, Math.max(0, (now - viewT) / 1000)); viewT = now;
+  if (!following()) { viewY = null; viewDy = 0; return; }
+  const from = viewY ?? scrollY, d = scrollY - from, dist = Math.abs(d), dir = Math.sign(d) || 1;
+  // It sets off at its pace with no run-up, so the wash starts with the gesture, and brakes to
+  // arrive still. With no page to wait for, a scene change still takes about two seconds.
+  const pace = WASH_PACE * innerHeight, cap = Math.max(pace, dist / WASH_MAX_LAG), acc = WASH_BRAKE * innerHeight * cap / pace;
+  const v = Math.max(12, Math.min(cap, Math.sqrt(2 * acc * dist)));           // never creep over the last pixels
+  viewY = dist < .5 ? scrollY : from + dir * Math.min(dist, v * dt);
+  viewDy = viewY - from;
+}
 const opening = document.getElementById('intro');
 const openingTitle = opening.querySelector('h1');
 // The title is ink too. On desktop the reader's first scroll floods it in a
@@ -895,12 +926,13 @@ function updateOpening() {
   // On phones the opening and first scene are ordinary document flow. Their
   // geometry is established once in fit(); scrolling only moves that flow.
   if (mobileLayout()) return;
-  const visible = Math.max(0, opening.getBoundingClientRect().bottom);
+  const lag = viewLag(), y = pos();   // rects are at the real position; the title reads the picture's
+  const visible = Math.max(0, opening.getBoundingClientRect().bottom + lag);
   const introP = Math.min(1, visible / Math.max(1, opening.offsetHeight));
   const first = document.querySelector('#c1 .scene-text').getBoundingClientRect();
   // rounded as restY(0) rounds it, so the title is gone on the pixel the page rests on
   const firstRest = Math.max(1, Math.round(scrollY + (first.top + first.bottom) / 2 - innerHeight * .5));
-  const titleP = clamp01(1 - scrollY / firstRest);
+  const titleP = clamp01(1 - y / firstRest);
   // The opening's scale and lift end with its title, so scene 1 arrives at the
   // same stage pose scene 2 morphs from. The copy can still occupy the opening
   // beat; it must not leave the live paper smaller or lower than its print.
@@ -912,7 +944,7 @@ function updateOpening() {
   // CSS pins the visual from the document opening. Only the intro moves it;
   // once titleP is zero there is no scroll-position compensation to chase.
   const pageStart = parseFloat(document.documentElement.style.getPropertyValue('--page-start')) || 0;
-  setRootVar('--opening-lift', (titleP * (Math.max(0, pageStart - scrollY) - visible * .33)) + 'px');
+  setRootVar('--opening-lift', (titleP * (Math.max(0, pageStart - y) - visible * .33)) + 'px');
 }
 // A write to a custom property on the root restyles the whole page even when
 // the value is the one it already has, and updateOpening runs every frame.
@@ -1093,97 +1125,18 @@ const running = () => phase === 'morph' || driving;
 // to T_TOTAL is the cure, which belongs to time and not to the hand. DT is one
 // step of that clock and STEPS_PER_FRAME the most a frame may spend on it;
 // V_TAU is the memory of the scroll-speed integrator that agitates and tilts
-// the film. The position drives the clock (washAt); ARRIVE and ARRIVE_SMEAR are
-// only the ?carry=wait settle's estimate of the travel a wash still owes,
-// in sim-seconds per real second, through the smeared window and elsewhere.
+// the film. The position drives the clock (washAt).
 // DT, STEPS_PER_FRAME, T_DRY, T_TAKE, T_CURE, T_TOTAL and PLAY_OUT come from
 // vendor/moss-watercolor/moss-watercolor.js's own DEFAULT_PRESET, so this page
 // and the package it loads can never quietly disagree about a timing
 // constant; the sims above were created with no `preset` override, so they use
-// these same values. SPF, V_TAU, T_WET, ARRIVE and ARRIVE_SMEAR are
+// these same values. SPF, V_TAU and T_WET are
 // landing-only pacing, not part of the engine's own contract.
 const { dt: DT, stepsPerFrame: STEPS_PER_FRAME, tDry: T_DRY, tTake: T_TAKE, tCure: T_CURE, tTotal: T_TOTAL, playOut: PLAY_OUT } = MossWatercolor.DEFAULT_PRESET;
-const SPF = 2, V_TAU = 0.4, T_WET = 1.6, ARRIVE = 6, ARRIVE_SMEAR = 1;
-// The rest. REST_MS is how long the scroll must have been still to count as a
-// stop. A wheel is nudges rather than a stream — a reader turning it slowly
-// leaves a fifth of a second between them — and the old catch window could
-// afford 140ms because it only ever fired near a designed position and in the
-// direction of travel. This one acts on any rest anywhere, so the window has to
-// be longer than the gap inside a gesture or it cuts one in half: at 140ms a
-// steady scroll across one boundary turned into two washes, the second one back
-// (measured 2026-09-14). The copy is then carried to the scene's
-// designed position on a critically damped spring — SETTLE_K is the stiffness
-// the prior art starts from (SwiftUI's half-second spring at mass 1) and
-// SETTLE_C the damping that is critical at that stiffness, 2*sqrt(K). It is not
-// the 17 the same source names beside 160: that is its bounce-0.3 pairing, and
-// a bounce is the one thing an arrival may not have. SETTLE_SECS is the
-// spring's own duration, which follows from K, and is used only when no wash is
-// owed; when one is, the settle borrows the wash's clock and runs for what the
-// cure has left, so the copy comes to rest in the same beat the film sets
-// rather than on a clock of its own (measured within a third of a second either
-// way, against a second and more for a fixed duration). SETTLE_MIN is the floor
-// on that, for a cure with almost nothing left to run. It does not fold into
-// SETTLE_SECS: the only ratio between them that reproduces 0.12 is a curve fit
-// to that number, not a derivation of it, and would read as a reason where
-// there isn't one — checked 2026-09-15, kept as two constants.
-// DEAD is the dead zone, in fractions of a gap, that still counts a stop as
-// arrival rather than as onward travel: once a reader scrolls with intent
-// they almost always want the next scene in the direction they were going,
-// so a rest carries forward to it, and only a stop still this close to the
-// scene behind that travel springs back — a small nudge, not a change of
-// mind. This is paging, not proximity: iOS's UIScrollView, Android's
-// PagerSnapHelper, and GSAP ScrollTrigger's own `snap: { directional: true }`
-// all carry a deliberate scroll onward rather than resting on whichever
-// position is numerically nearer. It happens to equal SETTLE_MIN above; the two answer unrelated
-// questions — one a fraction of a gap's distance, the other a floor on the
-// spring's own seconds — and share no derivation, so moving one is not
-// expected to move the other.
-const REST_MS = 300, SETTLE_K = 160, SETTLE_C = 2 * Math.sqrt(SETTLE_K), SETTLE_MIN = 0.12, DEAD = 0.12;
-const SETTLE_SECS = 2 * Math.PI / Math.sqrt(SETTLE_K);
-// ?carry= switches which of three scroll-rest behaviours drives the page. 'intent'
-// won the comparison between them and is the default: a release
-// hands the reader's own speed to the integrator, so the page keeps going like a let-go spring.
-// 'wait' (the REST_MS-then-spring path above, which stops dead on release) and 'css' stay
-// reachable by flag only, each a self-contained block near watchScroll below, until deleted.
-const CARRY = (() => { const c = arg('carry', 'intent'); return c === 'wait' || c === 'css' ? c : 'intent'; })();
-document.documentElement.dataset.carry = CARRY;   // the [data-carry="css"] rule above, and the harness
-// ?carry=intent's own critically damped pull toward the well ahead — the same ζ=1 ratio as
-// SETTLE_K/SETTLE_C, named separately because this one runs every frame on live real-time dt
-// for the page's whole life, not the settle's rate-scaled, wash-synced clock.
-const CARRY_K = 40, CARRY_C = 2 * Math.sqrt(CARRY_K);
-// The carry's pace. A trip between two scenes is where the wash plays, so it is
-// watched rather than taken: the page never travels faster than CARRY_VMAX
-// viewport heights a second and never gathers speed faster than CARRY_AMAX a
-// second squared. Braking stays the spring's own, so a rest is never overshot.
-const CARRY_VMAX = .5, CARRY_AMAX = 1.2;
-// The reader's own ways of moving the page win over the carry. A foreign write
-// (the scrollbar, a key the page leaves to the browser, find-in-page, a link)
-// leaves the page alone until it has been still for FOREIGN_MS, and then the
-// carry only finishes the transition it was stopped in, the way it was moving:
-// a proximity snap, which any input cancels. A trackpad flick (a held run of
-// at least FLING_TICKS ticks, or a touch drag) keeps the speed it was let go at,
-// easing back to the carry's pace over FLING_TAU seconds. A gesture counts scenes,
-// not pixels (the first rest is a third of a screen from the title, the others a
-// screen apart, so a distance or a projected coast skips it): a swipe moves one
-// scene, a fling released faster than FLING_FREE screens a second earns one more
-// per FLING_STEP screens a second beyond that, and a drag the reader carried
-// further settles on the rest nearest where it was let go. A mouse wheel's few
-// notches, however quick, are carried at the pace.
-const FOREIGN_MS = 600, FLING_TAU = .6, FLING_TICKS = 5, FLING_FREE = 4, FLING_STEP = 2;
-// How much of one wheel tick's pixel delta becomes velocity (px/s), added straight into the
-// integrator's v the instant the tick arrives — "v += delta * PUSH_GAIN".
-// Tuned by feel, not derived: too low reads as
-// inert, too high as a teleport across scenes.
-const PUSH_GAIN = 12;
-// How far the live scroll position may drift from ?carry=intent's own tracked position before
-// that reads as a foreign write — a scrollbar drag, or keyboard/touch scrolling, both left
-// outside this system — rather than ordinary rounding from the integrator's own last write.
-const CARRY_EPS = 2;
-// How long a gap between trackpad wheel ticks still reads as the same continuous gesture in
-// contact with the pad, used only where WheelEvent.momentum is unavailable (see the held-state
-// comment above the wheel listener) — a real gesture's own ticks land well inside this, a pause
-// or the coast after release does not.
-const HOLD_GAP = 100, WHEEL_GESTURE_GAP = 280;
+const SPF = 2, V_TAU = 0.4, T_WET = 1.6;
+// The stiffness of the spring a scene 3 card settles on: SwiftUI's half-second spring at mass 1,
+// critically damped (springStep takes c = 2*sqrt(k)).
+const CARD_K = 160;
 
 function sceneClasses(scene) { stage.classList.toggle('live', scene >= 1); stage.dataset.scene = String(scene); }
 function editorPlayback(active) {
@@ -1701,11 +1654,7 @@ const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--
 const fiveOn = (on) => {
   const entering = on && !five.classList.contains('on');
   five.classList.toggle('on', on); five.inert = !on; page.inert = on;
-  if (entering) requestAnimationFrame(() => {
-    settleArmed = true;
-    restSince = performance.now();
-    if (reduce && !mobileLayout()) scrollTo(0, closingRestY());
-  });
+  if (entering) requestAnimationFrame(() => { restSince = performance.now(); });
 };
 // The canvas takes over the scene: the prints it shows are the pixels on
 // screen, so the DOM under it can change without a visible frame.
@@ -1731,11 +1680,7 @@ function releasePigmentCover() {
   stage.style.removeProperty('--wash-cover');
   cell.style.transform = '';
 }
-// When the scene last came to a stand, for the work that may only run at a
-// rest: a dwell counts from here, not from the frame the target changed.
-let settledAt = 0;
 function still(scene) {
-  settledAt = performance.now();
   // Install the no-transition guard before changing data-scene. Otherwise a
   // publish frame can paint once with the shell's lower-right source pose
   // before the centred end-state transform is applied.
@@ -1760,7 +1705,6 @@ function still(scene) {
 
 // The signup link is navigation: it skips the scene performance.
 window.mossLanding = { openSignup() {
-  cancelSettle();
   if (running()) setTarget(SHARE);
   else { shown = target = SHARE; still(SHARE); }
   mountLoop(); setCross(1); fiveOn(true);
@@ -1780,8 +1724,8 @@ function mobileInkProgress(text) {
 // How far the reader stands between two scenes, 0 at the first and 1 at the
 // second: on a phone the copy crossing the visual, on desktop the page between
 // the two rests, so a scene is whole exactly when its copy has arrived.
-const washAt = (from, to) => mobileLayout() ? clamp01((progressAt() - from) / (to - from)) : clamp01((scrollY - restY(from)) / (restY(to) - restY(from)));
-function closingProgress() { return mobileLayout() ? mobileInkProgress(scenesEl[DEPLOY].firstElementChild) : washAt(DEPLOY, SHARE); }
+const washAt = (from, to, y = pos()) => mobileLayout() ? clamp01((progressAt() - from) / (to - from)) : clamp01((y - restY(from)) / (restY(to) - restY(from)));
+function closingProgress(y) { return mobileLayout() ? mobileInkProgress(scenesEl[DEPLOY].firstElementChild) : washAt(DEPLOY, SHARE, y); }
 function mobileVisualBand() {
   const visual = document.getElementById('vis');
   const top = parseFloat(getComputedStyle(visual).top);
@@ -1790,13 +1734,9 @@ function mobileVisualBand() {
 }
 // The crossfade that whitens the copy and brings in the film runs over the
 // last part of the close, after the logos have gone to pigment.
-function xfAt() { return smooth(.45, 1, closingProgress()); }
-function nativeScroll() {
-  // Desktop carries the close like every other join, all the way to scene 5's
-  // rest, so its film gathers at the carry's pace; only inside scene 5 does the
-  // page scroll natively, over the closing section.
-  return mobileLayout() || xfAt() >= 1;
-}
+function xfAt(y) { return smooth(.45, 1, closingProgress(y)); }
+// Scene 5's own scrolling: from the close's rest down to the footer, the page is the browser's.
+const inClose = () => scrollY >= restY(SHARE) - 2;
 // The scene on the far side of this join arrives already standing rather than
 // drawing itself under the fade: the fan is scene 4's end state, not a
 // performance to replay each time the reader crosses back.
@@ -1969,7 +1909,7 @@ if (new URLSearchParams(location.search).has('washdbg')) {
   requestAnimationFrame(count);
   (document.body || document.documentElement).appendChild(hud);
   setInterval(() => {
-    const p = progressAt();
+    const p = mobileLayout() ? progressAt() : restProgress();
     hud.textContent = `shown ${shown} → ${target}  at ${p.toFixed(2)}\nrunning ${running()}  primed ${primed()}  capturing ${retaking}\ncapture ${captureMs}ms  fps ${fps}  t ${washT.toFixed(2)}` +
       (simLost ? '\nGPU context LOST' : '') + (washError ? `\nerror: ${washError}` : '') + (playPair ? `\nrecorded ${playPair.rec.sides.map((s) => s.n).join('/')}` : '');
   }, 250);
@@ -2051,12 +1991,12 @@ async function pour(to) {
       // it rather than finishing and handing on to a second one.
       const turn = reachToward(from, target);
       if (mobileLayout() && turn === from) { to = from; finish(); return; }
-      // On desktop the carry travels between rests and the position alone says
-      // where the wash is: turned back, it finishes at the scene it left; carried
-      // on, it finishes at its own scene and the next join takes over from there.
-      const carried = playback && !mobileLayout();
-      if (carried && t <= 0 && (turn - from) * (to - from) <= 0) { to = from; finish(); return; }
-      if (turn !== to && !carried) {
+      // On desktop the position alone says where the wash is: turned back, it
+      // finishes at the scene it left; gone on, it finishes at its own scene and
+      // the next join takes over from there.
+      const byPosition = playback && !mobileLayout();
+      if (byPosition && t <= 0 && (turn - from) * (to - from) <= 0) { to = from; finish(); return; }
+      if (turn !== to && !byPosition) {
         // Back across the scene it began on is the turnaround it always was:
         // the water is poured again and what it laid down lifts. Anything else
         // is a re-point — the film keeps its pigment and its motion, and only
@@ -2636,7 +2576,7 @@ const neighbours = (s) => [s - 1, s + 1].filter((n) => n >= 0 && n < PHASE.lengt
 const needed = (s) => { const ns = neighbours(s); return ns.length ? [s, ...ns] : []; };
 // Every scene a wash can reach, and so every print a jump may ask for. What
 // holds the page shut is still `needed` — a jump is rare and can stop to take
-// its own print — but the idle tick fills these, so a fling from a scene the
+// its own print — but the idle tick fills these, so a jump from a scene the
 // reader has been resting on is one wash and not one wash behind one capture.
 const washable = PHASE.map((_, s) => s).filter((s) => neighbours(s).length);
 // When the shown print was replaced, and by which capture: a capture that
@@ -2883,22 +2823,11 @@ function standAtTerminalClose() {
 const LINE = 0.5;
 const textTop = (sec) => sec.firstElementChild.getBoundingClientRect().top;
 const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
-// Where the reader is, read whole rather than counted up one crossing at a
-// time. The line standing inside a scene's text names that scene. Between two
-// texts it names neither, and what it names there is the scene being travelled
-// toward: that is what hands the wash the whole gap between the texts to run
-// across, and what a turnaround reads to send it back. Because this is a
-// position and not a tally, a fling that clears three texts names the scene it
-// landed on from its first frame: on a phone the wash in flight is re-pointed
-// at it, and on desktop it finishes at its own scene and the next join goes on.
-// The pair-of-edges crossing detector this replaces could only ever step one
-// boundary at a time, so scene 1 to scene 3 played both joins in sequence and
-// the reader watched the page morph through scene 2 to get there.
-// One number: the scene whose text the reading line stands in, or a fraction
-// between two scenes when it stands in the gap between their texts. Everything
-// that asks which scene a position belongs to reads it here — the target the
-// wash follows, and the scene a rest is carried to — so the two cannot come to
-// disagree as either scene's markup changes.
+// Where the reader is on a phone, read whole rather than counted up one crossing at a time: the
+// scene whose text is being read, or a fraction between two scenes while the page travels from
+// one text to the next. Because this is a position and not a tally, a swipe that clears three
+// texts names the scene it landed on from its first frame, and the wash in flight is re-pointed
+// at it. On desktop the same question is answered by restProgress, from the rests.
 const progressAt = () => {
   if (mobileLayout()) {
     for (let scene = 0; scene < DEPLOY; scene++) {
@@ -2907,22 +2836,17 @@ const progressAt = () => {
     }
     return DEPLOY + closingProgress();
   }
-
-  const line = innerHeight * LINE;
-  for (let i = 0; i < JOINS.length; i++) {
-    if (textBottom(scenesEl[i]) >= line) return i;   // the line is still inside this text
-    const top = textTop(scenesEl[i + 1]);
-    if (top >= line) { const bot = textBottom(scenesEl[i]); return i + (line - bot) / Math.max(1, top - bot); }
-  }
+  return 0;
+};
+// Where the real page stands between rests on desktop: the scene it rests on, or a fraction
+// toward the next rest. It moves as soon as the page sets off, so the wash starts with the gesture.
+const restProgress = () => {
+  const ys = rests();   // ys[i + 1] is scene i's
+  for (let i = 0; i < JOINS.length; i++) if (scrollY < ys[i + 2]) return i + clamp01((scrollY - ys[i + 1]) / Math.max(1, ys[i + 2] - ys[i + 1]));
   return JOINS.length;
 };
-// In the gap the position names neither scene, and what it names there is the
-// one being travelled toward. Same zero-is-not-downward rule as
-// sceneForRest: dir is 0 before the reader's first gesture, which a
-// scroll-restored reload reaches with the position already mid-gap, so the
-// ceil branch below must not stand in for "no direction yet".
 const targetAt = (dir) => {
-  const p = progressAt();
+  const p = mobileLayout() ? progressAt() : restProgress();
   // Pixel rounding at a rest must not start a reverse wash by a fraction.
   if (Math.abs(p - Math.round(p)) < .002) return Math.round(p);
   // Keep the same pair of prints while a finger reverses within their wash.
@@ -3007,20 +2931,9 @@ function onScroll(dy) {
 // long frame, and a comparison per frame costs nothing.
 let lastScrollY = null;
 let lastWatchT = performance.now();
-// Wherever the reader comes to rest, the page finishes: the scene the reader
-// was carrying themselves toward (or, inside DEAD, the one just left), the
-// wash run out to it, and the copy carried onto that scene's designed position.
-// Not CSS scroll snap — that re-snaps after every scroll, a deliberate small one
-// included, and knows nothing of the wash it would have to land with. And not
-// the catch window this replaces either: that fired only on a coast dying
-// within a third of a window of a designed position, so a reader who simply
-// stopped between two texts was left with the film wet and the print smeared,
-// waiting on a creep that takes thirteen seconds to reach even the hold it was
-// creeping to (measured 2026-09-14). A stop is not a state the page can hold.
-// The inverse of progressAt(): the scroll position at the centre of the same
-// plateau it reads as this scene — textTop() to textBottom(), the identical
-// pair it names the scene from — so a settle and the function judging where
-// it landed can never disagree by construction, not just by measurement.
+// restY: the scroll position that rests on a scene, at the centre of its text (textTop() to
+// textBottom()) on the reading line. rests() collects these, and restProgress reads positions back
+// against them, so a rest and the judgement of where the page landed share one definition.
 // Frame the title and signup together; the footer remains a natural scroll away.
 function closingRestY() {
   const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
@@ -3043,361 +2956,104 @@ const restY = (scene) => {
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
   return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
 };
-// What the wash has left to run, in real seconds at the pace it will run it:
-// the smeared window is the slow one and the rest is the arrival pace. The
-// settle borrows this rather than keeping a duration of its own, so the copy
-// stops moving in the frame the film finishes curing.
-const spanLeft = (a, b, t) => Math.max(0, b - Math.max(a, t));
-const cureLeft = (t) => spanLeft(0, T_TAKE, t) / ARRIVE + spanLeft(T_TAKE, T_WET, t) / ARRIVE_SMEAR + spanLeft(T_WET, T_TOTAL, t) / ARRIVE;
-let restSince = performance.now(), travel = 0, settleArmed = false, settleRun = null;
-// The opening is a held first frame. A rest target is allowed to move the page
-// only after a real gesture has armed the carry, so a loaded page never pages
-// itself into scene 1 while the reader is still looking at the title.
-let inputArmed = false;
-// ?carry=intent's own state: the position and velocity the integrator owns, kept separate
-// from the real scrollY it writes every frame so a foreign write (CARRY_EPS above) can be
-// told apart from its own last write. carryX starts null and is seeded from scrollY on the
-// first tick, so a reload that restores mid-gap is picked up wherever the browser left it.
-let carryX = null, carryV = 0, carryGoal = null, foreignAt = -Infinity, carryFling = 0, wasHeld = false, heldTrail = [], gestureFrom = null, heldFrom = 0;
+let restSince = performance.now(), travel = 0;
+// The rests in order: the top of the document, then each scene's, then the close's. Entry i is
+// scene i - 1's.
+const rests = () => Array.from({ length: SHARE + 2 }, (_, i) => restY(i - 1));
 // the rest nearest a position (the page's, by default), the top of the document counting as one
-const nearestRest = (y = scrollY) => {
-  let anchor = -1;
-  for (let scene = 0; scene <= SHARE; scene++) if (Math.abs(y - restY(scene)) < Math.abs(y - restY(anchor))) anchor = scene;
-  return anchor;
-};
-// Direct manipulation (WWDC 2018 "Designing Fluid Interfaces", UIScrollView): while the reader
-// is in contact — a touch, a scrollbar drag, or an unreleased trackpad gesture — the pull is
-// off and the page follows their input one-to-one; release hands the integrator the speed that
-// contact was carrying, so the pull resumes from a real number instead of zero. Split into two
-// flags, not one `held`, because the two kinds of contact release differently: a touch or a
-// scrollbar drag has its own up event, but a trackpad gesture doesn't, so it's a heuristic that
-// can only be renewed on each tick, not switched off directly — watchScrollIntent below is what
-// notices a heuristic hold has gone quiet (touchHeld doesn't need that, so it isn't checked
-// there). Named touchHeld/wheelHeld, not `held`, to stay clear of the unrelated plate-drag
-// `held` above.
-let touchHeld = false, wheelHeld = false;
-// Trackpad-contact heuristic state (used only where WheelEvent.momentum is unavailable): the
-// last three tick magnitudes, oldest first, and the previous tick's own timestamp.
-let wheelMags = [], lastWheelT = 0, lastWheelStamp = 0;
-let wheelOrigin = 0, wheelDistance = 0, wheelCoasting = false, wheelRun = 0;
-// [time, where the page stood] after each of the run's ticks that moved it, its last 100 ms: a wheel
-// run is known from its ticks, so its speed at release is too, whether or not a frame watched it
-let wheelTrail = [];
-const wheelSpeed = () => {
-  const [t0, d0] = wheelTrail[0] ?? [0, 0], [t1, d1] = wheelTrail.at(-1) ?? [0, 0];
-  return t1 > t0 ? (d1 - d0) / ((t1 - t0) / 1000) : 0;
-};
-// What settleAtRest chose, frozen at the moment it fires rather than re-read
-// later. settleCureLeft is cureLeft(washT), and settleShown/settleRunning are
-// shown/running() themselves — all three on their own line, unconditionally,
-// so they are the ternary's raw inputs rather than its output, and the
-// harness can recompute the branch (scene === settleShown && !settleRunning
-// ? SETTLE_SECS : settleCureLeft) itself and compare that against settleSecs,
-// the duration actually handed to the spring. This used to expose
-// settleExpected instead — the same branch, pre-computed here — which meant a
-// defect inside the branch itself (a swapped arm, a flipped condition) would
-// corrupt settleExpected identically to settleSecs and the two would still
-// agree (caught by review of b0df986 before it shipped, 2026-09-15).
-// settleShown/settleRunning can't be read live off the page after the fact:
-// shown only becomes the new scene once the wash itself finishes, well after
-// the settle that used its old value has also finished, so anything read
-// post-settle is the wrong instant. For the harness only — see
-// window.__state below.
-let settleSecs = null, settleCureLeft = null, settleShown = null, settleRunning = null;
+const nearestRest = (y = scrollY) => { const ys = rests(); return ys.reduce((best, r, i) => (Math.abs(y - r) < Math.abs(y - ys[best]) ? i : best), 0) - 1; };
 // One substep of a critically damped spring (c = 2*sqrt(k) is always
 // critical): given the current displacement from target and velocity, the
 // next of each after dt seconds. Substepped at 240Hz regardless of the
 // caller's own dt, which is what keeps the integration stable whatever the
-// frame length is. The only spring this page has — the scroll settle below
-// and a scene-3 card's own release (settleCard) both
-// call it rather than each keeping its own copy of the ODE.
+// frame length is. The only spring this page has: a scene-3 card's release
+// (settleCard) calls it.
 function springStep(x, v, dt, k) {
   const c = 2 * Math.sqrt(k);
   for (let n = Math.max(1, Math.ceil(dt * 240)), h = dt / n; n-- > 0;) { v += (-k * x - c * v) * h; x += v * h; }
   return [x, v];
 }
-// A critically damped spring, seeded with the speed the reader was carrying and
-// run on the wash's clock rather than one of its own. It is integrated rather
-// than tweened because a spring retargets for free: a reader who reaches for the
-// wheel mid-settle is a new initial condition, not a tween to cancel and redo.
-function settleTo(y, v0, secs) {
-  const rate = SETTLE_SECS / Math.max(SETTLE_MIN, secs);   // the spring's own seconds per real second
-  let x = scrollY - y, v = v0 / rate;
-  if (!x && !v) return;
-  let last = performance.now();
-  const run = settleRun = { cancel: false };
-  const f = (now) => {
-    if (run.cancel) return;
-    // Real time, substepped at 240Hz — the substep is what keeps the integration
-    // stable, so the frame itself need not be short. A frame longer than a
-    // quarter second is a stall rather than a slow machine, and the spring does
-    // not swallow the whole gap for it.
-    const dt = Math.min(0.25, Math.max(0, (now - last) / 1000)) * rate; last = now;
-    [x, v] = springStep(x, v, dt, SETTLE_K);
-    if (Math.abs(x) < 0.5 && Math.abs(v) < 4) { settleRun = null; scrollTo(0, y); return; }
-    scrollTo(0, Math.round(y + x));
-    requestAnimationFrame(f);
-  };
-  requestAnimationFrame(f);
-}
-// The reader's own gesture ends the settle in the frame it arrives, and the
-// scroll it asks for is the browser's from there. The rest begins again from
-// the gesture itself rather than from the next frame that moves: a gesture that
-// moves the page by nothing at all — a key the page does not scroll on, a wheel
-// against the end of the document — would otherwise leave the copy standing
-// wherever the spring had got to.
-const cancelSettle = () => {
-  inputArmed = true;
-  if (settleRun) { settleRun.cancel = true; settleRun = null; }
-  settleArmed = true; restSince = performance.now();
-};
-// Watched, not taken: passive, and on the bubble phase, so nothing the page
-// does here can stand between the reader's gesture and the scroll it asks for.
-for (const ev of ['wheel', 'touchstart', 'pointerdown', 'keydown']) addEventListener(ev, cancelSettle, { passive: true });
-// Which scene a rest carries to: the one ahead in the direction of `dir` (the
-// sign of the reader's last nonzero scroll delta — `travel`, read at the call
-// site, not re-measured here), unless the stop is still within DEAD of the
-// scene behind that direction, which reads as a small correction rather than
-// onward intent. Exposed on window so the harness reads this one formula
-// rather than keeping a second copy of it, the same reason restY() and
-// targetAt() are exposed below.
-// dir === 0 is not downward, it is no direction at all — travel starts at 0
-// and a native scroll-restored reload can land here before the reader's
-// first gesture of the session, so there is nothing to carry forward and the
-// rest is just the nearest scene.
-const sceneForRest = (p, dir) => (dir === 0 ? Math.round(p) : dir < 0 ? Math.floor(p + DEAD) : Math.ceil(p - DEAD));
-// The opening is a real rest well even though it has no separate film scene.
-// Once an upward gesture passes scene 1's rest, keep carrying to the document
-// top; a downward gesture at the same position still selects scene 1.
-const restSceneAt = (p, dir) => dir <= 0 && scrollY < restY(0) ? -1 : sceneForRest(p, dir);
-function settleAtRest(now) {
-  if (!inputArmed || !settleArmed || settleRun || now - restSince < REST_MS) return;
-  settleArmed = false;
-  const scene = restSceneAt(progressAt(), travel);
-  const visualScene = Math.max(0, scene);
-  // A wash owed or already running lends its clock; with none, the spring
-  // keeps its own half second. cureLeft(washT) and the branch choice
-  // (`expected`) are each kept on their own line, unconditionally, so they
-  // stand as values independent of whatever secs itself is actually wired to.
-  const washCureLeft = cureLeft(phase === 'morph' ? washT : 0);
-  const expected = visualScene === shown && !running() ? SETTLE_SECS : washCureLeft;
-  const secs = expected;
-  settleSecs = secs; settleCureLeft = washCureLeft; settleShown = shown; settleRunning = running();
-  const v = scrollV * innerHeight;          // the reader's own speed, in pixels a second
-  const y = restY(scene);
-  setTarget(visualScene);   // the intro shares scene 1's film but owns scroll rest 0
-  if (reduce) return scrollTo(0, y);   // reduced motion arrives rather than travels
-  // The seed is the reader's motion carried forward, so it is taken only where
-  // it points at the rest the page picked: a speed pointing away from it is
-  // motion the reader has already stopped making.
-  settleTo(y, Math.sign(y - scrollY) === Math.sign(v) ? v : 0, secs);
-}
-// ?carry=intent listens to wheel directly and owns the scroll itself (preventDefault), so a
-// tick's delta becomes velocity the instant it arrives rather than something read back off
-// scrollY next frame. ctrlKey marks a trackpad pinch-zoom, not a scroll, and is left alone.
-// Reduced motion turns the interception off entirely — raw 1:1 scroll, no pull —
-// so wheel behaves exactly as it does in every other mode, and
-// watchScroll below always routes reduced motion to the wait path regardless of ?carry=.
-if (CARRY === 'intent') {
-  // Touch is native browser scrolling, so holding for it is only a presence flag —
-  // watchScrollIntent reads scrollY's own motion back each frame while it's set, and a
-  // release keeps its speed. A scrollbar drag is not a hold: it is a foreign write, left
-  // alone until it is still, and it stops where it is let go (an overlay scrollbar sends
-  // the page no pointer events at all, so this is the one rule that covers every kind).
-  const touchOn = () => { touchHeld = true; gestureFrom = nearestRest(); heldFrom = scrollY; };
-  const holdOn = (e) => { if (e.pointerType === 'touch') touchOn(); };
-  const holdOff = () => { touchHeld = false; };
-  addEventListener('pointerdown', holdOn);
-  addEventListener('touchstart', touchOn, { passive: true });
-  addEventListener('pointerup', holdOff);
-  addEventListener('touchend', holdOff);
-  addEventListener('touchcancel', holdOff);
-
-  addEventListener('wheel', (e) => {
-    if (reduce || e.ctrlKey || nativeScroll() || !e.deltaY) return;
-    e.preventDefault();
-    // travel is set from the tick itself, not from carryV's own sign inside the integrator
-    // below: the spring's restoring force can drive carryV through zero and even negative
-    // purely from its own reaction while the reader is still pushing forward (measured
-    // directly, 2026-09-16 — a modest push fell straight back to scene 0), which would read as
-    // a reversal that never happened. The wheel tick is the one place a reversal is real.
-    const direction = Math.sign(e.deltaY);
-    // A trackpad has no pointerdown/up of its own, so its contact is read off the ticks
-    // themselves: WheelEvent.momentum, where a browser exposes it, says outright whether this
-    // tick is the reader's own push (false) or the coast after release (true). Elsewhere, a
-    // run of ticks still arriving within HOLD_GAP and not shrinking across the last three
-    // reads as the same contact; watchScrollIntent below is what notices a pause, since there's
-    // no event for it here — only a decaying run is caught at tick time.
-    const now = performance.now();
-    // Delivery can pause while captures render. Event timestamps describe the
-    // input itself; releasing the spring is not the end of a wheel gesture.
-    const newGesture = !lastWheelStamp || e.timeStamp - lastWheelStamp > WHEEL_GESTURE_GAP;
-    const reversed = direction !== travel;
-    if (newGesture || reversed) {
-      wheelOrigin = scrollY; wheelDistance = 0; wheelCoasting = false; wheelRun = 0;
-      wheelMags = []; wheelTrail = [];
-    }
-    const atGoal = carryGoal != null && Math.abs(scrollY - restY(carryGoal)) <= CARRY_EPS;
-    foreignAt = -Infinity;   // the wheel is the carry's again
-    if (direction !== travel || (newGesture && (carryGoal == null || atGoal))) {
-      const anchor = carryGoal == null || newGesture ? nearestRest() : carryGoal;
-      carryGoal = Math.max(-1, Math.min(SHARE, anchor + direction));
-    }
-    if ((newGesture || reversed) && carryGoal != null) gestureFrom = carryGoal - direction;
-    travel = direction;
-    const mag = Math.abs(e.deltaY);
-    if ('momentum' in e) wheelCoasting = e.momentum;
-    else {
-      if (wheelCoasting && mag > (wheelMags.at(-1) || 0) + 2) wheelCoasting = false;
-      wheelMags.push(mag); if (wheelMags.length > 3) wheelMags.shift();
-      if (wheelMags.length === 3 && wheelMags[0] >= wheelMags[1] && wheelMags[1] >= wheelMags[2] && wheelMags[0] > wheelMags[2]) wheelCoasting = true;
-    }
-    wheelHeld = !wheelCoasting && now - lastWheelT <= HOLD_GAP;
-    lastWheelT = now; lastWheelStamp = e.timeStamp;
-    if (!wheelCoasting) wheelDistance += e.deltaY;
-    // the run itself marks that it was held: frames can stall for a whole swipe (the page captures
-    // prints), and the release below must not wait for one to have watched it
-    if (wheelHeld) { wheelRun++; wasHeld ||= 'wheel'; }
-    // a tick bigger than the window is no notch but a jump: it moves the page by
-    // its own delta, the reader's own scroll, however soon the next tick comes
-    if (wheelHeld || mag >= innerHeight) {
-      // 1:1, no pull: the tick moves the page by its own delta and nothing more.
-      const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-      const requested = Math.min(maxY, Math.max(0, scrollY + e.deltaY));
-      // Advance only when the reader's own direct tick crosses the goal. The
-      // spring's motion between ticks must never promote a three-tick nudge.
-      if (carryGoal != null) {
-        while (direction > 0 && carryGoal < SHARE && wheelOrigin + wheelDistance > restY(carryGoal)) carryGoal++;
-        while (direction < 0 && carryGoal > -1 && wheelOrigin + wheelDistance < restY(carryGoal)) carryGoal--;
-      }
-      scrollTo(0, Math.round(requested));
-      // a held run's own write: the frame loop must not take it for a scrollbar drag. A lone jump
-      // is still the reader's own scroll, which the frame loop hands back as it always has. The
-      // trail takes where the page really went, so a run pressed against either end has no speed.
-      if (wheelHeld) carryX = scrollY;
-      wheelTrail.push([e.timeStamp, scrollY]);
-      while (wheelTrail.length > 2 && e.timeStamp - wheelTrail[0][0] > 100) wheelTrail.shift();
-    } else if (!wheelCoasting) carryV += e.deltaY * PUSH_GAIN;
-  }, { passive: false });
-
-  addEventListener('keydown', (e) => sceneKey(e, false));
-  // pointerdown on the page itself (a frame's own never reaches here): no demo is in use
-  addEventListener('pointerdown', () => { demoInUse = false; }, true);
-}
-// Keys are scene steps, like a wheel's notch: the next or the previous scene at
-// the carry's pace, or the top and the close, a jump nobody reads through that
-// travels in about FAR_SECS. Typing, a focused control's own
-// Space, a modified key, and scene 5's own scrolling below its rest keep the
-// browser's, as do Shift with anything but Space (it extends a selection) and a
-// focused control that uses the arrows itself; so does a phone. The editor demo takes focus to show its caret, so
-// keys also arrive in the demos' frames: there they are the page's until the
-// reader works in that demo, and from then they are the demo's.
-const KEY_STEP = { PageDown: 1, ArrowDown: 1, ' ': 1, PageUp: -1, ArrowUp: -1, Home: -1, End: 1 }, FAR_SECS = 1;
+// Keys are scene steps: PageDown, Space and ArrowDown scroll to the next rest, PageUp,
+// Shift+Space and ArrowUp to the one before, Home and End to the top and the close. A step is a
+// smooth scroll to a rest and has no pacing of its own: the browser moves the page and the
+// picture follows. Typing, a focused control's own Space, a modified key, and scene 5's own
+// scrolling below its rest keep the browser's, as do Shift with anything but Space (it extends
+// a selection) and a focused control that uses the arrows itself; so does a phone. The editor
+// demo takes focus to show its caret, so keys also arrive in the demos' frames: there they are
+// the page's until the reader works in that demo, and from then they are the demo's.
+const KEY_STEP = { PageDown: 1, ArrowDown: 1, ' ': 1, PageUp: -1, ArrowUp: -1, Home: -1, End: 1 };
 let demoInUse = false;
+// The rest a step or a carried-on notch is heading for, until the page has stopped moving: a
+// held key or a quick second press goes on from there, not from where the page still stands.
+let aimed = null;
+const scrollToRest = (scene) => { aimed = scene; scrollTo({ top: restY(scene), behavior: reduce ? 'auto' : 'smooth' }); };
 function sceneKey(e, fromDemo) {
-  if (CARRY !== 'intent' || reduce || mobileLayout() || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || (fromDemo && demoInUse)) return;
+  if (mobileLayout() || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || (fromDemo && demoInUse)) return;
   if (e.shiftKey && e.key !== ' ') return;
   if (!fromDemo && (e.target.closest?.('input, textarea, select, video, audio, [contenteditable="true"], [role="slider"], [role="listbox"], [role="tablist"], [role="radiogroup"], [role="menu"], [role="grid"], [role="tree"], [role="spinbutton"], [role="combobox"]') || (e.key === ' ' && e.target.closest?.('button, a, summary')))) return;
   const dir = e.key === ' ' && e.shiftKey ? -1 : KEY_STEP[e.key];
-  if (dir == null || (nativeScroll() && !(dir < 0 && scrollY <= restY(SHARE) + CARRY_EPS))) return;
-  e.preventDefault(); cancelSettle();
+  if (dir == null || (inClose() && !(dir < 0 && scrollY <= restY(SHARE) + 2))) return;
+  e.preventDefault();
   const far = e.key === 'Home' || e.key === 'End';
-  const goal = far ? (dir < 0 ? -1 : SHARE) : Math.max(-1, Math.min(SHARE, (carryGoal != null && dir === travel ? carryGoal : nearestRest()) + dir));
-  // a speed allowance that decays over FLING_TAU covers about 2.2 × FLING_TAU × itself
-  if (far) carryFling = Math.abs(restY(goal) - scrollY) / (.45 * FAR_SECS);
-  carryGoal = goal; travel = Math.sign(restY(goal) - scrollY) || dir; foreignAt = -Infinity;
+  scrollToRest(far ? (dir < 0 ? -1 : SHARE) : Math.max(-1, Math.min(SHARE, (aimed ?? nearestRest()) + dir)));
 }
+addEventListener('keydown', (e) => sceneKey(e, false));
+// pointerdown on the page itself (a frame's own never reaches here): no demo is in use
+addEventListener('pointerdown', () => { demoInUse = false; aimed = null; }, true);
+// Chrome snaps a short scroll back to the rest it started from: one 100px wheel notch moves the
+// page about 90px within 100 ms and has it back within 200 ms, and only two quick notches
+// advance (measured on Chrome 154). So a short scroll is carried on to the next rest: the first
+// rest beyond where the page last stood still, in the gesture's direction. A passive listener
+// adds up a wheel gesture's deltas. A gesture that opens with a notch-sized delta is carried at
+// once; any other is carried once the wheel has been quiet for ONWARD_QUIET_MS, if it added up
+// to ONWARD_MIN_PX. A gesture that has already taken the page nearer the rest after that one is
+// the browser's, as is one past the last rest (scene 5's own scrolling) or above the first.
+// Where the page stood is read from `stood`, not from scrollY: by the time a wheel event is
+// heard the browser has already moved the page by it (a notch up from the footer was heard
+// 100px higher, above the close's rest, and was carried past the close; measured).
+// A scroll to a rest cannot begin until the wheel's own scroll has run, and by then Chrome is
+// already taking the page back (86px of backward travel, measured). So while a scroll is
+// carried the snap is off (html.carried), and drivePicture puts it back once the page has come
+// to rest on a rest. These are the only writes the page makes in response to the wheel, and
+// they never take the wheel from the reader.
+const ONWARD_QUIET_MS = 60, ONWARD_MIN_PX = 24, NOTCH_PX = 40;
+let stood = scrollY, carried = false, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
+function goOnward() {
+  const dir = Math.sign(wheelSum), enough = Math.abs(wheelSum) >= ONWARD_MIN_PX; wheelOpen = false;
+  if (!enough || mobileLayout()) return;   // the window may have become the phone layout since the wheel was heard
+  const ys = rests();
+  const i = dir > 0 ? ys.findIndex((y) => y > stood + 2) : ys.findLastIndex((y) => y < stood - 2);
+  if (i < 0) return;
+  const after = ys[i + dir];
+  if (after != null && Math.abs(scrollY - after) < Math.abs(scrollY - ys[i])) return;
+  carried = true; document.documentElement.classList.add('carried');
+  restSince = performance.now();   // the page's stillness is counted from here, not from before the gesture
+  scrollToRest(i - 1);
+}
+addEventListener('wheel', (e) => {
+  if (mobileLayout() || e.ctrlKey || !e.deltaY) return;
+  aimed = null;
+  const opens = !wheelOpen;
+  if (opens) { wheelOpen = true; wheelSum = 0; }
+  wheelSum += e.deltaY;
+  clearTimeout(wheelQuiet);
+  if (opens && (e.deltaMode || Math.abs(e.deltaY) >= NOTCH_PX)) goOnward();   // a notch, or a line or page delta
+  else wheelQuiet = setTimeout(goOnward, ONWARD_QUIET_MS);
+}, { passive: true });
 
-// The always-on integrator: one loop, no rest
-// branch, running from the first frame whether or not the reader has touched the wheel yet.
-// The well is chosen from `travel` — the same direction-and-dead-zone rule settleAtRest
-// uses, kept current by the wheel listener above rather than re-read from carryV here — and
-// the pull is the only deceleration force there is: the page never stops on its own, only by
-// arriving at rest at the well it's in.
-function watchScrollIntent(now) {
-  const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
-  if (carryX == null) carryX = scrollY;
-  if (!inputArmed) { carryX = scrollY; carryV = 0; return; }
-  // A trackpad's own contact has no release event, only a pause: past HOLD_GAP since the last
-  // tick with nothing new arriving, wheelHeld's own last value has gone stale, and this is the
-  // one place with a per-frame clock to notice it — touchHeld needs no such check, it already
-  // has pointerup/touchend/touchcancel to turn it off directly.
-  const carryHeld = touchHeld || (wheelHeld && now - lastWheelT <= HOLD_GAP);
-  if (carryHeld) {
-    // Direct manipulation: no pull. scrollY is the ground truth of what actually moved the
-    // page this frame — native touch/scrollbar-drag scrolling, or the wheel listener's own
-    // 1:1 write above — so carryX just reads it back, and carryV becomes the measured speed
-    // that carried, ready to hand to the integrator the moment the reader lets go.
-    const prevX = carryX;
-    carryX = scrollY;
-    // a touch's speed is its page's own movement over its last 100ms: a release is only noticed
-    // after the last frame, and the still frames in between must not hand the carry a speed of
-    // zero, nor one frame's jitter a speed it never had; a wheel run's is read from its ticks
-    if (!touchHeld) carryV = wheelSpeed();
-    else if (carryX !== prevX) {
-      heldTrail.push([now, carryX]); while (heldTrail.length > 2 && now - heldTrail[0][0] > 100) heldTrail.shift();
-      const [t0, x0] = heldTrail[0];
-      if (now > t0) carryV = (carryX - x0) / ((now - t0) / 1000);
-    }
-    if (carryV) travel = Math.sign(carryV);
-    if (touchHeld) carryGoal = null;
-  } else if (Math.abs(scrollY - carryX) > CARRY_EPS) {
-    // a foreign write: the reader moved the page some other way, and has it until it is still
-    travel = Math.sign(scrollY - carryX);
-    carryX = scrollY; carryV = 0; carryGoal = null; gestureFrom = null; foreignAt = now;
-  }
-  if (!carryHeld) heldTrail = [];
-  if (wasHeld && !carryHeld && (wasHeld === 'wheel' || Math.abs(scrollY - heldFrom) > CARRY_EPS)) {
-    // let go (a touch held still is no gesture; a wheel run is its ticks): a gesture moves
-    // one scene from the rest it set out from, and a fling released well past an ordinary swipe's
-    // speed one more per step of speed; where the reader dragged the page further than that, it
-    // settles on the rest nearest where they left it
-    if (wasHeld === 'wheel') carryV = wheelSpeed();
-    const fling = wasHeld === 'touch' || wheelRun >= FLING_TICKS;
-    carryFling = fling ? Math.abs(carryV) : 0;
-    const dir = wasHeld === 'touch' ? Math.sign(scrollY - heldFrom) : travel, from = gestureFrom ?? nearestRest();
-    const n = fling ? 1 + Math.floor(Math.max(0, Math.abs(carryV) / innerHeight - FLING_FREE) / FLING_STEP) : 1;
-    const earned = from + dir * n, reached = nearestRest(scrollY);
-    carryGoal = Math.max(-1, Math.min(SHARE, (earned - reached) * dir > 0 ? earned : reached));
-  }
-  wasHeld = carryHeld && (touchHeld ? 'touch' : 'wheel');
-  const handsOff = now - foreignAt < FOREIGN_MS;
-  const scene = carryGoal == null ? restSceneAt(progressAt(), travel) : carryGoal;
-  const y = restY(scene);
-  if (Math.abs(carryV) > 4 || Math.abs(carryX - y) > 0.5) restSince = now;   // bookkeeping for NB_DWELL elsewhere, not a branch in the physics below
-  setTarget(Math.max(0, scene));
-  scrollV = carryV / innerHeight;
-  // Substepped at 240Hz, the same stability margin settleTo() uses for this exact K/C pair:
-  // a plain once-a-frame Euler step here overshot the well by a full scene and oscillated
-  // (measured directly, 2026-09-16) — the spring itself was never the problem, the step size was.
-  // Held: any held input during free motion catches it immediately, by skipping this loop the
-  // very frame carryHeld goes true — nothing left to add pull to it.
-  // a flick or a jump gathers its own speed in a third of a second; the pace gathers gently
-  const vmax = Math.max(CARRY_VMAX * innerHeight, carryFling), amax = Math.max(CARRY_AMAX * innerHeight, carryFling / .3);
-  carryFling *= Math.exp(-dt / FLING_TAU);
-  if (handsOff) return;
-  if (!carryHeld) for (let n = Math.max(1, Math.ceil(dt * 240)), h = dt / n; n-- > 0;) {
-    let a = -CARRY_K * (carryX - y) - CARRY_C * carryV;
-    if (a * carryV >= 0) a = Math.max(-amax, Math.min(amax, a));   // gathering speed, not braking
-    carryV = Math.max(-vmax, Math.min(vmax, carryV + a * h)); carryX += carryV * h;
-  }
-  const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-  carryX = Math.min(maxY, Math.max(0, carryX));
-  scrollTo(0, Math.round(carryX));
+// Give each scene and the close a snap point at exactly restY(scene), by turning that absolute
+// position into a scroll-margin-top correction on the element scroll-snap-align already aligns
+// to (the matching rules live in <style>). Run once layout is real, on resize, and when fonts
+// land, the things that move a rest.
+function setupSnap() {
+  // scenesEl ends with the spacer that gives the close its scroll distance, so it and #five both
+  // stand on the close's rest
+  for (const [i, el] of [...scenesEl, five].entries()) el.style.scrollMarginTop = mobileLayout() ? '' : (el.getBoundingClientRect().top + scrollY - restY(Math.min(i, SHARE))) + 'px';
 }
-
-// ?carry=css: give each scene a snap point at exactly restY(scene) — the same position the
-// other two paths carry the reader onto — by turning that absolute target into a
-// scroll-margin-top correction on the element scroll-snap-align already aligns to (the
-// matching [data-carry="css"] rule lives in <style>). Run once layout is real and again on
-// resize; a font swap or reflow between resizes is the one thing this doesn't chase.
-function setupCssSnap() {
-  for (const [i, el] of scenesEl.entries()) el.style.scrollMarginTop = (el.getBoundingClientRect().top + scrollY - restY(i)) + 'px';
-}
-if (CARRY === 'css') { addEventListener('resize', setupCssSnap); setupCssSnap(); }
-// The browser owns motion here; settleAtRest is never called. On mobile this is a strictly
-// observational path: native scrolling supplies scrollY, which drives the scenes and closing
-// scrub continuously, and no release may move the page after the reader lets go.
+addEventListener('resize', setupSnap); document.fonts.ready.then(setupSnap); setupSnap();
+// The browser owns the scroll on both layouts and nothing here moves the page but the two
+// writes above. Native scrolling supplies scrollY, which drives the scenes and the closing
+// scrub continuously, on a phone directly and on desktop through the follower.
 let mobileWatchKey = '', finalDissolve = 0, finalWash = null, finalPrints = null;
 // The close has let go of its composition: its print no longer describes
 // targets that move again, and the next close takes a fresh one. Back in scene
@@ -3533,56 +3189,50 @@ function updateFinalDissolve() {
   wash.raf = requestAnimationFrame(frame);
 }
 
-function watchScrollCss(now) {
+// The page's real position decides when the pinned visual leaves its sticky range, so a
+// page that has already moved on to the close must hold the visual in place while the picture
+// is still catching up. Fixed at the top is where the sticky visual already stands, so holding
+// a quarter screen early changes nothing on screen and covers a native jump past the margin.
+function syncHeldVisual() {
+  if (!following()) return;
+  const want = orbitFrozen || scrollY > restY(DEPLOY) - innerHeight / 4;
+  if (want !== document.getElementById('vis').classList.contains('held')) holdVisual(want);
+}
+// Each frame: the page's own movement sets the direction, and the scene the wash heads for is
+// named from where the page stands (restProgress reads the real position); the picture's
+// movement, viewDy, only sets the wash's speed.
+function drivePicture(now) {
   if (mobileLayout()) {
     const key = `${scrollY}:${innerWidth}:${innerHeight}`;
     if (key === mobileWatchKey) return;
     mobileWatchKey = key;
-
   }
-  const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
+  const real = lastScrollY == null ? 0 : scrollY - lastScrollY;
   lastScrollY = scrollY;
-  if (dy) { travel = Math.sign(dy); restSince = now; }
+  const dy = following() ? viewDy : real;
+  if (real) { restSince = now; travel = Math.sign(real); }
+  else if (dy) travel = Math.sign(dy);
+  if (now - restSince > 150) { aimed = null; stood = scrollY; }
+  // A carried scroll ends when the page has come to rest on a rest, and the snap returns. One
+  // the reader stopped short of a rest is first finished on the nearest, so the returning snap
+  // has nothing to jump; that waits longer than the rest does, because a carry that has not yet
+  // begun to move is still, too. A window that became the phone layout has no snap to return.
+  if (carried) {
+    const rest = nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
+    if (mobileLayout() || (there && now - restSince > 150)) { carried = false; document.documentElement.classList.remove('carried'); }
+    else if (!there && now - restSince > 400) { restSince = now; scrollToRest(rest); }
+  }
   onScroll(dy);
   updateFinalDissolve();
-  // Desktop's closing section shares the release spring. Mobile remains on the
-  // observational path above through the whole close.
-  if (!mobileLayout() && xfAt() > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
-    settleArmed = false;
-    const destination = Math.max(scrollY, closingRestY());
-    if (reduce) scrollTo(0, destination);
-    else settleTo(destination, Math.max(0, scrollV * innerHeight), SETTLE_SECS);
-  }
-  const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
-  scrollV *= Math.exp(-dt / V_TAU);
-}
-
-// Today's path, unchanged: REST_MS of quiet, then a spring to the designed position.
-function watchScrollWait(now) {
-  const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
-  lastScrollY = scrollY;
-  // The settle's own scrollTo calls land here too, including its last frame,
-  // and can flip `travel` and re-arm settleArmed. That can never flip which
-  // scene a later rest picks: by convergence restY has put progressAt()
-  // exactly on the target's integer position, where sceneForRest(p, dir)
-  // already agrees for either sign of dir.
-  if (dy) { travel = Math.sign(dy); restSince = now; if (!settleRun) settleArmed = true; }
-  onScroll(dy);   // the target is a position, so it is read every frame, against the direction this frame carried
-  settleAtRest(now);
-  // decay by real time, not by frame: a 120 Hz display would otherwise halve the integral
+  syncHeldVisual();
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   scrollV *= Math.exp(-dt / V_TAU);
 }
 (function watchScroll(now = performance.now()) {
   if (document.documentElement.dataset.static) return;
-  // Reduced motion always takes the wait path, whatever ?carry= says: every mode's
-  // reduced-motion behaviour is already that path's own instant arrival (settleAtRest's own
-  // `if (reduce)`), so there is nothing for intent or css to do differently under it.
+  stepView(now);
   updateOpening();
-  if (nativeScroll()) { carryX = null; carryV = 0; carryGoal = null; watchScrollCss(now); }
-  else if (reduce || CARRY === 'wait') watchScrollWait(now);
-  else if (CARRY === 'intent') watchScrollIntent(now);
-  else watchScrollCss(now);
+  drivePicture(now);
   requestAnimationFrame(watchScroll);
 })();
 
@@ -3839,7 +3489,7 @@ function settleCard(id, target) {
   const frame = now => {
     c.raf = 0; if (s3HardStop || s3Drag?.id === id) return;
     const dt = Math.min(.05, (now - last) / 1000); last = now;
-    for (const key of ['x', 'y', 's']) { let d; [d, v[key]] = springStep(c.pose[key] - target[key], v[key], dt, SETTLE_K); c.pose[key] = target[key] + d; }
+    for (const key of ['x', 'y', 's']) { let d; [d, v[key]] = springStep(c.pose[key] - target[key], v[key], dt, CARD_K); c.pose[key] = target[key] + d; }
     const done = Math.abs(c.pose.x - target.x) < .2 && Math.abs(c.pose.y - target.y) < .2 && Math.abs(c.pose.s - target.s) < .0005;
     if (done) c.pose = { ...target };
     paintCard(id); if (!done) c.raf = requestAnimationFrame(frame);
@@ -3953,12 +3603,10 @@ window.__wash = (to) => { if (running()) return Promise.resolve(false); target =
 window.__probe = (x, y) => sim.probe(x, y);
 window.__target = (t) => { target = t; };   // the harness can turn a wash around
 window.__onHand = sheets;
-window.__restY = restY;   // the settle's own geometry, so a rest check reads it rather than keeping a second copy
+window.__restY = restY;   // the rests' own geometry, so a rest check reads it rather than keeping a second copy
 window.__targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
-window.__sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
-window.__DEAD = DEAD;   // the dead zone in that formula, read-only, so the harness can recompute sceneForRest's answer from primitives instead of asking the page's own function for it
 window.__plateBounds = plateBounds;   // the region a scattered/dragged plate must stay inside, the same formula the drag clamp and the initial scatter both read
-window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY });
+window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +(mobileLayout() ? progressAt() : restProgress()).toFixed(3), travel, view: +pos().toFixed(1), primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg });
 // window.__s3 is defined with the rest of scene 3's own script, above.
 // How the print pipeline is doing: captures started, how many are drawing now,
 // the most that ever drew at once, and how old the print on hand is.

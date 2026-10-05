@@ -29,12 +29,6 @@ for (const name of (process.env.ENGINE || 'chromium,webkit').split(',')) {
       await page.waitForTimeout(2400);
       assert(await page.evaluate(() => __stageChanges.length === 0), `${name}/${locale}: idle capture switched the visible scene`);
 
-      // Arm the carry without supplying a direction. A wheel delta is scene
-      // intent now, even at one pixel, so using one here would move the exact
-      // rest below toward the following scene instead of merely enabling it.
-      await page.mouse.move(720, 20);
-      await page.mouse.down();
-      await page.mouse.up();
       for (const scene of [1, 2, 3, 2, 0]) {
         const previous = await page.evaluate(() => __state());
         const prior = previous.washes;

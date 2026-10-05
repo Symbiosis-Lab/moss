@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 // Desktop's title dissolves as ink and is gone by scene 1, and each join plays
-// from the page's position between two rests: the next scene is whole exactly
-// when its copy has arrived, the carry travels slowly enough to watch it, and
-// the close darkens in place through its own recording without stopping
-// halfway. The reader keeps the scrollbar, the keys and a flick's speed.
-// A gesture counts scenes, not pixels: a swipe moves one scene whatever its
-// speed or length (scene 1 is a third of a screen below the title, so a pixel
-// rule skips it), and only a release far beyond a swipe's speed earns more.
+// from the page's position between two rests, which the browser scrolls and
+// snaps: the picture follows the page at a pace slow enough to watch, the next
+// scene is whole exactly when the picture arrives, and the close darkens in
+// place through its own recording without stopping halfway. Keys step scenes,
+// also from the editor demo, until the reader works in that demo.
 // Scene 2's Publish cue is one ring at a time, and a resting scene redraws
 // nothing it does not show. WebKit only: headless Chromium renders the
 // desktop simulation in software at about a frame a second.
@@ -44,7 +42,7 @@ try {
   await page.addInitScript(() => {
     window.__pace = [];
     const tick = (now) => {
-      try { if (window.__state) { const s = __state(); __pace.push({ t: now, y: scrollY, washT: s.washT, running: s.running, shown: s.shown, q: finalDissolve, xf: s.xf, stage: document.getElementById('stage').getBoundingClientRect().top }); } } catch (e) {}
+      try { if (window.__state) { const s = __state(); __pace.push({ t: now, y: scrollY, washT: s.washT, running: s.running, shown: s.shown, q: finalDissolve, xf: s.xf, stage: document.getElementById('stage').getBoundingClientRect().top, v: s.view }); } } catch (e) {}
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -58,20 +56,23 @@ try {
   const title = await page.evaluate(async () => {
     const rest = __restY(0);
     // a resize at load can retake the title; each look waits for the wash on hand to be recorded
+    // the page snaps to its rests, so a position between them is held with the snap off, and read once the picture has caught up
+    const nosnap = document.head.appendChild(Object.assign(document.createElement('style'), { textContent: 'html { scroll-snap-type: none !important }' }));
+    const arrived = async () => { while (Math.abs(__state().view - scrollY) > 1) await new Promise((r) => setTimeout(r, 50)); };
     const look = async (u) => {
       for (const t0 = performance.now(); !(titleWash && titleWash.sim.recorded(titleWash.rec));) {
         if (performance.now() - t0 > 15000) throw new Error('the title\'s wash was never recorded');
         await new Promise((r) => setTimeout(r, 50));
       }
       const c = titleWash.canvas;
-      scrollTo(0, Math.round(rest * u)); await new Promise((r) => setTimeout(r, 250));
+      scrollTo(0, Math.round(rest * u)); await arrived(); await new Promise((r) => setTimeout(r, 250));
       const g = document.createElement('canvas').getContext('2d'); g.canvas.width = c.width; g.canvas.height = c.height; g.drawImage(c, 0, 0);
       const d = g.getImageData(0, 0, c.width, c.height).data; let ink = 0;
       for (let i = 3; i < d.length; i += 4) ink = Math.max(ink, d[i]);
       return { shown: getComputedStyle(c).display !== 'none', ink, text: getComputedStyle(openingTitle).color };
     };
     const mid = await look(.4), end = await look(.97), at = await look(1);
-    scrollTo(0, 0); await new Promise((r) => setTimeout(r, 250));
+    scrollTo(0, 0); await arrived(); await new Promise((r) => setTimeout(r, 250)); nosnap.remove();
     return { mid, end, at, top: { shown: getComputedStyle(titleWash.canvas).display !== 'none', text: getComputedStyle(openingTitle).color } };
   });
   assert(title.mid.shown && title.mid.ink > 100 && title.mid.text === 'rgba(0, 0, 0, 0)', `the title is not dissolving as ink: ${JSON.stringify(title.mid)}`);
@@ -82,30 +83,38 @@ try {
   await page.mouse.move(720, 450);
   // The rests are read once the page has arrived: a scene's live layout can
   // settle a pixel or two away from where it measured while the other stood.
+  // A step is a key: the browser scrolls the page to the next rest, and what is recorded is the picture's
+  // position (v), which follows it.
   const gesture = async (from, to) => {
     const mark = await page.evaluate(() => performance.now());
-    for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, to > from ? 100 : -100); await page.waitForTimeout(40); }
-    await page.waitForFunction((to) => __state().shown === to && !__state().running && Math.abs(scrollY - __restY(to)) <= 1, to, { timeout: 20000 });
+    await page.keyboard.press(to > from ? 'PageDown' : 'PageUp');
+    await page.waitForFunction((to) => __state().shown === to && !__state().running && Math.abs(scrollY - __restY(to)) <= 1 && Math.abs(__state().view - scrollY) <= 1, to, { timeout: 20000 })
+      .catch(async (error) => { throw new Error(`the step to scene ${to + 1} did not finish: ${JSON.stringify(await page.evaluate(() => ({ y: scrollY, rests: [0, 1, 2, 3, 4].map(__restY), state: __state() })))}`, { cause: error }); });
     await page.waitForTimeout(300);
     return { rests: await page.evaluate(([a, b]) => [__restY(a), __restY(b)], [from, to]), frames: await page.evaluate((mark) => __pace.filter((r) => r.t >= mark), mark) };
   };
   // scene 1's rest, then one gesture into scene 2
-  for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, 40); await page.waitForTimeout(30); }
+  await page.keyboard.press('PageDown');
   await page.waitForFunction(() => Math.abs(scrollY - __restY(0)) <= 1 && !__state().running, null, { timeout: 15000 });
   await page.waitForFunction(() => [0, 1].every((i) => __onHand[i]), null, { timeout: 30000 });
   const join = await gesture(0, 1);
-  const T = await page.evaluate(() => T_TOTAL);
   const [r0, r1] = join.rests;
-  const arrival = join.frames.find((r) => Math.abs(r.y - r1) <= 1);
-  const travel = arrival.t - join.frames[0].t;
-  assert(travel >= 1600, `scene 1 to 2 was carried in ${Math.round(travel)}ms, too fast to watch`);
-  // the wash is drawn in the frame after the page moves, so one frame of lag is the position's own
-  const at = (r) => Math.min(1, Math.max(0, (r.y - r0) / (r1 - r0)));
+  // the picture sets off the frame the page moves and arrives still, about two seconds later
+  const set = join.frames.find((r) => r.y !== r0), arrival = join.frames.find((r) => Math.abs(r.v - r1) <= 1);
+  const travel = arrival.t - set.t, pace = await page.evaluate(() => WASH_PACE * innerHeight);
+  assert(travel >= 1600, `scene 1 to 2 was travelled by the picture in ${Math.round(travel)}ms, too fast to watch`);
+  // read over a quarter second, so a frame that arrives late does not read as a burst of speed
+  const speeds = join.frames.map((r, i) => { const from = join.frames.slice(0, i).findLast((f) => r.t - f.t >= 250); return from ? Math.abs(r.v - from.v) / (r.t - from.t) * 1000 : 0; });
+  assert(Math.max(...speeds) <= pace * 1.15 + 20, `the picture travelled at ${Math.round(Math.max(...speeds))}px/s, faster than its pace of ${Math.round(pace)}`);
+  assert(join.frames.some((r) => r.running && Math.abs(r.v - r0) < 60), 'the wash did not start with the gesture');
+  const T = await page.evaluate(() => T_TOTAL);
+  // the wash is drawn in the frame after the picture moves, so one frame of lag is the position's own
+  const at = (r) => Math.min(1, Math.max(0, (r.v - r0) / (r1 - r0)));
   const drift = join.frames.map((r, i) => r.running && i ? Math.min(Math.abs(r.washT / T - at(r)), Math.abs(r.washT / T - at(join.frames[i - 1]))) : null).filter((d) => d != null);
-  assert(drift.length && Math.max(...drift) < .04, `the wash did not follow the page between the rests: worst drift ${Math.max(...drift).toFixed(3)}`);
-  const early = join.frames.find((r) => r.washT >= T - .01 && r.y < r1 - 3);
-  assert(!early, `scene 2 was whole ${early && Math.round(r1 - early.y)}px before its copy arrived`);
-  console.log(`webkit 1440×900: scene 1 to 2 carried over ${Math.round(travel)}ms; the wash tracks the page and is whole on arrival`);
+  assert(drift.length && Math.max(...drift) < .04, `the wash did not follow the picture between the rests: worst drift ${Math.max(...drift).toFixed(3)}`);
+  const early = join.frames.find((r) => r.washT >= T - .01 && r.v < r1 - 3);
+  assert(!early, `scene 2 was whole ${early && Math.round(r1 - early.v)}px before the picture arrived`);
+  console.log(`webkit 1440×900: scene 1 to 2: the picture travels over ${Math.round(travel)}ms at no more than its pace; the wash tracks it and is whole on arrival`);
   // Standing in scene 2, one hairline ring at a time leaves the demo's Publish
   // button and crosses the page on the page's own canvas; the next leaves only
   // once the last has gone. Nothing else is redrawn for nothing meanwhile: the
@@ -181,6 +190,7 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !shFrame.contentDocument.querySelector('.moss-modal--receipt.visible'), null, { timeout: 3000 });
   console.log('webkit 1440×900: scene 2\'s Publish opens the example site\'s publish receipt, which settles to live');
+  await page.mouse.click(30, 450);   // back on the page: keys in a demo the reader has used are the demo's
   // A wash that lands has already shown scene 3 whole in its print, so when the
   // print is hidden the sketch and notebook must already stand at full opacity:
   // an entrance fade replayed under the live scene is the art vanishing for
@@ -225,207 +235,65 @@ try {
   const close = await gesture(3, 4);
   const [c3, c4] = close.rests;
   assert(await page.evaluate(() => !!finalPrints?.rec), 'the desktop close did not play its recorded pair');
-  const moving = close.frames.filter((r) => r.y > c3 + 2 && r.y < c4 - 20);
+  const moving = close.frames.filter((r) => r.v > c3 + 2 && r.v < c4 - 20);
   let still = 0, longest = 0;
-  for (let i = 1; i < moving.length; i++) { still = moving[i].y === moving[i - 1].y ? still + (moving[i].t - moving[i - 1].t) : 0; longest = Math.max(longest, still); }
+  for (let i = 1; i < moving.length; i++) { still = moving[i].v === moving[i - 1].v ? still + (moving[i].t - moving[i - 1].t) : 0; longest = Math.max(longest, still); }
   assert(longest < 120, `the close stopped for ${Math.round(longest)}ms halfway through`);
-  const along = (r) => (r.y - c3) / (c4 - c3);
+  const along = (r) => (r.v - c3) / (c4 - c3);
   const lag = close.frames.map((r, i) => r.q > 0 && r.q < 1 && i ? Math.min(Math.abs(r.q - along(r)), Math.abs(r.q - along(close.frames[i - 1]))) : null).filter((d) => d != null);
-  assert(lag.length && Math.max(...lag) < .02, `the close did not follow the page between scene 4 and 5: worst ${Math.max(...lag).toFixed(3)}`);
+  assert(lag.length && Math.max(...lag) < .02, `the close did not follow the picture between scene 4 and 5: worst ${Math.max(...lag).toFixed(3)}`);
   const closing = close.frames.filter((r) => r.q > 0 && r.q < 1), drifted = closing.find((r) => Math.abs(r.stage - close.frames[0].stage) > 1);
   assert(closing.length && !drifted, `scene 4 did not dissolve in place: its visual moved ${drifted && Math.round(close.frames[0].stage - drifted.stage)}px`);
-  const early5 = close.frames.find((r) => r.q >= .999 && r.y < c4 - 3);
-  assert(!early5, 'scene 5 stood before the page had arrived at it');
+  const early5 = close.frames.find((r) => r.q >= .999 && r.v < c4 - 3);
+  assert(!early5, 'scene 5 stood before the picture had arrived at it');
   // and back: the same place, and scene 4's visual pinned again where it was held
   await page.waitForTimeout(800);
   const back = await gesture(4, 3);
   const moved = back.frames.find((r) => Math.abs(r.stage - close.frames[0].stage) > 1);
   assert(!moved, `scene 4 did not gather in place on the way back: its visual moved ${moved && Math.round(close.frames[0].stage - moved.stage)}px`);
+  // the visual is held from a quarter screen before scene 4's rest, where the pin already stands; back at scene 3 it is let go
+  await gesture(3, 2);
   assert(await page.evaluate(() => !document.getElementById('vis').classList.contains('held')), 'scene 4\'s visual was left held after the close let go');
-  console.log('webkit 1440×900: the close dissolves and darkens in place with the page, all the way to scene 5 and back');
+  console.log('webkit 1440×900: the close dissolves and darkens in place with the picture, all the way to scene 5 and back');
   await page.close();
-  // The reader always has the page. A scrollbar drag (written to the page directly,
-  // as a drag on an overlay scrollbar is) is never fought and is left alone once it
-  // stops; only after a pause does the carry finish the transition it was left in.
-  // Keys step scenes at the pace, even with the editor demo holding focus for its
-  // caret, until the reader works in that demo. A trackpad flick keeps its speed.
+  // Keys are the page's until the reader works in the editor demo, which takes focus for its caret.
   const control = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await control.goto(base);
   await control.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
-  await control.mouse.move(720, 450);
-  for (let i = 0; i < 3; i++) { await control.mouse.wheel(0, 40); await control.waitForTimeout(30); }
+  await control.mouse.move(1300, 450);
+  await control.keyboard.press('PageDown');
   await control.waitForFunction(() => Math.abs(scrollY - __restY(0)) <= 1 && !__state().running, null, { timeout: 15000 })
     .catch(() => { throw new Error('the control page did not come to rest on scene 1'); });
-  const drag = await control.evaluate(async () => {
-    // left 60% of the way to scene 2's rest, well inside the transition
-    const y0 = scrollY, fought = [], steps = Math.round((__restY(1) - y0) * .6 / 12);
-    for (let k = 1; k <= steps; k++) { scrollTo(0, y0 + 12 * k); await new Promise((r) => requestAnimationFrame(r)); fought.push(Math.abs(scrollY - (y0 + 12 * k))); }
-    const released = scrollY, t0 = performance.now(); let firstMove = null;
-    while (performance.now() - t0 < 6000) { await new Promise((r) => requestAnimationFrame(r)); if (firstMove == null && Math.abs(scrollY - released) > 1) firstMove = performance.now() - t0; }
-    return { fought: Math.max(...fought), firstMove, end: scrollY, rest: __restY(1) };
-  });
-  assert(drag.fought <= 1, `a scrollbar drag was fought by ${drag.fought}px`);
-  assert(drag.firstMove == null || drag.firstMove >= 500, `a stopped scrollbar drag was taken over after ${Math.round(drag.firstMove)}ms`);
-  assert(Math.abs(drag.end - drag.rest) <= 1, `a drag left mid-transition was not finished the way it went: ${JSON.stringify(drag)}`);
-  const key = async (name) => {
-    const t0 = Date.now(); await control.keyboard.press(name);
-    await control.waitForFunction(() => !__state().running && __state().carryGoal != null && Math.abs(scrollY - __restY(__state().carryGoal)) <= 1, null, { timeout: 15000 }).catch(() => {});
-    return { y: await control.evaluate(() => scrollY), ms: Date.now() - t0 };
+  const editorFocus = () => control.waitForFunction(() => document.activeElement?.id === 'ed', null, { timeout: 8000 }).catch(() => { throw new Error('the editor demo no longer takes focus, so this check no longer covers keys arriving in its frame'); });
+  const key = async (name, scene) => {
+    await control.keyboard.press(name);
+    await control.waitForFunction((s) => !__state().running && Math.abs(scrollY - __restY(s)) <= 1, scene, { timeout: 15000 }).catch(() => {});
+    return control.evaluate(() => scrollY);
   };
-  // Shift with an arrow extends a selection: it is the browser's, never a scene step
+  const rest = (i) => control.evaluate((i) => __restY(i), i);
+  await key('PageDown', 1);
+  // Shift with an arrow extends a selection: it is the browser's, never a scene step (read in scene 2, where no demo holds focus)
   await control.evaluate(() => { window.__shifted = null; addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') setTimeout(() => { window.__shifted = e.defaultPrevented; }); }, true); });
   await control.keyboard.press('Shift+ArrowDown');
   await control.waitForFunction(() => window.__shifted !== null, null, { timeout: 5000 });
   assert(!(await control.evaluate(() => window.__shifted)), 'Shift+ArrowDown was taken as a scene step instead of extending a selection');
-  await control.waitForFunction(() => Math.abs(scrollY - __restY(1)) <= 1 && !__state().running, null, { timeout: 15000 }).catch(() => {});
-  const down = await key('PageDown'), rest2 = await control.evaluate(() => __restY(2));
-  assert(Math.abs(down.y - rest2) <= 1 && down.ms >= 1500, `PageDown did not carry to the next scene at the pace: ${JSON.stringify({ ...down, rest2 })}`);
-  const up = await key('PageUp'), rest1 = await control.evaluate(() => __restY(1));
-  assert(Math.abs(up.y - rest1) <= 1, `PageUp did not carry back a scene: ${JSON.stringify({ ...up, rest1 })}`);
-  // back in scene 1, where the editor demo takes focus for its caret: keys arriving in its frame still step
-  const first = await key('PageUp'), rest0 = await control.evaluate(() => __restY(0));
-  assert(Math.abs(first.y - rest0) <= 1, `PageUp did not carry back to scene 1: ${JSON.stringify({ ...first, rest0 })}`);
-  const editorFocus = () => control.waitForFunction(() => document.activeElement?.id === 'ed', null, { timeout: 8000 }).catch(() => { throw new Error('the editor demo no longer takes focus, so this check no longer covers keys arriving in its frame'); });
-  await editorFocus();
-  const fromDemo = await key('PageDown');
-  assert(Math.abs(fromDemo.y - rest1) <= 1, `PageDown with the editor demo holding focus did not step: ${JSON.stringify({ ...fromDemo, rest1 })}`);
-  await key('PageUp'); await editorFocus();
+  await key('PageUp', 0); await editorFocus();
+  assert(Math.abs(await key('PageDown', 1) - await rest(1)) <= 1, 'PageDown with the editor demo holding focus did not step');
+  await key('PageUp', 0); await editorFocus();
   // once the reader works in the editor demo, its keys are its own
   await control.frameLocator('#ed').locator('.cm-content').click({ timeout: 10000 }).catch(() => { throw new Error('could not click into the editor demo'); });
   const typed = await control.evaluate(() => scrollY); await control.keyboard.press('ArrowDown'); await control.waitForTimeout(900);
   assert(await control.evaluate((y) => Math.abs(scrollY - y) <= 1, typed), 'a key typed in a demo the reader is using moved the page');
   // away by the wheel and back: once the page has focused the editor again, keys are the page's
-  await control.mouse.move(1300, 450);
-  for (const dy of [100, -100]) {
-    for (let i = 0; i < 3; i++) { await control.mouse.wheel(0, dy); await control.waitForTimeout(40); }
-    await control.waitForFunction((s) => !__state().running && Math.abs(scrollY - __restY(s)) <= 1, dy > 0 ? 1 : 0, { timeout: 15000 });
+  await control.mouse.move(30, 450);
+  for (const [dy, scene] of [[100, 1], [-100, 0]]) {
+    await control.mouse.wheel(0, dy);
+    await control.waitForFunction((s) => !__state().running && Math.abs(scrollY - __restY(s)) <= 1, scene, { timeout: 15000 });
   }
   await control.waitForTimeout(2600);   // the typing loop's pause after a wash, then its focus
-  const again = await key('PageDown');
-  assert(Math.abs(again.y - rest1) <= 1, `after leaving and coming back, keys stayed with a demo the reader had used: ${JSON.stringify(again)}`);
-  await control.mouse.click(1300, 60, { timeout: 10000 });   // back on the page
-  const flick = await control.evaluate(async () => {
-    const out = []; let last = scrollY, lt = performance.now(), on = true;
-    const f = (now) => { if (!on) return; out.push(Math.abs(scrollY - last) / Math.max(1, now - lt) * 1000); last = scrollY; lt = now; requestAnimationFrame(f); }; requestAnimationFrame(f);
-    window.__flickRelease = () => { const i = out.length; return () => { on = false; return Math.max(...out.slice(i + 4)); }; };
-  });
-  for (const d of [20, 40, 60, 80, 80, 80]) { await control.mouse.wheel(0, d); await control.waitForTimeout(16); }
-  await control.evaluate(() => { window.__flickPeak = __flickRelease(); });
-  await control.waitForTimeout(1200);
-  const peak = await control.evaluate(() => __flickPeak()), pace = await control.evaluate(() => CARRY_VMAX * innerHeight);
-  assert(peak > 2 * pace, `a trackpad flick was slowed to the pace: ${Math.round(peak)}px/s against ${Math.round(pace)}`);
-  console.log('webkit 1440×900: a drag is never fought, keys step scenes (also from the editor demo) and stay with it once used, a flick keeps its speed');
+  assert(Math.abs(await key('PageDown', 1) - await rest(1)) <= 1, 'after leaving and coming back, keys stayed with a demo the reader had used');
+  console.log('webkit 1440×900: keys step scenes (also from the editor demo) and stay with it once used');
   await control.close();
-  // A gesture counts scenes, not pixels. The ticks are dispatched from inside the page, one per
-  // animation frame, because a Playwright wheel call takes tens of milliseconds to arrive and
-  // would divide every speed below by three. Speeds are in screens a second (900px here).
-  const stepTo = async (page, n) => {
-    for (let i = 0; i <= n; i++) {
-      await page.keyboard.press('PageDown');
-      await page.waitForFunction((i) => !__state().running && Math.abs(scrollY - __restY(i)) <= 1, i, { timeout: 15000 });
-    }
-  };
-  // Ticks leave on a 60 Hz clock of their own, not the display's: a tick's size is its speed, so a page
-  // drawn at another frame rate must not turn the same swipe into a faster or a slower one. A zero is a
-  // beat with no tick, which the page's listener ignores. A tick carries the time it was due, as a real one carries the
-  // time the hand made it however late the page gets to it: a timer that fires late delivers ticks in a burst, and a
-  // speed read off their delivery times would be several times the swipe's own.
-  // `stall` is the number of beats after which the page's animation frames are held back until the swipe is over,
-  // as a page busy capturing prints does (frames stall for 100 ms and more, most of all just after load): the rest
-  // of the ticks are all handled between two frames and the run is over before the next one. With 1 no frame
-  // watches the run at all; with 4 one has seen it begin.
-  const frames = (page, deltas, stall = 0) => page.evaluate(async ([deltas, stall]) => {
-    const real = window.requestAnimationFrame, queue = [], beat = 1000 / 60, frame = () => new Promise((r) => real(r));
-    let t0 = performance.now(), i = 0;
-    const run = async (end) => {
-      for (; i < end; i++) {
-        const wait = t0 + i * beat - performance.now();
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-        const e = new WheelEvent('wheel', { deltaY: deltas[i], bubbles: true, cancelable: true });
-        Object.defineProperty(e, 'timeStamp', { value: t0 + i * beat });
-        document.body.dispatchEvent(e);
-      }
-    };
-    await run(stall || deltas.length);
-    if (stall) {
-      await frame(); await frame();
-      window.requestAnimationFrame = (cb) => queue.push(cb);
-      t0 = performance.now() - i * beat;
-      await run(deltas.length);
-      // longer than the hold gap, so the first frame back finds the run over
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    window.requestAnimationFrame = real; queue.forEach((cb) => real(cb));
-  }, [deltas, stall]);
-  // a trackpad swipe: a finger phase that ramps up and ends at its top speed, then a decaying tail, all scaled by k
-  const FINGER = [8, 14, 20, 26, 30, 30, 28], TAIL = [24, 20, 16, 12, 9, 7, 5, 4, 3, 2, 2, 1, 1, 1];
-  const swipe = (k, sign = 1, finger = FINGER, tail = TAIL) => [...finger, ...tail].map((d) => sign * Math.max(1, Math.round(d * k)));
-  const restOf = async (page) => {
-    await page.waitForTimeout(500);
-    const read = () => page.evaluate(() => ({ y: Math.round(scrollY), running: __state().running, at: [0, 1, 2, 3, 4, 5].map((i) => __restY(i - 1)).findLastIndex((r) => r <= scrollY + 1) - 1, on: [0, 1, 2, 3, 4, 5].some((i) => Math.abs(__restY(i - 1) - scrollY) <= 1), fling: window.__peak }));
-    const t0 = Date.now(); let s = await read();
-    while ((s.running || !s.on) && Date.now() - t0 < 20000) { await page.waitForTimeout(100); s = await read(); }
-    return s;
-  };
-  const misses = [];
-  const open = async (context, from) => {
-    const page = await context.newPage();
-    await page.goto(base);
-    await page.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
-    await page.mouse.move(1300, 450);
-    if (from >= 0) await stepTo(page, from);
-    // the fastest release speed the carry was handed, in screens a second
-    await page.evaluate(() => { window.__peak = 0; const f = () => { window.__peak = Math.max(window.__peak, carryFling / innerHeight); requestAnimationFrame(f); }; requestAnimationFrame(f); });
-    return page;
-  };
-  const wheelCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  for (const [name, from, ticks, want, ok, stall] of [
-    ['an ordinary swipe (about 400px) from the title', -1, swipe(1, 1, FINGER, [26, 24, 22, 20, 18, 16, 14, 12, 10, 8, 7, 6, 5, 4, 3, 2, 2, 1, 1, 1]), 'scene 1', (s) => s.at === 0],
-    ['a firm swipe (a 350px finger phase) from the title', -1, swipe(2.24), 'scene 1', (s) => s.at === 0],
-    ['a brisk swipe (3.6 screens a second) from scene 1', 0, swipe(1, 1, [12, 24, 36, 48, 54, 54, 54], [48, 42, 36, 30, 24, 18, 12, 8, 5, 3, 2, 1]), 'scene 2', (s) => s.at === 1],
-    ['a firm swipe from scene 1', 0, swipe(2.24), 'scene 2', (s) => s.at === 1],
-    ['three quick notches from the title', -1, [100, 0, 0, 100, 0, 0, 100], 'scene 1', (s) => s.at === 0],
-    ['an 850px upward swipe from scene 2', 1, swipe(1, -1, [14, 25, 35, 46, 56, 60, 60], [60, 58, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 9, 6, 4, 2, 1]), 'scene 1', (s) => s.at === 0],
-    // the finger travels under 1000px, so the page's own drag ends at scene 2 and only the speed of the release can carry it further
-    ['a hard flick (under 1000px of finger, 10 screens a second) from scene 1', 0, [4, 4, 4, 4, 4, 4, 4, 300, 300, 300], 'at least scene 4', (s) => s.at >= 3],
-    // the same, with no animation frame during the run: a swipe is known from its ticks, not from a frame having watched it
-    ['a firm swipe from the title, with the frames stalled after the fourth beat', -1, swipe(2.24), 'scene 1', (s) => s.at === 0, 4],
-    ['a firm swipe from the title, with the frames stalled from the first beat', -1, swipe(2.24), 'scene 1', (s) => s.at === 0, 1],
-    ['a hard flick from scene 1, with the frames stalled from the first beat', 0, [4, 4, 4, 4, 4, 4, 4, 300, 300, 300], 'at least scene 4', (s) => s.at >= 3, 1],
-    ['three quick notches from the title, with the frames stalled from the first beat', -1, [100, 0, 0, 100, 0, 0, 100], 'scene 1', (s) => s.at === 0, 1],
-  ]) {
-    const page = await open(wheelCtx, from);
-    await frames(page, ticks, stall);
-    const s = await restOf(page);
-    if (!ok(s)) misses.push(`${name} rested at scrollY ${s.y} (scene ${s.at + 1}, released at ${s.fling.toFixed(1)} screens a second), not ${want}`);
-    else console.log(`webkit 1440×900: ${name} rests on ${want} (released at ${s.fling.toFixed(1)} screens a second)`);
-    await page.close();
-  }
-  await wheelCtx.close();
-  // A touch is read off the page's own movement, which the browser makes: the drag is emulated the way
-  // the carry sees one, a touch pointerdown, a scroll write per frame, a pointerup. The release goes the
-  // way the drag went, whatever the last frames did: it never turns a drag back into a step forward.
-  const touchCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, hasTouch: true });
-  const touchDrag = (page, steps) => page.evaluate((steps) => new Promise((done) => {
-    const fire = (type) => dispatchEvent(new PointerEvent(type, { pointerType: 'touch', bubbles: true }));
-    fire('pointerdown'); let i = 0;
-    const step = () => { if (i === steps.length) { fire('pointerup'); done(); return; } scrollTo(0, scrollY + steps[i++]); requestAnimationFrame(step); };
-    requestAnimationFrame(step);
-  }), steps);
-  for (const [name, steps, want, ok] of [
-    ['a touch drag up 280px that ends 20px back down', [...Array(10).fill(-28), ...Array(6).fill(3.4)], 'scene 1', (s) => s.at === 0],
-    ['a touch drag up 280px', Array(10).fill(-28), 'scene 1', (s) => s.at === 0],
-    ['a touch held still', [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 'scene 2', (s) => s.at === 1],
-  ]) {
-    const page = await open(touchCtx, 1);
-    await touchDrag(page, steps);
-    const s = await restOf(page);
-    if (!ok(s)) misses.push(`${name} rested at scrollY ${s.y} (scene ${s.at + 1}), not ${want}`);
-    else console.log(`webkit 1440×900 touch: ${name} rests on ${want}`);
-    await page.close();
-  }
-  await touchCtx.close();
-  assert(!misses.length, misses.join('; '));
   // a page opened narrow and widened past the phone layout still gets its title's wash
   const narrow = await browser.newPage({ viewport: { width: 800, height: 900 } });
   await narrow.goto(base);

@@ -12,11 +12,11 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 
 // check-landing-transitions.mjs (the desktop join sweep) is left out: it times
 // out against the September 19 production page as well, so it is a broken
-// check, not a signal, until its carry-arming step is repaired.
+// check, not a signal, until it is repaired for the native-scrolling page.
 const CHECKS = [
   'check-landing-cold-bottom.mjs',
   'check-landing-desktop-pace.mjs',
-  'check-landing-intent.mjs',
+  'check-landing-desktop-scroll.mjs',
   'check-landing-mobile-handoff.mjs',
   'check-landing-mobile.mjs',
   'check-landing-pin.mjs',
@@ -25,7 +25,6 @@ const CHECKS = [
   'check-landing-subscription.mjs',
   'check-landing-text-track.mjs',
   'check-landing-wash-recovery.mjs',
-  'check-landing-wheel-tail.mjs',
   'check-site-preview.mjs',
   'check-docs-footer-icon.mjs',
   'check-docs-media.mjs',
