@@ -61,6 +61,11 @@ pub struct ParsedDocument {
     /// Source priority: frontmatter `title` → title-cased filename
     /// (folder name for index/self-named notes). Never sourced from body content.
     pub label: String,
+    /// Frontmatter `nav_label`, trimmed; `None` when absent or blank. Read only
+    /// by the site's own navigation (nav bar, footer links) through
+    /// [`ParsedDocument::nav_text`]; everything that names the page as content
+    /// keeps `label`/`title`.
+    pub nav_label: Option<String>,
     /// Navigation weight for ordering (lower numbers = higher priority)
     pub weight: Option<i32>,
     /// Analytics configuration for privacy-focused analytics
@@ -545,6 +550,12 @@ pub struct ParsedDocument {
 }
 
 impl ParsedDocument {
+    /// The text the site's own navigation shows for this page: `nav_label`
+    /// when set, else the chrome `label`.
+    pub fn nav_text(&self) -> &str {
+        self.nav_label.as_deref().unwrap_or(&self.label)
+    }
+
     /// Whether this page shows its own map: `map:` when the page sets it,
     /// else `site_default`. The one definition of the `map` key's meaning,
     /// read for a place page's term map (default on) and for a located

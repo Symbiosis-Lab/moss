@@ -660,6 +660,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "nav_label",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        score: 76,
+        description: "A shorter name for this page in the site's nav bar and footer links, when its title is too long for them (e.g. `nav_label: Reading` on a page titled \"Course of Reading\"). The page's own heading, <title>, listing cards, breadcrumbs and feeds keep the title.",
+        label_key: "chip.nav_label.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "draft",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,

@@ -1329,6 +1329,12 @@ pub fn process_markdown_file(
     let series = frontmatter.series;
     let breadcrumb = frontmatter.breadcrumb;
     let footer = frontmatter.footer;
+    let nav_label = frontmatter
+        .nav_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
     // BTreeMap, not HashMap (PageFacade determinism — see the doc
     // comment on ParsedDocument::cascade); moss_core's typed FrontMatter
     // keeps HashMap since it's a broader public/frontend-facing type.
@@ -1366,6 +1372,7 @@ pub fn process_markdown_file(
 
     Ok(ParsedDocument {
         label,
+        nav_label,
         title,
         content: markdown_content_raw,
         html_content,

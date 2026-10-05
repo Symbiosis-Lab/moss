@@ -54,11 +54,11 @@ impl<'a> NavigationBuilder<'a> {
         footer_pages.sort_by(|a, b| match (a.weight, b.weight) {
             // Tied weights fall through to alphabetical for cross-platform
             // determinism — see comment in generate_navigation().
-            (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.label.cmp(&b.label)),
+            (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.nav_text().cmp(b.nav_text())),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
             // Sort alphabetically by the plain-text chrome label.
-            (None, None) => a.label.cmp(&b.label),
+            (None, None) => a.nav_text().cmp(b.nav_text()),
         });
 
         let mut default_links = Vec::new();
@@ -70,10 +70,10 @@ impl<'a> NavigationBuilder<'a> {
             } else {
                 "footer-link"
             };
-            // Footer link text is chrome; use the plain-text label.
+            // Footer link text is navigation chrome: `nav_label` else label.
             default_links.push(format!(
                 r#"<a href="{}" class="{}">{}</a>"#,
-                href, class, doc.label
+                href, class, crate::build::features::html_escape(doc.nav_text())
             ));
         }
 

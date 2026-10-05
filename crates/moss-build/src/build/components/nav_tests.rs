@@ -190,6 +190,61 @@ fn test_navigation_weight_sorting() {
     );
 }
 
+/// `nav_label` replaces the title in the nav bar only; a page without it, or
+/// with a blank one (stored as `None`), shows its title as before.
+#[test]
+fn nav_label_replaces_the_title_in_the_nav_bar_only() {
+    let mut long = make_doc("reading.html", "Course of Reading", Some(1), Some(true));
+    long.nav_label = Some("Reading".to_string());
+    let plain = make_doc("about.html", "About", Some(2), Some(true));
+    let blank = make_doc("contact.html", "Contact", Some(3), Some(true));
+    let documents = vec![long, plain, blank];
+
+    let nav_builder = NavigationBuilder::new(&documents, "Test Site", None, crate::i18n::Language::En, false);
+    let html = nav_builder.generate_navigation();
+
+    assert!(html.contains(r#"href="/reading">Reading</a>"#), "got: {html}");
+    assert!(!html.contains("Course of Reading"), "got: {html}");
+    assert!(html.contains(r#"href="/about">About</a>"#), "got: {html}");
+    assert!(html.contains(r#"href="/contact">Contact</a>"#), "got: {html}");
+    assert_eq!(documents[0].title, "Course of Reading");
+    assert_eq!(documents[0].label, "Course of Reading");
+}
+
+/// Labels are plain text, so markup characters in a title or a `nav_label`
+/// show as text rather than becoming elements.
+#[test]
+fn nav_and_footer_labels_are_escaped() {
+    let mut doc = make_doc("qa.html", "Q&A <i>", Some(1), Some(true));
+    doc.footer = Some(true);
+    let mut labelled = make_doc("faq.html", "Faq", Some(2), Some(true));
+    labelled.nav_label = Some("Q&A <b>".to_string());
+    let documents = vec![doc, labelled];
+
+    let nav_builder = NavigationBuilder::new(&documents, "Test Site", None, crate::i18n::Language::En, false);
+    let nav = nav_builder.generate_navigation();
+    assert!(nav.contains(">Q&amp;A &lt;i&gt;</a>"), "got: {nav}");
+    assert!(nav.contains(">Q&amp;A &lt;b&gt;</a>"), "got: {nav}");
+    assert!(!nav.contains("<b>") && !nav.contains("<i>"), "got: {nav}");
+    let footer = nav_builder.generate_footer(false);
+    assert!(footer.contains(">Q&amp;A &lt;i&gt;</a>"), "got: {footer}");
+}
+
+/// Footer links are navigation chrome too.
+#[test]
+fn nav_label_names_the_page_in_footer_links() {
+    let mut long = make_doc("reading.html", "Course of Reading", None, None);
+    long.footer = Some(true);
+    long.nav_label = Some("Reading".to_string());
+    let documents = vec![long];
+
+    let nav_builder = NavigationBuilder::new(&documents, "Test Site", None, crate::i18n::Language::En, false);
+    let html = nav_builder.generate_footer(false);
+
+    assert!(html.contains(">Reading</a>"), "got: {html}");
+    assert!(!html.contains("Course of Reading"), "got: {html}");
+}
+
 #[test]
 fn test_navigation_home_link_is_root_relative() {
     let documents: Vec<ParsedDocument> = vec![];

@@ -349,7 +349,8 @@ mod tests {
         // or a real folder index at a place namespace root hosts.)
         // (`start`/`end`/`timezone`/`status`/`tickets`/`online` added 2026-10 — the
         // event fields; see moss_core::event.)
-        assert_eq!(schema.frontmatter.fields.len(), 56);
+        // (`nav_label` added 2026-10 — a shorter nav-bar name than `title`.)
+        assert_eq!(schema.frontmatter.fields.len(), 57);
     }
 
     #[test]

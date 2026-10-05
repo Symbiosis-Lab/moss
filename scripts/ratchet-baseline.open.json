@@ -41,7 +41,7 @@
         "crates/moss-core/src/frontmatter_typed.rs": 1200,
         "crates/moss-core/src/render/image.rs": 1100,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,
-        "crates/moss-core/src/schema_fields.rs": 1100,
+        "crates/moss-core/src/schema_fields.rs": 1200,
         "packages/moss-api/src/testing/mock-tauri.ts": 1200,
         "crates/moss-build/src/build/manifest.rs": 1100,
         "crates/moss-build/src/ops/serve/invoke.rs": 900,

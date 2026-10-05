@@ -146,6 +146,11 @@ pub struct FrontMatter {
     pub date: Option<String>,
     /// Navigation weight for ordering (lower numbers = higher priority)
     pub weight: Option<i32>,
+    /// A shorter name for the site's own navigation (nav bar, footer links)
+    /// than `title`. Blank counts as unset. Everywhere the page is named as
+    /// content (heading, `<title>`, cards, breadcrumbs, feeds) keeps `title`.
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub nav_label: Option<String>,
     /// Custom URL slug (e.g., "links" -> "/links/"). Pin a stable ASCII slug when
     /// the filename isn't one — moss's convention is to name files after the page
     /// title in their own language, then pin `url:` here (隐私.md + url: privacy -> /privacy).
@@ -1015,6 +1020,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                     ),
                 },
                 "description" => frontmatter.description = Some(value.to_string()),
+                "nav_label" => frontmatter.nav_label = Some(value.to_string()),
                 "lang" => frontmatter.lang = Some(value.to_string()),
                 "translationKey" | "translation_key" => {
                     frontmatter.translation_key = Some(value.to_string())

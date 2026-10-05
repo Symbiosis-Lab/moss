@@ -869,6 +869,21 @@ fn parse_for_test(file_path: &str, md: &str, root: Option<&str>) -> ParsedDocume
     .expect("parse should succeed")
 }
 
+/// `nav_label` lands on the document beside `title`, which it never replaces;
+/// a blank value is the same as none.
+#[test]
+fn nav_label_is_carried_beside_the_title_and_blank_is_unset() {
+    let doc = parse_for_test("reading.md", "---\ntitle: Course of Reading\nnav_label: Reading\n---\nBody.\n", None);
+    assert_eq!(doc.nav_label.as_deref(), Some("Reading"));
+    assert_eq!(doc.title, "Course of Reading");
+    assert_eq!(doc.label, "Course of Reading");
+    assert_eq!(doc.nav_text(), "Reading");
+
+    let blank = parse_for_test("reading.md", "---\ntitle: Course of Reading\nnav_label: \"  \"\n---\nBody.\n", None);
+    assert_eq!(blank.nav_label, None);
+    assert_eq!(blank.nav_text(), "Course of Reading");
+}
+
 /// Self-named folder note `Research/Research.md`: a paragraph then `# Method`.
 /// Title must be the folder name "Research", NOT the body H1 "Method".
 /// The authored `# Method` stays in the body verbatim.

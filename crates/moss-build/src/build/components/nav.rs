@@ -263,18 +263,19 @@ impl<'a> NavigationBuilder<'a> {
                 // independent of filesystem walk order. Without the tiebreaker
                 // macOS and Linux scan_folder() produce different nav orders
                 // for items with the same explicit weight.
-                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.label.cmp(&b.label)),
+                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.nav_text().cmp(b.nav_text())),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 // Sort alphabetically by the plain-text chrome label.
-                (None, None) => a.label.cmp(&b.label),
+                (None, None) => a.nav_text().cmp(b.nav_text()),
             }
         });
 
         let mut page_items: Vec<String> = nav_documents.iter()
             .map(|doc| {
-                // Nav link text uses the chrome label (plain text).
-                let label = doc.label.clone();
+                // Nav link text: `nav_label` if the page set one, else the
+                // chrome label. Both are plain text, so escape at the write.
+                let label = crate::build::features::html_escape(doc.nav_text());
                 let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
                 let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (nav href to user content page, not a framework asset)
                 let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
