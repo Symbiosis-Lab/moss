@@ -51,3 +51,7 @@ node scripts/ratchet.mjs accept prod_lines_per_file "<reason>" --path <file>
 The reason must say why the growth is worth it, in at least 15 characters; `wip`, the row name or the path alone are refused. Include the printed `Ratchet-Accept: <row> <key> — <reason>` line(s) in your commit message; a `commit-msg` hook checks for it whenever the baseline file is staged. If your change only shrank something, run `tighten` instead — it lowers the baseline and never raises it.
 
 Hooks live in `.githooks/` and install automatically via `pnpm install`'s `prepare` script. If they aren't active, `git config core.hooksPath .githooks` from the repo root wires them in.
+
+## Proposals
+
+A design for something moss does not do yet goes in `docs/proposals/<name>/README.md`, with its screens beside it and one issue labelled `proposal`. [docs/proposals/README.md](../docs/proposals/README.md) has the format and the status words. Screens and examples in a proposal use invented site names and addresses, like every fixture here, and the rules above about private paths and names apply to it in full.
