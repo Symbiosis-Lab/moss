@@ -78,6 +78,8 @@ pub enum PushResult {
     /// Push succeeded, site is live.
     Success {
         url: String,
+        /// Files this publish transferred: the client's own count of what the
+        /// hosting server asked for, not the size of the site.
         files_uploaded: u32,
         files_removed: u32,
     },

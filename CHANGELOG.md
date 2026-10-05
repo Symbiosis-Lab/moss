@@ -23,6 +23,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss deploy` now ends with the number of files it actually uploaded. Its closing line used to report the size of the whole site as the upload count, so a publish that sent 404 files out of 1,039 said `1039 uploaded`; it now says `404 uploaded`, and a publish that sent nothing says `0 uploaded`.
 - `moss deploy --dry-run` lists the pages you changed first: added, then edited, then deleted, then restyled, by path within each, and the cap cuts restyled pages before any other, saying how many (`and 60 more restyled`). Before, a long list of restyled pages sorted ahead of the one page you edited and pushed it out of the list.
 - A language's home page lists that language's own posts again, linked under its own address, instead of the default language's posts.
 - Videos with capital letters in their file name keep adaptive streaming across rebuilds. Before, the next build deleted the already-encoded streaming files before the page was written, so the page fell back to the single MP4; the same build also deleted any JupyterLite bundle file whose folder name has capitals.

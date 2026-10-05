@@ -443,7 +443,7 @@ async fn push_prebuilt_inner(
     // paths, the custom domain wins once DNS is verified.
     Ok(PushResult::Success {
         url: crate::deploy::view_site_url(&folder_path_str, site_id, env),
-        files_uploaded: commit_result.files_updated,
+        files_uploaded: total,
         files_removed: commit_result.files_removed,
     })
 }

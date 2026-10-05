@@ -695,7 +695,7 @@ async fn push_site_inner_impl(
 
     Ok(PushResult::Success {
         url,
-        files_uploaded: commit_result.files_updated,
+        files_uploaded: total,
         files_removed: commit_result.files_removed,
     })
 }
@@ -1638,5 +1638,71 @@ mod tests {
         let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
 
         assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+    }
+
+    /// The hosting server's commit response counts every file in the site; the
+    /// publish result must report the files this publish sent instead. Here the
+    /// comparison needs one file and the server answers 1039. Ablated by
+    /// reading `commit_result.files_updated` back into `files_uploaded` in
+    /// `push_prebuilt_inner`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_prebuilt_publish_reports_the_files_it_sent_not_the_site_total() {
+        let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let site = prebuilt_site();
+        let addr = mock_seta_sequence(vec![
+            json_200(r#"{"generation_id":"ours","deployed_at":1790000000}"#),
+            json_200(r#"{"generation_id":"ours","deployed_at":1790000000}"#),
+            json_200(r#"{"need":["index.html"],"remove":[]}"#),
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            json_200(r#"{"url":"https://count-test.mosspub.com","files_updated":1039,"files_removed":0,"timestamp":1790258580}"#),
+        ])
+        .await;
+        let published = with_seta_url(
+            addr,
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+        )
+        .await;
+        assert!(matches!(published, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {published:?}");
+    }
+
+    /// The same, through moss's own build route (`push_site_inner`). Ablated
+    /// the same way at that function's return.
+    #[tokio::test]
+    async fn a_hosted_publish_reports_the_files_it_sent_not_the_site_total() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let addr = mock_seta_sequence(vec![
+            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            json_200(r#"{"need":["index.html"],"remove":[]}"#),
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            json_200(r#"{"url":"https://count-test.mosspub.com","files_updated":1039,"files_removed":0,"timestamp":1700000000}"#),
+        ])
+        .await;
+
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = ServedPath::from_source("index.html").unwrap();
+        pending.register_hashed(&sp, &crate::types::content::file_entry("0000000000000000"), HashBucket::Files);
+        let sealed = pending.seal();
+
+        let identity = Identity::generate().expect("generate identity");
+        let dir = tempfile::tempdir().unwrap();
+        let gen_dir = MossPaths::new(dir.path()).generation_dir(sealed.generation_id());
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        std::fs::write(gen_dir.join("index.html"), b"<html>x</html>").unwrap();
+
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(),
+            identity: &identity,
+            site_id: "count-test",
+            sink: &sink,
+            ports: &spy,
+            events_lock: &events_lock,
+        };
+        let result = with_seta_url(addr, push_site_inner(&sealed, &cx)).await;
+        assert!(matches!(result, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {result:?}");
     }
 }

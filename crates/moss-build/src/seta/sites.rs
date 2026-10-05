@@ -51,6 +51,9 @@ pub struct SyncManifestResponse {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CommitResponse {
     pub url: String,
+    /// Despite the name, the number of files in the site after this publish,
+    /// changed or not. It is not how many files this publish transferred; the
+    /// client counts those itself from the manifest comparison.
     pub files_updated: u32,
     pub files_removed: u32,
     /// Server timestamp (Unix seconds) of the deployment.
