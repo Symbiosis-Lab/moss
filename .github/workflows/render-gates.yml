@@ -22,7 +22,7 @@ name: Render gates
 
 on:
   pull_request:
-    branches: [main]
+    branches: [develop, main]
     paths:
       - 'tests/render-gates/**'
       - 'tests/e2e/helpers/**'

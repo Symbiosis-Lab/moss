@@ -1,19 +1,15 @@
-# The open repo's PR gate. Written under open/.github/workflows/ in the
-# desktop repo (F3); GitHub
-# does not execute a nested .github/, so this file is inert until open/
-# becomes a repo root at F6. Once the flip lands, every `open/crates/…` /
-# `open/packages/…` path the lifted steps below read becomes `crates/…` /
-# `packages/…` — this file already reflects that rewrite.
+# The pull request gate. It runs on a pull request to `develop`, the default
+# branch and the one a contribution targets, and on a pull request to `main`.
+# A push to `develop` runs none of it.
 #
-# Unlike the desktop's pr.yml, there is no detect-changes job here: this
-# repo's PR gate has no plugins/frontend filters to route around (plan §1,
-# detect-changes row) — every job below runs on every PR.
+# There is no change-detection job: every job below runs on every pull
+# request.
 
 name: PR
 
 on:
   pull_request:
-    branches: [main]
+    branches: [develop, main]
   workflow_dispatch:
 
 concurrency:
