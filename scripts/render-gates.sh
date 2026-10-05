@@ -63,6 +63,7 @@ GATES_BUILD=(
   hero-caption
   content-width-escape
   hero-tone
+  hero-overlay-legibility
   heading-anchor
   footnote-target
   share-card
