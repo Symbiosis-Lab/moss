@@ -895,9 +895,10 @@ fn test_generate_children_renders_frontmatter_description_as_safe_inline_html() 
     );
 
     // A card is a reader-facing HTML surface: markdown renders as real markup
-    // (`render_description_html`), not plain text with the syntax deleted —
-    // the raw `**`/`[...](...)` source syntax itself must not survive either
-    // way.
+    // (`render_description_html_in_link`), not plain text with the syntax
+    // deleted — the raw `**`/`[...](...)` source syntax itself must not
+    // survive either way. The summary card is itself an `<a>`, so the link
+    // keeps its words and loses its `<a>` (no nested anchors).
     assert!(
         !result.contains("**"),
         "Should not leak raw bold markdown syntax: {}",
@@ -909,7 +910,7 @@ fn test_generate_children_renders_frontmatter_description_as_safe_inline_html() 
         result
     );
     assert!(
-        result.contains(r#"A <strong>bold</strong> claim about <a href="https://example.com">something</a>"#),
+        result.contains("A <strong>bold</strong> claim about something"),
         "Should render as safe inline HTML: {}",
         result
     );
@@ -943,16 +944,54 @@ fn test_generate_children_renders_content_extracted_description_as_safe_inline_h
     );
 
     // Content-extracted descriptions get the same safe-HTML rendering as an
-    // explicit `description:` (same card, same `render_description_html`).
+    // explicit `description:` (same card, same `render_description_html_in_link`).
     assert!(
         !result.contains("**"),
         "Should not leak raw bold markdown syntax: {}",
         result
     );
     assert!(
-        result.contains(r#"This has <strong>bold</strong> and a <a href="https://example.com">link</a> in it."#),
+        result.contains("This has <strong>bold</strong> and a link in it."),
         "Should render as safe inline HTML: {}",
         result
+    );
+}
+
+#[test]
+fn card_description_renders_markdown_and_never_nests_an_anchor_while_meta_stays_plain() {
+    let src = "*emph* **bold** `code` [a link](https://example.com)";
+    let mut doc = make_test_doc("Article", "blog/article/index.html");
+    doc.date = Some("2025-01-15".to_string());
+    doc.description = Some(src.to_string());
+    let docs = vec![&doc];
+    let project = make_project();
+
+    for style in ["summary", "grid"] {
+        let html = generate_children(
+            &docs, &docs, &project, style, "none", Language::En, false,
+            &std::collections::HashMap::new(), None, None, None, true, false, &Default::default(),
+        );
+        assert!(
+            html.contains("<em>emph</em> <strong>bold</strong> <code>code</code> a link"),
+            "{style}: card must render the markdown: {html}"
+        );
+        assert!(!html.contains("example.com"), "{style}: link href must not reach a card: {html}");
+        assert!(!html.contains('*') && !html.contains('`'), "{style}: raw markdown leaked: {html}");
+    }
+
+    let inputs = crate::build::page::meta::DescriptionChainInputs {
+        page_description: Some(src),
+        page_hero_overlay_text: None,
+        page_content: "",
+        homepage_description: None,
+        homepage_hero_overlay_text: None,
+        homepage_content: None,
+        math: false,
+    };
+    assert_eq!(
+        crate::build::page::meta::resolve_page_description_with_fallbacks(&inputs).as_deref(),
+        Some("emph bold code a link"),
+        "meta/og description stays plain text"
     );
 }
 

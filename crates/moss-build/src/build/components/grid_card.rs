@@ -17,7 +17,7 @@ use std::path::Path;
 use super::child_list::ChildItemProps;
 use crate::i18n::{self, Language};
 use crate::build::media::cover::{self, html_escape, CoverType};
-use crate::build::page::meta::render_description_html;
+use crate::build::page::meta::render_description_html_in_link;
 
 /// Renders a single folder card as HTML with typesetting context.
 ///
@@ -112,7 +112,7 @@ fn render_item(
             // contract, per `child_list.rs`), rendered safely inline; the
             // title fallback is plain chrome text, so it stays a bare escape.
             let quote_html = match props.description.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(desc) => render_description_html(desc),
+                Some(desc) => render_description_html_in_link(desc),
                 None => html_escape(&props.title),
             };
             format!(
@@ -167,7 +167,7 @@ fn render_item(
         .filter(|s| !s.is_empty())
         .filter(|_| props.child_count.is_none())
         .filter(|_| !used_in_quote_slot)
-        .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html(d)))
+        .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
         .unwrap_or_default();
 
     format!(

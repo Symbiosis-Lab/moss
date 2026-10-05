@@ -441,6 +441,16 @@ fn render_description_html_keeps_strong_code_and_links() {
 }
 
 #[test]
+fn render_description_html_in_link_renders_inline_markdown_but_drops_the_anchor() {
+    assert_eq!(render_description_html_in_link("*em* and **strong**"), "<em>em</em> and <strong>strong</strong>");
+    assert_eq!(render_description_html_in_link("use `code` here"), "use <code>code</code> here");
+    assert_eq!(render_description_html_in_link("see [a link](https://example.com) now"), "see a link now");
+    assert_eq!(render_description_html_in_link("plain text, 1 < 2"), "plain text, 1 &lt; 2");
+    let raw = render_description_html_in_link("<script>alert(1)</script> [x](u)");
+    assert!(!raw.contains("<script>") && !raw.contains("<a "), "{raw}");
+}
+
+#[test]
 fn strip_markdown_inline_handles_underscore_emphasis_without_corrupting_snake_case() {
     assert_eq!(strip_markdown_inline("_italic_ and __bold__ text"), "italic and bold text");
     // The bug's exact reported case.

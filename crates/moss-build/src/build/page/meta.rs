@@ -1324,6 +1324,20 @@ fn strip_or_render_links(
 /// ([`resolve_wikilinks`]) and underscore-emphasis recognition
 /// ([`find_underscore_emphasis`]) and differ only in what a marker becomes.
 pub fn render_description_html(text: &str) -> String {
+    render_description(text, true)
+}
+
+/// [`render_description_html`] for a description that sits INSIDE a link —
+/// every card whose whole body is an `<a href>` to the page. A nested `<a>`
+/// is invalid HTML (the parser closes the outer one early and splits the
+/// card), so a markdown link keeps its visible words and drops the
+/// destination; everything else renders exactly as in
+/// [`render_description_html`].
+pub fn render_description_html_in_link(text: &str) -> String {
+    render_description(text, false)
+}
+
+fn render_description(text: &str, keep_links: bool) -> String {
     let escaped = moss_core::media::html_escape(text);
     let mut result = resolve_wikilinks(&escaped);
     // `href` is emitted as-is, with no scheme allowlist/blocklist — the same
@@ -1331,7 +1345,11 @@ pub fn render_description_html(text: &str) -> String {
     // `ast::resolve_urls`/`ast::render`), so a description's links behave
     // like any other link on the page.
     result = strip_or_render_links(&result, false, |link_text, href| {
-        format!(r#"<a href="{}">{}</a>"#, href, link_text)
+        if keep_links {
+            format!(r#"<a href="{}">{}</a>"#, href, link_text)
+        } else {
+            link_text.to_string()
+        }
     });
     result = wrap_delimited(&result, "**", "<strong>", "</strong>");
     result = wrap_delimited(&result, "*", "<em>", "</em>");
