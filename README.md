@@ -1,10 +1,29 @@
 # moss
 
-[![Latest release](https://img.shields.io/github/v/release/Symbiosis-Lab/moss?label=release)](https://github.com/Symbiosis-Lab/moss/releases/latest) [![License](https://img.shields.io/github/license/Symbiosis-Lab/moss)](LICENSE) [![CodeQL](https://github.com/Symbiosis-Lab/moss/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/Symbiosis-Lab/moss/actions/workflows/codeql.yml) [![npm](https://img.shields.io/npm/v/%40symbiosis-lab%2Fmoss)](https://www.npmjs.com/package/@symbiosis-lab/moss)
+[![Latest release](https://img.shields.io/github/v/release/Symbiosis-Lab/moss?label=release)](https://github.com/Symbiosis-Lab/moss/releases/latest) [![License](https://img.shields.io/github/license/Symbiosis-Lab/moss)](LICENSE) [![npm](https://img.shields.io/npm/v/%40symbiosis-lab%2Fmoss)](https://www.npmjs.com/package/@symbiosis-lab/moss)
 
-moss turns a folder of markdown files into a website: point it at a folder, and it builds, previews, and publishes the site.
+**Write anywhere. Publish everywhere. Own everything.**
 
-There's no database, no CMS, and no lock-in — the folder on disk is the site. Edit the markdown with whatever editor you like (moss's own desktop app, Obsidian, Typora, anything), and `moss build` compiles it into static HTML with navigation, styling, and dark mode handled for you. `moss deploy` publishes it to a `*.mosspub.com` subdomain or a domain you own, and plugins extend the build without you writing a static-site generator config.
+moss turns a folder of markdown into a website. The folder on your disk is the site: there is no database, no CMS and no project to configure. Write in any editor, and moss builds the pages, the navigation, the styling and dark mode, then publishes them.
+
+<img src="site/assets/animations/new%20folder.gif" width="720" alt="A folder of markdown files becomes a website in the moss app">
+
+## Why moss
+
+Your files stay on your computer. Your site lives on your domain. Your audience remains yours.
+
+Like its namesake, moss thrives in the spaces others overlook. It doesn't compete with platforms for sunlight. It creates the foundation layer that enables an ecosystem: you publish to your own site first, and to the platforms your readers use second.
+
+- **No setup.** Point moss at a folder. Sensible defaults stand in for a build config.
+- **Any editor.** moss's own app, Obsidian, Typora, or anything else that saves markdown.
+- **Media handled.** Images, video, HTML and Jupyter notebooks. Drop them in the folder.
+- **Publish and syndicate.** To a `*.mosspub.com` address or a domain you own, then on to other platforms, with comments synced back.
+- **Yours to extend.** CSS, JavaScript and plugins, with no generator config to learn.
+- **Ready for coding agents.** `moss guide` and `moss describe` give an agent the conventions, the contract and the checks it needs to build a site correctly.
+
+## Status
+
+moss is in beta. Building, previewing and editing are open to everyone. Publishing a new site to `*.mosspub.com` is by invitation while the beta is closed: [request access](https://mosspub.com). The built site is plain static files, so you can also host it anywhere yourself.
 
 ## Install
 
@@ -36,15 +55,27 @@ Or download a binary or the macOS/Windows app directly from [Releases](https://g
 moss build ~/blog/            # build once
 moss build ~/blog/ --serve    # build and serve a local preview
 moss list ~/blog/             # inventory every page: kind, URL, title, lang
-moss deploy ~/blog/ --site-id=my-blog   # first publish: registers my-blog.mosspub.com
+moss deploy ~/blog/ --site-id=my-blog   # first publish: registers my-blog.mosspub.com (by invitation during the beta)
 moss deploy ~/blog/           # build and publish on every later run
 ```
 
 `moss preview` and `moss edit` open a window and need the desktop app; the CLI binary hands off to it if installed, or tells you how to get it. Run `moss --help` for the full command list.
 
+For a coding agent, `moss guide` prints the conventions and rules, and `moss describe --json` prints the whole contract: tokens, components, frontmatter and commands.
+
+## Where moss is going
+
+Designs for things moss does not do yet live in [docs/proposals](docs/proposals/), each with an issue where it is discussed. A proposal is not a promise. The [`proposal` label](https://github.com/Symbiosis-Lab/moss/labels/proposal) lists everything under consideration.
+
+## Contributing
+
+Bug reports, comments on proposals and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) says how to build, how to check a change and what we ask of contributors. Issues labelled [`good first issue`](https://github.com/Symbiosis-Lab/moss/labels/good%20first%20issue) are sized for a first contribution.
+
+The desktop app for macOS and Windows is built from a private repository. Its releases, its bug reports and its designs live here.
+
 ## Repository layout
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for what each crate owns, the module map, and the size rules a change here is expected to respect.
+[ARCHITECTURE.md](ARCHITECTURE.md) says what each crate owns and where new code belongs.
 
 | Path | What's there |
 |---|---|
@@ -57,21 +88,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for what each crate owns, the module map,
 | `packages/obsidian-moss` | the Obsidian plugin |
 | `site/` | the source of [mosspub.com](https://mosspub.com), including the docs |
 
-The desktop app (macOS and Windows) is built from a private repository; its release assets — and its bug reports — live here.
-
-## Development
-
-`cargo build -p moss-cli` builds the CLI to `target/debug/moss-cli`. `pnpm install` sets up the JS/TS tooling for the crates and packages above.
-
-Render gates are Playwright specs that assert computed styles and layout against a real page render — the published site's CSS and cascade behavior, which nothing that doesn't lay out a page (no jsdom, no snapshot diff) can verify. `bash scripts/render-gates.sh` runs all of them against `target/debug/moss-cli` (or `release/`, or `$MOSS_BIN`) on both chromium and webkit; `--group nobuild` runs only the gates that need no binary at all; `--list` prints the selected gate names; `--check` verifies every `playwright/*.config.ts` is wired into the script. See the script's own header comment for the full flag list.
-
 ## Documentation
 
 Full docs: [mosspub.com/docs](https://mosspub.com/docs). Source: [site/docs/](site/docs/). Changes: [CHANGELOG.md](CHANGELOG.md).
-
-## Issues
-
-[Open an issue](https://github.com/Symbiosis-Lab/moss/issues) for the CLI, the build engine, any of the packages above, or the desktop app — desktop bug reports go here too, even though its source isn't.
 
 ## License
 
