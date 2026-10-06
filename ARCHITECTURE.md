@@ -92,7 +92,6 @@ Every file over 1000 production lines (tests excluded, counted the same way `scr
 | `crates/moss-core/src/resolve/wikilink_dispatch.rs` | 1034 | This dispatcher is the single entry point for wikilink embeds; the remaining growth path is more embed types registering through the shared renderer lookup, which is the intended way to add one, not a sign this file needs splitting. |
 | `crates/moss-core/src/render/image.rs` | 1029 | The single entry point every <img>/<picture> call site converges on, by explicit architectural choice recorded in the module doc; splitting it back into per-call-site emitters is the exact regression the migration that produced this file was written to retire. |
 | `crates/moss-build/src/build/assets/binary_resolver.rs` | 1016 | Already the result of collapsing three separate FFmpeg/Git/Hugo binary resolvers into one four-step chain (user path, PATH, cache, download); retires further by splitting the download/verify/extract half from the resolution-order half. |
-| `crates/moss-build/src/seta/client.rs` | 1001 | One line over the tier by a single-digit margin; auth helpers, error types and base-URL resolution for the hosting client sit together only because nothing has needed to split them yet, not because they can't be — moving one helper elsewhere retires this entry. |
 <!-- ratchet:known-debt:end -->
 
 None of these are a waiver by design; each is unfinished decomposition, tracked (and only allowed to shrink) through the baseline referenced above.
