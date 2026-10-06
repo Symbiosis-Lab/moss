@@ -207,11 +207,11 @@ jobs:
       # has no --output flag (real surface:
       # `moss build <folder> [--serve|--watch|--no-plugins|--allow-plugins|
       # --wait-plugins|--strict|--site-url=<url>]`, crates/moss-build/src/
-      # cli/commands.rs). A build writes into `<folder>/.moss/build/current`
+      # cli/commands.rs). A build writes into `<folder>/.moss/build.nosync/current`
       # (a symlink to the generation directory), not to a path the caller
-      # names — verified locally (2026-09-13): `moss-cli build /tmp/vault
+      # names — verified locally (2026-10-06): `moss-cli build /tmp/vault
       # --no-plugins --strict` against a two-line index.md produced
-      # `/tmp/vault/.moss/build/current/index.html` and exited 0.
+      # `/tmp/vault/.moss/build.nosync/current/index.html` and exited 0.
       - name: Build a fixture vault (headless)
         run: |
           mkdir -p /tmp/moss-cli-e2e-vault
@@ -223,7 +223,7 @@ jobs:
           index body
           EOF
           xvfb-run --auto-servernum ./target/release/moss-cli build /tmp/moss-cli-e2e-vault --no-plugins --strict
-          test -f /tmp/moss-cli-e2e-vault/.moss/build/current/index.html || { echo "::error::moss-cli build produced no .moss/build/current/index.html"; exit 1; }
+          test -f /tmp/moss-cli-e2e-vault/.moss/build.nosync/current/index.html || { echo "::error::moss-cli build produced no .moss/build.nosync/current/index.html"; exit 1; }
 
   # ==========================================================================
   # Lifted wholesale from pr.yml:709-776 ("Packages Tests"), dropping the
