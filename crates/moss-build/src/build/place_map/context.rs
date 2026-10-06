@@ -159,6 +159,11 @@ impl PlaceMapRenderContext {
     }
 
     pub fn render_locator(&self, names: &[String], route: bool, page_path: &str, ordinal: usize) -> Option<String> {
+        self.render_article_map(names, route, page_path, page_path, ordinal)
+            .map(|svg| format!(r#"<div class="moss-place-locator moss-align-right">{svg}</div>"#))
+    }
+
+    pub fn render_article_map(&self, names: &[String], route: bool, page_path: &str, host_path: &str, ordinal: usize) -> Option<String> {
         let mut target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names, route);
         apply_route_gate(&mut target, page_path);
         if !target.has_coordinates() { return None; }
@@ -179,7 +184,7 @@ impl PlaceMapRenderContext {
             .map(|place| place.precision)
             .max_by_key(precision_rank)
             .unwrap_or(Precision::Country);
-        let options = super::SvgMapOptions::new(page_path, ordinal, &first.display, precision);
+        let options = super::SvgMapOptions::new(host_path, ordinal, &first.display, precision);
         match super::emit_locator(&self.maps, &target, options) {
             Ok(locator) => {
                 // The article id `places.<hash>.json` keys THIS page's own
@@ -188,7 +193,7 @@ impl PlaceMapRenderContext {
                 // misread a page's own work.
                 let article = super::places_data::page_url(page_path);
                 let svg = self.with_embed_hydration(locator.svg, &format!("article={article}"), &first.display);
-                Some(format!(r#"<div class="moss-place-locator moss-align-right">{svg}</div>"#))
+                Some(svg)
             }
             Err(error) => {
                 crate::build::cli_output::log_warn_problem!(

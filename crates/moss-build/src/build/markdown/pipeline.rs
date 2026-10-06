@@ -1420,6 +1420,7 @@ pub fn process_markdown_file(
         place_line: None,
         place_names: None,
         is_place_namespace_root: false,
+        has_own_map_embed: false,
         map,
         route,
         children,

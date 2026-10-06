@@ -161,7 +161,7 @@ pub fn render_place_locator(
 ) -> Option<String> {
     let maps = layout.place_maps.as_ref()?;
     let is_place_page = doc.place_page.is_some() || doc.is_place_namespace_root;
-    if is_place_page || !doc.shows_own_map(maps.locator_default()) {
+    if is_place_page || doc.has_own_map_embed || !doc.shows_own_map(maps.locator_default()) {
         return None;
     }
     maps.render_locator(&doc.location, doc.route, &doc.url_path, 0)

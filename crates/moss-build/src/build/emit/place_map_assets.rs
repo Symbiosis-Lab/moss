@@ -286,38 +286,41 @@ pub fn emit(
             objects.ready_blob(&oid).is_some().then_some((oid, xxh3))
         });
 
-        match cached {
-            Some((oid, xxh3)) => {
-                objects
-                    .link_to(&oid, &target)
-                    .map_err(|e| format!("Failed to link cached place-map asset '{name}': {e}"))?;
-                pending.register_hashed(&served, &xxh3, HashBucket::Files);
-            }
-            None => {
-                let svg = asset.render(context);
-                let bytes = svg.as_bytes();
-                let xxh3 = compute_binary_hash(bytes);
-                let oid = objects
-                    .store_bytes(bytes, crate::build::cache::RecordMode::Request)
-                    .map_err(|e| format!("Failed to store place-map asset '{name}': {e}"))?;
-                BuildContext::for_render(output_dir, pending)
-                    .emit(&served, bytes, HashBucket::Files)
-                    .map_err(|e| format!("Failed to emit place-map asset '{name}': {e}"))?;
-                transforms
-                    .merge(&cache_key, 0, crate::build::cache::RecordMode::Request, |record| {
-                        record.transforms.insert(
-                            name.clone(),
-                            TransformEntry {
-                                oid,
-                                size: bytes.len() as u64,
-                                params: serde_json::json!({ "generator_version": GENERATOR_VERSION, "xxh3": xxh3 }),
-                            },
-                        );
-                    })
-                    .map_err(|e| format!("Failed to save place-map asset cache record for '{name}': {e}"))?;
-                rendered += 1;
+        if let Some((oid, xxh3)) = cached {
+            match objects.link_to(&oid, &target) {
+                Ok(()) => {
+                    pending.register_hashed(&served, &xxh3, HashBucket::Files);
+                    continue;
+                }
+                Err(error) => log::debug!("place-map asset '{name}' cache unavailable: {error}"),
             }
         }
+
+        let svg = asset.render(context);
+        let bytes = svg.as_bytes();
+        let xxh3 = compute_binary_hash(bytes);
+        BuildContext::for_render(output_dir, pending)
+            .emit(&served, bytes, HashBucket::Files)
+            .map_err(|e| format!("Failed to emit place-map asset '{name}': {e}"))?;
+        // Cache persistence may request a cloud-only folder and refuse this
+        // attempt. The rendered bytes still belong to this complete build.
+        let cached = objects.store_bytes(bytes, crate::build::cache::RecordMode::Request)
+            .and_then(|oid| {
+                transforms.merge(&cache_key, 0, crate::build::cache::RecordMode::Request, |record| {
+                    record.transforms.insert(
+                        name.clone(),
+                        TransformEntry {
+                            oid,
+                            size: bytes.len() as u64,
+                            params: serde_json::json!({ "generator_version": GENERATOR_VERSION, "xxh3": xxh3 }),
+                        },
+                    );
+                })
+            });
+        if let Err(error) = cached {
+            log::debug!("place-map asset '{name}' cache not saved: {error}");
+        }
+        rendered += 1;
     }
 
     // The index is cheap to (re-)compute — a few hundred small integers at
@@ -565,6 +568,89 @@ mod tests {
         assert_eq!(index.k, TILE_K);
         assert_eq!((index.columns, index.rows), (36, 18));
         assert_eq!(std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).count(), 2, "world.svg + tiles.json only");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cloud_only_cache_folders_do_not_remove_maps_from_the_build() {
+        use crate::build::icloud::pretend;
+        use sha2::{Digest, Sha256};
+        let context = place_map::PlaceMapContext::embedded().unwrap();
+        let gaz = gazetteer("[\"Port\"]\nlat = 33.89\nlng = 35.5\nprecision = \"city\"\n");
+        let cells = place_map::relevant_tiles(&gaz, context.pack());
+        assert!(!cells.is_empty());
+        let (x, y) = cells[0];
+        let tile = Asset::Tile(x, y).render(&context);
+        let svg = Asset::World.render(&context);
+        let oid = format!("{:x}", Sha256::digest(tile.as_bytes()));
+        for object_folder in [true, false] {
+            let (_dir, paths) = scratch_paths("cloud-map-cache");
+            let objects = ObjectStore::for_site(&paths);
+            let transforms = TransformCache::for_site(&paths);
+            let folder = if object_folder {
+                objects.blob_path(&oid).parent().unwrap().to_path_buf()
+            } else {
+                transforms.root().to_path_buf()
+            };
+            std::fs::create_dir_all(&folder).unwrap();
+            let sibling = folder.join("unrelated");
+            std::fs::write(&sibling, b"preserve shared data").unwrap();
+            let cloud = pretend::evicted_until_requested(&folder);
+            let output = tempfile::tempdir().unwrap();
+            let mut pending = PendingManifest::new(SiteHashes::default());
+            assert_eq!(emit(&context, &gaz, &paths, output.path(), &mut pending).unwrap(), cells.len() + 1);
+            let manifest = pending.seal();
+            let map_dir = output.path().join("_moss").join(format!("map.{}", assets_hash(&context, &gaz)));
+            assert_eq!(std::fs::read(map_dir.join("world.svg")).unwrap(), svg.as_bytes());
+            let index: serde_json::Value = serde_json::from_slice(&std::fs::read(map_dir.join("tiles.json")).unwrap()).unwrap();
+            assert_eq!(index["cells"], serde_json::json!(cells));
+            for (x, y) in &cells {
+                assert!(map_dir.join(format!("tile-{x}-{y}.svg")).is_file());
+            }
+            assert_eq!(manifest.site_hashes_view().files.len(), cells.len() + 2, "both outputs registered");
+            assert_eq!(pretend::requests_for(&folder), 1);
+            assert_eq!(std::fs::read(&sibling).unwrap(), b"preserve shared data");
+            drop(cloud);
+            // A later build saves the cache, and its successor consumes it.
+            for expected in [1, 0] {
+                let next = tempfile::tempdir().unwrap();
+                let mut pending = PendingManifest::new(SiteHashes::default());
+                assert_eq!(emit(&context, &gaz, &paths, next.path(), &mut pending).unwrap(), expected);
+                assert_eq!(pending.seal().site_hashes_view().files.len(), cells.len() + 2);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_cached_map_is_rendered_into_the_complete_build() {
+        use std::os::unix::fs::PermissionsExt;
+        use sha2::{Digest, Sha256};
+        let context = place_map::PlaceMapContext::embedded().unwrap();
+        let gaz = empty_gazetteer();
+        let (_dir, paths) = scratch_paths("unreadable-map-cache");
+        let initial = tempfile::tempdir().unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        emit(&context, &gaz, &paths, initial.path(), &mut pending).unwrap();
+        let svg = Asset::World.render(&context);
+        let oid = format!("{:x}", Sha256::digest(svg.as_bytes()));
+        let blob = ObjectStore::for_site(&paths).blob_path(&oid);
+        struct Restore(std::path::PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o644));
+            }
+        }
+        let _restore = Restore(blob.clone());
+        std::fs::set_permissions(&blob, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&blob).is_ok() { return; } // Root ignores file permissions.
+        let output = tempfile::tempdir().unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        assert_eq!(emit(&context, &gaz, &paths, output.path(), &mut pending).unwrap(), 1);
+        let map_dir = output.path().join("_moss").join(format!("map.{}", assets_hash(&context, &gaz)));
+        assert_eq!(std::fs::read(map_dir.join("world.svg")).unwrap(), svg.as_bytes());
+        assert!(map_dir.join("tiles.json").is_file());
+        assert_eq!(pending.seal().site_hashes_view().files.len(), 2);
     }
 
     fn emitted_map_dirs(output_dir: &Path) -> Vec<String> {

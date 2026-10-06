@@ -289,6 +289,10 @@ pub struct ParsedDocument {
     /// `Some(false)` hides it, `Some(true)` shows it even when `[site]
     /// locator` is `none`, unset follows the site.
     pub map: Option<bool>,
+    /// An authored reference to this page's own map replaces its automatic locator.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(skip)]
+    pub has_own_map_embed: bool,
     /// Opt-in from frontmatter `route:` to draw this page's `location:` list,
     /// in its existing declared order, as a route: a dashed line through the
     /// stops with numbered badges, on this page's own map and the locator

@@ -286,3 +286,19 @@ for (const width of [1280, 390]) {
     });
   }
 }
+
+for (const [route, block] of [["authored-heading/", "p"], ["authored-quote/", "blockquote"]]) {
+  test(`an explicit map in ${route} aligns with the content after its heading`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto(route, { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".moss-place-map-frame")).toHaveCount(1);
+    await expect(page.locator(LOCATOR)).toHaveCount(0);
+    await fullColumnWidth(page, "article.container > h2");
+    expect(Math.abs(await blockTop(page, MAP) - await blockTop(page, `article.container > ${block}`))).toBeLessThanOrEqual(2);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const frame = page.locator(".moss-place-map-frame");
+    expect(await frame.evaluate(el => getComputedStyle(el).float)).toBe("none");
+    expect(await frame.evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(await blockTop(page, `article.container > ${block}`));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+  });
+}

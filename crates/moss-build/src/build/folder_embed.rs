@@ -29,6 +29,9 @@
 //! slugified. Source-side lookups (e.g. `project.html_files`) use the raw
 //! `folder_id` because those carry on-disk paths.
 
+mod maps;
+use maps::place_map_with_placement;
+
 use std::path::Path;
 
 use moss_core::asset_snapshot::AssetSnapshot;
@@ -97,24 +100,6 @@ fn warn_map_fallback_once(path: &str, reason: &str) {
             "map embed '{path}' {reason}; rendering its ordinary listing"
         );
     }
-}
-
-fn place_map_with_placement(
-    svg: String,
-    placement: &moss_core::media::Placement,
-    caption: Option<&str>,
-) -> String {
-    let attrs = moss_core::render::placement::placement_attrs(placement);
-    let class = attrs.class_value("moss-place-map-frame");
-    let caption = caption.map(|text| format!(
-        "<div class=\"moss-place-map-caption\">{}</div>",
-        moss_core::media::html_escape(text)
-    )).unwrap_or_default();
-    format!(
-        "<div class=\"{class}\"{}{size}>{svg}{caption}</div>",
-        attrs.data_width_attr,
-        size = attrs.size_style_attr,
-    )
 }
 
 /// Parse the pipe-encoded body of a marker. Returns None if `path` is missing.
@@ -737,6 +722,7 @@ pub fn expand_markers_in_documents_with_place_maps(
             .source_path
             .clone()
             .unwrap_or_else(|| documents[i].url_path.clone());
+        documents[i].has_own_map_embed = maps::has_own_embed(&documents[i].html_content, &from);
         let lang = documents[i].lang; // hosting page's language, not site default
         let typesetting = crate::build::render::config::effective_typesetting(
             documents[i].typesetting.as_deref(),
@@ -748,6 +734,8 @@ pub fn expand_markers_in_documents_with_place_maps(
         // literal body `![[folder/|…]]`, never from `synthesize_children_marker`
         // (that path calls `resolve_markers` directly on a lone marker, before
         // this pass ever runs; see `resolve_markers_impl`'s doc comment).
+        // Body segments and grid cells share one SVG identity sequence per page.
+        let ordinal = std::cell::Cell::new(0);
         let expand = |html: &str| {
             resolve_markers_impl(
                 html,
@@ -761,6 +749,7 @@ pub fn expand_markers_in_documents_with_place_maps(
                 math,
                 true,
                 place_maps,
+                &ordinal,
             )
         };
         let resolved = match &mut plan {
@@ -826,6 +815,7 @@ pub(crate) fn resolve_markers_with_place_maps(
         math,
         false,
         place_maps,
+        &std::cell::Cell::new(0),
     )
 }
 
@@ -850,6 +840,7 @@ fn resolve_markers_impl(
     math: bool,
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    ordinal: &std::cell::Cell<usize>,
 ) -> String {
     if !html.contains(MARKER_FOLDER_LIST) {
         return html.to_string();
@@ -871,9 +862,12 @@ fn resolve_markers_impl(
             break;
         };
 
+        let embed_ordinal = ordinal.get();
+        ordinal.set(embed_ordinal + 1);
         let rendered = match parse_marker_body(body) {
             Some(parsed) => render_one(
                 &parsed,
+                embed_ordinal,
                 from_md_path,
                 all_docs,
                 project,
@@ -1137,6 +1131,7 @@ pub(crate) fn home_scope(url_path: &str) -> (&str, bool) {
 #[allow(clippy::too_many_arguments)]
 fn render_one(
     parsed: &ParsedMarker<'_>,
+    ordinal: usize,
     from_md_path: &str,
     all_docs: &[ParsedDocument],
     project: &ProjectStructure,
@@ -1155,6 +1150,9 @@ fn render_one(
     } else {
         parsed.from
     };
+    if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
+        return maps::render(parsed, ordinal, all_docs, place_maps);
+    }
     let folder_id = resolve_folder_id(parsed.path, from);
     // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
     // while `ParsedDocument.url_path` is slugified — lowercased and
@@ -1304,7 +1302,7 @@ fn render_one(
             // A `style:map` embed is a listing card — always `route: false`,
             // same as any other aggregate/listing surface (rule: listing
             // cards never draw a route).
-            if let Some(svg) = map.render_term_map(&folder_id_slug, folder_docs.iter().copied(), from, 0, false, true) {
+            if let Some(svg) = map.render_term_map(&folder_id_slug, folder_docs.iter().copied(), from, ordinal, false, true) {
                 return place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref());
             }
             warn_map_fallback_once(parsed.path, "has no coordinate-bearing places");

@@ -52,13 +52,12 @@ fn shard_deadline() -> Duration {
 /// The directory whose download makes a write to `path` possible: the
 /// outermost directory between `root` and `path` that is still in the cloud,
 /// since one inside it is then not even found. `None` when none is, which means
-/// the refusal has another cause and waiting would not help. Never `root`, nor
-/// anything above it.
+/// the refusal has another cause and waiting would not help. Includes `root`, but never anything above it.
 fn responsible_dir(root: &Path, path: &Path) -> Option<PathBuf> {
     if !path.starts_with(root) {
         return None;
     }
-    let below: Vec<&Path> = path.ancestors().skip(1).take_while(|dir| *dir != root).collect();
+    let below: Vec<&Path> = path.ancestors().skip(1).filter(|dir| dir.starts_with(root)).collect();
     below.into_iter().rev().find(|dir| is_dataless_dir(dir)).map(Path::to_path_buf)
 }
 
@@ -268,6 +267,18 @@ mod tests {
         let oid = store.store_bytes(b"bytes three", RecordMode::Wait).expect("created and stored once the directory arrived");
         assert_eq!(fs::read(store.blob_path(&oid)).unwrap(), b"bytes three");
         assert_eq!(pretend::requests_for(&first), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_store_root_itself_can_arrive_without_touching_its_parent() {
+        let _short = ShortWaits::new();
+        let (store, _shard, _dir) = store_with_shard(b"cloud root");
+        let _cloud = pretend::evicted_until_requested(store.root());
+        let oid = store.store_bytes(b"cloud root", RecordMode::Wait).expect("root arrived");
+        assert_eq!(fs::read(store.blob_path(&oid)).unwrap(), b"cloud root");
+        assert_eq!(pretend::requests_for(store.root()), 1);
+        assert_eq!(pretend::requests_for(store.root().parent().unwrap()), 0);
     }
 
     #[cfg(target_os = "macos")]

@@ -1950,6 +1950,30 @@ precision = "city"
 export const PLACE_MAP_ALIGN_GATE: ScratchSiteSpec = {
   name: "place-map-align-gate",
   files: {
+    "authored-heading.md": `---
+title: Authored map
+location: "Lisbon"
+map: true
+---
+
+## Where the story begins
+
+![[#|style:map|align-right 50%]]
+
+Opening prose beside an explicitly placed map.
+`,
+    "authored-quote.md": `---
+title: Authored quote
+location: "Lisbon"
+map: true
+---
+
+## Where the story begins
+
+![[#|style:map|align-right 50%]]
+
+> Opening quotation beside an explicitly placed map.
+`,
     "heading-first.md": `---
 title: Heading First
 uid: "pma001a"

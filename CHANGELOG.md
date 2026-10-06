@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- Maps can be placed explicitly in article text with `![[#|style:map|align-right 50%]]`, using the current article’s locations, or a named document in place of `#`. Width, alignment, and captions use the existing embed controls, and a map of the current article replaces its automatic locator.
 - `moss comments list` shows every comment on a site, newest first, with the page it is on and whether it is hidden, and `moss comments hide <id>` / `unhide <id>` keep a comment (and the replies under it) off the site at the next publish or bring it back, so spam can be dealt with from the command line before publishing. Hiding uses the site's own signing key and fails rather than create a new one; `--json` is supported throughout.
 - A page or folder can set `nav_label:` to show a shorter name in the site's nav bar and footer links than its `title:`, so a long title such as "Course of Reading" no longer has to crowd the bar or be shortened everywhere. The page's own heading, browser tab title, listing cards, breadcrumbs and feeds keep the title; a blank `nav_label` is ignored.
 - A hero that rotates through several pictures can now be paused: a small button in its corner stops the changing pictures (and starts them again), and they also hold still while a reader hovers over the hero or tabs into it. The button needs no script and is hidden for readers who have asked for reduced motion, who already see one still picture.
@@ -28,6 +29,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Keep world maps, regional map tiles, and their manifest complete when a cloud-only map cache folder cannot be materialized yet, or a cached map blob cannot be read; later builds refill and reuse the cache.
 - A site with hand-written HTML pages no longer re-uploads or self-corrects them on every publish, and such pages can no longer make a publish abort. The page's recorded hash now matches the file that is actually published, so identical output gets the same generation id.
 - Switching between `moss deploy --prebuilt` and a normal publish of the same site no longer re-uploads every file. The two paths now describe each file the same way, so only the files that changed go up, and byte-identical output counts as already live whichever path published it. The first deploy after upgrading still sends everything once, because the live site's record was written the old way.
 - On a cloud-synced folder, a cache folder that another computer created and this one has not downloaded yet is fetched when moss needs to write into it, instead of the same images shipping unoptimized on every build.

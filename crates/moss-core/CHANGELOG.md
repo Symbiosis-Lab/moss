@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `style:map` document embeds lower to metadata projections instead of body transclusions. `![[#|style:map]]` selects the current document; named targets use ordinary wikilink resolution and retain media placement and captions.
+
 - **Six event fields: `start`, `end`, `timezone`, `status`, `tickets`, `online`.** A page becomes an event by carrying `start`. `start` and `end` are venue-local wall-clock text, a date (`2026-11-01`, all-day) or a date-time (`2026-11-01 14:00` or `2026-11-01T14:00`), with no offset or `Z`; an all-day `end` is inclusive. They stay strings through both frontmatter dialects, so an unquoted time is never shifted into UTC. `date` keeps meaning "posted". Validation reports a malformed `start`/`end`, an `end` before its `start`, a `timezone` that is not an `Area/City`-shaped token (no zone database is consulted), and a `status` outside `cancelled`, `postponed`, `moved-online`, `rescheduled`. Adds the `event` module (`EventTime`, `when`, `check_end_after_start`), a new `Event` group in `BUILTIN_FIELDS` (so `builtin_schema()` reports 56 fields instead of 50), the `"event-time"` field format, and six `FrontMatter` fields. **Constructing `FrontMatter` with a struct literal needs the six new fields**; `..Default::default()` is unaffected. Nothing renders events yet.
 - `children_group` accepts `upcoming` as a value; it is accepted and validated but changes no listing yet.
 

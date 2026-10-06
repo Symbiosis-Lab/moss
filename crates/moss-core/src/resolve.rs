@@ -350,6 +350,30 @@ fn lower_transclusion_and_folder_wikilinks(
                 None => (inner_no_pothole, None),
             };
 
+            let pothole_raw = inner.split_once('|').map_or("", |(_, params)| params);
+            let params = embed_renderer::folder_list::classify_folder_segments(pothole_raw);
+            if params.style.as_deref() == Some("map") && !file_part.ends_with('/') {
+                let target = if file_part.is_empty() && anchor == Some("") {
+                    source_path.to_string()
+                } else {
+                    match fuzzy_path::resolve_reference(file_part, graph, source_path) {
+                        fuzzy_path::ResolvedRef::Found(path) => path,
+                        fuzzy_path::ResolvedRef::Unresolved => file_part.to_string(),
+                    }
+                };
+                let target = match anchor.filter(|a| !a.is_empty()) {
+                    Some(section) => format!("{target}#{section}"),
+                    None => target,
+                };
+                rewritten.push_str(&embed_renderer::folder_list::emit_marker(
+                    &embed_renderer::folder_list::marker_encode(&target),
+                    &embed_renderer::folder_list::marker_encode(source_path),
+                    &params,
+                ));
+                rest = remainder;
+                continue;
+            }
+
             // Skip empty target (`![[]]` is meaningless).
             if file_part.is_empty() {
                 rewritten.push_str(token);
@@ -362,12 +386,6 @@ fn lower_transclusion_and_folder_wikilinks(
             // handler resolves into a card grid. The pothole carries
             // params (limit:N, more, sort:axis) in pipe-encoded form.
             if file_part.ends_with('/') {
-                let pothole_raw = match inner.split_once('|') {
-                    Some((_, params)) => params,
-                    None => "",
-                };
-                let params =
-                    embed_renderer::folder_list::classify_folder_segments(pothole_raw);
                 let marker =
                     embed_renderer::folder_list::emit_marker(file_part, source_path, &params);
                 rewritten.push_str(&marker);
@@ -651,6 +669,35 @@ mod tests {
         b.add_file("disclaimer.md", "disclaimer");
         b.add_file("assets/photo.jpg", "photo");
         b.build()
+    }
+
+    #[test]
+    fn article_map_projection_does_not_transclude_its_target() {
+        for target in ["#", "note", "note.md"] {
+            let input = format!("![[{target}|style:map|align-right 50%|A map]]");
+            let resolved = resolve_content("note.md", &input, &test_graph(), &|_| {
+                panic!("map projection must never read the target body")
+            });
+            assert!(resolved.content_markdown.contains("path=note.md|from=note.md|style=map"), "{}", resolved.content_markdown);
+            assert!(resolved.content_markdown.contains("align=right|pct=50%|caption=A map"));
+            assert!(!resolved.content_markdown.contains("moss-embed:"));
+        }
+    }
+
+    #[test]
+    fn a_self_map_marker_cannot_be_terminated_by_its_source_filename() {
+        let resolved = resolve_content("a --> b|c.md", "![[#|style:map]]\nAfter", &test_graph(), &|_| None);
+        assert!(resolved.content_markdown.contains("path=a --%3E b%7Cc.md|from=a --%3E b%7Cc.md"));
+        assert!(resolved.content_markdown.ends_with("After"));
+    }
+
+    #[test]
+    fn article_map_projection_respects_inert_regions() {
+        let input = "`![[#|style:map]]`\n\n```md\n![[note|style:map]]\n```\n\n![[#|style:map]]";
+        let output = lower_transclusion_and_folder_wikilinks(input, &test_graph(), "note.md");
+        assert_eq!(output.matches("MOSS_MARKER_FOLDER_LIST").count(), 1);
+        assert!(output.contains("`![[#|style:map]]`"));
+        assert!(output.contains("![[note|style:map]]"));
     }
 
     fn test_files() -> HashMap<String, String> {

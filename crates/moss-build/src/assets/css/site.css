@@ -2876,6 +2876,11 @@ header:has(+ .moss-hero) .main-nav {
   article.container > .moss-place-locator:has(+ blockquote) {
     margin-block-start: calc(var(--moss-space-lg) - var(--moss-space-md));
   }
+  /* An authored float marks the start of the following content. Keep a
+     quotation on that same edge; preceding heading margins still apply. */
+  article.container > .moss-place-map-frame:is(.moss-align-left, .moss-align-right) + blockquote {
+    margin-block-start: 0;
+  }
 }
 .moss-place-map-frame {
   /* Same reason as `.moss-place-locator` just above: this wrapper's own
@@ -2884,6 +2889,7 @@ header:has(+ .moss-hero) .main-nav {
   writing-mode: horizontal-tb;
 }
 .moss-place-map-frame .moss-place-map {
+  margin-block-start: 0;
   margin-block-end: var(--moss-space-xs);
 }
 .moss-place-map-caption {

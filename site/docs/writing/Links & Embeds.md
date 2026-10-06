@@ -99,6 +99,20 @@ This is the preferred way to embed interactive content. Do not hand-write a raw 
 
 The embed fills the page width in a 16:9 frame, so design the file to read well at that shape.
 
+## Maps
+
+Place a map in the body with `style:map`. The embed stays where you write it, with the same width, alignment, and caption controls as other media:
+
+```markdown
+![[#|style:map|align-right 50%|Places in this article]]
+![[Travel diary|style:map|wide]]
+![[/places/kyoto/|style:map|align-left 40%|Kyoto]]
+```
+
+`#` selects the current document. A named document selects that document's `location:` values; neither form transcludes its body. A place target ending in `/` keeps the existing place-map behavior. Article maps use all coordinate-bearing locations from the target's frontmatter, with the same precision and `route:` rules as its own map. A heading or block fragment does not select separate location data.
+
+An explicit map of the current document replaces its automatic locator. The `map:` frontmatter switch and `[site].locator` setting still control automatic maps; they do not hide embeds you place in the body. If the target cannot be resolved or has no coordinate-bearing locations, moss reports an unavailable map instead of embedding the article text.
+
 ## Folder listings
 
 A wikilink whose path ends with `/` embeds a folder's children inline:
