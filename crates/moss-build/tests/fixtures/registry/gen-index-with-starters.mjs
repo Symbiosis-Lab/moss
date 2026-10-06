@@ -42,12 +42,13 @@ const manifests = Object.fromEntries(starters.map((id) => [id, JSON.parse(readFi
 const releases = starters.map((id) => {
   const v = manifests[id].version;
   const tag = `starter-${id}-v${v}`;
-  return { tag_name: tag, draft: false, prerelease: false, assets: [`${id}-${v}.zip`, `${id}-${v}-preview.zip`, `${id}-${v}.json`].map((n) => asset(tag, n)) };
+  return { tag_name: tag, draft: false, prerelease: false, assets: [`${id}-${v}.zip`, `${id}-${v}-preview.zip`, `${id}-${v}.json`, `${id}-${v}-poster-light.jpg`, `${id}-${v}-poster-dark.jpg`].map((n) => asset(tag, n)) };
 });
 const bytes = (a) => Buffer.from(`synthetic bytes of ${a.name}`.repeat(a.name.endsWith("preview.zip") ? 40 : 10));
 const sidecars = Object.fromEntries(starters.map((id) => {
   const v = manifests[id].version;
-  return [`${id}-${v}.json`, { preview_moss_version: "0.15.4", source_sha256: sha(bytes({ name: `${id}-${v}.zip` })), preview_sha256: sha(bytes({ name: `${id}-${v}-preview.zip` })) }];
+  const h = (name) => sha(bytes({ name: `${id}-${v}${name}` }));
+  return [`${id}-${v}.json`, { preview_moss_version: "0.15.4", source_sha256: h(".zip"), preview_sha256: h("-preview.zip"), poster_light_sha256: h("-poster-light.jpg"), poster_dark_sha256: h("-poster-dark.jpg") }];
 }));
 const starterEntries = await b.buildStarterEntries(releases, {
   fetchAsset: async (a) => ({ path: a.name, bytes: a.name.endsWith(".json") ? Buffer.from(JSON.stringify(sidecars[a.name])) : bytes(a) }),

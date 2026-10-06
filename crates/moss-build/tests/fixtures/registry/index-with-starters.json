@@ -82,9 +82,9 @@
     {
       "type": "starter",
       "id": "essays",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "display_name": "Essays",
-      "description": "A writer's own site: essays, talks and an about page, in plain Markdown.",
+      "description": "An essay collection.",
       "credit": "Filled with Virginia Woolf's essays and lectures, 1904–1929.",
       "language": "en",
       "order": 10,
@@ -111,21 +111,27 @@
           "path": "/places/"
         }
       ],
-      "download_url": "https://example.invalid/starter-essays-v1.0.0/essays-1.0.0.zip",
-      "sha256": "852ee7245216603d2d4b5003b5d2753a83aa57b20a8367966c22c468f9f0563e",
+      "download_url": "https://example.invalid/starter-essays-v1.1.0/essays-1.1.0.zip",
+      "sha256": "6218f01510e9c59b524f5ad76edbba055b595ed91c520faa1b0449e439563ad8",
       "size_bytes": 350,
       "demo_url": "https://virginia-woolf.mosspub.com/",
-      "preview_url": "https://example.invalid/starter-essays-v1.0.0/essays-1.0.0-preview.zip",
-      "preview_sha256": "6cedc0ca2d6078b80f917822cb33f9d78c9d69d891d618b0f6e0007689b7797e",
+      "preview_url": "https://example.invalid/starter-essays-v1.1.0/essays-1.1.0-preview.zip",
+      "preview_sha256": "745517cf0fe00a730b355c0c4756213c2c86697386b263f02e406fa24cb6a514",
       "preview_size_bytes": 1720,
-      "preview_moss_version": "0.15.4"
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://example.invalid/starter-essays-v1.1.0/essays-1.1.0-poster-light.jpg",
+      "poster_light_sha256": "aec4ceac16635d216bbc559f9757200bd86a829a9f899fde2fb54c4b31f500c4",
+      "poster_light_size_bytes": 480,
+      "poster_dark_url": "https://example.invalid/starter-essays-v1.1.0/essays-1.1.0-poster-dark.jpg",
+      "poster_dark_sha256": "3ffdcea1c98bf8a442f4d2cd7b0a21035428a56997211600d34bff371177a1f5",
+      "poster_dark_size_bytes": 470
     },
     {
       "type": "starter",
       "id": "organisation",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "display_name": "Organisation",
-      "description": "A society's site: its course of reading, local circles on a map, a calendar of days, notices.",
+      "description": "An organisation's site.",
       "credit": "Filled with the Chautauqua Literary and Scientific Circle's own pages, 1882–1885.",
       "language": "en",
       "order": 20,
@@ -152,21 +158,27 @@
           "path": "/places/"
         }
       ],
-      "download_url": "https://example.invalid/starter-organisation-v1.0.0/organisation-1.0.0.zip",
-      "sha256": "f537352ddfe86e62738f4543fe219ee730d88093a49f05bb90916bb893eb10aa",
+      "download_url": "https://example.invalid/starter-organisation-v1.1.0/organisation-1.1.0.zip",
+      "sha256": "adf393c1b9951ce66b35626012b917a4dde3cc204839cdd51c9ea76ab5396b7f",
       "size_bytes": 410,
       "demo_url": "https://chautauqua-circle.mosspub.com/",
-      "preview_url": "https://example.invalid/starter-organisation-v1.0.0/organisation-1.0.0-preview.zip",
-      "preview_sha256": "ceba26b610f18cdd45a50e4cf6c998e005b08360a2745c7161147a2e1bc1f91b",
+      "preview_url": "https://example.invalid/starter-organisation-v1.1.0/organisation-1.1.0-preview.zip",
+      "preview_sha256": "1b56722879242b6fed835d410d534d6b190c7393e89372e72f03d2042e336606",
       "preview_size_bytes": 1960,
-      "preview_moss_version": "0.15.4"
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://example.invalid/starter-organisation-v1.1.0/organisation-1.1.0-poster-light.jpg",
+      "poster_light_sha256": "915e826a1831d9a46cbe5ef3de7d395e2f0786756325b062daf301c0d07af6b5",
+      "poster_light_size_bytes": 540,
+      "poster_dark_url": "https://example.invalid/starter-organisation-v1.1.0/organisation-1.1.0-poster-dark.jpg",
+      "poster_dark_sha256": "13658c5dece4e39eb9f54fd3f7fab84abf875f6a616a6509c8d2d1d75a68d3e0",
+      "poster_dark_size_bytes": 530
     },
     {
       "type": "starter",
       "id": "vertical",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "display_name": "Vertical",
-      "description": "A vertical Chinese site, read right to left: writings, calligraphy and paintings.",
+      "description": "A vertical Chinese site.",
       "credit": "Filled with the works and words of 八大山人 (Zhu Da, 1626–1705).",
       "language": "zh-Hant",
       "order": 30,
@@ -193,14 +205,20 @@
           "path": "/%E5%B9%B4%E8%A1%A8/"
         }
       ],
-      "download_url": "https://example.invalid/starter-vertical-v1.0.0/vertical-1.0.0.zip",
-      "sha256": "b5f6028b897a36d1b50aed949160f735d46f2fa3610d01cf41866d907177104a",
+      "download_url": "https://example.invalid/starter-vertical-v1.1.0/vertical-1.1.0.zip",
+      "sha256": "e309ae95616bc079b294e0fc60dfbaa339fe677adff9e7c7a8d3b6457eb8fb08",
       "size_bytes": 370,
       "demo_url": "https://zhudasnotebook.com/",
-      "preview_url": "https://example.invalid/starter-vertical-v1.0.0/vertical-1.0.0-preview.zip",
-      "preview_sha256": "d10643d6f07fd3f1284e7953e045331f4ce36578d8dabf8631e75a40dbd03370",
+      "preview_url": "https://example.invalid/starter-vertical-v1.1.0/vertical-1.1.0-preview.zip",
+      "preview_sha256": "21dd0db64de5a72f31d4fdaf875a4764b1172307ff73f1d5d6b1caf3e3b2b729",
       "preview_size_bytes": 1800,
-      "preview_moss_version": "0.15.4"
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://example.invalid/starter-vertical-v1.1.0/vertical-1.1.0-poster-light.jpg",
+      "poster_light_sha256": "6f86dca6c0ea3062425134fc8af68effa262f42f7723e451210184155c8ba8a0",
+      "poster_light_size_bytes": 500,
+      "poster_dark_url": "https://example.invalid/starter-vertical-v1.1.0/vertical-1.1.0-poster-dark.jpg",
+      "poster_dark_sha256": "ae6fd789e0097bfcb2ec81637eaefb21450a3ec851e58a337d48257d96f4bf16",
+      "poster_dark_size_bytes": 490
     }
   ]
 }

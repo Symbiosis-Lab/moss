@@ -108,6 +108,9 @@ pub struct StarterEntry {
     /// Where the sample content came from.
     #[serde(default)]
     pub credit: String,
+    /// BCP 47 tag of the site's language, such as `en` or `zh-Hant`.
+    #[serde(default)]
+    pub language: String,
     /// Display order, ascending.
     #[serde(default)]
     pub order: u32,
@@ -127,6 +130,24 @@ pub struct StarterEntry {
     pub preview_sha256: Option<String>,
     #[serde(default)]
     pub preview_size_bytes: u64,
+    /// The moss release that built the preview.
+    #[serde(default)]
+    pub preview_moss_version: Option<String>,
+    /// The posters as standalone JPEGs, so a picker card is drawn without
+    /// fetching the source zip. The registry lists all six poster fields or
+    /// none; entries released before posters were attached have none.
+    #[serde(default)]
+    pub poster_light_url: Option<String>,
+    #[serde(default)]
+    pub poster_light_sha256: Option<String>,
+    #[serde(default)]
+    pub poster_light_size_bytes: u64,
+    #[serde(default)]
+    pub poster_dark_url: Option<String>,
+    #[serde(default)]
+    pub poster_dark_sha256: Option<String>,
+    #[serde(default)]
+    pub poster_dark_size_bytes: u64,
     /// A full site made with this starter, wherever its author chose to put
     /// it. Optional; the index does not check what it points at.
     #[serde(default)]
@@ -713,16 +734,28 @@ mod tests {
         let ids: Vec<&str> = starters.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["essays", "organisation", "vertical"]);
         for s in &starters {
-            assert_eq!(s.version, "1.0.0");
+            assert_eq!(s.version, "1.1.0");
             assert_eq!(s.sha256.len(), 64, "{}: source hash", s.id);
             assert!(s.size_bytes > 0, "{}: source size", s.id);
-            assert!(s.download_url.ends_with(&format!("{}-1.0.0.zip", s.id)));
+            assert!(s.download_url.ends_with(&format!("{}-1.1.0.zip", s.id)));
             assert_eq!(s.preview_sha256.as_deref().map(str::len), Some(64), "{}: preview hash", s.id);
             assert!(s.preview_size_bytes > s.size_bytes, "{}: preview size", s.id);
             assert!(s.preview_url.is_some(), "{}: preview url", s.id);
             assert_eq!(s.min_moss_version.as_deref(), Some("0.15.4"));
+            assert_eq!(s.preview_moss_version.as_deref(), Some("0.15.4"), "{}: preview moss", s.id);
+            for (scheme, url, sha, size) in [
+                ("light", &s.poster_light_url, &s.poster_light_sha256, s.poster_light_size_bytes),
+                ("dark", &s.poster_dark_url, &s.poster_dark_sha256, s.poster_dark_size_bytes),
+            ] {
+                let url = url.as_deref().unwrap_or_else(|| panic!("{}: poster {scheme} url", s.id));
+                assert!(url.ends_with(&format!("{}-1.1.0-poster-{scheme}.jpg", s.id)), "{url}");
+                assert_eq!(sha.as_deref().map(str::len), Some(64), "{}: poster {scheme} hash", s.id);
+                assert!(size > 0, "{}: poster {scheme} size", s.id);
+            }
             assert!(!s.tour.is_empty() && !s.credit.is_empty() && !s.description.is_empty());
         }
+        let languages: Vec<&str> = starters.iter().map(|s| s.language.as_str()).collect();
+        assert_eq!(languages, vec!["en", "en", "zh-Hant"]);
         let demos: Vec<Option<&str>> = starters.iter().map(|s| s.demo_url.as_deref()).collect();
         assert_eq!(
             demos,
