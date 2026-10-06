@@ -834,7 +834,7 @@ fn exact_target(root: &Path, from: &str, dest: &str) -> Option<String> {
         Some(rest) => rest.to_string(),
         None => format!("{}/{}", dirname(from), path),
     };
-    let norm = crate::editor::ref_rewrite::normalize_rel(&joined)?;
+    let norm = moss_core::content_graph::join_written("", &joined)?;
     if root.join(&norm).is_file() {
         return Some(norm);
     }
@@ -1604,4 +1604,41 @@ fn a_page_with_an_upper_case_extension_is_rewritten() {
     let (_t, root) = site(&[("notes/a.md", "# A\n"), ("Post.MD", "[a](notes/a.md)\n")]);
     do_move(&root, "notes/a.md", "notes/b.md");
     assert_eq!(r(&root, "Post.MD"), "[a](notes/b.md)\n");
+}
+
+#[test]
+fn moving_a_folder_leaves_pages_the_site_leaves_out_inside_it_untouched() {
+    let (_t, root) = site(&[
+        ("img/a.png", "x"),
+        ("tools/guide.md", "![](../img/a.png)\n"),
+        ("tools/node_modules/pkg/readme.md", "![](../../../img/a.png)\n"),
+        ("tools/.cache/note.md", "![](../../img/a.png)\n"),
+        ("tools/shop/.moss/config.toml", "schema_version = 6\n"),
+        ("tools/shop/page.md", "![](../../img/a.png)\n"),
+    ]);
+    fs::create_dir_all(root.join("deep")).unwrap();
+    do_move(&root, "tools", "deep/tools");
+    assert_eq!(r(&root, "deep/tools/guide.md"), "![](../../img/a.png)\n");
+    assert_eq!(r(&root, "deep/tools/node_modules/pkg/readme.md"), "![](../../../img/a.png)\n");
+    assert_eq!(r(&root, "deep/tools/.cache/note.md"), "![](../../img/a.png)\n");
+    assert_eq!(r(&root, "deep/tools/shop/page.md"), "![](../../img/a.png)\n");
+}
+
+#[test]
+fn moving_a_nested_site_or_hidden_folder_rewrites_its_own_pages_but_not_what_it_leaves_out() {
+    let (_t, root) = site(&[
+        ("img/a.png", "x"),
+        ("shop/.moss/config.toml", "schema_version = 6\n"),
+        ("shop/page.md", "![](../img/a.png)\n"),
+        ("shop/node_modules/x.md", "![](../../img/a.png)\n"),
+        (".drafts/x.md", "![](../img/a.png)\n"),
+        (".drafts/node_modules/y.md", "![](../../img/a.png)\n"),
+    ]);
+    fs::create_dir_all(root.join("deep")).unwrap();
+    do_move(&root, "shop", "deep/shop");
+    do_move(&root, ".drafts", "deep/.drafts");
+    assert_eq!(r(&root, "deep/shop/page.md"), "![](../../img/a.png)\n");
+    assert_eq!(r(&root, "deep/shop/node_modules/x.md"), "![](../../img/a.png)\n");
+    assert_eq!(r(&root, "deep/.drafts/x.md"), "![](../../img/a.png)\n");
+    assert_eq!(r(&root, "deep/.drafts/node_modules/y.md"), "![](../../img/a.png)\n");
 }

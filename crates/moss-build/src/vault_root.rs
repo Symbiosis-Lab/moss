@@ -317,7 +317,7 @@ impl VaultTarget {
         }
         if resolved.is_file() {
             match resolved.extension().map(|e| e.to_string_lossy().to_lowercase()) {
-                Some(ext) if ext == "md" || ext == "markdown" => {}
+                Some(ext) if crate::build::scan::classify::is_page_source(&ext) => {}
                 Some(ext) => return Err(VaultPathError::UnsupportedFileType(format!(".{}", ext))),
                 None => return Err(VaultPathError::UnsupportedFileType("(none)".to_string())),
             }

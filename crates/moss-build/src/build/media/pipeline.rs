@@ -1047,7 +1047,7 @@ pub(crate) fn copy_deferred_assets(
     let mut cache_misses: u32 = 0;
 
     // Markdown extensions that were handled in the blocking phase
-    let markdown_exts = ["md", "markdown", "mdown", "mkd"];
+    let markdown_exts = moss_core::page_kind::PAGE_EXTENSIONS;
     // Video extensions — large files (≥100MB) handled by FFmpeg pipeline,
     // small files copied as regular assets (see size check below)
     let video_exts = ["mov", "mp4", "webm", "avi", "mkv", "m4v"];

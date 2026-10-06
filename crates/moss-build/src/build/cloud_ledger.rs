@@ -129,13 +129,11 @@ pub fn is_structural_source(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        // Page sources — the formats `read_page_source` renders from.
-        "md" | "markdown" | "html" | "htm" | "docx" | "doc" | "pages" | "ipynb"
-        // `config.toml`, and `.moss/theme/style.css` plus its partials.
-        | "toml" | "css"
-    )
+    let ext = ext.to_ascii_lowercase();
+    // Page sources — the formats `read_page_source` renders from — then
+    // `config.toml`, and `.moss/theme/style.css` plus its partials.
+    crate::build::scan::classify::is_page_source(&ext)
+        || matches!(ext.as_str(), "html" | "htm" | "docx" | "doc" | "pages" | "ipynb" | "toml" | "css")
 }
 
 /// How many of `root`'s **structural** sources this build had to do without.

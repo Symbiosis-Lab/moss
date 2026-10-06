@@ -92,24 +92,21 @@ pub fn watch_targets(root: &Path) -> Vec<WatchTarget> {
 
     for entry in entries {
         let Some(name) = entry.file_name().and_then(|n| n.to_str()) else { continue };
-        // `.moss/` is handled below by the registry allowlist, not here. Every
-        // other dot-entry (`.git`, `.obsidian`, `.DS_Store`) and `node_modules`
-        // is excluded, matching `path_is_watchable`'s rule.
-        if name.starts_with('.') || name == "node_modules" {
+        // What the scan leaves out at the root: hidden folders (`.moss/` is
+        // handled below by the registry allowlist), `node_modules`, nested
+        // sites and agent instruction files. A root file is filtered by type
+        // further down, where it becomes a target at all.
+        let is_dir = entry.is_dir();
+        if crate::build::scan::classify::left_out(&entry, is_dir, 1).is_some() {
             continue;
         }
         // Root-level files moss writes itself (`AGENTS.md` and friends).
         if !moss_paths::is_watchable_rel(name) {
             continue;
         }
-        if entry.is_dir() {
-            // Nested-vault boundary (2026-08-19 design §4): a first-level dir
-            // that owns its own `.moss/` is a different site — never subscribe
-            // to its subtree. Deeper nested vaults stay covered by
-            // [`path_in_nested_vault`] at the event filter.
-            if entry.join(".moss").is_dir() {
-                continue;
-            }
+        if is_dir {
+            // A nested site deeper down lives inside this recursive target;
+            // `path_is_watchable` drops its events.
             targets.push((entry, RecursiveMode::Recursive));
         } else if !RECURSIVE_MODE_NARROWS {
             // macOS only: no root watch, so each root-level file is its own
@@ -208,9 +205,8 @@ pub fn any_path_watchable(root: &Path, paths: &[PathBuf]) -> bool {
 }
 
 /// True when `path` lies inside a NESTED moss root below `root` — a subtree
-/// that is a different site's territory (nested-vault boundary, 2026-08-19
-/// design §4). Probes each directory strictly between `root` and `path` for
-/// a `.moss/` of its own: one lstat per level, so it is safe per-event.
+/// that is a different site's territory, which the scan walks around. Probes each directory strictly between `root` and `path`
+/// for a `.moss/` of its own: one lstat per level, so it is safe per-event.
 pub fn path_in_nested_vault(root: &Path, path: &Path) -> bool {
     let Ok(rel) = path.strip_prefix(root) else { return false };
     let comps: Vec<_> = rel.components().collect();
@@ -222,12 +218,6 @@ pub fn path_in_nested_vault(root: &Path, path: &Path) -> bool {
         }
     }
     false
-}
-
-/// Every path of the event belongs to some nested vault below `root`: the
-/// event is the inner site's business, never the outer watcher's.
-pub fn all_paths_in_nested_vault(root: &Path, paths: &[PathBuf]) -> bool {
-    !paths.is_empty() && paths.iter().all(|p| path_in_nested_vault(root, p))
 }
 
 /// Returns `true` if every path in an event names something moss writes or
@@ -285,15 +275,22 @@ fn vault_rel(root: &Path, path: &Path) -> Option<String> {
     Some(rest.strip_prefix('/')?.to_string())
 }
 
-/// The vault-relative path, falling back to the whole path when `path` is not
-/// under `root`.
+/// The vault-relative path with the root it is relative to, or `None` and the
+/// whole path when `path` is not under `root`.
 ///
-/// The fallback is the pre-2026-08-19 behaviour, so no call site is worse off
-/// than it was — but it is also where a whole vault can go dark (see
-/// [`path_is_watchable`]), so it says so once per process instead of never.
-fn rel_or_whole(root: &Path, path: &Path) -> String {
-    match vault_rel(root, path) {
-        Some(rel) => rel,
+/// A root held through a symbolic link (a linked cloud folder, `/var` for
+/// `/private/var`) hears events under the other spelling, so the two are
+/// related again with both resolved before giving up.
+///
+/// The fallback judges the path by names alone, which is where a whole vault
+/// can go dark (see [`path_is_watchable`]), so it says so once per process.
+fn rel_or_whole(root: &Path, path: &Path) -> (Option<PathBuf>, String) {
+    if let Some(rel) = vault_rel(root, path) {
+        return (Some(root.to_path_buf()), rel);
+    }
+    let resolved = root.canonicalize().ok().zip(canonical_lenient(path));
+    match resolved.and_then(|(root, path)| Some((vault_rel(&root, &path)?, root))) {
+        Some((rel, root)) => (Some(root), rel),
         None => {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
@@ -305,9 +302,18 @@ fn rel_or_whole(root: &Path, path: &Path) -> String {
                     root.display()
                 );
             });
-            moss_core::slug::normalize_separators(&path.to_string_lossy())
+            (None, moss_core::slug::normalize_separators(&path.to_string_lossy()))
         }
     }
+}
+
+/// `path` with symbolic links resolved, for a path that may no longer exist:
+/// its nearest existing ancestor resolved, the rest appended as written.
+fn canonical_lenient(path: &Path) -> Option<PathBuf> {
+    // The walk below finds the nearest EXISTING ancestor to canonicalize; it
+    // never looks for `.moss` or decides which ancestor owns anything.
+    let existing = path.ancestors().find(|a| a.exists())?; // allow:root-name
+    Some(existing.canonicalize().ok()?.join(path.strip_prefix(existing).ok()?))
 }
 
 /// The tail after the LAST `.moss` component of a `/`-separated relative path,
@@ -378,8 +384,10 @@ pub fn mount_join(mount: &str, rel: &str) -> PathBuf {
 ///
 /// Second line of defence now that [`watch_targets`] keeps moss's output
 /// unsubscribed: a target registered before a build created a moss-owned path
-/// beneath it can still deliver one. Outside `.moss/` it rejects any
-/// dotfile/dir and `node_modules`.
+/// beneath it can still deliver one. Inside the vault's own `.moss/` it asks
+/// the allowlist; elsewhere it rejects whatever the scan leaves out of the site
+/// (`classify::left_out`: a hidden folder, `node_modules`, a nested site) and a
+/// dot-prefixed file that is not a page, which the asset copy skips.
 ///
 /// **Takes the vault root, and asks only about the path inside it.** The
 /// dotfile rule votes on every component it is shown, so an absolute path let
@@ -392,17 +400,42 @@ pub fn mount_join(mount: &str, rel: &str) -> PathBuf {
 /// again by a caller that forgets to strip it, the same reason
 /// [`all_paths_moss_written`] takes one.
 pub fn path_is_watchable(root: &Path, path: &Path) -> bool {
-    rel_is_watchable(&rel_or_whole(root, path))
-}
-
-/// [`path_is_watchable`] over an already vault-relative, `/`-separated path.
-fn rel_is_watchable(rel: &str) -> bool {
-    if let Some(after_moss) = after_last_moss(rel) {
-        return should_watch_moss_file(after_moss);
+    use crate::build::scan::classify::{is_excluded_dir_name, is_page_path, left_out};
+    // Outside the root there is no site to ask, so only the name rules apply:
+    // probing the disk from `/` would meet the site folder itself and read its
+    // `.moss/` as a nested site's.
+    let (mut dir, rel) = rel_or_whole(root, path);
+    let mut depth = 0;
+    let mut rest = rel.as_str();
+    let mut is_left_out = |name: &str, is_dir: bool, depth: usize| match dir.as_mut() {
+        Some(dir) => {
+            dir.push(name);
+            let out = left_out(dir, is_dir || dir.is_dir(), depth).is_some();
+            if !is_dir {
+                dir.pop();
+            }
+            out
+        }
+        None if is_dir => is_excluded_dir_name(name),
+        None => left_out(Path::new(name), false, depth).is_some(),
+    };
+    while let Some((head, tail)) = rest.split_once('/') {
+        if head == ".moss" {
+            return should_watch_moss_file(tail);
+        }
+        if !head.is_empty() {
+            depth += 1;
+            if is_left_out(head, true, depth) {
+                return false;
+            }
+        }
+        rest = tail;
     }
-    !rel.split('/').any(|component| {
-        (component.starts_with('.') && !component.is_empty()) || component == "node_modules"
-    })
+    if is_page_path(Path::new(rest)) {
+        !is_left_out(rest, false, depth + 1)
+    } else {
+        !(is_excluded_dir_name(rest) || is_left_out(rest, false, depth + 1))
+    }
 }
 
 /// Returns `true` if any element of `paths` passes the extension-based file
@@ -415,7 +448,7 @@ pub fn any_path_passes_filter(root: &Path, paths: &[PathBuf]) -> bool {
 /// allowlist branch keys on a `.moss` component, so a vault kept under
 /// `~/.moss-backups/` would otherwise have every file read as moss's own.
 pub fn path_passes_filter(root: &Path, path: &Path) -> bool {
-    rel_passes_filter(&rel_or_whole(root, path))
+    rel_passes_filter(&rel_or_whole(root, path).1)
 }
 
 /// [`path_passes_filter`] over an already vault-relative, `/`-separated path.
@@ -444,9 +477,6 @@ pub fn should_watch_moss_file(after_moss: &str) -> bool {
 /// [`path_is_watchable`] and by which paths [`watch_targets`] subscribes to at
 /// all. This function only filters by file type/extension.
 pub fn should_watch_file(path: &str) -> bool {
-    // Content files (markdown)
-    let content_extensions = ["md", "markdown"];
-
     // Asset files that should trigger rebuilds. Images come from the same
     // list the editor's SourceAssetChanged notifications use
     // (`super::IMAGE_EXTENSIONS`), so an extension the build consumes cannot
@@ -478,6 +508,10 @@ pub fn should_watch_file(path: &str) -> bool {
     // first publish immediately triggers a rebuild of the folder it just
     // published.
     let file_name = path.rsplit('/').next().unwrap_or(path);
+    // A page is read whatever its name, a dot-prefixed one included.
+    if crate::build::scan::classify::is_page_path(Path::new(file_name)) {
+        return true;
+    }
     if crate::build::scan::classify::is_os_metadata_file(file_name) {
         return false;
     }
@@ -497,8 +531,7 @@ pub fn should_watch_file(path: &str) -> bool {
     // Check file extension for files
     if let Some(extension) = file_name.rsplit('.').next() {
         let ext_lower = extension.to_lowercase();
-        content_extensions.contains(&ext_lower.as_str())
-            || asset_extensions.contains(&ext_lower.as_str())
+        asset_extensions.contains(&ext_lower.as_str())
             || super::IMAGE_EXTENSIONS.contains(&ext_lower.as_str())
     } else {
         false

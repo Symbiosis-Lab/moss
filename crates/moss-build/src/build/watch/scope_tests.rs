@@ -283,17 +283,18 @@ fn path_in_nested_vault_probes_every_level_between_root_and_path() {
     assert!(!path_in_nested_vault(root, std::path::Path::new("/elsewhere/x.md")));
 }
 
+/// The rebuild pump drops an event whose every path is inside a nested site,
+/// and keeps one that also touches the outer site.
 #[test]
-fn all_paths_in_nested_vault_requires_every_path_inside_and_a_nonempty_event() {
+fn an_event_only_inside_a_nested_site_is_dropped() {
     let dir = fixture();
     let root = dir.path();
     fs::create_dir_all(root.join("inner/.moss")).unwrap();
 
     let inside = root.join("inner/a.md");
     let outside = root.join("index.md");
-    assert!(all_paths_in_nested_vault(root, &[inside.clone()]));
-    assert!(!all_paths_in_nested_vault(root, &[inside, outside]));
-    assert!(!all_paths_in_nested_vault(root, &[]));
+    assert!(!any_path_watchable(root, &[inside.clone()]));
+    assert!(any_path_watchable(root, &[inside, outside]));
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +381,9 @@ const FILES: &[(&str, bool, bool)] = &[
     (".git/config", false, true),
     (".git/HEAD", false, true),
     ("node_modules/pkg/index.js", false, true),
-    ("posts/.secret.md", false, false),
+    ("posts/.secret.jpg", false, false),
+    // A dot-prefixed page is left out of the site: nothing builds it.
+    ("posts/.secret.md", false, true),
     (".DS_Store", false, false),
     // moss's own output: never an input, whatever it is named.
     (".moss/build.nosync/staging/index.html", false, false),
@@ -460,4 +463,78 @@ fn the_moss_allowlist_is_reached_from_the_vault_root() {
     let odd = std::path::Path::new("/home/u/.moss-backups/blog");
     assert!(path_is_watchable(odd, &odd.join("posts/hello.md")));
     assert!(path_passes_filter(odd, &odd.join("posts/hello.md")));
+}
+
+/// The watcher hears exactly the pages the scan reads: every page extension,
+/// and not a dot-prefixed page, which the scan leaves out.
+#[test]
+fn every_page_the_scan_reads_is_watched() {
+    let dir = fixture();
+    let root = dir.path();
+    for page in ["posts/a.mdown", "posts/b.mkd", "posts/c.markdown", "posts/.draft.md"] {
+        fs::write(root.join(page), "# p").unwrap();
+    }
+    let scanned = crate::build::scan::scan::scan_folder(&root.to_string_lossy()).unwrap();
+    for page in ["posts/a.mdown", "posts/b.mkd", "posts/c.markdown"] {
+        assert!(scanned.markdown_files.iter().any(|f| f.path == page), "the scan reads {page}");
+        let path = root.join(page);
+        assert!(path_is_watchable(root, &path) && path_passes_filter(root, &path), "{page} is watched");
+    }
+    // A dot-prefixed page is left out by the scan, so it is not watched either.
+    assert!(!scanned.markdown_files.iter().any(|f| f.path == "posts/.draft.md"));
+    assert!(!path_is_watchable(root, &root.join("posts/.draft.md")));
+    // A dot-prefixed file that is not a page is still not.
+    assert!(!path_is_watchable(root, &root.join("posts/.cover.jpg")));
+    assert!(!path_passes_filter(root, &root.join("posts/.cover.jpg")));
+}
+
+/// A nested site is not the outer site's: no edit inside it, its own `.moss/`
+/// included, is watchable, while the outer site's `.moss/` allowlist holds.
+#[test]
+fn nothing_inside_a_nested_site_is_watchable() {
+    let dir = fixture();
+    let root = dir.path();
+    fs::create_dir_all(root.join("posts/inner/.moss/theme")).unwrap();
+    fs::write(root.join("posts/inner/note.md"), "# n").unwrap();
+    assert!(!path_is_watchable(root, &root.join("posts/inner/note.md")));
+    assert!(!path_is_watchable(root, &root.join("posts/inner/.moss/config.toml")));
+    assert!(!path_is_watchable(root, &root.join("posts/inner/.moss/theme/style.css")));
+    assert!(path_is_watchable(root, &root.join(".moss/theme/style.css")));
+    assert!(path_is_watchable(root, &root.join("posts/other.md")));
+}
+
+/// A site held through a symbolic link (a linked cloud folder, `/var` for
+/// `/private/var`) gets events under the other spelling of its path. Judged
+/// against the root they still are inside it, and the site's own `.moss/`
+/// never reads as a nested site's.
+#[cfg(unix)]
+#[test]
+fn a_site_reached_through_a_symlink_hears_its_events() {
+    let dir = tempfile::Builder::new().prefix("moss_link").tempdir().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir_all(real.join(".moss")).unwrap();
+    fs::create_dir_all(real.join("posts")).unwrap();
+    fs::write(real.join("posts/a.md"), "# a").unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(path_is_watchable(&link, &real.join("posts/a.md")));
+    assert!(path_is_watchable(&real, &link.join("posts/a.md")));
+    assert!(path_is_watchable(&real, &link.join("posts/gone.md")), "a deleted page is still heard");
+    assert!(!path_is_watchable(&link, &real.join("node_modules/x.md")));
+}
+
+/// Subscription follows the scan's rule for the site root's entries: a
+/// dot-prefixed page there is published, so where root files are their own
+/// targets it is one; hidden folders, `node_modules` and nested sites are not.
+#[test]
+fn watch_targets_follow_what_the_scan_reads_at_the_root() {
+    let dir = fixture();
+    let root = dir.path();
+    fs::write(root.join(".draft.md"), "# d").unwrap();
+    fs::create_dir_all(root.join("shop/.moss")).unwrap();
+    let targets = targets_of(root);
+    assert!(!targets.contains(&root.join(".draft.md")), "a dot-prefixed page is not published");
+    for left_out in [".git", "node_modules", "shop", ".DS_Store"] {
+        assert!(!targets.contains(&root.join(left_out)), "{left_out}");
+    }
 }

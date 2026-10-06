@@ -609,7 +609,7 @@ fn the_walk_counts_what_it_can_see_against_what_it_may_watch() {
     // which is why the honest way to reach this state is the defect itself,
     // a dot-prefixed component ABOVE the vault voting on everything below it.
     std::fs::remove_file(root.join("posts/hello.md")).unwrap();
-    std::fs::write(root.join("posts/.draft.md"), b"x").unwrap();
+    std::fs::write(root.join("posts/.cover.jpg"), b"x").unwrap();
     std::fs::write(root.join(".DS_Store"), b"x").unwrap();
     let walked = walk(root, None, None);
     assert!(walked.files_seen > 0, "the walk still reaches them");
@@ -1054,4 +1054,17 @@ fn host(dispatch: crate::ops::watch::RebuildDispatch) -> SweepHost {
         emit: std::sync::Arc::new(|_| {}),
         cadence: tokio::sync::watch::channel(crate::ops::watch::cadence::Cadence::Live).1,
     }
+}
+
+/// The walk does not enter a nested site: its files are that site's to fetch
+/// and compare.
+#[test]
+fn the_walk_does_not_enter_a_nested_site() {
+    let dir = tempfile::Builder::new().prefix("moss_walk").tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("inner/.moss")).unwrap();
+    std::fs::create_dir_all(root.join("posts")).unwrap();
+    std::fs::write(root.join("inner/x.md"), b"# x").unwrap();
+    std::fs::write(root.join("posts/a.md"), b"# a").unwrap();
+    assert_eq!(walk(root, None, None).files_seen, 1);
 }

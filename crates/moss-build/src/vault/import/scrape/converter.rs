@@ -211,7 +211,10 @@ fn extract_localizable_embed_urls(md: &str) -> Vec<String> {
 
 /// Rewrite `![[URL]]` embeds through the same `remote → local` map the
 /// image rewrite uses, so downloaded files (audio, documents) point into
-/// the vault. URLs not in the map are left untouched.
+/// the vault. A localized file is written in the standard `![](path)` form,
+/// which renders the same player for a file in the site; URLs not in the map
+/// are left untouched and stay `![[URL]]`, the only form that makes a
+/// provider player.
 pub fn rewrite_embed_links(
     markdown: &str,
     remote_to_local: &std::collections::HashMap<String, String>,
@@ -219,7 +222,10 @@ pub fn rewrite_embed_links(
     WIKILINK_EMBED_PATTERN
         .replace_all(markdown, |caps: &regex::Captures| {
             match remote_to_local.get(&caps[1]) {
-                Some(local) => format!("![[{}]]", local),
+                Some(local) => format!(
+                    "![]({})",
+                    moss_core::resolve::fuzzy_path::escape_md_destination(local, false)
+                ),
                 None => caps[0].to_string(),
             }
         })
@@ -385,7 +391,7 @@ mod tests {
             "./assets/imported/h.mp3".to_string(),
         );
         let out = rewrite_embed_links(md, &map);
-        assert!(out.contains("![[./assets/imported/h.mp3]]"), "got: {out}");
+        assert!(out.contains("![](./assets/imported/h.mp3)"), "got: {out}");
         assert!(
             out.contains("![[https://www.youtube.com/watch?v=x1]]"),
             "provider embed must stay remote: {out}"
@@ -393,6 +399,17 @@ mod tests {
         assert!(out.contains("![[local/song.mp3]]"), "local untouched: {out}");
     }
 
+
+    #[test]
+    fn a_localized_embed_destination_is_escaped() {
+        let mut map = HashMap::new();
+        map.insert(
+            "https://example.com/a.mp3".to_string(),
+            "./assets/imported/my song (1).mp3".to_string(),
+        );
+        let out = rewrite_embed_links("![[https://example.com/a.mp3]]", &map);
+        assert_eq!(out, "![](./assets/imported/my%20song%20(1).mp3)");
+    }
 
     #[test]
     fn data_uri_images_ignored() {

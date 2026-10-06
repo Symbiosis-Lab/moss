@@ -441,7 +441,7 @@ pub(crate) fn exact_style(base: &str, from_dir: &str, target: &str, is_dir: bool
         (Anchor::Page, format!("{from_dir}/{base}"))
     };
     let slash = base.ends_with('/');
-    let n = normalize_rel(&joined)?;
+    let n = moss_core::content_graph::join_written("", &joined)?;
     let form = if n == target {
         PathForm::Full
     } else if is_dir {
@@ -570,22 +570,6 @@ pub(crate) fn retarget_root_relative(
             .unwrap_or(new_root_rel);
         (text_ref == old_stem).then(|| new_stem.to_string())
     }
-}
-
-/// Resolve `.`/`..` segments in a root-relative path. `None` if it escapes
-/// the project root.
-pub(crate) fn normalize_rel(path: &str) -> Option<String> {
-    let mut out: Vec<&str> = Vec::new();
-    for seg in path.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                out.pop()?;
-            }
-            s => out.push(s),
-        }
-    }
-    Some(out.join("/"))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

@@ -158,13 +158,15 @@ Where a file goes follows what owns it. `.moss/theme/` is the site's theme, for 
 
 ## Embedding media
 
-All media via wikilink embeds — never raw `<img>`, `<video>`, or `<audio>`:
+All media via embeds — never raw `<img>`, `<video>`, or `<audio>`. The standard Markdown form is the default; the wikilink form renders the same thing:
 
 ```
-![[photo.jpg]]          → image with LQIP, WebP, dimensions
-![[clip.mp4]]           → video player with controls
-![[track.mp3]]          → audio player
+![](photo.jpg)          → image with LQIP, WebP, dimensions
+![](clip.mp4)           → video player with controls
+![](track.mp3)          → audio player
 ```
+
+`![[photo.jpg]]`, `![[clip.mp4]]` and `![[track.mp3]]` are the wiki spelling of the same three embeds. Write the path relative to the page; if the file is not there moss tries the site root, then the nearest file with that name, and `%20` stands for a space. A wikilink needs only the file name. Text in the brackets plays the role the text after the pipe plays in a wikilink: `![640x360 loop](clip.mp4)` equals `![[clip.mp4|640x360 loop]]`, and on an image it is the caption. Page, table, notebook and folder transclusions have no standard form and stay `![[name]]`.
 
 moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions)
 if you use raw HTML tags for media that moss owns.
@@ -173,9 +175,11 @@ if you use raw HTML tags for media that moss owns.
 loop — autoplays, no controls, respects `prefers-reduced-motion`:
 
 ```
-![[clip.mp4|loop]]          → ambient loop
-![[clip.mp4|640x360 loop]]  → ambient loop + explicit size
+![loop](clip.mp4)           → ambient loop
+![640x360 loop](clip.mp4)   → ambient loop + explicit size
 ```
+
+The wiki spelling is `![[clip.mp4|loop]]`.
 
 The `|loop` preset atomically forces `autoplay muted loop playsinline` and
 removes the control bar. It is a fixed preset, not a set of per-attribute flags
@@ -188,7 +192,7 @@ tokens, etc.) run `moss describe --json`, or see `mosspub.com/docs/reference`
 
 ### External media embeds
 
-Embed a video or pen by URL with the same wikilink-embed syntax:
+Embed a video or pen by URL with the wikilink-embed syntax (the standard `![](https://…)` form does not make a player; it stays a plain image):
 
 ```
 ![[https://www.youtube.com/watch?v=dQw4w9WgXcQ]]
@@ -219,7 +223,7 @@ A hero's words belong on its image: the markdown written inside the `:::hero {�
 
 The same rule extends past physical-object reproductions: any image that carries its own lettering, or whose full frame is the point rather than a subject inside it — a poster, a flyer, a book cover, a chart — is a plate too, because a crop can cut off a headline or an axis exactly as it would a manuscript's edge. That holds where the whole frame is shown, such as the work's own page; when the same poster heads another page as its hero, crop it to its picture, keep its lettering out of frame, and let the page's own heading and text overlay it, since they say what the lettering said. Give a plate's own text a `caption="…"` instead — moss places it below the image, in the reading column, never over it, the same slot a captioned (non-plate) hero uses. There is no documented way to set a plate beside running text on a wide screen; the caption below it is the only placement moss supports.
 
-A hero can rotate through several pictures (2026-07-27, undocumented until 2026-10-02): write one `![[image]]` embed per line at the top of the fence, before the overlay, and leave `image=` off — `:::hero` / `![[hall.jpg]]` / `![[lake.jpg]]` / `# Title` / `:::`. The first embed is the primary slide: its pipe attributes set the crop for every slide, its colour tints the panel and picks the scrim, and it is the only picture a reader with reduced motion sees. The rest crossfade behind the words in order — seven seconds a slide, a 1.5 s dissolve, at most six slides; a seventh is dropped with a build warning. The rotation pauses while the hero is hovered or holds keyboard focus, and a small pause button in the corner opposite the panel stops it for good (a checkbox, no script; it is hidden for readers with reduced motion, who see only the first slide). It pauses the crossfade only: a video slide keeps playing. Because nothing marks which slide is showing, the pictures must be interchangeable moods of one subject, never a sequence or a set a reader needs to see whole: that is `:::gallery`. A slide may be a video, which gets the same ambient loop as a video hero. An `image=` hero has exactly one picture: its whole body is overlay, so an embed there is a picture inside the words, not a slide.
+A hero can rotate through several pictures (2026-07-27, undocumented until 2026-10-02): write one image embed per line at the top of the fence, before the overlay, and leave `image=` off — `:::hero` / `![](hall.jpg)` / `![](lake.jpg)` / `# Title` / `:::` (`![[hall.jpg]]` works the same). The first embed is the primary slide: its pipe attributes set the crop for every slide, its colour tints the panel and picks the scrim, and it is the only picture a reader with reduced motion sees. The rest crossfade behind the words in order — seven seconds a slide, a 1.5 s dissolve, at most six slides; a seventh is dropped with a build warning. The rotation pauses while the hero is hovered or holds keyboard focus, and a small pause button in the corner opposite the panel stops it for good (a checkbox, no script; it is hidden for readers with reduced motion, who see only the first slide). It pauses the crossfade only: a video slide keeps playing. Because nothing marks which slide is showing, the pictures must be interchangeable moods of one subject, never a sequence or a set a reader needs to see whole: that is `:::gallery`. A slide may be a video, which gets the same ambient loop as a video hero. An `image=` hero has exactly one picture: its whole body is overlay, so an embed there is a picture inside the words, not a slide.
 
 `:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
 

@@ -39,7 +39,7 @@ implied title is the deck.
 > A short author bio or mission statement.
 
 Write the body here. Link to the home page with [[index]] if you need to.
-Use `![[photo.jpg]]` for images — drop the file next to this document.
+Use `![](photo.jpg)` for images — drop the file next to this document.
 ```
 
 ---
@@ -67,7 +67,7 @@ date: 2026-01-15
 
 The article body starts here. Use standard markdown — headings, lists, code
 fences. Link to another post with [[A Second Post]]. Embed an image with
-`![[banner.jpg]]`.
+`![](banner.jpg)`.
 ```
 
 ---
@@ -89,7 +89,7 @@ Body text.
 - Filename = title. No body `# Heading`, no `title:` frontmatter.
 - Deck = `> blockquote` at the top of the body.
 - Folder home = file whose stem matches the folder (`posts/posts.md`).
-- Images and links use wikilinks, not paths.
+- Images use `![](photo.jpg)`; links between pages use `[[Page Name]]` wikilinks. Both are resolved by moss, so no absolute paths.
 - No `.moss/` setup before first build — run `moss build "My Site"` and it
   appears.
 - `date:` is the one frontmatter field a post usually needs. moss picks a

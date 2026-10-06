@@ -3924,14 +3924,14 @@ fn raw_create_key_dotfile_excluded() {
     let root = dir.path();
     let posts = root.join("posts");
     std::fs::create_dir_all(&posts).unwrap();
-    let secret = posts.join(".secret.md");
+    let secret = posts.join(".secret.jpg");
     std::fs::write(&secret, b"hidden").unwrap();
 
     let ev = synth_create(&secret, notify::event::CreateKind::File);
     let keys = collect_raw_create_keys(&[ev], root, |_| false);
     assert!(
         keys.is_empty(),
-        "dotfile posts/.secret.md must be excluded by path_is_watchable's dotfile-component rule"
+        "dotfile posts/.secret.jpg must be excluded by path_is_watchable's dotfile-component rule"
     );
 }
 
@@ -4005,4 +4005,19 @@ fn raw_create_key_all_folders_returns_empty() {
     let ev = synth_create(&subdir, notify::event::CreateKind::Folder);
     let keys = collect_raw_create_keys(&[ev], root, |_| true);
     assert!(keys.is_empty(), "all-folder batch must return empty Vec");
+}
+
+/// Every page extension is a page to the pump and to the editor's source-asset
+/// notifications, not only `md` and `markdown`.
+#[test]
+fn every_page_extension_is_a_page_to_the_pump() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for name in ["a.mdown", "b.mkd", "C.MD"] {
+        let page = root.join(name);
+        std::fs::write(&page, "# p").unwrap();
+        let modify = EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content));
+        assert_eq!(pump_gate(modify, root.to_str().unwrap(), std::slice::from_ref(&page)), PumpGate::DeferHashCheck, "{name}");
+        assert!(source_asset_request_paths(root, EventKind::Create(CreateKind::File), &[page]).is_empty(), "{name}");
+    }
 }

@@ -64,6 +64,8 @@ fn page_sources_and_config_are_structural_media_is_not() {
     for structural in [
         "index.md",
         "index.markdown",
+        "index.mdown",
+        "note.MKD",
         "post.docx",
         "post.PAGES",
         "page.html",

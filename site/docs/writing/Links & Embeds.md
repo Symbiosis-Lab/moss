@@ -46,25 +46,29 @@ When multiple files could match, moss picks the best one:
 
 Explicit paths like `[[zh-hans/footer]]` always win over the language-tree preference.
 
-## Image embeds
+## Image and media embeds
 
-Embed images with `!` before the brackets:
+Embed an image with standard Markdown, or with a wikilink by putting `!` before the brackets. Both render the same:
 
 ```markdown
+![](photos/photo.jpg)
 ![[photo.jpg]]
-![[poster-farewell.webp]]
 ```
 
-moss resolves the filename by searching the entire content tree — no relative path needed. Put images in an excluded asset folder (`assets/`, `images/`, `static/`, `public/`) so they are served but not treated as content pages, then reference them by bare filename from any markdown file.
+The standard form is the default: write the path relative to the page, and spell a space as `%20` (`![](my%20photo.jpg)`). If nothing is at that path, moss tries the same path from the site root, then falls back to the nearest file with that name, so a path that has gone stale still finds its file. The wikilink needs only the file name and searches the entire content tree, so no path is needed at all. The same two spellings work for video, audio, PDF and 3D model files (`![](clip.mp4)` or `![[clip.mp4]]`).
+
+Put images in an excluded asset folder (`assets/`, `images/`, `static/`, `public/`) so they are served but not treated as content pages, then reference them from any markdown file.
 
 ```
 work/
-├── index.md         ← uses ![[poster-farewell.webp]]
+├── index.md         ← uses ![](assets/poster-farewell.webp)
 └── assets/
     └── poster-farewell.webp   ← not a page; served as a static file
 ```
 
 The language-tree preference (rule 4 above) applies to image resolution too: `![[photo.jpg]]` inside `zh-hans/about.md` prefers `zh-hans/photo.jpg` if it exists.
+
+Some embeds exist only as wikilinks: page, section, table, notebook and folder transclusions (`![[name]]`, see below), the provider players for `![[https://…]]` URLs, and the `style:` keys. In the standard form the text in the brackets is a caption on an image, and on video or audio it plays the role of the text after the pipe: `![640x360 loop](clip.mp4)` is `![[clip.mp4|640x360 loop]]`.
 
 **Pipe syntax** controls display — a fit/position keyword (`![[photo.jpg|contain top]]`), a size (`![[photo.jpg|400]]`), or a caption (`![[photo.jpg|Morning light]]`). See [[media#Display control]] and [[media#Captions]] for the full rules.
 

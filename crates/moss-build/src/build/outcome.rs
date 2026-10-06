@@ -299,7 +299,7 @@ enum Disposition {
 /// today; convert one and add the test.
 ///
 /// **Both** watcher predicates, because the rebuild needs both:
-/// `path_is_watchable` rejects dotfiles and `node_modules` (and delegates to
+/// `path_is_watchable` rejects what the scan leaves out (and delegates to
 /// `should_watch_moss_file` inside `.moss/`), and `path_passes_filter` applies
 /// the extension allowlist. Restating either one here would be a second copy of
 /// a list that has already drifted once; delegating means a new watched

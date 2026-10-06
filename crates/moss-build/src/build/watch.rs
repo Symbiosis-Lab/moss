@@ -899,12 +899,7 @@ pub fn pump_gate(kind: notify::EventKind, folder_path: &str, paths: &[PathBuf]) 
     // background coordinator after that stash, so their entries can still
     // describe the previous build. Gating one of those modifies can therefore
     // discard an edit or undo while staging serves different bytes.
-    let all_markdown = !paths.is_empty()
-        && paths.iter().all(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown"))
-        });
+    let all_markdown = !paths.is_empty() && paths.iter().all(|path| crate::build::scan::classify::is_page_path(path));
     if !all_markdown {
         return PumpGate::Proceed;
     }
@@ -994,7 +989,7 @@ pub fn source_asset_request_paths(
             .map(|e| e.to_lowercase());
         let eligible = match ext.as_deref() {
             Some(e) if IMAGE_EXTENSIONS.contains(&e) => structural || content_modify,
-            Some("md") | Some("markdown") => false,
+            Some(e) if crate::build::scan::classify::is_page_source(e) => false,
             Some(e) => {
                 structural
                     && (moss_core::resolve::asset_registry::asset_info(e).is_some()
@@ -1091,8 +1086,8 @@ pub fn collect_raw_create_keys(
 /// **moss writes itself** when agent-file sync is on. So the common case — moss creating
 /// the very file it hides — announced a path no row could match.
 fn raw_create_key(root: &Path, abs: &Path) -> Option<String> {
-    // path_is_watchable rejects dotfiles/dirs (e.g. `.git`, `.secret.md`) ANYWHERE in the
-    // path and `node_modules`. It is still needed alongside `is_hidden`, which only
+    // path_is_watchable rejects dot-dirs (e.g. `.git`), `node_modules` and nested sites
+    // ANYWHERE in the path, and a dotfile that is not a page (`.secret.jpg`). It is still needed alongside `is_hidden`, which only
     // applies its dotfile rule at the project root. It does NOT exclude all `.moss/`
     // subdirs — it explicitly allows `.moss/theme/`, `.moss/data/social/`,
     // `.moss/assets/`, `config.toml` (see `should_watch_moss_file`); the component loop

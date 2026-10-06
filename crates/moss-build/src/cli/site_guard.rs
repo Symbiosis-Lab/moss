@@ -93,12 +93,10 @@ pub fn guard_cli_open_in(folder_path: &str, subcommand: &str, home: Option<&Path
         return Ok(());
     }
     if let Some(vault) = crate::vault::paths::VaultRoot::find_containing_below(path, path, home) {
+        let root = vault.as_str();
         return Err(format!(
-            "'{folder}' belongs to the site at '{root}'.\n       \
-             Run moss on that folder instead:  moss {sub} \"{root}\"",
-            folder = folder_path,
-            root = vault.as_str(),
-            sub = subcommand,
+            "'{folder_path}' belongs to the site at '{root}'.\n       {}",
+            next_step(subcommand, format!("Run moss on that folder instead:  moss {subcommand} \"{root}\""))
         ));
     }
     let report = find_nested_roots(path, home, &default_limits());
@@ -109,7 +107,8 @@ pub fn guard_cli_open_in(folder_path: &str, subcommand: &str, home: Option<&Path
 }
 
 /// `moss rename` reaches this guard only when no folder above the file has a
-/// `.moss/`, so the file is in no site yet: its way forward is to make one.
+/// `.moss/`, so the file is in no site yet, even when the current directory
+/// is inside one: its way forward is to make one.
 /// Every other subcommand is given `default`.
 fn next_step(subcommand: &str, default: String) -> String {
     match subcommand {

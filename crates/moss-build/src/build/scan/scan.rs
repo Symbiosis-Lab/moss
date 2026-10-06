@@ -1016,6 +1016,10 @@ pub fn scan_folder_with_dedup_emit(
                 false
             }
             Some(LeftOut::ExcludedDir) => false,
+            Some(LeftOut::HiddenFile) => {
+                log::info!("Skipping {}: a dot-prefixed file is not published", e.file_name().to_string_lossy());
+                false
+            }
         }) {
         let entry = match entry {
             Ok(entry) => entry,

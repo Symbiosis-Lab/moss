@@ -115,14 +115,10 @@ pub(crate) fn should_request(folder: &Path, path: &Path) -> bool {
     if rel.starts_with(".moss/") {
         return crate::moss_paths::is_materialized_rel(&rel);
     }
-    // Nested-vault boundary: a subtree owning its own `.moss/` is a
-    // different site, downloaded when THAT site is opened.
-    if scope::path_in_nested_vault(folder, path) {
-        return false;
-    }
     // Both predicates take the root and judge only what is inside it — a
     // dot-prefixed ancestor (a vault synced under a hidden folder of the provider)
-    // must not condemn the vault.
+    // must not condemn the vault. A nested site is left out like the scan
+    // leaves it out: it is downloaded when THAT site is opened.
     scope::path_is_watchable(folder, path) && scope::path_passes_filter(folder, path)
 }
 
@@ -162,9 +158,6 @@ pub(crate) fn drift_eligible(folder: &Path, path: &Path) -> bool {
         return false;
     }
     if crate::build::render::is_ignored_root_theme_file(&rel) {
-        return false;
-    }
-    if scope::path_in_nested_vault(folder, path) {
         return false;
     }
     if scope::all_paths_moss_written(folder, std::slice::from_ref(&path.to_path_buf())) {
@@ -224,12 +217,9 @@ pub(crate) fn walk(folder: &Path, deadline: Option<Instant>, resume_after: Optio
         if !should_descend(&rel, &e.file_name().to_string_lossy()) {
             return false;
         }
-        // Nested-vault boundary: never walk into a descendant that owns its
-        // own `.moss/` — its downloads and its drift are its own site's.
-        if !rel.is_empty() && !rel.starts_with(".moss") && e.path().join(".moss").is_dir() {
-            return false;
-        }
-        true
+        // Outside `.moss/`, the scan's rule: a nested site's downloads and
+        // drift are its own.
+        rel == ".moss" || rel.starts_with(".moss/") || crate::build::scan::classify::left_out_of_site(e).is_none()
     }) {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             out.deadline_blown = true;

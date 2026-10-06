@@ -34,7 +34,7 @@ use std::path::Path;
 use moss_core::content_graph::{ContentGraph, ContentGraphBuilder};
 use moss_core::resolve::md_extract::{extract_md_references, extract_structural_asset_refs, RefSyntax};
 use moss_core::resolve::fuzzy_path::{
-    percent_decoded_fallback, resolve_reference_with_percent_fallback, ResolvedRef,
+    percent_decoded_fallback, resolve_reference, ResolvedRef,
 };
 use moss_core::resolve::reference::{classify_reference, ReferenceContext, ReferenceKind};
 
@@ -261,11 +261,9 @@ fn resolve_by_route(
         RefRoute::AssetOrEmbed => classify_reference(text, from_source, true, ctx).target_path,
         RefRoute::PageGraph => {
             let (base, _) = split_ref_suffix(text);
-            // Same resolver + percent-decode fallback `resolve_link_urls`
-            // (ast/resolve_urls.rs) uses for the build's own link
-            // resolution, so the two never disagree on a percent-encoded
-            // destination.
-            match resolve_reference_with_percent_fallback(base, graph, from_source) {
+            // The resolver the build's own links go through, which retries a
+            // percent-encoded destination decoded, so the two never disagree.
+            match resolve_reference(base, graph, from_source) {
                 ResolvedRef::Found(p) => Some(p),
                 ResolvedRef::Unresolved => None,
             }
@@ -544,18 +542,27 @@ fn is_page(rel: &str) -> bool {
 /// last two out of the site, but their links still have to keep working.
 /// Symbolic links are never followed.
 fn pages_to_rewrite(canonical_root: &Path, site_files: &[String], moves: &[ResolvedMove]) -> Vec<String> {
-    let files_under = |rel: &str, depth: usize| -> Vec<String> {
+    // Inside a moved entry, whatever the build would leave out of the site
+    // (`node_modules`, a hidden folder, a nested site) stays out; the entry
+    // itself is kept even when it is one of those.
+    let files_under = |rel: &str, depth: usize, site_rule: bool| -> Vec<String> {
+        let site_depth = rel.split('/').filter(|c| !c.is_empty()).count();
         walkdir::WalkDir::new(canonical_root.join(rel))
             .follow_links(false)
             .max_depth(depth)
             .into_iter()
+            .filter_entry(|e| {
+                !site_rule
+                    || e.depth() == 0
+                    || crate::build::scan::classify::left_out(e.path(), e.file_type().is_dir(), site_depth + e.depth()).is_none()
+            })
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .filter_map(|e| Some(e.path().strip_prefix(canonical_root).ok()?.to_string_lossy().replace('\\', "/")))
             .collect()
     };
-    let agent_files = files_under("", 1).into_iter().filter(|p| crate::build::scan::classify::is_agent_config_name(p));
-    let moved = moves.iter().flat_map(|m| files_under(&m.old, usize::MAX));
+    let agent_files = files_under("", 1, false).into_iter().filter(|p| crate::build::scan::classify::is_agent_config_name(p));
+    let moved = moves.iter().flat_map(|m| files_under(&m.old, usize::MAX, true));
     let mut seen = HashSet::new();
     site_files.iter().cloned().chain(agent_files).chain(moved).filter(|p| is_page(p) && seen.insert(p.clone())).collect()
 }

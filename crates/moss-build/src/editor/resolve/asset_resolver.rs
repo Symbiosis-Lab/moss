@@ -405,9 +405,9 @@ mod tests {
         assert!(result.is_none());
     }
 
-    /// Task 8 — engine integration: subfolder `./`-prefix reference that
+    /// Through the shared resolver: a subfolder `./`-prefix reference that
     /// needs SeparatorFallback (file is at root `assets/`, authored path is
-    /// `./assets/AGU2025.jpg` from a `News/` subdirectory).
+    /// `./assets/Summit2099.jpg` from a `News/` subdirectory).
     #[test]
     fn editor_resolves_subfolder_dotslash_via_engine() {
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
@@ -415,43 +415,43 @@ mod tests {
         let dir = tempfile::TempDir::new_in(&base).unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        std::fs::write(root.join("assets/AGU2025.jpg"), b"x").unwrap();
+        std::fs::write(root.join("assets/Summit2099.jpg"), b"x").unwrap();
         std::fs::create_dir_all(root.join("News")).unwrap();
-        let r = resolve_asset("./assets/AGU2025.jpg", &root.join("News/post.md"), root).unwrap();
-        assert!(r.request_url.ends_with("/assets/AGU2025.jpg"),
-            "expected /assets/AGU2025.jpg, got {}", r.request_url);
+        let r = resolve_asset("./assets/Summit2099.jpg", &root.join("News/post.md"), root).unwrap();
+        assert!(r.request_url.ends_with("/assets/Summit2099.jpg"),
+            "expected /assets/Summit2099.jpg, got {}", r.request_url);
         assert_eq!(r.provenance, AssetProvenance::SeparatorFallback,
             "expected SeparatorFallback provenance, got {:?}", r.provenance);
     }
 
-    /// Task 8 — engine integration + APFS exact-case: the authored path
-    /// `./assets/Hoon.jpg` (lowercase ext) must resolve to the real file
-    /// `assets/Hoon.JPG` (uppercase ext) with CaseMismatch provenance.
+    /// Through the shared resolver, with the file's real case: the authored path
+    /// `./assets/Fern.jpg` (lowercase ext) must resolve to the real file
+    /// `assets/Fern.JPG` (uppercase ext) with CaseMismatch provenance.
     ///
     /// On macOS APFS this proves the picked path carries the file's real
     /// on-disk case, not the authored one (`Path::exists` is case-blind there).
     #[test]
-    fn editor_resolves_case_mismatch_hoon_jpg() {
+    fn editor_resolves_case_mismatch_fern_jpg() {
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
         std::fs::create_dir_all(&base).expect("create test-tmp base");
         let dir = tempfile::TempDir::new_in(&base).unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        // Real file has uppercase extension: Hoon.JPG
-        std::fs::write(root.join("assets/Hoon.JPG"), b"x").unwrap();
+        // Real file has uppercase extension: Fern.JPG
+        std::fs::write(root.join("assets/Fern.JPG"), b"x").unwrap();
         std::fs::create_dir_all(root.join("team")).unwrap();
-        // Authored with lowercase extension: Hoon.jpg
-        let r = resolve_asset("./assets/Hoon.jpg", &root.join("team/Team.md"), root).unwrap();
-        // request_url must use the REAL on-disk case (Hoon.JPG)
-        assert!(r.request_url.ends_with("/assets/Hoon.JPG"),
-            "expected /assets/Hoon.JPG (real case), got {}", r.request_url);
+        // Authored with lowercase extension: Fern.jpg
+        let r = resolve_asset("./assets/Fern.jpg", &root.join("team/Team.md"), root).unwrap();
+        // request_url must use the REAL on-disk case (Fern.JPG)
+        assert!(r.request_url.ends_with("/assets/Fern.JPG"),
+            "expected /assets/Fern.JPG (real case), got {}", r.request_url);
         assert_eq!(r.provenance, AssetProvenance::CaseMismatch,
             "expected CaseMismatch provenance, got {:?}", r.provenance);
     }
 
     #[test]
     fn editor_bare_case_mismatch_resolves_not_red() {
-        // Parity S1: a BARE `hoon.jpg` whose real file is assets/Hoon.JPG must
+        // A BARE `fern.jpg` whose real file is assets/Fern.JPG must
         // resolve in the editor (case-insensitive fuzzy walk), matching the
         // build — otherwise the editor shows a spurious red lint on an asset the
         // build ships fine (editor must never be redder than the build).
@@ -460,13 +460,13 @@ mod tests {
         let dir = tempfile::TempDir::new_in(&base).unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        std::fs::write(root.join("assets/Hoon.JPG"), b"x").unwrap();
+        std::fs::write(root.join("assets/Fern.JPG"), b"x").unwrap();
         std::fs::create_dir_all(root.join("team")).unwrap();
-        // bare lowercase ref, not adjacent; only assets/Hoon.JPG exists on disk
-        let r = resolve_asset("hoon.jpg", &root.join("team/Team.md"), root)
+        // bare lowercase ref, not adjacent; only assets/Fern.JPG exists on disk
+        let r = resolve_asset("fern.jpg", &root.join("team/Team.md"), root)
             .expect("bare case-mismatched ref must resolve (not NotFound)");
-        assert!(r.request_url.ends_with("/assets/Hoon.JPG"),
-            "expected /assets/Hoon.JPG (real case), got {}", r.request_url);
+        assert!(r.request_url.ends_with("/assets/Fern.JPG"),
+            "expected /assets/Fern.JPG (real case), got {}", r.request_url);
     }
 
     // The editor's file set (read from disk) and the build's (its own scan)
@@ -478,8 +478,8 @@ mod tests {
         let root = std::fs::canonicalize(dir.path()).unwrap();
 
         let corpus_paths: &[&str] = &[
-            "assets/AGU2025.jpg",
-            "assets/Hoon.JPG",
+            "assets/Summit2099.jpg",
+            "assets/Fern.JPG",
             "News/post.md",
             "team/Team.md",
             "a/photo.jpg",
@@ -509,11 +509,11 @@ mod tests {
         assert_eq!(sorted(&editor_graph), sorted(&build_graph));
 
         let cases: &[(&str, &str)] = &[
-            ("./assets/AGU2025.jpg", "News/post.md"),
-            ("./assets/Hoon.jpg", "team/Team.md"),
-            ("hoon.jpg", "team/Team.md"),
-            ("AGU2025.jpg", "News/post.md"),
-            ("/assets/AGU2025.jpg", "News/post.md"),
+            ("./assets/Summit2099.jpg", "News/post.md"),
+            ("./assets/Fern.jpg", "team/Team.md"),
+            ("fern.jpg", "team/Team.md"),
+            ("Summit2099.jpg", "News/post.md"),
+            ("/assets/Summit2099.jpg", "News/post.md"),
             ("photo.jpg", "News/post.md"),
             ("photo.jpg", "deep/page.md"),
             ("../../etc/x.jpg", "News/post.md"),
@@ -711,11 +711,11 @@ mod tests {
         let dir = tempfile::TempDir::new_in(&base).unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        std::fs::write(root.join("assets/AGU2025.jpg"), b"x").unwrap();
+        std::fs::write(root.join("assets/Summit2099.jpg"), b"x").unwrap();
         std::fs::create_dir_all(root.join("News")).unwrap();
         // RELATIVE from_file, exactly as the editor passes it via getCurrentEntry().path
         let r = resolve_asset(
-            "./assets/AGU2025.jpg",
+            "./assets/Summit2099.jpg",
             std::path::Path::new("News/post.md"),
             root,
         )

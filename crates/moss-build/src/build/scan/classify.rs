@@ -84,6 +84,12 @@ pub enum LeftOut {
     /// because `posts/agents.md` is an ordinary article about agents; only the
     /// source root is a location tooling claims.
     AgentInstructions,
+    /// A page whose name starts with a dot, at any depth: `posts/.draft.md`
+    /// is the author's own marker that it is not for publishing, the same
+    /// reading the file tree and the asset copy already give a dotfile. Only
+    /// pages: a dot-prefixed placeholder such as `.keeper.md.icloud` stands
+    /// for a page still in the cloud and must reach the scan.
+    HiddenFile,
 }
 
 /// The one rule for which files belong to the site: `Some` for an entry a walk
@@ -100,6 +106,9 @@ pub fn left_out_of_site(entry: &walkdir::DirEntry) -> Option<LeftOut> {
 pub fn left_out(path: &Path, is_dir: bool, depth: usize) -> Option<LeftOut> {
     let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
     if !is_dir {
+        if name.starts_with('.') && is_page_path(path) {
+            return Some(LeftOut::HiddenFile);
+        }
         return (depth == 1 && is_agent_config_name(&name)).then_some(LeftOut::AgentInstructions);
     }
     if depth > 0 && is_excluded_dir_name(&name) {
@@ -481,7 +490,7 @@ pub fn is_hidden_reason(name: &str, parent_relative: &str, show_internal: bool) 
 /// never restates this list. A copy of it in TypeScript is the Rust↔TS parity
 /// trap the preview follower's slot check already avoids.
 pub fn is_page_source(extension: &str) -> bool {
-    matches!(extension, "md" | "markdown" | "mdown" | "mkd")
+    moss_core::page_kind::PAGE_EXTENSIONS.contains(&extension)
 }
 
 /// [`is_page_source`] for a path, whatever the letter case of its extension:

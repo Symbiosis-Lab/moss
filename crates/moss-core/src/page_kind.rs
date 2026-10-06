@@ -23,6 +23,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// File extensions, lowercase, that the build turns into pages, `md` first.
+/// The resolver tries them in this order when a target names no extension.
+pub const PAGE_EXTENSIONS: [&str; 4] = ["md", "markdown", "mdown", "mkd"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PageKind {

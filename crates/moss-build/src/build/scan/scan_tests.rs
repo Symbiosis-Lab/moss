@@ -2632,3 +2632,17 @@ fn media_metadata_is_not_written_over_a_record_that_cannot_be_read() {
 
     assert_eq!(fs::read(&record_file).unwrap(), before);
 }
+
+#[test]
+fn a_dot_prefixed_page_is_not_published() {
+    let dir = tempfile::Builder::new().prefix("moss_test_dot_page").tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    fs::create_dir_all(dir.path().join("posts")).unwrap();
+    fs::write(dir.path().join("posts/.draft.md"), "# Draft").unwrap();
+    fs::write(dir.path().join("posts/shown.md"), "# Shown").unwrap();
+
+    let result = scan_folder(&dir.path().to_string_lossy()).unwrap();
+
+    let names: Vec<String> = result.markdown_files.iter().map(|f| f.path.clone()).collect();
+    assert!(names.iter().any(|p| p.ends_with("shown.md")), "{names:?}");
+    assert!(!names.iter().any(|p| p.contains(".draft")), "{names:?}");
+}

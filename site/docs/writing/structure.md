@@ -35,7 +35,7 @@ The following folder names are reserved for static assets and are **not** treate
 
 Any folder whose name starts with `.` (dot) or `_` (underscore) is also excluded.
 
-Files inside these folders are served as-is but will not become pages. Put images here and reference them with `![[filename.ext]]` wikilinks; moss resolves them regardless of where the source page lives.
+Files inside these folders are served as-is but will not become pages. Put images here and reference them with `![](assets/filename.ext)` or the `![[filename.ext]]` wikilink; moss resolves them regardless of where the source page lives.
 
 ## Folder pages
 

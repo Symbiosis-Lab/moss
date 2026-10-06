@@ -78,4 +78,13 @@ Community theatre rooted in lived experience.
 ::::
 :::
 
+The picture line can be a standard Markdown image as well. A space in the file name is written `%20`:
+
+```markdown
+:::hero
+![](assets/animations/first%20time%20publish.gif)
+# Our work
+:::
+```
+
 The hero renders full-width and is hoisted out of the article content flow, so it ignores the article's `content_width` setting.

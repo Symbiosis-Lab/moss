@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use crate::build::icloud::is_evicted;
 use crate::build::markdown::resolve_duplicate_slugs_with_lang;
 use crate::build::scan::article_map::to_pretty_url;
-use crate::build::scan::classify::{classify_extension, is_agent_config_name, is_excluded_dir_name, ScanBucket};
+use crate::build::scan::classify::{classify_extension, left_out, ScanBucket};
 use crate::build::scan::page_map::pages_before_dedup;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
@@ -81,12 +81,12 @@ impl<'a> Addresses<'a> {
 
     /// The addresses in `tree`, which is `pre_files` or `post_files`.
     fn served(&self, tree: &[String]) -> ServedAddresses {
-        let mut nested = NestedSites::default();
+        let mut folders = HashMap::new();
         let pairs: Vec<(&str, &str)> = self
             .pre_files
             .iter()
             .zip(tree)
-            .filter(|(_, then)| in_site(then) && !nested.holds(self.root.path(), then))
+            .filter(|(_, then)| in_site(self.root.path(), then, &mut folders))
             .map(|(now, then)| (now.as_str(), then.as_str()))
             .collect();
         ServedAddresses::build(&self.root, site_language(&self.root, &pairs), &pairs)
@@ -190,13 +190,29 @@ fn final_addresses(mut pages: Vec<ParsedDocument>, site_lang: Language) -> HashM
         .collect()
 }
 
-/// Does the build's folder walk keep `rel`: in no hidden or excluded folder,
-/// and not an agent instruction file in the site folder. Asked of a path, not
-/// of a walk, because a path after the moves does not exist yet; the files
-/// before the moves were walked by the same rule.
-fn in_site(rel: &str) -> bool {
-    let (dirs, name) = rel.rsplit_once('/').map_or(("", rel), |(d, n)| (d, n));
-    !dirs.split('/').any(|d| !d.is_empty() && is_excluded_dir_name(d)) && !(dirs.is_empty() && is_agent_config_name(name))
+/// Does the build's folder walk keep `rel`: `left_out` asked of every folder
+/// above it, once per folder through `folders`, and of the file. Asked of a
+/// path, not of a walk, because a path after the moves does not exist yet; the
+/// files before the moves were walked by the same rule.
+fn in_site(root: &Path, rel: &str, folders: &mut HashMap<String, bool>) -> bool {
+    let (dir, _) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let depth = if dir.is_empty() { 1 } else { dir.split('/').count() + 1 };
+    folder_in_site(root, dir, folders) && left_out(&root.join(rel), false, depth).is_none()
+}
+
+/// Whether the folder `dir` and every folder above it are in the site.
+fn folder_in_site(root: &Path, dir: &str, folders: &mut HashMap<String, bool>) -> bool {
+    if dir.is_empty() {
+        return true;
+    }
+    if let Some(&kept) = folders.get(dir) {
+        return kept;
+    }
+    let parent = dir.rsplit_once('/').map_or("", |(p, _)| p);
+    let kept = folder_in_site(root, parent, folders)
+        && left_out(&root.join(dir), true, dir.split('/').count()).is_none();
+    folders.insert(dir.to_string(), kept);
+    kept
 }
 
 /// The scan's category for `rel`, by its extension.
@@ -208,23 +224,4 @@ fn bucket(rel: &str) -> ScanBucket {
 fn file_info(rel: &str) -> FileInfo {
     let ext = Path::new(rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     FileInfo { path: rel.to_string(), file_type: ext, size: 0, modified: None }
-}
-
-/// Folders below the root that hold a site of their own, which the build
-/// walks around. Looked up on disk once per folder.
-#[derive(Default)]
-struct NestedSites(HashMap<String, bool>);
-
-impl NestedSites {
-    fn holds(&mut self, root: &Path, rel: &str) -> bool {
-        let mut dir = rel;
-        while let Some((parent, _)) = dir.rsplit_once('/') {
-            let is_site = *self.0.entry(parent.to_string()).or_insert_with(|| root.join(parent).join(".moss").is_dir());
-            if is_site {
-                return true;
-            }
-            dir = parent;
-        }
-        false
-    }
 }

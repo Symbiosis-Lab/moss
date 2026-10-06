@@ -34,9 +34,6 @@ pub fn resolve_reference(reference: &str, graph: &ContentGraph, from_path: &str)
     }
 }
 
-/// Another name for [`resolve_reference`], which already retries a percent-decoded target; kept for the rename planner, its last caller.
-pub use self::resolve_reference as resolve_reference_with_percent_fallback;
-
 /// Compute the relative URL from one file to another using pretty URL format.
 ///
 /// Both paths should be relative to the source root (e.g. `"posts/hello.md"`).

@@ -161,7 +161,7 @@ For shortcodes and partials (content reuse, not styling tiers), see
   selector like `p:first-of-type` would silently restyle the wrong element once
   the page grows. Say which of those applies, in a comment, at the point of use.
 - Never write inline `style="..."` — put the rule in `.moss/theme/style.css`.
-- Images use wikilinks: `![[filename.ext]]`. Never hardcode paths.
+- Images and media use the standard form: `![](photo.jpg)`, written as a path relative to the page. Wikilinks (`![[photo.jpg]]`) work too and find the file by name. Either way moss resolves the file, so never write a site-absolute or `https://` address for a file in the folder.
 - A deck (standfirst) is a `> blockquote` as the first thing in the body. moss
   injects the title itself, so the deck sits directly under it — do not write a
   `# Title` above the blockquote to position it.

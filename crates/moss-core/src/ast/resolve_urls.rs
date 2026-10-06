@@ -493,11 +493,9 @@ fn resolve_link_urls(
 /// `true` iff `rel` (a site-root path without its leading `/`) is, spelled
 /// exactly, a Markdown source file the graph holds.
 fn names_page_source(rel: &str, graph: &ContentGraph) -> bool {
-    let is_markdown = matches!(
-        crate::path_ext::path_extension(rel).as_deref(),
-        Some("md" | "markdown")
-    );
-    is_markdown && graph.resolve_path(rel, "").as_deref() == Some(rel)
+    let is_page = crate::path_ext::path_extension(rel)
+        .is_some_and(|ext| crate::page_kind::PAGE_EXTENSIONS.contains(&ext.as_str()));
+    is_page && graph.resolve_path(rel, "").as_deref() == Some(rel)
 }
 
 /// Split a URL into (path, suffix) where `suffix` is `?query` and/or

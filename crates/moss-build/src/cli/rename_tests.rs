@@ -139,3 +139,19 @@ fn unbuilt_folder_holding_other_sites_is_refused_and_nothing_changes() {
     assert!(dir.path().join("todo.md").exists() && !dir.path().join("done.md").exists());
     assert_eq!(fs::read_to_string(dir.path().join("journal/entry.md")).unwrap(), "[t](../todo.md)\n");
 }
+
+#[test]
+fn a_file_outside_every_site_renamed_from_inside_a_site_is_refused_as_in_no_site() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("site/.moss")).unwrap();
+    fs::create_dir_all(dir.path().join("site/notes")).unwrap();
+    fs::create_dir_all(dir.path().join("loose")).unwrap();
+    loose_folder(&dir.path().join("loose"));
+
+    let cwd = dir.path().join("site/notes");
+    let err = rename_in(&args("../../loose/todo.md", "../../loose/done.md"), &cwd, None).unwrap_err();
+
+    assert!(err.ends_with(NOT_IN_A_SITE), "{err}");
+    assert!(!err.contains("moss rename"), "{err}");
+    assert!(dir.path().join("loose/todo.md").exists() && !dir.path().join("loose/done.md").exists());
+}

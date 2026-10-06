@@ -165,7 +165,7 @@ impl PipelineConfig {
 /// [`is_markdown_ext`] over a bare extension, so callers holding a
 /// project-relative `&str` key (the manifest's `sources`) share the one answer.
 pub(crate) fn is_markdown_extension(ext: &str) -> bool {
-    ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+    crate::build::scan::classify::is_page_source(&ext.to_ascii_lowercase())
 }
 
 /// Extensions whose bytes are never read while a markdown file is parsed.

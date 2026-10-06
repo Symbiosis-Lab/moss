@@ -169,7 +169,7 @@ impl EditorFolderIndex {
                         static_index.entry(parent).or_insert_with(|| name.clone());
                     }
                 }
-                "md" | "markdown" => {
+                "md" => {
                     let parent_leaf = if parent.is_empty() {
                         self.root_name.as_str()
                     } else {

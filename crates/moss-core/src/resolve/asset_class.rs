@@ -74,23 +74,23 @@ mod tests {
 
     #[test]
     fn literal_exact_relative_hit() {
-        let r = resolve(&["assets/Hoon.JPG", "team/photo.jpg"], "./photo.jpg", "team/Team.md");
+        let r = resolve(&["assets/Fern.JPG", "team/photo.jpg"], "./photo.jpg", "team/Team.md");
         assert_eq!(r, resolved("team/photo.jpg", AssetProvenance::Literal));
     }
     #[test]
     fn separator_fallback_to_root() {
-        let r = resolve(&["assets/AGU2025.jpg"], "./assets/AGU2025.jpg", "News/2025-12-agu.md");
-        assert_eq!(r, resolved("assets/AGU2025.jpg", AssetProvenance::SeparatorFallback));
+        let r = resolve(&["assets/Summit2099.jpg"], "./assets/Summit2099.jpg", "News/2099-12-summit.md");
+        assert_eq!(r, resolved("assets/Summit2099.jpg", AssetProvenance::SeparatorFallback));
     }
     #[test]
     fn case_mismatch_reports_the_real_case() {
-        let r = resolve(&["assets/Hoon.JPG"], "./assets/Hoon.jpg", "Team.md");
-        assert_eq!(r, resolved("assets/Hoon.JPG", AssetProvenance::CaseMismatch));
+        let r = resolve(&["assets/Fern.JPG"], "./assets/Fern.jpg", "Team.md");
+        assert_eq!(r, resolved("assets/Fern.JPG", AssetProvenance::CaseMismatch));
     }
     #[test]
     fn bare_name_is_found_by_search() {
-        let r = resolve(&["assets/AGU2025.jpg"], "AGU2025.jpg", "News/post.md");
-        assert_eq!(r, resolved("assets/AGU2025.jpg", AssetProvenance::BareFuzzy));
+        let r = resolve(&["assets/Summit2099.jpg"], "Summit2099.jpg", "News/post.md");
+        assert_eq!(r, resolved("assets/Summit2099.jpg", AssetProvenance::BareFuzzy));
     }
     #[test]
     fn a_bare_name_at_the_root_is_found_by_search_in_any_case() {

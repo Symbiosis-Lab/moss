@@ -56,13 +56,13 @@ pub(crate) fn build_indexes(root: &Path) -> (ContentGraph, EditorFolderIndex, Ar
 /// Every page whose links point into the site under `root`: each file the
 /// build's scan turns into a page ([`left_out_of_site`], [`is_page_path`]),
 /// so a nested site or a hidden folder is never scanned or rewritten, plus the
-/// root agent instructions. Those are not published and so are never the file
+/// root agent instructions and dot-prefixed pages. Those are not published and so are never the file
 /// a reference names, but they are the author's own files and their links are
 /// kept current like any page's.
 fn site_pages(root: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
     walkdir::WalkDir::new(root)
         .into_iter()
-        .filter_entry(|e| matches!(left_out_of_site(e), None | Some(LeftOut::AgentInstructions)))
+        .filter_entry(|e| matches!(left_out_of_site(e), None | Some(LeftOut::AgentInstructions | LeftOut::HiddenFile)))
         .flatten()
         .filter(|e| e.file_type().is_file())
         .filter(|e| is_page_path(e.path()))

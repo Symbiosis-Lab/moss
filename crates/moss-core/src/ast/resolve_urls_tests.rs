@@ -360,11 +360,11 @@ fn standard_markdown_link_emits_sentinel() {
 fn root_address_of_a_page_source_resolves_to_exactly_that_file() {
     // From a zh-hans page, `/notes/a.md` still means the root file, not the
     // language copy a bare `notes/a.md` would be scoped to.
-    let graph = graph_with(&["zh-hans/index.md", "notes/a.md", "zh-hans/notes/a.md", "notes/b.csv"]);
-    let mut doc = parse("[a](/notes/a.md#top) [b](/notes/b.csv) [c](/notes/missing.md)");
+    let graph = graph_with(&["zh-hans/index.md", "notes/a.md", "zh-hans/notes/a.md", "notes/b.csv", "notes/d.mdown"]);
+    let mut doc = parse("[a](/notes/a.md#top) [b](/notes/b.csv) [c](/notes/missing.md) [d](/notes/d.mdown)");
     let found = resolve_urls(&mut doc, &graph, "zh-hans/index.md");
     let targets: Vec<_> = found.outgoing.iter().map(|o| o.target_path.as_str()).collect();
-    assert_eq!(targets, ["notes/a.md"]);
+    assert_eq!(targets, ["notes/a.md", "notes/d.mdown"]);
     let Block::Paragraph(children) = &doc.blocks[0] else { panic!("expected Paragraph") };
     let urls: Vec<_> = children
         .iter()
@@ -374,7 +374,7 @@ fn root_address_of_a_page_source_resolves_to_exactly_that_file() {
             _ => None,
         })
         .collect();
-    assert_eq!(urls, ["moss-resolved:notes/a.md#top", "/notes/b.csv", "/notes/missing.md"]);
+    assert_eq!(urls, ["moss-resolved:notes/a.md#top", "/notes/b.csv", "/notes/missing.md", "moss-resolved:notes/d.mdown"]);
 }
 
 #[test]
@@ -864,17 +864,17 @@ fn resolve_image_src(
 
 #[test]
 fn image_separator_fallback_rebases_to_root() {
-    // The 404 bug: `./assets/AGU2025.jpg` authored in `News/post.md` is
+    // The 404 bug: `./assets/Summit2099.jpg` authored in `News/post.md` is
     // not adjacent (no `News/assets/` dir). Old code passed it verbatim →
     // 404. The engine rebases to the real file (SeparatorFallback → root
-    // `assets/AGU2025.jpg`) and that file's pinned URL is emitted. The two
+    // `assets/Summit2099.jpg`) and that file's pinned URL is emitted. The two
     // downstream `../` compensations this used to need — one from the source
     // directory, one more for pretty-URL nesting, added by a later string pass
     // — have nothing left to compensate for.
-    let graph = graph_with(&["assets/AGU2025.jpg", "News/post.md"]);
+    let graph = graph_with(&["assets/Summit2099.jpg", "News/post.md"]);
     assert_eq!(
-        resolve_image_src("./assets/AGU2025.jpg", "News/post.md", &graph),
-        "/assets/AGU2025.jpg"
+        resolve_image_src("./assets/Summit2099.jpg", "News/post.md", &graph),
+        "/assets/Summit2099.jpg"
     );
 }
 
@@ -896,15 +896,15 @@ fn image_absolute_stays_absolute() {
 
 #[test]
 fn image_case_mismatch_emits_canonical() {
-    // `./assets/Hoon.jpg` authored in `Team.md`; disk is `Hoon.JPG`. The
-    // engine finds the real file (CaseMismatch → `assets/Hoon.JPG`) and the
+    // `./assets/Fern.jpg` authored in `Team.md`; disk is `Fern.JPG`. The
+    // engine finds the real file (CaseMismatch → `assets/Fern.JPG`) and the
     // emitted URL is that file's pinned URL: the LEAF keeps the disk's case
     // (the bytes are served under it) while directory segments take the slug
     // the output tree uses.
-    let graph = graph_with(&["assets/Hoon.JPG"]);
+    let graph = graph_with(&["assets/Fern.JPG"]);
     assert_eq!(
-        resolve_image_src("./assets/Hoon.jpg", "Team.md", &graph),
-        "/assets/Hoon.JPG"
+        resolve_image_src("./assets/Fern.jpg", "Team.md", &graph),
+        "/assets/Fern.JPG"
     );
 }
 

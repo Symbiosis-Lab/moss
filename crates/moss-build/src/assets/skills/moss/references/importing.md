@@ -26,7 +26,7 @@ moss import --list <urls.txt> [folder] [-r|--recursive]
 **Important:** import extracts **content** and discards the original CSS and design — you get raw markdown, not the original look. A `--recursive` import also reads the home page for the site's chrome and writes it, each piece only when the folder does not already have its own: the home note's `title:` as the site name, `nav: true` and a `weight:` on the pages the primary navigation links to, the home note's `logo:`, a `footer.md`, and `assets/favicon.*`; the summary's `site chrome:` line says what was written. It does not create a `.moss/` project and does not follow the folder-is-the-site convention. After importing, your job is:
 
 1. **Arrange files** into the canonical shape (a folder per section; a home file named `index.md` or after its folder).
-2. **Clean up markup** — move any inline styling into `.moss/theme/style.css`; convert raw HTML to `::: {.class}` fenced divs; convert image links to `![[file.ext]]`.
+2. **Clean up markup** — move any inline styling into `.moss/theme/style.css`; convert raw HTML to `::: {.class}` fenced divs; convert image links to `![](path/to/file.ext)`.
 3. **Palette and fonts** are not read from the original site yet and stay the agent's work for now: inspect its styling (computed CSS via browser devtools, or a screenshot) and write the rules into `.moss/theme/style.css`.
 4. `moss preview <folder>` to build and check, then apply the authoring
    discipline in `moss guide authoring`. That opens moss desktop, which an

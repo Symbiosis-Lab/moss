@@ -97,3 +97,11 @@ fn an_empty_batch_carries_no_information_so_it_reuses_nothing() {
     assert!(!cfg(BuildTrigger::Structural(vec![])).allows_parse_cache_reuse());
     assert!(!cfg(BuildTrigger::ContentOnly(vec![])).allows_parse_cache_reuse());
 }
+
+#[test]
+fn every_page_extension_counts_as_markdown_for_the_gates() {
+    for ext in ["md", "markdown", "mdown", "mkd", "MD", "Mkd"] {
+        assert!(is_markdown_extension(ext), "{ext} is a page source");
+    }
+    assert!(!is_markdown_extension("txt"));
+}

@@ -556,17 +556,6 @@ async fn handle_debounced_batch(
         if scope::all_paths_moss_written(root_path, &ev.paths) {
             continue;
         }
-        // Nested-vault boundary: a subtree owning its own `.moss/` is a
-        // different site's territory — the outer vault never rebuilds on it.
-        if scope::all_paths_in_nested_vault(root_path, &ev.paths) {
-            log::debug!(
-                target: "moss::build::watch",
-                "Skipped {} path(s) inside a nested moss site: {:?}",
-                ev.paths.len(),
-                ev.paths
-            );
-            continue;
-        }
         if !should_recompile_for_event(ev.kind, &ev.paths) {
             log::trace!(
                 target: "moss::build::watch",

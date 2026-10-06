@@ -40,7 +40,7 @@ Write ordinary Markdown in the main editor. Select text for the floating formatt
 
 moss layouts and components are fenced with `:::`. Insert one from the `/` menu or write it directly; see [[Lay out with shortcodes|Shortcodes]] for examples.
 
-Drag local files from Finder into the editor to copy and insert them. Images, audio, video, PDFs, notebooks, HTML, and other supported media can also be linked or embedded with wikilinks. Type `[[` to search the site, use `[[page]]` for a link, and add `!` as in `![[image.jpg]]` to embed. See [[Reference files & media|Links and media]] for the full syntax and supported file types.
+Drag local files from Finder into the editor, paste an image, or use the Media chip to pick a file: the editor copies it into your folder and inserts a standard Markdown embed such as `![](photo.jpg)`. Pages, tables, notebooks and folders embed as wikilinks (`![[name]]`). Typing `[[` to search the site is optional; use `[[page]]` for a link whenever you like. See [[Reference files & media|Links and media]] for the full syntax and supported file types.
 
 ## Save and restore versions
 

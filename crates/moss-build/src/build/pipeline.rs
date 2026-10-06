@@ -748,7 +748,7 @@ fn run_notebook_processing(
                                 .unwrap_or("")
                                 .to_lowercase();
                             // Skip notebooks, markdown, and hidden files (.DS_Store, .gitignore, etc.)
-                            if ext == "ipynb" || ext == "md" || ext == "markdown" { continue; }
+                            if ext == "ipynb" || crate::build::scan::classify::is_page_source(&ext) { continue; }
                             if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
                                 if fname.starts_with('.') { continue; }
                                 // .unwrap(): hardcoded prefix "jupyter/files/" + fname from disk — known valid.
