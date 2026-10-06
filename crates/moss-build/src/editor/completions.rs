@@ -193,10 +193,20 @@ pub fn asset_ref_in(
     if !picked.starts_with(&root) {
         return Err("Paths must be within the project directory".to_string());
     }
-    if picked.is_dir() {
-        return Err("Pick a file, not a folder".to_string());
-    }
     let source = rel_to_root(&picked, &root);
+    if picked.is_dir() {
+        // A folder is named by its page-relative path and a trailing slash,
+        // the form `![](journal/)` transcludes it by.
+        let from_rel = rel_to_root(Path::new(from_page), project_path);
+        let insert = format!("{}/", moss_core::link_completions::relative_destination(&from_rel, &source));
+        let name = source.rsplit('/').next().unwrap_or(&source);
+        return Ok(WikilinkCompletion {
+            insert: insert.clone(),
+            label: format!("{name}/"),
+            detail: Some(insert),
+            kind: TargetKind::Folder,
+        });
+    }
     // An extension moss cannot classify would produce a reference that
     // renders as a bare link at best — refuse it here rather than emit a
     // token the build will not resolve.

@@ -428,7 +428,7 @@ fn match_query(q: &Query, p: &Prepared<'_>) -> Option<Hit> {
 /// The destination that names `target` from the page at `from_rel`: the
 /// relative path ([`crate::resolve::fuzzy_path::relative_path`]), encoded for
 /// a Markdown destination.
-fn relative_destination(from_rel: &str, target: &str) -> String {
+pub fn relative_destination(from_rel: &str, target: &str) -> String {
     let relative = crate::resolve::fuzzy_path::relative_path(from_rel, target);
     let path = crate::resolve::fuzzy_path::escape_md_destination(&relative, false);
     // A first segment holding `:` would be read as a URL scheme.
