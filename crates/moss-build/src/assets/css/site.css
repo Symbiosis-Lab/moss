@@ -4220,11 +4220,18 @@ article figure.moss-image:not(.moss-align-left):not(.moss-align-right):not(:has(
 article figure.moss-image:not(.moss-align-left):not(.moss-align-right):not(:has(.moss-align-left)):not(:has(.moss-align-right)) img {
   margin-inline: auto;
 }
-/* Bare-paragraph (uncaptioned) standalone image: center the lone img. */
+/* Bare-paragraph (uncaptioned) standalone image: center the lone img. The
+   `<picture>` shrinks to the image so the auto margins have room to act
+   (a block picture at full width left a narrow image at the start edge),
+   and stops at the column so a wide image still fills it. */
 article p:has(> img:only-child) > img,
 article p:has(> picture:only-child) > picture {
   display: block;
   margin-inline: auto;
+}
+article p:has(> picture:only-child) > picture {
+  inline-size: fit-content;
+  max-inline-size: 100%;
 }
 
 /* Figcaption typography. Sits below the picture/img with a tight
@@ -4283,6 +4290,8 @@ article p:has(> picture:only-child) + p:has(> picture:only-child) {
 article p:has(> img:only-child) > img,
 article p:has(> picture:only-child) > picture > img {
   margin-block: var(--moss-space-xs);
+}
+article p:has(> picture:only-child) > picture > img {
   margin-inline: 0;
 }
 

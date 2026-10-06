@@ -29,7 +29,9 @@ use super::shortcode::{
     RecentShortcode, Shortcode, SubscribeShortcode,
 };
 use super::url::Url;
-use crate::resolve::md_extract::{line_table, AssetPathSpan, MediaLineSpan, PathContainer};
+use crate::resolve::md_extract::{
+    extract_md_references, line_table, AssetPathSpan, MediaLineSpan, PathContainer, RefSyntax,
+};
 
 /// One extracted shortcode block, with its body parsed into a typed variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -924,17 +926,25 @@ pub(crate) fn gallery_item_span(line: &str) -> Option<MediaLineSpan> {
     }
 
     // Each line: `path|attrs`, `![alt](path)|attrs`, or bare `path`.
-    // The pipe split (if any) is BEFORE the markdown-image pattern check.
-    let (src_raw, attrs) = split_pipe(trimmed);
+    // A whole image is read first so a pipe inside its alt text (`![a|b](x)`)
+    // is not mistaken for the `|attrs` separator; any other line splits on
+    // its first pipe.
+    let whole_image = extract_md_references(trimmed).into_iter().next().and_then(|r| {
+        if r.byte_from != 0 || !matches!(r.syntax, RefSyntax::MarkdownImage { .. }) {
+            return None;
+        }
+        let tail = trimmed.get(r.byte_to..)?.trim_start();
+        let attrs = if tail.is_empty() { "" } else { tail.strip_prefix('|')?.trim() };
+        Some((trimmed.get(..r.byte_to)?, attrs))
+    });
+    let (src_raw, attrs) = whole_image.unwrap_or_else(|| split_pipe(trimmed));
     match parse_markdown_image(src_raw) {
-        Some((alt, path)) => {
+        Some((alt, path, dest_start)) => {
             // The rename span is the destination inside the parens only. A
             // `|attrs` suffix here sits AFTER the closing paren, outside the
             // span, so `value_attrs` is empty and the suffix is left alone.
-            let s2 = src_raw.trim();
             let s2_lead = lead + (src_raw.len() - src_raw.trim_start().len());
-            // `](` is ASCII and `parse_markdown_image` already matched it.
-            let path_start = s2_lead + s2.find("](").map_or(0, |i| i + 2);
+            let path_start = s2_lead + dest_start;
             Some(MediaLineSpan {
                 value: path_start..path_start + path.len(),
                 path,
@@ -1137,20 +1147,19 @@ fn split_pipe(s: &str) -> (&str, &str) {
     }
 }
 
-/// Parse `![alt](path)` into `(alt, path)`. Returns `None` if not a
-/// markdown image. Mirrors the legacy parser at shortcode.rs:1615.
-fn parse_markdown_image(s: &str) -> Option<(String, String)> {
+/// Parse `![alt](path)` into `(alt, path, offset of path in the trimmed
+/// input)`. Returns `None` if not a markdown image. The destination is read
+/// by the same scanner every other reference goes through, so balanced
+/// parentheses and `<…>` are as welcome here as in a page body.
+fn parse_markdown_image(s: &str) -> Option<(String, String, usize)> {
     let s = s.trim();
-    let rest = s.strip_prefix("![")?;
-    let (alt, after) = rest.split_once("](")?;
-    let close_paren = after.rfind(')')?;
-    // char-aligned: close_paren points to ASCII ')' from str::rfind.
-    #[allow(clippy::string_slice)]
-    let path = &after[..close_paren];
-    if path.contains('(') {
-        return None;
+    let r = extract_md_references(s).into_iter().next()?;
+    match r.syntax {
+        RefSyntax::MarkdownImage { alt } if r.byte_from == 0 && r.byte_to == s.len() => {
+            Some((alt, r.text, r.ref_from))
+        }
+        _ => None,
     }
-    Some((alt.to_string(), path.to_string()))
 }
 
 fn parse_buttons_body(args: &str, body: &str) -> ButtonsShortcode {

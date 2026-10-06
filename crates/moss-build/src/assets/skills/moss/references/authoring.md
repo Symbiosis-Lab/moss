@@ -166,7 +166,7 @@ All media via embeds — never raw `<img>`, `<video>`, or `<audio>`. The standar
 ![](track.mp3)          → audio player
 ```
 
-`![[photo.jpg]]`, `![[clip.mp4]]` and `![[track.mp3]]` are the wiki spelling of the same three embeds. Write the path relative to the page; if the file is not there moss tries the site root, then the nearest file with that name, and `%20` stands for a space. A wikilink needs only the file name. Text in the brackets plays the role the text after the pipe plays in a wikilink: `![640x360 loop](clip.mp4)` equals `![[clip.mp4|640x360 loop]]`, and on an image it is the caption. Page, table, notebook and folder transclusions have no standard form and stay `![[name]]`.
+`![[photo.jpg]]`, `![[clip.mp4]]` and `![[track.mp3]]` are the wiki spelling of the same three embeds. Write the path relative to the page; if the file is not there moss tries the site root, then the nearest file with that name, and `%20` stands for a space. A wikilink needs only the file name. Text in the brackets plays the role the text after the pipe plays in a wikilink: `![640x360 loop](clip.mp4)` equals `![[clip.mp4|640x360 loop]]`, and on an image it is the caption. A page, table, notebook or folder embeds the same way in either spelling: `![](notes/essay.md)` equals `![[essay]]`, and `![limit:2](journal/)` equals `![[journal/|limit:2]]`. On a page, table or notebook the bracket text is ignored. One word is not interchangeable: `cover` (and the other display keywords) crops an image after the pipe but captions it in the standard brackets.
 
 moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions)
 if you use raw HTML tags for media that moss owns.
@@ -192,17 +192,16 @@ tokens, etc.) run `moss describe --json`, or see `mosspub.com/docs/reference`
 
 ### External media embeds
 
-Embed a video or pen by URL with the wikilink-embed syntax (the standard `![](https://…)` form does not make a player; it stays a plain image):
+Embed a video or pen by URL. The standard form makes the same player as the wiki form for a YouTube, Vimeo or CodePen address; any other `![](https://…)` stays a plain image:
 
 ```
-![[https://www.youtube.com/watch?v=dQw4w9WgXcQ]]
-![[https://vimeo.com/123456789]]
-![[https://www.youtube.com/watch?v=abc|wide]]
-![[https://www.youtube.com/watch?v=abc|640x360]]
+![](https://www.youtube.com/watch?v=dQw4w9WgXcQ)
+![](https://vimeo.com/123456789)
+![wide](https://www.youtube.com/watch?v=abc)
+![640x360](https://www.youtube.com/watch?v=abc)
 ```
 
-YouTube, Vimeo, and CodePen get provider-aware players; other https URLs
-become a generic iframe.
+The wiki spelling is `![[https://www.youtube.com/watch?v=dQw4w9WgXcQ|640x360]]`. YouTube, Vimeo, and CodePen get provider-aware players; only the wiki form turns another https page URL into a generic iframe.
 
 ## Content structure
 

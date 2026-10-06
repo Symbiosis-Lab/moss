@@ -687,11 +687,8 @@ fn extracts_gallery_wikilink_with_attrs() {
 
 #[test]
 fn extracts_gallery_wikilink_with_parens_and_space_in_filename() {
-    // Regression guard: `parse_markdown_image` rejects a path containing
-    // `(` (shortcode_extract.rs:939-941), which is why the gallery fix
-    // lives in the wikilink branch rather than switching the insert-bar to
-    // emit `![](name)` — a name like "photo (1).jpg" (common duplicate-file
-    // naming) would still break under that alternative.
+    // A name like "photo (1).jpg" (common duplicate-file naming) reads the
+    // same through the wiki form and through both standard spellings.
     let md = ":::gallery\n![[photo (1).jpg]]\n:::\n";
     let result = extract_shortcodes(md);
     match &result.extracted[0].shortcode {
@@ -700,6 +697,29 @@ fn extracts_gallery_wikilink_with_parens_and_space_in_filename() {
             _ => panic!("expected Unresolved"),
         },
         _ => panic!("expected Gallery"),
+    }
+}
+
+#[test]
+fn extracts_gallery_standard_image_with_parens_in_the_destination() {
+    for line in [
+        "![](photo%20(1).jpg)",
+        "![](<photo (1).jpg>)",
+        "![a caption](photo%20(1).jpg)",
+        "![a|b](photo%20(1).jpg)|cover",
+    ] {
+        let md = format!(":::gallery\n{line}\n:::\n");
+        let result = extract_shortcodes(&md);
+        match &result.extracted[0].shortcode {
+            Shortcode::Gallery(args) => {
+                assert_eq!(args.items.len(), 1, "{line}");
+                match &args.items[0].src {
+                    Url::Unresolved(s) => assert!(s == "photo%20(1).jpg" || s == "photo (1).jpg", "{line}: {s}"),
+                    _ => panic!("expected Unresolved"),
+                }
+            }
+            _ => panic!("expected Gallery"),
+        }
     }
 }
 
@@ -2903,4 +2923,20 @@ fn every_shortcode_kind_url_slot_is_accounted_for() {
         .filter(|sc| classify(sc) == Tracking::Structural)
         .count();
     assert_eq!(structural, 2, "exactly Gallery and Hero need structural spans");
+}
+
+#[test]
+fn a_gallery_rename_span_covers_exactly_the_destination() {
+    // A span off by the `<`, or by an escape, would rewrite the wrong bytes
+    // when the file is renamed.
+    for (line, dest) in [
+        ("![](photo.jpg)", "photo.jpg"),
+        ("  ![a|b](photo%20(1).jpg) | cover", "photo%20(1).jpg"),
+        ("![](<photo (1).jpg>)", "photo (1).jpg"),
+        ("\t![alt](<photo (1).jpg>)|wide", "photo (1).jpg"),
+        (r"![](photo\(1\).jpg)", r"photo\(1\).jpg"),
+    ] {
+        let span = super::gallery_item_span(line).unwrap_or_else(|| panic!("no span for {line:?}"));
+        assert_eq!(&line[span.value.clone()], dest, "{line:?} -> {span:?}");
+    }
 }

@@ -632,38 +632,19 @@ fn dispatch_img(alias: Option<&str>) -> WikilinkEmit {
 }
 
 #[test]
-fn dispatch_image_plain_emits_figure_block() {
+fn dispatch_image_plain_emits_the_bare_paragraph_a_standard_image_gets() {
     use crate::ast::node::{Block, Inline};
     let emit = dispatch_img(None);
     match figure_of(&emit) {
-        Block::Figure {
-            image,
-            caption,
-            width,
-            align,
-            class_names,
-            img_style,
-        } => {
-            assert!(caption.is_none(), "plain embed: no caption");
-            assert!(width.is_none());
-            assert!(align.is_none());
-            assert!(class_names.is_empty());
-            assert!(img_style.is_none());
-            match image {
-                Inline::Image {
-                    src,
-                    alt,
-                    is_wikilink,
-                    ..
-                } => {
-                    assert!(src.is_resolved());
-                    assert_eq!(alt, "");
-                    assert!(*is_wikilink);
-                }
-                other => panic!("expected Image, got {other:?}"),
+        Block::Paragraph(inlines) => match inlines.as_slice() {
+            [Inline::Image { src, alt, is_wikilink, .. }] => {
+                assert!(src.is_resolved());
+                assert_eq!(alt, "");
+                assert!(*is_wikilink);
             }
-        }
-        other => panic!("expected Figure, got {other:?}"),
+            other => panic!("expected one Image, got {other:?}"),
+        },
+        other => panic!("expected Paragraph, got {other:?}"),
     }
 }
 

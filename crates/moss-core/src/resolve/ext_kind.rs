@@ -29,13 +29,18 @@ pub fn reference_kind_for_ext(ext: &str) -> ExtKind {
         .unwrap_or(ExtKind::Other)
 }
 
+/// Whether `dest` points outside the site: a URL, a data URI, a `mailto:` or
+/// an in-page `#anchor`.
+fn is_external_dest(dest: &str) -> bool {
+    ["http://", "https://", "//", "data:", "mailto:", "#"].iter().any(|p| dest.starts_with(p))
+}
+
 /// Whether a standard `![alt](dest)` image should be rendered by its file
 /// kind (like `![[name]]`) instead of as an `<img>`: `dest` names a file in
 /// the site (not `http:`, `https:`, `//`, `data:`, `mailto:` or an in-page
 /// `#anchor`) and its extension is a typed embed other than an image.
 pub fn is_typed_site_embed(dest: &str) -> bool {
-    let external = ["http://", "https://", "//", "data:", "mailto:", "#"];
-    if external.iter().any(|p| dest.starts_with(p)) {
+    if is_external_dest(dest) {
         return false;
     }
     let ext = crate::path_ext::path_extension_lower(dest);
@@ -45,12 +50,53 @@ pub fn is_typed_site_embed(dest: &str) -> bool {
     )
 }
 
+/// Whether a standard `![alt](dest)` names a site target that `![[name]]`
+/// transcludes instead of embedding as media: a page (`.md`), a table
+/// (`.csv`, `.tsv`), a notebook (`.ipynb`) or a folder (a trailing `/`).
+/// These are lowered to their markers before the markdown is parsed, in the
+/// same pass that lowers the wiki spelling, so the two cannot drift.
+pub fn is_transclusion_site_embed(dest: &str) -> bool {
+    if is_external_dest(dest) {
+        return false;
+    }
+    let path = dest.split(['?', '#']).next().unwrap_or(dest);
+    path.ends_with('/')
+        || matches!(
+            reference_kind_for_ext(&crate::path_ext::path_extension_lower(dest)),
+            ExtKind::Transclusion | ExtKind::Notebook | ExtKind::Table
+        )
+}
+
+/// Whether `dest` is a web page the wiki spelling turns into a player:
+/// an `http(s)` URL one of the known providers (YouTube, Vimeo, CodePen)
+/// recognises. Any other URL, an image URL included, stays an `<img>` in the
+/// standard spelling.
+pub fn is_remote_player_embed(dest: &str) -> bool {
+    (dest.starts_with("http://") || dest.starts_with("https://"))
+        && !crate::render::url_embed::detect_provider(dest).provider_name.is_empty()
+}
+
+/// Whether `dest` is an `http(s)` URL of an image file that no provider
+/// claims. Both spellings render it as `<img>`; a frame around an image file
+/// shows nothing a browser would not show on its own.
+pub fn is_remote_image_url(dest: &str) -> bool {
+    (dest.starts_with("http://") || dest.starts_with("https://"))
+        && !is_remote_player_embed(dest)
+        && reference_kind_for_ext(&crate::path_ext::path_extension_lower(dest)) == ExtKind::Image
+}
+
 /// Whether the wikilink-embed dispatcher handles this image: every wiki embed
 /// (`![[name]]`), and a standard `![alt](dest)` only when `dest` is a typed
-/// site file ([`is_typed_site_embed`]). Widening the standard form to more
-/// targets means changing [`is_typed_site_embed`].
+/// site file ([`is_typed_site_embed`]), a page, table, notebook or folder
+/// ([`is_transclusion_site_embed`]: the pre-pass lowers these in a page body,
+/// but not inside a page that is itself embedded) or a provider URL
+/// ([`is_remote_player_embed`]). Widening the standard form to more targets
+/// means changing one of those.
 pub(crate) fn dispatcher_takes_embed(is_wikilink: bool, dest: &str) -> bool {
-    is_wikilink || is_typed_site_embed(dest)
+    is_wikilink
+        || is_typed_site_embed(dest)
+        || is_remote_player_embed(dest)
+        || is_transclusion_site_embed(dest)
 }
 
 /// Whether a lone image must stay a `Paragraph` so the dispatcher (which only
@@ -115,6 +161,31 @@ mod tests {
     }
 
     #[test]
+    fn the_standard_form_transcludes_pages_tables_notebooks_and_folders() {
+        for d in ["n.md", "a/b.MD", "t.csv", "t.tsv", "b.ipynb", "gallery/", "/journal/", "n.md#Heading", "n%20x.md", "gallery/?x=1"] {
+            assert!(is_transclusion_site_embed(d), "{d}");
+        }
+        for d in ["photo.jpg", "clip.mp4", "noext", "x.xyz", "https://e.com/n.md", "//e.com/g/", "data:text/csv,a", "#n.md", ""] {
+            assert!(!is_transclusion_site_embed(d), "{d}");
+        }
+    }
+
+    #[test]
+    fn a_provider_url_is_a_player_and_an_image_url_is_an_image() {
+        for d in ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "http://youtu.be/dQw4w9WgXcQ", "https://vimeo.com/76979871"] {
+            assert!(is_remote_player_embed(d), "{d}");
+            assert!(!is_remote_image_url(d), "{d}");
+        }
+        for d in ["https://e.com/a.jpg", "http://e.com/a.PNG?w=2"] {
+            assert!(is_remote_image_url(d), "{d}");
+            assert!(!is_remote_player_embed(d), "{d}");
+        }
+        for d in ["https://e.com/page", "https://www.youtube.com/about", "media/clip.mp4", "a.jpg"] {
+            assert!(!is_remote_player_embed(d) && !is_remote_image_url(d), "{d}");
+        }
+    }
+
+    #[test]
     fn the_dispatcher_and_the_parser_ask_two_related_questions() {
         // (is_wikilink, dest, dispatcher takes it, parser keeps it a paragraph)
         for (wiki, dest, takes, stays) in [
@@ -124,7 +195,9 @@ mod tests {
             (false, "photo.jpg", false, false),
             (false, "clip.mp4", true, true),
             (false, "https://e.com/clip.mp4", false, false),
-            (false, "n.md", false, false),
+            (false, "https://youtu.be/dQw4w9WgXcQ", true, true),
+            (false, "https://e.com/a.jpg", false, false),
+            (false, "n.md", true, true),
         ] {
             assert_eq!(dispatcher_takes_embed(wiki, dest), takes, "takes {wiki} {dest}");
             assert_eq!(embed_stays_paragraph(wiki, dest), stays, "stays {wiki} {dest}");

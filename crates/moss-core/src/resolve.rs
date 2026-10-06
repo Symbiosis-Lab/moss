@@ -12,6 +12,7 @@
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;
+use std::collections::HashMap;
 
 pub mod asset_class;
 pub mod asset_registry;
@@ -199,7 +200,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     // emit the markers inside `<p>` (paragraph context), and
     // `resolve_embeds` would never see them (it scans markdown lines,
     // not rendered HTML). Pre-converting both shapes here mirrors the
-    // pre-Phase-3 layering.
+    // earlier layering.
     let body = lower_transclusion_and_folder_wikilinks(body, graph, source_path);
 
     // Step 3: Resolve markdown transclusion embeds. The inlined body of
@@ -264,7 +265,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
 /// `<!-- moss-embed:TARGET -->` marker shape that
 /// [`embeds::resolve_embeds`] consumes. Pure text rewrite — no I/O.
 ///
-/// Why this pre-pass exists: pre-Phase-3, Stage 1's wikilink resolver
+/// Why this pre-pass exists: before the dispatcher existed, the wikilink resolver
 /// did this conversion. Phase 3 retires that resolver and routes most
 /// wikilink handling through this crate's own AST visitor
 /// ([`crate::ast::dispatch_wikilink_embeds`]), called from moss-build's
@@ -297,158 +298,80 @@ fn lower_transclusion_and_folder_wikilinks(
     for (line, masked_line) in body.lines().zip(masked.lines()) {
         // Nothing live to rewrite — covers whole-line inert regions (fenced
         // and indented code) and ordinary prose alike.
-        if !masked_line.contains("![[") {
+        if !masked_line.contains("![") {
             output_lines.push(line.to_string());
             continue;
         }
 
-        // Rewrite `![[…]]` wikilinks where the resolved target is a
+        // Rewrite `![[…]]` wikilinks, and standard `![alt](dest)` images that
+        // name the same kinds of target, where the resolved target is a
         // markdown file. Single-occurrence per line is the common case;
         // a loop handles multi-occurrence safely.
         let mut rewritten = String::with_capacity(line.len());
         let mut rest = line;
-        while let Some(start) = rest.find("![[") {
+        let mut line_images: Option<HashMap<usize, (String, String, usize)>> = None;
+        while let Some(start) = rest.find("![") {
             // Split once at the marker and name what follows. Every bail below is
-            // a plain `break`: `rest` already points at the unconsumed marker, and
-            // the `push_str(rest)` after the loop emits it verbatim — which is the
-            // no-rewrite behaviour these paths want anyway.
+            // a plain `break` or an unchanged `rest`: `rest` already points at the
+            // unconsumed marker, and the `push_str(rest)` after the loop emits it
+            // verbatim — which is the no-rewrite behaviour these paths want anyway.
             let Some((before, from_marker)) = rest.split_at_checked(start) else {
                 break;
             };
             rewritten.push_str(before);
             rest = from_marker;
             // This occurrence is inert (inline code span or HTML comment on
-            // an otherwise-live line): emit the author's `![[` untouched and
+            // an otherwise-live line): emit the author's `![` untouched and
             // keep scanning the rest of the line.
             let at = line.len() - rest.len();
-            if masked_line.as_bytes().get(at..at + 3) != Some(b"![[".as_slice()) {
-                let Some(after) = rest.get(3..) else { break };
-                rewritten.push_str("![[");
+            if masked_line.as_bytes().get(at..at + 2) != Some(b"![".as_slice()) {
+                let Some(after) = rest.get(2..) else { break };
+                rewritten.push_str("![");
                 rest = after;
                 continue;
             }
-            let Some(after) = rest.get(3..) else { break };
-            let Some(end) = after.find("]]") else { break };
-            // `token` is the whole `![[…]]`; `remainder` is everything past it.
-            // Computed once here instead of re-deriving `start + 3 + end + 2`
-            // at each of the nine exits below.
-            let (Some(inner), Some(token), Some(remainder)) =
-                (after.get(..end), rest.get(..3 + end + 2), after.get(end + 2..))
-            else {
-                break;
-            };
-            // Pothole-aware: pre-Phase-3 dropped pothole text for the
-            // marker (params live in the marker's heading-anchor /
-            // query suffix). Today the marker only cares about the
-            // `file#section` shape.
-            let inner_no_pothole = match inner.split_once('|') {
-                Some((f, _)) => f,
-                None => inner,
-            };
-            let (file_part, anchor) = match inner_no_pothole.split_once('#') {
-                Some((file, anchor)) => (file, Some(anchor)),
-                None => (inner_no_pothole, None),
-            };
-
-            let pothole_raw = inner.split_once('|').map_or("", |(_, params)| params);
-            let params = embed_renderer::folder_list::classify_folder_segments(pothole_raw);
-            if params.style.as_deref() == Some("map") && !file_part.ends_with('/') {
-                let target = if file_part.is_empty() && anchor == Some("") {
-                    source_path.to_string()
-                } else {
-                    match fuzzy_path::resolve_reference(file_part, graph, source_path) {
-                        fuzzy_path::ResolvedRef::Found(path) => path,
-                        fuzzy_path::ResolvedRef::Unresolved => file_part.to_string(),
-                    }
+            // A backslash before the `!` escapes it: `\![](note.md)` is the
+            // author's text, not an image. An even run of backslashes is
+            // escaped backslashes and leaves the `!` live.
+            let escaped = line.as_bytes()[..at].iter().rev().take_while(|&&b| b == b'\\').count() % 2 == 1;
+            if escaped {
+                let Some(after) = rest.get(2..) else { break };
+                rewritten.push_str("![");
+                rest = after;
+                continue;
+            }
+            // `token` is the whole `![[…]]` or `![alt](dest)`; `inner` is its
+            // wiki-form content (`target|pothole`); `remainder` is everything
+            // past it. For a standard image the bracket text is the pothole:
+            // the two spellings are one reference, read by one rule.
+            let (inner, token, remainder) = if rest.starts_with("![[") {
+                let Some(after) = rest.get(3..) else { break };
+                let Some(end) = after.find("]]") else { break };
+                let (Some(inner), Some(token), Some(remainder)) =
+                    (after.get(..end), rest.get(..3 + end + 2), after.get(end + 2..))
+                else {
+                    break;
                 };
-                let target = match anchor.filter(|a| !a.is_empty()) {
-                    Some(section) => format!("{target}#{section}"),
-                    None => target,
-                };
-                rewritten.push_str(&embed_renderer::folder_list::emit_marker(
-                    &embed_renderer::folder_list::marker_encode(&target),
-                    &embed_renderer::folder_list::marker_encode(source_path),
-                    &params,
-                ));
-                rest = remainder;
-                continue;
-            }
-
-            // Skip empty target (`![[]]` is meaningless).
-            if file_part.is_empty() {
-                rewritten.push_str(token);
-                rest = remainder;
-                continue;
-            }
-
-            // Folder-list embed: trailing slash dispatches to the
-            // `MOSS_MARKER_FOLDER_LIST` marker that moss-build's marker
-            // handler resolves into a card grid. The pothole carries
-            // params (limit:N, more, sort:axis) in pipe-encoded form.
-            if file_part.ends_with('/') {
-                let marker =
-                    embed_renderer::folder_list::emit_marker(file_part, source_path, &params);
-                rewritten.push_str(&marker);
-                rest = remainder;
-                continue;
-            }
-
-            // Resolve via ContentGraph. Bail to no-rewrite if the
-            // reference doesn't resolve — Stage 2's dispatcher will
-            // emit the `[unresolved](moss-unresolved:…)` link form.
-            let resolved = fuzzy_path::resolve_reference(file_part, graph, source_path);
-            let target_path = match resolved {
-                fuzzy_path::ResolvedRef::Found(p) => p,
-                fuzzy_path::ResolvedRef::Unresolved => {
-                    rewritten.push_str(token);
-                    rest = remainder;
+                (inner.to_string(), token, remainder)
+            } else {
+                // The line is scanned once, not once per marker: a line of
+                // thousands of images would otherwise be quadratic.
+                let images = line_images.get_or_insert_with(|| standard_embed_images(line));
+                let Some((dest, alt, len)) = images.get(&at).cloned() else {
+                    let Some(after) = rest.get(2..) else { break };
+                    rewritten.push_str("![");
+                    rest = after;
                     continue;
-                }
-            };
-            let ext = target_path
-                .rsplit('.')
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            // Markdown transclusion: `![[note.md]]` →
-            // `<!-- moss-embed:note.md[#anchor] -->`.
-            if ext == "md" || ext == "markdown" {
-                let target_with_anchor = match anchor {
-                    Some(a) => format!("{}#{}", target_path, a),
-                    None => target_path,
                 };
-                rewritten.push_str("<!-- ");
-                rewritten.push_str(embed_renderer::MARKER_MARKDOWN);
-                rewritten.push(':');
-                rewritten.push_str(&target_with_anchor);
-                rewritten.push_str(" -->");
-                rest = remainder;
-                continue;
-            }
-            // Deferred-handler embeds: `.ipynb` → notebook marker,
-            // `.csv` / `.tsv` → table marker. These extensions route to
-            // moss-build's marker handlers; the Stage 2 dispatcher would
-            // also produce these markers, but it runs AFTER
-            // `resolve_deferred_markers`, so pre-converting here keeps
-            // the existing marker-handler pipeline working.
-            let marker_prefix = match ext.as_str() {
-                "ipynb" => Some(embed_renderer::MARKER_IPYNB),
-                "csv" | "tsv" => Some(embed_renderer::MARKER_TABLE),
-                _ => None,
+                let (Some(token), Some(remainder)) = (rest.get(..len), rest.get(len..)) else {
+                    break;
+                };
+                (format!("{dest}|{alt}"), token, remainder)
             };
-            if let Some(prefix) = marker_prefix {
-                rewritten.push_str("<!-- ");
-                rewritten.push_str(prefix);
-                rewritten.push(':');
-                rewritten.push_str(&target_path);
-                rewritten.push_str(" -->");
-                rest = remainder;
-                continue;
+            match lower_embed(&inner, graph, source_path) {
+                Some(replacement) => rewritten.push_str(&replacement),
+                None => rewritten.push_str(token),
             }
-            // Other extensions (.pdf / .mp4 / .png / etc.) flow through
-            // the Stage 2 dispatcher untouched — those renderers
-            // produce HTML inline, not deferred markers.
-            rewritten.push_str(token);
             rest = remainder;
         }
         rewritten.push_str(rest);
@@ -459,6 +382,125 @@ fn lower_transclusion_and_folder_wikilinks(
         out.push('\n');
     }
     out
+}
+
+/// The standard `![alt](dest)` images of one line that lower like `![[…]]`:
+/// offset of the `!` -> (destination, alt text, token length).
+///
+/// A linked image (`[![alt](x.md)](url)`, or an image anywhere in a link's
+/// text) stays an image inside its link, and reference-style images keep the
+/// ordinary path. A raw `|` in the destination would read as the pothole
+/// separator; a path that holds one is spelled `%7C`.
+fn standard_embed_images(line: &str) -> HashMap<usize, (String, String, usize)> {
+    let mut images = HashMap::new();
+    // References arrive in source order with an enclosing link before what
+    // it holds, so anything starting before the last link's end is in it.
+    let mut link_end = 0;
+    for r in md_extract::extract_md_references(line) {
+        match r.syntax {
+            md_extract::RefSyntax::MarkdownLink { .. } => link_end = link_end.max(r.byte_to),
+            md_extract::RefSyntax::MarkdownImage { alt }
+                if r.byte_from >= link_end
+                    && !r.text.contains('|')
+                    && ext_kind::is_transclusion_site_embed(&r.text) =>
+            {
+                images.insert(r.byte_from, (r.text, alt, r.byte_to - r.byte_from));
+            }
+            _ => {}
+        }
+    }
+    images
+}
+
+/// What one embed (`target|pothole`, the content of `![[…]]`) lowers to, or
+/// `None` when it stays as the author wrote it: an empty or unresolvable
+/// target, or a kind the later dispatcher renders itself.
+fn lower_embed(inner: &str, graph: &ContentGraph, source_path: &str) -> Option<String> {
+    // Pothole-aware: the older resolver dropped pothole text for the
+    // marker (params live in the marker's heading-anchor /
+    // query suffix). Today the marker only cares about the
+    // `file#section` shape.
+    let inner_no_pothole = match inner.split_once('|') {
+        Some((f, _)) => f,
+        None => inner,
+    };
+    let (file_part, anchor) = match inner_no_pothole.split_once('#') {
+        Some((file, anchor)) => (file, Some(anchor)),
+        None => (inner_no_pothole, None),
+    };
+
+    let pothole_raw = inner.split_once('|').map_or("", |(_, params)| params);
+    let params = embed_renderer::folder_list::classify_folder_segments(pothole_raw);
+    if params.style.as_deref() == Some("map") && !file_part.ends_with('/') {
+        let target = if file_part.is_empty() && anchor == Some("") {
+            source_path.to_string()
+        } else {
+            match fuzzy_path::resolve_reference(file_part, graph, source_path) {
+                fuzzy_path::ResolvedRef::Found(path) => path,
+                fuzzy_path::ResolvedRef::Unresolved => file_part.to_string(),
+            }
+        };
+        let target = match anchor.filter(|a| !a.is_empty()) {
+            Some(section) => format!("{target}#{section}"),
+            None => target,
+        };
+        return Some(embed_renderer::folder_list::emit_marker(
+            &embed_renderer::folder_list::marker_encode(&target),
+            &embed_renderer::folder_list::marker_encode(source_path),
+            &params,
+        ));
+    }
+
+    // Skip empty target (`![[]]` is meaningless).
+    if file_part.is_empty() {
+        return None;
+    }
+
+    // Folder-list embed: trailing slash dispatches to the
+    // `MOSS_MARKER_FOLDER_LIST` marker that moss-build's marker
+    // handler resolves into a card grid. The pothole carries
+    // params (limit:N, more, sort:axis) in pipe-encoded form.
+    if file_part.ends_with('/') {
+        return Some(embed_renderer::folder_list::emit_marker(file_part, source_path, &params));
+    }
+
+    // Resolve via ContentGraph. Bail to no-rewrite if the
+    // reference doesn't resolve — the wikilink dispatcher will
+    // emit the `[unresolved](moss-unresolved:…)` link form.
+    let fuzzy_path::ResolvedRef::Found(target_path) =
+        fuzzy_path::resolve_reference(file_part, graph, source_path)
+    else {
+        return None;
+    };
+    let ext = target_path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    // Markdown transclusion: `![[note.md]]` →
+    // `<!-- moss-embed:note.md[#anchor] -->`.
+    if ext == "md" || ext == "markdown" {
+        let target_with_anchor = match anchor {
+            Some(a) => format!("{}#{}", target_path, a),
+            None => target_path,
+        };
+        return Some(format!("<!-- {}:{} -->", embed_renderer::MARKER_MARKDOWN, target_with_anchor));
+    }
+    // Deferred-handler embeds: `.ipynb` → notebook marker,
+    // `.csv` / `.tsv` → table marker. These extensions route to
+    // moss-build's marker handlers; the wikilink dispatcher would
+    // also produce these markers, but it runs AFTER
+    // `resolve_deferred_markers`, so pre-converting here keeps
+    // the existing marker-handler pipeline working.
+    let marker_prefix = match ext.as_str() {
+        "ipynb" => embed_renderer::MARKER_IPYNB,
+        "csv" | "tsv" => embed_renderer::MARKER_TABLE,
+        // Other extensions (.pdf / .mp4 / .png / etc.) flow through
+        // the wikilink dispatcher untouched — those renderers
+        // produce HTML inline, not deferred markers.
+        _ => return None,
+    };
+    Some(format!("<!-- {marker_prefix}:{target_path} -->"))
 }
 
 pub struct FrontmatterResolveResult {
@@ -755,6 +797,67 @@ mod tests {
     }
 
     #[test]
+    fn a_standard_image_of_a_page_lowers_to_the_marker_the_wiki_form_gets() {
+        for (std, wiki) in [
+            ("![](note.md)", "![[note.md]]"),
+            ("![ignored words](guide.md)", "![[guide.md|ignored words]]"),
+            ("![](note.md#Heading)", "![[note.md#Heading]]"),
+            ("![](<note.md>) after", "![[note.md]] after"),
+        ] {
+            assert_eq!(lower(std), lower(wiki), "{std}");
+            assert!(lower(std).contains("moss-embed:"), "{std}");
+        }
+    }
+
+    #[test]
+    fn a_standard_image_keeps_its_own_path_where_the_wiki_form_has_nothing_to_lower() {
+        for md in [
+            "![](assets/photo.jpg)\n",
+            "![](missing.md)\n",
+            "![](https://example.com/page.md)\n",
+            "![note][ref]\n\n[ref]: note.md\n",
+            "[![](note.md)](https://example.com)\n",
+            "`![](note.md)` stays code\n",
+        ] {
+            assert_eq!(lower(md), md, "{md:?}");
+        }
+    }
+
+    #[test]
+    fn an_escaped_bang_is_the_authors_text_in_both_spellings() {
+        for md in ["\\![](note.md)\n", "\\![[note.md]]\n", "see \\![x](guide.md) here\n"] {
+            assert_eq!(lower(md), md, "{md:?}");
+        }
+        // An escaped backslash leaves the `!` live.
+        assert_eq!(lower("\\\\![](note.md)\n"), format!("\\\\{}\n", lower("![](note.md)").trim_end()));
+        assert!(lower("\\\\![](note.md)").contains("moss-embed:"));
+    }
+
+    #[test]
+    fn an_image_inside_link_text_is_never_transcluded() {
+        for md in [
+            "[![](note.md)](https://example.com)\n",
+            "[see ![](note.md)](https://example.com)\n",
+            "[![](note.md) and more](https://example.com)\n",
+            "[a ![x](note.md) b ![y](guide.md)](https://example.com)\n",
+        ] {
+            assert_eq!(lower(md), md, "{md:?}");
+        }
+        // An image after the link on the same line is not inside it.
+        assert!(lower("[a](https://example.com) ![](note.md)").contains("moss-embed:"));
+    }
+
+    #[test]
+    fn a_line_of_standard_images_is_scanned_once() {
+        // Quadratic before the line was scanned once: ~11 s for this body.
+        let body = "![](photo.jpg) ".repeat(5000) + "![](note.md)";
+        let started = std::time::Instant::now();
+        let out = lower(&body);
+        assert!(out.ends_with("<!-- moss-embed:note.md -->"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
+    }
+
+    #[test]
     fn a_live_transclusion_beside_an_inert_one_still_lowers() {
         // Pins the per-occurrence offset check, not just the line fast path.
         assert_eq!(
@@ -1028,7 +1131,7 @@ mod tests {
 
         // disclaimer.md body contains `See [[guide]] for details.`
         // Phase 3 PR2: the embedded body's wikilink is no longer
-        // resolved by `resolve_content`; the Stage 2 dispatcher (`ast::dispatch_wikilink_embeds`)
+        // resolved by `resolve_content`; the wikilink dispatcher (`ast::dispatch_wikilink_embeds`)
         // handles it. `resolve_content` lowers
         // `![[disclaimer]]` into the `<!-- moss-embed:disclaimer.md -->`
         // marker, then `resolve_embeds` inlines the disclaimer body
@@ -1054,7 +1157,7 @@ mod tests {
         let files = HashMap::new();
 
         // Phase 3 PR2: wikilink unresolved diagnostics now surface from
-        // the Stage 2 dispatcher (`ast::dispatch_wikilink_embeds`). `resolve_content` only
+        // the wikilink dispatcher (`ast::dispatch_wikilink_embeds`). `resolve_content` only
         // surfaces diagnostics from passes it still runs (transclusion
         // / deferred markers / block refs). `![[missing]]` with no
         // extension resolves to Unresolved in the lowering pass — but

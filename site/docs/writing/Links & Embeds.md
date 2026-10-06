@@ -68,7 +68,9 @@ work/
 
 The language-tree preference (rule 4 above) applies to image resolution too: `![[photo.jpg]]` inside `zh-hans/about.md` prefers `zh-hans/photo.jpg` if it exists.
 
-Some embeds exist only as wikilinks: page, section, table, notebook and folder transclusions (`![[name]]`, see below), the provider players for `![[https://…]]` URLs, and the `style:` keys. In the standard form the text in the brackets is a caption on an image, and on video or audio it plays the role of the text after the pipe: `![640x360 loop](clip.mp4)` is `![[clip.mp4|640x360 loop]]`.
+Every embed has both spellings, and they render the same: pages, sections, tables, notebooks and folders (`![](notes/essay.md)`, `![](notes/essay.md#Methods)`, `![](data/ledger.csv)`, `![](lab/analysis.ipynb)`, `![](journal/)`), the provider players for YouTube, Vimeo and CodePen URLs (`![](https://www.youtube.com/watch?v=…)`), and the `style:` keys. The text in the standard brackets is the text after the pipe, read by the same rule: `![640x360 loop](clip.mp4)` is `![[clip.mp4|640x360 loop]]`, and `![limit:2](journal/)` is `![[journal/|limit:2]]`. Where the pipe text is only a caption (an image, a page) the brackets can hold it too; on a page, table or notebook transclusion the text is ignored.
+
+Three things stay wiki-only. A web address that no provider claims, such as `![[https://example.com/page]]`, becomes a frame around that page, while `![](https://example.com/page)` stays an image. An image whose brackets hold a display keyword (`![[photo.jpg|cover]]` crops the picture) captions it "cover" in the standard form, because the word is also a valid caption. And a reference-style image (`![text][ref]`) pointing at a page, table, notebook or folder stays an image.
 
 **Pipe syntax** controls display — a fit/position keyword (`![[photo.jpg|contain top]]`), a size (`![[photo.jpg|400]]`), or a caption (`![[photo.jpg|Morning light]]`). See [[media#Display control]] and [[media#Captions]] for the full rules.
 
