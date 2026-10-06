@@ -1415,7 +1415,6 @@ pub fn process_markdown_file(
         // Resolved later by `build::terms::derive_terms` (claim winners only).
         term_listing: None,
         term_sections: None,
-        place_breadcrumb: None,
         place_children: None,
         place_line: None,
         place_names: None,

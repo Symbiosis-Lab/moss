@@ -46,8 +46,6 @@ export interface PlacesStrings {
   mapEmbedTitle: string;
   /** Between the names of several authors on a card; the author-to-date separator is a fixed middle dot instead (`cards.ts`). */
   listSeparator: string;
-  /** `{key}` placeholder, filled with the platform's own zoom-modifier key name (`⌘` / `Ctrl`) — the cooperative-gesture hint shown the first time a reader wheels over a collapsed embed without it held. */
-  cooperativeHint: string;
 }
 
 const STRINGS: Record<Lang, PlacesStrings> = {
@@ -70,7 +68,6 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeAllArticles: "Showing all articles.",
     chipShowHidden: "Show hidden places",
     mapEmbedTitle: "Map: {name}",
-    cooperativeHint: "Hold {key} and scroll to zoom the map",
     listSeparator: ", ",
   },
   "zh-hans": {
@@ -92,7 +89,6 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeAllArticles: "已显示全部文章。",
     chipShowHidden: "显示隐藏地点",
     mapEmbedTitle: "地图：{name}",
-    cooperativeHint: "按住 {key} 滚动以缩放地图",
     listSeparator: "、",
   },
   "zh-hant": {
@@ -114,7 +110,6 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeAllArticles: "已顯示全部文章。",
     chipShowHidden: "顯示隱藏地點",
     mapEmbedTitle: "地圖：{name}",
-    cooperativeHint: "按住 {key} 捲動以縮放地圖",
     listSeparator: "、",
   },
 };

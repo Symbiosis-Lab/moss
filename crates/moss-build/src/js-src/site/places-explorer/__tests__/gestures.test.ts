@@ -13,7 +13,7 @@
  * Also covers `attachGestures`'s cooperative mode: the small collapsed embed
  * shares its page with the reader's own scroll, so a lone TOUCH drag must
  * be left alone (the page scrolls) while two fingers pan the camera as well
- * as pinch-zoom it. Mouse dragging and ctrl/⌘+wheel zoom are unaffected —
+ * as pinch-zoom it. Mouse dragging and wheel zoom are unaffected —
  * only a solitary touch defers, and only when `cooperative()` says so.
  *
  * jsdom has neither a `PointerEvent` constructor nor
@@ -158,7 +158,6 @@ function buildCallbacks(cooperative: boolean | (() => boolean)) {
   });
   const onSettle = vi.fn();
   const onGestureStart = vi.fn();
-  const cooperativeHint = vi.fn();
   const callbacks: GestureCallbacks = {
     getCamera: () => camera,
     getViewport: () => VIEWPORT,
@@ -167,9 +166,8 @@ function buildCallbacks(cooperative: boolean | (() => boolean)) {
     onGestureStart,
     maxZoom: () => 20,
     cooperative: typeof cooperative === "function" ? cooperative : () => cooperative,
-    cooperativeHint,
   };
-  return { callbacks, setCamera, onSettle, onGestureStart, cooperativeHint, getCamera: () => camera };
+  return { callbacks, setCamera, onSettle, onGestureStart, getCamera: () => camera };
 }
 
 describe("attachGestures — cooperative mode", () => {
@@ -271,26 +269,60 @@ describe("attachGestures — cooperative mode", () => {
     expect(setCamera).toHaveBeenCalled();
   });
 
-  test("a bare wheel over a cooperative viewport reports the hint instead of zooming", () => {
-    const { callbacks, setCamera, cooperativeHint } = buildCallbacks(true);
+  test.each([true, false])("plain wheel zooms and claims scrolling (cooperative touch: %s)", (cooperative) => {
+    const { callbacks, setCamera } = buildCallbacks(cooperative);
     attachGestures(viewport, callbacks);
-    viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, clientX: 400, clientY: 250, bubbles: true, cancelable: true }));
-    expect(cooperativeHint).toHaveBeenCalledTimes(1);
-    expect(setCamera).not.toHaveBeenCalled();
+    const event = new WheelEvent("wheel", { deltaY: -100, clientX: 400, clientY: 250, cancelable: true });
+    viewport.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(setCamera).toHaveBeenCalled();
   });
 
-  test("a bare wheel when NOT cooperative never reports the hint (the full explorer page has no hint to show)", () => {
-    const { callbacks, cooperativeHint } = buildCallbacks(false);
-    attachGestures(viewport, callbacks);
-    viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, clientX: 400, clientY: 250, bubbles: true, cancelable: true }));
-    expect(cooperativeHint).not.toHaveBeenCalled();
+  test("a wheel burst updates the final camera and settles once after idle", () => {
+    vi.useFakeTimers();
+    try {
+      const { callbacks, getCamera, onSettle } = buildCallbacks(false);
+      attachGestures(viewport, callbacks);
+      for (let i = 0; i < 10; i++) {
+        viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -10, clientX: 400, clientY: 250, cancelable: true }));
+        vi.advanceTimersByTime(8);
+      }
+      expect(getCamera().zoom).toBeCloseTo(1.08);
+      expect(onSettle).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(120);
+      expect(onSettle).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  test("a ctrl+wheel never reports the hint, cooperative or not — it already zooms", () => {
-    const { callbacks, cooperativeHint } = buildCallbacks(true);
-    attachGestures(viewport, callbacks);
-    viewport.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY: -1, clientX: 400, clientY: 250, bubbles: true, cancelable: true }));
-    expect(cooperativeHint).not.toHaveBeenCalled();
+  test("wheel idle does not settle an active pointer pan", () => {
+    vi.useFakeTimers();
+    try {
+      const { callbacks, onSettle } = buildCallbacks(false);
+      attachGestures(viewport, callbacks);
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, cancelable: true }));
+      firePointer(viewport, "pointerdown", { pointerId: 1, pointerType: "mouse", clientX: 100, clientY: 250 });
+      vi.advanceTimersByTime(120);
+      expect(onSettle).not.toHaveBeenCalled();
+      firePointer(viewport, "pointerup", { pointerId: 1, pointerType: "mouse", clientX: 100, clientY: 250 });
+      expect(onSettle).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("line and page deltas normalize to the same distance as pixel deltas", () => {
+    const zoomFor = (deltaY: number, deltaMode: number) => {
+      const el = document.createElement("div");
+      const { callbacks, getCamera } = buildCallbacks(false);
+      attachGestures(el, callbacks);
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY, deltaMode, cancelable: true }));
+      return getCamera().zoom;
+    };
+    expect(zoomFor(-1, 1)).toBeCloseTo(zoomFor(-16, 0));
+    expect(zoomFor(-0.2, 2)).toBeCloseTo(zoomFor(-100, 0));
+    expect(zoomFor(0, 0)).toBe(1);
   });
 
   test("cooperative() is read live, so toggling mid-session needs no re-attachment", () => {

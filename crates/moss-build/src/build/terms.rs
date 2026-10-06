@@ -43,7 +43,7 @@ pub(crate) mod inherit;
 // config stage — the only place the gazetteer type crosses into the terms
 // machinery. `derive_terms` itself never reads it.
 pub mod places;
-// `TermSite.parent`, breadcrumbs, and children-with-counts — the once-per-
+// `TermSite.parent` and children-with-counts — the once-per-
 // build resolution that reads pass 2's finished memberships. See its own
 // doc comment for why it is a sibling file rather than inline here.
 mod rollup;
@@ -105,15 +105,6 @@ pub struct TermIndex {
     /// the claimed and unclaimed pages of the same term cannot disagree
     /// about which field a member came through.
     sections_by_term: BTreeMap<String, Vec<(Option<String>, Vec<String>)>>,
-    /// Term key → its ordered ancestor `(display, url)` pairs, oldest first,
-    /// walked from `TermSite::parent` to the root. Empty (absent) for every
-    /// term with no parent — which is every term of a non-place kind, since
-    /// only a place-typed kind's `parents` map is ever filled. Resolved once
-    /// here, the same "one computation, two readers" pattern
-    /// `sections_by_term` established: the claiming page reads its own copy
-    /// off `ParsedDocument::place_breadcrumb`, the generated page reads it
-    /// through [`Self::breadcrumb`].
-    breadcrumbs_by_term: BTreeMap<String, Vec<(String, String)>>,
     /// Term key → its direct children's `(display, url, count)`, where
     /// `count` is the number of distinct member URLs across the child's own
     /// `members_by_field` entries (not a raw sum over fields, which would
@@ -196,15 +187,6 @@ impl TermIndex {
     /// term page reads it from here because it has no document of its own.
     pub fn sections(&self, term_key: &str) -> Option<&[(Option<String>, Vec<String>)]> {
         self.sections_by_term.get(term_key).map(Vec::as_slice)
-    }
-
-    /// This term's ancestor chain, oldest first — the same value a claiming
-    /// page carries in `ParsedDocument::place_breadcrumb`. The render
-    /// layer's generated term page reads it from here because it has no
-    /// document of its own. `None` for a term with no parent (every
-    /// non-place term, and a root place with no gazetteer parent).
-    pub fn breadcrumb(&self, term_key: &str) -> Option<&[(String, String)]> {
-        self.breadcrumbs_by_term.get(term_key).map(Vec::as_slice)
     }
 
     /// This term's direct children, `(display, url, count)` — the same
@@ -479,7 +461,7 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
         }
     }
 
-    // `TermSite.parent`, breadcrumbs, and children-with-counts — resolved
+    // `TermSite.parent` and children-with-counts — resolved
     // once, in the sibling `rollup` module, now that pass 2's memberships
     // are final. See its own doc comment for why this is a separate sweep
     // rather than set inline during the ancestor walk above.
@@ -537,7 +519,6 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     for doc in documents.iter_mut() {
         let Some(term_key) = doc.term_listing.as_deref() else { continue };
         doc.term_sections = index.sections_by_term.get(term_key).cloned();
-        doc.place_breadcrumb = index.breadcrumbs_by_term.get(term_key).cloned();
         doc.place_children = index.children_by_term.get(term_key).cloned();
     }
 
@@ -1439,7 +1420,7 @@ mod tests {
     }
 
     #[test]
-    fn a_claimed_place_with_no_members_still_gets_its_breadcrumb() {
+    fn a_claimed_place_with_no_members_keeps_its_parent() {
         let kinds = vec![places_kind_with_parents(&[("places/kyoto", "Japan")])];
         let mut docs = vec![doc("about/kyoto/index.html", "Kyoto")];
         docs[0].place_page = Some(TermClaim::UseTitle);
@@ -1449,21 +1430,15 @@ mod tests {
         // can set its `parent`.
         let index = derive_terms(&mut docs, kinds);
         assert_eq!(index.sites().get("places/kyoto").and_then(|s| s.parent.as_deref()), Some("places/japan"));
-        // The claiming page reads its own copy off `ParsedDocument`, same
-        // condition as `term_sections` (task A6).
-        assert_eq!(
-            docs[0].place_breadcrumb,
-            Some(vec![("Japan".to_string(), "/places/japan/".to_string())])
-        );
     }
 
-    // ── task A6: breadcrumb and children ─────────────────────────────────
+    // ── place children ─────────────────────────────────────────────────
 
     #[test]
-    fn non_place_kind_renders_neither_element() {
+    fn non_place_kind_has_no_place_children() {
         // A people-kind claiming page: `TermSite::parent` is never set for a
-        // non-place kind (`kind.parents` stays empty), so both
-        // `breadcrumbs_by_term` and `children_by_term` end up with nothing
+        // non-place kind (`kind.parents` stays empty), so
+        // `children_by_term` ends up with nothing
         // recorded for it — the emptiness check the render layer applies is
         // the only guard, replacing the dropped `is_place` gate.
         let kinds = vec![TermKind {
@@ -1476,7 +1451,6 @@ mod tests {
         let mut docs = vec![doc("about/kane/index.html", "Kane")];
         docs[0].jury_page = Some(TermClaim::UseTitle);
         derive_terms(&mut docs, kinds);
-        assert_eq!(docs[0].place_breadcrumb, None);
         assert_eq!(docs[0].place_children, None);
     }
 

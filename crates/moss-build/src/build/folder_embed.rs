@@ -1412,20 +1412,16 @@ fn render_one(
     let listing =
         crate::build::terms::render_term_sections(term_sections, &limited, site_lang, render_group)
             .unwrap_or_else(|| render_group(&limited));
-    // The claimed half of the same breadcrumb/children chrome the generated
+    // The claimed half of the same children chrome the generated
     // page gets in `render/blocking.rs`, read off the claiming document
     // beside `term_sections` above — `None` (rendered empty) for every
-    // non-place term, since `derive_terms` only ever sets these two fields
+    // non-place term, since `derive_terms` only ever sets this field
     // from a place-typed kind's resolved data.
-    let place_breadcrumb_html = claiming_doc
-        .and_then(|d| d.place_breadcrumb.as_deref())
-        .and_then(crate::build::components::place_hierarchy::render_breadcrumb)
-        .unwrap_or_default();
     let place_children_html = claiming_doc
         .and_then(|d| d.place_children.as_deref())
         .and_then(crate::build::components::place_hierarchy::render_children)
         .unwrap_or_default();
-    let listing = format!("{}{}{}", place_breadcrumb_html, listing, place_children_html);
+    let listing = format!("{}{}", listing, place_children_html);
 
     // Suppress the More link when the embed is on the folder's own index page
     // (self-referential listing). A "More →" link pointing to the page the

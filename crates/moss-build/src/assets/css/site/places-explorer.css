@@ -214,7 +214,7 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
    `setCooperativeGestures`): a lone touch is left for the PAGE's own
    vertical scroll instead of panning the map, so the viewport's own
    touch-action must allow it — `gestures.ts` only ever claims a second
-   touch (ctrl/⌘+wheel and pinch/two-finger pan still work, neither of
+   touch (wheel zoom and pinch/two-finger pan still work, neither of
    which `pan-y` disables). */
 .moss-places-viewport[data-gesture-mode="cooperative"] {
   touch-action: pan-y;
@@ -1357,36 +1357,5 @@ button.moss-places-chip-crumb {
   }
 }
 
-/* The cooperative-gesture hint (`map.ts`'s `showCooperativeHint`, wired
-   through `gestures.ts`'s own `cooperativeHint` callback): a brief,
-   non-blocking nudge the first time a reader wheels a collapsed embed
-   without the zoom modifier held. `position: absolute` so it never reserves
-   layout space (no shift when it appears or is removed), `pointer-events:
-   none` so it never steals the gesture it is explaining. */
-.moss-places-coop-hint {
-  position: absolute;
-  inset-inline: 0;
-  bottom: 12px;
-  margin: 0 auto;
-  width: fit-content;
-  max-inline-size: calc(100% - 24px);
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #fff;
-  font-size: var(--moss-read-caption);
-  text-align: center;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 200ms ease;
-}
-.moss-places-coop-hint--visible {
-  opacity: 1;
-}
-@media (prefers-reduced-motion: reduce) {
-  .moss-places-coop-hint {
-    transition: none;
-  }
-}
 
 }

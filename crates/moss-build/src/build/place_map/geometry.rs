@@ -3,6 +3,8 @@ use crate::vault::places::Precision;
 
 mod tile_grid;
 pub(crate) use tile_grid::TileGrid;
+#[cfg(test)]
+mod selection_tests;
 
 pub const VIEWBOX_WIDTH: f64 = 720.0;
 pub const VIEWBOX_HEIGHT: f64 = 480.0;
@@ -922,13 +924,17 @@ impl TileSelection {
             .flat_map(|tile| tile.features.iter().copied())
             .collect();
         let mut global_index = 0u32;
-        let mut features = Vec::new();
+        let mut features = Vec::with_capacity(tile_ids.len());
         for layer in &tier.layers {
-            for (index, feature) in layer.features.iter().enumerate() {
-                let feature_id = global_index + index as u32;
-                if tile_ids.contains(&feature_id) {
-                    features.push((layer.id, feature));
-                }
+            // Decoding validates dense global IDs across the layer boundaries.
+            // Keep their registry order without scanning unselected features.
+            for feature_id in tile_ids.range(global_index..global_index + layer.feature_count) {
+                #[cfg(test)]
+                selection_tests::FEATURE_VISITS.with(|visits| visits.set(visits.get() + 1));
+                features.push((
+                    layer.id,
+                    &layer.features[(*feature_id - global_index) as usize],
+                ));
             }
             global_index += layer.feature_count;
         }

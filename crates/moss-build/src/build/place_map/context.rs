@@ -243,7 +243,7 @@ impl PlaceMapRenderContext {
 
     /// Compose a SYNTHETIC term-listing folder's lead content whole: the
     /// (possibly `.visually-hidden`) heading, this key's own map in
-    /// explorer-root order, the place breadcrumb/children chrome, and the
+    /// explorer-root order, the place children, and the
     /// member list — everything `render/blocking.rs`'s synthetic-folder
     /// path (no authored `ParsedDocument` backs it) used to assemble
     /// inline, one `is_explorer_root` check at a time. Returns the decision
@@ -267,7 +267,6 @@ impl PlaceMapRenderContext {
         folder: &str,
         members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
         page_path: &str,
-        place_breadcrumb_html: &str,
         article_list: &str,
         place_children_html: &str,
     ) -> (bool, String) {
@@ -292,16 +291,12 @@ impl PlaceMapRenderContext {
         } else {
             heading
         };
-        // An explorer root hosts no breadcrumb/children chrome and no
+        // An explorer root hosts no children chrome and no
         // member listing at all (design decision 7, "the map is the
         // page" — the reader finds places through the map and its own
         // breadcrumb menu, never a list of place links below it). A
-        // non-root synthetic index is unaffected and keeps all three.
+        // non-root synthetic index retains its map, member list and children.
         if !is_explorer_root {
-            if !place_breadcrumb_html.is_empty() {
-                content_html.push('\n');
-                content_html.push_str(place_breadcrumb_html);
-            }
             if let Some(map) = map_html.as_deref() {
                 content_html.push('\n');
                 content_html.push_str(map);

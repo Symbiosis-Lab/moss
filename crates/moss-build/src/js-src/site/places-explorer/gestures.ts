@@ -24,7 +24,7 @@ export interface GestureCallbacks {
    * embed sharing its page with the reader's own scroll: a single-finger
    * TOUCH drag is left alone (the page scrolls natively) instead of
    * panning the map, and two fingers pan the camera in addition to
-   * pinch-zooming it. Mouse/pen dragging, and ctrl/⌘+wheel zoom, are
+   * pinch-zooming it. Mouse/pen dragging, and wheel zoom, are
    * unaffected either way — only a lone touch defers to the page.
    * Queried on every pointer event rather than fixed at attach time, so
    * the embed's own expand/collapse transition needs no re-attachment —
@@ -33,18 +33,6 @@ export interface GestureCallbacks {
    * callback as "never cooperative".
    */
   cooperative?(): boolean;
-  /**
-   * A bare wheel (no ctrl/⌘) over a COOPERATIVE viewport — the one gesture
-   * this module deliberately leaves alone so the page keeps scrolling
-   * normally (see the wheel listener's own comment). Called on every such
-   * event, same as every other callback here; map.ts's own implementation
-   * is what dedupes to "only the first time" and owns the hint's own
-   * lifecycle (`cooperative?()` must already read true for this to ever
-   * fire — see the wheel listener below). Never called when not
-   * cooperative: the full explorer page's own bare-wheel scroll has no
-   * hint to show.
-   */
-  cooperativeHint?(): void;
   /**
    * A tap or click on the bare map surface (not a marker, cluster, card,
    * breadcrumb chip or control, and not the end of a drag or pinch).
@@ -60,7 +48,8 @@ const TAP_SLOP = 5;
 
 const KEYBOARD_STEP = 32;
 const KEYBOARD_STEP_FAST = 70;
-const WHEEL_ZOOM_STEP = 1.08;
+const WHEEL_ZOOM_PER_PIXEL = Math.log(1.08) / 100;
+const WHEEL_SETTLE_MS = 120;
 
 /** The ceiling a PAN (drag, keyboard arrows) clamps against — never below the camera's own current zoom, so dragging off the tile patch that raised `callbacks.maxZoom()` can never snap the zoom back down mid-drag. A zoom-changing gesture (`zoomAt`) deliberately does NOT go through this: `callbacks.maxZoom()` alone is the ceiling that limits zooming IN. */
 function panMaxZoom(camera: Camera, callbacks: GestureCallbacks): number {
@@ -204,27 +193,25 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
   viewport.addEventListener("pointercancel", endPointer);
   viewport.addEventListener("lostpointercapture", endPointer);
 
-  // Ctrl/Cmd + wheel only — a trackpad pinch arrives as a ctrl-wheel event on
-  // every OS regardless of platform, so this one listener covers an explicit
-  // zoom key AND a pinch gesture delivered this way. A bare wheel is left
-  // alone: the explorer is the page's own main content, not a small aside,
-  // so the reader's ordinary page scroll must keep working. A COOPERATIVE
-  // viewport (the collapsed embed) is a small aside sharing a page with the
-  // reader's own scroll, so a bare wheel there is ambiguous rather than
-  // obviously "scroll the page" — `cooperativeHint` is map.ts's own one-time
-  // nudge toward the modifier key, never a behaviour change: the event is
-  // still left alone either way, so the page still scrolls.
+  // Wheel deltas arrive in pixels, lines, or pages. Use distance rather than
+  // event count so a trackpad's many small events do not race to the zoom cap.
+  let wheelSettleTimer: ReturnType<typeof setTimeout> | undefined;
   viewport.addEventListener(
     "wheel",
     (event) => {
-      if (!event.ctrlKey && !event.metaKey) {
-        if (isCooperative()) callbacks.cooperativeHint?.();
-        return;
-      }
+      if (!event.deltaY) return;
       event.preventDefault();
       callbacks.onGestureStart();
-      zoomAt(viewport, callbacks, event.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP, event.clientX, event.clientY);
-      callbacks.onSettle();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? callbacks.getViewport().height : 1;
+      const delta = Math.max(-400, Math.min(400, event.deltaY * unit));
+      zoomAt(viewport, callbacks, Math.exp(-delta * WHEEL_ZOOM_PER_PIXEL), event.clientX, event.clientY);
+      clearTimeout(wheelSettleTimer);
+      // Cards, labels and URL persistence belong to the end of a wheel burst,
+      // just as they belong to pointerup rather than every drag movement.
+      wheelSettleTimer = setTimeout(() => {
+        wheelSettleTimer = undefined;
+        if (!pointers.size) callbacks.onSettle();
+      }, WHEEL_SETTLE_MS);
     },
     { passive: false },
   );

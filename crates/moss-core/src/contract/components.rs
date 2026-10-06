@@ -3757,17 +3757,6 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Section heading on a term page (e.g. /people/<name>/) for one name-list field's group of works, when the kind names more than one field.",
     },
     ComponentEntry {
-        class: "moss-place-breadcrumb",
-        kind: "instance",
-        parent: "",
-        data_attrs: &[],
-        example_html: r#"<nav class="moss-place-breadcrumb"><a href="/places/japan/" class="breadcrumb-segment">Japan</a></nav>"#,
-        example_markdown: "",
-        status: Status::Confirmed,
-        since: "0",
-        description: "Ancestor trail on a place page (e.g. /places/<name>/), oldest ancestor first, reusing the masthead's own `.breadcrumb-segment`/`.breadcrumb-separator` classes. Absent for a root place with no gazetteer parent, and for every non-place term.",
-    },
-    ComponentEntry {
         class: "moss-place-children",
         kind: "instance",
         parent: "",

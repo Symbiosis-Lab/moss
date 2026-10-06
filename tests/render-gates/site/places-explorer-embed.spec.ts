@@ -285,20 +285,18 @@ test.describe("style:map embed", () => {
     await expect.poll(() => new URL(embedFrame.url()).searchParams.get("z")).not.toBe(before);
   });
 
-  test("a bare wheel over the collapsed embed shows a dismissing hint and still scrolls the page, rather than doing nothing silently", async ({ page, browserName }) => {
-    // Previously fixme'd on WebKit for the same reason as the ctrl+wheel
-    // test above — resolved by the same fix; passes for real now.
+  test("plain wheel zooms the collapsed embed without scrolling its host page", async ({ page }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
-    const scrollBefore = await page.evaluate(() => window.scrollY);
     const viewport = page.frameLocator(IFRAME).locator(".moss-places-viewport");
+    const embedFrame = page.frames().find((f) => f.url().includes("place=places%2Flisbon"))!;
+    const before = new URL(embedFrame.url()).searchParams.get("z");
     await viewport.hover();
-    await page.mouse.wheel(0, 200);
-    const hint = page.frameLocator(IFRAME).locator(".moss-places-coop-hint");
-    await expect(hint).toHaveClass(/moss-places-coop-hint--visible/);
-    await expect(hint).toHaveAttribute("aria-live", "polite");
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrollBefore);
-    await expect(hint).not.toHaveClass(/moss-places-coop-hint--visible/, { timeout: 4000 });
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    await page.mouse.wheel(0, -200);
+    await expect.poll(() => new URL(embedFrame.url()).searchParams.get("z")).not.toBe(before);
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    await expect(page.frameLocator(IFRAME).locator(".moss-places-coop-hint")).toHaveCount(0);
   });
 
   test("the expand control opens the full control set, with no open-in-new-tab control alongside it", async ({ page, browserName }) => {

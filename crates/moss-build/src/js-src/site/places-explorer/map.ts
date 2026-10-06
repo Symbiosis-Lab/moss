@@ -533,7 +533,12 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   let fitPending = !initial.camera && (getViewport().width <= 0 || getViewport().height <= 0);
 
   // ---- camera application -------------------------------------------------
+  let gestureFrame: number | null = null;
   function applyCamera(settled: boolean): void {
+    if (settled && gestureFrame !== null) {
+      cancelAnimationFrame(gestureFrame);
+      gestureFrame = null;
+    }
     const viewport = getViewport();
     if (viewport.width <= 0 || viewport.height <= 0) return;
     lastViewport = viewport;
@@ -597,37 +602,6 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     }
   }
 
-  // ---- cooperative-gesture hint --------------------------------------------
-  // Shown at most once per mount: a bare wheel over the collapsed embed does
-  // nothing (`gestures.ts` leaves it for the page's own scroll), which reads
-  // as "broken" rather than "scroll normally, hold a key to zoom" without
-  // this nudge. `aria-live="polite"` announces it without interrupting
-  // whatever the reader is doing; it never reserves layout space (`position:
-  // absolute`, places-explorer.css) and auto-dismisses either way, instantly
-  // under reduced motion (the CSS transition itself is the only thing that
-  // media query turns off — the dismiss timer is unconditional).
-  const COOPERATIVE_HINT_MODIFIER = /Mac|iPhone|iPad|iPod/.test(
-    (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? navigator.userAgent ?? "",
-  )
-    ? "⌘"
-    : "Ctrl";
-  let cooperativeHintShown = false;
-  function showCooperativeHint(): void {
-    if (cooperativeHintShown) return;
-    cooperativeHintShown = true;
-    const hint = document.createElement("p");
-    hint.className = "moss-places-coop-hint";
-    hint.setAttribute("role", "status");
-    hint.setAttribute("aria-live", "polite");
-    hint.textContent = strings.cooperativeHint.replace("{key}", COOPERATIVE_HINT_MODIFIER);
-    viewportEl.append(hint);
-    requestAnimationFrame(() => hint.classList.add("moss-places-coop-hint--visible"));
-    window.setTimeout(() => {
-      hint.classList.remove("moss-places-coop-hint--visible");
-      window.setTimeout(() => hint.remove(), 400);
-    }, 2600);
-  }
-
   // ---- gestures ------------------------------------------------------------
   let cooperativeGestures = false;
   attachGestures(viewportEl, {
@@ -635,13 +609,19 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     getViewport,
     setCamera(next) {
       camera = next;
-      applyCamera(false);
+      // Keep the camera authoritative immediately, but paint at most once per
+      // frame when wheel or pointer events arrive faster than the display.
+      if (gestureFrame === null) {
+        gestureFrame = requestAnimationFrame(() => {
+          gestureFrame = null;
+          applyCamera(false);
+        });
+      }
     },
     onSettle: () => applyCamera(true),
     onGestureStart: () => worldEl.setAttribute("data-gesture", ""),
     maxZoom: () => currentMaxZoom(getViewport()),
     cooperative: () => cooperativeGestures,
-    cooperativeHint: showCooperativeHint,
     // The same deselect a card or marker click on the open work performs; `selectWork(null)` leaves the camera alone.
     onDismiss: () => {
       if (selectedId) selectWork(null);

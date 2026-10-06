@@ -127,3 +127,52 @@ test("a real click on the zoom control resolves quickly at a deep zoom with tile
   const ms = await zoomInClickMs(page);
   expect(ms, `zoom-in click latency at deep zoom: ${ms}ms`).toBeLessThanOrEqual(MAX_CLICK_MS);
 });
+
+test("a plain-wheel burst paints the final camera and settles once", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await gotoReady(page, "places/");
+  await page.waitForTimeout(500);
+  const result = await page.evaluate(async () => {
+    const viewport = document.querySelector<HTMLElement>(".moss-places-viewport")!;
+    const world = document.querySelector<HTMLElement>(".moss-places-world")!;
+    const rect = viewport.getBoundingClientRect();
+    const before = world.style.transform;
+    let settlements = 0;
+    const replaceState = history.replaceState;
+    history.replaceState = function (...args) {
+      settlements++;
+      return replaceState.apply(this, args);
+    };
+    let active = true;
+    let previous = performance.now();
+    let worstGap = 0;
+    const tick = (now: number) => {
+      worstGap = Math.max(worstGap, now - previous);
+      previous = now;
+      if (active) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    try {
+      for (let i = 0; i < 40; i++) {
+        const event = new WheelEvent("wheel", {
+          deltaY: -5,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+          cancelable: true,
+        });
+        viewport.dispatchEvent(event);
+        if (!event.defaultPrevented) throw new Error("map did not claim plain wheel");
+        await new Promise((resolve) => setTimeout(resolve, 4));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return { settlements, worstGap, changed: before !== world.style.transform, settled: !world.hasAttribute("data-gesture") };
+    } finally {
+      active = false;
+      history.replaceState = replaceState;
+    }
+  });
+  expect(result.changed).toBe(true);
+  expect(result.settled).toBe(true);
+  expect(result.settlements).toBe(1);
+  expect(result.worstGap).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
+});

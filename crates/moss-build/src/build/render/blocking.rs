@@ -2426,14 +2426,6 @@ pub fn generate_blocking_content_for_build(
                 render_group,
             )
             .unwrap_or_else(|| render_group(&folder_docs));
-            // The generated half of the same breadcrumb/children chrome the
-            // claimed page gets in `folder_embed`, through the same resolved
-            // data: `None` (rendered empty) for every non-place term, since
-            // `TermSite::parent` is only ever set for a place-typed kind.
-            let place_breadcrumb_html = crate::build::components::place_hierarchy::render_breadcrumb(
-                term_index.breadcrumb(folder).unwrap_or(&[]),
-            )
-            .unwrap_or_default();
             let place_children_html = crate::build::components::place_hierarchy::render_children(
                 term_index.children(folder).unwrap_or(&[]),
             )
@@ -2464,7 +2456,6 @@ pub fn generate_blocking_content_for_build(
                 folder,
                 all_docs_refs.iter().copied(),
                 &auto_url_path,
-                &place_breadcrumb_html,
                 &article_list,
                 &place_children_html,
             );

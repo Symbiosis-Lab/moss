@@ -172,3 +172,34 @@ fn a_claimed_place_page_never_gets_a_locator() {
     assert!(page.contains("moss-place-map"), "its own term map still draws: {page}");
     assert!(!page.contains("moss-place-locator"), "{page}");
 }
+
+#[test]
+fn place_pages_omit_geographic_parent_annotations_but_keep_authored_text_and_hierarchy() {
+    let tmp = std::env::temp_dir().join(format!("moss_place_annotations_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\ntitle = \"Places\"\n");
+    write(&tmp, ".moss/places.toml", "[\"Village\"]\nlat = 10.0\nlng = 20.0\nprecision = \"city\"\nparent = \"Region\"\n\n[\"Region\"]\nlat = 12.0\nlng = 22.0\nprecision = \"region\"\nparent = \"Territory\"\n\n[\"Territory\"]\nlat = 15.0\nlng = 25.0\nprecision = \"country\"\n");
+    write(&tmp, "index.md", "---\ntitle: Home\nbreadcrumb: true\n---\n\nHi.\n");
+    write(&tmp, "village.md", "---\ntitle: Village\nplace_page: true\n---\n\nAn authored mention of Territory.\n");
+    write(&tmp, "posts/report.md", "---\ntitle: Field report\nlocation: Village\n---\n\nText.\n");
+    let result = build_sync(&tmp.to_string_lossy());
+    assert!(result.is_ok(), "build failed: {result:?}");
+    let out = tmp.join(".moss/build.nosync/staging");
+    let claimed = read_page(&out, "village/index.html");
+    let generated = read_page(&out, "places/region/index.html");
+    for html in [&claimed, &generated] {
+        assert!(!html.contains("moss-place-breadcrumb"), "parent annotation must not render");
+        assert!(html.contains("Field report"), "rolled-up works must remain");
+        assert!(html.contains("class=\"site-name\""), "normal home navigation must remain");
+    }
+    assert!(claimed.contains("An authored mention of Territory."));
+    assert!(generated.contains("moss-place-children"));
+    assert!(generated.contains("Village (1)"));
+    let places_path = fs::read_dir(out.join("_moss")).unwrap().map(|entry| entry.unwrap().path())
+        .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("places.") && path.extension().is_some_and(|ext| ext == "json"))
+        .expect("explorer places data");
+    let data: serde_json::Value = serde_json::from_str(&fs::read_to_string(places_path).unwrap()).unwrap();
+    let village = data["places"].as_array().unwrap().iter().find(|place| place["id"] == "places/village").unwrap();
+    assert_eq!(village["parent"], "places/region", "internal geographic hierarchy must remain");
+}

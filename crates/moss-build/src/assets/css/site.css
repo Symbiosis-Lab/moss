@@ -2086,18 +2086,6 @@ header:has(+ .moss-hero) .main-nav {
   display: none;
 }
 
-/* A place page's ancestor trail (`build::components::place_hierarchy`),
-   reusing `.breadcrumb-segment`/`.breadcrumb-separator` above rather than
-   duplicating them — this container just needs to lay them out as a row;
-   none of the masthead's fold/truncation machinery applies here, so
-   wrapping (not ellipsis) is how a long chain avoids overflow. */
-.moss-place-breadcrumb {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  margin-block: 0 var(--moss-space-md);
-}
-
 /* A place page's direct children, each already carrying its roll-up-
    inclusive count in the link text (`Kyoto (3)`) — no separate markup to
    mute just the count against, so the whole entry gets the same muted,

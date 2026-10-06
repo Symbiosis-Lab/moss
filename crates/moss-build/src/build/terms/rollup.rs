@@ -1,4 +1,4 @@
-//! Post-pass-2 hierarchy resolution: `TermSite.parent`, breadcrumbs,
+//! Post-pass-2 hierarchy resolution: `TermSite.parent`,
 //! children-with-counts, and flagging a real document that sits at a
 //! place-typed namespace root. Split out of `terms.rs` (sibling-file
 //! pattern) so the per-document membership derivation (`derive_terms`
@@ -13,7 +13,7 @@ use moss_core::terms::term_folder_key;
 use super::{TermIndex, TermKind, TermSite};
 use crate::build::types::ParsedDocument;
 
-/// `TermSite.parent`, breadcrumbs, and children-with-counts, resolved once
+/// `TermSite.parent`, and children-with-counts, resolved once
 /// here after [`super::derive_terms`]'s pass 2 memberships are final.
 /// Mutates `index` in place.
 pub fn resolve_hierarchy(index: &mut TermIndex, kinds: &[TermKind]) {
@@ -30,7 +30,7 @@ pub fn resolve_hierarchy(index: &mut TermIndex, kinds: &[TermKind]) {
     // parent_display, claimed_by: None`) — a claimed leaf place's ancestor
     // may never separately appear in `index.sites` on its own (no
     // document's `location:` names it, and `attach_parents` itself creates
-    // no sites), and without one it would have no page to breadcrumb-link
+    // no sites), and without one it would have no page for its children
     // to, and no page would be generated for it at all. A4's own
     // cycle-guard already makes `kind.parents` a fixed point; `seen` here
     // is a defensive backstop, not a load-bearing cap.
@@ -58,36 +58,7 @@ pub fn resolve_hierarchy(index: &mut TermIndex, kinds: &[TermKind]) {
         }
     }
 
-    // Breadcrumb and children, resolved once here (same "one computation,
-    // two readers" pattern as `sections_by_term` in `derive_terms`), now
-    // that every site's `parent` is final. A non-place term simply never
-    // has a `parent`, so both maps end up with nothing recorded for it —
-    // the emptiness check in the render layer is the only gate needed.
-    let mut breadcrumbs_by_term: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-    for key in index.sites.keys() {
-        let mut chain: Vec<(String, String)> = Vec::new();
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        seen.insert(key.clone());
-        let mut current = index.sites.get(key).and_then(|s| s.parent.clone());
-        // A4's own cycle-guard already made the gazetteer's `parents` a
-        // fixed point; `seen` here is a defensive backstop, not a load-
-        // bearing cap.
-        while let Some(anc_key) = current {
-            if !seen.insert(anc_key.clone()) {
-                break;
-            }
-            let Some(anc_site) = index.sites.get(&anc_key) else { break };
-            chain.push((anc_site.display.clone(), site_url(&anc_key, anc_site)));
-            current = anc_site.parent.clone();
-        }
-        if chain.is_empty() {
-            continue;
-        }
-        chain.reverse(); // oldest ancestor first
-        breadcrumbs_by_term.insert(key.clone(), chain);
-    }
-    index.breadcrumbs_by_term = breadcrumbs_by_term;
-
+    // Resolve direct children once for authored and generated term pages.
     let mut children_by_term: BTreeMap<String, Vec<(String, String, usize)>> = BTreeMap::new();
     for (key, site) in &index.sites {
         let Some(parent_key) = &site.parent else { continue };
@@ -104,8 +75,7 @@ pub fn resolve_hierarchy(index: &mut TermIndex, kinds: &[TermKind]) {
 /// The root-relative URL a term key's own site resolves to — the claiming
 /// page when one exists, the generated pseudo-folder page otherwise. Same
 /// logic [`TermIndex::term_url`] applies from a `(ns, name)` pair; this
-/// version takes an already-resolved key and site, for the breadcrumb/
-/// children pass, which already has both in hand.
+/// version takes an already-resolved key and site, for the children pass, which already has both in hand.
 fn site_url(key: &str, site: &TermSite) -> String {
     match &site.claimed_by {
         Some(claim) => format!("/{}", claim), // allow:served-path-url-construct (term link to the claiming page)

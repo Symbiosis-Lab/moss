@@ -237,13 +237,6 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub term_sections: Option<Vec<(Option<String>, Vec<String>)>>,
-    /// This place term's ancestor chain, oldest first — set alongside
-    /// `term_sections`, on the same condition (`term_listing.is_some()`).
-    /// `None` for a non-place claiming page, and for a root place with no
-    /// gazetteer parent.
-    #[serde(skip)]
-    #[specta(skip)]
-    pub place_breadcrumb: Option<Vec<(String, String)>>,
     /// This place term's direct children, `(display, url, count)` — set
     /// alongside `term_sections`, same condition. `None` for a non-place
     /// claiming page, and for a leaf place with no children.

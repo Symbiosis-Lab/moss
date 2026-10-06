@@ -42,7 +42,7 @@ afterEach(() => {
 /** Dispatch a ctrl-wheel zoom-in at a FIXED screen point, so repeated calls keep converging the camera toward the same world point under it (the real gesture a reader holding the cursor still over a cell while scrolling produces). */
 function wheelZoomIn(viewportEl: HTMLElement, clientX: number, clientY: number, times: number): void {
   for (let i = 0; i < times; i++) {
-    viewportEl.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY: -1, clientX, clientY, bubbles: true, cancelable: true }));
+    viewportEl.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY: -100, clientX, clientY, bubbles: true, cancelable: true }));
   }
 }
 
@@ -75,6 +75,58 @@ describe("mountPlacesMap — embed seams", () => {
     })!;
     return { figure, controller };
   }
+
+  test("camera paint coalesces while wheel input keeps the final camera", () => {
+    vi.useFakeTimers();
+    try {
+      const frames: FrameRequestCallback[] = [];
+      const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      const { figure, controller } = mount();
+      request.mockClear();
+      frames.length = 0;
+      const world = figure.querySelector<HTMLElement>(".moss-places-world")!;
+      const before = world.style.transform;
+      const beforeZoom = readUrlState().camera!.zoom;
+      for (let i = 0; i < 10; i++) {
+        controller.viewportEl.dispatchEvent(new WheelEvent("wheel", { deltaY: -10, clientX: 400, clientY: 250, cancelable: true }));
+      }
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(world.style.transform).toBe(before);
+      frames[0](16);
+      expect(world.style.transform).not.toBe(before);
+      expect(readUrlState().camera!.zoom).toBe(beforeZoom);
+      vi.advanceTimersByTime(120);
+      expect(readUrlState().camera!.zoom).toBeCloseTo(beforeZoom * 1.08, 2);
+      expect(world.hasAttribute("data-gesture")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("pointerup paints the final pan immediately and cancels its queued frame", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(42);
+    const cancel = vi.spyOn(window, "cancelAnimationFrame");
+    const { figure, controller } = mount();
+    const viewport = controller.viewportEl;
+    viewport.setPointerCapture = vi.fn();
+    const world = figure.querySelector<HTMLElement>(".moss-places-world")!;
+    const before = world.style.transform;
+    const send = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { clientX, clientY: 250, button: 0, bubbles: true });
+      Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
+      viewport.dispatchEvent(event);
+    };
+    send("pointerdown", 400);
+    send("pointermove", 460);
+    expect(world.style.transform).toBe(before);
+    send("pointerup", 460);
+    expect(world.style.transform).not.toBe(before);
+    expect(cancel).toHaveBeenCalledWith(42);
+    expect(world.hasAttribute("data-gesture")).toBe(false);
+  });
 
   test("setCurrentArticle drops that work's own card from the row without touching its marker selection", () => {
     history.replaceState(null, "", "/places/?article=w1");
@@ -255,7 +307,7 @@ describe("mountPlacesMap — a work's fit ceiling follows tile coverage", () => 
 });
 
 describe("mountPlacesMap — the applyCamera re-clamp never forces a zoom-out on a pan", () => {
-  test("panning off a tile patch, after zooming in on it past the world ceiling, keeps the zoom", () => {
+  test("panning off a tile patch, after zooming in on it past the world ceiling, keeps the zoom", async () => {
     const figure = document.createElement("figure");
     document.body.append(figure);
     const controller = mountPlacesMap(figure, {
@@ -281,6 +333,7 @@ describe("mountPlacesMap — the applyCamera re-clamp never forces a zoom-out on
     const anchorX = VIEWPORT.width / 2 + (target.x - initialCamera.x) * initialScale;
     const anchorY = VIEWPORT.height / 2 + (target.y - initialCamera.y) * initialScale;
     wheelZoomIn(viewportEl, anchorX, anchorY, 60);
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     const worldCeiling = detailMaxZoom(VIEWPORT);
     const tileCeiling = tileDetailMaxZoom(VIEWPORT);
