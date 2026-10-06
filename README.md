@@ -27,6 +27,8 @@ moss is in beta. Building, previewing and editing are open to everyone. Publishi
 
 ## Install
 
+Desktop app (macOS): download `moss.dmg` from [Releases](https://github.com/Symbiosis-Lab/moss/releases/latest), or run `moss desktop install` from an existing CLI install to fetch and verify it automatically.
+
 macOS (desktop app + CLI, as a Homebrew cask):
 
 ```sh
@@ -46,8 +48,6 @@ npm install -g @symbiosis-lab/moss
 ```
 
 `cargo install moss-cli` is coming — the crate is reserved on crates.io but not yet published.
-
-Or download a binary or the macOS/Windows app directly from [Releases](https://github.com/Symbiosis-Lab/moss/releases/latest).
 
 ## Quick start
 
@@ -71,7 +71,7 @@ Designs for things moss does not do yet live in [docs/proposals](docs/proposals/
 
 Bug reports, comments on proposals and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) says how to build, how to check a change and what we ask of contributors. Issues labelled [`good first issue`](https://github.com/Symbiosis-Lab/moss/labels/good%20first%20issue) are sized for a first contribution.
 
-The desktop app for macOS and Windows is built from a private repository. Its releases, its bug reports and its designs live here.
+The desktop app’s releases, bug reports and designs live here.
 
 ## Repository layout
 
@@ -91,6 +91,10 @@ The desktop app for macOS and Windows is built from a private repository. Its re
 ## Documentation
 
 Full docs: [mosspub.com/docs](https://mosspub.com/docs). Source: [site/docs/](site/docs/). Changes: [CHANGELOG.md](CHANGELOG.md).
+
+## Issues
+
+[Open an issue](https://github.com/Symbiosis-Lab/moss/issues) for the CLI, the build engine, any of the packages above, or the desktop app.
 
 ## License
 
