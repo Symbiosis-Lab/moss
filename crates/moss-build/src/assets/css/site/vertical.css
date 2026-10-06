@@ -368,133 +368,20 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   line-height: 1.7;
 }
 
-/* Counters site.css's `@media (max-width: 768px) .moss-grid[data-columns]`
-   collapse (added for the default, horizontal inline axis — see that
-   rule's comment). These restate the same per-count values site.css's
-   `.moss-grid[data-columns="N"]` rules already declare, at one attribute
-   selector higher specificity, so they win under the collapse media query
-   too; `data-columns="1"` needs no counter since a single column already
-   reads the same as the collapse. */
-[data-typesetting="vertical"] .moss-grid[data-columns="2"] {
-  grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
-}
-[data-typesetting="vertical"] .moss-grid[data-columns="3"] {
-  grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
-}
-[data-typesetting="vertical"] .moss-grid[data-columns="4"] {
-  grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+/* Grid columns follow the inline axis, so the shared track formula already
+   stacks cards down the page. Only physical overflow needs transposing:
+   logical overflow properties are not available at the supported Safari floor. */
+[data-typesetting="vertical"] .moss-grid {
+  --_grid-overflow-x: visible;
+  --_grid-overflow-y: auto;
 }
 
-/* Scrolling row (`:::grid N {scroll}`), transposed rather than disabled:
-   site.css's base rule already places one card per grid "column", and a
-   grid's columns are both SIZED and POSITIONED along the INLINE axis —
-   vertical-rl points that down the page — so the unmodified `grid-auto-flow:
-   column` stacks N cards top to bottom here instead of side by side, each
-   spanning the row's full (block-axis) width, with `grid-auto-columns`
-   giving each one the same "N cards plus a peek" share of the row's own
-   INLINE size (its height) that it gives the row's WIDTH under horizontal
-   typesetting — the calc() is a fraction of the container's inline size
-   either way, so the four `grid-auto-columns` formulas below are the exact
-   values site.css already declares for `[data-scroll][data-columns="N"]`,
-   restated only because they need to win a specificity race (next
-   paragraph), not because the numbers change.
-
-   `overflow-x: auto` is the one physical property in the base rule with no
-   safe logical spelling: `overflow-inline`/`overflow-block` exist (CSS
-   Overflow Level 3) but are too new for this file's Safari floor (see the
-   `overflow-x: hidden` comment on `html:has(...)` above), so the axis is
-   swapped by hand — `overflow-y: auto` scrolls the row down the line.
-   Declaring `overflow-x: visible` alongside it is documentation, not the
-   last word: CSS Overflow §3 forces a box's other axis to stop being
-   `visible` once one axis isn't, so both compute to `auto`. That is exactly
-   what the un-touched `padding-block: 4px` above (site.css) already
-   compensates for — being logical, it pads left/right here instead of
-   top/bottom, wherever the forced-auto block axis now clips a focus ring.
-   `scroll-snap-type: inline proximity` and `overscroll-behavior-inline:
-   contain` (site.css, both logical) need no restatement either.
-
-   `grid-template-columns` needs restoring to `none` specifically for a
-   scroll row: the per-count `[data-columns="N"]` rules above restate
-   site.css's WRAPPING template for `.moss-grid[data-columns="N"]`
-   generally (no `[data-scroll]` exclusion, since until now a scroll row
-   under vertical typesetting fell back to that same wrapping layout) — at a
-   specificity that would otherwise re-apply here too and fight
-   `grid-auto-columns`. One more attribute selector (`[data-scroll]`) beats
-   them regardless of source order.
-
-   And the per-count `grid-auto-columns` formulas need restating
-   unconditionally (no media query): they have to win the same specificity
-   race the wrapping per-count rules above already run, against site.css's
-   `@media (max-width: 768px)` phone collapse (divides by a flat 1.3) — the
-   wrong reason to shrink a card here, for the same cause the wrapping grid
-   has no phone variant either (comment further up): the constraining
-   dimension under vertical typesetting is the row's own SVH-derived height,
-   never the viewport's WIDTH. */
-[data-typesetting="vertical"] .moss-grid[data-scroll] {
-  overflow-y: auto;
-  overflow-x: visible;
-}
-[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns] {
-  grid-template-columns: none;
-}
-[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="1"] {
-  grid-auto-columns: calc(
-    100% - var(--moss-grid-scroll-peek, 2.5rem) - var(--moss-space-md)
-  );
-}
-[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="2"] {
-  grid-auto-columns: calc(
-    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 2 * var(--moss-space-md)) / 2
-  );
-}
-[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="3"] {
-  grid-auto-columns: calc(
-    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 3 * var(--moss-space-md)) / 3
-  );
-}
-[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="4"] {
-  grid-auto-columns: calc(
-    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 4 * var(--moss-space-md)) / 4
-  );
-}
-
-/* `data-fits` (site.css) counters the transpose above the SAME breakpoint
-   site.css uses, for a fitting row's twin reason: `.moss-grid[data-columns=
-   "N"]` (this file, unconditional) already renders it as plain-grid N cards
-   stacked down the column whenever `[data-scroll]` isn't in the selector at
-   all, so restoring exactly that shape above 769px only needs
-   `grid-template-columns` back. site.css's own `[data-fits]` rule sits at
-   the SAME specificity (one class, three attributes) as this file's own
-   `[data-scroll][data-columns]` rule two rules up (one class, three
-   attributes — `[data-typesetting]` counts too, even though it's on an
-   ancestor), so it would lose the tie by source order: partials load AFTER
-   core (`stylesheet.rs`'s `CSS_PARTIALS`), but THIS rule sits below line
-   358's inside the same file, and equal specificity + later source wins —
-   so restating it here, one attribute selector higher
-   (`[data-typesetting]` again, `[data-fits]` again), the same technique the
-   collapse-counter rules above already use, is what actually settles it.
-   `overflow-y: visible` undoes this file's own always-scrolling
-   `overflow-y: auto`. `grid-auto-flow: row` undoes site.css's
-   `[data-scroll] { grid-auto-flow: column }`, unconditional there for every
-   typesetting — the plain-count rules above rely on the same 'row' default
-   (never restated because nothing before this ever set it to 'column' on a
-   non-scroll grid), so a scroll row has to explicitly ask for it back. */
-@media (min-width: 769px) {
-  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits] {
-    grid-auto-flow: row;
-    overflow-y: visible;
-  }
-  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="1"] {
-    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
-  }
-  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="2"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
-  }
-  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="3"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
-  }
-  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="4"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+/* Preserve the authored tracks at phone width, where inline space is still
+   viewport height. Higher counts retain their existing responsive fallback. */
+@media (max-width: 768px) {
+  [data-typesetting="vertical"] .moss-grid:is([data-columns="1"], [data-columns="2"], [data-columns="3"], [data-columns="4"]) {
+    --_grid-wrap: var(--_grid-template);
+    --_grid-track: var(--_grid-authored-track);
   }
 }
 

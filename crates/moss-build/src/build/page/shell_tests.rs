@@ -3602,25 +3602,9 @@ fn a_hint_pill_is_reachable_when_shown_and_inert_when_not() {
 // ── `:::grid N {scroll}` — horizontally scrolling row ──────────────
 
 #[test]
-fn grid_scroll_lays_out_as_a_single_scrolling_line() {
-    let rule = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll]")
-        .expect(".moss-grid[data-scroll] CSS rule should exist");
-    assert!(rule.contains("grid-auto-flow: column"), "got: {rule}");
-    assert!(rule.contains("overflow-x: auto"), "got: {rule}");
-    assert!(
-        rule.contains("scroll-snap-type: inline proximity"),
-        "got: {rule}"
-    );
-    assert!(
-        rule.contains("overscroll-behavior-inline: contain"),
-        "got: {rule}"
-    );
-}
-
-#[test]
 fn grid_scroll_carries_no_template_columns() {
     // Sizing comes from `grid-auto-columns`, keyed on `[data-columns]`
-    // rather than a fixed template — see the per-count rules below.
+    // rather than a fixed template. Browser gates verify the shared sizing.
     let rule = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll][data-columns]")
         .expect(".moss-grid[data-scroll][data-columns] CSS rule should exist");
     assert!(
@@ -3643,57 +3627,6 @@ fn grid_scroll_cards_snap_and_do_not_floor_at_content_width() {
         .expect(".moss-grid[data-scroll] > * CSS rule should exist");
     assert!(rule.contains("min-inline-size: 0"), "got: {rule}");
     assert!(rule.contains("scroll-snap-align: start"), "got: {rule}");
-}
-
-#[test]
-fn grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek() {
-    for n in 1..=4u32 {
-        let selector = format!(r#".moss-grid[data-scroll][data-columns="{n}"]"#);
-        let rule = get_css_rule(DEFAULT_CSS, &selector)
-            .unwrap_or_else(|| panic!("{selector} CSS rule should exist"));
-        assert!(
-            rule.contains("grid-auto-columns:") && rule.contains("--moss-grid-scroll-peek"),
-            "{selector} must size tracks off the peek custom property: {rule}"
-        );
-        // Every count divides by itself, so its own digit must appear in the
-        // calc (guards against a copy-pasted rule for the wrong count).
-        assert!(
-            rule.contains(&format!("/ {n}")) || n == 1,
-            "{selector} should divide by {n}: {rule}"
-        );
-        // N cards need N gaps subtracted before the peek — one between each
-        // pair of the N cards, plus one more before the card that peeks past
-        // the edge. An (N-1)-gap version quietly eats part of the peek: a
-        // 2026-09-21 measurement at data-columns=3 found only ~16px of the
-        // next card visible instead of the promised 2.5rem (40px), because
-        // that gap was missing from the subtraction.
-        let expected_gap_term = if n == 1 {
-            "var(--moss-space-md)".to_string()
-        } else {
-            format!("{n} * var(--moss-space-md)")
-        };
-        assert!(
-            rule.contains(&expected_gap_term),
-            "{selector} should subtract {n} gap(s) before the peek, got: {rule}"
-        );
-    }
-}
-
-#[test]
-fn grid_scroll_survives_the_mobile_collapse_but_shrinks_its_track() {
-    // The general `.moss-grid[data-columns]` collapse (`grid-template-columns:
-    // 1fr`) is for the wrapping layout; a scroll row keeps scrolling but
-    // shows less of it on a phone.
-    let rule = get_css_rule_in_media(
-        DEFAULT_CSS,
-        "@media (max-width: 768px)",
-        ".moss-grid[data-scroll][data-columns]",
-    )
-    .expect("narrow-screen .moss-grid[data-scroll][data-columns] rule should exist");
-    assert!(
-        rule.contains("grid-auto-columns:"),
-        "narrow screens should still size by grid-auto-columns, not collapse: {rule}"
-    );
 }
 
 #[test]
@@ -3794,55 +3727,4 @@ fn external_card_favicon_resets_image_margins_and_uses_logical_gap() {
     assert!(rule.contains("margin-inline-end: 0.35em"), "got: {rule}");
     assert!(!rule.contains("margin-right"), "physical margin leaked into favicon rule: {rule}");
     assert!(!rule.contains("margin-block"), "block margin leaked into favicon rule: {rule}");
-}
-
-#[test]
-fn grid_scroll_scrolls_along_the_line_under_vertical_typesetting() {
-    // Transposed, not disabled: a grid's columns are both sized and
-    // positioned along the INLINE axis, which vertical-rl points down the
-    // page, so the base rule's unmodified `grid-auto-flow: column` already
-    // stacks cards top to bottom there — only the overflow axis is
-    // physical, so it is the only one swapped by hand.
-    let css = site_css_with_partials();
-    let rule = get_css_rule(&css, r#"[data-typesetting="vertical"] .moss-grid[data-scroll]"#)
-        .expect(r#"[data-typesetting="vertical"] .moss-grid[data-scroll] rule should exist"#);
-    assert!(rule.contains("overflow-y: auto"), "got: {rule}");
-    assert!(rule.contains("overflow-x: visible"), "got: {rule}");
-    assert!(
-        !rule.contains("grid-auto-flow"),
-        "must not re-disable the column flow the base rule already sets: got: {rule}"
-    );
-}
-
-#[test]
-fn grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek_under_vertical_typesetting() {
-    // Same formulas as `grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek`
-    // (site.css) — the calc() is a fraction of the container's own inline
-    // size either way — restated here because they need to win a
-    // specificity race the wrapping per-count rules above already run,
-    // against the `@media (max-width: 768px)` phone collapse: the wrong
-    // reason to shrink a card under vertical typesetting, whose
-    // constraining dimension is the row's own SVH-derived height, not
-    // viewport width.
-    let css = site_css_with_partials();
-    let template = get_css_rule(&css, r#"[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns]"#)
-        .expect("vertical [data-scroll][data-columns] rule should exist");
-    assert!(
-        template.contains("grid-template-columns: none"),
-        "got: {template}"
-    );
-    for n in 1..=4u32 {
-        let selector =
-            format!(r#"[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="{n}"]"#);
-        let rule = get_css_rule(&css, &selector)
-            .unwrap_or_else(|| panic!("{selector} CSS rule should exist"));
-        assert!(
-            rule.contains("grid-auto-columns:") && rule.contains("--moss-grid-scroll-peek"),
-            "{selector} must size tracks off the peek custom property: {rule}"
-        );
-        assert!(
-            rule.contains(&format!("/ {n}")) || n == 1,
-            "{selector} should divide by {n}: {rule}"
-        );
-    }
 }

@@ -734,6 +734,7 @@ cover: tile.svg
 [site]
 lang = "en"
 implicit_figure = false
+link_preview = false
 `,
     // No user theme: this gate is about moss's own defaults.
     ".moss/theme/style.css": null,

@@ -366,3 +366,50 @@ test("a scroll row's page-control dots are unscaled even-pixel squares in every 
     expect(Number.isInteger(px) && px % 2 === 0, `even whole px ${JSON.stringify(d)}`).toBe(true);
   }
 });
+
+for (const vertical of [false, true]) {
+  test(`the ${vertical ? "vertical" : "horizontal"} scroll row remains keyboard and wheel operable`, async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(vertical ? "/scroll-overflow-vertical/" : "/scroll-overflow/");
+    const row = page.locator(".moss-grid[data-scroll]");
+    await expect(row).toHaveAttribute("tabindex", "0");
+    await row.scrollIntoViewIfNeeded();
+    await row.focus();
+    await page.keyboard.press(vertical ? "ArrowDown" : "ArrowRight");
+    const position = () => row.evaluate((el, vertical) => Math.abs(vertical ? el.scrollTop : el.scrollLeft), vertical);
+    await expect.poll(position).toBeGreaterThan(0);
+    await row.evaluate((el) => { el.scrollTop = 0; el.scrollLeft = 0; });
+    await row.hover();
+    await page.mouse.wheel(0, 160);
+    await expect.poll(position).toBeGreaterThan(0);
+    const current = page.locator('.moss-scroll-dots button[tabindex="0"]');
+    await current.focus();
+    await page.keyboard.press("End");
+    await expect(row.locator(":scope > *").last()).toBeInViewport();
+  });
+}
+
+test.describe("native touch input", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "Trusted touch drag injection requires Chromium's input protocol");
+  for (const vertical of [false, true]) {
+    test(`a touch swipe scrolls the ${vertical ? "vertical" : "horizontal"} row natively`, async ({ page, context }) => {
+      await page.setViewportSize(MOBILE);
+      await page.goto(vertical ? "/scroll-overflow-vertical/" : "/scroll-overflow/");
+      const row = page.locator(".moss-grid[data-scroll]");
+      await row.scrollIntoViewIfNeeded();
+      const box = (await row.boundingBox())!;
+      const session = await context.newCDPSession(page);
+      await session.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+      for (const distance of [40, 80, 120, 160]) {
+        await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: vertical ? x : x - distance, y: vertical ? y - distance : y }] });
+      }
+      await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await expect.poll(() => row.evaluate((el, vertical) => Math.abs(vertical ? el.scrollTop : el.scrollLeft), vertical)).toBeGreaterThan(0);
+      await session.detach();
+    });
+  }
+});
