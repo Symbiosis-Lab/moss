@@ -3070,8 +3070,15 @@ function widenSnap() {
 }
 addEventListener('touchstart', () => { touching = true; narrowSnap(); }, { passive: true });
 for (const type of ['touchend', 'touchcancel']) addEventListener(type, () => { touching = false; gestureAt = performance.now(); }, { passive: true });
+// wheelOpen itself is never reset here: a ramping swipe's own deltas keep crossing NOTCH_PX as
+// they speed up, and resetting it on every call let each crossing open a fresh "gesture" and
+// carry again, each carry resetting restSince and so the snap it had just turned back on, which
+// let the glide's own tail -- still arriving, snap already off again -- free-scroll past the
+// rest a swipe had already reached (measured: a swipe that landed on scene 1 drifted on past it
+// within the same gesture). wheelOpen instead stays true for the gesture's own life, reset only
+// where the rest of a gesture's end is already decided, below.
 function goOnward() {
-  const dir = Math.sign(wheelSum), enough = Math.abs(wheelSum) >= ONWARD_MIN_PX; wheelOpen = false;
+  const dir = Math.sign(wheelSum), enough = Math.abs(wheelSum) >= ONWARD_MIN_PX;
   if (!enough || mobileLayout()) return;   // the window may have become the phone layout since the wheel was heard
   const ys = rests();
   const i = dir > 0 ? ys.findIndex((y) => y > stood + 2) : ys.findLastIndex((y) => y < stood - 2);
@@ -3298,18 +3305,21 @@ function drivePicture(now) {
   // it reached mid-swipe, has not stood there: a swipe is counted from where it began.
   if (now - restSince > 150) {
     aimed = null;
-    if (!touching && now - gestureAt > GESTURE_GAP_MS) { if (stood !== scrollY) { stood = scrollY; hearFrames(); } widenSnap(); }
+    if (!touching && now - gestureAt > GESTURE_GAP_MS) { wheelOpen = false; if (stood !== scrollY) { stood = scrollY; hearFrames(); } widenSnap(); }
   }
-  // A carried scroll ends when the page has come to rest on a rest, and the snap returns. One
-  // that stopped short of a rest is first finished on the nearest, so the returning snap has
-  // nothing to jump. That waits for 1.5 s of stillness, far longer than a frame: a smooth scroll
-  // that has not yet begun to move is still too, and at a frame or two a second, as a busy page
-  // can run, waiting 400 ms sent a carry that had not yet moved back to where it began
-  // (measured). A window that became the phone layout has no snap to return.
+  // A carried scroll ends, and the snap returns, the moment the page reaches a rest -- not once
+  // it has gone quiet there, which a swipe's own glide can keep delaying: its tail goes on
+  // nudging the page for up to another second and a half, real scrolling the whole time, so
+  // restSince never ages the usual way while the snap sits off and nothing is left to stop the
+  // tail from carrying the page on past the rest it had already reached (measured: the page
+  // reached the rest a swipe was carried to, then drifted hundreds of pixels past it). One that
+  // stopped short of a rest is first finished on the nearest, waiting 1.5 s of true stillness so
+  // a smooth scroll merely slow to start is not sent prematurely (measured: 400 ms was too
+  // short). A window that became the phone layout has no snap to return.
   if (carried) {
     const rest = nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
-    if (mobileLayout() || (there && now - restSince > 150)) { carried = false; document.documentElement.classList.remove('carried'); }
-    else if (!there && now - restSince > 1500) { restSince = now; scrollToRest(rest); }
+    if (mobileLayout() || there) { carried = false; document.documentElement.classList.remove('carried'); }
+    else if (now - restSince > 1500) { restSince = now; scrollToRest(rest); }
   }
   onScroll(dy);
   updateFinalDissolve();
