@@ -5,6 +5,7 @@ passthrough = ["index.html", "zh-hans/index.html", "zh-hant/index.html", "illust
 [channels.email]
 
 [site]
+search = true
 ai_policy = "unrestricted"
 lang = "en"
 rss_footer = false
