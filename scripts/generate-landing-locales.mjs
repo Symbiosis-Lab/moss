@@ -21,7 +21,7 @@ function localize(sourceHtml, locale) {
     .filter(key => key !== 'product' && typeof en[key] === 'string' && en[key] !== target[key])
     .map(key => [en[key], target[key]])
     .sort((a, b) => b[0].length - a[0].length);
-  const protectedParts = result.split(/(<(?:script|style)\b[\s\S]*?<\/(?:script|style)>)/gi);
+  const protectedParts = result.split(/(<script\b[\s\S]*?<\/script(?=[\s/>])[^>]*>|<style\b[\s\S]*?<\/style(?=[\s/>])[^>]*>)/gi);
   result = protectedParts.map(part => {
     if (/^<(?:script|style)\b/i.test(part)) return part;
     for (const [from, to] of replacements) part = part.replaceAll(from, to).replaceAll(escaped(from), escaped(to));

@@ -68,8 +68,12 @@
   // changes on the ring when it is clicked, named from the example site's real
   // pages (?pages=, which the landing passes). Strings are the app's, in the
   // frame's language.
-  const host = params.get('target') || location.hostname;
-  const url = params.get('live') || (/^https?:\/\//.test(host) ? host : `https://${host}`);
+  const examples = new Map([
+    ['blakesnotebook.com', 'https://www.blakesnotebook.com/'],
+    ['zhudasnotebook.com', 'https://www.zhudasnotebook.com/'],
+  ]);
+  const url = examples.get(params.get('target')) || location.origin + '/';
+  const destination = new URL(url), host = destination.hostname.replace(/^www\./, '');
   let pages = [];
   try { pages = JSON.parse(params.get('pages') || '[]'); } catch (e) { pages = []; }
   const STRINGS = {
@@ -98,7 +102,12 @@
   };
   const svg = (tag, attrs) => { const node = document.createElementNS(SVG, tag); for (const k in attrs) node.setAttribute(k, attrs[k]); return node; };
   const open = (href) => window.open(href, '_blank', 'noopener');
-  const pageUrl = (path) => `https://${host.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+  const pageUrl = (path) => {
+    try {
+      const page = new URL(path, url);
+      return page.origin === destination.origin && !page.username && !page.password ? page.href : url;
+    } catch { return url; }
+  };
   const displayUrl = (raw) => raw.replace(/^https?:\/\//, '').replace(/\/+$/, '');
   const mark = (state) => {
     const node = svg('svg', { class: 'mark', viewBox: '0 0 14 14', 'aria-hidden': 'true' });

@@ -14,6 +14,8 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 // out against the September 19 production page as well, so it is a broken
 // check, not a signal, until it is repaired for the native-scrolling page.
 const CHECKS = [
+  'generate-landing-locales.test.mjs',
+  'check-landing-url-boundaries.mjs',
   'check-landing-cold-bottom.mjs',
   'check-landing-desktop-pace.mjs',
   'check-landing-desktop-scroll.mjs',
