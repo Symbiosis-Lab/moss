@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>bridge capture fixture, stretched body</title>
+<style>
+  /* A flex html whose body is sized by its margins: the body is shorter than
+     the viewport, so a capture that pins it to the viewport height paints its
+     background where the live page shows none. */
+  html { display: flex; min-height: 100vh; background: #f4efe6; }
+  body { flex: 1; margin: 100px 0; background: #b5413a; color: #fff; font: 28px/1.6 sans-serif; padding: 24px; }
+</style>
+</head>
+<body>
+<p>A line of text in a body that is sized by its margins.</p>
+<script src="/crates/moss-build/src/ops/serve/js/iframe-bridge.js"></script>
+</body>
+</html>

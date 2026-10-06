@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>bridge capture fixture</title>
+<style>
+  @font-face { font-family: Cang; src: url(data:font/woff2;base64,d09GMgABAAAAAASkAA0AAAAABxAAAARWAAIAQQAAAAAAAAAAAAAAAAAAAAAAAAAAGyAcCgZgADwRCAqJMIcXATYCJAMICwgABCAFBgcgGwwFIB6FcfNyZcGzbOX8NHSC//d35777vm+yaCYqVRaaakoyoUSblvyh77SfCPUiaB3U4lm586Kb9rwlD9K2eSC/iiC7/SeLOOGI48ACTzCJrIlz6aKowUYFINXnaVE009HABzgd75Oi6QEfGF/kdZuMIfREkaiOLo9BYDCZqcen5gKhBLQ1FinLWR+zjgMeYrELAWB3BRrAO3xGUIDqreMoiosBt3cxZDanc+0AwJ8VLj4b4gDAInBAdyMTmbSCXSwhkq+tAVA9bo2zH4xEycwE1NoiqOQ3AHoAaH5ucpMlFbvadfy6oh6iHEcZBkzsEIGMIwTjS9/MP6NHCFI7cs3wDH3DBF5moFEvCpfonqFkwIh2ZIA1YEA+0MH4eQrCNIdcR/GASzrtCKnYuXfTjTndoMCOfvGhq4iegDDm8mNaRWMQhiHLrJofoCclOnQCxi+xdkZMGJQk+iGuHoLxWfGhSbBDawhSQzSTvwyN5o4iBEoaCOY+hGEwNQbjmPhQtJ64z/gvE0qSlFwyjOjPKPRn0IGkMUpO4TtgOODSCG6Q6EjlwMwMayf65QiMD+Ipjy5RtC+mYmg5DihcO2JKqoepaAZj3P44QugVqy5x54q9/XzeyiCEDTvfhXEYl5Crq4h+2JdeHGbtLPjgiRzfAfUPwnjBIx2Mgx2Y732VStaPG9Q43s+oMEw2SOkrr4crOFjracUPF2MZmmBU9KKKSdag5KOCggDFGeKxih7WDLN2BowYSMVOFjEci0GxsX/kJe2lS49I6zMX0cMDecYlYU6Qg2mCqtlY5C9cHd0Tc+qkxYv9NlDclRVjOZH/L75NE/O5bYN5tHeOHcFq694gFt/ZS6+87nE4bwXJ09RjXiJqZBHbdMZW/PpI/RGZWau2iK1MhGItOqfsLlhYPJFI9NOzzIbCVNXG86lfxyw7J+/+cwkStCRVS7mCUbtncbV8buxkYvGF9stfdlwMOytx+r2WSB7v9/Qc7PjRMkqQxL/7dEgbmbHO3tnNNqsgC/n1ayze2i9DGzAlkQu+W/ikTpAi/6SqedFutkZo23erP9I9pFr6xZfqoL1waUje+iu+WQoTMVV7vbJUIKwCM996NiSO2O/2WHwU6tTFjTFrNuVwuLWC5kyFFCpqHYjZV2F1iR0dEXJkywvKk8uiM8bjRdJ+3ZE47jw7Q5DfZJm6723WBx/yEtnd0mNtZJwz8vgN1zxJEXDHf7FIUlad4uuTKIyX498aCf/4/PO7XwYHx+4QCb8p6NwPZLdUGb1DQ7Wa2rp9lfv58v8ob3jhtt25U9JoE8eecllAEfJzjLXv1Y9f/Jhs3qOkIuwsvl3wYaNTXMlDdof9Bn82x8Rry0nPyaZNPEH7hVhHIim+qOMimCM3Jmx/DbUfqDAJ/bs35zsA3mH/IgDg+y/rXNP/d7kBnFoAqKLRmhlKAdE2DAC5jpIygAuc+MrZAkzcgE8QOsR1PIm2hDcA) format("woff2"); }
+  html, body { margin: 0; }
+  /* The themes make body a flex column: the hero below is a flex item that
+     clips (overflow hidden), so its automatic minimum height is 0 and it
+     shrinks to nothing inside a body pinned to the viewport height. */
+  body { display: flex; flex-direction: column; min-height: 100vh; background: #f4efe6; color: #222; font: 20px/1.5 sans-serif; }
+  .hero { position: relative; overflow: hidden; height: 360px; background: #2f5d50; }
+  .hero img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  main { padding: 24px 48px; }
+  h1 { margin: 0 0 16px; font: 400 96px/1.1 Cang, serif; }
+  main img { display: block; width: 192px; height: 128px; border-radius: 12px; }
+  .tall { height: 900px; }
+</style>
+</head>
+<body>
+<div class="hero"><img src="photo.png" alt=""></div>
+<main>
+  <h1>青苔青苔</h1>
+  <p>Text under the heading, wrapped in the page's own sans-serif.</p>
+  <img src="photo.png" alt="">
+  <div class="tall"></div>
+</main>
+<script src="/crates/moss-build/src/ops/serve/js/iframe-bridge.js"></script>
+</body>
+</html>

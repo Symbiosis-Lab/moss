@@ -12,6 +12,15 @@ fn test_script_contains_rpc_handler() {
 }
 
 #[test]
+fn test_script_contains_capture_responder() {
+    // A host asks a preview page for a bitmap of itself; the page answers
+    // under the response type. The pixels are checked by the bridge-capture
+    // render gate, which loads this same bundle.
+    assert!(IFRAME_BRIDGE_SCRIPT.contains("moss-capture-request"));
+    assert!(IFRAME_BRIDGE_SCRIPT.contains("moss-capture-response"));
+}
+
+#[test]
 fn test_injects_preview_only_cheap_reflow_style() {
     let html =
         "<html><body><article><figure class=\"moss-image\"><img/></figure></article></body></html>";
