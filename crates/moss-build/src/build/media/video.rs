@@ -2248,6 +2248,22 @@ pub(crate) fn cleanup_legacy_video_cache(moss_dir: &Path) {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn a_regenerated_mp4_stages_when_its_cached_oid_remains_in_the_cloud() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = crate::build::cache::ObjectStore::new(dir.path().join("objects"));
+        let encoded = dir.path().join("encoded.mp4");
+        std::fs::write(&encoded, b"encoded video bytes").unwrap();
+        let oid = super::stage_mp4(&objects, &encoded, &dir.path().join("first.mp4")).unwrap();
+        let blob = objects.blob_path(&oid);
+        let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+        crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(Some(std::time::Duration::from_millis(20))));
+        let regenerated = super::stage_mp4(&objects, &encoded, &dir.path().join("second.mp4"));
+        crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(None));
+        assert_eq!(regenerated.expect("fresh encoded bytes are sufficient for staging"), oid);
+        assert_eq!(std::fs::read(dir.path().join("second.mp4")).unwrap(), b"encoded video bytes");
+    }
     use super::*;
 
     // ===========================================

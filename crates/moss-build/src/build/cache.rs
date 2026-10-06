@@ -157,25 +157,33 @@ impl ObjectStore {
 
     /// Move the fully written `tmp` to its content-addressed `dest`.
     fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path, mode: RecordMode) -> Result<(), String> {
+        // Publishing shared content must preserve its identity, even if the
+        // source changed during a file copy or another writer arrived meanwhile.
+        // Verify the local pending file once; never read a cloud placeholder.
+        let verified = Self::hash_file_once(tmp).and_then(|hash| {
+            if hash == oid { Ok(()) } else { Err(std::io::Error::other("pending bytes do not match the content hash")) }
+        });
+        if let Err(e) = verified {
+            // allow:unlink the pending file owned by this store attempt
+            let _ = fs::remove_file(tmp);
+            return Err(format!("Failed to verify pending blob {}: {}", oid, e));
+        }
         // allow:unlink a temp inside the CAS shard dir, not staging
         let renamed = shard_wait::in_shard(&self.base, dest, mode, Touch::File, || {
             fs::rename(tmp, dest)  // allow:unlink a temp inside the CAS shard dir, not staging
         });
         let Err(rename_err) = renamed else { return Ok(()) };
-        // Another thread may have won the race and placed the blob.
-        if dest.exists() {
-            // allow:unlink a temp inside the CAS shard dir, not staging
-            let _ = fs::remove_file(tmp);
-            return Ok(());
-        }
-        // Cross-device fallback: copy then remove temp.
-        fs::copy(tmp, dest).map_err(|e| {  // allow:raw_write CAS blob under .moss/cache — cloud-excluded, dest is content-addressed
-            log::warn!("CAS store of {} failed: {}", oid, self.failure_context(dest, Some(tmp)));
-            format!("rename failed ({}), copy fallback also failed: {}", rename_err, e)
-        })?;
+        // A concurrent writer wins only by supplying the exact local bytes.
+        // Mere placeholder metadata cannot turn a refused rename into success.
+        let won = crate::build::io_utils::output_present(dest)
+            && Self::hash_file_once(dest).is_ok_and(|hash| hash == oid);
+        // The temp is a sibling: cross-device fallback is unreachable, and a
+        // direct copy over a shared placeholder would truncate its live entry.
         // allow:unlink a temp inside the CAS shard dir, not staging
         let _ = fs::remove_file(tmp);
-        Ok(())
+        if won { return Ok(()) }
+        log::warn!("CAS store of {} failed: {}", oid, self.failure_context(dest, None));
+        Err(format!("Failed to publish blob {}: {}", oid, rename_err))
     }
 
     /// Store a file in the object store, returning its SHA-256 OID.
@@ -185,9 +193,10 @@ impl ObjectStore {
     /// same pattern as git-lfs's "clean filter" — a crash can never leave
     /// a half-written blob at the final path.
     ///
-    /// If the blob already exists (same hash), this is a no-op — the
-    /// existing blob is kept and the OID is returned. This makes the
-    /// operation idempotent.
+    /// An existing local blob is kept. A cloud-only entry is atomically
+    /// republished from these bytes under the same hash: successful storage
+    /// supplies a local blob, so readers do not wait on the cloud again after
+    /// regenerating an asset. Shared content is neither removed nor changed.
     ///
     /// `mode` says what a refusal because the shard is still in the cloud
     /// costs: see [`RecordMode`].
@@ -196,18 +205,15 @@ impl ObjectStore {
         let dest = self.blob_path(&oid);
         let source_size = fs::metadata(source).map(|m| m.len()).unwrap_or(0);
 
-        // Idempotent: if the blob already exists AND passes validation,
-        // skip the write. If the blob is corrupt (0-byte but source is
-        // non-empty), validate_blob removes it and we fall through to
-        // re-store.
+        // Reuse validated local bytes. Cloud entries are republished below;
+        // validate_blob removes a downloaded empty blob before re-storing.
         // Best-effort: a probe that cannot tell (permission, not-a-directory,
         // an undownloaded shard) reads as absent and falls through to the
         // write, which handles its own directory failures and reports them.
-        if dest.exists() {
+        if dest.exists() && !crate::build::icloud::is_still_in_the_cloud(&dest) {
             if self.validate_blob(&oid, source_size).is_ok() {
                 return Ok(oid);
             }
-            // validate_blob already removed the corrupt blob; fall through.
         }
 
         // Ensure the parent directory (e.g., `base/ab/cd/`) exists.
@@ -220,8 +226,7 @@ impl ObjectStore {
 
         // Write to a temp file in the same directory, then rename.
         // `fs::rename` is atomic on POSIX when source and dest are on the
-        // same filesystem. If they're on different filesystems (cross-device),
-        // rename fails with EXDEV — we fall back to copy + remove.
+        // same filesystem; a sibling pending file stays on the same mount.
         //
         // UUID suffix prevents collisions when multiple concurrent tasks store
         // the same blob (e.g., background asset copy racing with rebuild).
@@ -257,7 +262,8 @@ impl ObjectStore {
     /// Store raw bytes in the object store, returning the SHA-256 OID.
     ///
     /// Like [`store_file`](Self::store_file), the write is atomic (temp +
-    /// rename) and idempotent (existing blob is kept). This variant avoids
+    /// rename) and idempotent (existing local blob is kept). A cloud-only blob
+    /// is republished from these same bytes. This variant avoids
     /// an intermediate file when the caller already has bytes in memory —
     /// e.g., a small JSON metadata blob. `mode` is as for `store_file`.
     pub fn store_bytes(&self, data: &[u8], mode: RecordMode) -> Result<String, String> {
@@ -268,7 +274,7 @@ impl ObjectStore {
         };
         let dest = self.blob_path(&oid);
 
-        if dest.exists() {
+        if crate::build::io_utils::output_present(&dest) {
             return Ok(oid);
         }
 
@@ -320,7 +326,8 @@ impl ObjectStore {
     /// is removed so that [`store_file`](Self::store_file) can write fresh
     /// content, and an `Err` is returned. A blob the cloud holds is present, not
     /// corrupt: its key is its hash, so it is the same bytes on every machine,
-    /// and removing or rewriting it would propagate to all of them.
+    /// and validation never removes it. When a store holds fresh local bytes,
+    /// it can republish that same hash atomically without changing the content.
     ///
     /// This is the single place where blob integrity is checked and
     /// self-healing happens. Called by `store_file` (idempotency check).

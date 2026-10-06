@@ -2727,20 +2727,84 @@ fn store_with_blob(name: &str, source: &[u8], stand_in: &[u8]) -> (ObjectStore, 
     (store, src, oid.clone(), dir)
 }
 
+#[cfg(unix)]
 #[test]
-fn store_file_and_store_bytes_leave_a_blob_in_the_cloud_alone() {
-    let (store, src, oid, _dir) = store_with_blob("cloud_blob_left_alone", b"the original bytes", b"stand-in");
+fn storing_local_bytes_republishes_the_same_cloud_oid_for_every_reader() {
+    let _short = ShortWaits::new();
+    let (store, src, oid, dir) = store_with_blob("cloud_blob_republished", b"the original bytes", b"stand-in");
     let blob = store.blob_path(&oid);
-    let _cloud = crate::build::icloud::pretend::evicted(&blob);
-    assert_eq!(store.store_file(&src, crate::build::cache::RecordMode::Request).expect("present in the cloud is present"), oid);
-    assert_eq!(fs::read(&blob).expect("still there"), b"stand-in", "store_file must not remove or rewrite it");
+    let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+    assert!(store.ready_blob(&oid).is_none(), "the provider never delivers the old inode");
+    assert_eq!(store.store_file(&src, crate::build::cache::RecordMode::Request).expect("republished"), oid);
+    assert!(!crate::build::icloud::is_evicted(&blob), "a successful store supplies local bytes");
+    assert_eq!(ObjectStore::hash_file(&blob).unwrap(), oid, "shared content identity is unchanged");
+    let follower = ObjectStore::new(store.root().to_path_buf());
+    follower.link_to(&oid, &dir.join("follower.bin")).expect("reader holds only the oid");
+    assert_eq!(fs::read(dir.join("follower.bin")).unwrap(), b"the original bytes");
 
     let bytes_oid = store.store_bytes(b"small json", crate::build::cache::RecordMode::Request).expect("stored");
     let bytes_blob = store.blob_path(&bytes_oid);
     fs::write(&bytes_blob, b"stand-in").unwrap();
-    let _also_in_cloud = crate::build::icloud::pretend::evicted(&bytes_blob);
-    assert_eq!(store.store_bytes(b"small json", crate::build::cache::RecordMode::Request).expect("present"), bytes_oid);
-    assert_eq!(fs::read(&bytes_blob).unwrap(), b"stand-in", "store_bytes must not rewrite it");
+    let _also_in_cloud = crate::build::icloud::pretend::evicted_until_replaced(&bytes_blob);
+    assert_eq!(store.store_bytes(b"small json", crate::build::cache::RecordMode::Request).expect("republished"), bytes_oid);
+    assert!(!crate::build::icloud::is_evicted(&bytes_blob));
+    follower.link_to(&bytes_oid, &dir.join("follower.json")).expect("bytes reader holds only the oid");
+    assert_eq!(fs::read(dir.join("follower.json")).unwrap(), b"small json");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn refused_cloud_republication_keeps_the_shared_blob_and_reports_failure() {
+    let (store, src, oid, _dir) = store_with_blob("cloud_republication_refused", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+    let _folder = crate::build::icloud::pretend::evicted(store.root());
+    store.store_file(&src, RecordMode::Request).expect_err("the shared folder refuses the fresh file");
+    store.store_bytes(b"the original bytes", RecordMode::Request).expect_err("the shared folder refuses the fresh bytes");
+    assert_eq!(fs::read(&blob).unwrap(), b"stand-in", "no removal or truncation of the shared entry");
+    assert!(crate::build::icloud::is_evicted(&blob));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_rename_does_not_claim_a_cloud_placeholder_won_the_store_race() {
+    let (store, _src, oid, _dir) = store_with_blob("cloud_rename_refused", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+    let pending = write_temp_file(blob.parent().unwrap(), "valid.pending", b"the original bytes");
+    let _folder = crate::build::icloud::pretend::evicted(store.root());
+    store.place_pending(&oid, &pending, &blob, RecordMode::Request)
+        .expect_err("the existing cloud entry is not a successful concurrent publication");
+    assert_eq!(fs::read(&blob).unwrap(), b"stand-in");
+    assert!(!pending.exists(), "only the owned pending file is cleaned up");
+}
+
+#[cfg(unix)]
+#[test]
+fn cloud_republication_rejects_pending_bytes_that_do_not_match_the_shared_oid() {
+    let (store, _src, oid, dir) = store_with_blob("cloud_republication_checksum", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+    let pending = write_temp_file(&dir, "wrong.pending", b"changed during copy");
+    store.place_pending(&oid, &pending, &blob, RecordMode::Request)
+        .expect_err("republishing shared content requires an exact checksum match");
+    assert_eq!(fs::read(&blob).unwrap(), b"stand-in");
+    assert!(!pending.exists(), "only the owned pending file is cleaned up");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_refused_rename_accepts_only_an_exact_local_store_race_winner() {
+    for (name, existing, accepted) in [("race_winner", b"the original bytes".as_slice(), true), ("race_wrong_bytes", b"other bytes".as_slice(), false)] {
+        let (store, _src, oid, _dir) = store_with_blob(name, b"the original bytes", existing);
+        let blob = store.blob_path(&oid);
+        let pending = write_temp_file(blob.parent().unwrap(), "valid.pending", b"the original bytes");
+        let _folder = crate::build::icloud::pretend::evicted(store.root());
+        let result = store.place_pending(&oid, &pending, &blob, RecordMode::Request);
+        assert_eq!(result.is_ok(), accepted, "{result:?}");
+        assert_eq!(fs::read(&blob).unwrap(), existing, "the other writer's entry is not touched");
+        assert!(!pending.exists());
+    }
 }
 
 #[test]

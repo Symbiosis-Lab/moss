@@ -416,6 +416,47 @@ fn convert_single_image_webp_keeps_alpha_on_transparent_png() {
 
 // ----- Task 5: ladder rung encodes -----
 
+#[cfg(unix)]
+#[test]
+fn regenerated_cloud_variants_are_available_to_singleflight_followers() {
+    use crate::build::cache::{Singleflight, ObjectStore};
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 2000, 1200);
+    let source_oid = ObjectStore::hash_file(&src).unwrap();
+    let cfg = ImageCompressionConfig::default();
+    let convert = || convert_single_image(
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging,
+        &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+    );
+    let first = convert();
+    assert!(first.error.is_none(), "{:?}", first.error);
+    assert_eq!(first.rungs.len(), 2, "exercise both responsive widths");
+    let oids: Vec<_> = std::iter::once(first.webp_oid.as_ref().unwrap())
+        .chain(first.rungs.iter().map(|r| r.oid.as_ref().unwrap())).collect();
+    let _cloud: Vec<_> = oids.iter().map(|oid| {
+        crate::build::icloud::pretend::evicted_until_replaced(&h.objects.blob_path(oid))
+    }).collect();
+    crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(Some(std::time::Duration::from_millis(20))));
+    let flights = Singleflight::new();
+    assert!(flights.try_start(&source_oid).0);
+    let (first_caller, follower) = flights.try_start(&source_oid);
+    assert!(!first_caller, "duplicate content joins the active encode");
+    let leader = convert();
+    crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(None));
+    assert!(leader.error.is_none(), "{:?}", leader.error);
+    assert!(leader.rungs.iter().all(|r| r.error.is_none()), "{:?}", leader.rungs);
+    flights.complete(&source_oid, leader);
+    let follower = follower.borrow().clone().expect("the follower receives the leader's outcome");
+    for (oid, rel, dims) in std::iter::once((follower.webp_oid.unwrap(), "copy.webp".to_string(), (2000, 1200)))
+        .chain(follower.rungs.into_iter().map(|r| (r.oid.unwrap(), format!("copy.w{}.webp", r.width), (r.width, r.width * 1200 / 2000))))
+    {
+        assert!(oids.contains(&&oid), "regeneration preserves content identity");
+        assert!(ensure_staged(&h.objects, &oid, &h.staging.join(&rel), &rel), "follower has only the oid: {rel}");
+        assert_eq!(staged_webp_dims(&h.staging.join(&rel)), dims);
+    }
+}
+
 /// Decoded (width, height) of a staged webp output file.
 fn staged_webp_dims(path: &Path) -> (u32, u32) {
     let bytes = fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));

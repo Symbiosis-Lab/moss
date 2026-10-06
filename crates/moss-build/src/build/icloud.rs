@@ -140,8 +140,18 @@ pub(crate) mod pretend {
     static ARRIVING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
     /// Every path a download was requested for, one entry per request.
     static REQUESTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    #[cfg(unix)]
+    static EVICTED_INODES: Mutex<Vec<(PathBuf, u64)>> = Mutex::new(Vec::new());
 
     pub(crate) fn marked(path: &Path) -> bool {
+        #[cfg(unix)]
+        if EVICTED_INODES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(p, inode)| {
+            p == path && std::fs::symlink_metadata(path).is_ok_and(|m| {
+                crate::build::stat::stat_identity(&m).1 == Some(*inode)
+            })
+        }) {
+            return true;
+        }
         if ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|p| p == path) {
             return true;
         }
@@ -176,6 +186,15 @@ pub(crate) mod pretend {
         Guard(path.to_path_buf())
     }
 
+    /// Mark the existing inode cloud-only. Replacing it atomically supplies a
+    /// new local inode; a download request alone leaves the placeholder offline.
+    #[cfg(unix)]
+    pub(crate) fn evicted_until_replaced(path: &Path) -> Guard {
+        let inode = crate::build::stat::stat_identity(&std::fs::symlink_metadata(path).unwrap()).1.unwrap();
+        EVICTED_INODES.lock().unwrap_or_else(|e| e.into_inner()).push((path.to_path_buf(), inode));
+        Guard(path.to_path_buf())
+    }
+
     /// Called by `request_download`: records the request and lets an arriving file land.
     pub(crate) fn requested(path: &Path) {
         REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).push(path.to_path_buf());
@@ -200,6 +219,8 @@ pub(crate) mod pretend {
 
     impl Drop for Guard {
         fn drop(&mut self) {
+            #[cfg(unix)]
+            EVICTED_INODES.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| *p != self.0);
             ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != self.0);
             REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != self.0);
             MARKED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| *p != self.0);

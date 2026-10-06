@@ -2275,7 +2275,7 @@ async fn ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry() {
 /// downloaded. The site's own file holds the same bytes, so the output is
 /// placed from it rather than missing until the download lands.
 #[test]
-fn copy_deferred_assets_places_an_original_from_its_own_file_when_the_cached_copy_is_in_the_cloud() {
+fn copy_deferred_assets_republishes_an_original_when_the_cached_copy_is_in_the_cloud() {
     use crate::types::assets::{AssetRegistry, AssetState};
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
@@ -2315,7 +2315,7 @@ fn copy_deferred_assets_places_an_original_from_its_own_file_when_the_cached_cop
     copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, Some(registry.clone()));
 
     assert_eq!(std::fs::read(staging.join("paper.pdf")).unwrap(), bytes, "placed from the site's own file");
-    assert_eq!(std::fs::read(&blob).unwrap(), b"placeholder", "the placeholder is left alone");
+    assert_eq!(std::fs::read(&blob).unwrap(), bytes, "the shared content hash now holds its same bytes locally");
     assert!(matches!(registry.get("paper.pdf"), Some(AssetState::Ready)), "and registered");
 }
 
