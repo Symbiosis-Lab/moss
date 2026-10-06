@@ -21,6 +21,14 @@ test("the static figure is replaced by the interactive layer once ready", async 
   await expect(figure.locator("> svg")).toHaveCount(0);
   await expect(figure.locator(".moss-places-viewport")).toHaveCount(1);
   await expect(figure.locator(".moss-places-status")).toHaveCount(1);
+  const bars = await figure.locator(".moss-places-cards").evaluate((row) => {
+    const reference = document.createElement("div");
+    document.body.append(reference);
+    const native = getComputedStyle(reference).scrollbarWidth;
+    reference.remove();
+    return { actual: getComputedStyle(row).scrollbarWidth, native };
+  });
+  expect(bars.actual, "the timeline should retain the browser's native scrollbar").toBe(bars.native);
 });
 
 // Tile rasters are cut from one continuous map: a rounded corner on any of

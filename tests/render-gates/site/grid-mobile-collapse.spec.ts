@@ -128,3 +128,36 @@ test.describe("grid mobile collapse", () => {
     await assertCardComposition(page, ".moss-grid .moss-card", false);
   });
 });
+
+// Optional scripts cannot own whether readers can see a scroll affordance.
+test.describe("native scrollbar policy without scripts", () => {
+  test.use({ javaScriptEnabled: false });
+  for (const vertical of [false, true]) {
+    test(`${vertical ? "vertical" : "horizontal"} pages and nested scrollers retain native bars`, async ({ page, browserName }) => {
+      await page.goto(vertical ? "/vertical/" : "/");
+      const metrics = await page.evaluate(() => {
+        const nested = document.createElement("div");
+        nested.style.cssText = "overflow:auto;width:128px;height:64px";
+        nested.innerHTML = '<div style="width:256px;height:256px">Scrollable content</div>';
+        document.body.append(nested);
+        nested.scrollTop = 32;
+        // Headless Firefox can suppress bars in its native stylesheet. Compare
+        // with an unstyled document rather than overriding that browser choice.
+        const reference = document.createElement("iframe");
+        document.body.append(reference);
+        const nativeWidth = reference.contentWindow!.getComputedStyle(reference.contentDocument!.body).scrollbarWidth;
+        return {
+          defaultWidth: nativeWidth,
+          bodyWidth: getComputedStyle(document.body).scrollbarWidth,
+          nestedWidth: getComputedStyle(nested).scrollbarWidth,
+          nativeWidth: getComputedStyle(nested, "::-webkit-scrollbar").width,
+          scrollTop: nested.scrollTop,
+        };
+      });
+      expect(metrics.bodyWidth).toBe(metrics.defaultWidth);
+      expect(metrics.nestedWidth).toBe(metrics.defaultWidth);
+      if (browserName !== "firefox") expect(metrics.nativeWidth).toBe("auto");
+      expect(metrics.scrollTop).toBe(32);
+    });
+  }
+});

@@ -1037,7 +1037,6 @@ button.moss-places-chip-crumb {
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
   padding-block-end: 2px;
-  scrollbar-width: thin;
 }
 .moss-places-cards:empty {
   display: none;

@@ -23,6 +23,7 @@ const serveDir = buildScratchSite(GRID_MOBILE_COLLAPSE_GATE);
 
 export default defineGateConfig({
   gate: 'grid-mobile-collapse',
+  engines: ['chromium', 'webkit', 'firefox'],
   use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light' },
   webServer: { serveDir, port: PORT },
 });

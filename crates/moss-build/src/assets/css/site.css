@@ -207,32 +207,6 @@
   box-sizing: border-box;
 }
 
-/* Thin scrollbar — transparent track, subtle thumb */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-.is-scrolling ::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.25);
-}
-.is-scrolling ::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.5);
-}
-
 /* Text selection - moss green tint */
 ::selection {
   background: rgba(45, 90, 45, 0.15);

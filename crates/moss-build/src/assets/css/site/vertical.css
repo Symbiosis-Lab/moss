@@ -99,14 +99,6 @@ body[data-typesetting="vertical"] {
   --moss-read-line: calc(var(--moss-reading-size) * var(--moss-read-leading));
 }
 
-/* Keep horizontal column navigation without painting a second UI bar. */
-body[data-typesetting="vertical"] {
-  scrollbar-width: none;
-}
-body[data-typesetting="vertical"]::-webkit-scrollbar {
-  display: none;
-}
-
 /* ── Main content ── */
 
 /* site.css `main { flex: 1 }` would grow main along body's flex column — the
