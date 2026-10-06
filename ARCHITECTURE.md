@@ -92,7 +92,6 @@ Every file over 1000 production lines (tests excluded, counted the same way `scr
 | `crates/moss-build/src/build/markdown/html_post.rs` | 1045 | A grab-bag of independent HTML post-processing passes (CriticMarkup accept mode, %% comment stripping, tag fixups, pretty-URL rewriting) that happen to run in the same phase; the easiest file on this list to retire — each pass can move to its own file without touching the others. |
 | `crates/moss-core/src/render/image.rs` | 1029 | The single entry point every <img>/<picture> call site converges on, by explicit architectural choice recorded in the module doc; splitting it back into per-call-site emitters is the exact regression the migration that produced this file was written to retire. |
 | `crates/moss-build/src/build/assets/binary_resolver.rs` | 1016 | Already the result of collapsing three separate FFmpeg/Git/Hugo binary resolvers into one four-step chain (user path, PATH, cache, download); retires further by splitting the download/verify/extract half from the resolution-order half. |
-| `crates/moss-build/src/seta/client.rs` | 1001 | One line over the tier by a single-digit margin; auth helpers, error types and base-URL resolution for the hosting client sit together only because nothing has needed to split them yet, not because they can't be — moving one helper elsewhere retires this entry. |
 <!-- ratchet:known-debt:end -->
 
 None of these are a waiver by design; each is unfinished decomposition, tracked (and only allowed to shrink) through the baseline referenced above.

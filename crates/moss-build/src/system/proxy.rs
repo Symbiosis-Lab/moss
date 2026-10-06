@@ -60,14 +60,10 @@ fn proxied_agent_builder(
     if let Some(proxy_url) = resolve_proxy_for_url(url) {
         match ureq::Proxy::new(&proxy_url) {
             Ok(proxy) => {
-                log::debug!("http: routing {} via system proxy {}", url, proxy_url);
+                log::debug!("http: routing request via system proxy");
                 builder = builder.proxy(proxy);
             }
-            Err(e) => log::warn!(
-                "http: resolved proxy '{}' is invalid ({}); connecting directly",
-                proxy_url,
-                e
-            ),
+            Err(_) => log::warn!("http: resolved proxy is invalid; connecting directly"),
         }
     }
     builder

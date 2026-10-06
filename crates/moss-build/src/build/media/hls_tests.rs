@@ -1065,14 +1065,13 @@ fn produce_ladder_honors_a_tiny_per_file_budget() {
 
 /// The real defect this feature exists for, reaching all the way through a
 /// real encode: a rung must never be encoded ABOVE the source's own video
-/// bitrate. A source deliberately capped to ~110 kbps — under the table's
+/// bitrate. A source deliberately capped to 120 kbps — under the table's
 /// 145k rung, let alone its 365k one — must come out of `produce_ladder`
 /// with its would-be 416x234 rung clamped down near the source's own figure,
 /// leaving only two rungs (width alone would have kept all six), and the
-/// clamped rung's file must be sized off that effective bitrate rather than
-/// the table's 145k. This has to be real ffmpeg: the assertion is on bytes
-/// actually written, which the pure function moss-core already pins cannot
-/// see.
+/// encoder must receive that effective bitrate rather than the table's
+/// 145k. The real encode still verifies the output census; on Unix a
+/// forwarding executable also captures the arguments actually dispatched.
 #[test]
 fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
     let Some(bin) = real_ffmpeg() else {
@@ -1087,7 +1086,8 @@ fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
             "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=3",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-b:v", "150k", "-maxrate", "150k", "-bufsize", "300k",
+            "-b:v", "120k", "-maxrate", "120k", "-bufsize", "240k",
+            "-x264-params", "nal-hrd=cbr",
             "-c:a", "aac", "-shortest",
         ])
         .arg(&source)
@@ -1099,15 +1099,32 @@ fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
         return;
     }
 
-    let ffmpeg = FFmpegManager::from_bin_path(bin);
+    let ffmpeg = FFmpegManager::from_bin_path(bin.clone());
     let probe = ffmpeg.probe_source(&source).expect("probe");
     let source_kbps = probe
         .video_kbps
         .expect("ffprobe reports the encoded stream's own bit_rate");
+    let planned = SourceFacts::from_probe(&probe).effective_rungs(&VideoCompressionConfig::default());
+    assert_eq!(planned.len(), 2, "the fixture must retain exactly two rungs");
     assert!(
-        (30.0..300.0).contains(&source_kbps),
-        "expected a source well under the 145k/365k table rungs, got {source_kbps} kbps"
+        planned[1].video_kbps < VIDEO_LADDER[1].video_kbps,
+        "the fixture must clamp the second rung below its table rate, got {source_kbps} kbps"
     );
+
+    #[cfg(unix)]
+    let recorded_args = dir.path().join("encoder-args");
+    #[cfg(unix)]
+    let ffmpeg = {
+        use std::os::unix::fs::PermissionsExt;
+        let wrapper = dir.path().join("recording-ffmpeg");
+        let quote = |s: &str| format!("'{}'", s.replace('\'', "'\"'\"'"));
+        std::fs::write(&wrapper, format!(
+            "#!/bin/sh\nprintf '%s\\0' \"$@\" > {}\nexec {} \"$@\"\n",
+            quote(recorded_args.to_str().unwrap()), quote(&bin),
+        )).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        FFmpegManager::from_bin_path(wrapper.to_string_lossy().into_owned())
+    };
 
     let transforms = TransformCache::new(
         dir.path().join("transforms"),
@@ -1141,21 +1158,29 @@ fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
          must leave only the bottom rung and one clamped rung above it: {entries:?}"
     );
 
-    // The clamped rung's file must be sized off its EFFECTIVE bitrate, not
-    // the table's. At the table's unclamped 145 kbps it would run close to
-    // 145*1000/8*3s*1.05 = 57,094 bytes; clamped near the source's own
-    // ~110 kbps it must come in well under that.
+    // A short VBV-capped encode can spend its initial buffer, and fMP4 adds
+    // container bytes. Its file size cannot prove which average bitrate was
+    // requested. Keep the real output check and inspect the dispatched flags.
     let top_m4s_size = entries
         .iter()
         .find(|(n, _)| n == "video/hls/v1.m4s")
         .map(|(_, e)| e.size)
         .expect("v1.m4s is the clamped top rung");
-    let unclamped_145k_estimate = (145.0_f64 * 1000.0 / 8.0 * probe.duration_secs * 1.05) as u64;
-    assert!(
-        top_m4s_size < unclamped_145k_estimate,
-        "v1.m4s is {top_m4s_size} bytes, not smaller than the {unclamped_145k_estimate}-byte \
-         estimate for the table's unclamped 145 kbps — the encoder was not handed the clamp"
-    );
+    assert!(top_m4s_size > 0, "the real encoder must write the clamped rung");
+    #[cfg(unix)]
+    {
+        let bytes = std::fs::read(&recorded_args).expect("the encoder was invoked");
+        let args: Vec<_> = bytes.split(|b| *b == 0)
+            .map(|arg| std::str::from_utf8(arg).unwrap()).collect();
+        let value = |flag: &str| {
+            let at = args.iter().position(|arg| *arg == flag).expect(flag);
+            args[at + 1]
+        };
+        let clamped_kbps = source_kbps.floor() as u32;
+        assert_eq!(value("-b:v:1"), format!("{clamped_kbps}k"), "the actual encode must receive the source clamp");
+        assert_eq!(value("-maxrate:v:1"), format!("{clamped_kbps}k"));
+        assert_eq!(value("-bufsize:v:1"), format!("{}k", clamped_kbps * 2));
+    }
 }
 
 // ── produce_ladder: migrating a pre-rekey (legacy) cached ladder ───

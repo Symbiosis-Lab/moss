@@ -45,6 +45,13 @@ fn build_seta_http_client() -> Client {
         .user_agent(crate::system::user_agent())
         .connect_timeout(SETA_CONNECT_TIMEOUT)
         .timeout(SETA_REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if is_safe_transport(attempt.url()) {
+                reqwest::redirect::Policy::default().redirect(attempt)
+            } else {
+                attempt.error("seta redirects require HTTPS or loopback HTTP without credentials")
+            }
+        }))
         // Behind the GFW a DIRECT connection to api.mosspub.com (Cloudflare) is
         // reset, so every deploy `sync`/`upload`/`commit` and "Send logs" call —
         // all of which flow through this one shared client — failed with
@@ -346,37 +353,41 @@ pub(super) const SETA_URL_ENV_VAR: &str = "MOSS_SETA_URL";
 /// 2. Compile-time `MOSS_SETA_URL` (for CI builds where runtime env isn't available)
 /// 3. `DEFAULT_SETA_URL` as final fallback
 pub fn get_seta_url() -> String {
-    // First try runtime env var (for local development).
-    // Sanitize at this boundary so a misconfigured env var doesn't crash
-    // the app via `validate_url` panic — fall back to the default URL
-    // with a warning instead.
-    if let Ok(url) = std::env::var(SETA_URL_ENV_VAR) {
-        if is_safe_base_url(&url) {
-            return url;
-        }
-        log::warn!(
-            "{} is set but fails the HTTPS/localhost check ({}); falling back to default",
-            SETA_URL_ENV_VAR,
-            url
-        );
-    }
-
-    // Then try compile-time env var (for CI builds)
-    if let Some(url) = option_env!("MOSS_SETA_URL") {
-        return url.to_string();
-    }
-
-    // Fall back to production URL
-    DEFAULT_SETA_URL.to_string()
+    runtime_seta_url()
+        .or_else(|| option_env!("MOSS_SETA_URL").filter(|url| is_safe_base_url(url)).map(str::to_string))
+        .unwrap_or_else(|| DEFAULT_SETA_URL.to_string())
 }
 
-/// Mirrors `MossSetaClient::validate_url`'s check without panicking.
-/// Used by `get_seta_url()` to gate the runtime env var.
-fn is_safe_base_url(url: &str) -> bool {
-    let url = url.trim_end_matches('/');
-    let is_localhost = url.contains("localhost") || url.contains("127.0.0.1");
-    let is_https = url.starts_with("https://");
-    is_localhost || is_https
+fn runtime_seta_url() -> Option<String> {
+    let url = std::env::var(SETA_URL_ENV_VAR).ok()?;
+    if is_safe_base_url(&url) {
+        Some(url)
+    } else {
+        log::warn!("{} must use HTTPS or loopback HTTP without credentials; ignoring override", SETA_URL_ENV_VAR);
+        None
+    }
+}
+
+fn is_safe_base_url(address: &str) -> bool {
+    url::Url::parse(address).is_ok_and(|url| is_safe_transport(&url))
+}
+
+/// Enforce the same transport boundary for configured endpoints and redirects.
+fn is_safe_transport(url: &url::Url) -> bool {
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    match url.scheme() {
+        "https" => url.host().is_some(),
+        "http" => match url.host() {
+            Some(url::Host::Domain("localhost")) => true,
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback()
+                || address.to_ipv4_mapped().is_some_and(|address| address.is_loopback()),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// moss-seta client for backend communication.
@@ -673,7 +684,7 @@ impl MossSetaClient {
     /// Create an unauthenticated client with a custom moss-seta URL.
     ///
     /// # Panics
-    /// Panics if a non-localhost HTTP URL is provided.
+    /// Panics if the URL violates the HTTPS or loopback HTTP transport policy.
     pub fn with_url(base_url: &str) -> Self {
         let url = Self::validate_url(base_url);
         Self {
@@ -695,28 +706,22 @@ impl MossSetaClient {
     }
 
     /// Create a client for a specific hosting environment.
-    /// `MOSS_SETA_URL` (raw URL) still overrides for local dev.
+    /// A safe `MOSS_SETA_URL` still overrides for local dev.
     pub fn for_environment(identity: &Identity, env: &crate::config::environment::HostingEnvironment) -> Self {
-        let base_url = match std::env::var("MOSS_SETA_URL") {
-            Ok(url) => url,
-            Err(_) => env.seta_url().to_string(),
-        };
+        let base_url = runtime_seta_url().unwrap_or_else(|| env.seta_url().to_string());
         Self::with_identity_and_url(identity, &base_url)
     }
 
     /// Create a client with a specific hosting environment and no identity (unauthenticated).
     pub fn new_for_environment(env: &crate::config::environment::HostingEnvironment) -> Self {
-        let base_url = match std::env::var("MOSS_SETA_URL") {
-            Ok(url) => url,
-            Err(_) => env.seta_url().to_string(),
-        };
+        let base_url = runtime_seta_url().unwrap_or_else(|| env.seta_url().to_string());
         Self::with_url(&base_url)
     }
 
     /// Create a client with a custom moss-seta URL and identity.
     ///
     /// # Panics
-    /// Panics if a non-localhost HTTP URL is provided.
+    /// Panics if the URL violates the HTTPS or loopback HTTP transport policy.
     pub fn with_identity_and_url(identity: &Identity, base_url: &str) -> Self {
         let url = Self::validate_url(base_url);
         Self {
@@ -726,23 +731,17 @@ impl MossSetaClient {
         }
     }
 
-    /// Validate and normalize a base URL. Enforces HTTPS for non-localhost URLs.
+    /// Validate and normalize a base URL using the shared transport policy.
     ///
     /// # Panics
-    /// Panics if a non-localhost HTTP URL is provided.
+    /// Panics if the URL violates the HTTPS or loopback HTTP transport policy.
     fn validate_url(base_url: &str) -> String {
         let url = base_url.trim_end_matches('/');
 
-        let is_localhost = url.contains("localhost") || url.contains("127.0.0.1");
-        let is_https = url.starts_with("https://");
-
-        if !is_localhost && !is_https {
-            panic!(
-                "Security error: moss-seta URL must use HTTPS for non-localhost addresses. \
-                 Received: {}. Use https:// to ensure sensitive data is encrypted in transit.",
-                url
-            );
-        }
+        assert!(
+            is_safe_base_url(url),
+            "Security error: moss-seta URL must use HTTPS or loopback HTTP without credentials"
+        );
 
         url.to_string()
     }
@@ -768,14 +767,7 @@ impl MossSetaClient {
     pub(super) fn secure_url(&self, path: &str) -> String {
         let url = format!("{}{}", self.base_url, path);
 
-        let is_localhost = self.base_url.contains("localhost") || self.base_url.contains("127.0.0.1");
-        let is_https = self.base_url.starts_with("https://");
-
-        debug_assert!(
-            is_localhost || is_https,
-            "URL must use HTTPS for non-localhost. Base URL: {}",
-            self.base_url
-        );
+        debug_assert!(is_safe_base_url(&self.base_url), "invalid seta transport");
 
         url
     }
@@ -912,7 +904,7 @@ impl MossSetaClient {
         &self,
         session_id: &str,
     ) -> Result<AuthSessionStatus, SetaError> {
-        let url = format!("{}/auth/status/{}", self.base_url, session_id);
+        let url = self.secure_url(&format!("/auth/status/{}", session_id));
 
         let response = self.client
             .get(&url)
