@@ -15,4 +15,4 @@ For bugs affecting multiple moss packages, file the advisory here on the package
 
 ## Supported versions
 
-The latest minor version is supported. See [moss releases](https://github.com/Symbiosis-Lab/moss-releases) for the matched moss app release.
+The latest minor version is supported. See [moss releases](https://github.com/Symbiosis-Lab/moss/releases) for the matched moss app release.

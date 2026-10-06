@@ -519,3 +519,37 @@ describe("setupImmersiveIframe's showOpenInNewTab parameter", () => {
     }).not.toThrow();
   });
 });
+
+
+describe("immersive open-in-new-window URL policy", () => {
+  beforeEach(() => { document.body.innerHTML = ""; });
+  afterEach(() => { document.body.innerHTML = ""; });
+
+  function openLink(src: string, override?: string): HTMLAnchorElement {
+    createArticlePage();
+    const iframe = document.querySelector("iframe")!;
+    iframe.setAttribute("src", src);
+    if (override !== undefined) iframe.dataset.openUrl = override;
+    setupImmersiveIframe(iframe);
+    return document.querySelector<HTMLAnchorElement>(".immersive-new-window-btn")!;
+  }
+
+  test.each(["./demo.html", "https://example.com/page", "http://example.com/page"])("preserves a web source %s", (src) => {
+    const link = openLink(src);
+    expect(link.href).toBe(new URL(src, window.location.href).href);
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toContain("noopener");
+  });
+
+  test.each(["javascript:alert(1)", "JaVaScRiPt:alert(1)", "java\tscript:alert(1)", "data:text/html,<script>alert(1)</script>", "vbscript:msgbox(1)"])("does not navigate to a non-web source %s", (src) => {
+    expect(openLink(src).href).toBe(window.location.href);
+  });
+
+  test.each(["data:text/html,override", "vbscript:msgbox(1)", "javascript:alert(1)"])("a non-web override falls back to the web source %s", (override) => {
+    expect(openLink("./demo.html", override).href).toBe(new URL("./demo.html", window.location.href).href);
+  });
+
+  test("a web override remains the destination when the source is non-web", () => {
+    expect(openLink("data:text/html,source", "https://example.com/page").href).toBe("https://example.com/page");
+  });
+});

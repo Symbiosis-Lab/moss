@@ -87,18 +87,19 @@ function afterTransition(
   timeout = window.setTimeout(finish, remaining + 50);
 }
 
-function iframeOpenUrl(iframe: HTMLIFrameElement): string {
-  const fallback = new URL(iframe.src, window.location.href);
-  const target = iframe.dataset.openUrl;
-  if (target) {
-    try {
-      const url = new URL(target, window.location.href);
-      if (url.protocol === "http:" || url.protocol === "https:") return url.href;
-    } catch {
-      // Use the iframe's original target when the optional override is invalid.
-    }
+/** Only web destinations are offered by the open-in-new-window control. */
+function webOpenUrl(target: string): string | null {
+  try {
+    const url = new URL(target, window.location.href);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
   }
-  return fallback.protocol === "javascript:" ? window.location.href : fallback.href;
+}
+
+function iframeOpenUrl(iframe: HTMLIFrameElement): string {
+  const override = iframe.dataset.openUrl;
+  return (override ? webOpenUrl(override) : null) ?? webOpenUrl(iframe.src) ?? window.location.href;
 }
 
 // Material Design icons (Chrome, Firefox, Edge)

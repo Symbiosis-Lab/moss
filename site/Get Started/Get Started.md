@@ -8,11 +8,11 @@ children: false
 ---
 moss packs the markdown files and other media in your folder into a website. You can use any markdown editor, such as [Obsidian](https://obsidian.md/), or moss's built-in editor, to write and add other material. moss is macOS-only for now; Linux and Windows are coming in later releases.
 
-Please submit bugs and feature suggestions [on Github](https://github.com/Symbiosis-Lab/moss-releases/issues).
+Please submit bugs and feature suggestions [on Github](https://github.com/Symbiosis-Lab/moss/issues).
 
 ## Create your site
 
-[Download](https://github.com/Symbiosis-Lab/moss-releases/releases/latest/download/moss.dmg) and install moss.
+[Download](https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg) and install moss.
 
 Create a folder and name it after your site. Right-click it and choose **Publish**, or double-click the moss icon and pick the folder — either one launches the moss preview. moss opens the editor automatically, so you can start writing and watch the preview update live.
 

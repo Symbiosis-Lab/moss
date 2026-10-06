@@ -48,8 +48,9 @@ async function serveDirectory(root) {
       res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });
       res.end(body);
     } catch (error) {
+      console.error(error);
       res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end(String(error?.stack || error));
+      res.end('Internal server error');
     }
   });
   await new Promise((done, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', done); });

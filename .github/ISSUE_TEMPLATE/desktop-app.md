@@ -6,8 +6,6 @@ labels: desktop-app
 assignees: ''
 ---
 
-The desktop app's own issue tracker is private, so please describe your problem here instead — do not link to or paste private issue URLs, they won't be visible to other readers.
-
 **What happened**
 <!-- Describe the symptoms: what you did, what you expected, what you saw instead -->
 
