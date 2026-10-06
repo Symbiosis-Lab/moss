@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "serial": 39,
+  "entries": [
+    {
+      "type": "plugin",
+      "id": "github",
+      "display_name": "GitHub",
+      "version": "1.6.1",
+      "description": "Deploy to GitHub Pages via GitHub Actions",
+      "author": "moss team",
+      "capabilities": [],
+      "download_url": "https://example.invalid/github-v1.6.1/github-1.6.1.zip",
+      "sha256": "7d0ce012d238b63630da3943e469ae8592fbb7e845ac51a5ffa23ab27fa11cba",
+      "size_bytes": 1016,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "min_moss_version": "0.11.7",
+      "requires": [
+        "execute_binary:git",
+        "execute_binary:sh"
+      ],
+      "icon_url": "https://example.invalid/github-v1.6.1/github-1.6.1-icon.svg"
+    },
+    {
+      "type": "plugin",
+      "id": "ipfs",
+      "display_name": "IPFS",
+      "version": "0.1.0",
+      "description": "Publish your site to IPFS",
+      "author": "moss team",
+      "capabilities": [
+        "deploy"
+      ],
+      "download_url": "https://example.invalid/ipfs-v0.1.0/ipfs-0.1.0.zip",
+      "sha256": "741d5485fd95f80788e6dd72d00a8f90da1b1f05030027907fc81c9a6a19688a",
+      "size_bytes": 1014,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "min_moss_version": "0.7.23",
+      "requires": [
+        "execute_binary:ipfs"
+      ],
+      "icon_url": "https://example.invalid/ipfs-v0.1.0/ipfs-0.1.0-icon.svg"
+    },
+    {
+      "type": "plugin",
+      "id": "matters",
+      "display_name": "Matters",
+      "version": "1.5.5",
+      "description": "Syndicate your articles to Matters.town",
+      "author": "moss team",
+      "capabilities": [
+        "process"
+      ],
+      "download_url": "https://example.invalid/matters-v1.5.5/matters-1.5.5.zip",
+      "sha256": "71a47743ab251cee8514f8f5ea88f9ce2e485567935349c1f2f398923b368cbc",
+      "size_bytes": 1017,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "min_moss_version": "0.11.7",
+      "icon_url": "https://example.invalid/matters-v1.5.5/matters-1.5.5-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "onionpress",
+      "display_name": "onionpress",
+      "version": "0.4.1",
+      "description": "Publish moss sites to a self-hosted receiver",
+      "author": "moss team",
+      "capabilities": [
+        "deploy"
+      ],
+      "download_url": "https://example.invalid/onionpress-v0.4.1/onionpress-0.4.1.zip",
+      "sha256": "cd95d2c10fa293283693ec156e3920c9bf3fa7bd35ae17653b3a6e254bb77706",
+      "size_bytes": 1020,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "requires": [
+        "execute_binary:curl"
+      ],
+      "icon_url": "https://example.invalid/onionpress-v0.4.1/onionpress-0.4.1-icon.svg",
+      "requires_stack": true
+    },
+    {
+      "type": "starter",
+      "id": "essays",
+      "version": "1.0.0",
+      "display_name": "Essays",
+      "description": "A writer's own site: essays, talks and an about page, in plain Markdown.",
+      "credit": "Filled with Virginia Woolf's essays and lectures, 1904–1929.",
+      "language": "en",
+      "order": 10,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "An essay with footnotes",
+          "path": "/essays/15-modern-fiction/"
+        },
+        {
+          "label": "An essay with a route map",
+          "path": "/essays/28-to-spain/"
+        },
+        {
+          "label": "A talk in chapters, with previous and next",
+          "path": "/talks/a-room-of-one-s-own/01-but-you-may-say/"
+        },
+        {
+          "label": "Every place on one map",
+          "path": "/places/"
+        }
+      ],
+      "download_url": "https://example.invalid/starter-essays-v1.0.0/essays-1.0.0.zip",
+      "sha256": "852ee7245216603d2d4b5003b5d2753a83aa57b20a8367966c22c468f9f0563e",
+      "size_bytes": 350,
+      "demo_url": "https://virginia-woolf.mosspub.com/",
+      "preview_url": "https://example.invalid/starter-essays-v1.0.0/essays-1.0.0-preview.zip",
+      "preview_sha256": "6cedc0ca2d6078b80f917822cb33f9d78c9d69d891d618b0f6e0007689b7797e",
+      "preview_size_bytes": 1720,
+      "preview_moss_version": "0.15.4"
+    },
+    {
+      "type": "starter",
+      "id": "organisation",
+      "version": "1.0.0",
+      "display_name": "Organisation",
+      "description": "A society's site: its course of reading, local circles on a map, a calendar of days, notices.",
+      "credit": "Filled with the Chautauqua Literary and Scientific Circle's own pages, 1882–1885.",
+      "language": "en",
+      "order": 20,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "A course of reading, with previous and next",
+          "path": "/course-of-reading/01-october-1884/"
+        },
+        {
+          "label": "A calendar of days",
+          "path": "/calendar/"
+        },
+        {
+          "label": "A day with its own map",
+          "path": "/calendar/recognition-day-1882/"
+        },
+        {
+          "label": "Local circles across the country",
+          "path": "/places/"
+        }
+      ],
+      "download_url": "https://example.invalid/starter-organisation-v1.0.0/organisation-1.0.0.zip",
+      "sha256": "f537352ddfe86e62738f4543fe219ee730d88093a49f05bb90916bb893eb10aa",
+      "size_bytes": 410,
+      "demo_url": "https://chautauqua-circle.mosspub.com/",
+      "preview_url": "https://example.invalid/starter-organisation-v1.0.0/organisation-1.0.0-preview.zip",
+      "preview_sha256": "ceba26b610f18cdd45a50e4cf6c998e005b08360a2745c7161147a2e1bc1f91b",
+      "preview_size_bytes": 1960,
+      "preview_moss_version": "0.15.4"
+    },
+    {
+      "type": "starter",
+      "id": "vertical",
+      "version": "1.0.0",
+      "display_name": "Vertical",
+      "description": "A vertical Chinese site, read right to left: writings, calligraphy and paintings.",
+      "credit": "Filled with the works and words of 八大山人 (Zhu Da, 1626–1705).",
+      "language": "zh-Hant",
+      "order": 30,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "Paintings",
+          "path": "/%E7%95%AB/"
+        },
+        {
+          "label": "A painting",
+          "path": "/%E7%95%AB/%E9%9B%99%E9%B7%B9%E5%9C%96/"
+        },
+        {
+          "label": "A letter in a series, with previous and next",
+          "path": "/%E6%96%87/%E8%87%B4%E6%96%B9%E5%A3%AB%E7%90%AF%E5%8D%81%E4%B8%89%E6%9C%AD/%E5%B0%88%E4%BD%BF%E4%BF%83%E9%A7%95/"
+        },
+        {
+          "label": "Chronology",
+          "path": "/%E5%B9%B4%E8%A1%A8/"
+        }
+      ],
+      "download_url": "https://example.invalid/starter-vertical-v1.0.0/vertical-1.0.0.zip",
+      "sha256": "b5f6028b897a36d1b50aed949160f735d46f2fa3610d01cf41866d907177104a",
+      "size_bytes": 370,
+      "demo_url": "https://zhudasnotebook.com/",
+      "preview_url": "https://example.invalid/starter-vertical-v1.0.0/vertical-1.0.0-preview.zip",
+      "preview_sha256": "d10643d6f07fd3f1284e7953e045331f4ce36578d8dabf8631e75a40dbd03370",
+      "preview_size_bytes": 1800,
+      "preview_moss_version": "0.15.4"
+    }
+  ]
+}

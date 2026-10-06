@@ -621,6 +621,56 @@ mod tests {
     }
 
     #[test]
+    fn reads_what_the_registry_builder_emits() {
+        // Emitted by moss-registry's own builder over its real starter
+        // manifests (see the README beside the fixture). A starter field the
+        // builder writes in a shape this reader cannot take must never hide
+        // the plugins: an older client once rejected a whole index over one
+        // mistyped starter field.
+        let raw = include_str!("../../../../tests/fixtures/registry/index-with-starters.json");
+        let index = accept_index(raw, 0).expect("the builder's own output must be accepted");
+
+        let plugin_ids: Vec<&str> = index.plugins().iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(plugin_ids, vec!["github", "ipfs", "matters", "onionpress"]);
+
+        let starters = index.starters();
+        let ids: Vec<&str> = starters.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["essays", "organisation", "vertical"]);
+        for s in &starters {
+            assert_eq!(s.version, "1.0.0");
+            assert_eq!(s.sha256.len(), 64, "{}: source hash", s.id);
+            assert!(s.size_bytes > 0, "{}: source size", s.id);
+            assert!(s.download_url.ends_with(&format!("{}-1.0.0.zip", s.id)));
+            assert_eq!(s.preview_sha256.as_deref().map(str::len), Some(64), "{}: preview hash", s.id);
+            assert!(s.preview_size_bytes > s.size_bytes, "{}: preview size", s.id);
+            assert!(s.preview_url.is_some(), "{}: preview url", s.id);
+            assert_eq!(s.min_moss_version.as_deref(), Some("0.15.4"));
+            assert!(!s.tour.is_empty() && !s.credit.is_empty() && !s.description.is_empty());
+        }
+        let demos: Vec<Option<&str>> = starters.iter().map(|s| s.demo_url.as_deref()).collect();
+        assert_eq!(
+            demos,
+            vec![
+                Some("https://virginia-woolf.mosspub.com/"),
+                Some("https://chautauqua-circle.mosspub.com/"),
+                Some("https://zhudasnotebook.com/"),
+            ]
+        );
+        let orders: Vec<u32> = starters.iter().map(|s| s.order).collect();
+        assert_eq!(orders, vec![10, 20, 30]);
+
+        // A type this client has never heard of rides along without effect.
+        let mut doc: serde_json::Value = serde_json::from_str(raw).unwrap();
+        doc["entries"].as_array_mut().unwrap().push(serde_json::json!({
+            "type": "hologram", "id": "future", "display_name": "F", "version": "1.0.0",
+            "download_url": "https://example.invalid/f.zip", "sha256": "0".repeat(64)
+        }));
+        let index = accept_index(&doc.to_string(), 0).expect("an unknown type must not reject the index");
+        assert_eq!(index.plugins().len(), 4);
+        assert_eq!(index.starters().len(), 3);
+    }
+
+    #[test]
     fn parses_the_live_kill_list_shape_verbatim() {
         let raw = include_str!("../../../../tests/fixtures/registry/revoked.json");
         let list = accept_revoked(raw, 0, 0).expect("the live kill list shape must parse");
