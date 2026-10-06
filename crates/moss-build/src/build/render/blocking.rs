@@ -306,6 +306,7 @@ pub fn generate_blocking_content_for_build(
     // comes from `root.name()` and is never re-derived from this string.
     let source_path = root.as_str();
     let source_path_buf = root.path();
+    let input_evidence = pending.input_evidence().expect("render requires build-attempt input evidence");
     let moss_dir = source_path_buf.join(".moss");
     let paths = MossPaths::from_moss_dir(moss_dir.clone());
 
@@ -624,6 +625,13 @@ pub fn generate_blocking_content_for_build(
         // reduce) because entries are rare and the lock is uncontended on
         // the fast path where nothing is evicted.
         let deferred_mutex: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+        let focused_source = services.and_then(|s| s.session.as_ref())
+            .and_then(|s| s.preview_requirement())
+            .and_then(|requirement| match requirement.source {
+                crate::system::folder_session::PreviewSource::File(path) =>
+                    Some(moss_core::slug::normalize_separators(&path.to_string_lossy())),
+                _ => None,
+            });
         let rendered: Vec<Option<(ParsedDocument, Option<(std::path::PathBuf, String, Option<crate::build::stat::FileStat>)>)>> = project_structure
             .markdown_files
             .par_iter()
@@ -681,7 +689,7 @@ pub fn generate_blocking_content_for_build(
                     // `remove_stale_html` treats a page this build didn't emit
                     // as deleted. See `read_page_source`, which owns that call.
                     let (stat_before_read, content) = crate::build::stat::stat_then(&source_file_path, |path| {
-                        crate::build::cloud_readiness::read_page_source(path, &deferred_mutex)
+                        crate::build::cloud_readiness::read_page_source(path, &deferred_mutex, &input_evidence)
                     });
                     let content = content?;
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -705,12 +713,11 @@ pub fn generate_blocking_content_for_build(
                         &content_graph,
                         &|path| {
                             let full_path = Path::new(source_path).join(path);
-                            if crate::build::icloud::is_evicted(&full_path) {
-                                crate::build::cloud_readiness::request_download(&full_path);
-                                deferred_mutex.lock().unwrap().push(full_path);
-                                return None;
+                            if focused_source.as_deref() == Some(file_info.path.as_str())
+                                && crate::build::icloud::is_still_in_the_cloud(&full_path) {
+                                crate::build::cloud_readiness::request_download_foreground(&full_path);
                             }
-                            std::fs::read_to_string(full_path).ok()
+                            crate::build::cloud_readiness::read_page_source(&full_path, &deferred_mutex, &input_evidence)
                         },
                         &resolve_marker_handlers,
                         asset_snapshot,
@@ -998,7 +1005,17 @@ pub fn generate_blocking_content_for_build(
     };
     for record in &mut source_records {
         let written = record.write_final();
+        if written && record.final_source != record.original_source {
+            input_evidence.owned_rewrite(
+                &record.disk_path,
+                record.original_source.as_bytes(),
+                record.final_source.as_bytes(),
+            );
+        }
         if !written {
+            if !record.original_bytes_still_on_disk() {
+                input_evidence.read_error(&record.disk_path, "UID normalization could not verify source bytes".into());
+            }
             failed_uid_writes.insert(record.source_path.clone());
             documents[record.document_index].uid = record.original_uid.clone();
         }
@@ -1459,7 +1476,11 @@ pub fn generate_blocking_content_for_build(
     // The file is copied to the output directory later with CSS/JS assets.
     let user_css_path = {
         let theme_css = source_path_buf.join(".moss").join("theme").join("style.css");
-        if theme_css.exists() { Some(theme_css) } else { None }
+        if theme_css.exists() || crate::build::icloud::is_still_in_the_cloud(&theme_css) { Some(theme_css) } else {
+            input_evidence.require(&theme_css, crate::build::cloud_ledger::InputRole::Theme);
+            input_evidence.absent(&theme_css);
+            None
+        }
     };
     // The read, not the stat, decides whether this build has a user theme: a
     // cloud-evicted style.css stats as present but reads as absent, and linking
@@ -1468,7 +1489,7 @@ pub fn generate_blocking_content_for_build(
     let (user_css_stat, user_css_content) = match user_css_path {
         Some(ref css_path) => {
             let (stat, content) = crate::build::stat::stat_then(css_path, |path| {
-                cloud_readiness::read_optional_build_input(path, "user style.css")
+                cloud_readiness::read_optional_build_input(path, "user style.css", &input_evidence)
             });
             (stat, content?)
         }
@@ -1502,12 +1523,16 @@ pub fn generate_blocking_content_for_build(
     // ignored; see check_misplaced_theme_files() above for the user-facing warning.
     let user_js_path = {
         let theme_js = source_path_buf.join(".moss").join("theme").join("script.js");
-        if theme_js.exists() { Some(theme_js) } else { None }
+        if theme_js.exists() || crate::build::icloud::is_still_in_the_cloud(&theme_js) { Some(theme_js) } else {
+            input_evidence.require(&theme_js, crate::build::cloud_ledger::InputRole::Theme);
+            input_evidence.absent(&theme_js);
+            None
+        }
     };
     let (user_js_stat, user_js_content) = match user_js_path {
         Some(ref js_path) => {
             let (stat, content) = crate::build::stat::stat_then(js_path, |path| {
-                cloud_readiness::read_optional_build_input(path, "user script.js")
+                cloud_readiness::read_optional_build_input(path, "user script.js", &input_evidence)
             });
             (stat, content?)
         }
@@ -1529,7 +1554,7 @@ pub fn generate_blocking_content_for_build(
     // via `infra::toml_rewrite` — reaches `modified_paths` too. See
     // `manifest::is_reload_tracked_source_key`.
     //
-    // `read_managed_toml` (not the `user_css_path.exists()` pattern above):
+    // `read_managed_toml_no_wait` (not the `user_css_path.exists()` pattern above):
     // it proves absence from the error rather than from a stat, which is the
     // only correct answer under iCloud eviction (see its doc comment). A
     // read error that is NOT "genuinely absent" (permission denied, a
@@ -1540,7 +1565,7 @@ pub fn generate_blocking_content_for_build(
     // same way: skip the registration, keep building.
     let config_toml_path = source_path_buf.join(".moss").join("config.toml");
     let (config_toml_stat, config_toml) =
-        crate::build::stat::stat_then(&config_toml_path, crate::build::site_config::read_managed_toml);
+        crate::build::stat::stat_then(&config_toml_path, crate::build::site_config::read_managed_toml_no_wait);
     match config_toml {
         Ok(Some(content)) => pending.register_page_source_hash(
             crate::build::manifest::CONFIG_TOML_SOURCE_KEY.to_string(),
@@ -1617,6 +1642,32 @@ pub fn generate_blocking_content_for_build(
     // those pages exist (no source document).
     let mut generated_index_urls: Vec<String> = Vec::new();
 
+    // A directory whose only known page source is pending has no title or
+    // listing metadata yet. Do not synthesize a finished folder page from its
+    // name; the next render can create it after a source arrives. Genuine
+    // empty directories have no pending page and keep their index pages.
+    let pending_pages: Vec<String> = input_evidence.snapshot().into_iter()
+        .filter(|(_, entry)| matches!(entry.role,
+            crate::build::cloud_ledger::InputRole::PageMetadata | crate::build::cloud_ledger::InputRole::PageContent)
+            && matches!(entry.state,
+                crate::build::cloud_ledger::InputState::Pending { .. } | crate::build::cloud_ledger::InputState::ReadError { .. }))
+        .map(|(path, _)| path).collect();
+    let suppressed_folder_indexes: std::collections::HashSet<String> =
+        folder_index_keys(&project_structure.dirs, &dir_overrides)
+            .filter(|(raw, _)| {
+                let prefix = format!("{raw}/");
+                let pending_only = pending_pages.iter().any(|path| path.starts_with(&prefix))
+                    && !documents.iter().any(|doc| doc.source_path.as_ref().is_some_and(|path| path.starts_with(&prefix)));
+                let authored_index_pending = pending_pages.iter().any(|path| {
+                    let source = Path::new(path);
+                    source.parent().is_some_and(|parent| parent == Path::new(raw))
+                        && source.file_stem().and_then(|s| s.to_str()).is_some_and(|stem|
+                            moss_core::home::is_home_file(stem, raw.rsplit('/').next().unwrap_or(raw)))
+                });
+                pending_only || authored_index_pending
+            })
+            .map(|(_, key)| key).collect();
+
     // Synthesize folder index entries for folders that have child documents but
     // no explicit index file. This completes the page tree so parent folder pages
     // can discover auto-generated subfolders as direct children during HTML rendering.
@@ -1651,6 +1702,7 @@ pub fn generate_blocking_content_for_build(
         // folder is never an ancestor prefix of any doc's `url_path`, so the
         // loop above alone would miss it.
         for (_, key) in folder_index_keys(&project_structure.dirs, &dir_overrides) {
+            if suppressed_folder_indexes.contains(&key) { continue; }
             folders_with_children.insert(key);
         }
 
@@ -1670,6 +1722,7 @@ pub fn generate_blocking_content_for_build(
         folders_with_children.retain(|folder| {
             let top_segment = folder.split('/').next().unwrap_or(folder);
             crate::i18n::path::resolve_language_from_folder(top_segment).is_none()
+                && !suppressed_folder_indexes.contains(folder)
         });
 
         // Identify folders that already have an explicit index page (from a real .md file).
@@ -2243,6 +2296,7 @@ pub fn generate_blocking_content_for_build(
         // Folders that DO have children were added by the loop above (an empty
         // `or_default()` here is a no-op for them).
         for (_, key) in folder_index_keys(&project_structure.dirs, &dir_overrides) {
+            if suppressed_folder_indexes.contains(&key) { continue; }
             folders_with_children.entry(key).or_default();
         }
 
@@ -2265,6 +2319,7 @@ pub fn generate_blocking_content_for_build(
         // folders: folders that DO have child documents are left to the
         // translation-root filter below, which handles real translation trees.
         folders_with_children.retain(|folder, child_indices| {
+            if suppressed_folder_indexes.contains(folder) { return false; }
             if !child_indices.is_empty() {
                 return true;
             }
@@ -3628,6 +3683,7 @@ pub fn generate_blocking_content_for_build(
             &transforms,
             &mut hash_index,
             &config,
+            Some(&input_evidence),
         );
         if !items.is_empty() {
             log::info!(

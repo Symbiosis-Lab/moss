@@ -31,6 +31,7 @@ pub use derived_work::DerivedWorkGate;
 pub struct FolderSession {
     pub folder: PathBuf,
     pub cancel: CancellationToken,
+    preview_requirement: StdMutex<Option<PreviewRequirement>>,
     tasks: Mutex<JoinSet<()>>,
     /// Counter of in-flight UiBound work (build, image/video conversion,
     /// asset copy). Used by `wait_for_in_flight_work` and the window-close
@@ -99,6 +100,31 @@ pub struct FolderSession {
     cadence: StdMutex<Option<tokio::sync::watch::Receiver<crate::ops::watch::cadence::Cadence>>>,
 }
 
+/// The page the preview currently requests. An unresolved source stays pending;
+/// a generated page requires proof that this build emitted its URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewRequirement {
+    pub url_path: String,
+    pub source: PreviewSource,
+    /// Changes whenever the requested page or its resolved source changes.
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreviewSource {
+    /// A source lookup is still in flight or could not be completed.
+    Unresolved,
+    /// A source file within the selected folder, relative to its root.
+    File(PathBuf),
+    /// The resolver found no source. The build must still prove this URL has
+    /// a current generated output before it can call the page ready.
+    Generated,
+}
+
+#[cfg(test)]
+#[path = "folder_session/preview_requirement_tests.rs"]
+mod preview_requirement_tests;
+
 impl FolderSession {
     pub fn new(folder: PathBuf) -> Arc<Self> {
         Self::with_stage_write_lock(folder, Arc::new(Mutex::new(())))
@@ -112,12 +138,43 @@ impl FolderSession {
         Arc::new(Self {
             folder,
             cancel: CancellationToken::new(),
+            preview_requirement: StdMutex::new(None),
             tasks: Mutex::new(JoinSet::new()),
             ui_bound: AtomicU32::new(0),
             stage_write_lock,
             unavailable: AtomicBool::new(false),
             cadence: StdMutex::new(None),
         })
+    }
+
+    /// Replace the current page requirement. Returns whether it changed, so
+    /// repeated bridge echoes do not schedule duplicate work.
+    pub fn set_preview_requirement(&self, url_path: String, source: PreviewSource) -> Result<bool, String> {
+        if !url_path.starts_with('/') || url_path.starts_with("//") || url_path.contains(['?', '#']) {
+            return Err("Preview URL must be a root-relative pathname".into());
+        }
+        if url_path != "/" {
+            crate::build::served_path::ServedPath::from_source(url_path.trim_start_matches('/'))
+                .map_err(|_| "Preview URL contains an invalid path".to_string())?;
+        }
+        if let PreviewSource::File(file) = &source {
+            if file.is_absolute() {
+                return Err("Preview source must be root-relative".into());
+            }
+            let path = self.folder.join(file);
+            let absolute = path.to_str().ok_or("Preview source path is not valid UTF-8")?;
+            crate::vault::fs::validate_entry_path(&self.folder, absolute)?;
+        }
+        let mut current = self.preview_requirement.lock().unwrap();
+        if current.as_ref().is_some_and(|old| old.url_path == url_path && old.source == source) { return Ok(false); }
+        let revision = current.as_ref().map_or(1, |old| old.revision.saturating_add(1));
+        *current = Some(PreviewRequirement { url_path, source, revision });
+        Ok(true)
+    }
+
+    /// `None` only before a page was selected; the build then elects its home.
+    pub fn preview_requirement(&self) -> Option<PreviewRequirement> {
+        self.preview_requirement.lock().unwrap().clone()
     }
 
     /// Acquire the stage-write guard from async code — the detached seal

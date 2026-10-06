@@ -1158,7 +1158,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, cancelled, home_ready: _home_ready, publishable, render_seq, stale_sources } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, cancelled, home_ready: _home_ready, publishable, render_seq } = {
         // moss's own generator, always. A plugin could replace it wholesale
         // through the `generate` capability until that capability was
         // retired: three months, no implementation, and the branch had
@@ -1252,7 +1252,6 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // than read. Same unconditional-write reasoning as the preflight projection:
     // a source that arrives fixes nothing if the CLEAN verdict never lands
     // because only failures were ever recorded.
-    crate::system::build_records::records().record_stale_sources(&folder_path, stale_sources);
 
     // The seal shares the admission-time generation with the projection. A
     // content-hash `generation_id` can never say which build is newer.

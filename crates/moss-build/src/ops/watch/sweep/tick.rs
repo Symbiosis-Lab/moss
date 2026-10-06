@@ -6,7 +6,7 @@
 //! progress/pacing helpers it calls live in the sibling `walk`/`progress`
 //! modules.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -30,15 +30,15 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
     let (tick_every, walk_every) =
         super::tick_and_walk_every(if cloud_root { CLOUD_WALK_EVERY_TICKS } else { LOCAL_WALK_EVERY_TICKS });
 
-    // Seed before the first sleep: a vault opened cold starts downloading
-    // immediately, and the provider sees the entire job at once. Downloads
-    // only — drift is suspended until a rebuild worker exists to dispatch
-    // through (and there is rarely a baseline this early anyway).
+    let mut focused_revision = 0;
+    promote_focused_source(&session, &mut focused_revision);
+
+    // Seed observations before the first sleep. Requests enter the shared
+    // pool in small batches so foreground page inputs retain capacity.
     let seed = walk::run_pass(&folder, None, None, None, false).await;
     let mut pending: HashSet<PathBuf> = seed.walk.dataless.iter().cloned().collect();
-    for p in &pending {
-        crate::build::cloud_readiness::request_download(p);
-    }
+    let mut background_cursor = 0;
+    progress::request_downloads(&pending, &mut background_cursor);
     if !pending.is_empty() {
         log::info!("cloud-sync: supervising {} file(s) still in the cloud", pending.len());
     }
@@ -51,15 +51,11 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
     );
 
     let mut total_seen: usize = pending.len();
+    let mut observed_arrivals: usize = 0;
     let mut last_arrival = Instant::now();
     let mut arrivals_since_rebuild: usize = 0;
     let mut first_arrival_at: Option<Instant> = None;
     let mut stall_reported = false;
-    // When each still-pending file was first seen dataless. Pruned to
-    // `pending` every walk, so an arrival forgets its history and a file
-    // re-evicted later starts over.
-    let mut first_seen: HashMap<PathBuf, Instant> = HashMap::new();
-    let mut refused_reported: HashSet<PathBuf> = HashSet::new();
     let mut last_rebuild_at: Option<Instant> = None;
     let mut last_rebuild_duration = Duration::ZERO;
     let mut prev_targets: Option<Vec<PathBuf>> = None;
@@ -98,10 +94,6 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
     let mut baseline_cache: Option<crate::types::content::SiteHashes> = None;
     // Where a blown pass stopped; the next pass resumes there.
     let mut resume_cursor: Option<String> = None;
-    // Refused files are re-asked on a slow clock, not every pass — a
-    // provider that has already said no for `REFUSED_AFTER` does not need
-    // waking every 2s pass.
-    let mut last_refused_ask = Instant::now();
     let mut panic_warned = false;
     let mut ticks: u64 = 0;
     let mut passes: u64 = 1;
@@ -143,6 +135,7 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
         // invariant, continue.
         let tick = std::panic::AssertUnwindSafe(async {
         let now = Instant::now();
+        promote_focused_source(&session, &mut focused_revision);
         // What this tick found, as the narrowest honest trigger — not a bool.
         // A drift pass that saw only content edits can take the SAME
         // incremental path an event-driven rebuild takes; dispatching it as
@@ -199,18 +192,9 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
         // so a file that arrived since last tick is simply missing from it —
         // walking first would drop it uncounted, and when that file is the
         // last one (the home page), nothing else would ever notice.
-        let before = pending.len();
-        let mut deleted = 0usize;
-        pending.retain(|path| {
-            if crate::build::icloud::is_still_in_the_cloud(path) {
-                return true;
-            }
-            if !path.exists() {
-                deleted += 1;
-            }
-            false
-        });
-        let arrived = before.saturating_sub(pending.len()).saturating_sub(deleted);
+        let (arrived, deleted) = observe_pending(&mut pending);
+        observed_arrivals += arrived;
+        total_seen = total_seen.saturating_sub(deleted);
         // A deletion counts too: the set the gate waits on just shrank, and
         // only a build can lower the gate. Left uncounted, deleting the
         // awaited file from another device wedges the waiting screen at
@@ -310,8 +294,11 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
                     // authority, so anything it dropped counts as an arrival
                     // here (covers the upstream-delete case too — still a
                     // structural change).
-                    let next: HashSet<PathBuf> = outcome.walk.dataless.iter().cloned().collect();
+                    let mut next: HashSet<PathBuf> = outcome.walk.dataless.iter().cloned().collect();
+                    next.extend(pending.iter().filter(|p| p.exists() && !readable_arrival(p)).cloned());
                     let swallowed = pending.iter().filter(|p| !next.contains(*p)).count();
+                    let arrived_unseen = pending.iter().filter(|p| !next.contains(*p) && readable_arrival(p)).count();
+                    let deleted_unseen = pending.iter().filter(|p| !next.contains(*p) && !p.exists()).count();
                     pending = next;
                     if swallowed > 0 {
                         log::debug!(
@@ -323,13 +310,10 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
                         first_arrival_at.get_or_insert(now);
                         stall_reported = false;
                     }
-                    first_seen.retain(|p, _| pending.contains(p));
-                    refused_reported.retain(|p| pending.contains(p));
-                    for p in &pending {
-                        first_seen.entry(p.clone()).or_insert(now);
-                    }
-                    total_seen = total_seen.max(pending.len());
-                    progress::request_downloads(&pending, &refused_reported, &mut last_refused_ask, now);
+                    observed_arrivals += arrived_unseen;
+                    total_seen = total_seen.saturating_sub(deleted_unseen);
+                    total_seen = total_seen.max(observed_arrivals + pending.len());
+                    progress::request_downloads(&pending, &mut background_cursor);
                 } else {
                     // A partial pass (blown or resumed) has no authority
                     // over absences, but what it DID see dataless still
@@ -337,12 +321,10 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
                     // partial set would starve exactly the slow trees that
                     // blow deadlines.
                     for p in &outcome.walk.dataless {
-                        if pending.insert(p.clone()) {
-                            first_seen.entry(p.clone()).or_insert(now);
-                            crate::build::cloud_readiness::request_download(p);
-                        }
+                        pending.insert(p.clone());
                     }
-                    total_seen = total_seen.max(pending.len());
+                    total_seen = total_seen.max(observed_arrivals + pending.len());
+                    progress::request_downloads(&pending, &mut background_cursor);
                 }
 
                 // Baseline drift — the design's reason to exist. Partial
@@ -449,42 +431,24 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
             // Idle episode over; counters reset so the next eviction's
             // progress does not read "3 of 700".
             total_seen = 0;
+            observed_arrivals = 0;
             stall_reported = false;
+            progress::emit_progress(reporter.as_ref(), &folder, 0, 0, 0, 0, false, &pending);
         } else {
-            let refused: Vec<&PathBuf> = pending
-                .iter()
-                .filter(|p| {
-                    first_seen
-                        .get(*p)
-                        .is_some_and(|t| now.duration_since(*t) >= super::REFUSED_AFTER)
-                })
-                .collect();
-            for p in &refused {
-                if refused_reported.insert((*p).clone()) {
-                    log::info!(
-                        "cloud-sync: {} has stayed in the cloud for {}s — reporting it as \
-                         unavailable rather than arriving; moss keeps asking, but the site does \
-                         not wait for it",
-                        p.display(),
-                        super::REFUSED_AFTER.as_secs(),
-                    );
-                }
-            }
-            let awaiting = pending.len() - refused.len();
             // What the *site* waits for, which is not what moss downloads:
             // `should_request` asks for all of `.moss/`'s materialized set
             //, so `pending` routinely holds files no page renders
             // from — and waiting on one of those put a dismissal-less
             // full-window screen over a served site.
-            let blocking = progress::blocking_count(&pending, &refused);
+            let blocking = progress::blocking_count(&pending);
             let stalled = blocking > 0 && now.duration_since(last_arrival) >= super::STALL_AFTER;
             if stalled && !stall_reported {
                 stall_reported = true;
                 // The operator wants the whole outstanding set, not the
                 // render-relevant slice: moss really is still fetching them.
-                progress::report_stall(awaiting);
+                progress::report_stall(pending.len());
             }
-            progress::emit_progress(reporter.as_ref(), &folder, total_seen, awaiting, blocking, stalled, &refused);
+            progress::emit_progress(reporter.as_ref(), &folder, total_seen, observed_arrivals, pending.len(), blocking, stalled, &pending);
         }
 
         // ── (5) Dispatch — always through the host's rebuild path ──────────
@@ -603,6 +567,46 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
 /// doesn't have to drive the whole sweep loop.
 pub(crate) fn folder_degraded(worker: Option<&worker::WorkerHandle>, folder: &str) -> bool {
     worker.is_some_and(|h| h.is_degraded()) || supervision::get(folder).is_some_and(|h| h.is_degraded())
+}
+
+/// A pending path leaves the unresolved set only after it can be opened.
+/// Disappearance and an unreadable present file are different outcomes.
+fn readable_arrival(path: &std::path::Path) -> bool {
+    !crate::build::icloud::is_still_in_the_cloud(path) && std::fs::File::open(path).is_ok()
+}
+
+/// Navigation may name a file that the sweep already queued in its background
+/// batch. Promote that same queued read; leave unresolved URLs without a
+/// source untouched until discovery supplies one.
+pub(super) fn promote_focused_source(session: &FolderSession, last_revision: &mut u64) {
+    let Some(requirement) = session.preview_requirement() else { return };
+    if requirement.revision == *last_revision { return; }
+    *last_revision = requirement.revision;
+    if let crate::system::folder_session::PreviewSource::File(source) = requirement.source {
+        let path = session.folder.join(source);
+        if crate::build::icloud::is_still_in_the_cloud(&path) {
+            crate::build::cloud_readiness::request_download_foreground(&path);
+        }
+    }
+}
+
+/// Remove only positively observed arrivals and confirmed deletions. A
+/// present path whose open fails remains unresolved.
+pub(super) fn observe_pending(pending: &mut HashSet<PathBuf>) -> (usize, usize) {
+    let mut arrived = 0;
+    let mut deleted = 0;
+    pending.retain(|path| {
+        if readable_arrival(path) {
+            arrived += 1;
+            return false;
+        }
+        if !crate::build::icloud::is_still_in_the_cloud(path) && !path.exists() {
+            deleted += 1;
+            return false;
+        }
+        true
+    });
+    (arrived, deleted)
 }
 
 /// Which drifted paths are worth dispatching: those whose stamp has MOVED

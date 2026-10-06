@@ -7,6 +7,71 @@ fn empty_manifest() -> PendingManifest {
     PendingManifest::new(SiteHashes::default())
 }
 
+#[test]
+fn sealed_origin_distinguishes_identical_output_generations_in_two_folders() {
+    let first = tempdir().unwrap();
+    let second = tempdir().unwrap();
+    let mut one = empty_manifest();
+    one.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(first.path()));
+    let mut two = empty_manifest();
+    two.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(second.path()));
+    let output = crate::build::served_path::ServedPath::from_source("index.html").unwrap();
+    one.register(&output, b"same", HashBucket::Files);
+    two.register(&output, b"same", HashBucket::Files);
+    let first_seal = one.seal();
+    let second_seal = two.seal();
+    assert_eq!(first_seal.generation_id(), second_seal.generation_id());
+    assert!(first_seal.belongs_to(first.path()));
+    assert!(!first_seal.belongs_to(second.path()));
+    assert!(crate::deploy::refuse_foreign_inputs(&first_seal, second.path()).is_err());
+    assert!(crate::deploy::refuse_foreign_inputs(&second_seal, second.path()).is_ok());
+}
+
+#[test]
+fn unresolved_route_needs_source_proof_before_reusing_selected_output() {
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempdir().unwrap();
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+    let source = dir.path().join("article.md");
+    evidence.require(&source, crate::build::cloud_ledger::InputRole::PageContent);
+    evidence.pending(&source);
+    let mut pending = empty_manifest();
+    pending.set_input_evidence(evidence.clone());
+    let output = crate::build::served_path::ServedPath::from_source("article/index.html").unwrap();
+    pending.register(&output, b"old HTML", HashBucket::Files);
+    pending.register_source_mapping("article.md".into(), &output);
+    let unresolved = PreviewRequirement { url_path: "/article/".into(), source: PreviewSource::Unresolved, revision: 1 };
+    let unproven = pending.seal();
+    assert!(!unproven.preview_route_present(&unresolved));
+
+    let mut fresh = empty_manifest();
+    evidence.read(&source, "current".into());
+    fresh.set_input_evidence(evidence);
+    fresh.register(&output, b"old HTML", HashBucket::Files);
+    fresh.register_source_mapping("article.md".into(), &output);
+    let proven = fresh.seal();
+    assert_eq!(unproven.generation_id(), proven.generation_id());
+    assert!(proven.preview_route_present(&unresolved));
+}
+
+#[test]
+fn generated_route_with_pending_metadata_cannot_clear_cold_preview_gate() {
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempdir().unwrap();
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+    let pending_source = dir.path().join("index.md");
+    evidence.require(&pending_source, crate::build::cloud_ledger::InputRole::PageMetadata);
+    evidence.pending(&pending_source);
+    let mut pending = empty_manifest();
+    pending.set_input_evidence(evidence);
+    let output = crate::build::served_path::ServedPath::from_source("index.html").unwrap();
+    pending.register(&output, b"synthetic home", HashBucket::Files);
+    let requirement = PreviewRequirement { url_path: "/".into(), source: PreviewSource::Generated, revision: 1 };
+    let sealed = pending.seal();
+    assert_eq!(sealed.preview_readiness(&requirement), PreviewReadiness::Pending);
+    assert!(!sealed.preview_route_present(&requirement));
+}
+
 // -----------------------------------------------------------------------
 // Bucket registration semantics
 // -----------------------------------------------------------------------

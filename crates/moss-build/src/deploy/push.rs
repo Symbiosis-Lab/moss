@@ -76,6 +76,8 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// `NeedsSetup` short-circuits earlier in `push_site_command_body`, so reaching
 /// here is always a genuine deploy attempt.
 pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
+    crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path)?;
+    crate::deploy::refuse_unresolved_inputs(sealed)?;
     let full = uuid::Uuid::new_v4().simple().to_string();
     let deploy_id = full.get(..8).unwrap_or(&full);
     let site_id = cx.site_id;
@@ -780,6 +782,8 @@ pub async fn run_hosted_deploy(
     crate::deploy::refuse_publish(&folder_str)?;
 
     let sealed = super::one_shot::require_sealed(taken)?;
+    crate::deploy::refuse_foreign_inputs(&sealed, folder)?;
+    crate::deploy::refuse_unresolved_inputs(&sealed)?;
 
     let ports = super::one_shot::HeadlessDeployPorts;
     let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
@@ -913,8 +917,9 @@ mod tests {
     /// One page, `index.html` — enough for `push_site_inner_impl` to reach
     /// `commit_sync` while the sync response below reports nothing to
     /// upload, so no bytes for it are ever read off disk.
-    fn sealed_fixture() -> SealedManifest {
+    fn sealed_fixture(folder: &std::path::Path) -> SealedManifest {
         let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(folder));
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register(&sp, b"<html>Home</html>", HashBucket::Files);
         pending.seal()
@@ -998,8 +1003,8 @@ mod tests {
         std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
 
         let identity = Identity::generate().expect("generate identity");
-        let sealed = sealed_fixture();
         let dir = tempfile::tempdir().unwrap();
+        let sealed = sealed_fixture(dir.path());
         let mp = MossPaths::new(dir.path());
         std::fs::create_dir_all(mp.generation_dir(sealed.generation_id())).unwrap();
 
@@ -1081,8 +1086,8 @@ mod tests {
         std::env::set_var("MOSS_SETA_URL", format!("http://{closed_addr}"));
 
         let identity = Identity::generate().expect("generate identity");
-        let sealed = sealed_fixture();
         let dir = tempfile::tempdir().unwrap();
+        let sealed = sealed_fixture(dir.path());
         let mp = MossPaths::new(dir.path());
         std::fs::create_dir_all(mp.generation_dir(sealed.generation_id())).unwrap();
         let moss_dir = dir.path().join(".moss");
@@ -1147,7 +1152,9 @@ mod tests {
         // Sealed manifest carries a symlink entry whose target hash is stale,
         // as if a background rebuild re-pointed the link after this manifest
         // was sealed.
+        let dir = tempfile::tempdir().unwrap();
         let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(dir.path()));
         let sp = ServedPath::from_source("link").unwrap();
         pending.register_hashed(
             &sp,
@@ -1157,7 +1164,6 @@ mod tests {
         let sealed = pending.seal();
 
         let identity = Identity::generate().expect("generate identity");
-        let dir = tempfile::tempdir().unwrap();
         let mp = MossPaths::new(dir.path());
         let gen_dir = mp.generation_dir(sealed.generation_id());
         std::fs::create_dir_all(&gen_dir).unwrap();
@@ -1224,7 +1230,9 @@ mod tests {
         // Sealed manifest carries a stale hash for "index.html" — as if a
         // background rebuild rewrote the file's real bytes after this
         // manifest was sealed.
+        let dir = tempfile::tempdir().unwrap();
         let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(dir.path()));
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register_hashed(
             &sp,
@@ -1234,7 +1242,6 @@ mod tests {
         let sealed = pending.seal();
 
         let identity = Identity::generate().expect("generate identity");
-        let dir = tempfile::tempdir().unwrap();
         let mp = MossPaths::new(dir.path());
         let gen_dir = mp.generation_dir(sealed.generation_id());
         std::fs::create_dir_all(&gen_dir).unwrap();
@@ -1502,7 +1509,7 @@ mod tests {
     async fn the_app_publish_path_does_not_refuse_a_copy_behind_the_live_site() {
         let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let folder = folder_that_last_published(true);
-        let sealed = sealed_fixture();
+        let sealed = sealed_fixture(folder.path());
         std::fs::create_dir_all(MossPaths::new(folder.path()).generation_dir(sealed.generation_id())).unwrap();
         let addr = mock_seta_sequence(vec![
             json_200(PUBLISHED_ELSEWHERE_SINCE),
@@ -1679,13 +1686,14 @@ mod tests {
         ])
         .await;
 
+        let dir = tempfile::tempdir().unwrap();
         let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(dir.path()));
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register_hashed(&sp, &crate::types::content::file_entry("0000000000000000"), HashBucket::Files);
         let sealed = pending.seal();
 
         let identity = Identity::generate().expect("generate identity");
-        let dir = tempfile::tempdir().unwrap();
         let gen_dir = MossPaths::new(dir.path()).generation_dir(sealed.generation_id());
         std::fs::create_dir_all(&gen_dir).unwrap();
         std::fs::write(gen_dir.join("index.html"), b"<html>x</html>").unwrap();

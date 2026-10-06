@@ -577,13 +577,11 @@ async fn a_folder_file_deleted_after_a_publish_reads_author_removed() {
     assert_eq!(removed_pairs(&set), [("guide.pdf".to_string(), AuthorRemoved)]);
 }
 
-/// A page still in the folder that drops out of the build — bytes that are not
-/// UTF-8, or a file the process cannot read — is not something the author
-/// removed. The existence test reads the folder, not the build's source list.
+/// Unreadable authored bytes retain the prior page and refuse this seal for
+/// publication; only verified absence can remove its output.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_page_that_stops_building_is_not_blamed_on_the_author() {
-    use crate::build::manifest::change_set::RemovalReason::Unexplained;
+async fn an_unreadable_page_keeps_its_published_address_until_a_fresh_render() {
     use std::os::unix::fs::PermissionsExt;
     for unreadable in [false, true] {
         let vault = Vault::new();
@@ -601,11 +599,9 @@ async fn a_page_that_stops_building_is_not_blamed_on_the_author() {
         let (second, set) = vault.seal_and_tap().await;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert!(!second.source_to_output().contains_key("about.md"), "sanity: it dropped out of the build");
-        assert_eq!(
-            removed_pairs(&set),
-            [("about/index.html".to_string(), Unexplained)],
-            "unreadable={unreadable}"
-        );
+        assert!(second.source_to_output().contains_key("about.md"), "prior output must survive: unreadable={unreadable}");
+        assert!(removed_pairs(&set).is_empty(), "unreadable={unreadable}");
+        assert!(second.unresolved_inputs().iter().any(|path| path == "about.md"));
+        assert!(crate::deploy::refuse_unresolved_inputs(&second).is_err());
     }
 }

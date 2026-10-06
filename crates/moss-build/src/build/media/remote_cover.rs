@@ -331,6 +331,33 @@ mod tests {
     }
 
     #[test]
+    fn a_cloud_only_cover_is_requested_without_delaying_the_page() {
+        let root = fresh_moss_dir("cloud_only_cover");
+        let moss_dir = root.join(".moss");
+        std::fs::create_dir_all(&moss_dir).unwrap();
+        let output_dir = root.join("site");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
+        let oid = store.store_bytes(&tiny_png_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+        let blob = store.blob_path(&oid);
+        let _cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
+        let mut meta = blank_link_meta("https://example.com/post");
+        meta.cover_oid = Some(oid);
+        meta.cover_ext = Some("png".into());
+        let mut link_meta = HashMap::from([(meta.url.clone(), meta)]);
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let before = crate::build::cloud_readiness::WAITS_RUN.with(|n| n.get());
+        assert_eq!(materialize_remote_covers(&mut link_meta, &moss_dir, &output_dir, &mut pending), 0);
+        assert_eq!(crate::build::cloud_readiness::WAITS_RUN.with(|n| n.get()), before);
+        assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1);
+        assert!(link_meta["https://example.com/post"].cover_served_path.is_none());
+
+        let mut later = PendingManifest::new(SiteHashes::default());
+        assert_eq!(materialize_remote_covers(&mut link_meta, &moss_dir, &output_dir, &mut later), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_preexisting_unwritable_scratch_file_does_not_block_materialization() {
         // `scratch_source` is named `{oid}.{ext}` — content-addressed, not a
         // fresh UUID — so a leftover from a prior run can already occupy

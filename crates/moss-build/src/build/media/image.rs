@@ -690,6 +690,7 @@ pub(crate) fn collect_images_for_conversion(
     transforms: &crate::build::cache::TransformCache,
     hash_index: &mut crate::build::cache::HashIndex,
     config: &ImageCompressionConfig,
+    evidence: Option<&crate::build::cloud_ledger::InputEvidence>,
 ) -> Vec<ImageConversionItem> {
     let mut items = Vec::new();
 
@@ -716,7 +717,7 @@ pub(crate) fn collect_images_for_conversion(
         // asking is cheap even for a vault that is entirely local.
         let source_in_the_cloud = crate::build::icloud::is_evicted(&file_path);
         if source_in_the_cloud {
-            crate::build::cloud_ledger::note_unavailable(&file_path);
+            if let Some(evidence) = evidence { evidence.pending(&file_path); }
         }
 
         let file_size = media_meta.size;

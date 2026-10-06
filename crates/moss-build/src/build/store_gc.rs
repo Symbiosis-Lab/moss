@@ -613,7 +613,7 @@ fn save_watermark(build_dir: &Path, objects_after_gc: usize) {
     }
 }
 
-/// Count blobs in `cache/objects`.
+/// Count blobs in one sharded object store root.
 ///
 /// The store is one fanout level deep (`objects/ab/cdef…`), so this walks the
 /// fanout directories rather than recursing arbitrarily.
@@ -659,7 +659,7 @@ fn should_gc_cache(objects_on_disk: usize, watermark: Option<usize>) -> bool {
 /// Blocking — walks and unlinks. Async callers wrap it in `spawn_blocking`.
 pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResult> {
     let build_dir = &mp.build_dir();
-    let before = count_objects(&mp.cache_objects());
+    let before = count_objects(&mp.cache_objects()) + count_objects(&mp.cache_local_objects());
     if !should_gc_cache(before, load_watermark(build_dir)) {
         return None;
     }

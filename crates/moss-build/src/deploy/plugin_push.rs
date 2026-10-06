@@ -235,6 +235,8 @@ pub async fn run_plugin_deploy_inner(
     // manifest there is no generation to check `current` against, and
     // `current` on this path is the PREVIOUS build's tree.
     let sealed = super::one_shot::require_sealed(cx.sealed)?;
+    crate::deploy::refuse_foreign_inputs(sealed, cx.folder)?;
+    crate::deploy::refuse_unresolved_inputs(sealed)?;
 
     // Force any pending seal to materialize NOW, before the check below reads
     // `current_generation_id()`. The seal's own materialize phase is

@@ -81,8 +81,9 @@
 //! either direction. So the tree is split by what "download and wait" can
 //! mean. `cache/` — the content-addressed store, `objects/` and
 //! `transforms/` — is the same bytes on every machine and every blob carries
-//! its checksum, so it syncs with the folder and is waited for
-//! (`ObjectStore::ready_blob`). Everything else lives
+//! its checksum, so it syncs with the folder as an optional replica.
+//! Cloud-only cached blobs are requested and recomputed without a wait.
+//! Everything else lives
 //! under `build.nosync/` — the suffix iCloud honours unconditionally — is
 //! marked for File Provider as well, and is never relied on to be excluded:
 //! the build holds that root by a directory handle
@@ -374,12 +375,10 @@ impl MossPaths {
 
     /// `.moss/build.nosync/cache/` — the PER-MACHINE caches: `hash-index.json`,
     /// `dep-cache.json`, `frontmatter-scan.json`, `folder-lang.json`,
-    /// `link-meta/`, `manifest-hash-memo.json`, `tmp/`.
+    /// `link-meta/`, `manifest-hash-memo.json`, `tmp/`, `local-objects/`.
     ///
-    /// NOT the content-addressed object store — that moved to [`store_dir`]
-    /// (`.moss/cache/`, synced with the folder) when the tree split. Reading
-    /// this doc as "the object store lives here" is exactly the mistake that
-    /// left a warm scan reading an empty store after that split: use
+    /// The local fallback object store is here; the optional shared replica
+    /// lives in [`store_dir`] (`.moss/cache/`). Use
     /// [`cache_objects`](Self::cache_objects) / [`cache_transforms`](Self::cache_transforms),
     /// or [`crate::build::cache::ObjectStore::for_site`] /
     /// [`crate::build::cache::TransformCache::for_site`], never this method,
@@ -391,8 +390,7 @@ impl MossPaths {
     }
 
     /// `.moss/cache/objects/` — hashed file blobs.
-    /// The content-addressed store, `.moss/cache/`: shared with the folder
-    /// and waited for, unlike everything under [`build_dir`](Self::build_dir).
+    /// The optional shared cache, `.moss/cache/`, synced with the folder.
     /// A plain join, not the held handle — the store is never marked, so a
     /// sync client has no reason to rename it aside.
     pub fn store_dir(&self) -> PathBuf {
@@ -401,6 +399,11 @@ impl MossPaths {
 
     pub fn cache_objects(&self) -> PathBuf {
         self.store_dir().join("objects")
+    }
+
+    /// Local CAS fallback for output bytes when the synced cache is offline.
+    pub fn cache_local_objects(&self) -> PathBuf {
+        self.cache_dir().join("local-objects")
     }
 
     /// `.moss/cache/transforms/` — source→output mappings.

@@ -1024,8 +1024,7 @@ pub fn scan_folder_with_dedup_emit(
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
-                log::warn!("Failed to read entry: {}", e);
-                continue;
+                return Err(format!("Failed to scan site entry: {}", e));
             }
         };
 

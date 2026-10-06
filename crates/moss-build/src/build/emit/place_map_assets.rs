@@ -612,7 +612,8 @@ mod tests {
             assert_eq!(std::fs::read(&sibling).unwrap(), b"preserve shared data");
             drop(cloud);
             // A later build saves the cache, and its successor consumes it.
-            for expected in [1, 0] {
+            let later_renders = if object_folder { [0, 0] } else { [1, 0] };
+            for expected in later_renders {
                 let next = tempfile::tempdir().unwrap();
                 let mut pending = PendingManifest::new(SiteHashes::default());
                 assert_eq!(emit(&context, &gaz, &paths, next.path(), &mut pending).unwrap(), expected);

@@ -83,6 +83,50 @@ fn a_fully_local_vault_has_nothing_dataless() {
     assert!(walk(&root, None, None).dataless.is_empty());
 }
 
+#[test]
+fn arrival_accounting_does_not_call_a_deleted_file_downloaded() {
+    let dir = tempfile::tempdir().unwrap();
+    let arrived = dir.path().join("arrived.md");
+    let deleted = dir.path().join("deleted.md");
+    std::fs::write(&arrived, "# Here").unwrap();
+    let mut pending = HashSet::from([arrived, deleted]);
+    assert_eq!(observe_pending(&mut pending), (1, 1));
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn navigation_promotes_only_the_resolved_requested_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("posts/first.md");
+    let second = dir.path().join("posts/second.md");
+    std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+    std::fs::write(&first, "# First").unwrap();
+    std::fs::write(&second, "# Second").unwrap();
+    let _first = crate::build::icloud::pretend::evicted_until_requested(&first);
+    let _second = crate::build::icloud::pretend::evicted_until_requested(&second);
+    let session = FolderSession::new(dir.path().to_path_buf());
+    let mut revision = 0;
+
+    session.set_preview_requirement("/unresolved/".into(), crate::system::folder_session::PreviewSource::Unresolved).unwrap();
+    promote_focused_source(&session, &mut revision);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&first), 0);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&second), 0);
+
+    session.set_preview_requirement("/generated/".into(), crate::system::folder_session::PreviewSource::Generated).unwrap();
+    promote_focused_source(&session, &mut revision);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&first), 0);
+
+    session.set_preview_requirement("/first/".into(), crate::system::folder_session::PreviewSource::File(PathBuf::from("posts/first.md"))).unwrap();
+    promote_focused_source(&session, &mut revision);
+    promote_focused_source(&session, &mut revision);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&first), 1);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&second), 0);
+
+    session.set_preview_requirement("/second/".into(), crate::system::folder_session::PreviewSource::File(PathBuf::from("posts/second.md"))).unwrap();
+    promote_focused_source(&session, &mut revision);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&second), 1);
+}
+
 /// `.moss/` is dot-prefixed, so the obvious dir filter prunes it — and with
 /// it every user-authored build input moss reads from there. The files that
 /// hard-fail a build were the only ones nobody was downloading.
@@ -360,31 +404,12 @@ fn the_first_rebuild_of_an_episode_is_not_held_back() {
     ));
 }
 
-// ── Progress phases (ported verbatim) ─────────────────────────────────────
+// ── Progress phases ────────────────────────────────────────────────────────
 
-/// The stall notice and the unavailable notice answer different questions,
-/// and a tick that could be either must pick the stall — see `phase_for`.
 #[test]
-fn a_stall_outranks_a_refused_file() {
-    assert_eq!(phase_for(5, true, 1), "stalled");
-    // Even with nothing left to wait for: `stalled` is only set when
-    // something IS awaited, so this pins the ordering, not the caller.
-    assert_eq!(phase_for(0, true, 1), "stalled");
-}
-
-/// The reported case: the download is over in every sense that
-/// matters to the site, and one file is never coming.
-#[test]
-fn nothing_left_to_wait_for_but_a_refused_file_is_its_own_phase() {
-    assert_eq!(phase_for(0, false, 1), "unavailable");
-}
-
-/// A refused file must not end the download episode early for the files
-/// that ARE still arriving.
-#[test]
-fn files_still_arriving_keep_the_ordinary_phase() {
-    assert_eq!(phase_for(3, false, 1), "materializing");
-    assert_eq!(phase_for(0, false, 0), "materializing");
+fn a_long_wait_is_stalled_but_still_pending() {
+    assert_eq!(phase_for(true), "stalled");
+    assert_eq!(phase_for(false), "materializing");
 }
 
 // ── What the site is waiting for ──────────────────────────────
@@ -408,21 +433,14 @@ fn only_render_relevant_files_are_counted_as_blocking() {
     .map(PathBuf::from)
     .collect();
 
-    assert_eq!(blocking_count(&pending, &[]), 3);
+    assert_eq!(blocking_count(&pending), 3);
 }
 
-/// Same rule `remaining` follows: a file moss has stopped waiting for is not
-/// something the user is waiting for either. Without this a structural file
-/// the provider refuses would pin the screen for the rest of the session, with
-/// nothing left that could ever bring it down.
 #[test]
-fn a_refused_structural_file_no_longer_blocks() {
+fn a_long_wait_never_removes_a_structural_file_from_the_count() {
     let pending: HashSet<PathBuf> =
         ["/V/posts/hello.md", "/V/config.toml"].iter().map(PathBuf::from).collect();
-    let refused = PathBuf::from("/V/posts/hello.md");
-    let refused_refs: Vec<&PathBuf> = pending.iter().filter(|p| **p == refused).collect();
-
-    assert_eq!(blocking_count(&pending, &refused_refs), 1);
+    assert_eq!(blocking_count(&pending), 2);
 }
 
 /// The two counts and the phase, read together on the incident's own shape:
@@ -435,27 +453,14 @@ fn a_pending_set_with_nothing_render_relevant_never_stalls() {
     let pending: HashSet<PathBuf> =
         ["/V/.moss/data/deployed-article-map.json"].iter().map(PathBuf::from).collect();
 
-    let blocking = blocking_count(&pending, &[]);
+    let blocking = blocking_count(&pending);
     assert_eq!(blocking, 0);
 
     // What the sweep does with it: no stall however long the silence runs,
     // because the stall test is `blocking > 0`.
     let stalled = blocking > 0;
     assert!(!stalled);
-    assert_eq!(phase_for(pending.len(), stalled, 0), "materializing");
-    // And once it is refused, the episode ends in `unavailable` as before.
-    assert_eq!(phase_for(0, false, 1), "unavailable");
-}
-
-/// The notice names files to be actionable; a wall of forty names is not,
-/// and the full path is in the log for the support case that needs it.
-#[test]
-fn the_notice_names_a_few_files_by_base_name() {
-    let paths: Vec<PathBuf> = (0..6)
-        .map(|i| PathBuf::from(format!("/Vault/.hidden-ancestor/xyz/doc{i}.md")))
-        .collect();
-    let refs: Vec<&PathBuf> = paths.iter().collect();
-    assert_eq!(unavailable_names(&refs), vec!["doc0.md", "doc1.md", "doc2.md"]);
+    assert_eq!(phase_for(stalled), "materializing");
 }
 
 // ── The pass deadline and root health ─────────────────────────────────────

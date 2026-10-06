@@ -537,7 +537,6 @@ fn produce_sized_raster(
     // lives here too — and here is where it can also be RECORDED, which is the
     // half that was missing.
     if crate::build::icloud::is_evicted(source_file) {
-        crate::build::cloud_ledger::note_unavailable(source_file);
         log::debug!(
             "[sized-raster] {} is still in the cloud — keeping the original for now",
             source_file.display()
@@ -578,7 +577,6 @@ fn produce_sized_raster(
             // re-check the placeholder bit rather than trying to recover an
             // errno from the message.
             if crate::build::icloud::is_evicted(source_file) {
-                crate::build::cloud_ledger::note_unavailable(source_file);
                 log::debug!(
                     "[sized-raster] {} went back into the cloud mid-encode — keeping the original for now",
                     source_file.display()

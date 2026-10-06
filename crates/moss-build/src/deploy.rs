@@ -366,7 +366,7 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// Also refused: a structural source (a page, `config.toml`, the user
 /// stylesheet) this build could not read falls back to last-known content
 /// instead of refusing the SCREEN outright — see
-/// `PipelineRunOutput::stale_sources`. The publish it might go on to make is
+/// the selected sealed manifest's input evidence. The publish it might go on to make is
 /// still built on that carried-forward content, and that is what THIS rule
 /// refuses: not because the site is wrong, but because shipping it without
 /// saying so would let a source stay stale indefinitely with no signal that
@@ -389,15 +389,32 @@ pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
             return Err(in_flight_refusal_text(unfulfilled.len()));
         }
     }
-    if let Some(stale) = records.stale_sources(folder_path) {
-        if !stale.is_empty() {
-            return Err(stale_source_refusal_text(&stale));
-        }
-    }
     if let Some(refusal) = removal_gate::refusal_for(folder_path) {
         return Err(refusal);
     }
     Ok(())
+}
+
+/// Refuse the exact generation selected for upload when it was rendered with
+/// unresolved source inputs. A later arrival cannot rewrite this evidence;
+/// a later seal is required to clear it.
+pub fn refuse_unresolved_inputs(sealed: &crate::build::manifest::SealedManifest) -> Result<(), String> {
+    if sealed.input_evidence().is_none() && !sealed.source_to_output().is_empty() {
+        return Err("Nothing published — this generation has no source-read evidence. Rebuild the folder and retry.".to_string());
+    }
+    let stale = sealed.unresolved_inputs();
+    if stale.is_empty() { Ok(()) } else { Err(stale_source_refusal_text(&stale)) }
+}
+
+/// A matching generation directory does not prove that the selected seal was
+/// built from this folder: identical output bytes can occur in two vaults.
+pub fn refuse_foreign_inputs(
+    sealed: &crate::build::manifest::SealedManifest,
+    folder: &std::path::Path,
+) -> Result<(), String> {
+    if sealed.belongs_to(folder) { Ok(()) } else {
+        Err("Nothing published — this generation belongs to another folder. Rebuild and retry.".into())
+    }
 }
 
 /// The refusal a user reads. Says what did not happen, not which subsystem said
@@ -1030,8 +1047,6 @@ mod publish_preflight_gate_tests;
 mod promised_dead_links_gate_tests;
 
 #[cfg(test)]
-#[path = "deploy/stale_sources_gate_tests.rs"]
-mod stale_sources_gate_tests;
 
 #[cfg(test)]
 #[path = "deploy/removal_gate_tests.rs"]

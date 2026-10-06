@@ -126,19 +126,6 @@ pub(crate) const MIN_REBUILD_INTERVAL: Duration = Duration::from_secs(8);
 /// Silence across the whole pending set before the user is told.
 pub(crate) const STALL_AFTER: Duration = Duration::from_secs(90);
 
-/// How long a file may stay dataless across sweep passes before moss stops
-/// calling it "arriving" and starts calling it **unavailable** (provider-native docs, withheld shared files: they never come, and a
-/// stall notice that says "moss keeps trying" forever over a complete site
-/// is a lie). The supervisor counted 3 of its 60s sweeps; the sweep's walk
-/// cadence is 2–20s, so the count became a clock — same ~3 minutes, and
-/// still only accrued while the folder is open and being asked about.
-pub(crate) const REFUSED_AFTER: Duration = Duration::from_secs(180);
-
-/// How often a **refused** file is re-asked for. The provider has already
-/// said no for [`REFUSED_AFTER`]; waking it on every 2s pass is 30x the old
-/// supervisor's pressure for zero extra arrivals.
-pub(crate) const REFUSED_RETRY: Duration = Duration::from_secs(60);
-
 /// The tick the loop actually sleeps. `MOSS_TEST_SWEEP_TICK_MS` is a test seam: it
 /// shortens the tick and makes every tick a walk, so a process-level test sees
 /// a reconciliation in seconds instead of a local root's ~20s cadence.
