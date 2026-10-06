@@ -376,11 +376,13 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   --_grid-overflow-y: auto;
 }
 
-/* Preserve the authored tracks at phone width, where inline space is still
-   viewport height. Higher counts retain their existing responsive fallback. */
+/* Preserve authored multi-column tracks at phone width, where inline space is
+   viewport height. A single wrapped column keeps its mobile stretch. */
 @media (max-width: 768px) {
-  [data-typesetting="vertical"] .moss-grid:is([data-columns="1"], [data-columns="2"], [data-columns="3"], [data-columns="4"]) {
+  [data-typesetting="vertical"] .moss-grid:is([data-columns="2"], [data-columns="3"], [data-columns="4"]) {
     --_grid-wrap: var(--_grid-template);
+  }
+  [data-typesetting="vertical"] .moss-grid:is([data-columns="1"], [data-columns="2"], [data-columns="3"], [data-columns="4"]) {
     --_grid-track: var(--_grid-authored-track);
   }
 }

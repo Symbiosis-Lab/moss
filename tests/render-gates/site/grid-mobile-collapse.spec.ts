@@ -261,3 +261,19 @@ for (const vertical of [false, true]) {
     expect(await tracks(page, ".higher-count")).toHaveLength(1);
   });
 }
+
+test("a single-column vertical grid keeps its mobile stretch with an authored ratio", async ({ page }) => {
+  await page.setViewportSize(MOBILE);
+  await page.goto("/vertical/");
+  await page.evaluate(() => {
+    const row = document.createElement("div");
+    row.className = "moss-grid single-column";
+    row.dataset.columns = "1";
+    row.style.cssText = "inline-size:480px;--moss-grid-ratio:20px";
+    row.innerHTML = "<span>One</span>";
+    document.querySelector("article.container")!.append(row);
+  });
+  const widths = await tracks(page, ".single-column");
+  expect(widths).toHaveLength(1);
+  expect(widths[0]).toBeCloseTo(480, 0);
+});
