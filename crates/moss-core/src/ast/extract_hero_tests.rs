@@ -15,6 +15,7 @@ fn hero_block(image_url: Option<&str>, overlay: Vec<Block>) -> Block {
         overlay_text: String::new(),
         width: None,
         mobile: None,
+        align: None,
         caption: String::new(),
     }))
 }

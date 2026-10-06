@@ -2,7 +2,7 @@
 //! and how a template's frontmatter is reset when it's instantiated into a
 //! new page.
 //!
-//! Template storage and file I/O live in src-tauri (`.moss/templates/`) —
+//! Template storage and file I/O live in the desktop app (`.moss/templates/`) —
 //! this module never touches the filesystem. Frontmatter here is the same
 //! untyped `HashMap<String, serde_yaml::Value>` `crate::frontmatter` reads
 //! and writes, not the vault's typed `FrontMatter`/`BUILTIN_FIELDS` schema:
@@ -12,6 +12,8 @@
 
 use std::collections::HashMap;
 use serde_yaml::Value;
+
+use crate::schema_fields;
 
 /// What a saved template produces when instantiated. Decided at capture time
 /// from the tree's own home-file election (a folder's home file captures as
@@ -31,14 +33,17 @@ pub enum TemplateKind {
 /// (the untitled-first flow fills it in when the user commits the H1), a
 /// `date` the template carries is re-stamped to `now`, and every field that
 /// names THIS page rather than describes it is dropped — `uid` (the
-/// comments/redirects join key), `url` (the pinned address), `author_page` /
-/// `tag_page` (a term claim; two claimants resolve to the first `url_path`,
-/// so a copy could steal the original's term page), `translationKey` (a copy
-/// makes the pair "one page's translations" and links them), and
-/// `syndicated` (where the captured page was published, written by the
-/// matters plugin). Every other field — layout, tags, cascade, and anything
-/// else the template carries — is copied verbatim, since that's the point of
-/// templating them.
+/// comments/redirects join key), `url` (the pinned address), every term-page
+/// claim (`schema_fields::term_claim_fields()` — `author_page` / `tag_page` /
+/// `editor_page` / `jury_page` / `place_page` today; two claimants resolve to
+/// the first `url_path`, so a copy could steal the original's term page),
+/// `translationKey` (a copy
+/// makes the pair "one page's translations" and links them), `syndicated`
+/// (where the captured page was published, written by the matters plugin),
+/// and `origin` (where the captured page was imported from — provenance of
+/// that one specific page, not of a new page made from its template). Every
+/// other field — layout, tags, cascade, and anything else the template
+/// carries — is copied verbatim, since that's the point of templating them.
 ///
 /// A template without a `date` produces an instance without one (2026-09-05,
 /// user report): the captured page's author chose not to date it, and a
@@ -59,7 +64,7 @@ pub fn instantiate_template_frontmatter(
     // the preview waits on the path-derived URL that never arrives (seen in
     // the 2026-09-05 log: `測試獎.md` sent to /awards/writing-2/).
     frontmatter.remove("url");
-    for claim in ["author_page", "tag_page", "translationKey", "syndicated"] {
+    for claim in schema_fields::term_claim_fields().chain(["translationKey", "syndicated", "origin"]) {
         frontmatter.remove(claim);
     }
     if frontmatter.contains_key("date") {
@@ -81,7 +86,11 @@ mod tests {
             ("url", "writing"),
             ("author_page", "guo"),
             ("tag_page", "essays"),
+            ("editor_page", "ada"),
+            ("jury_page", "kane"),
+            ("place_page", "kyoto"),
             ("translationKey", "about"),
+            ("origin", "https://old-site.example/about"),
             ("date", "2020-01-01"),
         ] {
             fm.insert(k.to_string(), Value::String(v.to_string()));
@@ -90,7 +99,7 @@ mod tests {
 
         let out = instantiate_template_frontmatter(fm, "2026-09-03");
 
-        for identity in ["title", "uid", "url", "author_page", "tag_page", "translationKey", "syndicated"] {
+        for identity in ["title", "uid", "url", "author_page", "tag_page", "editor_page", "jury_page", "place_page", "translationKey", "syndicated", "origin"] {
             assert_eq!(out.get(identity), None, "`{identity}` names the captured page, not the instance");
         }
         assert_eq!(out.get("date"), Some(&Value::String("2026-09-03".to_string())));

@@ -13,8 +13,7 @@
    ── The proportion ──
 
    Measured 2026-08-30 for the ink-drop mark (ink against ink at 2×, in
-   WebKit and Chromium — docs/archive/2026-08-30-mark-wordmark-proportion.md
-   has that method, tables and renders) and re-measured 2026-09-12 for the
+   WebKit and Chromium) and re-measured 2026-09-12 for the
    leaf mark by rasterising mark-small.svg with rsvg-convert (8× supersample,
    box downscale, 50% alpha threshold). The proportion RULE below is
    unchanged; the numbers in this section are the leaf's own.

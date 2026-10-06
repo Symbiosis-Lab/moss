@@ -7,16 +7,16 @@
 # in the right cell to 3-colon for comparison with the left cell.
 #
 # Usage: scripts/check-sc-demos.sh [file...]
-#   No args: checks all site/docs/author/shortcodes/*.md
+#   No args: checks all site/docs/writing/shortcodes/*.md
 #   With args: checks only those files
 
 set -euo pipefail
 
-DOCS_DIR="$(cd "$(dirname "$0")/.." && pwd)/site/docs/author/shortcodes"
+DOCS_DIR="$(cd "$(dirname "$0")/.." && pwd)/site/docs/writing/shortcodes"
 FILES=()
 for arg in "$@"; do FILES+=("$arg"); done
 
-if [ ${#FILES[@]} -eq 0 ]; then
+if [ "$#" -eq 0 ]; then
   while IFS= read -r f; do FILES+=("$f"); done < <(find "$DOCS_DIR" -name "*.md" | sort)
 fi
 

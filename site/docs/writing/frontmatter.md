@@ -25,9 +25,9 @@ Frontmatter is optional. A file without it still becomes a page; moss uses the f
 
 Frontmatter uses a **fixed schema**: moss only recognizes the fields listed on this page. Arbitrary custom fields are silently ignored. For custom per-page metadata, store it in body content: a markdown paragraph, a `::: {.meta}` fenced div, or a data table.
 
-Every recognized field is discoverable via `moss describe --json`, which prints the full schema as machine-readable JSON. The human-readable version is at [[reference|Reference]].
+Every recognized field is discoverable via `moss describe --json`, which prints the full schema as machine-readable JSON. The human-readable version is at [Reference](/docs/reference/).
 
-`description:` feeds SEO meta tags, Open Graph previews, and sitemap summaries. It is **not** rendered as a visible deck. For a visible subtitle, use a `> blockquote` immediately after the `# H1` — the default theme styles `h1 + blockquote` as a deck.
+`description:` feeds SEO meta tags, Open Graph previews, and list-card summaries; when it's left out, moss extracts one from the page's own opening paragraph instead. The value is inline markdown — `_emphasis_`, `**strong**`, `` `code` ``, and links all work — rendered as real markup on a list card and reduced to plain text in a meta tag or feed, where markup has no meaning; block-level markdown (headings, lists, images) isn't supported and is dropped rather than shown as literal syntax. It is **not** rendered as a visible deck. For a visible subtitle, use a `> blockquote` immediately after the `# H1` — the default theme styles `h1 + blockquote` as a deck.
 
 ## Identity
 
@@ -38,7 +38,7 @@ These fields describe what the page is.
 |-------|------|---------|-------------|
 | `title` | string | filename | Page title |
 | `description` | string | (none) | SEO meta description and list previews |
-| `date` | string | (none) | Publication date (`YYYY-MM-DD`) |
+| `date` | string | (none) | Publication date (`YYYY-MM-DD`; a year or year and month alone, or a full timestamp like `2024-06-15T09:30:00Z`, is also accepted) |
 | `tags` | list | (none) | Content tags |
 | `lang` | string | auto-detected | Language override (`"en"`, `"zh-hans"`, `"zh-hant"`) |
 <!-- auto:end:frontmatter-identity -->
@@ -70,7 +70,6 @@ These fields control how the page appears in the site's navigation and chrome.
 | `weight` | integer | (none) | Sort order in nav and lists (lower = first) |
 | `breadcrumb` | boolean | site default | Show breadcrumb trail on this page. Set `true` on the homepage to activate breadcrumbs site-wide; set `false` on any page to opt it out. |
 | `footer` | boolean | site default | Show this page as a link in the site footer |
-| `footer_align` | string | `"left"` | Align this page's footer link (`"left"` or `"right"`) |
 <!-- auto:end:frontmatter-navigation -->
 
 ## Visibility
@@ -91,7 +90,7 @@ These fields control how a [[structure#^folder-page|folder page]] displays its c
 |-------|------|---------|-------------|
 | `children` | boolean | `true` | Show child page list on section pages |
 | `children_style` | string | `"list"` | `"list"`, `"summary"`, `"card"`, or `"minimal"` |
-| `children_group` | string | `"none"` | Group by `"year"` or `"none"` |
+| `children_group` | string | `"none"` | Group by `"year"`, `"none"`, or `"upcoming"` |
 | `children_depth` | string | `"direct"` | `"direct"` (immediate children) or `"all"` (all descendants) |
 | `children_source` | string | (none) | Wikilink to folder whose children to show instead |
 <!-- auto:end:frontmatter-children -->
@@ -111,6 +110,7 @@ Set `children: false` to opt out of the auto-emitted child listing on a folder p
 | Value | Order | Card meta |
 |---|---|---|
 | `date` | newest first | year · month |
+| `date-asc` | oldest first | year · month |
 | `weight` | by `weight` integer, lowest first; unweighted fall to the end | (none) |
 | `title` | alphabetical | (none) |
 | `[a, b, c]` | explicit list of child stems first, in that order; rest by inferred axis | (none) |
@@ -132,7 +132,28 @@ Most folders need no `sort` declaration: a blog folder is automatically `date`, 
 
 **Why sort drives appearance:** date listings put the date in each card's meta slot; weight and title listings omit the meta slot entirely (no empty space). Folder cards in non-date listings show a small "N articles" subtitle only when they have no description.
 
+A child folder with its own `date:` (on its home page) sorts by that date on a `date`/`date-asc` listing, the same as any page, instead of always leading the list — its card shows that date (and its `location:`, if set) ahead of the article count, so a chronology that includes a dated section still reads in order.
+
 The legacy `order: [...]` field is a back-compat alias for `sort: [...]`.
+
+## Places
+
+`location:` names one or more places from `.moss/places.toml`, in the order you write them; a site with a place-typed term shows each named place on a map, sized to the coarsest precision among them (`exact`/`city` a small dot, `region`/`country` a soft area). Set `route: true` alongside an already-ordered `location:` list to draw that order as a route instead: a dashed line through the stops with numbered badges, on the page's own map and its locator. A country-precision stop is too coarse a point to draw a line through, so it blocks the whole route and prints a build diagnostic naming the page and that stop; a region-precision stop still joins the route, at the centre of its own area marker, with its badge drawn as an outline rather than filled. The automatic "Location: …" line can be dropped for the whole site with `line = false` in the place-typed `[terms.<key>]` table of `.moss/config.toml`; the default is `true`. With it off, no page renders the line, while `location:` keeps feeding listing cards, the places root, each place's page and every map exactly as before. Like `explorer`, the key is read only for a place-typed kind and ignored elsewhere. `map:` is the page's own map switch: `map: false` hides the locator on a located article, and `map: true` shows it even when the site's `locator` is `none`; unset follows the site. On a place page the key keeps its own meaning — that page's term map, on or off — and a place page never also gets a locator, even with `location:` and `map: true`, so `map` has exactly one meaning per page. In vertical typesetting the locator is not floated: it follows the opening text as a block of its own in the column flow, starting at the same head edge as the other columns, and at phone width it keeps that position at full width.
+
+## Events
+
+A page becomes an event by carrying `start:`. `date:` stays the posted date; `start:` is when the event happens. If you are porting from a generator where `date` is the event time, move that value to `start`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `start` | string | (none) | When the event starts: `YYYY-MM-DD` for an all-day event, or `YYYY-MM-DD HH:MM` |
+| `end` | string | (none) | When it ends, same forms as `start`; an all-day `end` includes that day |
+| `timezone` | string | (none) | IANA zone the times are in, e.g. `Asia/Taipei` |
+| `status` | string | (none) | `"cancelled"`, `"postponed"`, `"moved-online"`, or `"rescheduled"`; absent means scheduled |
+| `tickets` | string | (none) | URL for tickets or registration |
+| `online` | string | (none) | URL to attend online |
+
+Times are wall-clock time where the event happens: write `14:00`, not an offset or `Z`, and name the zone in `timezone:`. An all-day multi-day event ends on its last day, so `start: 2026-11-01` with `end: 2026-11-03` runs through the 3rd. moss warns when `end` is before `start`.
 
 ## Media
 
@@ -206,6 +227,7 @@ You can also opt a single child out by setting `series: false` on that article's
 | `review_of` | string | (none) | URL of the work being reviewed |
 | `rating` | integer | (none) | Rating (1–5) for reviews |
 | `comments` | boolean | `true` | Show comments section |
+| `map` | boolean | `true` | Show the place term map on a claimed term page or a real page at a place namespace root — the geographic map, not `cascade`'s key-value map |
 
 ### uid
 

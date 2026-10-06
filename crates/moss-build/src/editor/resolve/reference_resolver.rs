@@ -4,7 +4,7 @@
 //!
 //! This is the ONE editor resolution command — it replaced the former separate
 //! `editor_resolve_assets` + `resolve_links` commands (now deleted). One call
-//! builds the three indexes ONCE — `FsAssetIndex` (assets), `EditorFolderIndex` (folders),
+//! builds the three indexes ONCE — `project_graph` (the site's files), `EditorFolderIndex` (folders),
 //! `ArticleMapIndex` (deployed URLs) — and routes each target through the same
 //! classifier the build pipeline uses, so the editor's lint/preview decisions
 //! can never drift from the published site.
@@ -23,7 +23,7 @@ use std::path::Path;
 /// One reference to resolve: the raw target text plus whether it appeared in an
 /// embed context (`![[...]]` / `![](...)`) or a plain link (`[[...]]` / `[](...)`).
 /// `is_embed` is what drives the classifier's Link-vs-embed fork.
-// NOTE: `specta` is a NON-optional dependency in src-tauri (no `specta`
+// NOTE: `specta` is a NON-optional dependency in the desktop app (no `specta`
 // cargo feature exists in this crate), so the gated `cfg_attr(feature =
 // "specta", ...)` form would never actually derive `specta::Type` and the
 // `#[specta::specta]` command would fail to compile. Match the existing
@@ -122,7 +122,7 @@ fn compute_from_source(from_file: &str, project_root: &Path) -> String {
 /// Resolve a batch of references, building the three indexes ONCE and routing
 /// every target through the shared `classify_reference`.
 ///
-/// - `FsAssetIndex` / `EditorFolderIndex` operate on the canonicalized project root
+/// - `project_graph` / `EditorFolderIndex` operate on the canonicalized project root
 ///   (so `strip_prefix` is stable on macOS where `/tmp` symlinks).
 /// - `ArticleMapIndex` is built from the on-disk `ArticleMap` (mirrors
 ///   `resolve_links`); an empty/missing map means Link targets simply don't
@@ -141,7 +141,7 @@ pub fn resolve_references_batch(
     // set from it (slug overrides live there, not on disk).
     let moss_dir = canonical_root.join(".moss");
     let map = ArticleMap::load(&moss_dir).unwrap_or_default();
-    let fs_assets = crate::editor::resolve::asset_resolver::FsAssetIndex::new(&canonical_root);
+    let fs_assets = crate::editor::resolve::asset_resolver::project_graph(&canonical_root);
     let fs_folders =
         crate::editor::resolve::folder_index::EditorFolderIndex::new(&canonical_root, &map);
     let article_idx = ArticleMapIndex::from_map(&map);
@@ -261,7 +261,7 @@ fn enrich_resolution(
     // …and where following it lands: the folder's INDEX SOURCE, resolved through
     // the same `key_for` bridge the counts use. Joining the author-typed target
     // to the root instead would break on exactly the case the card handles best
-    // — `獎項/獎項.md` publishing at `awards/`, where `<root>/awards` names no
+    // — `評選/評選.md` publishing at `awards/`, where `<root>/awards` names no
     // directory at all.
     if matches!(resolved.kind, ReferenceKind::FolderListing) {
         if let Some(ref folder_rel) = resolved.target_path {

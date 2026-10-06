@@ -30,7 +30,6 @@
 //!
 //! - [build.rs](../build.rs) for where this is invoked.
 //! - [comment.rs](comment.rs) and [review.rs](review.rs) for the sync work itself.
-//! - moss issue #570 for the bug this prevents.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -111,6 +110,7 @@ fn store_comment_sync_state(folder_path: &str, state: &CommentSyncState) {
     let path = comment_sync_state_path(Path::new(folder_path));
     let write = || -> Result<(), String> {
         let parent = path.parent().expect("state path always has a parent");
+        // allow:raw_write .moss/data, not the build tree
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
         std::fs::write(&path, json).map_err(|e| e.to_string())  // allow:raw_write user state under .moss/data, not regenerable output
@@ -128,6 +128,19 @@ fn record_comment_sync_success(folder_path: &str, at: f64) {
     state.last_attempt_at = Some(at);
     state.last_error = None;
     store_comment_sync_state(folder_path, &state);
+}
+
+/// Record one pass's outcome: a success sets the last-success time and clears
+/// the error, a failure keeps the last success and stores the reason.
+pub(in crate::build::features) fn record_comment_sync_result(
+    folder_path: &str,
+    result: &Result<super::comment::sync_remote::CommentSyncOutcome, CommentSyncError>,
+    at: f64,
+) {
+    match result {
+        Ok(_) => record_comment_sync_success(folder_path, at),
+        Err(e) => record_comment_sync_failure(folder_path, at, e),
+    }
 }
 
 fn record_comment_sync_failure(folder_path: &str, at: f64, err: &CommentSyncError) {
@@ -273,10 +286,7 @@ fn run_native_process_sync(
     let mut stats = SyncStats::default();
     let mut advisories: Vec<crate::advisory::Advisory> = Vec::new();
 
-    let article_map_path = Path::new(folder_path)
-        .join(".moss")
-        .join("build")
-        .join("article-map.json");
+    let article_map_path = crate::moss_paths::MossPaths::new(Path::new(folder_path)).article_map();
     if !article_map_path.exists() {
         log::debug!(target: "sync", "no article-map.json yet — nothing to sync");
         return (stats, advisories);
@@ -344,20 +354,20 @@ fn run_native_process_sync(
                 "comment fetch",
                 Duration::from_secs(60),
             );
-            match super::comment::process_comments(
+            let result = super::comment::process_comments(
                 folder_path,
                 &server_url,
                 site_name,
                 &comment_articles,
-            ) {
+            );
+            record_comment_sync_result(folder_path, &result, unix_now_secs());
+            match result {
                 Ok(outcome) => {
                     stats.comments_changed = outcome.changed as usize;
-                    record_comment_sync_success(folder_path, unix_now_secs());
                     log::info!(target: "sync", "comments: synced {} articles against {} in {:?} (changed={})", comment_articles.len(), server_url, phase_start.elapsed(), outcome.changed);
                 }
                 Err(e) => {
                     log::warn!(target: "sync", "comment sync failed ({:?}): {}", e.kind, e.detail);
-                    record_comment_sync_failure(folder_path, unix_now_secs(), &e);
                     advisories.push(comment_sync_failure_advisory(&e));
                 }
             }
@@ -366,7 +376,7 @@ fn run_native_process_sync(
     }
 
     // Link metadata prewarm: refresh the cache for any external URLs the most
-    // recent build needed (persisted at .moss/build/link-meta-urls.json).
+    // recent build needed (persisted at .moss/build.nosync/link-meta-urls.json).
     // Render reads from cache only — this is what makes those reads fast and
     // keeps the build off the network.
     let moss_dir = Path::new(folder_path).join(".moss");

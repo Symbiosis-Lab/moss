@@ -40,8 +40,6 @@ pub struct DirEntry {
     /// Windows (v1): always `None` — stable Rust doesn't expose file_index
     /// without nightly. Future PR can wire the `file-id` crate (already
     /// transitive via notify-debouncer-full) for proper Windows support.
-    ///
-    /// See: docs/archive/2026-05-26-treenode-inode.md
     pub file_id: Option<String>,
 }
 
@@ -72,10 +70,11 @@ pub struct TreeNode {
     /// is `true`; always `false` for directories. The frontend consumes this
     /// flag (`entries.find(e => e.is_home)`) instead of re-deriving the
     /// election — the backend owns the home decision (consolidation-map
-    /// homeRank row, docs/reference/target/).
+    /// homeRank row).
     pub is_home: bool,
     /// Children of this directory. `None` for files.
     pub children: Option<Vec<TreeNode>>,
+    pub hidden: u32,
     /// See `DirEntry::file_id`.
     pub file_id: Option<String>,
 }
@@ -197,17 +196,18 @@ pub fn walk_source_files(dir: &str, project_path: &str, visit: &mut dyn FnMut(&D
     }
 }
 
-/// Inner implementation of `list_directory` for testability (no Tauri State
-/// dependency).
+/// Inner implementation of `list_directory` for testability (no Tauri State dependency).
 pub fn list_directory_inner(
     path: &str,
     project_path: &str,
     show_internal: bool,
 ) -> Result<Vec<DirEntry>, String> {
+    Ok(list_directory_counted(path, project_path, show_internal)?.0)
+}
+
+fn list_directory_counted(path: &str, project_path: &str, show_internal: bool) -> Result<(Vec<DirEntry>, u32), String> {
     let dir = std::path::Path::new(path);
-    if !dir.is_dir() {
-        return Err(format!("'{}' is not a directory", path));
-    }
+    if !dir.is_dir() { return Err(format!("'{}' is not a directory", path)); }
 
     // Compute this directory's path relative to the project root ("" for root,
     // ".moss" when listing .moss/ itself, ".moss/theme" when listing
@@ -221,12 +221,14 @@ pub fn list_directory_inner(
         .map_err(|e| format!("Failed to read directory '{}': {}", path, e))?;
 
     let mut entries: Vec<DirEntry> = Vec::new();
+    let mut hidden: u32 = 0;
 
     for entry in read_dir {
         let entry = entry.map_err(|e| format!("Error reading entry: {}", e))?;
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if crate::build::scan::classify::is_hidden(&name, &parent_relative, show_internal) {
+        if let Some(reason) = crate::build::scan::classify::is_hidden_reason(&name, &parent_relative, show_internal) {
+            hidden += reason.is_curated() as u32;
             continue;
         }
 
@@ -253,7 +255,7 @@ pub fn list_directory_inner(
 
     entries.sort_by(cmp_dir_entry);
 
-    Ok(entries)
+    Ok((entries, hidden))
 }
 
 /// Per-project publish-date cache passed to `list_tree_inner_cached`.
@@ -301,7 +303,7 @@ pub fn list_tree_inner_cached(
     show_internal: bool,
     cache: &PublishDateCacheView<'_>,
 ) -> Result<TreeNode, String> {
-    let entries = list_directory_inner(path, project_path, show_internal)?;
+    let (entries, hidden) = list_directory_counted(path, project_path, show_internal)?;
 
     // Basenames of md children whose frontmatter carries the `home: true`
     // marker — collected from the same cached frontmatter read that resolves
@@ -332,6 +334,7 @@ pub fn list_tree_inner_cached(
                     date_source,
                     is_home: false,
                     children: None,
+                    hidden: 0,
                     file_id: entry.file_id,
                 })
             }
@@ -351,7 +354,7 @@ pub fn list_tree_inner_cached(
     // re-derived from the path string with a second `Path::file_name()` /
     // `trim_end_matches`. That re-derivation returns `None` / `""` for `.`, a
     // trailing slash and `/`, silently demoting a self-named root home
-    // (`潮汐/潮汐.md`) off `/` — the `moss build .` bug one code path over.
+    // (`河灣/河灣.md`) off `/` — the `moss build .` bug one code path over.
     // `VaultRoot::resolve` collapses all three spellings the way the build
     // does, so the tree's `is_home` flag can never disagree with which file the
     // built site serves at the folder's URL. A SUBFOLDER keeps its plain
@@ -433,6 +436,7 @@ pub fn list_tree_inner_cached(
         date_source: DateSource::None,
         is_home: false,
         children: Some(children),
+        hidden,
         file_id: dir_file_id,
     };
     folder_node.publish_date = compute_folder_recency(&folder_node);
@@ -449,7 +453,7 @@ pub fn list_tree_inner_cached(
 ///
 /// Both are read via `read_frontmatter_only` → `frontmatter_map`, which covers
 /// both frontmatter dialects — so the tree flag now agrees with the build's
-/// `file_has_home_marker` instead of missing simplified frontmatter (moss#937).
+/// `file_has_home_marker` instead of missing simplified frontmatter.
 fn resolve_md_date(
     entry: &DirEntry,
     cache: &PublishDateCacheView<'_>,
@@ -540,7 +544,7 @@ pub fn resolve_collision(path: &std::path::Path) -> std::path::PathBuf {
     // symlink_metadata, not exists(): exists() follows symlinks, so a
     // DANGLING symlink at the destination reads as absent and fs::copy would
     // then write THROUGH it — outside the vault if it points there (the
-    // moss#997 shape, one component deeper). Any pre-existing entry,
+    // same escape shape, one component deeper). Any pre-existing entry,
     // including a dangling symlink, gets collision-suffixed instead.
     if path.symlink_metadata().is_err() {
         return path.to_path_buf();
@@ -786,7 +790,7 @@ pub fn read_frontmatter_only(
     let text = String::from_utf8_lossy(&buf);
     // `frontmatter_map`, not `parse`: the file tree needs the fields, and a
     // simplified-frontmatter page used to come back empty here — no date in the
-    // tree, and its `home: true` never flagged (moss#937).
+    // tree, and its `home: true` never flagged.
     Ok(moss_core::frontmatter::frontmatter_map(&text))
 }
 
@@ -828,6 +832,7 @@ mod tests {
             date_source: source,
             is_home: false,
             children: None,
+            hidden: 0,
             file_id: None,
         }
     }
@@ -842,6 +847,7 @@ mod tests {
             date_source: DateSource::None,
             is_home: false,
             children: Some(vec![]),
+            hidden: 0,
             file_id: None,
         }
     }
@@ -856,6 +862,7 @@ mod tests {
             date_source: DateSource::None,
             is_home: false,
             children: None,
+            hidden: 0,
             file_id: None,
         }
     }
@@ -913,6 +920,7 @@ mod tests {
                 node_md("article.md", Some("2025-11-15"), DateSource::Frontmatter, 80.0),
                 node_file("photo.png", 999_999_999.0), // very recent image, must NOT win
             ]),
+            hidden: 0,
             file_id: None,
         };
         assert_eq!(
@@ -935,6 +943,7 @@ mod tests {
                 node_md("a.md", None, DateSource::None, 100.0),
                 node_md("b.md", None, DateSource::None, 200.0),
             ]),
+            hidden: 0,
             file_id: None,
         };
         assert!(compute_folder_recency(&folder).is_some());
@@ -951,6 +960,7 @@ mod tests {
             date_source: DateSource::None,
             is_home: false,
             children: Some(vec![node_file("photo.png", 200.0)]),
+            hidden: 0,
             file_id: None,
         };
         assert!(compute_folder_recency(&folder).is_some());
@@ -963,6 +973,49 @@ mod tests {
     }
 
     // --- list_tree_inner integration ---
+
+    #[test]
+    fn list_tree_counts_hidden_moss_internal_entries() {
+        // `.moss/` holds only non-allowlisted entries: `agents/SKILL.md` and
+        // `state.toml`, no `config.toml`, no `theme/`. The listing of `.moss/`
+        // itself sees two entries (`agents`, `state.toml`), both filtered by
+        // `HiddenReason::MossInternal` — `children` reads empty, same as
+        // before this change, but `hidden` must now say why.
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path();
+        let moss_dir = proj.join(".moss");
+        let agents_dir = moss_dir.join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(agents_dir.join("SKILL.md"), "# agent skill").unwrap();
+        std::fs::write(moss_dir.join("state.toml"), "").unwrap();
+
+        let tree = list_tree_inner(proj.to_str().unwrap(), proj.to_str().unwrap(), true).unwrap();
+        let moss_node = tree
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|c| c.name == ".moss")
+            .expect(".moss must be listed when show_internal is on");
+
+        assert_eq!(moss_node.children.as_ref().unwrap().len(), 0);
+        assert_eq!(moss_node.hidden, 2);
+    }
+
+    #[test]
+    fn list_tree_does_not_count_os_junk_as_hidden() {
+        // A folder holding nothing but a `.DS_Store` — the almost-universal
+        // macOS case — must still read as genuinely empty: `hidden == 0`,
+        // not "moss filtered something here."
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path();
+        std::fs::write(proj.join(".DS_Store"), b"junk").unwrap();
+
+        let tree = list_tree_inner(proj.to_str().unwrap(), proj.to_str().unwrap(), false).unwrap();
+
+        assert_eq!(tree.children.as_ref().unwrap().len(), 0);
+        assert_eq!(tree.hidden, 0);
+    }
 
     #[test]
     fn list_tree_populates_publish_date_for_md() {
@@ -1111,35 +1164,35 @@ mod tests {
     #[test]
     fn is_home_flags_self_named_root_home() {
         // The root-name parity case: the PROJECT ROOT's own basename elects a
-        // self-named note (`William Blake/William Blake.md`), because the
+        // self-named note (`Garden Path/Garden Path.md`), because the
         // election receives the REAL basename, not ''.
         let dir = tempfile::tempdir().unwrap();
-        let proj = dir.path().join("William Blake");
+        let proj = dir.path().join("Garden Path");
         std::fs::create_dir(&proj).unwrap();
-        std::fs::write(proj.join("William Blake.md"), "# home").unwrap();
+        std::fs::write(proj.join("Garden Path.md"), "# home").unwrap();
         std::fs::write(proj.join("poems.md"), "# poems").unwrap();
 
         let tree = list_named_project(&proj);
         let flags = home_flags(&tree);
-        assert!(flags.contains(&("William Blake.md".to_string(), true)));
+        assert!(flags.contains(&("Garden Path.md".to_string(), true)));
         assert!(flags.contains(&("poems.md".to_string(), false)));
     }
 
     #[test]
     fn is_home_self_named_root_home_is_spelling_invariant() {
-        // The self-named root home (`潮汐/潮汐.md`) is elected whether the
+        // The self-named root home (`河灣/河灣.md`) is elected whether the
         // project root arrives as an ABSOLUTE path, with a TRAILING SLASH, or as
         // `.` — the root name now comes from `VaultRoot::resolve`, not
         // `Path::file_name()`. `Path::file_name()` is `None` for `.`, which left
         // the election with an empty root name; the self-named rule could not
         // fire, and the root's gated-out alphabetical fallback then elected NO
-        // home at all (`潮汐.md` silently demoted off `/`).
+        // home at all (`河灣.md` silently demoted off `/`).
         let dir = tempfile::tempdir().unwrap();
-        let proj = dir.path().join("\u{5728}\u{5834}");
+        let proj = dir.path().join("\u{521d}\u{96ea}");
         std::fs::create_dir(&proj).unwrap();
-        std::fs::write(proj.join("\u{5728}\u{5834}.md"), "# home").unwrap();
+        std::fs::write(proj.join("\u{521d}\u{96ea}.md"), "# home").unwrap();
         std::fs::write(proj.join("note.md"), "# note").unwrap();
-        let home = ("\u{5728}\u{5834}.md".to_string(), true);
+        let home = ("\u{521d}\u{96ea}.md".to_string(), true);
 
         // Absolute and trailing-slash spellings need no working-directory move.
         let abs = proj.to_string_lossy().to_string();

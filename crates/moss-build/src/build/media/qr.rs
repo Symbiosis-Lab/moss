@@ -22,8 +22,7 @@
 //! folder-note article on one site had no code at all, while another served
 //! fourteen codes pointing at the wrong page.
 //!
-//! The reader no longer computes anything. See
-//! `docs/archive/2026-08-10-share-card-audit.md`.
+//! The reader no longer computes anything.
 
 use fast_qr::convert::svg::SvgBuilder;
 use fast_qr::convert::{Builder, Shape};
@@ -368,9 +367,9 @@ mod tests {
         // `PageKind::Folder` skip left every one of them with a card that had
         // an empty corner. Nothing about the page kind reaches this decision
         // any more — there is no parameter for it to arrive on.
-        let qr = share_qr_for_page("awards/s4/ukraine/index.html", true, &deployed()).unwrap();
-        assert_eq!(qr.served_path, "qr/awards/s4/ukraine.svg");
-        assert_eq!(qr.payload, "https://example.com/awards/s4/ukraine/");
+        let qr = share_qr_for_page("awards/s2/rainy-season/index.html", true, &deployed()).unwrap();
+        assert_eq!(qr.served_path, "qr/awards/s2/rainy-season.svg");
+        assert_eq!(qr.payload, "https://example.com/awards/s2/rainy-season/");
     }
 
     #[test]

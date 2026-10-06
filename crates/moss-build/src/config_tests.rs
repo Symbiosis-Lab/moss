@@ -8,7 +8,7 @@ use super::*;
 /// Every test below reads THIS text, so a reader that only works on
 /// moss-generated formatting fails here.
 const HAND_WRITTEN: &str = "\
-# 潮汐 — site configuration.
+# 河灣 — site configuration.
 # Hand-written; the modals are for people in a hurry.
 
 schema_version = 5
@@ -116,22 +116,22 @@ fn section_walks_a_missing_path_without_panicking() {
     assert!(config.section(&["site", "lang", "nope"]).is_none());
 }
 
-// The hand-editability ruling (ADR-059) is NOT asserted here, deliberately.
+// The hand-editability ruling is NOT asserted here, deliberately.
 // A read-side "the text is unchanged afterwards" test in this crate cannot
 // fail: `parse` takes `&str` and every accessor takes `&self`, so the borrow
 // checker already forbids the mutation, and no edit to production code can
 // turn such a test red. It was written, reviewed, and deleted for exactly
-// that reason. The ruling is asserted where a writer actually exists —
-// `src-tauri/tests/config_hand_editability_test.rs`, which reads a
+// that reason. The ruling is asserted where a writer actually exists — the
+// app's own config hand-editability test, which reads a
 // hand-written config through this reader and then compares the file
 // byte-for-byte after a settings modal writes to it.
 
-/// Open-CLI slice 3 (#1019): the one parse funnel migrates in memory, so a
+/// Open-CLI slice 3: the one parse funnel migrates in memory, so a
 /// host that never persists (moss-cli) still reads a legacy config at its
 /// migrated meaning. Mirrors the parity fixture's v0 shape — pre-v1
 /// `[features]`/`[analytics]` and no `schema_version` — whose analytics slot
 /// and RSS footer are exactly what diverge if one host migrates and the
-/// other does not (ADR-059's silent-defaults hazard).
+/// other does not (a silent-defaults hazard).
 #[test]
 fn parse_migrates_a_v0_config_in_memory() {
     let v0 = "[site]\nlang = \"en\"\n\n[features]\nrss = true\n\n[analytics]\nscript = \"<script src=\\\"https://stats.example.org/js/script.js\\\"></script>\"\n";
@@ -167,4 +167,42 @@ fn schema_version_ahead_reads_off_the_same_parse_that_swallowed_the_error() {
     ))
     .unwrap();
     assert_eq!(current.schema_version_ahead(), None);
+}
+
+#[test]
+fn redirects_table_is_optional() {
+    let cfg = ConfigFile::parse("schema_version = 6\n[site]\nlang = \"en\"\n").unwrap();
+    assert!(cfg.declared_redirects().is_empty());
+}
+
+#[test]
+fn redirects_are_read_as_old_to_new_pairs_with_any_slash_spelling() {
+    let cfg = ConfigFile::parse(
+        "schema_version = 6\n[redirects]\n\"/old/\" = \"/new/\"\n\"gone.html\" = \"https://example.com/x\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.declared_redirects(),
+        vec![
+            ("/old/".to_string(), "/new/".to_string()),
+            ("gone.html".to_string(), "https://example.com/x".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn a_redirect_that_is_not_a_string_is_one_advisory_and_the_rest_still_read() {
+    let _ = crate::build::cli_output::take_cli_problems();
+    let cfg =
+        ConfigFile::parse("schema_version = 6\n[redirects]\n\"/a/\" = 3\n\"/b/\" = \"/c/\"\n").unwrap();
+    assert_eq!(cfg.declared_redirects(), vec![("/b/".to_string(), "/c/".to_string())]);
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+}
+
+#[test]
+fn a_redirects_value_that_is_not_a_table_is_an_advisory_not_a_crash() {
+    let _ = crate::build::cli_output::take_cli_problems();
+    let cfg = ConfigFile::parse("schema_version = 6\nredirects = \"nope\"\n").unwrap();
+    assert!(cfg.declared_redirects().is_empty());
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
 }

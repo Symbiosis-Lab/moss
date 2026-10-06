@@ -1,17 +1,14 @@
 //! The nested-site decision table (rows 3–6) and its CLI refusal shapes.
 //!
 //! Detection lives in [`crate::nested_roots`], which never decides anything;
-//! this module is the POLICY half both hosts share (crossed from
-//! `src-tauri/src/system/nested_site_guard.rs` at open-CLI slice 3, #1019).
+//! this module is the POLICY half both hosts share (crossed from the app's
+//! nested-site guard at open-CLI slice 3).
 //! The app's GUI guard consumes [`plan_unowned_open`] and renders a dialog;
 //! [`guard_cli_open`] is the whole answer for a host with no surface to ask
 //! on — every Confirm row becomes a refusal message naming the fix.
-//!
-//! Decision table, remediation rules and test plan:
-//! `docs/archive/2026-08-19-nested-moss-folder-design.md` (Part 1).
 
 use crate::nested_roots::{
-    find_nested_roots, owns_moss, NestedRootInfo, NestedRootsReport, RootClass, ScanLimits,
+    classify_root, find_nested_roots, owns_moss, NestedRootInfo, NestedRootsReport, RootClass, ScanLimits,
 };
 use std::path::Path;
 
@@ -84,24 +81,39 @@ pub fn default_limits() -> ScanLimits {
 /// moss roots, or the folder is suspicious/uncheckable (provider root, home,
 /// truncated scan). A folder that IS a root always proceeds.
 pub fn guard_cli_open(folder_path: &str, subcommand: &str) -> Result<(), String> {
+    guard_cli_open_in(folder_path, subcommand, dirs::home_dir().as_deref())
+}
+
+/// [`guard_cli_open`] with the home folder passed in.
+pub fn guard_cli_open_in(folder_path: &str, subcommand: &str, home: Option<&Path>) -> Result<(), String> {
     let path = Path::new(folder_path);
-    if owns_moss(path) {
+    // The home folder's `.moss/` holds moss's own app data, so it never makes
+    // the home folder a site (the same rule `VaultRoot::find_containing` keeps).
+    if owns_moss(path) && classify_root(path, home) != RootClass::HomeDir {
         return Ok(());
     }
-    if let Some(vault) = crate::vault::paths::VaultRoot::find_containing(path) {
+    if let Some(vault) = crate::vault::paths::VaultRoot::find_containing_below(path, path, home) {
+        let root = vault.as_str();
         return Err(format!(
-            "'{folder}' belongs to the site at '{root}'.\n       \
-             Run moss on that folder instead:  moss {sub} \"{root}\"",
-            folder = folder_path,
-            root = vault.as_str(),
-            sub = subcommand,
+            "'{folder_path}' belongs to the site at '{root}'.\n       {}",
+            next_step(subcommand, format!("Run moss on that folder instead:  moss {subcommand} \"{root}\""))
         ));
     }
-    let home = dirs::home_dir();
-    let report = find_nested_roots(path, home.as_deref(), &default_limits());
+    let report = find_nested_roots(path, home, &default_limits());
     match plan_unowned_open(&report) {
         UnownedPlan::Proceed => Ok(()),
         UnownedPlan::Confirm { .. } => Err(cli_refusal_message(&report, folder_path, subcommand)),
+    }
+}
+
+/// `moss rename` reaches this guard only when no folder above the file has a
+/// `.moss/`, so the file is in no site yet, even when the current directory
+/// is inside one: its way forward is to make one.
+/// Every other subcommand is given `default`.
+fn next_step(subcommand: &str, default: String) -> String {
+    match subcommand {
+        "rename" => "The file is not inside a moss site. Run `moss build` once on the folder that should be the site, then run the rename again.".to_string(),
+        _ => default,
     }
 }
 
@@ -130,27 +142,27 @@ pub fn cli_refusal_message(
             String::new()
         };
         return format!(
-            "'{folder}' contains a moss site at {rel}{id}{more}.\n       \
-             Run moss on that folder instead:  moss {sub} \"{folder}/{rel}\"",
+            "'{folder}' contains a moss site at {rel}{id}{more}.\n       {hint}",
             folder = folder_path,
             rel = primary.rel_path,
-            sub = subcommand,
+            hint = next_step(
+                subcommand,
+                format!("Run moss on that folder instead:  moss {subcommand} \"{folder_path}/{}\"", primary.rel_path)
+            ),
         );
     }
     if let Some(desc) = class_description(&report.root_class) {
         return format!(
-            "'{folder}' looks like {desc} — moss will not turn it into a site.\n       \
-             Run moss {sub} on the folder that holds your site instead.",
+            "'{folder}' looks like {desc} — moss will not turn it into a site.\n       {hint}",
             folder = folder_path,
-            sub = subcommand,
+            hint = next_step(subcommand, format!("Run moss {subcommand} on the folder that holds your site instead.")),
         );
     }
     // Truncated Normal, nothing found: the scan cannot vouch for the tree.
     format!(
-        "'{folder}' is too large to check for nested moss sites ({visited} folders scanned).\n       \
-         Run moss {sub} on the site folder itself.",
+        "'{folder}' is too large to check for nested moss sites ({visited} folders scanned).\n       {hint}",
         folder = folder_path,
         visited = report.dirs_visited,
-        sub = subcommand,
+        hint = next_step(subcommand, format!("Run moss {subcommand} on the site folder itself.")),
     )
 }

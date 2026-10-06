@@ -18,14 +18,14 @@
 //!
 //! # Why an enum, not a bool
 //!
-//! The previous model used `is_index: bool` and inferred the rest from
-//! context. That made the children-listing filter impossible to get right.
-//! A third `Asset` variant (synthetic per-image pages) existed until the
-//! image-as-page feature was removed in 2026-07; nothing produced it, so it
-//! was dropped rather than left as an unreachable state. See
-//! `moss/docs/reference/page-kinds.md`.
+//! `is_index: bool` and inferring the rest from context made the
+//! children-listing filter impossible to get right.
 
 use serde::{Deserialize, Serialize};
+
+/// File extensions, lowercase, that the build turns into pages, `md` first.
+/// The resolver tries them in this order when a target names no extension.
+pub const PAGE_EXTENSIONS: [&str; 4] = ["md", "markdown", "mdown", "mkd"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

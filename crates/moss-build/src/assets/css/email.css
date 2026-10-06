@@ -9,8 +9,7 @@
   /* Every moss-hosted subscribe form is now the `:::subscribe` shortcode
      shape — `<div class="moss-subscribe"><form data-position="inline">` —
      whether auto-injected into the footer or authored in body/footer.md.
-     Card container for the in-page (non-footer) case. Token-only. See spec
-     docs/archive/2026-04-30-subscribe-shortcode-design.md. */
+     Card container for the in-page (non-footer) case. Token-only. */
   .moss-subscribe {
     max-width: 32rem;
     margin: var(--moss-space-lg) 0;
@@ -24,14 +23,18 @@
      right-anchored on desktop. The footer becomes a flex row via
      `footer.container:has(> .moss-subscribe)` in site.css; `margin-inline-start:
      auto` (declared HERE so it wins the @layer cascade over the base
-     `.moss-subscribe` margin) pushes the form to the inline-end edge. The full
-     `margin` shorthand sets block-end 0 (so it doesn't inherit the base
+     `.moss-subscribe` margin) pushes the form to the inline-end edge — which is
+     why it and the block margin below are the two logical `margin-inline`/
+     `margin-block` shorthands, not a physical `margin` shorthand: physical
+     `margin-left: auto` only coincides with `margin-inline-start: auto` under
+     horizontal-tb, and sets block-end 0 (so it doesn't inherit the base
      `space-lg` block margin) and `min-width: 0` lets the form shrink below its
      content width beside a verbose link list instead of wrapping early. */
   footer .moss-subscribe {
     max-width: 24rem;
     min-width: 0;
-    margin: var(--moss-space-sm) 0 0 auto;
+    margin-block: var(--moss-space-sm) 0;
+    margin-inline: auto 0;
     padding: 0;
     border: none;
     border-radius: 0;
@@ -156,8 +159,7 @@
    form reaching readers (defense-in-depth for non-seta exports — GitHub
    Pages plugin, plain `moss build` — where email is unsupported in Phase 1).
    NOTE: this rule sits OUTSIDE the @layer block above (unlayered → highest
-   precedence after the wrap), which is what we want for a safety hide.
-   See docs/archive/2026-06-10-email-footer-mode-independent-design.md. */
+   precedence after the wrap), which is what we want for a safety hide. */
 body:not([data-moss-preview]) .moss-subscribe-form[data-moss-pending-site] {
   display: none;
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
 use crate::build::manifest::change_set::ChangedPage;
 use crate::build::scan::article_map::ArticleInfo;
 use std::collections::HashMap;
@@ -62,7 +63,7 @@ fn a_renamed_page_seen_as_added_and_deleted_by_the_change_set_is_one_moved_row()
     let current = article_map(&[("new-page", "new.md", "New Title")]);
     let prev = vec![live_entry("old-page", "old.md", "Old Title")];
 
-    let summary = build_page_change_records(&change_set, &renames, &current, &prev);
+    let summary = build_page_change_records(&change_set, &renames, &current, &prev, &[]);
 
     assert_eq!(summary.records.len(), 1, "{:?}", summary.records);
     let row = &summary.records[0];
@@ -83,7 +84,7 @@ fn a_plain_added_page_with_no_rename_involved() {
     };
     let current = article_map(&[("fresh", "fresh.md", "Fresh Page")]);
 
-    let summary = build_page_change_records(&change_set, &HashMap::new(), &current, &[]);
+    let summary = build_page_change_records(&change_set, &HashMap::new(), &current, &[], &[]);
 
     assert_eq!(summary.records.len(), 1);
     let row = &summary.records[0];
@@ -107,7 +108,7 @@ fn a_plain_removed_page_takes_its_title_from_prev_triples() {
     let current = article_map(&[]);
     let prev = vec![live_entry("gone-page", "gone.md", "Gone Page")];
 
-    let summary = build_page_change_records(&change_set, &HashMap::new(), &current, &prev);
+    let summary = build_page_change_records(&change_set, &HashMap::new(), &current, &prev, &[]);
 
     assert_eq!(summary.records.len(), 1);
     let row = &summary.records[0];
@@ -122,7 +123,7 @@ fn a_plain_removed_page_takes_its_title_from_prev_triples() {
 fn pages_updated_counts_edited_plus_restyled_and_never_becomes_a_row() {
     let change_set = ChangeSet { classified: true, edited: 2, restyled: 3, ..Default::default() };
 
-    let summary = build_page_change_records(&change_set, &HashMap::new(), &ArticleMap::default(), &[]);
+    let summary = build_page_change_records(&change_set, &HashMap::new(), &ArticleMap::default(), &[], &[]);
 
     assert_eq!(summary.pages_updated, 5);
     assert!(summary.records.is_empty());
@@ -138,7 +139,7 @@ fn records_are_sorted_by_path() {
     };
     let current = article_map(&[("b-page", "b.md", "B"), ("a-page", "a.md", "A")]);
 
-    let summary = build_page_change_records(&change_set, &HashMap::new(), &current, &[]);
+    let summary = build_page_change_records(&change_set, &HashMap::new(), &current, &[], &[]);
 
     let paths: Vec<&str> = summary.records.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(paths, vec!["a-page", "b-page"]);
@@ -146,8 +147,7 @@ fn records_are_sorted_by_path() {
 
 /// task 4-6's verification burst must probe exactly the rows the receipt
 /// shows: grouped by kind (Added, Moved, Removed), capped at
-/// `MAX_PAGE_ROWS`, never re-sorted within a kind — mirrors
-/// `publish-receipt.ts`'s `orderedPageRows` + `MAX_PAGE_ROWS` slice.
+/// `MAX_RECEIPT_ROWS`, never re-sorted within a kind.
 #[test]
 fn capped_page_rows_groups_by_kind_and_caps_at_three() {
     let records = vec![
@@ -166,4 +166,147 @@ fn capped_page_rows_groups_by_kind_and_caps_at_three() {
 
     let paths: Vec<&str> = capped.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(paths, vec!["a1", "a2", "m1"], "Added before Moved before Removed, capped at 3");
+}
+
+fn address_record(path: &str) -> RemovedAddressRecord {
+    RemovedAddressRecord { path: path.into(), reason: RemovalReason::Unexplained, moved_to: None }
+}
+
+fn page_record(kind: PageChangeKind, path: &str) -> PageChangeRecord {
+    PageChangeRecord { kind, path: path.into(), title: path.into(), old_path: None }
+}
+
+/// Pages come first; addresses fill what is left; what does not fit is counted.
+#[test]
+fn capped_rows_fill_the_slots_pages_leave_and_count_the_rest() {
+    let records = vec![page_record(PageChangeKind::Added, "a"), page_record(PageChangeKind::Removed, "r")];
+    let addresses = vec![address_record("/x"), address_record("/y"), address_record("/z")];
+
+    let rows = capped_rows(&records, &addresses);
+
+    assert_eq!(rows.pages.len(), 2);
+    assert_eq!(rows.addresses.iter().map(|a| a.path.as_str()).collect::<Vec<_>>(), ["/x"]);
+    assert_eq!(rows.hidden, 2);
+}
+
+#[test]
+fn capped_rows_with_pages_over_the_cap_show_no_address() {
+    let records: Vec<_> = ["a", "b", "c", "d"].iter().map(|p| page_record(PageChangeKind::Added, p)).collect();
+    let addresses = [address_record("/x")];
+    let rows = capped_rows(&records, &addresses);
+    assert_eq!((rows.pages.len(), rows.addresses.len(), rows.hidden), (3, 0, 2));
+}
+
+#[test]
+fn capped_rows_with_room_to_spare_hide_nothing() {
+    let addresses = [address_record("/x")];
+    let rows = capped_rows(&[], &addresses);
+    assert_eq!((rows.pages.len(), rows.addresses.len(), rows.hidden), (0, 1, 0));
+}
+
+fn gone(path: &str, reason: RemovalReason, source: Option<&str>) -> RemovedAddress {
+    RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into) }
+}
+
+fn summarize(change_set: &ChangeSet, removed: &[RemovedAddress]) -> PageChangeSummary {
+    build_page_change_records(change_set, &HashMap::new(), &ArticleMap::default(), &[], removed)
+}
+
+fn classified() -> ChangeSet {
+    ChangeSet { classified: true, ..Default::default() }
+}
+
+#[test]
+fn a_deleted_folder_file_is_one_removed_address_and_no_page_row() {
+    let summary = summarize(&classified(), &[gone("docs/guide.pdf", RemovalReason::AuthorRemoved, Some("docs/guide.pdf"))]);
+
+    assert!(summary.records.is_empty(), "{:?}", summary.records);
+    assert_eq!(
+        summary.removed_addresses,
+        [RemovedAddressRecord { path: "/docs/guide.pdf".into(), reason: RemovalReason::AuthorRemoved, moved_to: None }]
+    );
+}
+
+/// A removed page keeps its page record; the address list holds its output
+/// too, and it must not appear a second time.
+#[test]
+fn a_removed_page_has_its_page_record_and_no_address_record() {
+    let change_set = ChangeSet { classified: true, deleted: 1, pages: vec![deleted("gone.md")], ..Default::default() };
+    let prev = vec![live_entry("gone/", "gone.md", "Gone Page")];
+
+    let summary = build_page_change_records(
+        &change_set,
+        &HashMap::new(),
+        &ArticleMap::default(),
+        &prev,
+        &[gone("gone/index.html", RemovalReason::AuthorRemoved, Some("gone.md"))],
+    );
+
+    assert_eq!(summary.records.len(), 1, "{:?}", summary.records);
+    assert!(summary.removed_addresses.is_empty());
+}
+
+/// A renamed page's old address is its Moved row's `old_path`, so the list
+/// leaves it out.
+#[test]
+fn a_renamed_pages_old_address_is_named_by_its_moved_row_only() {
+    let renames: HashMap<String, String> = [("old-page/".to_string(), "new-page/".to_string())].into();
+    let current = article_map(&[("new-page/", "new.md", "New")]);
+
+    let summary = build_page_change_records(
+        &classified(),
+        &renames,
+        &current,
+        &[],
+        &[gone("old-page/index.html", RemovalReason::Unexplained, Some("new.md"))],
+    );
+
+    assert_eq!(summary.records.len(), 1);
+    assert!(summary.removed_addresses.is_empty());
+}
+
+/// A page that moved with no redirect (and no uid rename to give it a Moved
+/// row) and whose loss was accepted: the old address is named once, in the
+/// list, with where it went. No page row exists to name it.
+#[test]
+fn a_moved_page_with_no_stub_is_named_once_in_the_list() {
+    let removed = [RemovedAddress {
+        path: "old/index.html".into(),
+        reason: RemovalReason::Unexplained,
+        moved_to: Some("new/index.html".into()),
+        source: Some("moved.md".into()),
+    }];
+    let change_set = ChangeSet { classified: true, edited: 1, pages: vec![ChangedPage { source_path: "moved.md".into(), verb: PageVerb::Edited }], ..Default::default() };
+
+    let summary = summarize(&change_set, &removed);
+
+    assert!(summary.records.is_empty());
+    assert_eq!(
+        summary.removed_addresses,
+        [RemovedAddressRecord { path: "/old/".into(), reason: RemovalReason::Unexplained, moved_to: Some("/new/".into()) }]
+    );
+}
+
+#[test]
+fn the_root_index_prints_as_a_slash() {
+    let summary = summarize(&classified(), &[gone("index.html", RemovalReason::Unexplained, None)]);
+    assert_eq!(summary.removed_addresses[0].path, "/");
+}
+
+#[test]
+fn nothing_removed_names_no_address() {
+    assert!(summarize(&classified(), &[]).removed_addresses.is_empty());
+}
+
+#[test]
+fn the_summary_serializes_the_list_beside_the_page_records() {
+    let summary = summarize(&classified(), &[gone("x.pdf", RemovalReason::AuthorRemoved, None)]);
+    assert_eq!(
+        serde_json::to_value(summary).unwrap(),
+        serde_json::json!({
+            "pages_added": 0, "pages_moved": 0, "pages_removed": 0, "pages_updated": 0,
+            "records": [],
+            "removed_addresses": [{"path": "/x.pdf", "reason": "author_removed"}]
+        })
+    );
 }

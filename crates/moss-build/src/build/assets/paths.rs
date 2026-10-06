@@ -45,9 +45,7 @@ pub fn compute_binary_hash_file(path: &std::path::Path) -> Result<String, String
 /// cancel work that is going perfectly well.
 ///
 /// It is a parameter rather than a call into `deploy::activity` because the
-/// build has no business knowing a publish watchdog exists — and because the
-/// SHA-256 arm of the same `HashAlgo::hash_file` already bumps at its own call
-/// site, so this makes the two arms say the same thing in the same place.
+/// build has no business knowing a publish watchdog exists.
 ///
 /// **What that cost, said out loud.** The bump used to live INSIDE
 /// [`compute_binary_hash_file`], so it fired for every caller. It now fires
@@ -58,7 +56,7 @@ pub fn compute_binary_hash_file(path: &std::path::Path) -> Result<String, String
 /// on (`deploy::drain_in_flight_work`, `STALL_TIMEOUT` 300s), so a single file
 /// whose read SUCCEEDS but takes over 300s with no other build event in the
 /// window would now abort a publish that was progressing fine. Narrow, and not
-/// nothing: moss#1060. Closing it properly is a reporter-shaped concern, which
+/// nothing. Closing it properly is a reporter-shaped concern, which
 /// is the port seam's business (NORTH-STAR:88, ratchet row (o)) — not a
 /// re-added `crate::deploy` call.
 pub fn compute_binary_hash_file_with_heartbeat(
@@ -268,8 +266,7 @@ impl PathResolver {
     /// has to RECOGNISE a URL then saw a shape it was not written against —
     /// `orphan_prune`'s reference scanner reads its token class straight off the
     /// encoder's output set, so raw non-ASCII covers read as unreferenced and
-    /// were deleted, 404ing the live site (2026-08-06, `LOG-8D03-T1529-08-06`;
-    /// diagnosis in docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md).
+    /// were deleted, 404ing the live site (2026-08-06, `LOG-8D03-T1529-08-06`).
     /// A second implementation of a conversion is a second answer; keep one.
     ///
     /// Examples (without overrides):
@@ -342,7 +339,7 @@ impl PathResolver {
     /// This is the one owner of runtime `<script>` tag construction — of ONE
     /// tag. Which tags the shell block contains, in what order and with which
     /// `defer`, is `emit::scripts::ScriptAssets::shell_tags` reading the
-    /// `SITE_SCRIPTS` table (#1149); the direct callers left here are the
+    /// `SITE_SCRIPTS` table; the direct callers left here are the
     /// media-collection page, which places its own. It was four byte-identical
     /// copies (preview, heading-anchor, math-copy,
     /// search), each with its own path helper whose only caller was its own
@@ -591,8 +588,8 @@ mod tests {
         // markdown page URL, which compute_url_path also slugifies.
         let resolver = PathResolver::new();
         assert_eq!(
-            resolver.resolve_url("News/chps-new-hub.png"),
-            "/news/chps-new-hub.png"
+            resolver.resolve_url("News/new-hub.png"),
+            "/news/new-hub.png"
         );
     }
 
@@ -628,8 +625,8 @@ mod tests {
         // extension; only the directory is slugified.
         let resolver = PathResolver::new();
         assert_eq!(
-            resolver.resolve_url("News/chps-new-hub.webp"),
-            "/news/chps-new-hub.webp"
+            resolver.resolve_url("News/new-hub.webp"),
+            "/news/new-hub.webp"
         );
         assert_eq!(
             resolver.resolve_url("Photos/GiorgioDeChirico.webp"),
@@ -645,8 +642,8 @@ mod tests {
         overrides.insert("News".to_string(), "blog".to_string());
         let resolver = PathResolver::new().with_dir_overrides(overrides);
         assert_eq!(
-            resolver.resolve_url("News/chps-new-hub.png"),
-            "/blog/chps-new-hub.png"
+            resolver.resolve_url("News/new-hub.png"),
+            "/blog/new-hub.png"
         );
     }
 
@@ -660,15 +657,14 @@ mod tests {
     // file was pruned as an orphan and 404'd. These assert the one property
     // that closes the class: whatever a caller hands `resolve_url`, what comes
     // back is a URL, encoded exactly once.
-    // See docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
     // -----------------------------------------------------------------------
 
     #[test]
     fn resolve_url_percent_encodes_non_ascii_segments() {
         let resolver = PathResolver::new();
         assert_eq!(
-            resolver.resolve_url("獎項/封面.jpg"),
-            "/%E7%8D%8E%E9%A0%85/%E5%B0%81%E9%9D%A2.jpg"
+            resolver.resolve_url("評選/封面.jpg"),
+            "/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.jpg"
         );
     }
 
@@ -692,7 +688,7 @@ mod tests {
         overrides.insert("交互".to_string(), "interactive".to_string());
         let resolver = PathResolver::new().with_dir_overrides(overrides.clone());
         for input in [
-            "獎項/封面.jpg",
+            "評選/封面.jpg",
             "News/Winter Song.mov",
             "交互/night-in-the-woods.html",
             "posts/article/index.html",
@@ -711,8 +707,8 @@ mod tests {
         // Encoding an absolute URL would mangle its `://` and query string.
         let resolver = PathResolver::new();
         assert_eq!(
-            resolver.resolve_url("https://example.com/獎項/封面.jpg?w=800"),
-            "https://example.com/獎項/封面.jpg?w=800"
+            resolver.resolve_url("https://example.com/評選/封面.jpg?w=800"),
+            "https://example.com/評選/封面.jpg?w=800"
         );
     }
 

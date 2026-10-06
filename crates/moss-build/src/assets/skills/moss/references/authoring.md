@@ -39,7 +39,7 @@ with which values. Scope to those rather than to something merely unique to
 this page today.
 
 ```css
-body[data-page="home"] .moss-hero { --moss-hero-max-height: none; }
+body[data-page="home"] .moss-hero { --moss-hero-object-position: center; }
 ```
 
 **Set the component's custom properties.** A component's declared properties
@@ -85,6 +85,8 @@ Example — a warm "lamplight" dark palette:
 }
 ```
 
+A `logo:` image is not exempt from this. Dark ink on a transparent background disappears against a dark `--moss-color-bg`, and moss ships no dark-mode handling of its own for it — the nav logo is a plain `<img class="site-logo">`, so the fix is ordinary CSS scoped to `:root[data-theme="dark"] .site-logo {}`, the same selector pattern as any other dark-mode override. Two ways: point at a second file (`content: url("logo-dark.svg");`), or recolour the one file with a filter (`filter: invert(1);`, right when the mark is a single flat colour on transparency).
+
 ## Quiet chrome
 
 moss splits "accent" in two: `--moss-color-accent` is the content accent (links
@@ -117,6 +119,7 @@ inside `themes` and changes precedence unpredictably. Write plain CSS.
 ## The `.moss/theme/` packaging API
 
 `.moss/theme/` is mirrored **verbatim** to `/_moss/theme/` in the built site.
+
 Consequences you can rely on:
 
 - `.moss/theme/style.css` is served at `/_moss/theme/style.css` (content-hashed)
@@ -130,15 +133,40 @@ Consequences you can rely on:
   `/_moss/theme/` URL) before your `.moss/theme/script.js` runs. Resolve assets
   with `new URL("asset.woff2", mossTheme.base)`.
 
+## Site icon
+
+Drop `assets/favicon.svg` (or `.png`/`.ico`) at the project root for the site's own tab icon; without one, moss ships its own default mark on a round ground of its own (paper in a light browser, near-black in a dark one) rather than leaving the tab blank, so the mark stays legible on any tab strip. A favicon you supply is used as is and never given a ground. An SVG favicon — yours or moss's default — is rasterized automatically into `assets/favicon-16.png`, `assets/favicon-32.png`, and `assets/favicon-180.png` (the last doubles as the apple-touch-icon). A `.png`/`.ico` favicon is not copied byte for byte: it passes through moss's ordinary image optimizer like any other picture on the site, so the served file is often smaller than the one you dropped in — but unlike the SVG path, it is never resized or multiplied into the 16/32/180 icon set, only optimized at its own single size.
+
+The SVG must be pure vector, with no embedded bitmap. moss's SVG renderer ships without raster-image decoding, so an `<image>` element inside the SVG — a logo exported as "SVG" that actually wraps a PNG or JPEG — renders as nothing: the icon comes out blank (or missing whatever part of it was the raster), with only a warning in the build log to say why.
+
+## A source-owned HTML homepage
+
+For a homepage that must own its complete HTML document, keep `index.md` for site metadata, put the authored document at `index.html`, and declare the exact file in `.moss/config.toml`:
+
+```toml
+[build]
+passthrough = ["index.html"]
+```
+
+The explicit entry makes the source HTML win only the root `index.html` output collision. moss still generates every Markdown page, and `--watch` rebuilds when either source changes. The HTML document owns its own head, styles, scripts, accessibility, and asset links. A root `index.html` without this explicit entry remains an ordinary source asset and does not replace moss's generated homepage.
+
+## Files moss does not render, and where they belong
+
+A file in the site folder that is not a page — a script, a data file, a stylesheet a page links itself — reaches the built site at the same path: `closing.js` beside `index.md` is served at `/closing.js`, byte for byte. Images and videos go through moss's media conversion instead, the same as an embed's. A folder is passthrough when it holds its own `index.html`, or when `[build].passthrough` names it (`passthrough = ["index.html", "demo"]`; a leading `!` opts out a folder moss detected). Its videos are copied byte for byte and it gets no folder listing page, but its images are still re-encoded in place, at their own size and path (a lighter JPEG, a palette PNG), so an app that needs a pixel-exact image cannot rely on passthrough for it. Markdown inside it is still rendered as pages.
+
+Where a file goes follows what owns it. `.moss/theme/` is the site's theme, for every page moss generates: its `style.css` and `script.js` load on each of them, and whatever sits beside them ships with the theme under `/_moss/theme/`. A source-owned HTML document owns its own scripts and assets instead, so keep them beside it as ordinary files, or in a passthrough folder, and link them by path. One page's script put in the theme would travel with the theme to every page and tie that page to the theme's mount path.
+
 ## Embedding media
 
-All media via wikilink embeds — never raw `<img>`, `<video>`, or `<audio>`:
+All media via embeds — never raw `<img>`, `<video>`, or `<audio>`. The standard Markdown form is the default; the wikilink form renders the same thing:
 
 ```
-![[photo.jpg]]          → image with LQIP, WebP, dimensions
-![[clip.mp4]]           → video player with controls
-![[track.mp3]]          → audio player
+![](photo.jpg)          → image with LQIP, WebP, dimensions
+![](clip.mp4)           → video player with controls
+![](track.mp3)          → audio player
 ```
+
+`![[photo.jpg]]`, `![[clip.mp4]]` and `![[track.mp3]]` are the wiki spelling of the same three embeds. Write the path relative to the page; if the file is not there moss tries the site root, then the nearest file with that name, and `%20` stands for a space. A wikilink needs only the file name. Text in the brackets plays the role the text after the pipe plays in a wikilink: `![640x360 loop](clip.mp4)` equals `![[clip.mp4|640x360 loop]]`, and on an image it is the caption. Page, table, notebook and folder transclusions have no standard form and stay `![[name]]`.
 
 moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions)
 if you use raw HTML tags for media that moss owns.
@@ -147,9 +175,11 @@ if you use raw HTML tags for media that moss owns.
 loop — autoplays, no controls, respects `prefers-reduced-motion`:
 
 ```
-![[clip.mp4|loop]]          → ambient loop
-![[clip.mp4|640x360 loop]]  → ambient loop + explicit size
+![loop](clip.mp4)           → ambient loop
+![640x360 loop](clip.mp4)   → ambient loop + explicit size
 ```
+
+The wiki spelling is `![[clip.mp4|loop]]`.
 
 The `|loop` preset atomically forces `autoplay muted loop playsinline` and
 removes the control bar. It is a fixed preset, not a set of per-attribute flags
@@ -162,7 +192,7 @@ tokens, etc.) run `moss describe --json`, or see `mosspub.com/docs/reference`
 
 ### External media embeds
 
-Embed a video or pen by URL with the same wikilink-embed syntax:
+Embed a video or pen by URL with the wikilink-embed syntax (the standard `![](https://…)` form does not make a player; it stays a plain image):
 
 ```
 ![[https://www.youtube.com/watch?v=dQw4w9WgXcQ]]
@@ -187,7 +217,17 @@ moss describe --json | jq -r '.components[] | select(.authorable) | .class'
 
 Each entry carries `example_markdown`, which is the invocation moss itself tests — copy that shape rather than reconstructing one. Add a site-specific class to a shortcode invocation and style the class; keep the shortcode generic.
 
+A hero's words belong on its image: the markdown written inside the `:::hero {…} … :::` fence overlays the picture, and that is what makes it a hero rather than an illustration with a heading. The overlay sits bottom-start on every overlaid layout by default; `align=end` moves it to the inline-end edge instead — the right in a left-to-right page, the left in a right-to-left one. The overlay itself sits on a panel tinted from the image's own colour (`--moss-hero-panel-bg`, computed per image) and sized to its own content, never the hero's full height, so a busy photo with no calm corner no longer costs legibility and a short line of text never washes out most of the picture. Cropping still matters for which part of the picture shows: set `--moss-hero-object-position` so a deliberate subject (a face, a line of text in the photo itself) lands where you want it, and look at the result at desktop and phone width in light and dark mode. The hero frame grows to fit however much the overlay holds, so a long paragraph is never clipped by a fixed-height box. Phones show the image whole with the words below it unless the hero carries `mobile=overlay`, and under that mode the panel is already full width, so `align=end` makes no visible difference there; that mode also always keeps a band of the image showing above the panel — `--moss-hero-mobile-band`, default `min(45vb, 320px)` — so a long paragraph's panel never covers the whole picture. Move the crop first; when the crop cannot move the subject out from under the words — a portrait image already spanning the full width of a wide frame cannot move sideways — put the words at the other end with `align=end` instead. An image-only hero (`:::hero {image=…}` with nothing between the fences) or `caption="…"` is for an image that must be seen whole, which is a plate (next paragraph).
+
 `:::hero {.plate}` (2026-09-11) is a moss default, not a per-site class to style: it renders the hero image whole — never cropped, never enlarged past the resolution it was delivered at, shrunk to fit the column instead. Reach for it over a plain hero whenever the image's own shape, not the page layout, should decide how large it appears — an artwork, manuscript page, or photograph reproduction where cropping would cut off part of the object, and especially a wide or tall outlier (a handscroll, a long strip) that a viewport-relative `100vw` sizing would otherwise fetch too small and stretch blurry. A plain `:::hero` (or `:::hero {caption="…"}`, which already avoids cropping but still bounds the frame at the default height cap) stays right for a banner meant to fill its slot.
+
+The same rule extends past physical-object reproductions: any image that carries its own lettering, or whose full frame is the point rather than a subject inside it — a poster, a flyer, a book cover, a chart — is a plate too, because a crop can cut off a headline or an axis exactly as it would a manuscript's edge. That holds where the whole frame is shown, such as the work's own page; when the same poster heads another page as its hero, crop it to its picture, keep its lettering out of frame, and let the page's own heading and text overlay it, since they say what the lettering said. Give a plate's own text a `caption="…"` instead — moss places it below the image, in the reading column, never over it, the same slot a captioned (non-plate) hero uses. There is no documented way to set a plate beside running text on a wide screen; the caption below it is the only placement moss supports.
+
+A hero can rotate through several pictures (2026-07-27, undocumented until 2026-10-02): write one image embed per line at the top of the fence, before the overlay, and leave `image=` off — `:::hero` / `![](hall.jpg)` / `![](lake.jpg)` / `# Title` / `:::` (`![[hall.jpg]]` works the same). The first embed is the primary slide: its pipe attributes set the crop for every slide, its colour tints the panel and picks the scrim, and it is the only picture a reader with reduced motion sees. The rest crossfade behind the words in order — seven seconds a slide, a 1.5 s dissolve, at most six slides; a seventh is dropped with a build warning. The rotation pauses while the hero is hovered or holds keyboard focus, and a small pause button in the corner opposite the panel stops it for good (a checkbox, no script; it is hidden for readers with reduced motion, who see only the first slide). It pauses the crossfade only: a video slide keeps playing. Because nothing marks which slide is showing, the pictures must be interchangeable moods of one subject, never a sequence or a set a reader needs to see whole: that is `:::gallery`. A slide may be a video, which gets the same ambient loop as a video hero. An `image=` hero has exactly one picture: its whole body is overlay, so an embed there is a picture inside the words, not a slide.
+
+`:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
+
+A `:::grid` cell holding nothing but a page reference becomes one of two different things depending on the `!`. `![[page.md]]` is a transclusion — it inlines that page's markdown as the cell's own content, same as a partial anywhere else in a body. `[[page]]` or `[[page|Custom Title]]`, alone in the cell, becomes a **card** instead: the page's own cover, title and description, styled the same way a folder listing cards its children. The cover comes from the page's `cover:` frontmatter (an empty box if it has none), the title is the page's own (`|Custom Title` overrides it), and the text is the page's `description:` field only — never an excerpt pulled from the body, so a page with no `description:` set shows a card with no text under its title. A card's cover is cropped to a fixed box by default (`4 / 3`), same as any other photograph; a cover with lettering or a full-frame subject wants to be shown whole instead, which is a scope override (rung 4), not a per-card frontmatter switch — set `--moss-card-cover-ratio` to the image's own ratio and `--moss-card-cover-fit: contain` on `.moss-card-cover` (or a narrower scope) rather than cropping it.
 
 ### Partials
 
@@ -195,18 +235,92 @@ Extract repeated blocks to a partial file and transclude with
 `![[partial-name]]`. Partials are content reuse, not styling — they live outside
 the styling rungs.
 
-### Authors and tags
+### Term kinds
 
-`author:` and `tags:` are listable dimensions, not just metadata. Every value generates a page listing what carries it: `author: 趙雲` gives `/authors/趙雲/`, `tags: [城市]` gives `/tags/城市/`. Nothing to set up, and a link to a term page never 404s.
+Name-list fields are listable dimensions, not just metadata. Every value generates a page listing what carries it: `author: 趙雲` gives `/authors/趙雲/`, `tags: [城市]` gives `/tags/城市/`. Nothing to set up, and a link to a term page never 404s.
 
-Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. `tag_page:` does the same for a tag. Term mentions site-wide then link there instead of at the generated URL.
+Five fields work this way: `author:`, `tags:`, `editor:`, `jury:`, `location:`. Out of the box `author:` feeds `/authors/` and `tags:` feeds `/tags/`; `editor:`, `jury:` and `location:` feed nothing until a site says where they go.
+
+A **term kind** is one namespace fed by one or more of those fields. Declare one in `.moss/config.toml`:
+
+```toml
+[terms.people]
+fields = ["author", "editor", "jury"]
+title = "People"
+```
+
+Now all three fields feed one namespace: someone who wrote one piece and edited another has a single page at `/people/<name>/`, not two. That page lists their works in sections — "Author", then "Editor", then "Jury", in the order `fields` gives — so the listing says what each credit was. A person reached through only one of the fields gets a plain listing with no section headings.
+
+Naming a field in a declared kind takes it out of its built-in namespace: with the block above, `author:` no longer feeds `/authors/`. The old `/authors/<name>/` URLs keep working, and so does the bare `/authors/` root itself — moss emits a redirect to the new page for as long as the field belongs elsewhere. That redirect never lands on a real page: if you have hand-authored content living at the old address, moss leaves it alone rather than burying it under a meta-refresh.
+
+Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. Every field has its claim: `tag_page:`, `editor_page:`, `jury_page:`, `place_page:`. Any of a kind's claims takes over that kind's page, so in the `people` example above a bio page claims with whichever credit fits. Term mentions site-wide then link there instead of at the generated URL. Claiming adds that listing below, and also gives the page's own `cover:` a visible place in the body — beside the title, the same layout a folder-index page claiming the same term already uses. An unclaimed leaf's `cover:` only ever reaches share/OG metadata; it never becomes a visible image in the body.
 
 Two things that surprise people:
 
 - **Inline `#hashtags` derive no pages** — only frontmatter `tags:` do. An inline tag still reaches `article:tag` metadata and JSON-LD keywords; it is prose, not cataloguing.
-- **`/authors/` and `/tags/` are not in nav and not listed by their parent.** A folder holding every author name is wrong as a nav item on most sites, so the roots stay reachable through term links, sitemap and search instead.
+- **Namespace roots are not in nav and not listed by their parent.** A folder holding every author name is wrong as a nav item on most sites, so `/authors/`, `/tags/` and any declared kind's root stay reachable through term links, sitemap and search instead.
 
-Turn a dimension off with `[terms].author = false` or `[terms].tags = false` in `.moss/config.toml`.
+To stop a dimension generating pages, either switch the built-in off — `[terms].author = false` or `[terms].tags = false` — or drop the field from the `fields` list of the kind that claims it.
+
+### Places
+
+`location:` is a name-list field like `author:`/`editor:`/`jury:`, feeding whichever kind's `fields` names it — but a kind that also sets `type = "place"` gets three things the others don't: a hand-edited gazetteer, a parent hierarchy, and an automatic place line.
+
+```toml
+[terms.places]
+type = "place"
+fields = ["location"]
+title = "Places"
+```
+
+Every name in `location:` is looked up by its display name in `.moss/places.toml`, a file you edit by hand — moss never writes it. One quoted-key table per place:
+
+```toml
+["Kyoto"]
+lat = 35.0116
+lng = 135.7681
+precision = "city"
+parent = "Japan"
+```
+
+Three fields, all optional: `lat`/`lng` place the pin (missing either one still keeps the place — its page, parent and precision all still work, just with nothing to put on a map); `parent` names another place by its display name, and that place rolls up into the parent's listing too — a page in Kyoto also appears on Japan's page, and Japan gets its own generated page even with no gazetteer row of its own, purely from being named as somebody's parent; `precision` is the privacy control, not a display preference — `exact`, `city`, `region` or `country`, and a missing or unrecognized value coarsens to `country`, the widest ring, rather than defaulting to the most precise one; an unrecognized value also prints a build diagnostic naming the file, the place, the value you wrote and the allowed set, so a typo (`"town"`) is visible rather than a silent privacy downgrade.
+
+A place page — claimed with `place_page:`, or generated like any other unclaimed term — gets a breadcrumb up its parent chain and a list of its own children, each with how many pages are under it (counting every page anywhere in that child's own subtree, not just its direct members). A page with `location:` set gets one more thing for free: an automatic line under its byline naming every place it declared, each linked to that place's page. There is no frontmatter key to write that line yourself, and no per-page opt-out — leave `location:` unset and the page gets none; to drop the line site-wide, set `line = false` (below). The same resolved place also shows next to that page's compact date wherever it's listed as a card (grid cards, summary cards, and the plain date-and-title rows alike) — so a folder of dated, located pages reads as a chronology of places, not just a column of dates.
+
+Place pages draw an offline map automatically when at least one relevant gazetteer entry has coordinates. A real page of your own at a place term's root (`places/index.md`, say, with no `place_page:` claim) keeps its own title and content — the map still draws below them, not instead of them. Set `map: false` in that page's frontmatter to turn the map off; this `map:` is the geographic map on the page, unrelated to `cascade:`'s own key-value map. `map:` is the one per-page switch for a page's own map, on a place page and on a located article alike (see the locator below).
+
+Set `route: true` on a page whose `location:` list is already in the order you travelled it, to draw that order as a route: a dashed line through the stops with numbered badges (1..N), on that page's own map and its locator alike. There is no second ordered-list field — `location:` already keeps its declared order, and `route:` just says "connect these". Precision is still the privacy control: every stop must resolve to at least region precision, since a country-precision stop is too coarse a point to draw a line through — such a stop blocks the whole route and prints a build diagnostic naming the page and the stop, rather than drawing a line that jumps past it. A region-precision stop still joins the route, at the centre of the same soft area marker it's already shown with, and its badge is drawn as an outline instead of filled, so it reads as an area rather than a point. A listing map — the `/places/` root, a folder's `style: map` card — never draws a route, regardless of `route:`, since there is no single page-ordered list behind it to draw one from. Known limitation: a route with two stops on opposite sides of the 180° meridian draws a straight line across the whole map rather than the short way around it.
+
+To add the smaller locator map after each authored page's place line, opt in site-wide:
+
+```toml
+[site]
+locator = "align-right"
+```
+
+The default is no locator. `"none"` also disables it. On narrow screens the right-aligned locator collapses into the reading flow at full width.
+
+A page can override the site setting with `map:` in its frontmatter: `map: false` hides that page's locator, and `map: true` shows it on a site whose `locator` is `none` (drawn right-aligned, the only placement there is). Unset follows the site. On a place page the key keeps its own meaning — that page's term map, on or off — and a place page never also gets a locator, even with `location:` and `map: true`, so `map` has exactly one meaning per page. A page with `map: true` but no `location:` that resolves to a place with coordinates draws nothing, with no error. `route: true` draws on whichever map the page shows.
+
+A place namespace, parent, or leaf can also be embedded explicitly with `style:map`, for example `![[/places/kyoto/|style:map]]`. The map uses the same members and privacy precision as the place page. If the target is not a place term, or none of its entries has coordinates, moss warns and renders the ordinary listing instead.
+
+A place's page — its own leaf (`/places/kyoto/`), or an ancestor reached only through roll-up (`/places/japan/`, with no page of its own naming it directly) — embeds as a listing anywhere in the body the same way a real folder does: `![[/places/kyoto/|style:grid]]`. Nothing on disk backs that path; it resolves through the same term membership the page itself is built from, member order included, whether the page underneath is generated or claimed with `place_page:`.
+
+A place namespace's root page can also carry an interactive explorer layered over the same offline map — on by default, turned off with `explorer = false` in that kind's `[terms.<key>]` table (`places`, or whatever key you declared `type = "place"` on). The key is read only for a place-typed kind; setting it elsewhere is silently ignored rather than an error.
+
+The automatic place line can be dropped for the whole site with `line = false` in the same `[terms.<key>]` table; the default is `true`. With it off, no page renders the "Location: …" line, while `location:` keeps feeding listing cards, the places root, each place's page and every map exactly as before. Like `explorer`, the key is read only for a place-typed kind and ignored elsewhere.
+
+### Events
+
+A page becomes an event by carrying `start:`. `date:` stays the posted date; `start:` is the event time, so when porting from a generator where `date` is the event time, move that value to `start`.
+
+- `start` — when it starts: `YYYY-MM-DD` (all-day) or `YYYY-MM-DD HH:MM`.
+- `end` — when it ends, same forms; an all-day `end` is inclusive (`end: 2026-11-03` runs through the 3rd) and must not be before `start`.
+- `timezone` — IANA zone the times are in, e.g. `Asia/Taipei`.
+- `status` — `cancelled`, `postponed`, `moved-online` or `rescheduled`; absent means scheduled.
+- `tickets`, `online` — URLs.
+
+Times are venue-local wall-clock time: write `14:00`, never an offset or `Z`, and name the zone in `timezone:`.
 
 ### Long archives
 
@@ -214,7 +328,7 @@ moss has **no pagination**: no `paginate:`, no `offset`, no `/page/2/`. Do not
 invent one — unknown frontmatter keys are silently ignored, and hand-built
 `/page/N/` folders drift the moment an article is added or removed.
 
-Split a long archive by folder instead — by year, by series, by section. Give each folder's home `sort: date` for a chronological stream (`sort` also accepts `weight` and `title`).
+Split a long archive by folder instead — by year, by series, by section. Give each folder's home `sort: date` for a newest-first chronological stream, `sort: date-asc` for the same stream oldest-first — a sequence of lectures, say, read in the order they were given — or `sort` also accepts `weight` and `title`. A subfolder in that stream sorts by its own `date:` the same way: a section of the series with a dated home page takes its place in the chronology instead of always leading the list, and its card shows that date (and its `location:`) ahead of its article count.
 
 `date:` takes `YYYY-MM-DD`, `YYYY-MM`, or a bare year, so a work whose day or month is unknown can still sort and show what is known. Quote a bare year — `date: "1695"` — because YAML reads an unquoted `1695` as an integer and the build rejects it. On a vertical CJK page every date, on the article and on its cards, renders in Chinese numerals (一六九五年·三月).
 
@@ -228,6 +342,8 @@ sort: [intro, setup, advanced]
 
 A page's own `weight:` is an integer that `sort: weight` orders by — lower first, and pages with no weight follow after the weighted ones, tied among themselves by stem.
 
+A section can show a shorter name in the nav bar than its title: `nav_label: Reading` on a page titled "Course of Reading". The nav bar and the footer links (`footer: true`) use it; the page's own heading, the browser tab title, listing cards, breadcrumbs and feeds keep the title. A blank `nav_label` is ignored.
+
 `series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next. Declaring `sort:` as an explicit list, or as `sort: weight`, turns `series` on by default.
 
 Show a capped feed on the homepage by pointing at that folder:
@@ -237,11 +353,17 @@ children: "[[2026]]"
 children_limit: 10
 ```
 
-The automatic "More" link only appears on a **cross-folder** feed that
-actually truncated something. A `children_limit` on a page listing its own
-children truncates silently with no "More" link, because linking back to the
-page you are already on is meaningless. So always name the target folder when
-you want the link to appear.
+The automatic "More" link only appears on a **cross-folder** feed that actually truncated something. A `children_limit` on a page listing its own children truncates silently with no "More" link, because linking back to the page you are already on is meaningless. So always name the target folder when you want the link to appear.
+
+### Moved and removed pages
+
+Every page carries a `uid:`, and each build compares that uid's current address against the one recorded at the last deploy — an address that changed gets an automatic redirect, a small page at the old address forwarding to the new one. Never hand-write one of these: it isn't tracked as a redirect, so moss cannot retire it later, and a stray one at the site root gets crawled and can leak into the sitemap. The comparison is against what was actually *deployed*, so a first port with no deploy on record yet gets no redirect for anything renamed before that first publish — only a move made after at least one deploy is caught automatically.
+
+A page you removed, or merged into a section of another, leaves nothing for moss to compare uids against, so add the forwarding link yourself: edit `.moss/data/redirects.json`, a flat JSON object mapping the old address to the new one, neither with a leading slash — `{"old-page/": "new-page/#section"}` (a fragment on the target works). This takes effect on an ordinary local `moss build`; no deploy is required for a hand-written entry to start forwarding. If a real page now exists at the old address, moss leaves it alone — the redirect is dropped rather than overwriting it.
+
+For an address that is not a page moss tracks — a hand-made `.html` file you moved, or a link out to another site — declare it in `.moss/config.toml` instead: `[redirects]` maps the old address to the new one, both site-absolute (`"/scale-compare.html" = "/assets/scale-compare.html"`, `"/old-post/" = "/writings/new-post/"`, `"/shop/" = "https://example.com/shop"`). The new address is one the site serves or an `https://` URL. A page address or a `.html` file gets a forwarding page; any other file gets a byte copy of its target, so its target must be a file on the site (an external or page target for a non-HTML file has no static form and is reported, working only on a host that reads `_moss/redirects.json`, which lists every redirect). An old address with capitals or spaces in a folder name cannot be a file path, so it gets no forwarding page and works only on a host that reads the table. An old address the site really serves is left alone and reported. The table is optional and needs no `schema_version` change.
+
+A site kept in git must un-ignore this one file. moss's own `.moss/.gitignore` excludes `.moss/data/` as `data/*`, deliberately the one line in that file spelled so a single file underneath can still be re-included — but nothing adds that exception for you, so add `!data/redirects.json` on its own line beneath `data/*`, or `git add -f` the file once. Left ignored, an ordinary `git add .` silently drops it: a fresh clone then has no redirect history at all, so every earlier hand-declared forward for a removed or merged page is gone — there is no `uid:` for moss to reconstruct it from — while a rename since the last deploy still gets caught fresh, since the deploy record itself is tracked in git.
 
 ## Multilingual sites
 
@@ -271,12 +393,9 @@ second: a `ja/` tree publishes correctly and is dressed in another language's
 chrome. Neither answer is a bug, but reading the first as the second is the way
 to be surprised by the result.
 
-`translationKey:` links two files as translations when their filenames
-differ. Files with matching stems (`about.md` and `about.zh-hans.md`) pair
-automatically without it.
+`translationKey:` links two files as translations when their filenames differ. Files with matching stems (`about.md` and `about.zh-hans.md`) pair automatically without it.
 
-`[site] lang` in `.moss/config.toml` names the **default edition**: the one
-that publishes at `/`, while every other edition publishes under `/<code>/`.
+`[site] lang` in `.moss/config.toml` names the **default edition**: the one that publishes at `/`, while every other edition publishes under `/<code>/`.
 
 Read that as naming the edition, not as choosing which files land at the root.
 Directory structure decides that — anything outside a language-code directory
@@ -325,6 +444,8 @@ home page is the one that always works.) The ordinary folder-home rule applies,
 so `en/index.md` and `en/en.md` are equally valid; match whatever the site
 already does rather than converting it.
 
+A `[[reference]]` written from a page inside a language tree prefers that reader's own language — bare stem or full path alike. `[[work/spring-show]]` written from a page under `zh-hans/` resolves to `zh-hans/work/spring-show.md` when that file exists, the same way the bare `[[spring-show]]` already prefers `zh-hans/spring-show.md` over a root one; either form only falls back to the un-prefixed path when no same-language copy exists. To link across languages on purpose — a Chinese page pointing at the English original, say — write the full path including the language folder: `[[en/work/spring-show]]`.
+
 ## Live vocabulary: moss describe
 
 `moss describe --json` is the single source of truth for:
@@ -344,7 +465,10 @@ already does rather than converting it.
 - **Components** — every `moss-*` class moss emits, with `authorable: true`
   flagging the author-facing shortcodes.
 - **Frontmatter** — every built-in frontmatter field moss recognizes, its type,
-  and allowed enum values where applicable.
+  and allowed enum values where applicable. Check this array before adding any
+  new top-level frontmatter key of your own: a name that collides with one
+  already here is read by moss and silently changes behaviour instead of
+  staying the inert custom field you meant it to be.
 
 Tokens and custom properties are both `--moss-*` names and are easy to confuse.
 The test is where you set it: a token belongs in `:root {}` and cascades

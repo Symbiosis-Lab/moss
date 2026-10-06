@@ -97,7 +97,7 @@ impl ManifestHashMemo {
     /// Persist the memo to disk (atomic write). Called once per build.
     pub(crate) fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
+            crate::build::io_utils::create_output_dir_all(parent)
                 .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
         let json = serde_json::to_string(&*self.entries.borrow())
@@ -108,6 +108,7 @@ impl ManifestHashMemo {
         let tmp = path.with_extension(format!("json.pending.{}", uuid::Uuid::new_v4()));
         std::fs::write(&tmp, json.as_bytes())  // allow:raw_write temp for the memo's own atomic save, under .moss/cache
             .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
+        // allow:unlink rename into place for the hash memo, not staging
         std::fs::rename(&tmp, path).map_err(|e| {
             format!("Failed to rename {} -> {}: {}", tmp.display(), path.display(), e)
         })

@@ -1,5 +1,5 @@
 //! The preview server — one Axum server, two hosts (desktop GUI and headless
-//! CLI), crossed from the app crate at S1 of the ADR-067 relocation.
+//! CLI).
 //!
 //! # The `/__moss/*` HTTP contract
 //!
@@ -27,67 +27,111 @@
 //!   `MossEvent` bus the desktop frontend receives over Tauri IPC (`events.rs`).
 //!   Same token gate as `/read`, minus the media-type half (a GET has no body).
 //!
+//! `POST /__moss/yield`, `GET /__moss/session` and `POST /__moss/upload` are
+//! further, unconditional endpoints outside this three-tier model —
+//! infrastructure routes like health and source, not carrier commands (see
+//! `yield_route`'s, `session_route`'s and `upload_route`'s module docs).
+//! `upload` is the one mutating infrastructure route, so unlike its two
+//! siblings it wears the mutation carrier's own token gate.
+//!
 //! ## The token
 //!
 //! One token per bound vault, minted by `InvokeCtx::bind` — at start-up from
 //! the serve dir, and again whenever a folder switch points the server at a
 //! different vault, which retires the previous token — and carried in the
 //! `X-Moss-Token` request header. It is published — never logged — to
-//! `.moss/build/http-token` inside the served vault (`carrier_token::publish`),
+//! `.moss/build.nosync/http-token` inside the served vault (`carrier_token::publish`),
 //! world-unreadable, so a local client (coding agent, Playwright) can
 //! authenticate before its first request. A request with a bad or absent token
 //! gets 401; a command absent from a tier's allowlist gets 404 (absent, not
-//! gated — ADR-032 §5).
+//! gated).
 //!
 //! ## Trust boundary
 //!
-//! The server binds loopback only (dual-stack `127.0.0.1` + `[::1]`), and the
-//! OUTERMOST router layer (`trust_boundary::validate_host_origin`) refuses a
-//! non-loopback `Host` (DNS-rebinding defence) and a foreign `Origin` with 403
-//! before any handler runs — including on the token-gated tiers, so the token
-//! is never even inspected for a foreign caller. Which carrier a given moss
-//! instance mounts is governed by ADR-066 (one carrier per instance): the
-//! routes exist only when the host threads an `InvokeCtx` into [`ServeConfig`].
-//!
-//! No behavioral change crossed with the code: this module doc is the contract
-//! statement the relocation plan's decision 7 called for, and a
-//! `docs/reference/` page is owed when the open repo ships (decision #32's
-//! publishing half), not before.
+//! The server binds loopback only (dual-stack `127.0.0.1` + `[::1]`) by
+//! default, and the OUTERMOST router layer (`trust_boundary::validate_host_origin`)
+//! refuses a `Host` that is neither loopback nor operator-named (DNS-rebinding
+//! defence) and a foreign `Origin` with 403 before any handler runs —
+//! including on the token-gated tiers, so the token is never even inspected
+//! for a foreign caller. [`ServeConfig::bind`] opts a single explicit address
+//! into reach beyond loopback, and [`ServeConfig::extra_hosts`] is what then
+//! widens the Host/Origin allowlist to match — the default stays loopback-only
+//! until both are set. Which carrier a given moss instance mounts is governed
+//! by a one-carrier-per-instance rule: the routes exist only when the host
+//! threads an `InvokeCtx` into [`ServeConfig`].
 //!
 //! ## Module layout
 //! - `router` — Axum router construction, [`ServeConfig`]/[`start_server`], middleware stack
-//! - `port` — port availability checking, scanning, readiness verification
+//! - `port` — port availability checking, scanning, readiness verification,
+//!   and binding/driving the actual listener(s) (loopback dual-stack or
+//!   `ServeConfig::bind`'s explicit address)
 //! - `invoke` — the HTTP command carrier (three tiers above)
 //! - `carrier_token` — per-session token mint/publish + the gate middleware
 //! - `trust_boundary` — Host/Origin validation (outermost layer)
-//! - `events` — the SSE event carrier + headless announcer/reporter
+//! - `yield_route` — `POST /__moss/yield` handler + contract
+//! - `session_route` — `GET /__moss/session` token→cookie exchange
+//! - `upload_route` — `POST /__moss/upload` handler + contract
+//! - `events` — the SSE event carrier + headless announcer/reporter, and the
+//!   viewer-activity signal
 //! - `placeholder` — SVG placeholders for assets still being processed
 //! - `asset_rewriter` / `content_wrapper` / `iframe_bridge` / `comment_stub` —
-//!   the response-transform layers (bridge injection stays a host-mounted layer
-//!   per ADR-067 clause 4; today every host mounts all of them)
+//!   the response-transform layers (bridge injection stays a host-mounted layer;
+//!   today every host mounts all of them)
 
 // `pub` only where a consumer outside this crate actually reads the module.
-// `asset_rewriter` earns it (src-tauri/tests/instant_preview_media_parity_test.rs);
+// `asset_rewriter` earns it (exercised by the desktop app's media parity test);
 // the rest of the response-transform layers, the token and the trust boundary are
 // internal to the server and stay `pub(crate)` — they are the security-relevant
 // half, and the open repo will make "crate-external" mean "public".
 pub mod asset_rewriter;
-pub(crate) mod carrier_token;
+pub mod carrier_token;
 pub(crate) mod comment_stub;
 pub(crate) mod content_wrapper;
 pub mod events;
+pub(crate) mod host_routes;
 pub(crate) mod iframe_bridge;
 pub mod invoke;
+pub mod ownership;
 pub mod placeholder;
 pub mod port;
 pub mod router;
 pub mod session;
+pub(crate) mod session_route;
 pub(crate) mod trust_boundary;
+pub(crate) mod upload_route;
+pub(crate) mod yield_route;
 
 pub use invoke::InvokeCtx;
+pub use ownership::HostKind;
 pub use router::{start_server, ServeConfig};
 
 use std::sync::Arc;
+
+/// What a host decides about the headless server, as one value. `Default` is
+/// the plain loopback-only server `moss build --serve` starts.
+#[derive(Default, Clone)]
+pub struct HeadlessServe {
+    /// Forwarded to [`ownership::acquire_for_site_dir`] via [`ServeConfig`].
+    /// `ops::run_headless_build` sets it from `--watch` (standing by makes no
+    /// sense for a one-shot build that would just exit right after).
+    pub standby_on_conflict: bool,
+    /// Forwarded to [`ServeConfig`]: `ops::run_headless_build` holds the same
+    /// `Arc` across every call this process makes here, so a `/__moss/yield`
+    /// hit on whichever server is live always wakes the one driver loop
+    /// waiting on it.
+    pub yield_notify: Arc<tokio::sync::Notify>,
+    /// See [`ServeConfig::host_routes`].
+    pub host_routes: Option<axum::Router>,
+    /// See [`ServeConfig::bind`]. `None` keeps the loopback-only bind.
+    pub bind: Option<std::net::IpAddr>,
+    /// See [`ServeConfig::extra_hosts`].
+    pub extra_hosts: Vec<String>,
+    /// See [`ServeConfig::announce_sign_in`].
+    pub announce_sign_in: Option<String>,
+    /// First port of the upward scan. `None` reads `MOSS_PREVIEW_PORT_BASE`
+    /// (see [`port::env_port_base`]).
+    pub port_base: Option<u16>,
+}
 
 /// Start a preview server with no host shell — the CLI / headless
 /// `moss build --serve` arm. The GUI arm (server reuse, folder-switch
@@ -97,8 +141,8 @@ use std::sync::Arc;
 /// # Arguments
 /// * `moss_path` — the project's `.moss` directory.
 /// * `cli_site_dir` — the directory cell this server serves from. **The caller
-///   must pass the same `Arc` the build switches**, or the server never sees
-///   `switch_to(staging)` and serves the pre-build seed for the life of the
+///   must pass the same `Arc` the build moves**, or the server never sees a
+///   render move it to staging and serves the pre-build seed for the life of the
 ///   process — a 404 on every page for `moss build --serve`. `None` means
 ///   "nobody is switching this", which is only true when no build shares the
 ///   process; the fallback cell is seeded to the initial serve dir
@@ -109,32 +153,45 @@ use std::sync::Arc;
 /// stops accepting new connections while the OS backlog still completes TCP
 /// handshakes — connections accepted at the TCP level that get no HTTP
 /// response), so hold it for the life of the serve and `send(())` on the way
-/// out. Until slice C1 this function `mem::forget`ed the sender because every
-/// caller exited via `std::process::exit`; the CLI driver now blocks on
-/// ctrl-C and shuts down deliberately (`ops::run_headless_build`), and the
-/// one caller that still cannot send — an in-process test build — forgets it
-/// at its own site (`events/host_ports.rs`, app crate).
+/// out. The CLI driver blocks on ctrl-C and shuts down deliberately
+/// (`ops::run_headless_build`); the one caller that cannot send — an
+/// in-process test build — forgets it at its own site.
+///
+/// `serve` carries everything a host decides about the server — see
+/// [`HeadlessServe`]. [`HeadlessServe::default`] is the loopback-only server a
+/// plain `moss build --serve` starts.
 pub async fn start_server_headless(
     moss_path: &str,
     cli_site_dir: Option<Arc<std::sync::RwLock<std::path::PathBuf>>>,
     asset_registry: Option<Arc<crate::types::assets::AssetRegistry>>,
+    serve: HeadlessServe,
 ) -> Result<(u16, tokio::sync::oneshot::Sender<()>), String> {
     let serve_dir = serve_dir_for_site_path(moss_path);
     let site_dir_state =
         cli_site_dir.unwrap_or_else(|| Arc::new(std::sync::RwLock::new(serve_dir)));
     // Headless mode: the HTTP command carrier is the entire point — typing
-    // `moss build --serve` IS the opt-in (ADR-066). Standalone context, no
+    // `moss build --serve` IS the opt-in. Standalone context, no
     // Tauri shell (mirrors host_fns::HostState::standalone).
     let invoke_ctx = Some(InvokeCtx::standalone());
     // The build's own registry, so a variant still being encoded answers with
     // the source bytes or a placeholder rather than 404. `<picture>` does not
-    // recover from a chosen-source 404 (ADR-013), and until 2026-08-29 this
+    // recover from a chosen-source 404, and until 2026-08-29 this
     // arm passed no registry at all — so the never-404 promise held in the app
-    // and not under `moss build --serve` (#1113).
+    // and not under `moss build --serve`.
     let (port, shutdown_tx) = start_server(ServeConfig {
         invoke: invoke_ctx,
         asset_registry,
-        ..ServeConfig::new(site_dir_state, port::env_port_base())
+        kind: HostKind::Cli,
+        standby_on_conflict: serve.standby_on_conflict,
+        yield_notify: serve.yield_notify,
+        host_routes: serve.host_routes,
+        bind: serve.bind,
+        extra_hosts: serve.extra_hosts,
+        announce_sign_in: serve.announce_sign_in,
+        ..ServeConfig::new(
+            site_dir_state,
+            serve.port_base.unwrap_or_else(port::env_port_base),
+        )
     })
     .await?;
     Ok((port, shutdown_tx))
@@ -149,6 +206,55 @@ pub async fn start_server_headless(
 pub fn serve_dir_for_site_path(moss_path: &str) -> std::path::PathBuf {
     crate::moss_paths::MossPaths::from_moss_dir(std::path::PathBuf::from(moss_path))
         .initial_serve_dir()
+}
+
+/// One WARN per 10 s per served root for preview 404s, with the count it held
+/// back — so a pointer move that 404s a whole page load names itself once
+/// instead of once per asset.
+const PREVIEW_404_LOG_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+static PREVIEW_404_LOG: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, (Option<std::time::Instant>, usize)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Which tree a 404 came from: `staging`, `current→gen <id>`, or `other`.
+fn served_tree_label(current_dir: &std::path::Path) -> String {
+    match current_dir.file_name().and_then(|n| n.to_str()) {
+        Some("staging") => "staging".to_string(),
+        Some("current") => {
+            let id = current_dir
+                .parent()
+                .map(|build| build.join("current.generation"))
+                .and_then(|marker| std::fs::read_to_string(marker).ok())
+                .map(|id| id.trim().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("current→gen {id}")
+        }
+        _ => "other".to_string(),
+    }
+}
+
+pub(crate) fn log_preview_404(current_dir: &std::path::Path, path: &str) {
+    let root = match current_dir.file_name().and_then(|n| n.to_str()) {
+        Some("staging" | "current") => current_dir.parent().unwrap_or(current_dir),
+        _ => current_dir,
+    };
+    let Ok(mut windows) = PREVIEW_404_LOG.lock() else { return };
+    let now = std::time::Instant::now();
+    let entry = windows.entry(root.to_path_buf()).or_insert((None, 0));
+    if entry.0.is_some_and(|last| now.duration_since(last) < PREVIEW_404_LOG_WINDOW) {
+        entry.1 += 1;
+        return;
+    }
+    let suppressed = std::mem::take(&mut entry.1);
+    entry.0 = Some(now);
+    crate::build::lifecycle::root_identity::log_build_root(root, "serve", None);
+    log::warn!(
+        "preview 404 {} from {} ({} more suppressed)",
+        path,
+        served_tree_label(current_dir),
+        suppressed
+    );
 }
 
 #[cfg(test)]

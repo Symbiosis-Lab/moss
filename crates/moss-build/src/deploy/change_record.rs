@@ -21,9 +21,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::build::manifest::change_set::{ChangeSet, PageVerb};
+use crate::build::manifest::change_set::{ChangeSet, PageVerb, RemovalReason, RemovedAddress};
 use crate::build::manifest::live_baseline::LiveEntry;
 use crate::build::scan::article_map::ArticleMap;
+use crate::build::served_path::served_address;
 
 /// What kind of row a page's change renders as in the receipt.
 #[derive(Clone, Copy, Debug, Serialize, specta::Type, PartialEq, Eq)]
@@ -46,6 +47,22 @@ pub struct PageChangeRecord {
     pub old_path: Option<String>,
 }
 
+/// A public address this publish stopped serving that is not a page row: a
+/// file the author deleted, a generated file whose loss was accepted, a page
+/// whose address changed with no redirect.
+///
+/// Page records ([`PageChangeRecord`]) carry paths WITHOUT a leading slash;
+/// this list carries served addresses, WITH one, by the one rule the publish
+/// gate prints them by.
+#[derive(Clone, Debug, Serialize, specta::Type, PartialEq)]
+pub struct RemovedAddressRecord {
+    pub path: String,
+    pub reason: RemovalReason,
+    /// Where the page that lived here is now served, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<String>,
+}
+
 /// The completion-scoped change record a publish receipt renders.
 #[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Default)]
 pub struct PageChangeSummary {
@@ -56,13 +73,16 @@ pub struct PageChangeSummary {
     /// set is Added/Moved/Removed only.
     pub pages_updated: u32,
     pub records: Vec<PageChangeRecord>,
+    /// Removed public addresses that no removed or moved page row already
+    /// names, each once. Nothing here is a page row.
+    pub removed_addresses: Vec<RemovedAddressRecord>,
 }
 
 /// Merge a change set, detected renames, and the current/previous article
 /// maps into the Added/Moved/Removed rows a publish receipt shows.
 ///
 /// `prev_triples` is the previous publish record's `{uid, url, source_path,
-/// title}` entries ([`LiveEntry`], moss#1093) — the same baseline `renames`
+/// title}` entries ([`LiveEntry`]) — the same baseline `renames`
 /// was itself computed against, so a Removed row's title is read from here
 /// rather than re-derived from anything current.
 pub fn build_page_change_records(
@@ -70,6 +90,7 @@ pub fn build_page_change_records(
     renames: &HashMap<String, String>,
     current_map: &ArticleMap,
     prev_triples: &[LiveEntry],
+    removed: &[RemovedAddress],
 ) -> PageChangeSummary {
     // Step 1: source_path -> current url, and source_path -> the old live entry.
     let source_to_url: HashMap<&str, &str> = current_map
@@ -141,6 +162,36 @@ pub fn build_page_change_records(
         });
     }
 
+    // Removed public addresses that are not pages. A removed page has its
+    // Removed row and a renamed one its Moved row, so an address one of those
+    // names is skipped; no address appears twice.
+    let represented: HashSet<String> = records
+        .iter()
+        .filter(|r| r.kind == PageChangeKind::Removed)
+        .map(|r| r.path.as_str())
+        .chain(records.iter().filter_map(|r| r.old_path.as_deref()))
+        .map(|p| p.trim_start_matches('/').to_string())
+        .collect();
+    let deleted_pages: HashSet<&str> = change_set
+        .pages
+        .iter()
+        .filter(|p| p.verb == PageVerb::Deleted)
+        .map(|p| p.source_path.as_str())
+        .collect();
+    let removed_addresses: Vec<RemovedAddressRecord> = removed
+        .iter()
+        .filter(|a| {
+            let pretty = crate::build::scan::article_map::to_pretty_url(&a.path);
+            !represented.contains(&pretty)
+                && !a.source.as_deref().is_some_and(|src| deleted_pages.contains(src))
+        })
+        .map(|a| RemovedAddressRecord {
+            path: served_address(&a.path),
+            reason: a.reason,
+            moved_to: a.moved_to.as_deref().map(served_address),
+        })
+        .collect();
+
     // Step 6: one ring, sorted by path.
     records.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -157,29 +208,48 @@ pub fn build_page_change_records(
         pages_removed,
         pages_updated: change_set.edited + change_set.restyled,
         records,
+        removed_addresses,
     }
 }
 
-/// The combined page-row cap the receipt renders (task 4-5,
-/// `publish-receipt.ts`'s `MAX_PAGE_ROWS`) — named here too because the
-/// post-landing verification burst (task 4-6) must probe exactly the rows
-/// the receipt shows, never more.
-pub const MAX_PAGE_ROWS: usize = 3;
+/// How many rows the receipt shows in all — page rows and removed-address
+/// rows together. The post-publish check probes exactly the rows shown, never
+/// more, and the receipt's page-row renderer applies the same number.
+pub const MAX_RECEIPT_ROWS: usize = 3;
 
 /// Group `records` by kind — Added, Moved, Removed, in that fixed order
-/// (design §5 "Anatomy"; mirrors `publish-receipt.ts`'s `orderedPageRows`)
 /// — preserving each kind's own path-sorted order, then keep only the first
-/// [`MAX_PAGE_ROWS`]. Pure, so both the receipt's own renderer and the
-/// verification burst read the identical selection without either
-/// re-deriving it differently.
+/// [`MAX_RECEIPT_ROWS`]. Pure, so the receipt and the post-publish check read
+/// the identical selection without either re-deriving it differently.
 pub fn capped_page_rows(records: &[PageChangeRecord]) -> Vec<&PageChangeRecord> {
+    ordered_page_rows(records).take(MAX_RECEIPT_ROWS).collect()
+}
+
+fn ordered_page_rows(records: &[PageChangeRecord]) -> impl Iterator<Item = &PageChangeRecord> {
     const ORDER: [PageChangeKind; 3] =
         [PageChangeKind::Added, PageChangeKind::Moved, PageChangeKind::Removed];
-    ORDER
-        .iter()
-        .flat_map(|kind| records.iter().filter(move |r| r.kind == *kind))
-        .take(MAX_PAGE_ROWS)
-        .collect()
+    ORDER.iter().flat_map(move |kind| records.iter().filter(move |r| r.kind == *kind))
+}
+
+/// The receipt's rows: the page rows first, the removed addresses filling the
+/// slots they leave, and how many rows of either kind did not fit.
+pub struct CappedRows<'a> {
+    pub pages: Vec<&'a PageChangeRecord>,
+    pub addresses: Vec<&'a RemovedAddressRecord>,
+    pub hidden: usize,
+}
+
+/// The one selection of which rows the receipt shows within
+/// [`MAX_RECEIPT_ROWS`]; the check that probes them and the payload that
+/// names them both come from here.
+pub fn capped_rows<'a>(records: &'a [PageChangeRecord], addresses: &'a [RemovedAddressRecord]) -> CappedRows<'a> {
+    let pages = capped_page_rows(records);
+    let room = MAX_RECEIPT_ROWS - pages.len();
+    CappedRows {
+        hidden: records.len() + addresses.len() - pages.len() - addresses.len().min(room),
+        addresses: addresses.iter().take(room).collect(),
+        pages,
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,232 @@
+schema = 1
+generator = "moss-place-map-generator"
+generator_version = "1.0.0"
+natural_earth_theme = "10m physical and cultural"
+natural_earth_release = "mixed per-layer releases; see each source's published_version and archive_version"
+natural_earth_license = "Public domain; see https://www.naturalearthdata.com/about/terms-of-use/"
+gmt_dataset = "earth_relief_03m_g"
+gmt_manifest_url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_server.txt"
+gmt_manifest_date = "2025-05-01"
+gmt_manifest_sha256 = "65c7c03a59d103c329f3ab8f88bb8fb3719e0a73314747aba971906a1f17bb82"
+gmt_provenance = "https://doi.org/10.1029/2019EA000658"
+gmt_license = "not specified in the pinned GMT server manifest"
+simplification = "In geographic degrees: by area (Visvalingam-Whyatt) for relief, sea-floor and river lines, Douglas-Peucker for the rest; layer tolerances are pinned by the generator."
+projection = "longitude/latitude in WGS84; Rust owns screen projection"
+quantization = 1000
+
+[[sources]]
+name = "land"
+artifact = "ne_10m_land.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_land.zip"
+sha256 = "e547d749445eaa0964aba76738090ec88f5e63c4585122170f98c67a7ea922dc"
+size_bytes = 3269070
+published_version = "5.1.1"
+members = ["ne_10m_land.shp", "ne_10m_land.dbf", "ne_10m_land.shx", "ne_10m_land.prj", "ne_10m_land.cpg"]
+layer = "land"
+
+[[sources]]
+name = "lakes"
+artifact = "ne_10m_lakes.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_lakes.zip"
+sha256 = "0803a06f9c3cb4671d89b68c48b142aad9366ba40f665245e12a913fbc61722a"
+size_bytes = 2349685
+published_version = "5.0.0"
+members = ["ne_10m_lakes.shp", "ne_10m_lakes.dbf", "ne_10m_lakes.shx", "ne_10m_lakes.prj", "ne_10m_lakes.cpg"]
+layer = "lakes"
+
+[[sources]]
+name = "rivers"
+artifact = "ne_10m_rivers_lake_centerlines_scale_rank.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_rivers_lake_centerlines_scale_rank.zip"
+sha256 = "a6fc02f8d663a0cb451b2564fbc361174410cd65d14c59d11ffb870ebb8c8566"
+size_bytes = 2410997
+published_version = "5.0.0"
+members = ["ne_10m_rivers_lake_centerlines_scale_rank.shp", "ne_10m_rivers_lake_centerlines_scale_rank.dbf", "ne_10m_rivers_lake_centerlines_scale_rank.shx", "ne_10m_rivers_lake_centerlines_scale_rank.prj", "ne_10m_rivers_lake_centerlines_scale_rank.cpg"]
+layer = "rivers"
+
+[[sources]]
+name = "glaciated_areas"
+artifact = "ne_10m_glaciated_areas.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_glaciated_areas.zip"
+sha256 = "de6ff396ab7eee8cbe2146030cc29278ef67c468e5675c748b1372e241ecbbff"
+size_bytes = 1644604
+published_version = "4.1.0"
+members = ["ne_10m_glaciated_areas.shp", "ne_10m_glaciated_areas.dbf", "ne_10m_glaciated_areas.shx", "ne_10m_glaciated_areas.prj", "ne_10m_glaciated_areas.cpg"]
+layer = "ice"
+
+[[sources]]
+name = "antarctic_ice_shelves"
+artifact = "ne_10m_antarctic_ice_shelves_polys.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_antarctic_ice_shelves_polys.zip"
+sha256 = "1d421d2487e2721a6e0aee8187e008c9bd8f0adbf4a5297b8503f7bf3c30b04d"
+size_bytes = 163651
+published_version = "4.1.0"
+members = ["ne_10m_antarctic_ice_shelves_polys.shp", "ne_10m_antarctic_ice_shelves_polys.dbf", "ne_10m_antarctic_ice_shelves_polys.shx", "ne_10m_antarctic_ice_shelves_polys.prj", "ne_10m_antarctic_ice_shelves_polys.cpg"]
+layer = "ice"
+
+[[sources]]
+name = "reefs"
+artifact = "ne_10m_reefs.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_reefs.zip"
+sha256 = "b29cce160628a9aa243ab9c88d2234d79af97aded495137248059230e36f508c"
+size_bytes = 178301
+published_version = "4.1.0"
+members = ["ne_10m_reefs.shp", "ne_10m_reefs.dbf", "ne_10m_reefs.shx", "ne_10m_reefs.prj", "ne_10m_reefs.cpg"]
+layer = "reefs"
+
+[[sources]]
+name = "playas"
+artifact = "ne_10m_playas.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_playas.zip"
+sha256 = "74e366d0042ecfa742bf787475a78442b44ae554dfcd3366cfa35254959e873c"
+size_bytes = 101634
+published_version = "5.0.0"
+members = ["ne_10m_playas.shp", "ne_10m_playas.dbf", "ne_10m_playas.shx", "ne_10m_playas.prj", "ne_10m_playas.cpg"]
+layer = "playas"
+
+[[sources]]
+name = "bathymetry"
+artifact = "ne_10m_bathymetry_all.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_bathymetry_all.zip"
+sha256 = "9c5ea31402e5eb322a49f56136bfdc2732ab4e60c85720a4f83606f08088e5c2"
+size_bytes = 15577186
+published_version = "4.1.0"
+version_member = "ne_10m_bathymetry_A_10000.VERSION.txt"
+members = [
+  "ne_10m_bathymetry_A_10000.shp", "ne_10m_bathymetry_A_10000.dbf", "ne_10m_bathymetry_A_10000.shx", "ne_10m_bathymetry_A_10000.prj", "ne_10m_bathymetry_A_10000.cpg",
+  "ne_10m_bathymetry_B_9000.shp", "ne_10m_bathymetry_B_9000.dbf", "ne_10m_bathymetry_B_9000.shx", "ne_10m_bathymetry_B_9000.prj", "ne_10m_bathymetry_B_9000.cpg",
+  "ne_10m_bathymetry_C_8000.shp", "ne_10m_bathymetry_C_8000.dbf", "ne_10m_bathymetry_C_8000.shx", "ne_10m_bathymetry_C_8000.prj", "ne_10m_bathymetry_C_8000.cpg",
+  "ne_10m_bathymetry_D_7000.shp", "ne_10m_bathymetry_D_7000.dbf", "ne_10m_bathymetry_D_7000.shx", "ne_10m_bathymetry_D_7000.prj", "ne_10m_bathymetry_D_7000.cpg",
+  "ne_10m_bathymetry_E_6000.shp", "ne_10m_bathymetry_E_6000.dbf", "ne_10m_bathymetry_E_6000.shx", "ne_10m_bathymetry_E_6000.prj", "ne_10m_bathymetry_E_6000.cpg",
+  "ne_10m_bathymetry_F_5000.shp", "ne_10m_bathymetry_F_5000.dbf", "ne_10m_bathymetry_F_5000.shx", "ne_10m_bathymetry_F_5000.prj", "ne_10m_bathymetry_F_5000.cpg",
+  "ne_10m_bathymetry_G_4000.shp", "ne_10m_bathymetry_G_4000.dbf", "ne_10m_bathymetry_G_4000.shx", "ne_10m_bathymetry_G_4000.prj", "ne_10m_bathymetry_G_4000.cpg",
+  "ne_10m_bathymetry_H_3000.shp", "ne_10m_bathymetry_H_3000.dbf", "ne_10m_bathymetry_H_3000.shx", "ne_10m_bathymetry_H_3000.prj", "ne_10m_bathymetry_H_3000.cpg",
+  "ne_10m_bathymetry_I_2000.shp", "ne_10m_bathymetry_I_2000.dbf", "ne_10m_bathymetry_I_2000.shx", "ne_10m_bathymetry_I_2000.prj", "ne_10m_bathymetry_I_2000.cpg",
+  "ne_10m_bathymetry_J_1000.shp", "ne_10m_bathymetry_J_1000.dbf", "ne_10m_bathymetry_J_1000.shx", "ne_10m_bathymetry_J_1000.prj", "ne_10m_bathymetry_J_1000.cpg",
+  "ne_10m_bathymetry_K_200.shp", "ne_10m_bathymetry_K_200.dbf", "ne_10m_bathymetry_K_200.shx", "ne_10m_bathymetry_K_200.prj", "ne_10m_bathymetry_K_200.cpg",
+  "ne_10m_bathymetry_L_0.shp", "ne_10m_bathymetry_L_0.dbf", "ne_10m_bathymetry_L_0.shx", "ne_10m_bathymetry_L_0.prj", "ne_10m_bathymetry_L_0.cpg",
+]
+layer = "bathymetry"
+
+[[sources]]
+name = "urban_areas"
+artifact = "ne_10m_urban_areas.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_urban_areas.zip"
+sha256 = "2c593114e954ce1adb297ddee5465f05d9e81fa0a26deb13f8500d58a00d7051"
+size_bytes = 13097698
+published_version = "4.1.0"
+members = ["ne_10m_urban_areas.shp", "ne_10m_urban_areas.dbf", "ne_10m_urban_areas.shx", "ne_10m_urban_areas.prj", "ne_10m_urban_areas.cpg"]
+layer = "built_up"
+
+# The three sources below feed the places-explorer LABEL data (city, mountain
+# range, peak and river names in `en`/`zh-Hant`) rather than any drawn
+# geometry layer -- `layer = "labels"` for all three. `rivers`, above, is
+# reused for river names and already-pinned geometry; no fourth entry is
+# needed for it.
+[[sources]]
+name = "populated_places"
+artifact = "ne_10m_populated_places.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_populated_places.zip"
+sha256 = "cd149186f03d2603e0410da399b980a4357d0ac32d3a2305a49ed3dffcc41d7b"
+size_bytes = 2811199
+published_version = "5.1.2"
+members = ["ne_10m_populated_places.shp", "ne_10m_populated_places.dbf", "ne_10m_populated_places.shx", "ne_10m_populated_places.prj", "ne_10m_populated_places.cpg"]
+layer = "labels"
+
+[[sources]]
+name = "geography_regions_polys"
+artifact = "ne_10m_geography_regions_polys.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_geography_regions_polys.zip"
+sha256 = "cb7b9db200284ed1551f20eacc7f3333e9b5f311c19f7cb2670694529f688682"
+size_bytes = 2038519
+published_version = "5.0.0"
+members = ["ne_10m_geography_regions_polys.shp", "ne_10m_geography_regions_polys.dbf", "ne_10m_geography_regions_polys.shx", "ne_10m_geography_regions_polys.prj", "ne_10m_geography_regions_polys.cpg"]
+layer = "labels"
+
+[[sources]]
+name = "geography_regions_elevation_points"
+artifact = "ne_10m_geography_regions_elevation_points.zip"
+url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_geography_regions_elevation_points.zip"
+sha256 = "c7465b5df43045c3b639ab26ce61128273c2391b597074077a55f06fe63e1c99"
+size_bytes = 240144
+published_version = "5.0.0"
+members = ["ne_10m_geography_regions_elevation_points.shp", "ne_10m_geography_regions_elevation_points.dbf", "ne_10m_geography_regions_elevation_points.shx", "ne_10m_geography_regions_elevation_points.prj", "ne_10m_geography_regions_elevation_points.cpg"]
+layer = "labels"
+
+# earth_relief_03m_g ships as eight 90x90-degree gridline-registered tiles
+# (lossless, signed 16-bit JPEG2000) rather than one file; the fine tier
+# contours this dataset at native resolution. Tile naming gives the
+# southwest corner: N00 spans lat 0..90, S90 spans lat -90..0;
+# E000/E090/W090/W180 each span 90 degrees of longitude starting at that
+# corner.
+[[sources]]
+name = "earth_relief_03m_g_n00e000"
+artifact = "N00E000.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E000.earth_relief_03m_g.jp2"
+sha256 = "a7c0459ad149fd93984ebcfda16be889fd2dd52dd70b08d4472bbb9720c57b72"
+size_bytes = 2569883
+member = "N00E000.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_n00e090"
+artifact = "N00E090.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E090.earth_relief_03m_g.jp2"
+sha256 = "be0b684aa6fa326710c5328214d34d2c37531e1cc8f8359ccb5000f4d4ff535b"
+size_bytes = 3015041
+member = "N00E090.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_n00w090"
+artifact = "N00W090.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W090.earth_relief_03m_g.jp2"
+sha256 = "49638a4d87a268f97a7235c5c5936fe5ab8457664ee28b0fa9cc38037ed3e6d9"
+size_bytes = 2936302
+member = "N00W090.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_n00w180"
+artifact = "N00W180.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W180.earth_relief_03m_g.jp2"
+sha256 = "3c410a2e5e97cafb839402b9dd087caa567ea53f1a8aa6a8cf8432e08d459619"
+size_bytes = 2991787
+member = "N00W180.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_s90e000"
+artifact = "S90E000.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E000.earth_relief_03m_g.jp2"
+sha256 = "6525887ffbfcc6b2dabc64c6da42c6389540b756d38b214ba8133af1520999bd"
+size_bytes = 2793835
+member = "S90E000.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_s90e090"
+artifact = "S90E090.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E090.earth_relief_03m_g.jp2"
+sha256 = "d6bf56a882983d011404fc76df1d80a126a80659e7e172f5903d438820f51f69"
+size_bytes = 2787129
+member = "S90E090.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_s90w090"
+artifact = "S90W090.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W090.earth_relief_03m_g.jp2"
+sha256 = "d3c2c1dcc4c6fc72eaef033331925a6807289fcf6e8811b37beb6601aabf31c9"
+size_bytes = 2885704
+member = "S90W090.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_s90w180"
+artifact = "S90W180.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W180.earth_relief_03m_g.jp2"
+sha256 = "fa0651ea262690fe50d332a3448e28dd0084a2e13926df220e61c58cc025f991"
+size_bytes = 3109991
+member = "S90W180.earth_relief_03m_g.jp2"
+layer = "relief"

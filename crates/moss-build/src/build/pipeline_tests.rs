@@ -2,7 +2,7 @@ use super::super::media::pipeline::{
     compute_expected_dirs, copy_deferred_assets, is_image_extension,
     remove_stale_dirs, remove_stale_files, stage_copy, stage_write,
 };
-use super::super::video::{compute_video_set_fingerprint, run_video_conversion};
+use super::super::video::{compute_video_item_fingerprint, run_video_conversion};
 use super::*;
 use crate::types::services::BackgroundContext;
 use crate::build::scan::scan::scan_folder;
@@ -40,10 +40,10 @@ fn test_load_previous_hashes_nonexistent() {
 fn test_load_previous_hashes_valid_json() {
     let temp = TempDir::new().unwrap();
     let moss_dir = temp.path().join(".moss");
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let hashes_json = r#"{"files":{"index.html":"abc123","about.html":"def456"}}"#;
-    fs::write(moss_dir.join("build").join("hashes.json"), hashes_json).unwrap();
+    fs::write(moss_dir.join("build.nosync").join("hashes.json"), hashes_json).unwrap();
 
     let hashes = load_previous_hashes(temp.path().to_str().unwrap());
     assert_eq!(hashes.files.len(), 2);
@@ -54,9 +54,9 @@ fn test_load_previous_hashes_valid_json() {
 fn test_load_previous_hashes_invalid_json() {
     let temp = TempDir::new().unwrap();
     let moss_dir = temp.path().join(".moss");
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
-    fs::write(moss_dir.join("build").join("hashes.json"), "not valid json").unwrap();
+    fs::write(moss_dir.join("build.nosync").join("hashes.json"), "not valid json").unwrap();
 
     // Should return default (empty) on parse error
     let hashes = load_previous_hashes(temp.path().to_str().unwrap());
@@ -85,10 +85,10 @@ fn create_test_dir() -> (std::path::PathBuf, impl Drop) {
 /// Test wrapper around `run`. Constructs a single-thread tokio runtime
 /// per call, runs the build, awaits the `BackgroundHandle` (so the
 /// coordinator drains and seals), and persists the resulting
-/// `SealedManifest` to `.moss/build/hashes.json` so the next build's
+/// `SealedManifest` to `.moss/build.nosync/hashes.json` so the next build's
 /// `load_previous_hashes` sees a complete manifest.
 ///
-/// Pre-#620 Item 2 the synchronous path was supported by:
+/// The old synchronous path was supported by:
 ///   1. a no-tokio-runtime fallback in `build_inner` (gone — sees
 ///      `debug_assert!` on tokio::runtime::Handle);
 ///   2. a legacy on-disk `hashes.json` write inside the runners (gone —
@@ -127,7 +127,27 @@ fn build_test_full(
     server_port: Option<u16>,
     services: Option<&BuildServices>,
     resolved_slots: &ResolvedSlots,
-) -> Result<(bool, Vec<crate::build::types::MissingMedia>), String> {
+) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
+    build_test_full_with_gates(
+        folder_path,
+        site_dir_state,
+        progress_sender,
+        server_port,
+        services,
+        resolved_slots,
+        crate::build::render::IncrementalGates::default(),
+    )
+}
+
+fn build_test_full_with_gates(
+    folder_path: &str,
+    site_dir_state: Option<&SiteDirectoryState>,
+    progress_sender: Option<&dyn crate::build::ports::reporter::BuildReporter>,
+    server_port: Option<u16>,
+    services: Option<&BuildServices>,
+    resolved_slots: &ResolvedSlots,
+    gates: crate::build::render::IncrementalGates,
+) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -142,7 +162,7 @@ fn build_test_full(
     // `every_completion_reports_the_port_that_came_up_during_the_build`).
     let preview_port = crate::build::ports::port_of_this_build(server_port, None);
     rt.block_on(async move {
-        // PR7b (moss#599): `PipelineRunOutput::build_documents` carries the parsed
+        // `PipelineRunOutput::build_documents` carries the parsed
         // page slice. This test path doesn't consume it (snapshot tests inspect
         // the on-disk output), so we discard it here.
         let slots = resolved_slots.clone();
@@ -151,10 +171,12 @@ fn build_test_full(
             bg_handle,
             build_documents: _documents,
             content_hashes: _content_hashes,
-            missing_media,
+            missing_references,
             cancelled: _cancelled,
             home_ready: _home_ready,
             publishable: _publishable,
+            render_seq: _render_seq,
+            stale_sources: _stale_sources,
         } = run(
             &root,
             site_dir_state,
@@ -164,14 +186,14 @@ fn build_test_full(
             Some(Box::new(move |_, _, _| Ok(slots))),
             &ps,
             None,
-            crate::build::render::IncrementalGates::default(),
+            gates,
             crate::build::feeds::search_lane::Freshness::Now,
             &test_cache_keys(),
         )
         .map_err(crate::build::outcome::BuildStopped::into_message)?;
         if let Some(handle) = bg_handle {
             match handle.await_completion().await {
-                Ok(sealed) => {
+                Ok((sealed, _cache_lease)) => {
                     let hashes_path = crate::moss_paths::MossPaths::new(root.path()).hashes();
                     if let Err(e) = sealed.write_to_disk(&hashes_path) {
                         log::warn!("test seal+persist: failed to write hashes.json: {}", e);
@@ -182,8 +204,192 @@ fn build_test_full(
                 }
             }
         }
-        Ok((is_empty, missing_media))
+        Ok((is_empty, missing_references))
     })
+}
+
+#[test]
+fn warm_parse_cache_replays_then_replaces_missing_reference_evidence() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: evidence\n---\n![alt](gone.png)\n").unwrap();
+    let gates = crate::build::render::IncrementalGates {
+        render_skip: false,
+        parse_cache: true,
+    };
+
+    let (_, first) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("cold build");
+    assert_eq!(first.len(), 1);
+
+    let (_, warm) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("warm build");
+    assert_eq!(warm, first);
+    let stats = crate::build::parse_cache::last_stats().expect("completed cache stats");
+    assert!(stats.eligible && stats.hits >= 1, "expected a real cache hit: {stats:?}");
+
+    fs::write(dir.join("index.md"), "# fixed\n").unwrap();
+    let (_, fixed) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("fixed build");
+    assert!(fixed.is_empty());
+    crate::build::parse_cache::reset_for_tests();
+}
+
+#[test]
+fn reserved_output_sources_never_receive_final_source_records() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("con.md"), "---\ntitle: reserved\n---\n![reserved](reserved.png)\n").unwrap();
+
+    let (_, missing) = build_test_full(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(),
+    )
+    .expect("a sole reserved output is skipped without panicking");
+    assert!(missing.is_empty());
+    assert!(
+        !fs::read_to_string(dir.join("con.md")).unwrap().contains("uid:"),
+        "a skipped source must never be normalized or cached as an admitted document"
+    );
+}
+
+#[test]
+fn reserved_output_before_normal_source_keeps_evidence_with_the_normal_document() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("con.md"), "---\ntitle: reserved\n---\n![reserved](reserved.png)\n").unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: normal\n---\n![normal](gone.png)\n").unwrap();
+
+    let (_, missing) = build_test_full(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(),
+    )
+    .expect("the normal source still builds");
+    assert_eq!(
+        missing.iter().map(|item| (item.source_path.as_str(), item.reference.as_str())).collect::<Vec<_>>(),
+        vec![("index.md", "gone.png")],
+    );
+    assert!(!fs::read_to_string(dir.join("con.md")).unwrap().contains("uid:"));
+    assert!(fs::read_to_string(dir.join("index.md")).unwrap().contains("uid:"));
+}
+
+#[test]
+fn duplicate_uid_normalization_keeps_cacheable_missing_reference_evidence() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    for (path, title, image) in [("a.md", "A", "gone-a.png"), ("b.md", "B", "gone-b.jpg")] {
+        fs::write(
+            dir.join(path),
+            format!("---\ntitle: {title}\ndate: 2026-01-01\nuid: duplicate\n---\n![alt]({image})\n"),
+        )
+        .unwrap();
+    }
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let (_, first) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("duplicate uid build");
+    assert_eq!(first.len(), 2);
+    let a = fs::read_to_string(dir.join("a.md")).unwrap();
+    let b = fs::read_to_string(dir.join("b.md")).unwrap();
+    let uid = |source: &str| source.lines().find(|line| line.starts_with("uid:")).unwrap().to_string();
+    assert_ne!(uid(&a), uid(&b), "one duplicate UID must be reassigned in its final source");
+
+    let (_, warm) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("cache replay after uid normalization");
+    assert_eq!(warm, first);
+    assert!(crate::build::parse_cache::last_stats().is_some_and(|stats| stats.hits >= 2));
+    crate::build::parse_cache::reset_for_tests();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_build_installs_one_ordered_preflight_projection_for_the_publish_gate() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "![alt](gone.png)\n").unwrap();
+    let config = |folder: &std::path::Path, admission_epoch| PipelineConfig {
+        root: crate::vault::paths::VaultRoot::resolve(folder),
+        progress: crate::build::null_sink(),
+        plugins: PluginMode::Skip,
+        watch: false,
+        start_server: false,
+        host: crate::build::ports::host::test_host_ports(),
+        trigger: BuildTrigger::Full,
+        exits_after_build: true,
+        site_url_override: None,
+        server_port: None,
+        admission_epoch: Some(admission_epoch),
+        live_port: None,
+    };
+
+    let broken_epoch = crate::build::ship::next_promotion_epoch();
+    run_pipeline(config(&dir, broken_epoch)).await.expect("broken build still completes");
+    assert!(crate::deploy::refuse_publish(dir.to_str().unwrap()).is_err());
+    let broken = crate::system::build_records::records()
+        .publish_preflight(dir.to_str().unwrap())
+        .expect("completed build installs a projection");
+    assert_eq!(broken.build_generation, broken_epoch);
+    assert_eq!(broken.missing_references.len(), 1);
+
+    fs::write(dir.join("index.md"), "# fixed\n").unwrap();
+    let clean_epoch = crate::build::ship::next_promotion_epoch();
+    run_pipeline(config(&dir, clean_epoch)).await.expect("fixed build completes");
+    assert!(crate::deploy::refuse_publish(dir.to_str().unwrap()).is_ok());
+    let clean = crate::system::build_records::records()
+        .publish_preflight(dir.to_str().unwrap())
+        .expect("clean completed build replaces the projection");
+    assert_eq!(clean.build_generation, clean_epoch);
+    assert!(clean.missing_references.is_empty(), "a clean build installs an explicit empty verdict");
+}
+
+#[test]
+fn transcluded_child_evidence_keeps_its_own_physical_source() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "# host\n![[child.md]]\n").unwrap();
+    fs::write(dir.join("child.md"), "![child](gone.png)\n").unwrap();
+
+    let (_, missing) = build_test_full(
+        dir.to_str().unwrap(),
+        None,
+        None,
+        None,
+        None,
+        &ResolvedSlots::empty(),
+    )
+    .expect("build renders transclusion");
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].source_path, "child.md");
+}
+
+#[test]
+fn missing_reference_evidence_is_sorted_across_source_files() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("z.md"), "![z](gone-z.jpg)\n").unwrap();
+    fs::write(dir.join("a.md"), "![a](gone-a.png)\n").unwrap();
+
+    let (_, missing) = build_test_full(
+        dir.to_str().unwrap(),
+        None,
+        None,
+        None,
+        None,
+        &ResolvedSlots::empty(),
+    )
+    .expect("build renders both source files");
+    assert_eq!(
+        missing
+            .iter()
+            .map(|item| (item.source_path.as_str(), item.reference.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("a.md", "gone-a.png"), ("z.md", "gone-z.jpg")],
+    );
 }
 
 #[test]
@@ -201,7 +407,7 @@ fn test_build_creates_output_directory() {
     assert!(!result.unwrap(), "Site should not be empty");
 
     // Verify output was created (staging/ is sole output post-T2)
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
 #[test]
@@ -225,7 +431,7 @@ fn test_build_with_site_dir_state() {
     fs::write(test_dir.join("index.md"), "# Test").unwrap();
 
     // Create SiteDirectoryState seeded to staging (post-generations: site/ is empty)
-    let staging_path = test_dir.join(".moss/build/staging");
+    let staging_path = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_path).unwrap();
     let site_dir_state = SiteDirectoryState::new(staging_path.clone());
 
@@ -241,7 +447,7 @@ fn test_build_with_site_dir_state() {
 
     assert!(result.is_ok());
     // Post-T2: staging/ is sole build output
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
 #[test]
@@ -267,11 +473,11 @@ fn test_site_stage_persists_after_successful_build() {
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
     // Staging directory persists for mtime/size cache optimization
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert!(stage_dir.exists(), "site-stage should persist after build");
 
     // Post-T2: staging/ is sole output (ship_phase removed)
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
 #[test]
@@ -285,7 +491,7 @@ fn test_site_stage_persists_after_empty_build() {
 
     // Even empty builds use staging — site-stage/ is created
     assert!(
-        test_dir.join(".moss/build/staging").exists(),
+        test_dir.join(".moss/build.nosync/staging").exists(),
         "site-stage should exist even for empty builds"
     );
 }
@@ -302,13 +508,13 @@ fn test_site_stage_persists_after_rebuild() {
     // Second build (with different content to trigger changes)
     fs::write(test_dir.join("index.md"), "# Second").unwrap();
     // Clear caches to avoid mtime-based false cache hits on CI
-    let _ = fs::remove_dir_all(test_dir.join(".moss/build/cache"));
-    let _ = fs::remove_file(test_dir.join(".moss/build/hashes.json"));
+    let _ = fs::remove_dir_all(test_dir.join(".moss/build.nosync/cache"));
+    let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
 
     // Verify site-stage persists for incremental rebuilds
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert!(
         stage_dir.exists(),
         "site-stage directory should persist for incremental rebuilds"
@@ -328,15 +534,15 @@ fn test_rebuild_site_populated_after_build() {
 
     // Modify content to trigger staging path on second build
     fs::write(test_dir.join("index.md"), "# Second").unwrap();
-    let _ = fs::remove_dir_all(test_dir.join(".moss/build/cache"));
-    let _ = fs::remove_file(test_dir.join(".moss/build/hashes.json"));
+    let _ = fs::remove_dir_all(test_dir.join(".moss/build.nosync/cache"));
+    let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
 
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok(), "Rebuild should succeed: {:?}", result);
 
     // Immediately after build() returns, staging/ must contain the latest content.
     let staging_content =
-        fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+        fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         staging_content.contains("Second"),
         "staging/ must contain the latest content after rebuild"
@@ -361,7 +567,7 @@ fn test_site_stage_persists_when_no_changes() {
     assert!(result.is_ok());
 
     // Verify site-stage persists
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert!(
         stage_dir.exists(),
         "site-stage directory should persist for incremental rebuilds"
@@ -401,7 +607,7 @@ fn test_slots_injected_before_copy_to_site() {
     let result = build_test(folder_path, None, None, None, None, &slots);
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
-    let stage_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
 
     assert!(
         stage_html.contains("test-subscribe"),
@@ -434,7 +640,7 @@ fn test_empty_slots_leave_no_markers() {
     assert!(result.is_ok());
 
     // Post-T2: check staging/ (sole output)
-    let stage_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         !stage_html.contains("<!-- slot:"),
         "No raw slot markers should remain in staging/ even with empty slots"
@@ -455,7 +661,7 @@ fn test_slots_injected_on_rebuild() {
 
     // Rebuild with slots
     fs::write(test_dir.join("index.md"), "# Second").unwrap();
-    let _ = fs::remove_file(test_dir.join(".moss/build/hashes.json"));
+    let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
 
     let mut slots = ResolvedSlots::empty();
     let mut result_slots = std::collections::HashMap::new();
@@ -475,7 +681,7 @@ fn test_slots_injected_on_rebuild() {
     assert!(result.is_ok(), "Rebuild should succeed: {:?}", result);
 
     // Post-T2: check staging/ (sole output)
-    let stage_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         stage_html.contains("test-style"),
         "Rebuild should have injected head-end slot content"
@@ -512,7 +718,7 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
     build_test(folder_path, None, None, None, None, &slots).expect("build with slots must succeed");
 
     // Read the actual staging file bytes after slot injection.
-    let staging_html = fs::read(test_dir.join(".moss/build/staging/index.html"))
+    let staging_html = fs::read(test_dir.join(".moss/build.nosync/staging/index.html"))
         .expect("staging/index.html must exist after build");
 
     // The injected content must be present in staging.
@@ -526,7 +732,7 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
     // data-source-line annotations stripped via apply_transform). staging/ holds
     // annotated HTML; the manifest records the stripped derivative that deploy uploads.
     // site/ is not updated until T4 (seal+persist materialization).
-    let staging_html_for_hash = fs::read(test_dir.join(".moss/build/staging/index.html"))
+    let staging_html_for_hash = fs::read(test_dir.join(".moss/build.nosync/staging/index.html"))
         .expect("staging/index.html must exist after build");
     let manifest_bytes = crate::build::ship::apply_transform(
         crate::build::ship::transform_for("index.html"),
@@ -535,7 +741,7 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
     let expected_hash = format!("100644:{}", compute_binary_hash(&manifest_bytes));
 
     // Read hashes.json and check the index.html entry.
-    let hashes_path = test_dir.join(".moss/build/hashes.json");
+    let hashes_path = test_dir.join(".moss/build.nosync/hashes.json");
     let hashes_json =
         fs::read_to_string(&hashes_path).expect("hashes.json must be written by build_test");
     let hashes: crate::types::content::SiteHashes =
@@ -570,13 +776,13 @@ fn test_first_build_uses_staging() {
 
     // Post-T2: staging/ is sole output
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be generated in staging/"
     );
 
     // Staging directory persists for mtime/size cache optimization
     assert!(
-        test_dir.join(".moss/build/staging").exists(),
+        test_dir.join(".moss/build.nosync/staging").exists(),
         "site-stage should persist after build"
     );
 }
@@ -596,12 +802,12 @@ fn test_rebuild_when_site_emptied() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
     // staging/ has the output
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 
     // Empty staging/ to force the pipeline to recreate it.
     // (site/ is no longer written by the pipeline; clearing staging/ is the
     // equivalent setup for verifying the "recover from empty output" path.)
-    let staging = test_dir.join(".moss/build/staging");
+    let staging = test_dir.join(".moss/build.nosync/staging");
     if staging.exists() {
         fs::remove_dir_all(&staging).unwrap();
     }
@@ -619,7 +825,7 @@ fn test_rebuild_when_site_emptied() {
 
     // staging/ should have content (sole output post-T2)
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be in staging/ after build"
     );
 }
@@ -637,16 +843,16 @@ fn test_rebuild_when_staging_deleted() {
     // First build
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 
     // Delete staging directory completely (simulates a partial cleanup)
-    if test_dir.join(".moss/build/staging").exists() {
-        fs::remove_dir_all(test_dir.join(".moss/build/staging")).unwrap();
+    if test_dir.join(".moss/build.nosync/staging").exists() {
+        fs::remove_dir_all(test_dir.join(".moss/build.nosync/staging")).unwrap();
     }
 
     // Verify staging doesn't exist
     assert!(
-        !test_dir.join(".moss/build/staging").exists(),
+        !test_dir.join(".moss/build.nosync/staging").exists(),
         "Staging should not exist before second build"
     );
 
@@ -656,7 +862,7 @@ fn test_rebuild_when_staging_deleted() {
 
     // staging/ has the output
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be in staging/ after build"
     );
 }
@@ -683,7 +889,7 @@ fn build_annotates_stage_and_strips_site_without_server_port() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok(), "build should succeed: {:?}", result);
 
-    let stage = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let stage = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
 
     assert!(
             stage.contains(r#"data-source-line=""#),
@@ -707,7 +913,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     assert!(result.is_ok());
 
     // Verify first content (in staging/ post-T2)
-    let content = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let content = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         content.contains("First"),
         "First build should contain 'First'"
@@ -719,8 +925,8 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     // Clear caches to ensure rebuild detects content change (avoids
     // flaky failures when both builds run within the same second on CI,
     // causing mtime-based cache lookups to return stale hashes)
-    let _ = fs::remove_dir_all(test_dir.join(".moss/build/cache"));
-    let _ = fs::remove_file(test_dir.join(".moss/build/hashes.json"));
+    let _ = fs::remove_dir_all(test_dir.join(".moss/build.nosync/cache"));
+    let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
 
     // Second build - should use staging pattern (site has content)
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
@@ -730,7 +936,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     // Note: site/ is updated by ship_phase which runs synchronously before
     // build() returns, but we check site-stage/ here for the annotated HTML.
     let stage_content =
-        fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+        fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         stage_content.contains("Second"),
         "Staging build should contain 'Second'"
@@ -738,7 +944,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
 
     // Staging persists for incremental rebuilds
     assert!(
-        test_dir.join(".moss/build/staging").exists(),
+        test_dir.join(".moss/build.nosync/staging").exists(),
         "site-stage should persist for incremental rebuilds"
     );
 }
@@ -757,7 +963,7 @@ fn test_pointer_switches_during_rebuild() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // Set up state for second build — seed to staging (post-generations: site/ is empty)
-    let staging_seed = test_dir.join(".moss/build/staging");
+    let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
     let state = SiteDirectoryState::new(staging_seed.clone());
 
@@ -779,7 +985,7 @@ fn test_pointer_switches_during_rebuild() {
     .unwrap();
 
     // After build returns, pointer rests on site-stage/ (preview has annotations)
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
 
     // Post-T2: staging/ is the sole output. site/ is NOT updated.
@@ -802,7 +1008,7 @@ fn test_content_unchanged_when_hashes_match() {
     fs::write(test_dir.join("index.md"), "# Same content").unwrap();
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
-    let staging_file = test_dir.join(".moss/build/staging/index.html");
+    let staging_file = test_dir.join(".moss/build.nosync/staging/index.html");
     let content_before = fs::read_to_string(&staging_file).unwrap();
 
     // Small delay so any new write would be detectable.
@@ -829,12 +1035,12 @@ fn test_multiple_sequential_rebuilds() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // Create state seeded to staging (post-generations: site/ is empty)
-    let staging_seed = test_dir.join(".moss/build/staging");
+    let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
     let state = SiteDirectoryState::new(staging_seed);
 
     // Multiple rebuilds with changes
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     for i in 2..=5 {
         fs::write(test_dir.join("index.md"), format!("# Version {}", i)).unwrap();
         build_test(
@@ -861,7 +1067,7 @@ fn test_multiple_sequential_rebuilds() {
 
         // Verify staging persists for incremental rebuilds
         assert!(
-            test_dir.join(".moss/build/staging").exists(),
+            test_dir.join(".moss/build.nosync/staging").exists(),
             "site-stage should persist after build {}",
             i
         );
@@ -883,7 +1089,7 @@ fn test_pointer_sequence_during_rebuild() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // Seed state to staging (post-generations: site/ is empty)
-    let staging_seed = test_dir.join(".moss/build/staging");
+    let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
     let state = SiteDirectoryState::new(staging_seed.clone());
 
@@ -904,7 +1110,7 @@ fn test_pointer_sequence_during_rebuild() {
     .unwrap();
 
     // Pointer rests on site-stage/ (preview with annotations)
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
 
     // staging/ has the new content (sole output post-T2)
@@ -916,7 +1122,7 @@ fn test_pointer_sequence_during_rebuild() {
 }
 
 // =========================================================================
-// Two-Phase Build Tests (ADR-001: Staged Build)
+// Two-Phase Build Tests (Staged Build)
 // =========================================================================
 // These tests verify the two-phase build architecture:
 // - Blocking phase (~1s): scan, markdown->HTML, document_setup, server start
@@ -930,7 +1136,7 @@ fn test_pointer_sequence_during_rebuild() {
 
 #[test]
 fn test_build_returns_before_assets_copied() {
-    // ADR-001: build() should return quickly after blocking phase
+    // build() should return quickly after blocking phase
     // Assets copying happens in background
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -958,18 +1164,18 @@ fn test_build_returns_before_assets_copied() {
 
     // HTML should be immediately available after build() returns (in staging/ post-T2)
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "HTML should be generated in blocking phase"
     );
 
     // Note: In the current implementation, assets are copied synchronously.
-    // After implementing ADR-001, assets may still be copying in background.
+    // Under the two-phase build, assets may still be copying in background.
     // The test verifies that build() returns before assets are fully copied.
 }
 
 #[test]
 fn test_html_available_immediately_after_build() {
-    // ADR-001: Core HTML content must be available immediately
+    // Core HTML content must be available immediately
     // This is the key user-facing requirement - browser can open right away
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -984,19 +1190,19 @@ fn test_html_available_immediately_after_build() {
 
     // All HTML files must be available immediately (in staging/ post-T2)
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be ready immediately"
     );
     assert!(
         test_dir
-            .join(".moss/build/staging/about/index.html")
+            .join(".moss/build.nosync/staging/about/index.html")
             .exists(),
         "about/index.html should be ready immediately"
     );
 
     // CSS and JS must also be available (needed for page rendering).
     // Files are now emitted with content-hash names (e.g. _moss/style.<hash>.css).
-    let moss_dir = test_dir.join(".moss/build/staging/_moss");
+    let moss_dir = test_dir.join(".moss/build.nosync/staging/_moss");
     let has_hashed_css = fs::read_dir(&moss_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -1011,7 +1217,7 @@ fn test_html_available_immediately_after_build() {
         "_moss/style.<hash>.css should be ready immediately"
     );
 
-    let js_dir = test_dir.join(".moss/build/staging/_moss/js");
+    let js_dir = test_dir.join(".moss/build.nosync/staging/_moss/js");
     let has_hashed_theme_js = fs::read_dir(&js_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -1029,7 +1235,7 @@ fn test_html_available_immediately_after_build() {
 
 #[test]
 fn test_blocking_phase_includes_essential_files() {
-    // ADR-001: Blocking phase must include all files needed for initial page load
+    // Blocking phase must include all files needed for initial page load
     // This means: HTML, CSS, JS, favicon (if exists)
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -1043,9 +1249,9 @@ fn test_blocking_phase_includes_essential_files() {
     assert!(result.is_ok());
 
     // Essential files for page rendering (in staging/ post-T2)
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
     // CSS and JS are now emitted with content-hash names.
-    let moss_dir = test_dir.join(".moss/build/staging/_moss");
+    let moss_dir = test_dir.join(".moss/build.nosync/staging/_moss");
     let has_hashed_css = fs::read_dir(&moss_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -1059,7 +1265,7 @@ fn test_blocking_phase_includes_essential_files() {
         has_hashed_css,
         "_moss/style.<hash>.css must exist in blocking output"
     );
-    let js_dir = test_dir.join(".moss/build/staging/_moss/js");
+    let js_dir = test_dir.join(".moss/build.nosync/staging/_moss/js");
     let has_hashed_theme_js = fs::read_dir(&js_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -1075,14 +1281,14 @@ fn test_blocking_phase_includes_essential_files() {
     );
     assert!(
         test_dir
-            .join(".moss/build/staging/assets/favicon.svg")
+            .join(".moss/build.nosync/staging/assets/favicon.svg")
             .exists(),
         "Favicon should be copied in blocking phase (above the fold)"
     );
 }
 
 // =========================================================================
-// Background Video Conversion Tests (ADR-001: Phase 2)
+// Background Video Conversion Tests (Phase 2)
 // =========================================================================
 
 #[test]
@@ -1122,7 +1328,7 @@ fn test_background_ctx_is_not_ignored() {
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "build should produce an output index.html"
     );
 }
@@ -1148,7 +1354,7 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
 
     // What the previous build's encoder left behind. `master.m3u8` is the
     // gate — a directory without one is a half-written ladder.
-    let ladder = test_dir.join(".moss/build/staging/clip.hls");
+    let ladder = test_dir.join(".moss/build.nosync/staging/clip.hls");
     fs::create_dir_all(&ladder).unwrap();
     for member in moss_core::asset_paths::hls_members(&moss_core::asset_paths::VIDEO_LADDER) {
         fs::write(ladder.join(member), "fake ladder member").unwrap();
@@ -1167,12 +1373,154 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
     );
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
-    let html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         html.contains("clip.hls/master.m3u8"),
         "a staged ladder must reach the emitted markup; got:\n{}",
         html
     );
+}
+
+/// Build twice, the second time over a staging tree holding a ladder that the
+/// first build's manifest names as `recorded_dir`/`file`. Returns the second
+/// build's page and whether the ladder is still in staging.
+///
+/// `stem` is the video's file stem, `staged_dir` where the encoder wrote the
+/// ladder, `recorded_dir` the spelling the manifest carries for it.
+fn second_build_over_a_recorded_ladder(stem: &str, staged_dir: &str, recorded_dir: &str) -> (String, bool) {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+
+    fs::write(test_dir.join("index.md"), format!("# Test\n\n![[{stem}.mov]]\n")).unwrap();
+    fs::write(test_dir.join(format!("{stem}.mov")), "fake video data").unwrap();
+
+    let first = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
+    assert!(first.is_ok(), "first build should succeed: {:?}", first);
+
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    let ladder = staging.join(staged_dir);
+    fs::create_dir_all(&ladder).unwrap();
+    let mut recorded = Vec::new();
+    for member in moss_core::asset_paths::hls_members(&moss_core::asset_paths::VIDEO_LADDER) {
+        fs::write(ladder.join(&member), "fake ladder member").unwrap();
+        recorded.push(format!("{recorded_dir}/{member}"));
+    }
+    record_outputs(&test_dir, "video_outputs", recorded);
+
+    let services = BuildServices::headless();
+    let second = build_test(folder_path, None, None, None, Some(&services), &ResolvedSlots::empty());
+    assert!(second.is_ok(), "second build should succeed: {:?}", second);
+
+    let html = fs::read_to_string(staging.join("index.html")).unwrap();
+    (html, ladder.join("master.m3u8").exists())
+}
+
+/// Add `paths` to a bucket of the manifest the last build wrote, as that
+/// bucket's writer would have recorded them.
+fn record_outputs(test_dir: &std::path::Path, bucket: &str, paths: Vec<String>) {
+    let hashes_path = test_dir.join(".moss/build.nosync/hashes.json");
+    let mut hashes: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&hashes_path).unwrap()).unwrap();
+    hashes[bucket]
+        .as_array_mut()
+        .unwrap()
+        .extend(paths.into_iter().map(serde_json::Value::from));
+    fs::write(&hashes_path, serde_json::to_string(&hashes).unwrap()).unwrap();
+}
+
+/// A ladder directory is named after its video, capitals and all, and the
+/// build records it that way. Loading that manifest used to lowercase every
+/// directory segment, so the sweep that follows saw `clip-one.hls/...` in the
+/// manifest, found `Clip-One.hls/...` on disk, called the whole ladder stale
+/// and deleted it before the renderer looked for it.
+#[test]
+fn a_ladder_named_with_capitals_is_not_swept_before_it_is_rendered() {
+    let (html, kept) = second_build_over_a_recorded_ladder("Clip-One", "Clip-One.hls", "Clip-One.hls");
+    assert!(kept, "the sweep deleted a valid ladder");
+    assert!(html.contains("Clip-One.hls/master.m3u8"), "got:\n{html}");
+}
+
+#[test]
+fn a_ladder_name_with_a_space_or_a_non_ascii_capital_survives_the_next_build() {
+    for stem in ["Clip One", "Éclair 视频"] {
+        let dir = format!("{stem}.hls");
+        let (_, kept) = second_build_over_a_recorded_ladder(stem, &dir, &dir);
+        assert!(kept, "the sweep deleted the ladder of {stem:?}");
+    }
+}
+
+/// Only the ladder's own segment keeps its spelling. A manifest from before
+/// directories were lowercased may carry `Assets/` above it; that segment is
+/// still migrated, or the record would name a directory that is not there.
+#[test]
+fn a_ladder_under_a_capitalised_folder_is_migrated_above_it_and_kept_below() {
+    let (html, kept) = second_build_over_a_recorded_ladder("Clip-One", "assets/Clip-One.hls", "Assets/Clip-One.hls");
+    assert!(kept, "the sweep deleted a valid ladder");
+    assert!(html.contains("Clip-One"), "got:\n{html}");
+
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Test\n").unwrap();
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+    record_outputs(&test_dir, "video_outputs", vec!["Assets/Clip-One.hls/master.m3u8".into()]);
+    let loaded = load_previous_hashes(folder_path);
+    assert!(
+        loaded.video_outputs.contains("assets/Clip-One.hls/master.m3u8"),
+        "recorded as {:?}",
+        loaded.video_outputs
+    );
+}
+
+/// JupyterLite's own files are recorded verbatim, directory case included,
+/// because the bundle's runtime loads them by those exact names, and they are
+/// recorded twice: in `notebook_outputs` and in the general file map. Neither
+/// record may be rewritten, or the sweep deletes the file.
+#[test]
+fn a_case_preserved_bundle_file_survives_the_next_build() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Test\n").unwrap();
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+
+    let key = "jupyter/build/Vendor/Bundle.js";
+    let file = test_dir.join(".moss/build.nosync/staging").join(key);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "bundle").unwrap();
+    record_outputs(&test_dir, "notebook_outputs", vec![key.into()]);
+    record_file(&test_dir, key);
+
+    let loaded = load_previous_hashes(folder_path);
+    assert!(loaded.notebook_outputs.contains(key), "{:?}", loaded.notebook_outputs);
+    assert!(loaded.files.contains_key(key), "{:?}", loaded.files.keys().collect::<Vec<_>>());
+
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+    assert!(file.exists(), "the sweep deleted a recorded bundle file");
+}
+
+/// What marks a bundle file is the set its writer recorded it in, not its
+/// spelling. An author's own folder that happens to be called `jupyter` is
+/// still lowercased like any other source folder.
+#[test]
+fn an_author_folder_named_jupyter_is_still_lowercased() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Test\n").unwrap();
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+
+    record_file(&test_dir, "jupyter/Notes/page.html");
+    record_file(&test_dir, "Jupyter/Notes/other.html");
+    let loaded = load_previous_hashes(folder_path);
+    assert!(loaded.files.contains_key("jupyter/notes/page.html"));
+    assert!(loaded.files.contains_key("jupyter/notes/other.html"));
+}
+
+/// Add `path` to the manifest's general file map.
+fn record_file(test_dir: &std::path::Path, path: &str) {
+    let hashes_path = test_dir.join(".moss/build.nosync/hashes.json");
+    let mut hashes: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&hashes_path).unwrap()).unwrap();
+    hashes["files"][path] = "100644:0000000000000000".into();
+    fs::write(&hashes_path, serde_json::to_string(&hashes).unwrap()).unwrap();
 }
 
 // =========================================================================
@@ -1198,8 +1546,8 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
 fn test_legacy_video_cache_cleanup() {
     let temp = TempDir::new().unwrap();
     let moss_dir = temp.path().join(".moss");
-    let legacy = moss_dir.join("build").join("cache").join("videos");
-    let cas = moss_dir.join("build").join("cache").join("objects");
+    let legacy = moss_dir.join("build.nosync").join("cache").join("videos");
+    let cas = moss_dir.join("cache").join("objects");
 
     // Create both directories
     fs::create_dir_all(&legacy).unwrap();
@@ -1217,7 +1565,7 @@ fn test_legacy_video_cache_cleanup() {
 fn test_legacy_video_cache_not_removed_without_cas() {
     let temp = TempDir::new().unwrap();
     let moss_dir = temp.path().join(".moss");
-    let legacy = moss_dir.join("build").join("cache").join("videos");
+    let legacy = moss_dir.join("build.nosync").join("cache").join("videos");
 
     // Create only legacy directory (no CAS yet)
     fs::create_dir_all(&legacy).unwrap();
@@ -1251,7 +1599,7 @@ fn test_run_video_conversion_headless_empty_videos() {
     let ctx = BackgroundContext {
         video_items: vec![],
         source_path: "/nonexistent".to_string(),
-        staging_dir: std::path::PathBuf::from("/nonexistent/.moss/build/staging"),
+        staging_dir: std::path::PathBuf::from("/nonexistent/.moss/build.nosync/staging"),
         moss_dir: std::path::PathBuf::from("/nonexistent/.moss"),
         start_time: std::time::Instant::now(),
         notebook_files: vec![],
@@ -1279,7 +1627,7 @@ fn vault_with_videos(names: &[&str], script: &str) -> (TempDir, BackgroundContex
     let temp = TempDir::new().unwrap();
     let source_dir = temp.path().join("source");
     let staging_dir = temp.path().join("stage");
-    let cache = temp.path().join(".moss/build/cache");
+    let cache = temp.path().join(".moss/build.nosync/cache");
     std::fs::create_dir_all(&staging_dir).unwrap();
     for name in names {
         std::fs::create_dir_all(source_dir.join(name).parent().unwrap()).unwrap();
@@ -1497,6 +1845,391 @@ async fn superseded_mid_encode_abandons_instead_of_shipping_a_fallback() {
     );
 }
 
+/// The storm, end to end: a vault of eleven videos where ten are already in the
+/// object store and one (listed first, as aimeili was) needs a real encode that
+/// takes longer than the rebuilds do. Eight rebuild rounds run while that encode
+/// is blocked inside the encoder, each round a staging sweep, a dispatch, a
+/// seal of what the dispatch registered and the seal tail's media-settle check;
+/// rounds 3 and 6 persist nothing, standing for superseded seal tails.
+///
+/// What ended the loop, each edge on its own: the ten cached videos are relinked
+/// by dispatch (so they are never "missing" again), the one encode is joined by
+/// every later round (so it is entered once), and only its delivery asks for a
+/// rebuild (so the rounds in between ask for nothing). The only other rebuild is
+/// the settle for the ten posters the first round relinked, and the one for the
+/// encode's own poster once it lands.
+///
+/// Every permitted sweep meets the running encode's files in staging: its
+/// poster, linked before the mp4 pass, and temps mid-rename beside its outputs.
+/// Deleting any of them fails the item and requeues it — the loop by another
+/// door — so each round drops fresh temps and checks they survive, beside an
+/// unrelated temp that must not. Once the encode lands, what it delivered
+/// survives the next sweep too, until that build registers it.
+#[cfg(unix)] // the fake encoder is a /bin/sh script
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
+    use crate::build::coordinator::test_utils;
+    use crate::build::manifest::SealedManifest;
+    use crate::ops::watch::worker;
+    use moss_core::asset_paths;
+    use std::os::unix::fs::PermissionsExt;
+
+    let slow = "videos/aimeili.mov";
+    let cached: Vec<String> = (0..10).map(|i| format!("videos/cached-{i}.mov")).collect();
+    let mut names = vec![slow];
+    names.extend(cached.iter().map(String::as_str));
+    // The encoder: a poster frame is written at once; the mp4 encode's first
+    // pass marks its entry and blocks until the test releases it, and the
+    // second pass writes the mp4.
+    let (temp, ctx) = vault_with_videos(
+        &names,
+        "#!/bin/sh\n\
+         out=''; thumb=''; pass=''; prev=''\n\
+         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -pass ] && pass=\"$a\"; prev=\"$a\"; done\n\
+         if [ -n \"$thumb\" ]; then printf poster > \"$out\"; exit 0; fi\n\
+         if [ \"$pass\" = 1 ]; then\n\
+           echo entered >> '{temp}/entered'\n\
+           n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
+           exit 0\n\
+         fi\n\
+         printf 'encoded mp4' > \"$out\"\n",
+    );
+    // A 320-wide ProRes source: one ladder rung (no HLS), and not web-playable,
+    // so the mp4 plan is a real encode. A duration query gets a bare number.
+    let ffprobe = temp.path().join("ffprobe");
+    std::fs::write(
+        &ffprobe,
+        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A failing assertion must not leave the encode blocked: the runtime waits
+    // for its blocking threads on the way out.
+    struct Release(std::path::PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, b"go");
+        }
+    }
+    let _release = Release(temp.path().join("release"));
+    let vault = std::path::PathBuf::from(&ctx.source_path);
+    for name in &names {
+        std::fs::write(vault.join(name), format!("bytes of {name}")).unwrap();
+    }
+    for name in &cached {
+        crate::build::media::video::tests::seed_cached_video(
+            &vault,
+            &ctx.moss_dir,
+            name,
+            format!("mp4 of {name}").as_bytes(),
+            format!("poster of {name}").as_bytes(),
+        );
+    }
+
+    let mut services = BuildServices::headless();
+    services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    let services = std::sync::Arc::new(services);
+    let folder = ctx.source_path.clone();
+    let handle = worker::register(&folder);
+    let entered = temp.path().join("entered");
+    let entries = || std::fs::read_to_string(&entered).map(|s| s.lines().count()).unwrap_or(0);
+
+    // One rebuild round; returns what it sealed and whether it asked for a rebuild.
+    let staged = |key: &str| ctx.staging_dir.join(key);
+    let running_files = [
+        format!("{}.tmp.x", asset_paths::to_mp4(slow)),
+        format!("{}.pending.x", asset_paths::to_thumb(slow)),
+    ];
+    let litter = "videos/other.mp4.tmp.x";
+    let round = |previous: SiteHashes| {
+        let (services, ctx, folder, handle) = (services.clone(), ctx.clone(), folder.clone(), handle.clone());
+        let drop_temps = running_files.iter().map(String::as_str).chain([litter]).map(|k| ctx.staging_dir.join(k)).collect::<Vec<_>>();
+        async move {
+            for temp in &drop_temps {
+                std::fs::create_dir_all(temp.parent().unwrap()).unwrap();
+                std::fs::write(temp, b"mid-write").unwrap();
+            }
+            let mp = crate::moss_paths::MossPaths::from_moss_dir(ctx.moss_dir.clone());
+            super::sweep_staging(&ctx.staging_dir, &previous, crate::build::lifecycle::park_for_rebuild(&mp, false, services.cancellation.protected_outputs()).as_ref());
+            let (tx, rx) = test_utils::build_test_coordinator();
+            tokio::task::spawn_blocking(move || {
+                crate::build::media::video::dispatch_video_conversions(Some(&services), ctx, Some(tx))
+            })
+            .await
+            .unwrap();
+            let sealed: SealedManifest = test_utils::drain_into_sealed(rx, previous.clone()).await;
+            let settled = crate::build::diff_settled_assets(&previous, sealed.site_hashes_view());
+            crate::build::trigger_media_settle_rerender(&folder, &settled, Some(&previous));
+            (sealed.site_hashes_view().clone(), handle.take().is_some())
+        }
+    };
+
+    let mut previous = SiteHashes::default();
+    let mut asked = Vec::new();
+    for n in 1..=8 {
+        let (view, rebuild) = round(previous.clone()).await;
+        asked.push(rebuild);
+        if n == 1 {
+            // Every later round must meet the encode already running.
+            for _ in 0..500 {
+                if entries() > 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            assert_eq!(entries(), 1, "the uncached video never reached the encoder");
+        }
+        for name in &cached {
+            for key in [asset_paths::to_mp4(name), asset_paths::to_thumb(name)] {
+                assert!(ctx.staging_dir.join(&key).exists(), "round {n}: cached output {key} is missing");
+            }
+        }
+        if n > 1 {
+            assert!(staged(&asset_paths::to_thumb(slow)).exists(), "round {n}: the running encode's poster was swept");
+            for temp in &running_files {
+                assert!(staged(temp).exists(), "round {n}: the running encode's temp {temp} was swept");
+            }
+            assert!(!staged(litter).exists(), "round {n}: a temp no encode owns must still be swept");
+        }
+        if n != 3 && n != 6 {
+            previous = view;
+        }
+    }
+    // Long enough for a superseding run to take the second encode permit.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(entries(), 1, "a rebuild must join the running encode, never restart it");
+    assert_eq!(
+        asked,
+        [true, false, false, false, false, false, false, false],
+        "only round 1's settle (ten relinked posters) may ask for a rebuild while the encode runs"
+    );
+
+    std::fs::write(temp.path().join("release"), b"go").unwrap();
+    let mut requested = false;
+    for _ in 0..500 {
+        if handle.take().is_some() {
+            requested = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(requested, "the encode's delivery must ask for exactly the rebuild that registers it");
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(ctx.moss_dir.clone());
+    super::sweep_staging(
+        &ctx.staging_dir,
+        &previous,
+        crate::build::lifecycle::park_for_rebuild(&mp, false, services.cancellation.protected_outputs()).as_ref(),
+    );
+    assert!(
+        staged(&asset_paths::to_mp4(slow)).exists(),
+        "a delivered mp4 no build has registered yet survives the sweep of the build that will register it"
+    );
+    let (view, settle) = round(previous.clone()).await;
+    assert!(settle, "that rebuild registers the new poster, which settles once");
+    let (_, again) = round(view).await;
+    assert!(!again, "and then the folder is quiet");
+    assert!(!handle.slot_occupied());
+    worker::deregister(&folder, &handle);
+}
+
+/// The rebuild sweep, through two real builds of one folder: it unlinks from
+/// staging only once the render the preview shows has been promoted, and it
+/// never parks the preview on an older `current` to do it.
+///
+/// Build 2 starts after build 1's seal tail promoted build 1's render, so it
+/// parks on `current` and sweeps an orphan out of staging. Then a render is put
+/// on screen that nothing has promoted — what a rebuild meets when it starts
+/// before the last tail lands — and build 3 must leave both the orphan and the
+/// preview alone for its whole length.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::TempDir::new_in(&base).unwrap();
+    // Canonical, so this test's `MossPaths` names the same lifecycle record
+    // the build's resolved `VaultRoot` does.
+    let folder = tmp.path().canonicalize().unwrap();
+    fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let folder_key = folder.to_string_lossy().to_string();
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    crate::system::folder_session::registry().insert(folder_key.clone(), session.clone());
+    let mp = crate::moss_paths::MossPaths::new(&folder);
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+
+    let build = || {
+        let mut services = BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(&folder),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                site_dir: Some(cell.clone()),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger: BuildTrigger::Full,
+            // A long-lived process: the seal tail runs detached, as in the app.
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+        })
+    };
+    let drained = || async {
+        for _ in 0..1500 {
+            if !session.has_ui_bound() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the seal tail never finished");
+    };
+
+    build().await.expect("build 1");
+    drained().await;
+    // The materialize phase is now debounced (`build::seal_phase`) rather
+    // than running inline in the detached tail — `drained()` only waits for
+    // the (fast) per-build half, not for `ship_phase`/promotion. Force it so
+    // the assertions below, which are specifically about promotion, see a
+    // deterministic state rather than racing the idle timer.
+    crate::build::seal_phase::settle(&mp).await;
+    assert!(mp.current_ptr().exists(), "build 1's tail promoted its render");
+
+    let orphan = mp.staging_dir().join("orphan.txt");
+    fs::write(&orphan, "left behind").unwrap();
+    build().await.expect("build 2");
+    assert!(!orphan.exists(), "a caught-up rebuild sweeps what no manifest names");
+    assert_eq!(*cell.read().unwrap(), mp.staging_dir(), "and ends showing its own render");
+    drained().await;
+    crate::build::seal_phase::settle(&mp).await;
+
+    crate::build::lifecycle::show_render(&mp, true);
+    let orphan = mp.staging_dir().join("orphan-2.txt");
+    fs::write(&orphan, "left behind").unwrap();
+    let watching = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let watcher = {
+        let (cell, watching, current) = (cell.clone(), watching.clone(), mp.current_ptr());
+        std::thread::spawn(move || {
+            let mut moved = false;
+            while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                moved |= *cell.read().unwrap() == current;
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
+            moved
+        })
+    };
+    build().await.expect("build 3");
+    watching.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(!watcher.join().unwrap(), "the preview must never move to an older current");
+    assert!(orphan.exists(), "and a rebuild ahead of the promotion unlinks nothing");
+    drained().await;
+    crate::system::folder_session::registry().remove(&folder_key);
+}
+
+/// A detached encode stores each finished video's blobs and transform record
+/// as it goes, but saves the hash index that marks them live only when the
+/// whole run ends. A cache sweep from a seal tail that lands in between —
+/// while the run is blocked on its next video — would read those records as
+/// orphans and delete the encode it just paid for. The run's own lease keeps
+/// the sweep off until it is done.
+#[cfg(unix)] // the fake encoder is a /bin/sh script
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
+    use crate::build::coordinator::test_utils;
+    use crate::ops::watch::worker;
+    use std::os::unix::fs::PermissionsExt;
+
+    // The first video encodes at once; the second blocks in its first pass.
+    let (temp, ctx) = vault_with_videos(
+        &["videos/first.mov", "videos/second.mov"],
+        "#!/bin/sh\n\
+         out=''; thumb=''; pass=''; prev=''; input=''\n\
+         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -pass ] && pass=\"$a\"; [ \"$prev\" = -i ] && input=\"$a\"; prev=\"$a\"; done\n\
+         if [ -n \"$thumb\" ]; then printf poster > \"$out\"; exit 0; fi\n\
+         case \"$input\" in *second*) if [ \"$pass\" = 1 ]; then\n\
+           echo entered >> '{temp}/entered'\n\
+           n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
+         fi;; esac\n\
+         [ \"$pass\" = 1 ] && exit 0\n\
+         printf 'encoded mp4' > \"$out\"\n",
+    );
+    let ffprobe = temp.path().join("ffprobe");
+    std::fs::write(
+        &ffprobe,
+        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    struct Release(std::path::PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, b"go");
+        }
+    }
+    let _release = Release(temp.path().join("release"));
+    let vault = std::path::PathBuf::from(&ctx.source_path);
+    for name in ["videos/first.mov", "videos/second.mov"] {
+        std::fs::write(vault.join(name), format!("bytes of {name}")).unwrap();
+    }
+
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(ctx.moss_dir.clone());
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    let mut services = BuildServices::headless();
+    services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    let folder = ctx.source_path.clone();
+    let handle = worker::register(&folder);
+    let (tx, rx) = test_utils::build_test_coordinator();
+    let dispatch_ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::build::media::video::dispatch_video_conversions(Some(&services), dispatch_ctx, Some(tx))
+    })
+    .await
+    .unwrap();
+    let _ = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+    let entered = temp.path().join("entered");
+    for _ in 0..500 {
+        if entered.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(entered.exists(), "the second video never reached the encoder");
+
+    let objects = crate::build::cache::ObjectStore::new(mp.cache_objects());
+    let transforms = crate::build::cache::TransformCache::new(
+        mp.cache_transforms(),
+        crate::build::cache::ObjectStore::new(mp.cache_objects()),
+    );
+    let first_source = crate::build::cache::ObjectStore::hash_file(&vault.join("videos/first.mov")).unwrap();
+    let first = transforms.get_with(&first_source, crate::build::cache::RecordMode::Request).expect("the first video's encode was recorded");
+    let mp4 = first.transforms["video/mp4"].oid.clone();
+    // Big enough to be worth sweeping.
+    for i in 0..2_048 {
+        std::fs::create_dir_all(mp.cache_objects().join("zz").join(format!("{i:04}"))).unwrap();
+    }
+
+    crate::build::collect_build_store(&mp, "none", &std::collections::HashSet::new());
+
+    assert!(transforms.get_with(&first_source, crate::build::cache::RecordMode::Request).is_some(), "the finished video's transform record survives the sweep");
+    assert!(objects.blob_path(&mp4).exists(), "and so does its mp4 blob");
+    std::fs::write(temp.path().join("release"), b"go").unwrap();
+    for _ in 0..500 {
+        if handle.take().is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    worker::deregister(&folder, &handle);
+}
+
 #[test]
 fn test_run_video_conversion_headless_has_no_shell() {
     let services = BuildServices::headless();
@@ -1526,8 +2259,10 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
                 error: None,
-                hls_rungs: 0,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             });
     assert!(result.is_some());
     assert!(result.unwrap().error.is_none(), "First call should succeed");
@@ -1538,8 +2273,10 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
                 error: None,
-                hls_rungs: 0,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             });
     assert!(result2.is_some());
     assert!(
@@ -1574,37 +2311,36 @@ fn test_run_video_conversion_task_tracker_with_session() {
 }
 
 // =========================================================================
-// Tests for Video Set Fingerprinting (Step 3)
+// Tests for Video Item Fingerprinting (per-item, not per-set)
 // =========================================================================
 
 #[test]
-fn test_compute_video_set_fingerprint_deterministic() {
+fn test_compute_video_item_fingerprint_deterministic() {
     use crate::build::media::ffmpeg::VideoCompressionConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let video_path = dir.path().join("test.mov");
     std::fs::write(&video_path, b"fake video data").unwrap();
 
-    let items = vec!["test.mov".to_string()];
     let config = VideoCompressionConfig::default();
 
-    let fp1 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config);
-    let fp2 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config);
+    let fp1 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config);
+    let fp2 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config);
     assert_eq!(fp1, fp2, "Same inputs should produce same fingerprint");
+    assert!(fp1.is_some());
 }
 
 #[test]
-fn test_compute_video_set_fingerprint_changes_with_content() {
+fn test_compute_video_item_fingerprint_changes_with_content() {
     use crate::build::media::ffmpeg::VideoCompressionConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let video_path = dir.path().join("test.mov");
     std::fs::write(&video_path, b"video data v1").unwrap();
 
-    let items = vec!["test.mov".to_string()];
     let config = VideoCompressionConfig::default();
 
-    let fp1 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config);
+    let fp1 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config);
 
     std::fs::write(
         &video_path,
@@ -1612,7 +2348,7 @@ fn test_compute_video_set_fingerprint_changes_with_content() {
     )
     .unwrap();
 
-    let fp2 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config);
+    let fp2 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config);
     assert_ne!(
         fp1, fp2,
         "Different content/size should produce different fingerprint"
@@ -1620,14 +2356,12 @@ fn test_compute_video_set_fingerprint_changes_with_content() {
 }
 
 #[test]
-fn test_compute_video_set_fingerprint_changes_with_config() {
+fn test_compute_video_item_fingerprint_changes_with_config() {
     use crate::build::media::ffmpeg::VideoCompressionConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let video_path = dir.path().join("test.mov");
     std::fs::write(&video_path, b"fake video data").unwrap();
-
-    let items = vec!["test.mov".to_string()];
 
     let config1 = VideoCompressionConfig::default();
     let config2 = VideoCompressionConfig {
@@ -1635,8 +2369,8 @@ fn test_compute_video_set_fingerprint_changes_with_config() {
         ..Default::default()
     };
 
-    let fp1 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config1);
-    let fp2 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config2);
+    let fp1 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config1);
+    let fp2 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config2);
     assert_ne!(
         fp1, fp2,
         "Different compression config should produce different fingerprint"
@@ -1644,53 +2378,45 @@ fn test_compute_video_set_fingerprint_changes_with_config() {
 }
 
 #[test]
-fn test_compute_video_set_fingerprint_empty_videos() {
+fn test_compute_video_item_fingerprint_missing_source_returns_none() {
     use crate::build::media::ffmpeg::VideoCompressionConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let config = VideoCompressionConfig::default();
 
-    let fp = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &[], &config);
-    assert!(
-        !fp.is_empty(),
-        "Empty video set should still produce a fingerprint"
+    // No file written at "missing.mov" — the caller (dispatch_video_conversions)
+    // must treat `None` as "cannot prove unchanged" and dispatch it, never as
+    // a distinct, cacheable fingerprint value of its own.
+    let fp = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "missing.mov", &config);
+    assert!(fp.is_none(), "An unstat-able source must not produce a fingerprint");
+}
+
+#[test]
+fn test_compute_video_item_fingerprint_differs_by_path_even_with_identical_content() {
+    use crate::build::media::ffmpeg::VideoCompressionConfig;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.mov"), b"same bytes").unwrap();
+    std::fs::write(dir.path().join("b.mov"), b"same bytes").unwrap();
+
+    let config = VideoCompressionConfig::default();
+
+    let fp_a = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "a.mov", &config);
+    let fp_b = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "b.mov", &config);
+    assert_ne!(
+        fp_a, fp_b,
+        "two different videos with identical bytes must not alias to the same per-item fingerprint"
     );
 }
 
 #[test]
-fn test_compute_video_set_fingerprint_order_independent() {
-    use crate::build::media::ffmpeg::VideoCompressionConfig;
-
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a.mov"), b"video a").unwrap();
-    std::fs::write(dir.path().join("b.mov"), b"video b").unwrap();
-
-    let items_ab = vec![
-        "a.mov".to_string(),
-        "b.mov".to_string(),
-    ];
-    let items_ba = vec![
-        "b.mov".to_string(),
-        "a.mov".to_string(),
-    ];
-    let config = VideoCompressionConfig::default();
-
-    let fp1 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items_ab, &config);
-    let fp2 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items_ba, &config);
-    assert_eq!(fp1, fp2, "Order of items should not affect fingerprint");
-}
-
-#[test]
-fn test_dispatch_skips_when_fingerprint_unchanged() {
+fn test_dispatch_skips_when_item_fingerprint_unchanged() {
     let services = BuildServices::headless();
     let fingerprint = "test_fingerprint_abc123";
 
-    assert!(!services
-        .cancellation
-        .check_and_update_fingerprint(fingerprint));
-    assert!(services
-        .cancellation
-        .check_and_update_fingerprint(fingerprint));
+    assert!(!services.cancellation.item_fingerprint_matches("videos/a.mov", fingerprint));
+    services.cancellation.record_item_fingerprint("videos/a.mov", fingerprint);
+    assert!(services.cancellation.item_fingerprint_matches("videos/a.mov", fingerprint));
 }
 
 // =========================================================================
@@ -1730,7 +2456,7 @@ fn test_copy_deferred_assets_accepts_event_sink() {
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&source).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    std::fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    std::fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     std::fs::write(source.join("photo.jpg"), b"fake image data").unwrap();
 
@@ -1770,7 +2496,7 @@ fn test_copy_deferred_assets_copies_source_html_files() {
     fs::write(interactive.join("article.md"), "# Article").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
@@ -1817,7 +2543,7 @@ fn test_copy_deferred_assets_skips_html_when_in_blocking_keys() {
     fs::write(interactive.join("sketch.html"), "<html>sketch</html>").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
@@ -1840,6 +2566,62 @@ fn test_copy_deferred_assets_skips_html_when_in_blocking_keys() {
         !output.join("interactive/sketch.html").exists(),
         "Source HTML is skipped when blocking_keys is polluted (bug behavior)"
     );
+}
+
+#[test]
+fn configured_passthrough_html_replaces_generated_page() {
+    use std::collections::HashSet;
+
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let output = temp.path().join("output");
+    let moss = temp.path().join(".moss");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&output).unwrap();
+    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::write(source.join("index.html"), "<html>custom home</html>").unwrap();
+    fs::write(output.join("index.html"), "<html>generated home</html>").unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: output.clone(),
+        moss_dir: moss,
+        blocking_keys: HashSet::from(["index.html".to_string()]),
+        passthrough_roots: HashSet::from(["index.html".to_string()]),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+
+    let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+
+    assert_eq!(fs::read_to_string(output.join("index.html")).unwrap(), "<html>custom home</html>");
+}
+
+#[test]
+fn configured_passthrough_directory_copies_video_verbatim() {
+    use std::collections::HashSet;
+
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let output = temp.path().join("output");
+    let moss = temp.path().join(".moss");
+    fs::create_dir_all(source.join("landing")).unwrap();
+    fs::create_dir_all(&output).unwrap();
+    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::write(source.join("landing/loop.mp4"), b"source video bytes").unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: output.clone(),
+        moss_dir: moss,
+        passthrough_roots: HashSet::from(["landing/".to_string()]),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+
+    let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+
+    assert_eq!(fs::read(output.join("landing/loop.mp4")).unwrap(), b"source video bytes");
 }
 
 // =========================================================================
@@ -1885,12 +2667,12 @@ fn test_stale_directory_removed_after_article_deletion() {
         copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     }
 
-    // Stale-dir cleanup moved to the seal+persist side task in build.rs
-    // (#621). The tx=None path no longer runs cleanup inline. Simulate
+    // Stale-dir cleanup moved to the seal+persist side task in build.rs.
+    // The tx=None path no longer runs cleanup inline. Simulate
     // the new flow by calling cleanup explicitly with the same site_hashes
     // the in-band call would have used.
     let expected_dirs = compute_expected_dirs(&site_hashes);
-    remove_stale_dirs(&output, &expected_dirs);
+    remove_stale_dirs(&output, &expected_dirs, &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !stale_dir.exists(),
@@ -1940,12 +2722,12 @@ fn test_stale_directory_with_stale_files_removed() {
         copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     }
 
-    // Stale-file + stale-dir cleanup moved to seal+persist side task (#621);
+    // Stale-file + stale-dir cleanup moved to seal+persist side task;
     // simulate that step here so this test continues to exercise the
     // cleanup logic.
-    remove_stale_files(&output, &site_hashes, "test");
+    remove_stale_files(&output, &site_hashes, "test", &crate::build::lifecycle::permit_for_test());
     let expected_dirs = compute_expected_dirs(&site_hashes);
-    remove_stale_dirs(&output, &expected_dirs);
+    remove_stale_dirs(&output, &expected_dirs, &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !output.join("old-section").exists(),
@@ -1962,7 +2744,7 @@ fn test_video_output_directories_preserved() {
     let moss = temp.path().join(".moss");
 
     fs::create_dir_all(&source).unwrap();
-    fs::create_dir_all(moss.join("build")).unwrap();
+    fs::create_dir_all(moss.join("build.nosync")).unwrap();
 
     let videos_dir = output.join("videos");
     fs::create_dir_all(&videos_dir).unwrap();
@@ -1975,7 +2757,7 @@ fn test_video_output_directories_preserved() {
         .insert("videos/clip.mp4".to_string());
 
     let hashes_json = serde_json::to_string_pretty(&site_hashes).unwrap();
-    fs::write(moss.join("build").join("hashes.json"), &hashes_json).unwrap();
+    fs::write(moss.join("build.nosync").join("hashes.json"), &hashes_json).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
@@ -2003,6 +2785,47 @@ fn test_video_output_directories_preserved() {
 // Stale Staging Cleanup Tests
 // =========================================================================
 
+/// A symlink the manifest does not name is unlinked as a link, one it names is
+/// kept, and the sweep never descends into either: an alias to a kept
+/// directory must not take the directory's contents with it.
+#[cfg(unix)]
+#[test]
+fn remove_stale_files_unlinks_unkept_symlinks_without_descending_into_them() {
+    let temp = TempDir::new().unwrap();
+    let dir = temp.path().join("output");
+    fs::create_dir_all(dir.join("resources/app")).unwrap();
+    fs::write(dir.join("resources/app/index.html"), "<h1>app</h1>").unwrap();
+    std::os::unix::fs::symlink("resources/app", dir.join("live-alias")).unwrap();
+    std::os::unix::fs::symlink("resources/app", dir.join("stale-alias")).unwrap();
+    let mut hashes = SiteHashes::new();
+    hashes.insert("resources/app/index.html".to_string(), "hash1".to_string());
+    hashes.insert("live-alias".to_string(), "120000:resources/app".to_string());
+
+    let report = remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
+
+    assert!(fs::symlink_metadata(dir.join("live-alias")).is_ok(), "a named alias is kept");
+    assert!(fs::symlink_metadata(dir.join("stale-alias")).is_err(), "an unnamed alias is unlinked");
+    assert!(dir.join("resources/app/index.html").exists(), "the sweep never descends into an alias");
+    assert_eq!(report.symlink, 1);
+}
+
+/// `_moss/math/` is append-only: no `<hash>.png` there is ever
+/// stale. The `.pending.` temp a crashed write left beside one is.
+#[test]
+fn remove_stale_files_takes_math_png_temps_but_keeps_every_png() {
+    let temp = TempDir::new().unwrap();
+    let dir = temp.path().join("output");
+    let math = dir.join("_moss/math");
+    fs::create_dir_all(&math).unwrap();
+    fs::write(math.join("aaaaaaaaaaaaaaaa.png"), b"real png").unwrap();
+    fs::write(math.join("aaaaaaaaaaaaaaaa.pending.dead-uuid"), b"crash leftover").unwrap();
+
+    remove_stale_files(&dir, &SiteHashes::new(), "test", &crate::build::lifecycle::permit_for_test());
+
+    assert!(math.join("aaaaaaaaaaaaaaaa.png").exists(), "an unregistered PNG is still append-only");
+    assert!(!math.join("aaaaaaaaaaaaaaaa.pending.dead-uuid").exists(), "a crashed temp is not");
+}
+
 #[test]
 fn test_remove_stale_files_deletes_unlisted_files() {
     let temp = TempDir::new().unwrap();
@@ -2015,7 +2838,7 @@ fn test_remove_stale_files_deletes_unlisted_files() {
     let mut hashes = SiteHashes::new();
     hashes.insert("index.html".to_string(), "hash1".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "index.html should be kept");
     assert!(
@@ -2036,7 +2859,7 @@ fn test_remove_stale_files_preserves_video_outputs() {
     let mut hashes = SiteHashes::new();
     hashes.video_outputs.insert("videos/clip.mp4".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         videos.join("clip.mp4").exists(),
@@ -2061,7 +2884,7 @@ fn test_remove_stale_files_preserves_image_outputs() {
     let mut hashes = SiteHashes::new();
     hashes.image_outputs.insert("images/hero.webp".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         images.join("hero.webp").exists(),
@@ -2086,7 +2909,7 @@ fn test_remove_stale_files_deletes_untracked_webp() {
         .image_outputs
         .insert("images/tracked.webp".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         images.join("tracked.webp").exists(),
@@ -2098,7 +2921,7 @@ fn test_remove_stale_files_deletes_untracked_webp() {
     );
 }
 
-/// ADR-030 §3.4 append-only retention: a math PNG whose equation was
+/// Append-only retention: a math PNG whose equation was
 /// edited or deleted has NO entry in the new build's hashes, but its URL
 /// is baked into already-sent emails (Gmail's proxy caches it forever).
 /// Stale-file cleanup must never touch `_moss/math/`.
@@ -2113,7 +2936,7 @@ fn remove_stale_files_never_deletes_math_pngs() {
     fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
 
     let hashes = SiteHashes::new();
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         math.join("aaaaaaaaaaaaaaaa.png").exists(),
@@ -2134,7 +2957,7 @@ fn remove_stale_dirs_never_deletes_math_dir() {
     // Expected dirs cover _moss (other artifacts) but NOT _moss/math.
     let mut expected = std::collections::HashSet::new();
     expected.insert(std::path::PathBuf::from("_moss"));
-    remove_stale_dirs(&dir, &expected);
+    remove_stale_dirs(&dir, &expected, &crate::build::lifecycle::permit_for_test());
 
     assert!(
         math.join("aaaaaaaaaaaaaaaa.png").exists(),
@@ -2151,10 +2974,10 @@ fn remove_stale_dirs_never_deletes_math_dir() {
 /// walk used to hold a snapshot clone of the whole manifest and re-emit it,
 /// so anything it failed to recognise was swept before persistence — the
 /// deploy manifest shipped to seta missed those paths and prod 404'd
-/// `/resources/habitable-zone.html` and `/jupyter/**`.
+/// `/resources/orbit-model.html` and `/jupyter/**`.
 ///
 /// The walk now owns only the static-asset slice, seeded from the PREVIOUS
-/// build's manifest (moss#618), so it has no way to sweep an entry belonging
+/// build's manifest, so it has no way to sweep an entry belonging
 /// to another phase. This test holds that: the notebook entry is registered
 /// into the pending manifest the coordinator carries — as
 /// `run_notebook_processing` registers it in `build_inner` — and must still be
@@ -2170,15 +2993,15 @@ async fn test_copy_deferred_assets_preserves_notebook_hash_entries_for_deploy() 
     let moss = temp.path().join(".moss");
     std::fs::create_dir_all(&source).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    std::fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    std::fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
-    let nb_path = "resources/habitable-zone.html".to_string();
+    let nb_path = "resources/orbit-model.html".to_string();
     let nb_hash = "deadbeefdeadbeef".to_string();
 
     // What `run_notebook_processing` does in `build_inner`: register the
     // output into the live pending manifest, NOT into anything the walk holds.
     let mut pending = PendingManifest::new(SiteHashes::default());
-    pending.apply_message(nb_path.clone(), &nb_hash, HashBucket::NotebookOutputs);
+    pending.apply_message(nb_path.clone(), &nb_hash, HashBucket::NotebookOutputs, None);
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -2217,8 +3040,8 @@ async fn test_copy_deferred_assets_preserves_notebook_hash_entries_for_deploy() 
 /// deleted on every rebuild because their source is .ipynb but the outputs
 /// have different extensions — matching the webp pattern exactly.
 ///
-/// Regression test for a 404 on /resources/habitable-zone.html observed in
-/// test-sites/chps-site: rebuild → stale cleanup deletes the viewer HTML →
+/// Regression test for a 404 on /resources/orbit-model.html observed on
+/// a real site: rebuild → stale cleanup deletes the viewer HTML →
 /// iframe 404 until the next full notebook regeneration completes.
 #[test]
 fn test_remove_stale_files_preserves_notebook_outputs() {
@@ -2230,11 +3053,11 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
     fs::create_dir_all(&jupyter_lab).unwrap();
 
     // Viewer HTML wrapper (sibling of .ipynb at its natural path)
-    fs::write(resources.join("habitable-zone.html"), "viewer").unwrap();
+    fs::write(resources.join("orbit-model.html"), "viewer").unwrap();
     // JupyterLite asset file
     fs::write(jupyter_lab.join("index.html"), "lab").unwrap();
     // .ipynb copy (for direct access / JupyterLite load)
-    fs::write(resources.join("habitable-zone.ipynb"), "nb").unwrap();
+    fs::write(resources.join("orbit-model.ipynb"), "nb").unwrap();
     // Orphan: not in any preserve-set, must be deleted (proves the
     // function is actually scanning, not no-op'ing).
     fs::write(jupyter_lab.join("orphan.js"), "stale").unwrap();
@@ -2242,18 +3065,18 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
     let mut hashes = SiteHashes::new();
     hashes
         .notebook_outputs
-        .insert("resources/habitable-zone.html".to_string());
+        .insert("resources/orbit-model.html".to_string());
     hashes
         .notebook_outputs
         .insert("jupyter/lab/index.html".to_string());
     hashes
         .notebook_outputs
-        .insert("resources/habitable-zone.ipynb".to_string());
+        .insert("resources/orbit-model.ipynb".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
-        resources.join("habitable-zone.html").exists(),
+        resources.join("orbit-model.html").exists(),
         "notebook viewer HTML should be preserved"
     );
     assert!(
@@ -2261,7 +3084,7 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
         "jupyter asset should be preserved"
     );
     assert!(
-        resources.join("habitable-zone.ipynb").exists(),
+        resources.join("orbit-model.ipynb").exists(),
         ".ipynb copy should be preserved"
     );
     assert!(
@@ -2304,7 +3127,7 @@ fn test_remove_stale_html_preserves_notebook_outputs() {
     notebook_outputs.insert("jupyter/lab/index.html".to_string());
     notebook_outputs.insert("jupyter/tree/index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &notebook_outputs);
+    remove_stale_html(&dir, &blocking_keys, &notebook_outputs, &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "home kept");
     assert!(
@@ -2333,7 +3156,7 @@ fn test_remove_stale_dirs_removes_empty_stale_directories() {
     let mut expected_dirs = std::collections::HashSet::new();
     expected_dirs.insert(std::path::PathBuf::from("js"));
 
-    remove_stale_dirs(&dir, &expected_dirs);
+    remove_stale_dirs(&dir, &expected_dirs, &crate::build::lifecycle::permit_for_test());
 
     assert!(keep_dir.exists(), "js/ should be preserved");
     assert!(!stale_dir.exists(), "old-section/ should be removed");
@@ -2390,7 +3213,7 @@ fn test_copy_deferred_assets_cleans_staging_dir() {
     fs::create_dir_all(&source).unwrap();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(&site).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     fs::write(staging.join("custom.css"), "body { old }").unwrap();
     fs::write(site.join("custom.css"), "body { old }").unwrap();
@@ -2414,11 +3237,11 @@ fn test_copy_deferred_assets_cleans_staging_dir() {
         copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     }
 
-    // Stale-file cleanup moved to the seal+persist side task in build.rs
-    // (#621). Simulate that step here so this test continues to exercise
+    // Stale-file cleanup moved to the seal+persist side task in build.rs.
+    // Simulate that step here so this test continues to exercise
     // the staging+site cleanup logic.
-    remove_stale_files(&site, &site_hashes, "site");
-    remove_stale_files(&staging, &site_hashes, "staging");
+    remove_stale_files(&site, &site_hashes, "site", &crate::build::lifecycle::permit_for_test());
+    remove_stale_files(&staging, &site_hashes, "staging", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !site.join("custom.css").exists(),
@@ -2448,7 +3271,7 @@ fn test_remove_stale_html_deletes_orphaned_index_pages() {
     blocking_keys.insert("index.html".to_string());
     blocking_keys.insert("文字/article/index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &HashSet::new());
+    remove_stale_html(&dir, &blocking_keys, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "current index.html kept");
     assert!(
@@ -2483,7 +3306,7 @@ fn test_remove_stale_html_preserves_non_html_files() {
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &HashSet::new());
+    remove_stale_html(&dir, &blocking_keys, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists());
     assert!(dir.join("style.css").exists(), "CSS preserved");
@@ -2508,7 +3331,7 @@ fn test_resolve_source_hash_uses_cached_hash_on_mtime_match() {
         .as_secs();
 
     let mut hash_index = HashIndex::new();
-    hash_index.update(
+    hash_index.update_whole_second(
         "video.mov".to_string(),
         size,
         mtime,
@@ -2533,7 +3356,7 @@ fn test_resolve_source_hash_rehashes_on_mtime_mismatch() {
     let size = meta.len();
 
     let mut hash_index = HashIndex::new();
-    hash_index.update(
+    hash_index.update_whole_second(
         "video.mov".to_string(),
         size,
         1000,
@@ -2587,9 +3410,9 @@ fn test_fast_path_rejects_zero_byte_canonical_files() {
     fs::create_dir_all(source_dir.join("videos")).unwrap();
     fs::create_dir_all(staging_dir.join("videos")).unwrap();
     fs::create_dir_all(canonical_dir.join("videos")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
 
     fs::write(
         source_dir.join("videos/clip.mov"),
@@ -2609,13 +3432,13 @@ fn test_fast_path_rejects_zero_byte_canonical_files() {
         .unwrap()
         .as_secs();
     let mut hash_index = HashIndex::new();
-    hash_index.update(
+    hash_index.update_whole_second(
         "videos/clip.mov".to_string(),
         source_size,
         source_mtime,
         "fake_hash_123".to_string(),
     );
-    let hash_index_path = moss_dir.join("build").join("cache").join("hash-index.json");
+    let hash_index_path = moss_dir.join("build.nosync").join("cache").join("hash-index.json");
     let hash_json = serde_json::to_string_pretty(&hash_index).unwrap();
     fs::write(&hash_index_path, hash_json).unwrap();
 
@@ -2705,7 +3528,7 @@ fn test_copy_deferred_assets_maps_paths_through_dir_overrides() {
     fs::write(chinese_dir.join("sketch.js"), "// sketch code").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut dir_overrides = HashMap::new();
     dir_overrides.insert("交互".to_string(), "interactive".to_string());
@@ -2757,7 +3580,7 @@ fn test_copy_deferred_assets_maps_nested_dir_overrides() {
     fs::write(nested_dir.join("photo.jpg"), "fake image").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut dir_overrides = HashMap::new();
     dir_overrides.insert("文字".to_string(), "writings".to_string());
@@ -2801,7 +3624,7 @@ fn test_copy_deferred_assets_no_overrides_unchanged() {
     fs::write(source.join("image.png"), "fake png").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -2838,7 +3661,7 @@ fn test_copy_deferred_assets_skips_root_style_css() {
     fs::create_dir_all(&output).unwrap();
     let default_css = ":root { --moss-color-accent: green; }";
     fs::write(output.join("style.css"), default_css).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("style.css".to_string());
@@ -2882,7 +3705,7 @@ fn test_copy_deferred_assets_skips_root_script_js() {
     fs::create_dir_all(&output).unwrap();
     let default_script = "console.log('moss default script');";
     fs::write(output.join("script.js"), default_script).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("script.js".to_string());
@@ -2919,9 +3742,9 @@ fn test_copy_deferred_assets_skips_root_script_js() {
 /// recorded under `SealedManifest::video_outputs` and NOT under
 /// `files` / `blocking_keys`.
 ///
-/// Pre-Track A this lived as `test_update_video_hashes_uses_mapped_paths`
+/// This used to live as `test_update_video_hashes_uses_mapped_paths`
 /// and asserted the on-disk hashes.json contained the mapped paths after
-/// `update_video_hashes(&ctx)`. The on-disk fallback is gone (#620 Item 2);
+/// `update_video_hashes(&ctx)`. The on-disk fallback is gone;
 /// the runner now sends EmitMessage::VideoOutputs through the coordinator
 /// channel. The mapping itself (file-tree → page-tree) happens inside the
 /// runner's path-derivation; this test exercises the coordinator wiring
@@ -2939,6 +3762,7 @@ async fn test_video_outputs_emitted_via_coordinator() {
             rel_path: path.to_string(),
             hash: String::new(),
             bucket: HashBucket::VideoOutputs,
+            oid: None,
         })
         .await
         .unwrap();
@@ -2983,6 +3807,7 @@ async fn test_video_outputs_emitted_via_coordinator_no_overrides() {
             rel_path: path.to_string(),
             hash: String::new(),
             bucket: HashBucket::VideoOutputs,
+            oid: None,
         })
         .await
         .unwrap();
@@ -3180,7 +4005,7 @@ fn stage_copy_writes_the_file_and_returns_its_hash() {
 
 #[test]
 fn stage_write_creates_parents_normalizes_dirs_and_returns_its_hash() {
-    // Regression test for the chps-site bug: a source dir with capital case
+    // Regression test for a real site's bug: a source dir with capital case
     // (Resources/) emits to the lowercase form. Per the lowercase-only dir rule
     // (a21573395), directory segments are lowercased but the basename is
     // preserved verbatim so JupyterLite assets like `MathJax_Main-Bold.woff`
@@ -3242,7 +4067,7 @@ fn test_copy_dir_recursive_copies_all_files() {
 /// that directory, so the twins entered the manifest as moss's own output; they
 /// were cloud-evicted, and reading one back to hash it returned EDEADLK, which
 /// classified as a fatal stop and killed every build of that vault
-/// (the CPHS vault, 2026-08-30).
+/// (a large vault, 2026-08-30).
 ///
 /// The receipt is what makes that unrepresentable: `copy_dir_recursive` reports
 /// what it copied, so whatever else is sitting in the destination — a twin, a
@@ -3321,7 +4146,7 @@ fn test_stale_cleanup_preserves_registered_notebook_outputs() {
     );
     hashes.insert("resources/analysis.html".to_string(), hash_of(b"viewer"));
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     // Registered notebook outputs survive
     assert!(
@@ -3354,7 +4179,7 @@ fn test_stale_cleanup_removes_unregistered_jupyter_files() {
     fs::write(dir.join("jupyter/stale-old-file.js"), "old").unwrap();
 
     let hashes = SiteHashes::default();
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !dir.join("jupyter/stale-old-file.js").exists(),
@@ -3383,7 +4208,7 @@ fn test_user_css_from_moss_dir() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // User CSS is now emitted with a content-hash filename; scan to find it.
-    let theme_dir = test_dir.join(".moss/build/staging/_moss/theme");
+    let theme_dir = test_dir.join(".moss/build.nosync/staging/_moss/theme");
     let hashed_css_path = fs::read_dir(&theme_dir)
         .unwrap()
         .flatten()
@@ -3397,7 +4222,7 @@ fn test_user_css_from_moss_dir() {
     let custom_css = fs::read_to_string(&hashed_css_path).unwrap();
     assert_eq!(custom_css, "body { color: blue; }");
 
-    let html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         html.contains("_moss/theme/style."),
         "HTML should link to _moss/theme/style.<hash>.css when .moss/theme/style.css exists"
@@ -3417,7 +4242,7 @@ fn test_user_css_root_ignored() {
 
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
-    assert!(!test_dir.join(".moss/build/staging/_moss/theme/style.css").exists(),
+    assert!(!test_dir.join(".moss/build.nosync/staging/_moss/theme/style.css").exists(),
             "Root style.css should NOT produce _moss/theme/style.css — only .moss/theme/style.css is canonical");
 }
 
@@ -3431,7 +4256,7 @@ fn test_no_user_css() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     assert!(!test_dir
-        .join(".moss/build/staging/_moss/theme/style.css")
+        .join(".moss/build.nosync/staging/_moss/theme/style.css")
         .exists());
 }
 
@@ -3453,7 +4278,7 @@ fn test_theme_style_edit_regenerates_custom_css() {
     .unwrap();
 
     // Helper: collect content of all hashed CSS files in theme_dir.
-    let theme_dir = test_dir.join(".moss/build/staging/_moss/theme");
+    let theme_dir = test_dir.join(".moss/build.nosync/staging/_moss/theme");
     let read_all_hashed_css = |theme_dir: &std::path::Path| -> Vec<String> {
         fs::read_dir(theme_dir)
             .unwrap_or_else(|_| panic!("_moss/theme dir must exist"))
@@ -3516,7 +4341,7 @@ fn test_user_js_from_moss_dir() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // User JS is now emitted with a content-hash filename; scan to find it.
-    let theme_dir = test_dir.join(".moss/build/staging/_moss/theme");
+    let theme_dir = test_dir.join(".moss/build.nosync/staging/_moss/theme");
     let hashed_js_path = fs::read_dir(&theme_dir)
         .unwrap()
         .flatten()
@@ -3530,7 +4355,7 @@ fn test_user_js_from_moss_dir() {
     let custom_js = fs::read_to_string(&hashed_js_path).unwrap();
     assert_eq!(custom_js, "console.log('moss')");
 
-    let html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         html.contains("_moss/theme/script."),
         "HTML should include _moss/theme/script.<hash>.js when .moss/theme/script.js exists"
@@ -3550,7 +4375,7 @@ fn test_user_js_root_ignored() {
 
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
-    assert!(!test_dir.join(".moss/build/staging/_moss/theme/script.js").exists(),
+    assert!(!test_dir.join(".moss/build.nosync/staging/_moss/theme/script.js").exists(),
             "Root script.js should NOT produce _moss/theme/script.js — only .moss/theme/script.js is canonical");
 }
 
@@ -3572,7 +4397,7 @@ fn test_moss_assets_copied_to_output() {
     fs::write(moss.join("theme").join("logo.png"), b"fake png").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -3614,7 +4439,7 @@ fn test_moss_assets_nested_directories() {
     .unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -3659,7 +4484,7 @@ fn test_theme_video_overlay_copied_to_output() {
     fs::write(moss.join("theme").join("grain.png"), b"fake texture").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -3705,7 +4530,7 @@ fn test_theme_walk_skips_entry_files_copies_rest() {
     fs::write(moss.join("theme").join("allowed.svg"), "<svg/>").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -3909,7 +4734,7 @@ fn test_image_compression_pipeline_end_to_end() {
     // upgrades the HTML to `<picture><source srcset="photo.webp">`.
     //
     // Assertions prove the seams are wired correctly:
-    //   1. JPEGs on disk become .webp in .moss/build/staging/ (sole output post-T2)
+    //   1. JPEGs on disk become .webp in .moss/build.nosync/staging/ (sole output post-T2)
     //   2. .webp is smaller than the source JPEG (real encoding happened)
     //   3. SVG passes through unchanged (skip rules honoured)
     //   4. After build 2 — Built HTML wraps the markdown <img> in
@@ -3963,7 +4788,7 @@ fn test_image_compression_pipeline_end_to_end() {
     assert!(result.is_ok(), "Build 1 should succeed: {:?}", result);
 
     // ---- 1. WebP outputs exist (in staging/ — the sole build output post-T2) ----
-    let staging_dir = test_dir.join(".moss/build/staging");
+    let staging_dir = test_dir.join(".moss/build.nosync/staging");
     let photo_webp = staging_dir.join("photo.webp");
     let photo2_webp = staging_dir.join("photo2.webp");
     assert!(
@@ -4055,7 +4880,6 @@ fn test_image_compression_pipeline_end_to_end() {
     // data-placeholder-src removed 2026-05-20 from both the synthesizer
     // and the regex pass. iframe-bridge matches by URL substring now;
     // AssetRegistry + preview server handle the placeholder lifecycle.
-    // See docs/archive/2026-05-20-image-variant-honest-mirror.md.
     assert!(
         !html.contains("data-placeholder-src"),
         "data-placeholder-src must not be emitted post-2026-05-20, got: {}",
@@ -4098,14 +4922,14 @@ fn test_image_compression_pipeline_end_to_end() {
 /// `sources` write-back or the `check_source_cache` call, this test
 /// fails.
 ///
-/// The win it locks in: on the William Blake recordings site this took
+/// The win it locks in: on a large image-heavy demo site this took
 /// `copy_deferred_assets` from ~35s to ~1s. Without this assertion any
 /// well-meaning cleanup that drops the `sources` map writes would
 /// silently regress to the slow path.
 ///
-/// Pre-#620 Item 2: this test ran two `copy_deferred_assets(... None)`
-/// calls and roundtripped the persisted `hashes.json` between them.
-/// Post-#620 Item 2: the on-disk fallback is gone. The test now seals
+/// This test used to run two `copy_deferred_assets(... None)`
+/// calls and roundtrip the persisted `hashes.json` between them.
+/// Now the on-disk fallback is gone. The test instead seals
 /// the run-1 manifest from the coordinator, then feeds the sealed
 /// `SiteHashes` as `previous_hashes` to run 2 — mirroring the
 /// production flow where `seal+persist` writes to disk and the next
@@ -4122,7 +4946,7 @@ async fn copy_deferred_assets_warm_cache_zero_misses() {
     let moss = temp.path().join(".moss");
     std::fs::create_dir_all(&source).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    std::fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    std::fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     // Two assets covering different MIME paths through the walker.
     std::fs::write(
@@ -4176,7 +5000,7 @@ async fn copy_deferred_assets_warm_cache_zero_misses() {
 /// `current_sealed_manifest` was never populated → deploy hard-errored with
 /// "Deploy artifacts are not sealed yet."
 ///
-/// The first fix added an `else` branch making a zero-worker handle. moss#618
+/// The first fix added an `else` branch making a zero-worker handle. A later fix
 /// removed the gate instead: every build now dispatches the asset walk, so
 /// there is always a worker and always a seal, and the branch this test was
 /// written against no longer exists. The assertion is kept because it states
@@ -4216,7 +5040,7 @@ async fn text_only_build_returns_bg_handle_for_deploy_seal() {
     );
 
     // Also verify the handle actually seals cleanly (zero workers → immediate drain).
-    let sealed = bg_handle
+    let (sealed, _cache_lease) = bg_handle
         .unwrap()
         .await_completion()
         .await
@@ -4243,6 +5067,11 @@ async fn text_only_build_returns_bg_handle_for_deploy_seal() {
 /// un-publishing it. Returns the sealed manifest's keys so a test can assert on
 /// the wire manifest, not just on disk.
 fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
+    build_test_sealed_at(folder_path, None)
+}
+
+/// [`build_test_sealed`], built for `site_url` (`run`'s override).
+fn build_test_sealed_at(folder_path: &str, site_url: Option<&str>) -> Result<Vec<String>, String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -4260,14 +5089,14 @@ fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
             None,
             Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
             &ps,
-            None,
+            site_url.map(str::to_string),
             crate::build::render::IncrementalGates::default(),
             crate::build::feeds::search_lane::Freshness::Now,
             &test_cache_keys(),
         )
         .map_err(crate::build::outcome::BuildStopped::into_message)?;
         let Some(handle) = bg_handle else { return Ok(Vec::new()) };
-        let sealed = handle
+        let (sealed, _cache_lease) = handle
             .await_completion()
             .await
             .map_err(|e| format!("test seal+persist failed: {}", e))?;
@@ -4277,24 +5106,35 @@ fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
         let view = sealed.site_hashes_view();
         let mut keys: Vec<String> = view.files.keys().cloned().collect();
         keys.sort();
-        crate::build::media::pipeline::remove_stale_files(&stage_dir, view, "staging");
+        crate::build::media::pipeline::remove_stale_files(&stage_dir, view, "staging", &crate::build::lifecycle::permit_for_test());
         Ok(keys)
     })
 }
 
 /// Drive the full production SHIP TAIL, not just the build: seal → prune
-/// orphaned `.webp` → write `hashes.json` → stale-clean staging. Mirrors
-/// `build.rs`'s `exits_after_build` branch, which is the only place all four
-/// run in order.
+/// orphaned `.webp` → reclaim what the prune orphaned → write `hashes.json`
+/// → promote. Mirrors `build.rs`'s `exits_after_build` branch, which is the
+/// only place all of these run in order — this harness has no next build in
+/// its own process either, so it calls `ship::reclaim_staging_now` exactly
+/// where that branch does (moss#… the 2026-09-16 regression: without this
+/// call a single call here left an orphan's `.webp` sitting in staging, which
+/// every assertion below would have missed since none of them ran a SECOND
+/// build to let `pipeline::sweep_staging` cover for it).
 ///
 /// `build_test` and `build_test_sealed` both stop at the seal, so neither can
 /// observe anything the tail decides — and the tail is where the staging tree
 /// is complete, where the reference set is therefore complete, and where the
-/// prune runs. Returns the prune's own count so a caller can assert a
-/// converged build removes nothing.
+/// prune runs. Returns the keys the prune condemned so a caller can assert a
+/// converged build condemns nothing.
+///
+/// It promotes, too, for the multi-call case: a caller that runs this
+/// harness again on the same folder still exercises `pipeline::sweep_staging`
+/// at that next build's start, reading the `hashes.json` this call just
+/// wrote — which needs a promoted generation to be the one the server is
+/// considered "on" (see `sweep_staging`'s `served_from_current` doc).
 fn build_test_shipped(
     folder_path: &str,
-) -> Result<crate::build::media::orphan_prune::PruneResult, String> {
+) -> Result<std::collections::HashSet<String>, String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -4325,21 +5165,106 @@ fn build_test_shipped(
         )
         .map_err(crate::build::outcome::BuildStopped::into_message)?;
         let Some(handle) = bg_handle else {
-            return Ok(crate::build::media::orphan_prune::PruneResult::default());
+            return Ok(std::collections::HashSet::new());
         };
-        let mut sealed = handle
+        let (mut sealed, _cache_lease) = handle
             .await_completion()
             .await
             .map_err(|e| format!("test seal+persist failed: {}", e))?;
         let mp = crate::moss_paths::MossPaths::new(root.path());
         let stage_dir = mp.staging_dir();
         let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage_dir);
-        let (_pruned_keys, pruned) =
-            crate::build::ship::prune_orphaned_webp_before_ship(&mp, &stage_dir, &mut sealed, &scan);
+        let pruned =
+            crate::build::ship::prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
+        // Mirrors `advertise_sealed`'s `reclaim_stage_dir_when_done = true`
+        // arm: this harness never has a next build in the same process
+        // either, so without this call staging would hold orphaned bytes no
+        // test here could ever observe going away.
+        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
         let _ = sealed.write_to_disk(&mp.hashes());
-        let view = sealed.site_hashes_view();
-        crate::build::media::pipeline::remove_stale_files(&stage_dir, view, "staging");
+        crate::build::ship::materialize_and_promote(
+            &sealed,
+            &mp,
+            &stage_dir,
+            crate::build::ship::next_promotion_epoch(),
+            None,
+            crate::build::ship::ShipVerdict::Ship,
+        )?;
         Ok(pruned)
+    })
+}
+
+/// `build_test_shipped`, but the promotion verdict follows THIS build's own
+/// `publishable` the way `build.rs::advertise_sealed` does, instead of always
+/// shipping. `build_test_shipped` hardcodes `ShipVerdict::Ship` because none
+/// of its callers care about the withhold branch; the tests that care about
+/// `publishable` (the 2026-09-17 revision) need exactly
+/// the branch it skips.
+///
+/// Deliberately does not call `degrade::repair_staged_html` — the presence
+/// pass is a separate, already-tested concern (`ship_tests.rs`), and folding
+/// it in here would make a test that only cares about `publishable` also
+/// depend on presence-pass behavior it isn't exercising.
+///
+/// Returns `(Promotion, sealed file keys, stale_sources)`. The third element
+/// is this build's own `PipelineRunOutput::stale_sources` — the value
+/// `build.rs`'s seal tail hands to `BuildRecords::record_stale_sources` — for
+/// tests that check the publish-time staleness gate rather than promotion
+/// itself.
+fn build_test_promoted_or_withheld(
+    folder_path: &str,
+) -> Result<(crate::build::ship::Promotion, Vec<String>, Vec<String>), String> {
+    let ps = scan_folder(folder_path)?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|e| format!("test runtime build failed: {}", e))?;
+    let root = crate::vault::paths::VaultRoot::resolve(folder_path);
+    let preview_port = crate::build::ports::port_of_this_build(None, None);
+    let services = BuildServices::headless();
+    rt.block_on(async move {
+        let PipelineRunOutput { bg_handle, publishable, stale_sources, .. } = run(
+            &root,
+            None,
+            None,
+            &preview_port,
+            Some(&services),
+            Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
+            &ps,
+            None,
+            crate::build::render::IncrementalGates::default(),
+            crate::build::feeds::search_lane::Freshness::Now,
+            &test_cache_keys(),
+        )
+        .map_err(crate::build::outcome::BuildStopped::into_message)?;
+        let Some(handle) = bg_handle else {
+            return Err("build produced no background handle to seal".to_string());
+        };
+        let (sealed, _cache_lease) = handle
+            .await_completion()
+            .await
+            .map_err(|e| format!("test seal+persist failed: {}", e))?;
+        let mp = crate::moss_paths::MossPaths::new(root.path());
+        let stage_dir = mp.staging_dir();
+        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
+        let _ = sealed.write_to_disk(&mp.hashes());
+        let mut keys: Vec<String> = sealed.files().keys().cloned().collect();
+        keys.sort();
+        let verdict = if publishable {
+            crate::build::ship::ShipVerdict::Ship
+        } else {
+            crate::build::ship::ShipVerdict::Withhold(crate::build::ship::WithholdReason::SourcesDownloading)
+        };
+        let promotion = crate::build::ship::materialize_and_promote(
+            &sealed,
+            &mp,
+            &stage_dir,
+            crate::build::ship::next_promotion_epoch(),
+            None,
+            verdict,
+        )?;
+        Ok((promotion, keys, stale_sources))
     })
 }
 
@@ -4366,10 +5291,10 @@ fn stage_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<String, u
 
 /// A build that changes nothing must DO nothing.
 ///
-/// The general shape of moss#1085: one part of the build derives a set by
+/// The general shape of this bug: one part of the build derives a set by
 /// walking the disk, another derives "the same" set by reading what the render
 /// referenced, the two disagree, and every build redoes work that can never
-/// settle. On harbor that ran for sixteen consecutive builds — 96 `.webp`
+/// settle. On riverbend that ran for sixteen consecutive builds — 96 `.webp`
 /// files re-materialized from the CAS and the same 96 deleted again, 3.5 MB
 /// each pass, 1–2 s on the critical path between `seal+persist` and the prune
 /// finishing.
@@ -4429,8 +5354,8 @@ fn a_build_that_changes_nothing_does_nothing() {
     )
     .unwrap();
 
-    // The colocated case from moss#1085, stated rather than stumbled into. On
-    // harbor that was `0ba912901f865c42.jpg` colocated in
+    // The colocated case, stated rather than stumbled into. On
+    // a real site that was `0ba912901f865c42.jpg` colocated in
     // `awards/film/s1/assets/` and `awards/film/s2/assets/`: one referrer, two
     // staged copies. `make_big_jpeg_at` is deterministic, so this file is
     // byte-identical to `posts/assets/inline.jpg` and the two share ONE cache
@@ -4445,7 +5370,7 @@ fn a_build_that_changes_nothing_does_nothing() {
     build_test_shipped(folder_path).expect("build 1");
     build_test_shipped(folder_path).expect("build 2");
 
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     let before = stage_snapshot(&stage_dir);
 
     // Guard the fixture itself. Everything below is a claim about `.webp`
@@ -4461,12 +5386,10 @@ fn a_build_that_changes_nothing_does_nothing() {
     let pruned = build_test_shipped(folder_path).expect("build 3");
     let after = stage_snapshot(&stage_dir);
 
-    assert_eq!(
-        pruned.files_removed, 0,
-        "a converged build must prune nothing — {} file(s)/{} bytes removed means \
-         something re-materialized variants the previous build had already \
-         deleted (moss#1085)",
-        pruned.files_removed, pruned.bytes_freed
+    assert!(
+        pruned.is_empty(),
+        "a converged build must condemn nothing — {pruned:?} means something \
+         re-materialized variants the previous build had already dropped"
     );
 
     let changed: Vec<&String> = before
@@ -4490,7 +5413,7 @@ fn a_build_that_changes_nothing_does_nothing() {
     assert!(
         !stage_dir.join("gallery/assets/inline.webp").exists(),
         "the colocated copy nobody references must stay gone, not be re-healed \
-         from the object its referenced twin keeps alive (moss#1085)"
+         from the object its referenced twin keeps alive"
     );
 
     // ---- and suppression is a latch, not a one-way door ----------------
@@ -4499,7 +5422,7 @@ fn a_build_that_changes_nothing_does_nothing() {
     // unreferenced is only safe if pointing a page at that image brings it
     // straight back. Otherwise the build ships a `<source srcset>` for a file
     // it deliberately did not write, and `<picture>` has no fallback from a
-    // chosen source that 404s (ADR-013). The escape hatch is unit-tested on
+    // chosen source that 404s. The escape hatch is unit-tested on
     // `suppressed_variants` alone; only here does the whole chain have to
     // agree — persisted verdict → suppression lifted by HTML already staged
     // this build → encode → the offered URL naming real bytes.
@@ -4532,7 +5455,67 @@ fn a_build_that_changes_nothing_does_nothing() {
         stage_dir.join("gallery/assets/inline.webp").is_file(),
         "a suppressed variant a page now references must be produced again on \
          that same build, not one build later — the page already promises it, \
-         and <picture> does not recover from a chosen source that 404s (ADR-013)"
+         and <picture> does not recover from a chosen source that 404s"
+    );
+}
+
+/// A one-shot build's own orphan prune must remove the orphaned `.webp`
+/// BYTES from `stage_dir`, not just its `sealed` entry.
+///
+/// The 2026-09-16 regression this test would have caught: `f003326` moved the
+/// physical unlink out of `prune_orphaned_webp_before_ship` (mid-flight 404s
+/// under a live preview server — a real bug, correctly fixed) and deferred it
+/// to `pipeline::sweep_staging`, which only runs at the START of a NEXT
+/// build. `build_test_shipped` here, a real `moss build`, and every
+/// snapshot-test fixture are all one-shot: the process exits
+/// after this one build, so a next build that would do the sweeping never
+/// comes, and the orphaned bytes shipped in anything that read `stage_dir`
+/// directly. `ship::reclaim_staging_now` closes that gap for exactly the
+/// build shape that proves nobody is left to read `stage_dir` afterward.
+///
+/// Ablate by commenting out the `reclaim_staging_now` call in
+/// `build_test_shipped` above: `gone.webp` then survives on disk after build
+/// 2 and the last assertion here goes red.
+#[test]
+fn a_dropped_reference_reclaims_its_webp_bytes_on_the_same_build() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+
+    fs::write(
+        test_dir.join("index.md"),
+        "---\ntitle: Home\ndate: 2026-01-02\n---\n\n# Home\n\n![Cover](gone.jpg)\n",
+    )
+    .unwrap();
+    make_big_jpeg_at(&test_dir.join("gone.jpg"), 2400, 1800);
+
+    build_test_shipped(folder_path).expect("build 1: image referenced");
+
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
+    assert!(
+        stage_dir.join("gone.webp").is_file(),
+        "fixture guard: the referenced image must produce a staged .webp, or \
+         nothing below tests anything"
+    );
+
+    // Drop the reference. The source image stays in the vault — this is the
+    // orphan prune's case to act on, not the deleted-source path
+    // (`drop_absent_outputs`) or a removed-source fingerprint retention.
+    fs::write(
+        test_dir.join("index.md"),
+        "---\ntitle: Home\ndate: 2026-01-02\n---\n\n# Home\n\nNo image now.\n",
+    )
+    .unwrap();
+
+    let pruned = build_test_shipped(folder_path).expect("build 2: reference dropped");
+    assert!(
+        pruned.contains("gone.webp"),
+        "the prune must condemn the now-orphaned variant: {pruned:?}"
+    );
+    assert!(
+        !stage_dir.join("gone.webp").exists(),
+        "the orphaned .webp must be gone from staging after THIS build — a \
+         real `moss build` (and every snapshot-test fixture) is \
+         a one-shot process with no next build to defer the reclaim to"
     );
 }
 
@@ -4558,7 +5541,7 @@ fn a_cloud_evicted_page_survives_the_seal_time_sweep_and_the_deploy_manifest() {
     fs::write(test_dir.join("keeper.md"), "# Keeper\n\nStill a real page.").unwrap();
 
     let keys = build_test_sealed(folder_path).expect("first build");
-    let published = test_dir.join(".moss/build/staging/keeper/index.html");
+    let published = test_dir.join(".moss/build.nosync/staging/keeper/index.html");
     assert!(published.is_file(), "first build must publish the page");
     assert!(keys.iter().any(|k| k == "keeper/index.html"), "keys: {keys:?}");
 
@@ -4709,7 +5692,7 @@ fn gate_raises_when_an_unmarked_home_loses_to_an_evicted_alphabetical_winner() {
     assert!(home_page_is_a_substitute(&ps, tmp.path().to_str().unwrap()));
 }
 
-// ----- moss#982: the gate is monotonic, and sees post-scan evictions -----
+// ----- the gate is monotonic, and sees post-scan evictions -----
 
 #[test]
 fn the_gate_holds_on_a_cold_open_with_files_still_in_the_cloud() {
@@ -4724,7 +5707,7 @@ fn the_gate_never_holds_once_a_generation_is_sealed() {
     // Monotonicity. This is what makes a screen with no dismissal control safe:
     // `home_waiting` is re-emitted by every build and arrivals trigger builds,
     // so a re-armable gate can slam a full-window screen over a site the user is
-    // already reading (2026-08-05-cloud-waiting-screen-redesign.md §1).
+    // already reading.
     assert!(
         !cloud_gate_should_hold(false, true, 553, false),
         "a sealed generation is servable — blocking it is never right"
@@ -4746,7 +5729,7 @@ fn the_gate_is_silent_when_nothing_is_in_the_cloud() {
 
 #[test]
 fn a_post_scan_eviction_still_raises_the_gate() {
-    // The blindness moss#982 measured: the scan count is taken before the build
+    // A known blindness: the scan count is taken before the build
     // and prunes dot-directories, so it is 0 for anything evicted afterwards.
     // The caller folds the ledger into `cloud_outstanding` precisely so this
     // case reaches the gate at all; here that is the difference between the
@@ -4799,97 +5782,69 @@ fn a_fully_local_build_leaves_the_gate_exactly_where_it_was() {
     assert!(!cloud_gate_should_hold(true, false, 553, false));
 }
 
-// ----- moss#1042: the publish decision is not the screen decision -----
+// ----- the publish decision is not the screen decision -----
+//
+// `should_publish` — which used to withhold promotion whenever
+// `structural_incomplete` was true — was deleted in a 2026-09-17
+// revision (see `pipeline.rs`'s comment where it stood). The showing
+// question below is unchanged; the publish question now lives in full-build
+// tests instead of a pure function of `structural_incomplete` — see
+// `a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site`,
+// `an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site`,
+// `an_unreadable_config_toml_still_lets_the_build_publish`, and
+// `a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen` further
+// down this file.
 
-/// The bug, stated as the smallest possible assertion. A sealed generation is
-/// what made `cloud_gate_should_hold` return `false` — correctly, there was
-/// something to look at — and the same fact was then used to justify replacing
-/// it with a build rendered from files that were not there. `should_publish`
-/// does not take that fact at all, which is the whole fix.
+/// A sealed generation is what makes `cloud_gate_should_hold` return `false`
+/// — correctly, there is something to look at — even when this build's own
+/// read was incomplete. The screen decision does not need this build to be
+/// perfect; it needs there to be something worth showing.
 #[test]
-fn a_sealed_generation_does_not_license_publishing_over_it() {
+fn a_sealed_generation_keeps_the_screen_down_even_when_this_build_is_incomplete() {
     assert!(
         !cloud_gate_should_hold(true, true, 553, true),
         "the screen stays down — the sealed generation is worth serving"
     );
-    assert!(
-        !should_publish(true),
-        "and the build that could not read its sources still may not replace it"
-    );
 }
 
-/// Media is decoration: a site whose images are still arriving is still the
-/// user's site, and publishing it is right (the placeholders are ADR-013's
-/// job). Only a structural absence withholds.
+/// Withholding the SCREEN on a cold vault rolls nothing back — there is
+/// nothing sealed to roll back to. This is the same case at the
+/// `cloud_gate_should_hold` level; the full-pipeline version lives in
+/// `a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen`.
 #[test]
-fn media_still_downloading_does_not_withhold_a_publish() {
-    assert!(should_publish(false), "553 images outstanding is not a reason to withhold");
-}
-
-/// Withholding on a cold vault rolls nothing back — there is nothing sealed to
-/// roll back to — and the screen covers the same condition. Asserted together
-/// because the pair is the safety argument: the user is never left with neither
-/// a site nor an explanation.
-#[test]
-fn a_cold_vault_withholds_and_shows_the_screen() {
-    assert!(!should_publish(true));
+fn a_cold_vault_shows_the_screen() {
     assert!(cloud_gate_should_hold(false, false, 553, true));
 }
 
-/// The gate must stay clearable. Vaults hold files moss never opens, so the
-/// provider never downloads them and their eviction is permanent — if one
-/// withheld the publish, the user would never see their site again.
+/// `structural_missing_count` must stay clearable by construction, not by
+/// policy: vaults hold files moss never opens (`.zip`, `.psd`), the provider
+/// never downloads them, and their eviction is permanent — the positive
+/// extension list in `is_structural_source` is what keeps them from ever
+/// counting here at all.
 #[test]
-fn an_evicted_file_moss_never_reads_does_not_withhold_forever() {
+fn an_evicted_file_moss_never_reads_does_not_count_as_structural() {
     let junk = vec![
         std::path::PathBuf::from("/v/archive.zip"),
         std::path::PathBuf::from("/v/art.psd"),
     ];
     assert_eq!(super::super::cloud_ledger::structural_missing_count(&junk, 0), 0);
-    assert!(should_publish(false));
 }
 
-/// `initial-build-complete` does not report the serving directory, it *sets*
-/// it — its listener in `lib.rs` calls `switch_to` with the payload path. So
-/// naming staging on a withheld build would undo the withholding through the
-/// back door, and this is the assertion that says it does not.
+/// The invariant `cloud_gate_should_hold` leans on: whenever
+/// `structural_missing_count` reports something missing, `cloud_outstanding`
+/// (the caller's `icloud_count.max(ledger)`) is also non-zero — so a
+/// structural absence never raises the screen without a cloud count to show
+/// alongside it. `structural_missing_count` only ever sees paths still in the
+/// cloud (the caller filters), and each of its two inputs is a subset of what
+/// `cloud_outstanding` counts.
 #[test]
-fn a_withheld_build_never_names_staging_as_the_serving_directory() {
-    let stage = std::path::Path::new("/v/.moss/build/staging");
-    let current = std::path::Path::new("/v/.moss/build/current");
-
-    assert_eq!(served_dir(true, true, stage, current), Some(stage), "published: staging");
-    assert_eq!(served_dir(true, false, stage, current), Some(stage), "first build, published");
-    assert_eq!(
-        served_dir(false, true, stage, current),
-        Some(current),
-        "withheld with something sealed — the user keeps their real site"
-    );
-    assert_eq!(
-        served_dir(false, false, stage, current),
-        None,
-        "withheld with nothing sealed — no directory to name; the screen owns the window"
-    );
-}
-
-/// The invariant that keeps the two decisions in step: a build moss withholds
-/// is always one the gate can explain. `cloud_ledger::structural_missing_count` only ever
-/// sees paths still in the cloud (the caller filters), and each of its two
-/// inputs is a subset of what `cloud_outstanding` counts — so `!should_publish`
-/// implies `cloud_outstanding > 0`, which is exactly what
-/// `cloud_gate_should_hold` needs to raise the screen when nothing is sealed.
-/// Without it the user gets neither a site nor an explanation.
-#[test]
-fn a_withheld_build_can_always_raise_the_screen() {
+fn structural_absence_always_implies_a_nonzero_cloud_count() {
     for (evicted, ledger) in [
         (vec![std::path::PathBuf::from("/v/index.md")], 0usize),
         (vec![], 1usize),
     ] {
         let missing = super::super::cloud_ledger::structural_missing_count(&evicted, ledger) > 0;
         assert!(missing, "precondition of this case");
-        assert!(!should_publish(missing));
-        // The caller's `cloud_outstanding` is `icloud_count.max(ledger)`, and
-        // both inputs above contribute to it — so it is at least 1 here.
         let cloud_outstanding = evicted.len().max(ledger);
         assert!(cloud_outstanding > 0);
         assert!(
@@ -4897,6 +5852,267 @@ fn a_withheld_build_can_always_raise_the_screen() {
             "nothing sealed and nothing servable — the screen must be available"
         );
     }
+}
+
+/// The publish half of a 2026-09-17 revision. Before it, a page still
+/// in the cloud made `structural_incomplete` true, and `should_publish` used
+/// that to withhold the WHOLE generation — so editing `index.md` while
+/// `keeper.md` sat offline meant neither page reached a reader. Ablate by
+/// changing `pipeline.rs`'s `let publishable = true;` back to
+/// `!structural_incomplete`: this goes red with `Promotion::Withheld`.
+///
+/// The second build's `stale_sources` assertion is the other half of that
+/// same revision — the staleness gate that replaced the withhold. It is the
+/// full-pipeline wiring `deploy/stale_sources_gate_tests.rs` points back to:
+/// this confirms `PipelineRunOutput::stale_sources` actually names the
+/// carried-forward page, and `stale_sources_gate_tests.rs` confirms
+/// `refuse_publish` acts on it once `BuildRecords` holds it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
+    fs::write(
+        test_dir.join("keeper.md"),
+        "---\ntitle: Keeper\n---\n\n# Keeper\n\nOriginal wording.\n",
+    )
+    .unwrap();
+
+    let (promotion, _keys, _stale) = build_test_promoted_or_withheld(folder_path).expect("first build");
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+    let keeper_html = test_dir.join(".moss/build.nosync/staging/keeper/index.html");
+    assert!(keeper_html.is_file(), "first build must publish the page");
+    assert_eq!(
+        load_previous_hashes(folder_path).page_meta.get("keeper.md").map(|m| m.title.as_str()),
+        Some("Keeper")
+    );
+
+    // Pre-Sonoma eviction: keeper.md's real name vanishes from the walk.
+    fs::remove_file(test_dir.join("keeper.md")).unwrap();
+    fs::write(test_dir.join(".keeper.md.icloud"), "").unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
+
+    let (promotion, keys, stale_sources) =
+        build_test_promoted_or_withheld(folder_path).expect("second build, keeper evicted");
+    assert_eq!(
+        promotion,
+        crate::build::ship::Promotion::Promoted,
+        "an unreadable page must not withhold the rest of the site"
+    );
+    assert!(
+        keys.iter().any(|k| k == "keeper/index.html"),
+        "keeper must stay in the deploy manifest: {keys:?}"
+    );
+    assert_eq!(
+        stale_sources,
+        vec!["keeper.md".to_string()],
+        "the carried-forward page must be named in PipelineRunOutput::stale_sources"
+    );
+    assert!(keeper_html.is_file(), "keeper's last-known HTML must still serve");
+    assert_eq!(
+        load_previous_hashes(folder_path).page_meta.get("keeper.md").map(|m| m.title.as_str()),
+        Some("Keeper"),
+        "keeper's old title must survive the carry-forward for nav/listing"
+    );
+
+    let home_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
+    assert!(home_html.contains("Updated"), "the rest of the site must update normally");
+}
+
+/// The stylesheet is structural too (`cloud_ledger::is_structural_source`) and
+/// — unlike `config.toml` — its eviction IS tracked through the ledger, via
+/// `read_optional_build_input`'s call to `note_unavailable`. But that call
+/// only runs once `render::blocking` has already decided there is a user
+/// stylesheet to read at all (`theme_css.exists()`), and the only eviction a
+/// test can simulate — the pre-Sonoma `.icloud` sibling — works by making the
+/// real name disappear from the walk, which reads as "no stylesheet" at that
+/// gate rather than "an evicted one". So, like `config.toml`, this never
+/// reached `structural_incomplete` and `should_publish`'s deletion changes
+/// nothing for it (the ledger path exists for the `SF_DATALESS` form, which
+/// nothing but the real file-provider extension can set — see
+/// `deploy::history::record`'s note on the same limit). This pins the
+/// `.exists()` boundary rather than the deletion.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
+    let theme_dir = test_dir.join(".moss/theme");
+    fs::create_dir_all(&theme_dir).unwrap();
+    fs::write(theme_dir.join("style.css"), "body { color: red; }").unwrap();
+
+    let (promotion, _, _) = build_test_promoted_or_withheld(folder_path).expect("first build");
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+
+    // Pre-Sonoma eviction of the stylesheet, plus an ordinary page edit.
+    fs::remove_file(theme_dir.join("style.css")).unwrap();
+    fs::write(theme_dir.join(".style.css.icloud"), "").unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
+
+    let (promotion, _, _) =
+        build_test_promoted_or_withheld(folder_path).expect("second build, stylesheet evicted");
+    assert_eq!(
+        promotion,
+        crate::build::ship::Promotion::Promoted,
+        "an unreadable stylesheet must not withhold the rest of the site"
+    );
+    let home_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
+    assert!(home_html.contains("Updated"), "the rest of the site must update normally");
+}
+
+/// `config.toml` is the odd one of the three: `.moss` sits outside the scan's
+/// walk, and `read_project_config`'s own read error is swallowed by
+/// `pipeline.rs`'s `.ok()` before `cloud_ledger::note_unavailable` ever runs.
+/// So an unreadable `config.toml` was never counted as `structural_incomplete`
+/// to begin with, and `should_publish`'s deletion changes nothing for it — this
+/// pins the boundary rather than the deletion. Ablate by changing that `.ok()`
+/// to `.expect(...)`: the build then errors before it ever seals.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_config_toml_still_lets_the_build_publish() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nHello.\n").unwrap();
+    let moss_dir = test_dir.join(".moss");
+    fs::create_dir_all(&moss_dir).unwrap();
+    let config_path = moss_dir.join("config.toml");
+    fs::write(&config_path, "[site]\ntitle = \"Test Site\"\n").unwrap();
+
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(
+        fs::read(&config_path).is_err(),
+        "mode 0o000 must genuinely block the read — as root it would not, \
+         and this test would prove nothing"
+    );
+
+    let result = build_test_promoted_or_withheld(folder_path);
+    // Restore before any assertion can panic and leave an unreadable file
+    // behind for `create_test_dir`'s cleanup.
+    fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let (promotion, _, _) =
+        result.expect("a build with an unreadable config.toml must still complete and seal");
+    assert_eq!(
+        promotion,
+        crate::build::ship::Promotion::Promoted,
+        "an unreadable config.toml must not withhold the build"
+    );
+}
+
+/// `footer.md` is the fourth structural source, and the odd one of this
+/// group: it owns no page output of its own (`footer.rs`'s own
+/// last-known-good cache is what keeps the chrome from vanishing off every
+/// OTHER page while this is true — see `apply_last_known_good_fallback`), but
+/// it is still an `.md` file the scan walks, so `is_structural_source` counts
+/// it and the same pre-Sonoma eviction technique the page test above uses
+/// reaches it too. Ablate by removing the `is_structural_source` filter from
+/// either half of `cloud_ledger::structural_stale_paths` (or its
+/// `evicted_at_scan` term) and the `stale_sources` assertion below goes red.
+///
+/// `build_test_promoted_or_withheld` calls `pipeline::run` directly rather
+/// than `build.rs`'s seal tail, so unlike production this build's
+/// `stale_sources` never reaches `BuildRecords` on its own — this test wires
+/// it in the same way `build.rs` does before checking `deploy::refuse_publish`,
+/// which is the other half of the revision this pins: showing
+/// forgives a carried-forward footer, publish must not.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_carried_forward_footer_reaches_the_staleness_gate() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
+    fs::write(test_dir.join("footer.md"), "Original footer.\n").unwrap();
+
+    let (promotion, _keys, stale_sources) =
+        build_test_promoted_or_withheld(folder_path).expect("first build");
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+    assert!(
+        stale_sources.is_empty(),
+        "a clean first build carries nothing forward: {stale_sources:?}"
+    );
+
+    // Pre-Sonoma eviction: footer.md's real name vanishes from the walk.
+    fs::remove_file(test_dir.join("footer.md")).unwrap();
+    fs::write(test_dir.join(".footer.md.icloud"), "").unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
+
+    let (promotion, _keys, stale_sources) =
+        build_test_promoted_or_withheld(folder_path).expect("second build, footer evicted");
+    assert_eq!(
+        promotion,
+        crate::build::ship::Promotion::Promoted,
+        "an unreadable footer must not withhold the rest of the site"
+    );
+    assert_eq!(
+        stale_sources,
+        vec!["footer.md".to_string()],
+        "the carried-forward footer must be named in PipelineRunOutput::stale_sources"
+    );
+    let home_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
+    assert!(home_html.contains("Updated"), "the rest of the site must update normally");
+
+    // What `build.rs`'s seal tail does with that value in production —
+    // exercised here because this harness bypasses `build.rs` entirely.
+    crate::system::build_records::records().record_stale_sources(folder_path, stale_sources);
+    let err = crate::deploy::refuse_publish(folder_path)
+        .expect_err("publish must refuse a folder that carried footer.md forward");
+    assert!(err.contains("footer.md"), "{err}");
+}
+
+/// The regression this whole revision must not reopen: a cold vault
+/// — nothing sealed yet — whose only page source is unreadable must still show
+/// the waiting screen, never a placeholder home. This is a property of
+/// `cloud_gate_should_hold`/`home_ready`, which sit upstream of and are
+/// untouched by the deleted `should_publish`; this test is the full-pipeline
+/// guard that the two stayed decoupled through the refactor.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    // A vault that has never built: index.md exists but is offline from the
+    // very first scan, exactly like a folder just cloned from a cloud drive
+    // before sync catches up.
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nHello.\n").unwrap();
+    fs::remove_file(test_dir.join("index.md")).unwrap();
+    fs::write(test_dir.join(".index.md.icloud"), "").unwrap();
+
+    let ps = scan_folder(folder_path).expect("scan");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let root = crate::vault::paths::VaultRoot::resolve(folder_path);
+    let preview_port = crate::build::ports::port_of_this_build(None, None);
+    let output = rt.block_on(async move {
+        run(
+            &root,
+            None,
+            None,
+            &preview_port,
+            None,
+            Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
+            &ps,
+            None,
+            crate::build::render::IncrementalGates::default(),
+            crate::build::feeds::search_lane::Freshness::Now,
+            &test_cache_keys(),
+        )
+        .map_err(crate::build::outcome::BuildStopped::into_message)
+    });
+    let output = output.expect("a build with no readable home must still complete, not error");
+    assert!(
+        !output.home_ready,
+        "no readable page source means no real home page was written"
+    );
+    assert!(
+        crate::build::cloud_readiness::take_gate(folder_path),
+        "a cold vault with nothing readable must raise the waiting screen"
+    );
 }
 
 /// Priority 3 of the home election is `index.pages` / `index.docx` — first-class
@@ -4979,7 +6195,7 @@ fn markdown_pages_appear_in_sealed_sources() {
 /// footers as drift, dispatched a full rebuild that could not clear them, then
 /// blamed the watcher for missing an event and recreated it — after which the
 /// folder degraded to sweep-only and the event-driven partial build stopped
-/// happening at all (harbor, 2026-08-19: `n=2` every pass, always
+/// happening at all (riverbend, 2026-08-19: `n=2` every pass, always
 /// `en/footer.md`).
 ///
 /// `everything_the_walk_judges_the_scan_consumes` did not catch it: it asserts
@@ -5105,10 +6321,11 @@ fn a_vault_whose_media_all_exists_leaves_the_publish_gate_open() {
 
 /// The presence pass is the last owner of "the manifest and the generation
 /// agree". Four entries, four fates, one call — a carried entry whose file a
-/// sync client evicted between builds is dropped; a 0-byte stub is unlinked
-/// so the next build regenerates rather than trusting it; a `_moss/math/`
-/// entry survives unreadable because the published site still serves it
-/// (ADR-030) and un-promising one deletes it from a live site; a symlink
+/// sync client evicted between builds is dropped; a 0-byte stub is dropped
+/// too, so the next build's pre-render sweep unlinks it rather than a producer
+/// trusting it; a `_moss/math/`
+/// entry survives unreadable because the published site still serves it,
+/// and un-promising one deletes it from a live site; a symlink
 /// entry survives, since `output_present` reads the link, not the target.
 #[cfg(unix)]
 #[test]
@@ -5146,7 +6363,7 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
     let mut sealed = pending.seal();
     let id_before = sealed.generation_id().to_string();
 
-    crate::build::ship::drop_absent_outputs(&stage, &mut sealed);
+    crate::build::ship::drop_absent_outputs(&stage, &mut sealed, None);
 
     assert!(sealed.files().contains_key(real.as_str()), "a real output stays");
     assert!(
@@ -5165,8 +6382,11 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
          names a path the generation does not contain, and deploy refuses the upload"
     );
     assert!(
-        !stub.to_disk(&stage).exists(),
-        "the stub is unlinked so the next build regenerates instead of trusting it"
+        stub.to_disk(&stage).exists(),
+        "the pass is read-only against staging — that tree is what the preview \
+         server is reading while the seal tail runs. The stub goes at the next \
+         build's start, via `pipeline::sweep_staging`, which finds it because \
+         this drop kept it out of `hashes.json`"
     );
     assert_ne!(
         sealed.generation_id(),
@@ -5179,7 +6399,7 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
     // Err, and `current` is never repointed — the stale preview this change
     // exists to end.
     let site = tmp.path().join("gen");
-    crate::build::ship::ship_phase(&stage, &site, &sealed, None)
+    crate::build::ship::ship_phase(&stage, &site, &sealed, None, None)
         .expect("an entry the presence pass kept unreadable must not fail the generation");
     assert!(
         !math.to_disk(&site).exists(),
@@ -5188,16 +6408,120 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
     assert!(real.to_disk(&site).exists(), "the real output still ships");
 }
 
+/// The same pass over a tree it cannot read. 404c's build read none of 822
+/// staged entries, dropped all 822, stripped the pages that referenced them and
+/// promoted an empty generation. An I/O error that is not a positive `NotFound`
+/// is no answer: the entries stay, the staged HTML is not rewritten from a
+/// blind strip set, and the generation is withheld while `current` keeps
+/// serving the last good one.
+#[cfg(unix)]
+#[test]
+fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+    use crate::build::ship::{Promotion, ShipVerdict, WithholdReason};
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(tmp.path());
+    fs::create_dir_all(mp.generation_dir("g1")).unwrap();
+    fs::write(mp.generation_dir("g1").join("index.html"), "<html>g1</html>").unwrap();
+    mp.set_current_ptr("g1").unwrap();
+
+    let stage = mp.staging_dir();
+    fs::create_dir_all(stage.join("assets")).unwrap();
+    fs::create_dir_all(stage.join("locked")).unwrap();
+    // The preview shows this render on staging; `current` is g1.
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    crate::build::lifecycle::adopt_server(&mp, &cell);
+    let (render, _) = crate::build::lifecycle::show_render(&mp, true);
+    assert_eq!(*cell.read().unwrap(), stage);
+    let html = concat!(
+        "<html><body>",
+        r#"<picture><source srcset="assets/deleted.webp" type="image/webp">"#,
+        r#"<img src="assets/deleted.jpg"></picture>"#,
+        "</body></html>\n",
+    );
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    let mut put = |rel: &str, bytes: &[u8], bucket: HashBucket, write: bool| {
+        if write {
+            fs::write(stage.join(rel), bytes).unwrap();
+        }
+        pending.register(&ServedPath::from_source(rel).unwrap(), bytes, bucket);
+    };
+    put("index.html", html.as_bytes(), HashBucket::Files, true);
+    put("assets/deleted.webp", b"gone", HashBucket::ImageVariants, false);
+    for i in 0..8 {
+        put(&format!("assets/kept{i}.css"), b"css", HashBucket::Files, true);
+    }
+    let locked: Vec<String> = (0..30).map(|i| format!("locked/f{i}.css")).collect();
+    for rel in &locked {
+        put(rel, b"css", HashBucket::Files, true);
+    }
+    let mut sealed = pending.seal();
+    assert_eq!(sealed.files().len(), 40);
+
+    let locked_dir = stage.join("locked");
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked_dir).is_ok() {
+        fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: this process can read a 0o000 directory (running as root?)");
+        return;
+    }
+
+    let verdict = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
+    let promotion = crate::build::ship::materialize_and_promote(
+        &sealed,
+        &mp,
+        &stage,
+        crate::build::ship::next_promotion_epoch(),
+        Some(render),
+        verdict.clone(),
+    );
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    for rel in &locked {
+        assert!(sealed.files().contains_key(rel), "{rel} could not be read, so it must not be dropped");
+    }
+    assert!(
+        !sealed.files().contains_key("assets/deleted.webp"),
+        "a really deleted entry is still dropped"
+    );
+    assert!(
+        matches!(&verdict, ShipVerdict::Withhold(WithholdReason::Unverified { entries: 30, .. })),
+        "got {:?}",
+        verdict
+    );
+    assert_eq!(
+        fs::read_to_string(stage.join("index.html")).unwrap(),
+        html,
+        "a withheld generation must not also rewrite the HTML the preview is serving"
+    );
+    assert!(
+        matches!(promotion, Ok(Promotion::Withheld(WithholdReason::Unverified { .. }))),
+        "got {promotion:?}"
+    );
+    assert_eq!(mp.current_generation_id().unwrap(), "g1", "`current` stays on the last good generation");
+    let generations: Vec<_> = fs::read_dir(mp.generations_dir()).unwrap().collect();
+    assert_eq!(generations.len(), 1, "no partial generation was frozen");
+    assert_eq!(
+        *cell.read().unwrap(),
+        mp.current_ptr(),
+        "the unreadable render is withdrawn: the preview goes back to the last good generation"
+    );
+}
+
 #[test]
 fn a_cmyk_jpeg_ships_as_the_original_with_no_webp_source() {
     // A CMYK JPEG is never encoded (`SkipReason::Cmyk`), but the synthesizer
     // promises `<picture><source srcset="plate.webp">` for every jpg from the
     // extension alone. Until 2026-09-05 the collector dropped the source, the
     // promise was never registered, and the published page carried a
-    // `<source>` that 404ed — which `<picture>` does not recover from
-    // (ADR-013): zhu-da's 河上花圖 rendered as nothing. Now the verdict rides
+    // `<source>` that 404ed — which `<picture>` does not recover from:
+    // a real site's painting rendered as nothing. Now the verdict rides
     // to the registration loop, the variant settles `Failed`, and the
-    // post-seal degrade pass (moss#867) removes the `<source>` so the page
+    // post-seal degrade pass removes the `<source>` so the page
     // falls through to the original `<img>`.
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -5227,7 +6551,7 @@ fn a_cmyk_jpeg_ships_as_the_original_with_no_webp_source() {
     // `build_test` stops where the seal tail (`advertise_sealed`) begins, so
     // run the tail's degrade step over the real staging page. This is the
     // same call the tail makes, against the HTML the build emitted.
-    let staging = test_dir.join(".moss/build/staging");
+    let staging = test_dir.join(".moss/build.nosync/staging");
     let html = fs::read_to_string(staging.join("index.html")).unwrap();
     assert!(html.contains("plate.webp"), "premise: the page promised the variant:\n{html}");
     let mut pending = crate::build::manifest::PendingManifest::new(Default::default());
@@ -5246,4 +6570,228 @@ fn a_cmyk_jpeg_ships_as_the_original_with_no_webp_source() {
     );
     assert!(html.contains(r#"src="/plate.jpg""#), "the original stays the image:\n{html}");
     assert!(staging.join("plate.jpg").exists(), "the original ships");
+}
+
+/// [`build_test_sealed`] with a deployed site URL: the sitemap and the feed
+/// are only written when the build has a real `https://` address to put in
+/// them.
+fn build_test_at_site_url(folder_path: &str) -> Result<Vec<String>, String> {
+    build_test_sealed_at(folder_path, Some("https://example.com"))
+}
+
+/// A site that keeps its own `feed.xml` (a podcast feed, one carried over from
+/// an imported site) keeps it: the alias for the feed's old address is only
+/// written where nothing else claims the path. Checked on a first build and on
+/// a rebuild, since the folder's files are copied in after the feed is written.
+#[test]
+fn a_feed_xml_the_folder_provides_is_never_replaced_by_the_alias() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("feed.xml"), "<rss>the author's own feed</rss>").unwrap();
+    let staging = test_dir.join(".moss/build.nosync/staging");
+
+    for build in ["first build", "rebuild"] {
+        build_test_at_site_url(folder_path).expect(build);
+        assert_eq!(
+            fs::read_to_string(staging.join("feed.xml")).unwrap(),
+            "<rss>the author's own feed</rss>",
+            "{build}: the folder's own feed.xml must win"
+        );
+        let generated = fs::read_to_string(staging.join("rss.xml")).unwrap();
+        assert!(generated.contains("<atom:link"), "{build}: rss.xml is still the generated feed: {generated}");
+    }
+}
+
+/// Pages whose source files disappear from disk without moss being told — a
+/// `git pull` bringing in someone else's deletion — must leave every
+/// whole-site listing on the very next build, not just stop being rendered.
+/// Seen on a real site: 82 pages deleted by a pull stopped rendering, but the
+/// next `sitemap.xml` still listed every one of them, so search engines were
+/// sent to 82 URLs that 404 once deployed.
+#[test]
+fn pages_deleted_outside_moss_leave_the_sitemap_on_the_next_build() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(test_dir.join("Writings/Letters")).unwrap();
+    // The marked photo gives the site a `photography/` collection page, which
+    // is written after the home page, like the redirect stubs are.
+    fs::write(
+        test_dir.join("Writings/essay.md"),
+        "---\ntitle: Essay\ndate: 2026-01-01\n---\n\nAn essay.\n\n![A photo](photo.png)\n<!-- photography -->\n",
+    )
+    .unwrap();
+    fs::write(
+        test_dir.join("Writings/Letters/first.md"),
+        "---\ntitle: First Letter\ndate: 2026-02-01\n---\n\nDear reader, the first.\n",
+    )
+    .unwrap();
+    fs::write(
+        test_dir.join("Writings/Letters/second.md"),
+        "---\ntitle: Second Letter\ndate: 2026-03-01\n---\n\nDear reader, the second.\n",
+    )
+    .unwrap();
+
+    build_test_at_site_url(folder_path).expect("first build");
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    let read = |rel: &str| fs::read_to_string(staging.join(rel)).unwrap_or_default();
+    let sitemap = read("sitemap.xml");
+    assert!(
+        sitemap.contains("https://example.com/writings/letters/first/"),
+        "premise: the first build lists the letters:\n{sitemap}"
+    );
+
+    fs::remove_dir_all(test_dir.join("Writings/Letters")).unwrap();
+    let keys = build_test_at_site_url(folder_path).expect("second build");
+
+    assert!(
+        !keys.iter().any(|k| k.contains("letters/")),
+        "premise: the deleted pages are no longer published: {keys:?}"
+    );
+    let sitemap = read("sitemap.xml");
+    assert!(sitemap.contains("https://example.com/writings/essay/"), "the surviving page stays listed:\n{sitemap}");
+    assert!(sitemap.contains("<loc>https://example.com/</loc>"), "the home page stays listed:\n{sitemap}");
+    assert!(sitemap.contains("https://example.com/photography/"), "the collection page stays listed:\n{sitemap}");
+    let still_naming: Vec<&str> = ["sitemap.xml", "rss.xml", "llms.txt", "_moss/previews.json", "writings/index.html", "index.html"]
+        .into_iter()
+        .filter(|rel| {
+            let body = read(rel);
+            assert!(!body.is_empty(), "{rel} must exist after the second build");
+            body.contains("letters/") || body.contains("Letter")
+        })
+        .collect();
+    assert!(still_naming.is_empty(), "outputs still naming a page whose source was deleted: {still_naming:?}\n{sitemap}");
+}
+
+/// The other side of the test above: a page this build could not read because
+/// it is still in the cloud keeps serving its last HTML
+/// (`carry_forward_deferred_page`), so it stays in the sitemap too. It must not
+/// be mistaken for a deleted one.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_page_still_in_the_cloud_stays_in_the_sitemap() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("keeper.md"), "---\ntitle: Keeper\n---\n\nKept.\n").unwrap();
+    build_test_at_site_url(folder_path).expect("first build");
+
+    // Pre-Sonoma eviction: keeper.md's real name vanishes from the walk.
+    fs::remove_file(test_dir.join("keeper.md")).unwrap();
+    fs::write(test_dir.join(".keeper.md.icloud"), "").unwrap();
+    let keys = build_test_at_site_url(folder_path).expect("second build, keeper evicted");
+
+    assert!(keys.iter().any(|k| k == "keeper/index.html"), "premise: keeper is still published: {keys:?}");
+    let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
+    assert!(sitemap.contains("<loc>https://example.com/keeper/</loc>"), "a page still in the cloud stays listed:\n{sitemap}");
+}
+
+/// The sitemap lists every page a reader is meant to land on, and the same set
+/// on a first build as on a rebuild. Static `.html` pages and notebook viewers
+/// are written after the sitemap, by the asset walk and the notebook step, so a
+/// rebuild used to list them only as the previous build's leftovers and a first
+/// build not at all. Redirect stubs and the noindex subscribe pages are pages
+/// too, and must never be listed.
+#[test]
+fn the_sitemap_lists_static_pages_and_notebooks_but_never_stubs() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("essay.md"), "---\ntitle: Essay\n---\n\nAn essay.\n").unwrap();
+    fs::create_dir_all(test_dir.join("demo")).unwrap();
+    fs::write(test_dir.join("demo/sketch.html"), "<html><body>sketch</body></html>").unwrap();
+    fs::write(
+        test_dir.join("analysis.ipynb"),
+        r#"{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}"#,
+    )
+    .unwrap();
+    // A rename history (a redirect stub at `old-essay/`) and a moss-hosted site
+    // (the subscribe landing pages).
+    fs::create_dir_all(test_dir.join(".moss/data")).unwrap();
+    fs::write(test_dir.join(".moss/data/redirects.json"), r#"{"old-essay/": "essay/"}"#).unwrap();
+    fs::write(test_dir.join(".moss/state.toml"), "[deployment]\nsite_id = \"test-site\"\n").unwrap();
+
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    for build in ["first build", "rebuild"] {
+        build_test_at_site_url(folder_path).expect(build);
+        for stub in ["old-essay/index.html", "subscribe/confirmed/index.html"] {
+            assert!(staging.join(stub).is_file(), "premise, {build}: {stub} is published");
+        }
+        let sitemap = fs::read_to_string(staging.join("sitemap.xml")).unwrap();
+        for listed in ["https://example.com/demo/sketch<", "https://example.com/analysis<"] {
+            assert!(sitemap.contains(listed), "{build}: the sitemap must list {listed}\n{sitemap}");
+        }
+        for unlisted in ["old-essay", "subscribe/"] {
+            assert!(!sitemap.contains(unlisted), "{build}: the sitemap must not list {unlisted}\n{sitemap}");
+        }
+    }
+}
+
+/// A warm build of an unchanged site writes no page to the stage: the render
+/// leaves its pages in memory, the slot pass is their one writer, and it skips
+/// a stage file its staged-link record vouches already holds the page's final
+/// bytes. Every stage write replaces the file (temp and rename, or a clone
+/// renamed in), so any write at all moves the page's inode and mtime.
+#[test]
+fn an_unchanged_warm_build_writes_no_page_to_the_stage() {
+    use crate::build::enhance::{EnhanceContent, EnhanceResult};
+
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("essay.md"), "---\ntitle: Essay\n---\n\nAn essay.\n").unwrap();
+    // `notes/` has no index of its own, so the build synthesizes one.
+    fs::create_dir_all(test_dir.join("notes")).unwrap();
+    fs::write(test_dir.join("notes/one.md"), "---\ntitle: One\n---\n\nA note.\n").unwrap();
+    // A photograph makes the build emit the photography collection page, and a
+    // site id makes it emit the subscribe landing pages.
+    fs::write(test_dir.join("gallery.md"), "# Gallery\n\n![Sunset](sunset.jpg)\n<!-- photography -->\n").unwrap();
+    fs::create_dir_all(test_dir.join(".moss")).unwrap();
+    fs::write(test_dir.join(".moss/state.toml"), "[deployment]\nsite_id = \"test-site\"\n").unwrap();
+    let mut slots = ResolvedSlots::empty();
+    slots.merge(
+        &EnhanceResult {
+            success: true,
+            slots: std::collections::HashMap::from([(
+                "head-end".to_string(),
+                EnhanceContent::Static { html: "<meta name=\"injected\">".to_string() },
+            )]),
+        },
+        0,
+        "test",
+    );
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    let staged_pages = || -> std::collections::BTreeMap<String, crate::build::stat::FileStat> {
+        walkdir::WalkDir::new(&staging)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "html"))
+            .map(|e| {
+                let html = fs::read_to_string(e.path()).unwrap();
+                assert!(!html.contains("<!-- slot:"), "{}: not its final bytes", e.path().display());
+                let key = e.path().strip_prefix(&staging).unwrap().to_string_lossy().into_owned();
+                (key, crate::build::stat::FileStat::of(&fs::metadata(e.path()).unwrap()))
+            })
+            .collect()
+    };
+
+    build_test(folder_path, None, None, None, None, &slots).expect("cold build");
+    let cold = staged_pages();
+    assert!(fs::read_to_string(staging.join("index.html")).unwrap().contains("<meta name=\"injected\">"));
+    for page in [
+        "index.html",
+        "essay/index.html",
+        "notes/index.html",
+        "notes/one/index.html",
+        "photography/index.html",
+        "subscribe/confirmed/index.html",
+    ] {
+        assert!(cold.contains_key(page), "premise: {page} is staged, in {:?}", cold.keys());
+    }
+    build_test(folder_path, None, None, None, None, &slots).expect("warm build");
+    let warm = staged_pages();
+
+    let rewritten: Vec<&String> = cold.keys().filter(|page| cold.get(*page) != warm.get(*page)).collect();
+    assert!(rewritten.is_empty(), "an unchanged warm build rewrote {rewritten:?}");
 }

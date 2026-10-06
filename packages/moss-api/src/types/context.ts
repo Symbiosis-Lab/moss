@@ -28,7 +28,7 @@ export interface BaseContext {
 /**
  * Context for before_build hook (process capability)
  *
- * `trigger` is stamped by moss (ADR-015): the plugin reads it to declare task
+ * `trigger` is stamped by moss: the plugin reads it to declare task
  * intent via `startTask`, it does NOT guess it. Onboarding card → "onboarding_flow"
  * (drives the ambient hairline); every build/preview rebuild → "background".
  * Optional for backward compatibility; absent ⇒ treat as "background".
@@ -133,7 +133,7 @@ export interface SetupContext {
 /**
  * Context for after_deploy hook (syndicator plugins)
  *
- * `trigger` is stamped by moss (ADR-015), same contract as
+ * `trigger` is stamped by moss, same contract as
  * {@link ProcessContext.trigger}. Syndication has exactly one production
  * caller — the Publish click — so this is always `"manual_one"`; absent
  * (older moss) ⇒ treat as `"background"`.

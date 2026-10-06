@@ -20,20 +20,20 @@ use moss_core::contract::describe::CliCommandInfo;
 ///
 /// Both `--help` screens and `moss describe` render from here, so the prose
 /// cannot drift from the table. The one thing the table does not generate is
-/// the dispatch arms — `src-tauri/src/startup/run_mode.rs` and
+/// the dispatch arms — the desktop app's startup dispatcher and
 /// `crates/moss-cli/src/main.rs` — so a command added here with no arm is
 /// advertised by both binaries and answered by neither.
 pub fn cli_commands() -> Vec<CliCommandInfo> {
     vec![
         CliCommandInfo {
             name: "build",
-            args: "<folder> [--serve] [--watch] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
-            description: "Build the site with plugins. --serve starts a local preview server when the build finishes, and --watch rebuilds on every file change. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
+            args: "<folder> [--serve [--watch]] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
+            description: "Build the site with plugins. --serve starts a local preview server when the build finishes, and --watch, which only works with --serve, rebuilds on every file change and refreshes the preview. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
         },
         CliCommandInfo {
             name: "deploy",
-            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--allow-plugins]",
-            description: "Build and deploy the site. Where it goes is the folder's to say: a prebuilt directory wins, then a `[hooks] deploy` plugin, otherwise moss hosting. A folder publishing for the first time needs `moss env <staging|production|local>` first, and then registers a site named after the folder (or --site-id) — a site ID cannot be un-minted, so moss will not pick one for a folder that never named an environment. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed, exactly as in `moss build`.",
+            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--allow-plugins] [--overwrite-newer] [--dry-run] [--accept-removals]",
+            description: "Build and deploy the site. Where it goes is the folder's to say: a prebuilt directory wins, then a `[hooks] deploy` plugin, otherwise moss hosting. A folder publishing for the first time needs `moss env <staging|production|local>` first, and then registers a site named after the folder (or --site-id) — a site ID cannot be un-minted, so moss will not pick one for a folder that never named an environment. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed, exactly as in `moss build`. A publish to moss hosting, --prebuilt included, is refused when the live site was published from another copy after this folder last published — deploying would undo that publish. Bring this folder up to date with that copy (for example, git pull) and deploy again, or pass --overwrite-newer to replace the live site anyway. A publish that would stop serving an address the site has served, for a reason other than you deleting its source (a moved page with no redirect, a generated file no longer produced), is refused with each address and its cause; add the redirect it shows under [redirects] in .moss/config.toml, or pass --accept-removals to accept losing exactly those addresses. Run with --dry-run first to see what a deploy would do: it builds exactly as a deploy builds, including any plugin the flags allow (the build may use the network as any build does: a plugin's requests, and link previews fetched from third-party sites), and prints the pages added, edited and deleted, the addresses that would go offline, the upload and remove counts measured against this folder's last publish record (unknown when there is none), and whether the publish check passes. It uploads nothing and records nothing, runs the checks a deploy makes locally (the folder has a site, the config is not from a newer moss), says when a deploy would register a site or create a signing key, exits 1 where those or the removed-address check would refuse the deploy, and says that it did not check what needs the server, such as whether another copy published since.",
         },
         CliCommandInfo {
             name: "preview",
@@ -97,8 +97,13 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "history",
-            args: "[<path>] [--json] | --save [<name>] | <path> --restore --at <id> [--copy] | --restore --at <id> --yes",
-            description: "moss's own version history, kept outside the site folder (not git): every landed publish gets a snapshot, and `--save` takes one on demand. With no path, lists the site's timeline newest first: when, whether it was a publish or a named save, a `live` marker on the version currently published, and what changed. With a path, lists that one page's timeline instead, noting when its content was not kept (over the size ceiling, or unreadable at publish time). `--save [<name>]` builds the site and saves a version of it right now. `--restore --at <id>` restores that version — a path restores just that page (`--copy` writes it beside the current file instead of overwriting it); with no path it restores the whole site, which needs `--yes` since it can move files to the Trash. `<id>` is a version's id from the timeline, or an unambiguous prefix of one. This command always operates on the site containing the current directory — it takes no folder argument.",
+            args: "[<folder>] [<path>] [--json] | [<folder>] --save [<name>] [--json] | [<folder>] <path> --restore --at <id> [--copy] | [<folder>] --restore --at <id> --yes",
+            description: "moss's own version history, kept inside the site at `.moss/history` (not git — a git user already has their own history, and this store never adds commits): every landed publish gets a snapshot, and `--save` takes one on demand. With no path, lists the site's timeline newest first: when, whether it was a publish or a named save, a `live` marker on the version currently published, and what changed. With a path, lists that one page's timeline instead, noting when its content was not kept (over the size ceiling, or unreadable at publish time). `--save [<name>]` builds the site and saves a version of it right now, ending with one line naming the version saved; `--save --json` prints that one version as a single JSON object on stdout instead (build progress and warnings still go to stderr), so a script never has to scrape the saved id out of the build log. `--restore --at <id>` restores that version — a path restores just that page (`--copy` writes it beside the current file instead of overwriting it); with no path it restores the whole site, which needs `--yes` since it can move files to the Trash. `<id>` is a version's id from the timeline, or an unambiguous prefix of one. With no folder, this command operates on the site containing the current directory; pass `<folder>` — a directory that already contains `.moss` — to act on a site from outside it, the same as `moss build <folder>`.",
+        },
+        CliCommandInfo {
+            name: "comments",
+            args: "list [<folder>] [--json] | hide [<folder>] <id>... [--source <name>] [--json] | unhide [<folder>] <id>... [--source <name>] [--json]",
+            description: "Review and hide a site's comments. `list` prints every comment, newest first: id, source, the page it is on (address and title once a build has run, otherwise the page uid), author, time, the first 60 characters of its text, and whether it is hidden; it needs no build. `hide` takes one or more ids from `list` and removes those comments, and the replies under them, from the site at the next publish; `unhide` reverses it. Nothing is erased and nothing is sent anywhere: a hide is a signed event in `.moss/data/social/moderation.jsonl`, signed with the site's own key in `.moss/identity`, which moss never creates for this (no key, no hide). A call validates every id first, so an unknown id changes nothing; an id that exists under two sources needs `--source <name>`; an already-hidden comment is left alone. Nothing reviews new comments before they go live, so list them before publishing and hide the spam. `--json` prints rows, or `{\"changed\": [...], \"unchanged\": [...]}` for hide and unhide, and failures as `{\"error\": ...}`. With no folder, this command operates on the site containing the current directory.",
         },
     ]
 }
@@ -116,7 +121,7 @@ const OWN_HELP: [&str; 7] = ["list", "doctor", "rename", "domain", "env", "impor
 /// Every one of those reads as "your argument is wrong" rather than "that flag
 /// landed in an argument slot" — and `<cmd> --help` is the first thing anyone
 /// types at a CLI they do not know, an agent most of all. Observed in the
-/// 2026-08-05 trial (docs/archive/2026-08-05-agent-surface-vs-hugo.md).
+/// 2026-08-05 trial.
 ///
 /// Drawing the text from [`cli_commands`] means a command cannot describe
 /// itself one way in `moss describe --json` and another way at `--help`.
@@ -147,6 +152,7 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("build", "moss build ~/blog/ --strict          # Fail (exit 1) if the build reported problems"),
     ("list", "moss list ~/blog/                    # Inventory every page: kind, URL, title, lang"),
     ("list", "moss list ~/blog/ --json             # Same inventory, machine-readable"),
+    ("deploy", "moss deploy ~/blog/ --dry-run        # See what a deploy would change, send nothing"),
     ("deploy", "moss deploy ~/blog/                  # Build and publish the site"),
     ("deploy", "moss deploy ~/site/ --prebuilt=_site # Upload _site/ as the site, skipping the build"),
     ("deploy", "moss deploy ~/blog/ --site-id=my-blog  # First publish: register my-blog.mosspub.com"),
@@ -164,6 +170,8 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("import", "moss import https://blog.example.com/post/ ~/Sites/me/articles/"),
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
+    ("comments", "moss comments list ~/blog/          # Every comment, newest first, hidden ones marked"),
+    ("comments", "moss comments hide ~/blog/ 12 13    # Keep comments 12 and 13 off the site at the next publish"),
 ];
 
 /// The only two flags that belong to no command. Everything else a command
@@ -172,6 +180,27 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
 /// the fact this slice exists to have one of.
 const OPTION_LINES: &str = "    -h, --help                     Show this help message
     -V, --version                  Print the version and exit";
+
+/// The one environment variable that belongs to no command. `build`, `deploy`
+/// and `history` all log through `build::cli_output::install_headless_logger`,
+/// which reads `MOSS_LOG_LEVEL` and nothing else, so `RUST_LOG` is silently
+/// ignored; without this line the only way to find the switch that turns on the
+/// timing lines was to read that source (2026-09-19, a build-speed investigation
+/// by an agent).
+///
+/// The level split is read off the `log::info!` / `log::debug!` call sites
+/// (2026-09-20, after the first wording put the `[render]` timings at `info`).
+/// At `info`: `[slots]`, `[search]` and two `[render]` summaries (all
+/// `target: "timing"`), one `[cache]` line and the `build.summary` line. Every
+/// other `[render]` line and all the `[reduce]`, `[scan]`, `[pipeline]` and
+/// `[build]` ones are `debug`. Change a call's level and this text moves with it.
+const ENVIRONMENT_LINES: &str = "    MOSS_LOG_LEVEL=<level>         Log verbosity on stderr: error, warn
+                                   (default), info or debug. `info` adds the
+                                   build.summary line (per-phase ms) and the
+                                   [slots], [search], [cache] and two [render]
+                                   summary lines; `debug` adds the per-step
+                                   [render], [reduce], [scan] and [build]
+                                   timings. RUST_LOG is not read.";
 
 /// The first sentence of a description — what a command is, without the
 /// paragraph of consequences `<cmd> --help` and `moss describe` print in full.
@@ -245,7 +274,7 @@ USING MOSS FROM A CODING AGENT:
     )
 }
 
-/// What `moss compile` gets. Renamed to `moss build` on 2026-04-24 (#554),
+/// What `moss compile` gets. Renamed to `moss build` on 2026-04-24,
 /// but shell history and old docs still carry it, and both binaries have to
 /// say the same thing — the open binary is the one an old script finds first.
 pub fn renamed_compile_hint(folder: Option<&str>) -> String {
@@ -280,6 +309,8 @@ pub fn top_level_help(version: &str, answers: &dyn Fn(&str) -> bool) -> String {
     }
     text.push_str("OPTIONS:\n");
     text.push_str(OPTION_LINES);
+    text.push_str("\n\nENVIRONMENT:\n");
+    text.push_str(ENVIRONMENT_LINES);
     text.push_str("\n\nEXAMPLES:\n");
     for (_, line) in EXAMPLE_LINES.iter().filter(|(verb, _)| answers(verb)) {
         text.push_str(&format!("    {line}\n"));
@@ -365,6 +396,31 @@ mod tests {
         );
     }
 
+    /// `MOSS_LOG_LEVEL` is the only way to see the timing lines and `RUST_LOG` is
+    /// ignored, so `--help` has to say both, and which level shows which: at
+    /// `info` a build prints its `build.summary` and a handful of `[slots]` /
+    /// `[render]` / `[cache]` summary lines, and the per-step `[render]`,
+    /// `[reduce]`, `[scan]` and `[build]` breakdown only appears at `debug`. An
+    /// earlier wording promised the `[render]` timings at `info`, where only two
+    /// `[render]` summary lines print.
+    #[test]
+    fn top_level_help_says_how_to_see_timing_output() {
+        let text = top_level_help("0.0.0", &|_| true);
+        // The block is wrapped for the terminal; compare it as words.
+        let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(text.contains("\nENVIRONMENT:\n"), "no ENVIRONMENT section:\n{text}");
+        assert!(text.contains("MOSS_LOG_LEVEL"), "MOSS_LOG_LEVEL not named:\n{text}");
+        assert!(
+            words.contains("`info` adds the build.summary line (per-phase ms) and the [slots], [search], [cache] and two [render] summary lines;"),
+            "what `info` shows is not stated:\n{text}"
+        );
+        assert!(
+            words.contains("`debug` adds the per-step [render], [reduce], [scan] and [build] timings."),
+            "what only `debug` shows is not stated:\n{text}"
+        );
+        assert!(text.contains("RUST_LOG is not read"), "RUST_LOG's silence not stated:\n{text}");
+    }
+
     /// The rendered text has to carry the argument grammar, or it is a slogan
     /// rather than help — the caller still cannot tell where the folder goes.
     #[test]
@@ -372,6 +428,35 @@ mod tests {
         let text = help_for("build").expect("build is not self-handled");
         assert!(text.starts_with("Usage: moss build "), "no usage line: {text}");
         assert!(text.contains("--strict"), "flags missing from usage: {text}");
+    }
+
+    /// `--watch` is refused without `--serve` (the refresh it drives goes out
+    /// through the preview server), so the usage must not offer it alone.
+    #[test]
+    fn build_help_nests_watch_under_serve() {
+        let text = help_for("build").expect("build is not self-handled");
+        assert!(text.contains("[--serve [--watch]]"), "usage offers --watch on its own: {text}");
+        assert!(text.contains("--watch, which only works with --serve"), "help does not say --watch needs --serve: {text}");
+    }
+
+    /// The store lives inside the site, at `.moss/history` — the store's own
+    /// `store_dir()`, which `moss history`'s plain-text timeline prints at the
+    /// end of its own output ("Versions are kept at …"). The help text used to
+    /// say the opposite ("kept outside the site folder"), which sent an agent
+    /// looking for a version store that was never there.
+    #[test]
+    fn history_help_says_versions_live_inside_the_site() {
+        let cmd = cli_commands().into_iter().find(|c| c.name == "history").expect("history is a command");
+        assert!(
+            cmd.description.contains(".moss/history"),
+            "history's --help does not say where versions actually live: {}",
+            cmd.description
+        );
+        assert!(
+            !cmd.description.contains("outside the site folder"),
+            "history's --help still claims versions are kept outside the site: {}",
+            cmd.description
+        );
     }
 
     /// `every_command_answers_help` cannot see a verb that declines rendering

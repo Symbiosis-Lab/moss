@@ -2,19 +2,17 @@
 //!
 //! Everything that crosses the moss-build ↔ moss-app boundary crosses here, and
 //! the reason this file exists as a named place rather than as a habit is that
-//! **NORTH-STAR's abort threshold is defined over its contents**: if this seam
-//! ever needs a fourth channel-shaped port, or if either named value struct
-//! grows past roughly a dozen direct members, the crate line is drawn too low
-//! and the answer is an in-crate module boundary instead of a crate
-//! (`docs/reference/target/NORTH-STAR.md`, the five-port seam and the threshold
-//! beneath it).
+//! **the target architecture's abort threshold is defined over its contents**:
+//! if this seam ever needs a fourth channel-shaped port, or if either named
+//! value struct grows past roughly a dozen direct members, the crate line is
+//! drawn too low and the answer is an in-crate module boundary instead of a
+//! crate (the five-port seam and the threshold beneath it).
 //!
 //! That threshold is a falsifier, and a falsifier is only worth anything if it
 //! is committed before the bet. It was not: this file did not exist while the
 //! first three ports were written, so the count it is supposed to catch had
 //! nowhere to be counted. Writing it down is the whole point of landing this
-//! ahead of the pipeline move
-//! (`docs/archive/2026-08-17-open-cli-without-tauri-plan.md`, step 1.5).
+//! ahead of the pipeline move.
 //!
 //! ## What is here, and what is not
 //!
@@ -24,7 +22,7 @@
 //!   the three shell signals that are not progress.
 //! - [`spawner::Spawner`] — where background work *runs*, and — by its absence
 //!   — whether there is a runtime to run it on at all.
-//! - [`announcer::SealAnnouncer`] (2026-08-24, ADR-010 extension) — the seal
+//! - [`announcer::SealAnnouncer`] (2026-08-24 extension) — the seal
 //!   tail's three state handoffs that are not `PipelineEvent`-shaped. Its
 //!   module doc argues why it is a new port rather than a fold onto
 //!   `BuildReporter`; the row-(o) raise it caused is accepted by name.
@@ -58,9 +56,9 @@
 //! threshold forbids.
 //!
 //! Value-struct members, the threshold's other clause (~a dozen is the ceiling):
-//! `CacheKeyInputs` has **1**, down from 2 when ADR-055 retired the `enhance`
+//! `CacheKeyInputs` has **1**, down from 2 when an earlier change retired the `enhance`
 //! capability and took the plugin digest with it. The live reading of this
-//! clause is `HostPorts` at 12 — see the ADR-068 note below.
+//! clause is `HostPorts` at 12 — see below.
 //!
 //! ## The reading that was missing (2026-08-27)
 //!
@@ -75,18 +73,16 @@
 //!
 //! Six of those sixteen were `Arc<dyn Fn…>` fields that are now the
 //! [`host::HostStore`] trait. That fold moves the row's number by zero on
-//! purpose — ADR-058 counts a trait method exactly as it counts a struct
+//! purpose — the abort-threshold rule counts a trait method exactly as it counts a struct
 //! member, so a fold can never be a way to get under the ceiling. What it is
 //! for is that the seam's shapes now have names.
 //!
 //! Both numbers are now read by ratchet row (o) `seam_surface` rather than by
-//! hand — 14 on the day [ADR-058] ruled on it, shrink-only from there. The
+//! hand — 14 on the day this rule was adopted, shrink-only from there. The
 //! prose above is the explanation; the row is the test, and it is the one that
 //! notices a fourth concern arriving as a fifth method.
 //!
-//! [ADR-058]: ../../../../../docs/decisions/ADR-058-the-abort-threshold-counts-seam-surface.md
-//!
-//! NORTH-STAR:125 ends that clause with "a field only one caller sets … fires
+//! The target-architecture note ends that clause with "a field only one caller sets … fires
 //! the falsifier". `CacheKeyInputs` has exactly one filler and treats that as a
 //! *defence*, which reads like a contradiction and is not: the clause is about
 //! grab-bag config structs, where a single-setter field is evidence the struct
@@ -99,15 +95,14 @@
 //! concern onto an existing trait moves no count, so any future shell signal can
 //! arrive as one more default method forever. Either the threshold counts
 //! concerns rather than ports, or the fold needs a rule about when it stops
-//! being legitimate. Recorded in the 3c amendment of
-//! `docs/reference/target/MIGRATION-STATE.md`.
+//! being legitimate.
 //!
 //! [`LivePortResolver`] found the same edge from the other side: row (o) reads
 //! trait methods and struct members, so a **closure** port — the shape this
 //! module's own prose calls "already the right shape" — adds real seam width
 //! and moves the number by zero. The row is unmoved at 14 with three ports
 //! implemented rather than two, which is under-counting, not a clean bill.
-//! moss#1066 carries it to the same ADR.
+//! That is still an open question to fold into the eventual decision.
 
 pub mod announcer;
 pub mod deploy;
@@ -125,7 +120,7 @@ pub mod spawner;
 ///
 /// ## Why a closure and not an `Option<u16>`
 ///
-/// That is what moss#1061 was. `PipelineConfig::server_port` was a value the
+/// That is what an earlier incident was. `PipelineConfig::server_port` was a value the
 /// caller resolved *before* dispatching the build, and a build carries it for
 /// as long as it runs. The cloud supervisor dispatched an arrival rebuild one
 /// second after a folder-open — fourteen seconds before `start_preview_server`
@@ -142,7 +137,7 @@ pub mod spawner;
 ///
 /// ## Why a completion without a port is worth this much trouble
 ///
-/// The cloud gate's way home (moss#964). A build that stops `Deferred` returns
+/// The cloud gate's way home. A build that stops `Deferred` returns
 /// `Err` before emitting `complete`, so the frontend never gets a port and
 /// `preview-state` has no `serverUrl`. The rebuild that lifts the gate is its
 /// last chance to get one, and a portless completion there makes `preview-state`
@@ -153,8 +148,7 @@ pub mod spawner;
 ///
 /// Not counted by ratchet row (o) `seam_surface`, which counts trait methods
 /// and value-struct members; a closure port is a type alias, exactly like
-/// `SlotResolver`. That is a gap in ADR-058's collector rather than a licence,
-/// and it is recorded as one in moss#1066.
+/// `SlotResolver`. That is a gap in the abort-threshold rule's collector rather than a licence.
 pub type LivePortResolver = std::sync::Arc<dyn Fn() -> Option<u16> + Send + Sync>;
 
 /// The resolver a build asks about its own preview port.
@@ -183,7 +177,7 @@ pub fn port_of_this_build(own: Option<u16>, live: Option<LivePortResolver>) -> L
 ///   live inside the binary, and none of them touch a source file when they
 ///   change.
 /// A second member, `plugin`, stood here until 2026-08-29: a digest over the
-/// installed *enhance* plugins' files. ADR-055 retired that capability, which
+/// installed *enhance* plugins' files. Retiring that capability
 /// left the digest scanning an empty set — it would have returned `None`
 /// forever — so it went with the hook rather than being kept as a field nobody
 /// could make non-`None`.

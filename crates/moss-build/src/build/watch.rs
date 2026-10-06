@@ -8,8 +8,8 @@
 //! [`crate::build_shell::watch`], which calls everything here and decides
 //! nothing itself. The two files are one feature; read them together.
 //!
-//! The split is why this half names no tauri — it travels to `moss-build`
-//! (ADR-050), and the other half cannot.
+//! The split is why this half names no tauri — it travels to `moss-build`,
+//! and the other half cannot.
 //!
 //! ## The debouncer delays; it does not enforce a quiet period
 //!
@@ -25,8 +25,7 @@
 //! This said the opposite until 2026-08-31 ("a resetting 250ms quiet window;
 //! 10 plugin downloads, one rebuild"), which is why a user's paired triggers
 //! read as a debounce artefact instead of as two real disk events. Coalescing
-//! past one drain happens downstream, in the worker's capacity-1 slot. See
-//! `docs/archive/2026-08-31-rebuild-pairs-per-save.md`.
+//! past one drain happens downstream, in the worker's capacity-1 slot.
 //!
 //! The loop lives inside [`notify_debouncer_full::new_debouncer`]; our wrapper
 //! forwards its batched callback onto `trigger_rebuild_with_lock`.
@@ -45,9 +44,7 @@
 //! — into a single `Modify(Name(Both))` event with `paths = [from, to]`,
 //! using inode/file-id matching. This is the unified path for both in-app
 //! and external (Finder/CLI/git) renames, replacing the previous
-//! `RebuildState.pending_renames` queue (closes issue #637).
-//!
-//! See `docs/archive/2026-05-22-editor-state-architecture.md` PR-1.
+//! `RebuildState.pending_renames` queue.
 //!
 //! ## Rebuild Coordination
 //!
@@ -69,6 +66,7 @@ use notify::EventKind;
 use notify_debouncer_full::DebouncedEvent;
 use std::path::{Path, PathBuf};
 
+use crate::build::stat::{mtime_is_racy, FileStat};
 use crate::build::types::SourceMetadata;
 
 pub mod drift;
@@ -82,7 +80,7 @@ use super::pipeline::load_previous_hashes;
 use super::BuildTrigger;
 
 
-/// Classify an actionable debounced batch (moss#922 Stage 2).
+/// Classify an actionable debounced batch.
 ///
 /// `Structural` if ANY event in the batch is a create/remove/rename — a
 /// mixed batch (e.g. one content edit + one new file) cannot be salvaged as
@@ -154,7 +152,7 @@ pub fn extract_rename_pairs(
 /// The hash-diff at the end of `do_rebuild_and_notify` decides whether to
 /// emit `FileChanged` based on (pre-rebuild hashes) vs (post-rebuild
 /// hashes). The implicit assumption is that the on-disk output tree
-/// (`.moss/build/staging/`) reflects the state hashes.json describes — moss
+/// (`.moss/build.nosync/staging/`) reflects the state hashes.json describes — moss
 /// is the only writer.
 ///
 /// When an external process wipes staging/ between ticks (iCloud "Optimize
@@ -197,9 +195,6 @@ fn previous_hashes_for_diff(folder_path: &str, output: &Path) -> SiteHashes {
 /// disk artifact a background task may have rewritten): Vite HMR's per-module
 /// version/timestamp stamping <https://vite.dev/guide/api-hmr> and webpack's
 /// `currentHash`/`lastHash` <https://webpack.js.org/concepts/hot-module-replacement/>.
-/// Full survey + references: docs/reference/editor-preview-sync.md
-/// ("Prior art & references"). This closes the §6 "baseline parity" caveat in
-/// docs/archive/2026-05-31-preview-refresh-stale-hash-race.md.
 pub fn baseline_for_rebuild(
     in_memory: Option<SiteHashes>,
     folder_path: &str,
@@ -231,14 +226,14 @@ fn compute_rebuild_event(
     // Pagefind is excluded from all three diffs. Its shards are
     // content-addressed (`zh-hant_b02cc96.pf_index`), so a re-index renames
     // every file it touches and the diff reads it as a bulk create + delete —
-    // 85 entries between two consecutive harbor generations, none of them a
+    // 85 entries between two consecutive riverbend generations, none of them a
     // change to anything the open page renders. The search UI lazy-loads the
     // bundle at query time, so a stale index in an already-open tab costs at
     // most one stale result set until the next navigation; forcing a refresh
     // (and, when the morph declines, a full reload with a flash) to avoid that
     // is the worse trade. This is the PREVIEW-REFRESH decision only — the
     // manifest and the deploy diff still carry `_moss/pagefind/**` in full,
-    // which ADR-045 requires (see `feeds/search_lane.rs`: an exemption there
+    // which is required (see `feeds/search_lane.rs`: an exemption there
     // would have the deploy read the bundle as removed and delete it live).
     let is_search = crate::build::served_path::ServedPath::is_search_asset;
     let changed_output_files: Vec<String> = new_hashes
@@ -322,12 +317,19 @@ fn find_output_for_source(source: &str, hashes: &SiteHashes) -> Option<String> {
     None
 }
 
+/// Which source files this rebuild saw appear, disappear, or change in place —
+/// the one statement of "which sources changed". Paths are project-root-
+/// relative, the keys of `SiteHashes.source_to_output` / `sources`.
+struct SourceChanges {
+    creates: Vec<String>,
+    deletes: Vec<String>,
+    modified: Vec<String>,
+}
+
 /// Diff `previous_hashes.source_to_output` against `new_hashes.source_to_output`
 /// to find which source files appeared (creates) and disappeared (deletes)
-/// this rebuild, with rename pairs deduped from both sides.
-///
-/// Returns `(creates, deletes)` in source-path domain (project-root-relative,
-/// matching the keys of `SiteHashes.source_to_output`).
+/// this rebuild, with rename pairs deduped from both sides; and the page
+/// sources' byte hashes to find which changed in place (modified).
 ///
 /// **Why dedup against `rename_pairs`:** a renamed file naturally appears as
 /// "old path disappeared, new path appeared" in the per-key diff. The watcher's
@@ -335,15 +337,25 @@ fn find_output_for_source(source: &str, hashes: &SiteHashes) -> Option<String> {
 /// emitting it ALSO as a delete + create would force the EntryRegistry to
 /// retire the EntryId (on the spurious delete) and mint a new one (on the
 /// spurious create), losing identity across rename. The dedup keeps each
-/// FS change in exactly one of the three source-domain fields.
+/// FS change in exactly one of the source-domain fields.
 ///
 /// Order of preference: rename > create > delete. A pair in `rename_pairs`
 /// occupies its source AND target paths uniquely.
+///
+/// **Modified is [`is_reload_tracked_source_key`]'s domain: pages, plus the
+/// small closed set of vault-config/theme sources** (`.moss/config.toml`,
+/// `.moss/places.toml`, `.moss/theme/style.css`, `.moss/theme/script.js`).
+/// Those hashes are the
+/// bytes this build read, or carried forward because it provably did not need
+/// to; every other `sources` entry — images, and any other css/toml/yaml/json
+/// the generic passthrough walk happens to hash — is refreshed by the
+/// background asset walk AFTER this snapshot is taken, so including one would
+/// surface a rebuild late.
 fn compute_source_change_set(
     new_hashes: &SiteHashes,
     previous_hashes: &SiteHashes,
     rename_pairs: &[(String, String)],
-) -> (Vec<String>, Vec<String>) {
+) -> SourceChanges {
     let renamed_old: std::collections::HashSet<&str> =
         rename_pairs.iter().map(|(o, _)| o.as_str()).collect();
     let renamed_new: std::collections::HashSet<&str> =
@@ -367,7 +379,23 @@ fn compute_source_change_set(
         .collect();
     deletes.sort();
 
-    (creates, deletes)
+    // A page deleted in an earlier rebuild keeps its hash in the source cache,
+    // so one recreated (or renamed onto) under the same name reads as moved:
+    // it is a create or a rename, and already named there.
+    let mut modified: Vec<String> = new_hashes
+        .sources
+        .iter()
+        .filter(|(src, meta)| {
+            crate::build::manifest::is_reload_tracked_source_key(src)
+                && previous_hashes.sources.get(src.as_str()).is_some_and(|prev| prev.hash != meta.hash)
+                && creates.binary_search(src).is_err()
+                && !renamed_new.contains(src.as_str())
+        })
+        .map(|(src, _)| src.clone())
+        .collect();
+    modified.sort();
+
+    SourceChanges { creates, deletes, modified }
 }
 
 /// Compose a `FileChangeEvent` from the output-hash diff plus the watcher's
@@ -375,7 +403,6 @@ fn compute_source_change_set(
 /// behaviors:
 ///
 /// PATTERN 6 — INODE+FILE-ID PAIRING via notify-debouncer-full
-/// see docs/archive/2026-05-22-editor-state-architecture.md
 ///
 /// 1. For each `(old_source_path, new_source_path)` pair from the watcher's
 ///    stitched rename events, looks up the OLD output path in
@@ -453,13 +480,13 @@ fn build_rebuild_event_with_renames(
     // deletion under the in-memory-hash path. Computed before the diff so its
     // mapped output deletions are merged into `deleted_paths` *before* the
     // rename-suppression pass below.
-    let (source_creates, source_deletes) =
+    let SourceChanges { creates, deletes, modified } =
         compute_source_change_set(new_hashes, previous_hashes, rename_pairs);
 
     // Map source-domain deletions to OUTPUT-domain paths via the PREVIOUS
     // manifest (which still holds the deleted page's source→output mapping) so
     // they reach `deleted_paths` and the frontend redirects the preview home.
-    let mapped_deletes: Vec<String> = source_deletes
+    let mapped_deletes: Vec<String> = deletes
         .iter()
         .filter_map(|src| find_output_for_source(src, previous_hashes))
         .collect();
@@ -495,22 +522,22 @@ fn build_rebuild_event_with_renames(
         event = Some(e);
     }
 
-    // Source-domain fields: surface the per-source changes the watcher detected
-    // (and that compute_rebuild_event/output_pairs intentionally collapsed to
-    // output-domain). Consumed by the EntryRegistry per
-    // docs/archive/2026-05-25-entry-id-architecture.md.
-    let source_changes_present = !source_creates.is_empty()
-        || !source_deletes.is_empty()
+    // Source-domain fields: surface the per-source changes that
+    // compute_rebuild_event/output_pairs collapse to output-domain. The file
+    // registry consumes creates/deletes/renames; the editor reloads an open
+    // file named in `modified_paths`. A modification alone emits even when no
+    // output changed — the editor needs it when the preview has nothing to do.
+    let source_changes_present = !creates.is_empty()
+        || !deletes.is_empty()
+        || !modified.is_empty()
         || !rename_pairs.is_empty();
 
     if source_changes_present {
         let mut e = event.unwrap_or_else(FileChangeEvent::new);
-        if !source_creates.is_empty() {
-            e.source_creates = Some(source_creates);
-        }
-        if !source_deletes.is_empty() {
-            e.source_deletes = Some(source_deletes);
-        }
+        let non_empty = |v: Vec<String>| (!v.is_empty()).then_some(v);
+        e.source_creates = non_empty(creates);
+        e.source_deletes = non_empty(deletes);
+        e.modified_paths = non_empty(modified);
         if !rename_pairs.is_empty() {
             e.source_renames = Some(rename_pairs.to_vec());
         }
@@ -555,8 +582,7 @@ pub fn decide_rebuild_event(
 // Content-hash gate: suppress watcher events when the files they reference are
 // byte-identical to the prior build's source manifest. Breaks the runaway
 // rebuild loop induced by cloud-sync providers (Dropbox, iCloud) that re-emit
-// metadata events for files moss just read. See
-// docs/archive/2026-04-23-watcher-content-hash-gate.md.
+// metadata events for files moss just read.
 // ---------------------------------------------------------------------------
 
 /// Outcome of comparing a watcher event's file against the stored source manifest.
@@ -573,14 +599,13 @@ pub(crate) enum SourceCheck {
 /// Compare a file on disk against its previous `SourceMetadata`.
 ///
 /// 1. If size differs → `Changed` (short-circuit; avoid hashing huge files).
-/// 2. If size matches AND the mtime matches at full nanosecond precision →
-///    `Unchanged` (fast path). This requires an mtime on BOTH sides: the
-///    filesystem must report one now, and the manifest must carry
-///    `mtime_nanos` (written since this field existed, from a filesystem
-///    that had an mtime). A missing mtime anywhere, or a manifest with only
-///    whole-second precision, falls through to hashing — a whole-second
-///    match cannot rule out a same-size rewrite in the same second, and a
-///    size-only match must never suppress.
+/// 2. If the recorded stat still vouches for the file
+///    ([`FileStat::vouches_for`]) → `Unchanged` (fast path). With no capture
+///    clock here, that takes a non-zero sub-second mtime on BOTH sides that
+///    agrees: a missing mtime anywhere, a manifest with only whole-second
+///    precision, or an exact-zero reading falls through to hashing — a
+///    whole-second match cannot rule out a same-size rewrite in the same
+///    second, and a size-only match must never suppress.
 /// 3. Otherwise → read and hash; compare to `meta.hash`.
 ///    - Hash match → `Unchanged`.
 ///    - Hash mismatch → `Changed`.
@@ -589,46 +614,12 @@ pub(crate) fn source_metadata_matches(meta: &SourceMetadata, fs_path: &Path) -> 
     source_metadata_matches_at(meta, fs_path, None)
 }
 
-/// One timestamp granularity, generously: exFAT stores mtimes at 2s
-/// resolution and SMB servers round to 1–2s, so a write landing inside this
-/// window of the manifest's capture could share the recorded mtime while
-/// carrying different bytes.
-pub(crate) const RACY_WRITE_EPSILON_SECS: u64 = 2;
-
-/// git's racily-clean rule: is this entry's mtime too close to the moment
-/// the manifest was captured to trust a whole-timestamp match?
-///
-/// `captured_at` is [`SiteHashes::captured_at`]; `None` (old manifest, no
-/// clock) fails open — nothing is suspect, the fast path keeps working.
-/// A racy entry is not "changed" — it merely loses the fast path and is
-/// disposed of by the hash tier.
-///
-/// The window is TWO-sided (`|mtime − captured_at| ≤ ε`), deliberately. The
-/// racy case is a write straddling the capture moment; a recorded mtime far
-/// in the FUTURE (a file synced from a device with a fast clock) is not
-/// ambiguous — a later change would move it off the recorded value like any
-/// other mtime. One-sided (`mtime + ε ≥ cap`) marked every future-dated file
-/// racy forever, which on a 2s sweep cadence meant re-hashing it every pass
-/// for the life of the session.
-pub(crate) fn mtime_is_racy(meta: &SourceMetadata, captured_at: Option<u64>) -> bool {
-    match captured_at {
-        Some(cap) => meta.mtime.abs_diff(cap) <= RACY_WRITE_EPSILON_SECS,
-        None => false,
-    }
-}
-
-/// Both sides reported a value and they disagree. Absence on either side is
-/// agreement (fail open) — old manifests and platforms without the field
-/// must not lose the fast path forever.
-fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Option<T>) -> bool {
-    matches!((recorded, current), (Some(a), Some(b)) if a != b)
-}
-
-/// [`source_metadata_matches`] with the sweep's two demotions armed:
-/// ctime/inode disagreement (userland can forge mtime but not ctime, and
-/// replace-via-rename changes the inode) and the racy-write guard. Both only
-/// ever route to the hash tier — they can never suppress, so a false
-/// positive costs one hash and self-absorbs.
+/// [`source_metadata_matches`] against the manifest's capture clock,
+/// [`SiteHashes::captured_at`](crate::types::content::SiteHashes::captured_at):
+/// the racy-write window ([`mtime_is_racy`]) arms, and an exact-zero sub-second
+/// mtime comfortably older than the capture can fast-path (see
+/// [`FileStat::vouches_for`]). The window only ever routes to the hash tier —
+/// it can never suppress, so a false positive costs one hash and self-absorbs.
 pub(crate) fn source_metadata_matches_at(
     meta: &SourceMetadata,
     fs_path: &Path,
@@ -666,10 +657,11 @@ pub(crate) enum SourceVerdict {
 }
 
 /// The verdict core, over a caller-supplied stat. The three-tier compare
-/// itself: size, then trusted mtime(ns), then hash — with the sweep's two
-/// demotions armed (ctime/inode disagreement, racy-write window). Both
-/// demotions only ever route to the hash tier — they can never suppress, so
-/// a false positive costs one hash and, via `refreshed`, absorbs itself.
+/// itself: size, then the stat record ([`FileStat::vouches_for`]: mtime to the
+/// sub-second, ctime/inode disagreement, racy-write window), then hash. Every
+/// way the stat tier declines only routes to the hash tier — it can never
+/// suppress, so a false positive costs one hash and, via `refreshed`, absorbs
+/// itself.
 ///
 /// Taking `md` as a parameter is what lets the sweep reuse the stat its walk
 /// already paid for instead of stat'ing every file a second time per pass.
@@ -679,26 +671,21 @@ pub(crate) fn source_metadata_verdict(
     fs_path: &Path,
     captured_at: Option<u64>,
 ) -> SourceVerdict {
-    use std::time::UNIX_EPOCH;
-
     // Size differs: content definitely changed. Don't hash (file may be huge).
     if md.len() != meta.size {
         return SourceVerdict::Changed;
     }
 
-    let (fs_ctime, fs_inode) = crate::build::types::stat_identity(md);
-    let fast_path_trusted = !identity_disagrees(meta.ctime, fs_ctime)
-        && !identity_disagrees(meta.inode, fs_inode)
-        && !mtime_is_racy(meta, captured_at);
-
-    let fs_mtime = md
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-    if let (true, Some(d), Some(nanos)) = (fast_path_trusted, fs_mtime, meta.mtime_nanos) {
-        if d.as_secs() == meta.mtime && d.subsec_nanos() == nanos {
-            return SourceVerdict::Unchanged { refreshed: None };
-        }
+    // The racy window on top of the shared rule, for a real sub-second mtime
+    // too. Records are stat'd before their bytes are read, so an equal stamp
+    // is the same write wherever the sub-second field is as fine as it looks;
+    // some filesystems store it coarser but non-zero (exFAT in 10ms steps,
+    // NTFS over SMB in 100ns), where two writes in one step read the same.
+    // The window sends an mtime near the capture to the hash tier, which
+    // catches such a pair when the read was close to the capture.
+    let current = FileStat::of(md);
+    if !mtime_is_racy(meta.mtime, captured_at) && meta.stat().vouches_for(&current, captured_at) {
+        return SourceVerdict::Unchanged { refreshed: None };
     }
 
     // No trustworthy mtime match: hash to disambiguate.
@@ -712,16 +699,7 @@ pub(crate) fn source_metadata_verdict(
     let computed = format!("{:x}", hasher.finalize());
 
     if computed == meta.hash {
-        SourceVerdict::Unchanged {
-            refreshed: Some(SourceMetadata {
-                hash: meta.hash.clone(),
-                size: md.len(),
-                mtime: fs_mtime.map(|d| d.as_secs()).unwrap_or(meta.mtime),
-                mtime_nanos: fs_mtime.map(|d| d.subsec_nanos()).or(meta.mtime_nanos),
-                ctime: fs_ctime,
-                inode: fs_inode,
-            }),
-        }
+        SourceVerdict::Unchanged { refreshed: Some(SourceMetadata::from_stat(meta.hash.clone(), current)) }
     } else {
         SourceVerdict::Changed
     }
@@ -878,9 +856,8 @@ pub(crate) fn should_gate_modify_event(kind: notify::EventKind) -> bool {
 
 /// What the pump may decide about one event WITHOUT touching file contents.
 ///
-/// Phase 1b of `docs/archive/2026-08-18-watcher-reliability-architecture.md`
-/// ("The pump … never touches the disk — the content-hash gate's stat+SHA-256
-/// moves to the build worker"): the event loop applies only the cheap
+/// The pump … never touches the disk — the content-hash gate's stat+SHA-256
+/// moves to the build worker: the event loop applies only the cheap
 /// verdicts here; the hash tier (`should_rebuild_for_paths`) runs at the
 /// worker's admission, where a wedged read costs one parked build instead of
 /// the whole event loop.
@@ -915,6 +892,15 @@ pub fn pump_gate(kind: notify::EventKind, folder_path: &str, paths: &[PathBuf]) 
         return PumpGate::Proceed;
     }
     if !should_gate_modify_event(kind) {
+        return PumpGate::Proceed;
+    }
+    // Only markdown source metadata is final when `run_pipeline` records the
+    // in-memory gate baseline. Passthrough and media files are copied by the
+    // background coordinator after that stash, so their entries can still
+    // describe the previous build. Gating one of those modifies can therefore
+    // discard an edit or undo while staging serves different bytes.
+    let all_markdown = !paths.is_empty() && paths.iter().all(|path| crate::build::scan::classify::is_page_path(path));
+    if !all_markdown {
         return PumpGate::Proceed;
     }
     PumpGate::DeferHashCheck
@@ -1003,7 +989,7 @@ pub fn source_asset_request_paths(
             .map(|e| e.to_lowercase());
         let eligible = match ext.as_deref() {
             Some(e) if IMAGE_EXTENSIONS.contains(&e) => structural || content_modify,
-            Some("md") | Some("markdown") => false,
+            Some(e) if crate::build::scan::classify::is_page_source(e) => false,
             Some(e) => {
                 structural
                     && (moss_core::resolve::asset_registry::asset_info(e).is_some()
@@ -1037,7 +1023,7 @@ fn request_path_under_root(root: &Path, abs: &Path) -> Option<String> {
 
     // Only Normal components allowed (no "..", ".", prefix roots).
     // Also exclude any component that matches is_excluded_dir_name (e.g. `.moss`,
-    // `node_modules`, `.git`) so build-output images written under `.moss/build/`
+    // `node_modules`, `.git`) so build-output images written under `.moss/build.nosync/`
     // never flood the editor with SourceAssetChanged events.
     let mut parts: Vec<String> = Vec::new();
     for comp in rel.components() {
@@ -1098,10 +1084,10 @@ pub fn collect_raw_create_keys(
 /// second list had already drifted: it excluded `.moss/`, `.git/` and `node_modules/`,
 /// but not a root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`, which the tree hides and which
 /// **moss writes itself** when agent-file sync is on. So the common case — moss creating
-/// the very file it hides — announced a path no row could match (#955).
+/// the very file it hides — announced a path no row could match.
 fn raw_create_key(root: &Path, abs: &Path) -> Option<String> {
-    // path_is_watchable rejects dotfiles/dirs (e.g. `.git`, `.secret.md`) ANYWHERE in the
-    // path and `node_modules`. It is still needed alongside `is_hidden`, which only
+    // path_is_watchable rejects dot-dirs (e.g. `.git`), `node_modules` and nested sites
+    // ANYWHERE in the path, and a dotfile that is not a page (`.secret.jpg`). It is still needed alongside `is_hidden`, which only
     // applies its dotfile rule at the project root. It does NOT exclude all `.moss/`
     // subdirs — it explicitly allows `.moss/theme/`, `.moss/data/social/`,
     // `.moss/assets/`, `config.toml` (see `should_watch_moss_file`); the component loop

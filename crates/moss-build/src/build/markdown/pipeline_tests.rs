@@ -161,13 +161,13 @@ fn build_asset_snapshot_slug_collision_is_deterministic() {
 /// content too short for `whatlang` to detect, the doc should fall back
 /// to the site's default language — not a hard-coded English.
 ///
-/// Regression for issue #545. Mirrors the real-world failure on the 刘果
-/// vault: a Chinese-default site with `视频/冬日之歌.md` (~13 CJK chars
+/// Regression: mirrors a real-world failure on a
+/// Chinese-default site where a short post (~13 CJK chars
 /// of body) was rendering with `lang=en`, mislabeling it across the
 /// HTML lang attribute, language switcher, and pages-by-lang queries.
 #[test]
 fn short_doc_with_no_signal_uses_site_default_lang() {
-    let md = "---\ntitle: 冬日之歌\n---\n\n短。";
+    let md = "---\ntitle: 山间小曲\n---\n\n短。";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "videos/winter-song.md",
@@ -177,20 +177,42 @@ fn short_doc_with_no_signal_uses_site_default_lang() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.lang, Language::ZhHans);
+}
+
+/// `author:` already lowers into `ParsedDocument.author`; `editor:`/`jury:`
+/// are new fields added beside it in the same struct literal (task A3) and
+/// must lower the same way, through the same field-agnostic
+/// `deserialize_name_list`/`serialize_name_list` normalizer.
+#[test]
+fn editor_and_jury_frontmatter_lower_into_parsed_document_beside_author() {
+    let md = "---\ntitle: Committee Notes\nauthor: Ada Lin\neditor: Kane\njury:\n  - Kane\n  - Kaneda\n---\n\nBody.\n";
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "posts/committee-notes.md",
+        md,
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("should parse");
+    assert_eq!(doc.author, vec!["Ada Lin".to_string()]);
+    assert_eq!(doc.editor, vec!["Kane".to_string()]);
+    assert_eq!(doc.jury, vec!["Kane".to_string(), "Kaneda".to_string()]);
 }
 
 /// Step 5: `transform_events` captures the first markdown-origin
@@ -209,17 +231,11 @@ fn body_cover_path_captures_first_markdown_image() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(
@@ -245,17 +261,11 @@ fn body_cover_path_skips_raw_html_img_in_markdown() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(
@@ -289,17 +299,11 @@ fn body_cover_path_none_when_document_has_no_images() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.body_cover_path, None);
@@ -318,17 +322,11 @@ fn frontmatter_lang_overrides_site_default() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.lang, Language::En);
@@ -337,8 +335,7 @@ fn frontmatter_lang_overrides_site_default() {
 /// Article with no frontmatter title and no body H1 — the page must render
 /// with an injected <h1 class="moss-article-title"> derived from the
 /// title-cased filename. This matches the Obsidian convention where the
-/// filename IS the document title. See
-/// docs/archive/2026-04-28-auto-h1-injection-design.md.
+/// filename IS the document title.
 #[test]
 fn article_without_h1_or_title_injects_filename_as_h1() {
     let md = "短文章正文。\n";
@@ -351,17 +348,11 @@ fn article_without_h1_or_title_injects_filename_as_h1() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -387,17 +378,11 @@ fn article_with_frontmatter_title_injects_title() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -427,17 +412,11 @@ fn nav_page_suppresses_injected_article_title() {
         false,
         Language::En,
         None,
-        false,
-        true,
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        true, // has_content_folders → organized → root file is a nav page
-        None, // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -459,17 +438,11 @@ fn non_nav_article_still_injects_title() {
         false,
         Language::En,
         None,
-        false,
-        true,
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        true,
-        None, // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -494,17 +467,11 @@ fn nav_false_restores_article_title() {
         false,
         Language::En,
         None,
-        false,
-        true,
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        true, // organized mode; nav: false opts out even though it would auto-qualify
-        None, // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -526,17 +493,11 @@ fn nav_page_keeps_authored_body_h1() {
         false,
         Language::En,
         None,
-        false,
-        true,
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        true,
-        None, // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -570,17 +531,11 @@ fn strict_contract_section_number_h1_does_not_suppress_injection() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     // Title must be injected from the filename (verbatim case).
@@ -593,7 +548,7 @@ fn strict_contract_section_number_h1_does_not_suppress_injection() {
     // The body section H1 must still be present.
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"1.\">1.<a class=\"moss-heading-anchor\" href=\"#1.\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"1.\">1.</h1>"
             ),
             "body section H1 must be preserved, got: {}",
             doc.html_content
@@ -616,17 +571,11 @@ fn strict_contract_leading_blockquote_then_section_h1_injects_title() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -668,17 +617,11 @@ fn matching_leading_body_h1_is_kept_alongside_injected_title() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     // Two H1s now: the injected article title AND the authored body H1.
@@ -711,17 +654,11 @@ fn dedup_does_not_strip_when_text_differs() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -732,7 +669,7 @@ fn dedup_does_not_strip_when_text_differs() {
     );
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"inner\">Inner<a class=\"moss-heading-anchor\" href=\"#inner\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"inner\">Inner</h1>"
             ),
             "body H1 'Inner' must be preserved (differs from resolved heading), got: {}",
             doc.html_content
@@ -753,17 +690,11 @@ fn dedup_does_not_strip_buried_h1_matching_filename() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -773,11 +704,11 @@ fn dedup_does_not_strip_buried_h1_matching_filename() {
         doc.html_content
     );
     // Buried 'Page' H1 still present (matches filename but not at lead position).
-    // The body heading carries the slug id + permalink anchor; the injected
-    // title H1 (above) carries the class and no anchor.
+    // The body heading carries the slug id; neither it nor the injected
+    // title H1 (above) carries a permalink anchor — level-1 headings never do.
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"page\">Page<a class=\"moss-heading-anchor\" href=\"#page\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"page\">Page</h1>"
             ),
             "buried matching H1 must NOT be stripped (it's a section header), got: {}",
             doc.html_content
@@ -799,17 +730,11 @@ fn article_with_differing_body_h1_renders_both() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -820,7 +745,7 @@ fn article_with_differing_body_h1_renders_both() {
     );
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"body-heading\">Body Heading<a class=\"moss-heading-anchor\" href=\"#body-heading\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"body-heading\">Body Heading</h1>"
             ),
             "differing body H1 must be preserved as a section header, got: {}",
             doc.html_content
@@ -846,17 +771,11 @@ fn article_with_empty_title_suppresses_injection() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -869,10 +788,9 @@ fn article_with_empty_title_suppresses_injection() {
 /// Index page (folder index) with no body H1 — moss must NOT inject.
 /// Index pages typically open with a hero or designed landing layout
 /// where a stacked text H1 would compete with the visual header.
-/// See docs/archive/2026-04-28-auto-h1-injection-design.md.
 #[test]
 fn index_page_without_h1_does_not_inject() {
-    let md = "---\ntitle: Yin Lab @ NYU\n---\n\nWelcome.\n";
+    let md = "---\ntitle: Ocean Lab @ Example University\n---\n\nWelcome.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "main.md",
@@ -882,17 +800,11 @@ fn index_page_without_h1_does_not_inject() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -902,31 +814,25 @@ fn index_page_without_h1_does_not_inject() {
     );
 }
 
-/// Self-named folder index (`刘果/刘果.md`) — recognized as an index by
+/// Self-named folder index (`山居/山居.md`) — recognized as an index by
 /// moss_core::home::is_home_file. Must not inject.
 #[test]
 fn self_named_folder_index_does_not_inject() {
     let md = "欢迎。\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
-        "刘果/刘果.md",
+        "山居/山居.md",
         md,
         "site",
         &empty_map,
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -954,19 +860,28 @@ fn parse_for_test(file_path: &str, md: &str, root: Option<&str>) -> ParsedDocume
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("parse should succeed")
+}
+
+/// `nav_label` lands on the document beside `title`, which it never replaces;
+/// a blank value is the same as none.
+#[test]
+fn nav_label_is_carried_beside_the_title_and_blank_is_unset() {
+    let doc = parse_for_test("reading.md", "---\ntitle: Course of Reading\nnav_label: Reading\n---\nBody.\n", None);
+    assert_eq!(doc.nav_label.as_deref(), Some("Reading"));
+    assert_eq!(doc.title, "Course of Reading");
+    assert_eq!(doc.label, "Course of Reading");
+    assert_eq!(doc.nav_text(), "Reading");
+
+    let blank = parse_for_test("reading.md", "---\ntitle: Course of Reading\nnav_label: \"  \"\n---\nBody.\n", None);
+    assert_eq!(blank.nav_label, None);
+    assert_eq!(blank.nav_text(), "Course of Reading");
 }
 
 /// Self-named folder note `Research/Research.md`: a paragraph then `# Method`.
@@ -982,7 +897,7 @@ fn folder_index_title_uses_folder_name_not_body_h1() {
     );
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"method\">Method<a class=\"moss-heading-anchor\" href=\"#method\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"method\">Method</h1>"
             ),
             "authored body H1 'Method' must be kept verbatim, got: {}",
             doc.html_content
@@ -998,7 +913,7 @@ fn folder_index_leading_body_h1_is_not_stripped() {
     assert_eq!(doc.title, "notes");
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"foo\">Foo<a class=\"moss-heading-anchor\" href=\"#foo\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"foo\">Foo</h1>"
             ),
             "leading body H1 must be retained (no dedup), got: {}",
             doc.html_content
@@ -1013,7 +928,7 @@ fn folder_index_title_frontmatter_wins_and_body_h1_kept() {
     assert_eq!(doc.title, "Custom Title");
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"other\">Other<a class=\"moss-heading-anchor\" href=\"#other\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"other\">Other</h1>"
             ),
             "body H1 kept, got: {}",
             doc.html_content
@@ -1030,7 +945,7 @@ fn homepage_body_h1_is_kept_verbatim_no_injection() {
     let doc = parse_for_test("index.md", md, Some("MySite"));
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"welcome\">Welcome<a class=\"moss-heading-anchor\" href=\"#welcome\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"welcome\">Welcome</h1>"
             ),
             "homepage body H1 must be kept verbatim, got: {}",
             doc.html_content
@@ -1038,6 +953,77 @@ fn homepage_body_h1_is_kept_verbatim_no_injection() {
     assert!(
         !doc.html_content.contains("moss-article-title"),
         "homepage must NOT inject a filename title h1, got: {}",
+        doc.html_content
+    );
+}
+
+/// The home page (`process_markdown_file`'s `is_homepage: true`, the same
+/// fact that makes `build/render/html.rs` emit `<body data-page="home">`)
+/// suppresses every heading's `#` permalink anchor, not only level 1's. A
+/// reader lands on the home page by visiting the site, never by a deep link
+/// into one of its sections, so a `## Section` there gets no anchor either
+/// — contrast with `ordinary_page_heading_keeps_h2_permalink_anchor` below,
+/// where the identical body renders WITH the anchor because `is_homepage`
+/// is false.
+#[test]
+fn homepage_heading_suppresses_h2_permalink_anchor() {
+    let md = "---\n---\n## Section\n\nhome body\n";
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "index.md",
+        md,
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext { has_content_folders: false, seta_url: None, folder_lang: None, is_homepage: true },
+    )
+    .expect("should parse");
+    assert!(
+        doc.html_content.contains("<h2 id=\"section\">Section</h2>"),
+        "home page H2 must keep its id, just not the permalink anchor, got: {}",
+        doc.html_content
+    );
+    assert!(
+        !doc.html_content.contains("moss-heading-anchor"),
+        "home page headings must carry no permalink anchor at any level, got: {}",
+        doc.html_content
+    );
+}
+
+/// Same body as `homepage_heading_suppresses_h2_permalink_anchor`, on an
+/// ordinary (non-home) page: the `## Section` heading keeps its permalink
+/// anchor, same as always. Proves the suppression above is specific to the
+/// home page, not a side effect of the level-2 heading itself.
+#[test]
+fn ordinary_page_heading_keeps_h2_permalink_anchor() {
+    let md = "---\n---\n## Section\n\nbody\n";
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "posts/note.md",
+        md,
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("should parse");
+    assert!(
+        doc.html_content.contains(
+            "<h2 id=\"section\">Section<a class=\"moss-heading-anchor\" href=\"#section\" aria-label=\"Permalink to this section\"></a></h2>"
+        ),
+        "ordinary page H2 must keep its permalink anchor, got: {}",
         doc.html_content
     );
 }
@@ -1068,9 +1054,9 @@ fn article_body_h1_matching_title_is_not_deduped() {
 /// inject. The hero block is extracted out of the markdown body before
 /// rendering and placed at template level, so a body-H1 lookup against
 /// `html_content` alone returns None. The injection gate must also check
-/// `hero_html`. Regression for the SoCiviC daowu page.
+/// `hero_html`. Regression from a real site's hero page.
 /// Filename case is preserved verbatim. An author who writes a stem like
-/// `Farewell, and Erase on BroadwayWorld` gets exactly that as the
+/// `Hello, and Goodbye on NewsWire` gets exactly that as the
 /// injected H1 — no per-word title-casing that would change `and` to
 /// `And` or `on` to `On`. Hyphens and underscores still become spaces.
 #[test]
@@ -1078,29 +1064,23 @@ fn filename_title_preserves_case_verbatim() {
     let md = "Body text.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
-        "news/Farewell, and Erase on BroadwayWorld.md",
+        "news/Hello, and Goodbye on NewsWire.md",
         md,
         "site",
         &empty_map,
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
         doc.html_content
-            .contains("<h1 class=\"moss-article-title\">Farewell, and Erase on BroadwayWorld</h1>"),
+            .contains("<h1 class=\"moss-article-title\">Hello, and Goodbye on NewsWire</h1>"),
         "expected verbatim filename heading, got: {}",
         doc.html_content
     );
@@ -1122,17 +1102,11 @@ fn filename_title_no_longer_capitalizes_kebab_case() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -1145,27 +1119,21 @@ fn filename_title_no_longer_capitalizes_kebab_case() {
 
 #[test]
 fn article_with_h1_inside_hero_block_does_not_inject() {
-    let md = "---\ntitle: A House of Daowu\n---\n\n:::hero\n# A House of Daowu\n:::\n\nBody.\n";
+    let md = "---\ntitle: A House of Paper\n---\n\n:::hero\n# A House of Paper\n:::\n\nBody.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
-        "work/daowu.md",
+        "work/paper-house.md",
         md,
         "site",
         &empty_map,
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -1184,27 +1152,21 @@ fn article_with_an_image_only_hero_still_renders_its_title() {
     // page with no visible heading at all. One site adopted covers site-wide
     // and lost the title on 87 pages; nothing failed, because `<title>`, the
     // OG tags and RSS resolve the same text by other paths.
-    let md = "---\ntitle: A House of Daowu\n---\n\n:::hero {image=assets/cover.jpg}\n:::\n\nBody.\n";
+    let md = "---\ntitle: A House of Paper\n---\n\n:::hero {image=assets/cover.jpg}\n:::\n\nBody.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
-        "work/daowu.md",
+        "work/paper-house.md",
         md,
         "site",
         &empty_map,
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -1213,7 +1175,7 @@ fn article_with_an_image_only_hero_still_renders_its_title() {
         doc.html_content
     );
     assert!(
-        doc.html_content.contains("A House of Daowu"),
+        doc.html_content.contains("A House of Paper"),
         "and it must be the page's own title, got: {}",
         doc.html_content
     );
@@ -1271,17 +1233,11 @@ fn moss_resolved_link_preserves_query_when_target_in_page_map() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1296,7 +1252,7 @@ fn moss_resolved_link_preserves_query_when_target_in_page_map() {
 /// HTML assets are NOT in page_map (only markdown files are). The href
 /// must be relative to the page's served URL directory, which is one
 /// level deeper than the source for non-index pages. Regression for the
-/// 刘果 vault `音阶对比.md` 404: source `交互/音阶对比.md` (url:
+/// `音阶对比.md` 404 on a real site: source `交互/音阶对比.md` (url:
 /// scale-compare) serves at `interactive/scale-compare/index.html`. The href
 /// must reach `assets/scale-compare.html` from there. It used to do that by
 /// counting `../` from the source file and then adding one more for pretty-URL
@@ -1319,17 +1275,11 @@ fn moss_resolved_link_to_html_asset_uses_pinned_url_regardless_of_page_depth() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1396,17 +1346,11 @@ fn moss_resolved_link_to_html_asset_depth_table() {
             false,
             Language::En,
             None,
-            false,
-            true, // math: [site].math default (ADR-030)
-            true, // hard_line_breaks: [site] default (Obsidian parity)
-            true, // heading_anchors: [site] default (unconditional today)
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,
-            None,
-            false,
-            None, // seta_url
-            None, // folder_lang
+            PageContext::default(),
         )
         .expect("should parse");
         assert!(
@@ -1435,17 +1379,11 @@ fn moss_resolved_link_to_html_asset_opens_in_new_tab() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1490,17 +1428,11 @@ fn moss_resolved_link_to_markdown_page_stays_same_tab() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1527,17 +1459,11 @@ fn moss_resolved_link_to_html_asset_from_root_page() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1548,7 +1474,7 @@ fn moss_resolved_link_to_html_asset_from_root_page() {
     );
 }
 
-/// Regression for 刘果 vault `音阶对比.md`:
+/// Regression for a real site's `音阶对比.md`:
 /// `[![[scale-compare.png]]](scale-compare.html?a=...)` — markdown link
 /// wrapping a wikilink-image. After the wikilinks pass converts
 /// `![[scale-compare.png]]` to `![alt](path)` and markdown_links rewrites
@@ -1571,17 +1497,11 @@ fn nested_image_link_with_query_renders_correctly() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1606,24 +1526,18 @@ fn filename_suffix_overrides_site_default() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.lang, Language::En);
 }
 
 /// `is_index_file` must stay true for a folder index that has a
-/// frontmatter slug override. After the issue-#587 promotion fix, an
+/// frontmatter slug override. After the home-override promotion fix, an
 /// earlier draft used "page_map URL parent equals source parent" as
 /// the only signal, which would silently regress this case:
 /// `posts/index.md` with `url: blog` produces page_map URL
@@ -1643,17 +1557,11 @@ fn folder_index_with_slug_override_is_still_index() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(
@@ -1666,37 +1574,31 @@ fn folder_index_with_slug_override_is_still_index() {
 /// The `home: true` marker promotes a non-INDEX_STEM file to be its
 /// folder's home — the translated index page lands at
 /// `<folder>/index.html` and is treated as a folder index by the
-/// pipeline. Issue #587.
+/// pipeline.
 #[test]
 fn home_override_is_index_via_page_map() {
-    let md = "---\ntitle: Liu Guo\nlang: en\nhome: true\n---\n\n# Hello\n";
+    let md = "---\ntitle: Mountain Home\nlang: en\nhome: true\n---\n\n# Hello\n";
     let mut page_map = HashMap::new();
-    page_map.insert("en/Liu Guo.md".to_string(), "en/index.html".to_string());
+    page_map.insert("en/Mountain Home.md".to_string(), "en/index.html".to_string());
     let doc = process_markdown_file(
-        "en/Liu Guo.md",
+        "en/Mountain Home.md",
         md,
         "site",
         &page_map,
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(
         doc.kind,
         moss_core::PageKind::Folder,
-        "en/Liu Guo.md should be detected as a folder index after translation-home promotion"
+        "en/Mountain Home.md should be detected as a folder index after translation-home promotion"
     );
 }
 
@@ -1712,17 +1614,11 @@ fn test_pipeline_sets_features_inline_subscribe_when_shortcode_present() {
         false,
         crate::i18n::Language::En,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(doc.features.inline_subscribe, "flag must be set");
@@ -1746,21 +1642,93 @@ fn test_pipeline_features_default_false_without_shortcode() {
         false,
         crate::i18n::Language::En,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(!doc.features.inline_subscribe);
     assert!(!doc.features.inline_apply);
+    assert!(!doc.features.scroll_rows);
+}
+
+/// `scroll_rows` gates `scroll-row.js`: set by a `{scroll}` grid that actually
+/// overflows its row, including one nested in a fenced div (the embed/wrapper
+/// shape), never by a plain grid. See the test below for the grid that asked
+/// for `{scroll}` but doesn't need it.
+#[test]
+fn test_pipeline_sets_scroll_rows_only_for_a_scrolling_grid() {
+    let parse = |content: &str| {
+        process_markdown_file(
+            "test.md",
+            content,
+            "root",
+            &std::collections::HashMap::new(),
+            false,
+            crate::i18n::Language::En,
+            Some("test-site"),
+            crate::build::markdown::SiteMarkdown::default(),
+            None,
+            None,
+            None,
+            PageContext::default(),
+        )
+        .expect("pipeline should succeed")
+    };
+    let nested = parse("::::{.wrap}\n:::grid 3 {scroll}\na\n+++\nb\n+++\nc\n+++\nd\n:::\n::::\n");
+    assert!(nested.features.scroll_rows, "nested scroll row must set the flag");
+    let plain = parse(":::grid 3\na\n+++\nb\n:::\n");
+    assert!(!plain.features.scroll_rows, "a wrapping grid must not set it");
+}
+
+/// Owner's rule: a `{scroll}` grid whose cells all fit in one row (cell
+/// count <= columns) still IS a scroll row — it just renders like the plain
+/// grid on a wide screen and only becomes a scroller once the viewport
+/// narrows — so it must still set the feature flag, to ship the runtime
+/// script that drives that narrow-screen behavior. See the single-cell test
+/// below for the one shape that really sets no flag.
+#[test]
+fn test_pipeline_scroll_grid_that_fits_still_sets_scroll_rows() {
+    let doc = process_markdown_file(
+        "test.md",
+        ":::grid 3 {scroll}\na\n+++\nb\n:::\n",
+        "root",
+        &std::collections::HashMap::new(),
+        false,
+        crate::i18n::Language::En,
+        Some("test-site"),
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("pipeline should succeed");
+    assert!(doc.features.scroll_rows, "2 cells over 3 columns fit, but is still a scroll row");
+}
+
+/// The one shape that truly opts out: a single cell has nothing to scroll
+/// past at any width.
+#[test]
+fn test_pipeline_single_cell_scroll_grid_does_not_set_scroll_rows() {
+    let doc = process_markdown_file(
+        "test.md",
+        ":::grid 3 {scroll}\na\n:::\n",
+        "root",
+        &std::collections::HashMap::new(),
+        false,
+        crate::i18n::Language::En,
+        Some("test-site"),
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("pipeline should succeed");
+    assert!(!doc.features.scroll_rows, "a single-cell scroll grid has nothing to scroll");
 }
 
 #[test]
@@ -1775,17 +1743,11 @@ fn test_pipeline_sets_features_inline_apply_when_shortcode_present() {
         false,
         crate::i18n::Language::ZhHans,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        Some("https://api.mosspub.com"), // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("pipeline should succeed");
     assert!(doc.features.inline_apply, "inline_apply flag must be set");
@@ -1818,17 +1780,11 @@ fn test_pipeline_no_site_id_yields_pending_form() {
         false,
         crate::i18n::Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .unwrap();
     assert!(doc.features.inline_subscribe);
@@ -1851,7 +1807,7 @@ fn test_pipeline_no_site_id_yields_pending_form() {
 /// preview-scroll paragraph-precision feature that PR7a's
 /// `transform_events` deletion temporarily disabled.
 ///
-/// The downstream consumer is `frontend/bridge/iframe-bridge.ts`'s
+/// The downstream consumer is the preview bridge's
 /// `scrollToSourceLine` RPC, which queries
 /// `[data-source-line], [data-source-range]` and scrolls to the
 /// element whose source line ≤ target line.
@@ -1867,17 +1823,11 @@ fn process_markdown_file_emits_data_source_line_when_flag_on() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     // Heading (line 1 of the body markdown, which is line 1 of the
@@ -1928,17 +1878,11 @@ fn process_markdown_file_malformed_yaml_does_not_leak_block() {
         false, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed on malformed frontmatter");
     assert!(
@@ -1988,7 +1932,7 @@ fn frontmatter_invalid_yaml_warning_fires_only_on_malformed_block() {
     );
 }
 
-/// #771 edge (b): the source-line-offset search must NOT match a body line
+/// Edge case B: the source-line-offset search must NOT match a body line
 /// against an identical line INSIDE the frontmatter, or the offset is
 /// under-counted and every annotation lands too high (into the frontmatter
 /// region). Reachable via the simplified-frontmatter path, which silently
@@ -2010,17 +1954,11 @@ fn data_source_line_skips_frontmatter_collision() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     // Body `Welcome` is file line 5; `body text` is file line 7. Without the
@@ -2062,17 +2000,11 @@ fn data_source_line_offset_traditional_yaml_frontmatter() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(
@@ -2125,17 +2057,11 @@ fn data_source_line_matches_editor_cm6_body_line() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
 
@@ -2167,7 +2093,7 @@ fn data_source_line_matches_editor_cm6_body_line() {
 #[test]
 fn data_source_line_matches_editor_on_malformed_frontmatter() {
     // `uid: blk: "x"` is invalid YAML (mapping value inside a scalar) —
-    // mirrors the shipped William-Blake malformed-frontmatter case.
+    // mirrors a shipped malformed-frontmatter case.
     let content = "---\nuid: blk: \"x\"\n---\n\nHello\n";
 
     let editor_body = moss_core::frontmatter::parse(content).body;
@@ -2187,17 +2113,11 @@ fn data_source_line_matches_editor_on_malformed_frontmatter() {
         true,
         crate::i18n::Language::En,
         None,
-        true,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None,
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
 
@@ -2234,17 +2154,11 @@ fn data_source_line_matches_editor_on_simplified_frontmatter() {
         true,
         crate::i18n::Language::En,
         None,
-        true,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None,
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
 
@@ -2282,17 +2196,11 @@ fn process_markdown_file_omits_data_source_line_when_flag_off() {
         false, // emit_source_lines OFF
         crate::i18n::Language::En,
         None,
-        true,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(
@@ -2320,17 +2228,11 @@ fn process_markdown_file_emits_data_source_range_on_shortcode_when_flag_on() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     // The :::grid opener is on body line 3.
@@ -2355,17 +2257,11 @@ fn process_markdown_file_omits_data_source_range_when_flag_off() {
         false, // emit_source_lines OFF
         crate::i18n::Language::En,
         None,
-        true,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(
@@ -2404,17 +2300,11 @@ fn buttons_internal_link_does_not_leak_moss_resolved_prefix() {
         false,
         crate::i18n::Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -2461,17 +2351,11 @@ Inline link to [extend](docs/extend/) for comparison.
         false,
         crate::i18n::Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     for prefix in ["moss-resolved:", "wikilink:", "moss-newtab:"] {
@@ -2549,17 +2433,11 @@ Para with [link](docs/) and *em* and `code`.
         false,
         crate::i18n::Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse cleanly with observation path active");
     // Production HTML must still contain the canonical output —
@@ -2588,8 +2466,6 @@ Para with [link](docs/) and *em* and `code`.
 // All three share the empty-alt a11y guard: an image with empty alt does
 // not produce `<figure>` even when a caption is supplied, so screen-reader
 // users never get an undescribed image with a captioned wrapper.
-//
-// See docs/archive/2026-05-05-figure-captions-design.md.
 
 /// Render with an explicit `[site].math` answer, everything else at
 /// production defaults.
@@ -2603,17 +2479,11 @@ fn render_with_math(md: &str, math: bool) -> String {
         false,
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        math,
-        false, // hard_line_breaks: off here — this harness probes math wiring alone
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, math, hard_line_breaks: false, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.html_content
@@ -2685,17 +2555,11 @@ fn render_with_breaks(md: &str, hard_line_breaks: bool) -> String {
         false,
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        false, // math: off here — this harness probes line-break wiring alone
-        hard_line_breaks,
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, math: false, hard_line_breaks, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.html_content
@@ -2733,28 +2597,25 @@ fn site_hard_line_breaks_off_keeps_commonmark_soft_break() {
 }
 
 /// Render with an explicit `[site].heading_anchors` answer, everything
-/// else at production defaults.
+/// else at production defaults. `## Title` (level 2), not `# Title` — a
+/// level-1 heading never gets a permalink anchor regardless of this
+/// setting, which would make the "on" case below indistinguishable from
+/// a wiring bug.
 fn render_with_heading_anchors(heading_anchors: bool) -> String {
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "test.md",
-        "# Title\n\nBody text.\n",
+        "## Title\n\nBody text.\n",
         "site",
         &empty_map,
         false,
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        heading_anchors,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, heading_anchors, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.html_content
@@ -2766,9 +2627,9 @@ fn render_with_heading_anchors(heading_anchors: bool) -> String {
 /// from `site_config.heading_anchors` at the blocking.rs call site) leaves
 /// every moss-core test green while every real build keeps emitting
 /// permalink anchors regardless of the config toggle. Mutation check: hardcode
-/// `emit_heading_anchors(&self) -> bool { true }` in `PipelineHooks` and this
-/// goes red only for the off case below — this test guards the on case stays
-/// unaffected by the wiring itself.
+/// `emit_heading_anchors(&self, _level: u8) -> bool { true }` in `PipelineHooks`
+/// and this goes red only for the off case below — this test guards the on
+/// case stays unaffected by the wiring itself.
 #[test]
 fn site_heading_anchors_on_renders_permalink_anchor() {
     let html = render_with_heading_anchors(true);
@@ -2799,22 +2660,24 @@ fn site_heading_anchors_off_omits_permalink_anchor() {
 }
 
 /// `render_markdown_to_html_with` is the fragment renderer `Shortcode::Recent`
-/// uses for its authored fallback_markdown (moss#915) — it must honor the
+/// uses for its authored fallback_markdown — it must honor the
 /// caller's `heading_anchors` value rather than hardcoding one, or a site
 /// with `[site].heading_anchors = false` still leaks anchors from `:::recent`
-/// fallback blocks.
+/// fallback blocks. `## Title` (level 2): a level-1 heading never gets an
+/// anchor regardless of `heading_anchors`, which would make the "on" case
+/// indistinguishable from a wiring bug.
 #[test]
 fn render_markdown_to_html_with_respects_heading_anchors_param() {
     let default_resolver = |href: &str| -> String { href.to_string() };
 
-    let on = render_markdown_to_html_with("# Title\n", &default_resolver, None, true);
+    let on = render_markdown_to_html_with("## Title\n", &default_resolver, None, true);
     assert!(
         on.contains(r#"class="moss-heading-anchor""#),
         "expected the permalink anchor when heading_anchors=true, got: {}",
         on
     );
 
-    let off = render_markdown_to_html_with("# Title\n", &default_resolver, None, false);
+    let off = render_markdown_to_html_with("## Title\n", &default_resolver, None, false);
     assert!(
         !off.contains("moss-heading-anchor"),
         "no permalink anchor may appear when heading_anchors=false, got: {}",
@@ -2833,23 +2696,17 @@ fn tags_of(content: &str) -> Option<Vec<String>> {
         false,
         crate::i18n::Language::En,
         None,
-        true,  // implicit_figure
-        false, // math
-        false, // hard_line_breaks
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, math: false, hard_line_breaks: false, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.tags
 }
 
-/// Inline `#tags` (issue #649 P1) must actually reach `doc.tags` alongside
+/// Inline `#tags` must actually reach `doc.tags` alongside
 /// frontmatter `tags:` — frontmatter first, inline appended. The union is
 /// made HERE at the document level, deliberately NOT in the folder cascade:
 /// cascade's rule stays uniform child-overrides-folder (cascade.rs), so a
@@ -2901,17 +2758,11 @@ fn render(md: &str, implicit_figure: bool) -> String {
         false,
         crate::i18n::Language::En,
         None,
-        implicit_figure,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure, ..Default::default() },
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.html_content
@@ -2987,7 +2838,7 @@ fn implicit_figure_caption_typesets_math_and_leaves_alt_to_the_caption() {
 /// kept a `<figure class="moss-image">` on a site that had opted out while
 /// `![alt](x.png)` did not. Any theme rule keyed on `.moss-image` then styled
 /// whichever images happened to be written as wikilinks — visible on
-/// harbor's homepage as one award tile narrower than the three beside it.
+/// riverbend's homepage as one award tile narrower than the three beside it.
 #[test]
 fn implicit_figure_off_unwraps_wikilink_embeds_too() {
     let html = render_with_graph_cfg("![[photo.jpg]]\n", &["photo.jpg"], false);
@@ -3263,7 +3114,7 @@ fn implicit_figure_html_shape_satisfies_gallery_regex() {
 //   - moss-core `embed_renderer::tests` (bare-markdown emission)
 //   - snapshot tests (end-to-end HTML shape for wikilink fixtures)
 //
-// The contract test in `src-tauri/tests/img_contract_test.rs` is the
+// The desktop app's own contract test is the
 // regression guard against a `moss:` title reviving on any `<img>` in
 // rendered output (planned extension in PR6).
 
@@ -3390,17 +3241,11 @@ fn recent_shortcode_dispatch_renders_fallback_on_html_path() {
         false,
         crate::i18n::Language::En,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed (no panic from Recent dispatch)");
     let html = &doc.html_content;
@@ -3426,17 +3271,11 @@ fn recent_shortcode_dispatch_empty_fallback_yields_no_marker_leak() {
         false,
         crate::i18n::Language::En,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     let html = &doc.html_content;
@@ -3522,7 +3361,6 @@ fn parse_with_graph_cfg(
         b.add_file(p, slug);
     }
     let graph = b.build();
-    let registry = moss_core::resolve::registry::RendererRegistry::builtin().build();
     process_markdown_file(
         "test.md",
         md,
@@ -3531,17 +3369,11 @@ fn parse_with_graph_cfg(
         false,
         crate::i18n::Language::En,
         None,
-        implicit_figure,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure, ..Default::default() },
         None,
         None,
         Some(&graph),
-        Some(&registry),
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse")
 }
@@ -3557,8 +3389,10 @@ fn video_embed_plain_end_to_end() {
 fn video_embed_percent_end_to_end() {
     let html = render_with_graph("![[clip.mov|77%]]\n", &["clip.mov"]);
     assert!(html.contains("<video"), "got: {html}");
+    // A bare percent is the element's own width and rides inline style;
+    // `<video width="77%">` was never valid HTML.
     assert!(
-        html.contains(r#"width="77%""#),
+        html.contains(r#"style="width:77%""#),
         "percent width dropped: {html}"
     );
     assert!(
@@ -3588,7 +3422,7 @@ fn wikilink_image_percent_with_graph_still_figure() {
     );
 }
 
-/// moss#754: an image embed's sizing tokens must survive inside a `:::hero`
+/// A regression where an image embed's sizing tokens must survive inside a `:::hero`
 /// overlay, exactly as they do in body prose. The overlay renders through
 /// hero-overlay hooks. Those used to be a partially-delegating wrapper that
 /// forwarded only the styleless image entry point, so `object-fit`/
@@ -3635,17 +3469,11 @@ fn per_page_language_apply_in_zh_hans_subdir() {
         false,
         Language::En, // site default is EN
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        Some("https://api.mosspub.com"),
-        None, // folder_lang
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -3684,17 +3512,11 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         false,
         Language::En, // site default is EN
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        Some("https://api.mosspub.com"),
-        None, // folder_lang
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -3729,17 +3551,11 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
         false,
         Language::ZhHans, // site default is ZhHans
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
-        None,
-        false,
-        Some("https://api.mosspub.com"),
-        None, // folder_lang
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -3770,7 +3586,7 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
 /// `cli_eprintln!` loop from the pipeline is caught.
 #[test]
 fn foreign_frontmatter_field_warns_and_names_the_moss_equivalent() {
-    let warnings = foreign_frontmatter_warnings("privacy.md", &["title", "slug"]);
+    let warnings = foreign_frontmatter_warnings("privacy.md", &["title", "slug"], &Default::default());
     assert_eq!(
         warnings.len(),
         1,
@@ -3791,13 +3607,37 @@ fn foreign_frontmatter_field_warns_and_names_the_moss_equivalent() {
     );
 }
 
+/// `order: [a, b]` is the documented alias for `sort` and works, so the build
+/// must not tell the author it was ignored; a single value really is ignored and
+/// does warn. Through the real page entry point, so the value reaches the check.
+#[test]
+fn order_list_is_the_sort_alias_but_a_single_value_warns() {
+    let empty_map = HashMap::new();
+    let problems = |order: &str| {
+        let _ = crate::build::cli_output::take_cli_problems();
+        let md = format!("---\ntitle: t\norder: {order}\n---\n\nbody\n");
+        process_markdown_file(
+            "index.md", &md, "site", &empty_map, false, Language::ZhHant, None,
+            SiteMarkdown::default(), None, None, None, PageContext::default(),
+        )
+        .expect("should parse");
+        crate::build::cli_output::take_cli_problems()
+    };
+    assert_eq!(problems("[b, a]"), 0, "an order list is the sort alias");
+    assert_eq!(problems("3"), 1, "one mistake, one message: the foreign-field warning only");
+}
+
 /// The other half of the contract: a genuinely custom field stays silent.
 /// Plugins and templates read their own keys, and warning on every one would
 /// make the signal above worthless.
 #[test]
 fn ordinary_custom_frontmatter_fields_do_not_warn() {
     let warnings =
-        foreign_frontmatter_warnings("post.md", &["title", "date", "my_field", "data", "uid"]);
+        foreign_frontmatter_warnings(
+        "post.md",
+        &["title", "date", "my_field", "data", "uid"],
+        &Default::default(),
+    );
     assert!(
         warnings.is_empty(),
         "builtin and custom fields must not warn, got: {warnings:?}"
@@ -3852,10 +3692,30 @@ fn schema_bad_date_format_warns_at_build() {
     );
 }
 
+/// A full ISO timestamp renders the right date, so the build must not count it
+/// as a problem — `--strict` reads that count. Drives the real page entry
+/// point, because the count is bumped there, not in the pure warning builder.
+#[test]
+fn timestamp_date_is_not_a_build_problem() {
+    let empty_map = HashMap::new();
+    let _ = crate::build::cli_output::take_cli_problems();
+    let md = "---\ntitle: t\ndate: 2019-10-16T07:42:16.551Z\n---\n\nbody\n";
+    process_markdown_file(
+        "a.md", md, "site", &empty_map, false, Language::ZhHant, None,
+        SiteMarkdown::default(), None, None, None, PageContext::default(),
+    )
+    .expect("should parse");
+    assert_eq!(
+        crate::build::cli_output::take_cli_problems(),
+        0,
+        "a timestamp date is valid and must not trip --strict"
+    );
+}
+
 /// The critical negative: `title` is the schema's one required field, and
 /// `validate_frontmatter` reports an `Error` when it is absent — but moss
-/// deliberately falls back to the filename (docs/reference/title-rendering.md),
-/// so most correct pages omit it. Emitting that error would fire on nearly
+/// deliberately falls back to the filename, so most correct pages omit it.
+/// Emitting that error would fire on nearly
 /// every page and train authors to ignore the whole channel.
 #[test]
 fn missing_title_does_not_warn_at_build() {
@@ -3888,4 +3748,46 @@ fn valid_frontmatter_warns_nothing_at_build() {
         &fm_of("title: Hi\ndate: '2026-08-04'\nweight: 3\nchildren_style: grid\ndraft: true"),
     );
     assert!(warnings.is_empty(), "got: {warnings:?}");
+}
+
+/// A body image's `sizes=` follows the page's EFFECTIVE typesetting: the
+/// page's own `typesetting:` over `[site].typesetting`. Under vertical-rl
+/// the column is a height, so the value is the column height × the aspect.
+#[test]
+fn body_image_sizes_follow_the_pages_effective_typesetting() {
+    let meta = crate::types::content::MediaMetadata {
+        is_animated: false,
+        path: "photo.jpg".to_string(),
+        file_type: "jpg".to_string(),
+        size: 0,
+        modified: None,
+        dimensions: Some((2400, 1771)),
+        dominant_color: None,
+        lqip_data_uri: None,
+    };
+    let lookup =
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None);
+    let empty_map = HashMap::new();
+    let render = |frontmatter: &str, site_typesetting: Option<&str>| {
+        let md = format!("---\ntitle: t\n{frontmatter}---\n\n正文。\n\n![](photo.jpg)\n");
+        let site = SiteMarkdown { typesetting: site_typesetting, ..Default::default() };
+        process_markdown_file(
+            "a.md", &md, "site", &empty_map, false, Language::ZhHant, None, site,
+            Some(&lookup), None, None,
+            PageContext::default(),
+        )
+        .expect("should parse")
+        .html_content
+    };
+    let vertical = r#"sizes="calc(1.356 * (100vh - 4rem))""#;
+    let horizontal = r#"sizes="(min-width: 48rem) 47.25rem, 100vw""#;
+
+    let site_vertical = render("", Some("vertical"));
+    assert!(site_vertical.contains(vertical), "{site_vertical}");
+    let page_horizontal = render("typesetting: horizontal\n", Some("vertical"));
+    assert!(page_horizontal.contains(horizontal), "{page_horizontal}");
+    let page_vertical = render("typesetting: vertical\n", None);
+    assert!(page_vertical.contains(vertical), "{page_vertical}");
+    let site_default = render("", None);
+    assert!(site_default.contains(horizontal), "{site_default}");
 }

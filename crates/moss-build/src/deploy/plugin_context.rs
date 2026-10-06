@@ -1,10 +1,9 @@
 //! The window-free half of the plugin deploy route: the context a deploy hook
 //! receives, and the one guard that can refuse a publish before it runs.
 //!
-//! These bodies drove `deploy_site` from `src-tauri/src/preview/commands.rs`
+//! These bodies drove `deploy_site` from the app's own preview-commands module
 //! until 2026-09-09 and never touched Tauri; they moved here so the headless
-//! `moss deploy` can build the same context the app does (track P, slice P1 of
-//! [the plan](../../../../../docs/archive/2026-09-09-deploy-plugin-runs-windowless-plan.md)).
+//! `moss deploy` can build the same context the app does (track P, slice P1).
 
 use crate::plugins::types::{
     DeployContext, DeployResult, HookResult, ProjectInfo, Toast, ToastOutcome,
@@ -105,8 +104,8 @@ const GITHUB_DEPLOY_PLUGIN: &str = "github";
 /// moss hosting serves from the root of `<site_id>.mosspub.com`.
 ///
 /// Without that check, putting a moss vault under version control on GitHub
-/// was enough to make Publish refuse. That is what happened to the William
-/// Blake site: `git init` + `git remote add origin .../william-blake.git` on
+/// was enough to make Publish refuse. That is what happened to a real
+/// site: `git init` + `git remote add origin .../my-site.git` on
 /// 2026-08-02 silently disabled publishing to its onion, and every attempt
 /// after that failed with "Custom domain required" while `[hooks] deploy =
 /// "onionpress"` was pinned in config.toml.

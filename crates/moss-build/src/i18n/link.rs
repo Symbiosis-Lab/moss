@@ -12,8 +12,7 @@ pub struct TranslationLink {
     /// It used to carry moss's three-variant UI enum as well, which collapsed
     /// every language moss has no interface for onto one of the three: a `fr`
     /// page was advertised as `hreflang="en"` while its own `<html lang>` said
-    /// `fr`, and two pages in one unshipped language became a single alternate
-    /// (moss#1177).
+    /// `fr`, and two pages in one unshipped language became a single alternate.
     pub lang_tag: String,
     /// URL path to the translated document
     pub url_path: String,

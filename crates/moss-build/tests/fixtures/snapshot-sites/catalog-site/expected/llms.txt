@@ -1,0 +1,34 @@
+# Catalog Site
+
+---
+
+## Alpha Project
+
+Body content for alpha.
+
+---
+
+## Bravo Project
+
+Body content for bravo.
+
+---
+
+## Catalog Site
+
+# Catalog Site
+
+A small site exercising the dateless, cover-led catalog pattern.
+
+---
+
+## Charlie Project
+
+Body content for charlie.
+
+---
+
+## Projects
+
+# Projects
+

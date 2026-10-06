@@ -1,35 +1,24 @@
-//! The open crates (`moss-core`, `moss-build`, `moss-cli`) must build and
-//! test from `open/` alone — the public repo the F-track flip
-//! (docs/archive/2026-09-10-open-repo-flip-and-stack-lifecycle-plan.md)
-//! exports has nothing above `open/`. F5's dry run found three tests that
-//! violated this by joining a `..`-laden literal onto
-//! `env!("CARGO_MANIFEST_DIR")` (which is the *crate* root, e.g.
-//! `open/crates/moss-build`) and climbing out of `open/` entirely to read a
-//! desktop-only fixture (`playwright/fixtures/nav-island/live-css.html`,
-//! `frontend/design-system/index.html`, `src-tauri/tauri.conf.json`); all
-//! three moved to `src-tauri/tests/` (desktop-side, calling the open crates'
-//! public API or reading their source text, same as the F1 plugin-manifest
-//! precedent).
+//! The crates (`moss-core`, `moss-build`, `moss-cli`) must build and test
+//! from this repo's root alone. A test that joins a `..`-laden literal onto
+//! `env!("CARGO_MANIFEST_DIR")` (the *crate* root, e.g. `crates/moss-build`)
+//! can climb out of the repo root and read files that exist only in some
+//! other checkout; this guard stops that class.
 //!
-//! This is the guard that stops the class from coming back. It resolves
-//! every `..`-containing quoted string literal against the base its call
-//! site actually uses — `CARGO_MANIFEST_DIR` (the crate root) if that's what
-//! the line joins against, otherwise the source file's own directory, which
-//! is what `include_str!`/`include_bytes!`/`include_dir!` resolve relative
-//! to — and fails only if the resolved path lands above `open/`. Two known
-//! limits, both measured 2026-09-13: a bare runtime path (no
+//! It resolves every `..`-containing quoted string literal against the base
+//! its call site actually uses — `CARGO_MANIFEST_DIR` (the crate root) if
+//! that's what the line joins against, otherwise the source file's own
+//! directory, which is what `include_str!`/`include_bytes!`/`include_dir!`
+//! resolve relative to — and fails only if the resolved path lands above the
+//! repo root. Two known limits: a bare runtime path (no
 //! `CARGO_MANIFEST_DIR`) is resolved from the file's directory although
-//! cargo's test cwd is the crate root, which is more lenient for nested
-//! files — the tree's five bare `../../../` literals are all traversal-defense
-//! fixtures, not reads, and a stricter base flags four of them; and the TS
-//! packages under `open/packages` are out of scope, since they climb via
-//! `import.meta.url` under vitest, not cargo. A dumb
-//! "contains `../../../`" substring check was tried first and rejected: the
-//! tree already has ~15 legitimate 3+-`..` literals (`include_str!` reaching
-//! a crate's own `assets/` from three directories down, `target/test-tmp`
-//! helpers, traversal-defense test fixtures) that all resolve safely inside
-//! `open/`, and gating on the substring alone would have flagged every one
-//! of them.
+//! cargo's test cwd is the crate root, which is more lenient for nested files
+//! (the bare `../../../` literals in the tree are traversal-defense fixtures,
+//! not reads); and the TS packages under `packages/` are out of scope, since
+//! they climb via `import.meta.url` under vitest, not cargo. A plain
+//! "contains `../../../`" substring check is not enough: many legitimate
+//! 3+-`..` literals (`include_str!` reaching a crate's own `assets/` from
+//! three directories down, `target/test-tmp` helpers, traversal-defense
+//! fixtures) resolve safely inside the repo root.
 
 use std::path::{Component, Path, PathBuf};
 

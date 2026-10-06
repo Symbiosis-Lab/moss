@@ -9,47 +9,37 @@ moss import --list <urls.txt> [folder] [-r|--recursive]
 
 - Accepts a remote **http/https URL**, a local **`.mhtml`/`.mht` web-archive**
   ("Save Page As"), a local **`.html`/`.htm` file**, or (via `--list`) a text
-  file of one-per-line URLs/paths to import in batch.
-- Each page becomes a `.md` file with YAML frontmatter (`title`, `date`,
-  `author`, `publisher`, `lang`, `description`, `cover`, plus a `syndicated:`
-  list holding the source URL). Images download to `assets/imported/`.
-- `syndicated:` is the POSSE mirror field: an import is the user's own content
-  republished here, so the local copy is canonical and the source URL is
-  recorded as a syndication mirror. `moss import` does **not** set
-  `external_url` — that is the manual linkblog field, which points cards,
-  canonical and sitemap off-site. (Pages that fail to fetch are the one
-  exception: they get a `title`/`external_url`/`scrape_error` stub.)
-- `--recursive` crawls **same-domain, same-path-prefix** links (capped at 200
-  pages) and rewrites in-scope links to relative `.md` paths.
+  file of one-per-line URLs/paths to import in batch. A `folder` that does not
+  exist yet is created, parents included.
+- Each page becomes a `.md` file with YAML frontmatter for whichever of `title`, `date`, `author`, `publisher`, `lang`, `description`, `cover` the source page actually declares — `author` is set only when the page carries one (JSON-LD `author`, or an `author`/`article:author` meta tag), so a page with no visible byline gets no `author` key at all. An `origin:` field holds the source URL, and images download to `assets/imported/`. A page that indexes a folder holding other pages (an `index.md`, or a `<name>.md` beside a `<name>/` folder) is written with `children: false`, since the source page already has its own listing and moss would otherwise append the child pages under it. The site's own name (the home page's `title:` or `publisher:`, or the `og:site_name`/JSON-LD publisher a page declares) is stripped as a whole from either edge of the title, even when the name itself contains a dash, so `About | Studio Name` becomes `About`; a segment every page shares that is not that name, like a series word, stays. The cover falls back to the first content image when there is no `og:image`, never one inside a header, nav, footer or aside or declared under 64 px. A page that declares a schema.org Event gets `start`, `end`, `location`, `status`, `tickets` and `online` from it, with the event's wall-clock time kept as written and `date` left to the page's own published date.
+- `origin:` is provenance, not syndication: it records the address a page was imported from, so the local copy is canonical and the source URL is kept as a record of where the content came from — it is not a claim that the content is still published there (a site port's old address is going away, not gaining a mirror). A future redirect feature reads a site's declared former domain(s) against `origin` to keep that old address's links working. `moss import` does **not** set `external_url` — that is the manual linkblog field, which points cards, canonical and sitemap off-site. (A page that fails to fetch is the one exception: it gets a `title`/`external_url`/`scrape_error` stub, written `listed: false` so it stays out of navigation and listings — unless its own URL path, query string aside, already names a path this run has already confirmed produces duplicate content (not merely a path some other page already imported successfully under — a page genuinely distinct from anything else on its path, such as an old-style `?p=123` post, still gets its stub if its fetch fails), in which case it is a lightbox/filter/export variant that couldn't be reconfirmed rather than a page gone missing, and is counted as a "variant(s) unreachable" in the summary instead of getting a stub.)
+- The `"N duplicate(s) skipped"` count in the summary is a page never written at all, by either of two rules: its own same-host `<link rel="canonical">` already names a page already imported, or — for a page that declares no canonical of its own — its fetched body is byte-identical to an already-written page's body at the same path (query string and fragment ignored). Query strings are never stripped from the URL that does get written, only ignored for this same-path comparison.
+- A page fetch that gets `429 Too Many Requests`, or a `503` naming a `Retry-After`, is retried rather than failed immediately: the wait honors `Retry-After` when the response sent one (capped at a sane maximum), falling back to a short exponential backoff otherwise, for a bounded number of attempts before the page is finally counted as failed (or as an unreachable variant, per the `origin:` point above). Independently of retries, each host is paced on its own schedule — a 429/503 slows further requests to that host and a run of successes speeds them back up — and a site's own `robots.txt` `Crawl-delay`, when it declares one, sets a floor that pacing never goes below; the summary names every host this slowed down for.
+- A page's `uid` is not written by `moss import` at all — it is minted the first time the folder is built, the same as for a hand-authored page, so an imported page carries no `uid` in its frontmatter until you build or preview the folder.
+- `--recursive` crawls **same-domain, same-path-prefix** links, capped at 200 pages — the run's summary says when the cap is what stopped the crawl and how many more in-scope pages were found but not imported, and names `--list` as the way to bring in the rest. Link rewriting only touches an in-scope link written in the source page as a full, absolute URL (`https://example.com/post`), turning it into a relative `./post.md`-style path; a link that was already relative in the source markup — root-relative (`/events/2026/11/01`) or bare (`post.html`) — is left exactly as written, and a link whose entire content is an image (`[![alt](img)](page)`) is never rewritten either. An anchor whose target is only a query string (`?itemId=abc123`, `?category=Dance`) or is empty is unwrapped — its image or text is kept, the link is not — because a static site has no page behind it; `#fragment` links are left alone.
+- Before walking links, `--recursive` also reads the site's own declared page list: `Sitemap:` line(s) in `robots.txt`, else `/sitemap.xml` at the site root, following a `<sitemapindex>` chain when present. Every page it declares is imported regardless of the 200-page cap, which limits link-discovered extras only — this is what brings in a page nothing on the site links to, and a large site's real page count once the cap alone would have cut it off early. The summary reports how many pages came from the sitemap. A UI-language mirror the sitemap marks with its own `hreflang` alternate annotation (the same content at a locale-prefixed URL) is collapsed to one representative before seeding, and every URL the sitemap names as such an alternate is never fetched at all — not by the crawl, not even when an ordinary link on the site also points at it — so a bilingual site's other-language copy never becomes a second page. A site with no sitemap at all behaves exactly as before this existed.
+- A linked non-page file (PDF, image, archive, ...) that fails to fetch while `--recursive` is crawling is never written as a page and never gets a failure stub — it is counted as `"linked file(s) unreachable"` in the summary, the same bucket a non-HTML response that did come back falls into when it's skipped. This is distinct from `"variant(s) unreachable"` above, which is specifically a failed fetch of a URL whose own path has already produced a confirmed duplicate.
+- Video embeds from known hosts (YouTube, Vimeo, Bilibili, and the like) are kept as embeds. Widgets a static site cannot run are carried as a link to their hosted page when the markup names one, a contact form becomes the page's contact address, and the summary's `"N widget(s) carried as links, M with no static form"` counts what was kept as a link and what had nothing to keep (each of those is also logged with its page); chat bubbles, comment embeds and newsletter signups are dropped uncounted, as site chrome. This covers iframes, forms and embeds present in the server's HTML; a widget built entirely by script leaves nothing to carry yet.
+- On a filename collision between two distinct pages writing to the same path, the later one is renamed with the macOS-Finder convention: `name.md` → `name 2.md` → `name 3.md`.
+- `moss import`'s own progress and warnings print to stderr at the `warn` level by default — set `MOSS_LOG_LEVEL=info` or `=debug` for more; `RUST_LOG` is not read.
 
-**Important:** import extracts **content** and discards the original CSS and
-design — you get raw markdown, not the original look. `moss import` does not
-create a `.moss/` project and does not follow the folder-is-the-site
-convention. After importing, your job is:
+**Important:** import extracts **content** and discards the original CSS and design — you get raw markdown, not the original look. A `--recursive` import also reads the home page for the site's chrome and writes it, each piece only when the folder does not already have its own: the home note's `title:` as the site name, `nav: true` and a `weight:` on the pages the primary navigation links to, the home note's `logo:`, a `footer.md`, and `assets/favicon.*`; the summary's `site chrome:` line says what was written. It does not create a `.moss/` project and does not follow the folder-is-the-site convention. After importing, your job is:
 
-1. **Arrange files** into the canonical shape (a folder per section; a home
-   file named `index.md` or after its folder).
-2. **Clean up markup** — move any inline styling into `.moss/theme/style.css`;
-   convert raw HTML to `::: {.class}` fenced divs; convert image links to
-   `![[file.ext]]`.
-3. **Design transfer (if you need the original look):** `moss import` discards
-   CSS deliberately. To recreate the original visual style, do this as a
-   separate step: inspect the original site's styling (computed CSS via browser
-   devtools, or a screenshot), then recreate the relevant rules in
-   `.moss/theme/style.css`. This is intentional design work, not part of the
-   content scrape.
+1. **Arrange files** into the canonical shape (a folder per section; a home file named `index.md` or after its folder).
+2. **Clean up markup** — move any inline styling into `.moss/theme/style.css`; convert raw HTML to `::: {.class}` fenced divs; convert image links to `![](path/to/file.ext)`.
+3. **Palette and fonts** are not read from the original site yet and stay the agent's work for now: inspect its styling (computed CSS via browser devtools, or a screenshot) and write the rules into `.moss/theme/style.css`.
 4. `moss preview <folder>` to build and check, then apply the authoring
    discipline in `moss guide authoring`. That opens moss desktop, which an
    agent cannot see — use `moss build <folder> --serve` instead.
 
 ## From local files
 
-There is **no** local-import command. Two options:
+A single saved page — a `.mhtml`/`.mht` web-archive or a plain `.html` file — imports directly with `moss import <file> [folder]`, described at the top of this guide. There is no *recursive* local import: `-r`/`--recursive` walks links by fetching them over HTTP, so it has nothing to walk inside a folder of local files. For a whole local site — many linked pages, not one saved page — two options:
 
 - **Hand-convert (preferred for a few pages):** read the local HTML/files and
   write canonical moss markdown + `.moss/theme/` yourself, following
   `moss guide authoring`.
-- **Temp-serve then import (for a whole local site):** serve the local files
+- **Temp-serve then import (for many pages):** serve the local files
   over HTTP (e.g. `python3 -m http.server`) and run
   `moss import http://localhost:8000/ <folder> --recursive`, then do the cleanup
   steps above.

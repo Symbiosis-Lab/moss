@@ -1,0 +1,29 @@
+# Cascade Site
+
+---
+
+## Apple Post
+
+Body.
+
+---
+
+## Zebra Post
+
+Body.
+
+---
+
+## Cascade Site
+
+# Cascade Site
+
+Root index declares `cascade: { sort: title }`. Every descendant folder
+inherits sort: title unless it overrides explicitly.
+
+---
+
+## Posts
+
+# Posts
+

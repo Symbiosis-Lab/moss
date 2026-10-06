@@ -5,10 +5,10 @@
 //!
 //! The build decides `![[/X/]]` in URL space: `BuildFolderIndex::
 //! dir_has_markdown_index` asks whether any document's `url_path` is
-//! `slug(X)/index.html`. That document set has two halves, and the editor's old
-//! filesystem answer could see neither:
+//! `slug(X)/index.html`. That document set has two halves, and a filesystem
+//! answer can see neither:
 //!
-//! 1. **Source-backed folder-index docs.** `獎項/獎項.md` carrying `url: awards`
+//! 1. **Source-backed folder-index docs.** `評選/評選.md` carrying `url: awards`
 //!    in its frontmatter is served at `awards/index.html`. `![[/awards/]]`
 //!    renders a listing in the build; a `read_dir` of `<root>/awards` finds
 //!    nothing.
@@ -21,7 +21,7 @@
 //! So this index reconstructs both halves from the same three inputs the build
 //! uses — the last build's [`ArticleMap`] (half 1, plus its `dir_overrides`),
 //! the scanned directory set, and the passthrough/language exclusions (half 2).
-//! Every rule is CALLED, never re-implemented: [`crate::build::scan::classify::is_excluded_dir_name`],
+//! Every rule is CALLED, never re-implemented: [`crate::build::scan::classify::left_out_of_site`],
 //! `classify::compute_passthrough_roots`,
 //! `crate::build::site_config::get_build_passthrough`,
 //! [`moss_core::home::is_home_file`],
@@ -32,9 +32,9 @@
 //!
 //! With a fresh article map the editor and the build agree exactly. Where they
 //! cannot (no build has ever run, or a `url:` override was added since the last
-//! build), the editor is deliberately GREENER than the build — see
-//! `docs/decisions/ADR-040-editor-build-folder-parity.md` for why a false red
-//! costs more than a false green here, and for the enumerated divergences.
+//! build), the editor is deliberately GREENER than the build: a false red
+//! blocks an author over a divergence the next build will resolve on its own,
+//! which costs more than a false green here.
 //!
 //! One known hazard from that choice: deleting a real directory named `awards/`
 //! while `awards` is ALSO a frontmatter `url:` override for some other folder
@@ -125,20 +125,11 @@ impl EditorFolderIndex {
         // home/index markdown file.
         let mut md_home_dirs: HashSet<String> = HashSet::new();
 
-        // Same predicate, same shape as the build scan's WalkDir
-        // (`build/scan/scan.rs`), reached through the crate-root re-export so
-        // there is ONE exclusion rule, not two.
+        // The build scan's own rule for what belongs to the site, so a nested
+        // site or an excluded folder is never a folder here either.
         let walker = walkdir::WalkDir::new(&self.root)
             .into_iter()
-            .filter_entry(|e| {
-                // depth 0 is the vault root itself: its own name is not subject
-                // to the exclusion rule (a vault may legitimately live in a
-                // dot-directory, and pruning it would empty the whole walk).
-                if e.depth() == 0 || !e.file_type().is_dir() {
-                    return true;
-                }
-                !crate::build::scan::classify::is_excluded_dir_name(&e.file_name().to_string_lossy())
-            });
+            .filter_entry(|e| crate::build::scan::classify::left_out_of_site(e).is_none());
 
         for entry in walker.flatten() {
             let rel = match entry.path().strip_prefix(&self.root) {
@@ -178,7 +169,7 @@ impl EditorFolderIndex {
                         static_index.entry(parent).or_insert_with(|| name.clone());
                     }
                 }
-                "md" | "markdown" => {
+                "md" => {
                     let parent_leaf = if parent.is_empty() {
                         self.root_name.as_str()
                     } else {
@@ -203,7 +194,7 @@ impl EditorFolderIndex {
         // Half (A): source-backed folder-index documents, straight from the
         // map. A directory whose folder-index document the map already claims
         // contributes ONLY that document's URL key, never its own directory key
-        // — otherwise `![[/獎項/]]` goes green in the editor while the build
+        // — otherwise `![[/評選/]]` goes green in the editor while the build
         // (whose doc lives at `awards/index.html`) emits a missing embed.
         // `is_file` is the staleness guard: a mapped source that no longer
         // exists is a dead entry and must not suppress anything.

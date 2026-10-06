@@ -3,8 +3,8 @@
  * `[^label]:` definition lines.
  *
  * ── Why this exists ─────────────────────────────────────────────────────
- * The build has parsed footnotes since ADR-035 (`Options::ENABLE_FOOTNOTES`
- * in `ast/parser.rs`). The editor never has, and CommonMark does not leave
+ * The build has parsed footnotes since `Options::ENABLE_FOOTNOTES`
+ * in `ast/parser.rs`. The editor never has, and CommonMark does not leave
  * unknown brackets alone — it claims them. Measured against the real parser,
  * a footnoted paragraph came out of the editor mangled three different ways:
  *
@@ -60,14 +60,9 @@
  *   blank + `    - item`    → a LIST inside the note
  *   blank + `plain para`    → the note ends; `plain para` is top-level
  *
- * This grammar used to claim only the marker line, and the continuation then
- * parsed as whatever it looked like standing alone. That was not a cosmetic
- * limit: a line indented four spaces looks exactly like an indented code
- * block, so the author who indents CAREFULLY got a monospace code box in the
- * editor where their site renders note prose — the same "editor and build
- * disagree about what this is" defect the original footnote bug was.
- *
- * So `FootnoteDefinition` is a composite block whose continuation rule is
+ * A line indented four spaces looks exactly like an indented code block, so
+ * claiming only the marker line would make the editor and the build disagree
+ * about what a continuation is. So `FootnoteDefinition` is a composite block whose continuation rule is
  * `ListItem`'s, with `CONTINUATION_INDENT` in place of the marker width.
  * Four is fixed rather than derived from the label, because that is what
  * pulldown does — `[^a-very-long-label]:` still continues at four spaces.
@@ -189,6 +184,17 @@ export const footnoteConfig: MarkdownConfig = {
         cx.addElement(cx.elt('FootnoteMark', cx.lineStart + labelEnd - 1, cx.lineStart + labelEnd + 1)); // ]:
         line.moveBase(bodyStart);
         return null;
+      },
+
+      // A `[^x]:` line ends the paragraph above it, as in pulldown-cmark. Without
+      // this, `[^1]: a` directly followed by `[^long]: b` folded the second line
+      // into the first note as lazy continuation, so `[^long]` had no definition
+      // and its markers rendered as plain text.
+      endLeaf(_cx: BlockContext, line: Line): boolean {
+        if (line.indent - line.baseIndent >= 4) return false;
+        const text = line.text;
+        const labelEnd = scanLabel((i) => (i < text.length ? text.charCodeAt(i) : -1), line.pos, text.length);
+        return labelEnd >= 0 && text.charCodeAt(labelEnd) === COLON;
       },
     },
   ],

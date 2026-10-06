@@ -15,7 +15,7 @@
 //! gate entirely: no `icloud-sync` event was emitted at all, and the user got
 //! `Failed to build: … Resource deadlock avoided (os error 11)` on the
 //! onboarding overlay where the waiting screen belonged, on every rebuild,
-//! until the provider finished on its own schedule (moss#964).
+//! until the provider finished on its own schedule.
 //!
 //! ## The rule
 //!
@@ -42,12 +42,12 @@
 //!
 //! ## `Deferred` has no live producer today, and that is the good state
 //!
-//! Every converted call site reads back a file under `.moss/build/staging/`, so
+//! Every converted call site reads back a file under `.moss/build.nosync/staging/`, so
 //! every one of them takes the `Discard` arm. Nothing in the pipeline currently
 //! returns `Deferred`.
 //!
 //! That is not an oversight, it is what four rounds of read-side audit
-//! (moss#956) achieved: the source-read class — pages, theme, config, assets —
+//! achieved: the source-read class — pages, theme, config, assets —
 //! is handled by the disciplines in `cloud_readiness`
 //! (`read_page_source`, `read_optional_build_input`, `retry_after_materialize`),
 //! which defer *inside* the build. They record the file and carry on, so the
@@ -68,8 +68,7 @@
 //! Do not read the `Deferred` path as dead code to delete. Read it as the reason
 //! nobody has to remember this again.
 //!
-//! Deleted when M6b's `ports.rs` draws the real build-outcome seam. See
-//! `docs/archive/2026-08-05-dataless-output-writes-and-gate-preemption.md`.
+//! Deleted when M6b's `ports.rs` draws the real build-outcome seam.
 
 use std::fmt;
 use std::path::Path;
@@ -204,7 +203,7 @@ impl From<std::io::Error> for BuildStopped {
 /// dot-prefixed ancestor — a Google shared-drive vault lives below
 /// `.shortcut-targets-by-id`, an iCloud one below `~/Library/Mobile
 /// Documents/` — condemn every file in the vault, so every dataless read
-/// reported a raw OS error instead of raising the waiting screen (#1067).
+/// reported a raw OS error instead of raising the waiting screen.
 pub fn io_stop(root: &Path, context: &str, path: &Path, e: std::io::Error) -> BuildStopped {
     let message = format!("Failed to {context} {}: {e}", path.display());
     if !crate::build::icloud::is_offline_not_absent(path, &e) {
@@ -215,7 +214,7 @@ pub fn io_stop(root: &Path, context: &str, path: &Path, e: std::io::Error) -> Bu
             let removed = std::fs::remove_file(path).is_ok();
             log::warn!(
                 "{} was evicted from the build stage{} — the next build will \
-                 re-render it (ADR-043)",
+                 re-render it",
                 path.display(),
                 if removed { ", and has been discarded" } else { " (could not discard it)" }
             );
@@ -242,14 +241,19 @@ pub fn io_stop(root: &Path, context: &str, path: &Path, e: std::io::Error) -> Bu
 /// What to do about a file the cloud has not handed back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Disposition {
-    /// **Anything under `build/staging/` or `build/cache/`.** Delete it and
-    /// fail; the caller re-runs the build once and it is written fresh. Per
-    /// ADR-043 a dataless file in the stage is absent — moss regenerates it
+    /// **Anything under `build.nosync/staging/`, `build.nosync/cache/` or the
+    /// store at `cache/`** — never a sealed generation, which the preview may
+    /// be serving. A store
+    /// blob is waited for deliberately, once, by `ObjectStore::ready_blob`;
+    /// a read that still stops on it has already lost that wait, and a
+    /// `Report` here would raise a waiting screen nothing lowers (the
+    /// supervisor never sweeps the store). Delete it and
+    /// fail; the caller re-runs the build once and it is written fresh. A
+    /// dataless file in the stage is treated as absent — moss regenerates it
     /// from source and does not want the bytes back, so waiting is pure delay.
     /// `unlink` does not touch data extents, so removing it cannot
     /// materialize, and removing it is what makes the failure self-healing
-    /// rather than repeating against the same evicted inode on every rebuild —
-    /// the shape of the moss#964 report.
+    /// rather than repeating against the same evicted inode on every rebuild.
     ///
     /// **The rule is "delete only what the next build is guaranteed to
     /// rewrite", and the whole of staging and the CAS now qualify.** The build
@@ -295,7 +299,7 @@ enum Disposition {
 /// today; convert one and add the test.
 ///
 /// **Both** watcher predicates, because the rebuild needs both:
-/// `path_is_watchable` rejects dotfiles and `node_modules` (and delegates to
+/// `path_is_watchable` rejects what the scan leaves out (and delegates to
 /// `should_watch_moss_file` inside `.moss/`), and `path_passes_filter` applies
 /// the extension allowlist. Restating either one here would be a second copy of
 /// a list that has already drifted once; delegating means a new watched
@@ -307,7 +311,9 @@ enum Disposition {
 /// the vault-relative path.
 fn disposition(root: &Path, path: &Path) -> Disposition {
     let regenerable = moss_relative_tail(path).is_some_and(|rel| {
-        rel.starts_with("build/staging/") || rel.starts_with("build/cache/")
+        rel.starts_with("build.nosync/staging/")
+            || rel.starts_with("build.nosync/cache/")
+            || rel.starts_with("cache/")
     });
     if regenerable {
         return Disposition::Discard;

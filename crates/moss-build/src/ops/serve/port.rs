@@ -1,7 +1,10 @@
 //! TCP port utilities for the preview server.
 //!
 //! Provides port availability checking, port scanning, and server readiness
-//! verification used by the server lifecycle layer.
+//! verification used by the server lifecycle layer, plus [`bind_with_scan`]
+//! and [`drive`] — the one owner of binding the preview server's actual
+//! listener(s) (loopback dual-stack, or `ServeConfig::bind`'s explicit
+//! address) and driving `axum::serve` on whichever came back.
 //!
 //! ## Identity verification
 //!
@@ -10,7 +13,10 @@
 //! foreign server's port, [`verify_server_ready`] hits the dedicated
 //! [`MOSS_HEALTH_PATH`] endpoint and requires a moss-specific marker token
 //! ([`MOSS_HEALTH_MARKER`]) in the response body before accepting the port as
-//! moss-owned. The matching route handler is defined in `router.rs`.
+//! moss-owned. [`moss_health_handler`] is that endpoint's route handler,
+//! mounted by `router.rs`; it lives here, beside the constant and the probe
+//! that read its body, rather than in `router.rs` with the rest of the route
+//! table.
 
 /// The reserved health-check path served by every moss preview server.
 ///
@@ -26,6 +32,60 @@ pub const MOSS_HEALTH_PATH: &str = "/__moss_health/";
 /// the probed port is actually a moss preview server, not a stale eleventy /
 /// vite / jekyll / next.js instance that happened to bind the same port.
 pub const MOSS_HEALTH_MARKER: &str = "\"moss-preview-server\"";
+
+/// Body served by [`MOSS_HEALTH_PATH`].
+///
+/// The marker substring is physically substituted from [`MOSS_HEALTH_MARKER`]
+/// at format time, so the producer and [`verify_server_ready`] cannot drift
+/// apart: a rename of the marker constant updates both sides automatically
+/// (`moss_health_body_contains_marker` in `router_tests.rs` locks it too).
+///
+/// Schema 2 spends the `schema: 1` forward-compat field: `folder_id` and
+/// `pid` let [`super::ownership::find_live_owner`] confirm whoever answers
+/// this URL still serves the folder asked about, not just that some moss is
+/// alive on the port. A field schema 2 introduces needs a `schema >= 2` gate,
+/// not presence alone — an older server has no `folder_id`, not an empty
+/// one, and `>=` keeps a future schema-3 reader accepting this body too.
+/// `folder_id` is JSON `null` (never `""`) when the served directory
+/// resolves to no vault.
+///
+/// `MOSS_HEALTH_MARKER` already includes its own surrounding double quotes,
+/// so the format expression drops it in pre-quoted — no extra `\"` needed.
+pub(crate) fn moss_health_body(folder_id: Option<&str>, pid: u32) -> String {
+    let folder_id_json = match folder_id {
+        Some(id) => format!("\"{id}\""),
+        None => "null".to_string(),
+    };
+    format!(
+        "{{\"server\":{},\"version\":\"{}\",\"preview\":true,\"schema\":2,\"folder_id\":{},\"pid\":{}}}",
+        MOSS_HEALTH_MARKER,
+        env!("CARGO_PKG_VERSION"),
+        folder_id_json,
+        pid
+    )
+}
+
+/// Handler for [`MOSS_HEALTH_PATH`], mounted by `router.rs`.
+///
+/// Returns the moss marker [`verify_server_ready`] checks for, plus the
+/// folder identity `find_live_owner` needs. Re-resolved from the live
+/// `site_dir` on every request, not fixed at router-build time, so a future
+/// folder switch reports the folder served NOW.
+pub(crate) async fn moss_health_handler(
+    site_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+) -> axum::response::Response<axum::body::Body> {
+    let folder_id = site_dir
+        .read()
+        .ok()
+        .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir))
+        .map(|vault| crate::infra::folder_lock::folder_id(vault.path()));
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json; charset=utf-8")
+        .header("cache-control", "no-store")
+        .body(axum::body::Body::from(moss_health_body(folder_id.as_deref(), std::process::id())))
+        .unwrap()
+}
 
 /// Finds an available TCP port starting from the given port number.
 ///
@@ -58,7 +118,7 @@ pub fn find_available_port(start_port: u16) -> Result<u16, String> {
 /// IPv6 wildcard while leaving IPv4 free — a single-family probe would
 /// erroneously declare the port available, moss would bind IPv4, and the
 /// `http://localhost:` iframe URL (IPv6-first on macOS) would silently route
-/// to the foreign server. See `docs/archive/2026-05-22-preview-port-dual-stack-collision.md`.
+/// to the foreign server.
 ///
 /// This is defense-in-depth — the authoritative collision check is the
 /// dual-stack server bind in `router.rs::start_server`.
@@ -113,6 +173,33 @@ pub fn env_port_base() -> u16 {
 /// # Returns
 /// * `Ok(())` - A moss preview server is responding on this port
 /// * `Err(String)` - No moss server detected (foreign server, no server, or unreachable)
+/// One blocking GET, run off the async executor because `ureq` is a sync
+/// client. The sole piece [`verify_server_ready`]'s retry loop and
+/// [`super::ownership::find_live_owner`]'s one-shot discovery probe have in
+/// common — see [`blocking_get`] for why the retry policy around it is not
+/// shared too.
+fn blocking_get_sync(url: &str) -> Result<String, ureq::Error> {
+    ureq::get(url)
+        .timeout(std::time::Duration::from_secs(1))
+        .call()
+        .map(|resp| resp.into_string().unwrap_or_default())
+}
+
+/// [`blocking_get_sync`] on `spawn_blocking`, collapsed to a single `Result`
+/// a one-shot caller can just `?` through. [`verify_server_ready`] does NOT
+/// use this: its retry loop must tell "connection refused, try again" apart
+/// from "a non-success status, a foreign server, stop now," a distinction
+/// this collapsed shape throws away. [`find_live_owner`] has no such
+/// distinction to make — any failure at all simply means "not a confirmed
+/// live owner" — so it reuses the plain GET without the retry wrapper.
+pub(crate) async fn blocking_get(url: String) -> Result<String, String> {
+    match tokio::task::spawn_blocking(move || blocking_get_sync(&url)).await {
+        Ok(Ok(body)) => Ok(body),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(e) => Err(format!("probe task panicked: {e}")),
+    }
+}
+
 pub async fn verify_server_ready(port: u16) -> Result<(), String> {
     // Use the IPv4 literal explicitly. `localhost` would expose us to IPv6-first
     // DNS resolution on macOS, which can route the probe to a foreign IPv6
@@ -124,13 +211,7 @@ pub async fn verify_server_ready(port: u16) -> Result<(), String> {
 
     for attempt in 1..=max_attempts {
         let url_clone = url.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            ureq::get(&url_clone)
-                .timeout(std::time::Duration::from_secs(1))
-                .call()
-                .map(|resp| resp.into_string().unwrap_or_default())
-        })
-        .await;
+        let result = tokio::task::spawn_blocking(move || blocking_get_sync(&url_clone)).await;
 
         match result {
             Ok(Ok(body)) => {
@@ -168,6 +249,195 @@ pub async fn verify_server_ready(port: u16) -> Result<(), String> {
         "Server failed to respond after {} attempts",
         max_attempts
     ))
+}
+
+/// Attempt to bind TCP listeners for moss on both IPv4 (`127.0.0.1`) and
+/// IPv6 (`[::1]`) loopback for exactly the given port.
+///
+/// Returns `Err` if either family is unbindable; the caller is expected to
+/// move on to the next candidate port in that case.
+///
+/// ### Why two listeners instead of one wildcard bind
+///
+/// The obvious approach — binding the IPv6 wildcard `[::]:port` with
+/// `IPV6_V6ONLY=0` — does NOT work as a collision detector on macOS / BSD.
+/// macOS allows a later `127.0.0.1:port` bind to coexist with a prior
+/// `[::]:port` bind, and the more-specific listener wins for incoming
+/// localhost traffic. That is exactly the foreign-vs-moss collision pattern
+/// this code is supposed to detect and refuse.
+///
+/// Binding both specific loopback addresses explicitly accomplishes two
+/// things:
+///
+/// 1. **Detection.** If a foreign server holds `127.0.0.1:port` or `[::1]:port`
+///    directly, our bind fails on that address and we fall through to the
+///    next-port scan.
+/// 2. **Correctness in the wildcard case.** Even if a foreign dev server
+///    holds the IPv6 wildcard `[::]:port` (eleventy's default), the kernel
+///    routes connections to whichever listener has the more specific
+///    address. Our two specific-loopback listeners win, so the iframe
+///    sees moss content regardless of whether `localhost` resolves to
+///    `127.0.0.1` or `::1`.
+async fn try_bind_dual_stack(
+    port: u16,
+) -> Result<(tokio::net::TcpListener, tokio::net::TcpListener), String> {
+    let v4_addr: std::net::SocketAddr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let v6_addr: std::net::SocketAddr =
+        std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+
+    let v4 = tokio::net::TcpListener::bind(&v4_addr)
+        .await
+        .map_err(|e| format!("bind 127.0.0.1:{}: {}", port, e))?;
+    // If v4 succeeded but v6 fails, dropping `v4` here releases the IPv4
+    // listener so we don't leak a half-bound port — the next loop iteration
+    // (or a competing process) is free to grab the IPv4 side again.
+    let v6 = tokio::net::TcpListener::bind(&v6_addr)
+        .await
+        .map_err(|e| format!("bind [::1]:{}: {}", port, e))?;
+    Ok((v4, v6))
+}
+
+/// Scan upward from `start_port` until both IPv4 and IPv6 loopback can be
+/// bound simultaneously. Returns the bound port plus both listeners.
+///
+/// This is the **authoritative collision check** for the server-start path:
+/// the bind itself is the source of truth for "is this port free?", which
+/// closes the TOCTOU window that a separate `is_port_available` →
+/// `bind_dual_stack` sequence would leave open. Other callers that just
+/// want a non-binding probe (e.g. lifecycle health checks) can still use
+/// `is_port_available`.
+///
+/// Scans `MAX_PORT_SCAN` ports (currently 100) starting from `start_port`.
+/// Returns the same shape `try_bind_dual_stack` does on success, or an
+/// `Err` describing the last bind failure if no port in the range works.
+pub(super) async fn bind_dual_stack_with_scan(
+    start_port: u16,
+) -> Result<(u16, tokio::net::TcpListener, tokio::net::TcpListener), String> {
+    const MAX_PORT_SCAN: u16 = 100;
+    let mut last_err: Option<String> = None;
+    for port in start_port..start_port.saturating_add(MAX_PORT_SCAN) {
+        match try_bind_dual_stack(port).await {
+            Ok((v4, v6)) => {
+                log::info!(
+                    target: "preview",
+                    "Preview server bound to port {} (dual-stack: IPv4 + IPv6)",
+                    port
+                );
+                return Ok((port, v4, v6));
+            }
+            Err(e) => {
+                log::info!(
+                    target: "preview",
+                    "Port {} unavailable, trying next port (foreign server may be holding it): {}",
+                    port, e
+                );
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(format!(
+        "No dual-stack-bindable port found in range {}..{} (last error: {})",
+        start_port,
+        start_port.saturating_add(MAX_PORT_SCAN),
+        last_err.unwrap_or_else(|| "unknown".to_string())
+    ))
+}
+
+/// Bind a single explicit, operator-named address — and nothing else — on
+/// the chosen port, scanning the same range the loopback bind does. Safe to
+/// expose beyond loopback for the reason `trust_boundary`'s `extra_hosts`
+/// doc section adds to its DNS-rebinding reasoning: the operator named this
+/// address, it did not arrive by a rebind.
+async fn bind_explicit_with_scan(
+    addr: std::net::IpAddr,
+    start_port: u16,
+) -> Result<(u16, tokio::net::TcpListener), String> {
+    const MAX_PORT_SCAN: u16 = 100;
+    let mut last_err: Option<String> = None;
+    for port in start_port..start_port.saturating_add(MAX_PORT_SCAN) {
+        match tokio::net::TcpListener::bind(std::net::SocketAddr::new(addr, port)).await {
+            Ok(listener) => return Ok((port, listener)),
+            Err(e) => last_err = Some(format!("bind {addr}:{port}: {e}")),
+        }
+    }
+    Err(format!(
+        "No bindable port found in range {}..{} for {} (last error: {})",
+        start_port,
+        start_port.saturating_add(MAX_PORT_SCAN),
+        addr,
+        last_err.unwrap_or_else(|| "unknown".to_string())
+    ))
+}
+
+/// Bind the port for one server start. `bind` is `ServeConfig::bind`
+/// verbatim: `None` scans for the loopback dual-stack pair
+/// ([`bind_dual_stack_with_scan`]); `Some(addr)` scans for `addr` alone
+/// ([`bind_explicit_with_scan`]). Returns the bound port, the primary
+/// listener, and a secondary one only in the dual-stack case.
+pub(super) async fn bind_with_scan(
+    bind: Option<std::net::IpAddr>,
+    start_port: u16,
+) -> Result<(u16, tokio::net::TcpListener, Option<tokio::net::TcpListener>), String> {
+    match bind {
+        Some(addr) => {
+            let (port, listener) = bind_explicit_with_scan(addr, start_port).await?;
+            Ok((port, listener, None))
+        }
+        None => {
+            let (port, v4, v6) = bind_dual_stack_with_scan(start_port).await?;
+            Ok((port, v4, Some(v6)))
+        }
+    }
+}
+
+/// Serve `app` on `primary` (and `secondary`, when present) until
+/// `shutdown_rx` fires, then stop both gracefully. One external signal,
+/// fanned out to every bound listener through a broadcast channel of one.
+pub(super) async fn drive(
+    primary: tokio::net::TcpListener,
+    secondary: Option<tokio::net::TcpListener>,
+    app: axum::Router,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) {
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+    let shutdown_primary = {
+        let mut rx = broadcast_tx.subscribe();
+        async move {
+            let _ = rx.recv().await;
+        }
+    };
+    let shutdown_secondary = secondary.is_some().then(|| {
+        let mut rx = broadcast_tx.subscribe();
+        async move {
+            let _ = rx.recv().await;
+        }
+    });
+
+    let app_secondary = app.clone();
+    let primary_serve = async move {
+        if let Err(e) = axum::serve(primary, app)
+            .with_graceful_shutdown(shutdown_primary)
+            .await
+        {
+            log::error!(target: "preview", "Preview server error: {}", e);
+        }
+    };
+    let secondary_serve = async move {
+        if let (Some(listener), Some(shutdown)) = (secondary, shutdown_secondary) {
+            if let Err(e) = axum::serve(listener, app_secondary)
+                .with_graceful_shutdown(shutdown)
+                .await
+            {
+                log::error!(target: "preview", "Preview server (secondary) error: {}", e);
+            }
+        }
+    };
+    let bridge = async move {
+        let _ = shutdown_rx.await;
+        let _ = broadcast_tx.send(());
+    };
+
+    tokio::join!(primary_serve, secondary_serve, bridge);
 }
 
 #[cfg(test)]

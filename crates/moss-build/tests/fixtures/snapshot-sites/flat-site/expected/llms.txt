@@ -1,0 +1,34 @@
+# [TEST_DIR]
+
+---
+
+## another thought
+
+# Another Thought
+
+Sometimes I wonder why we don't write more.
+
+---
+
+## my first post
+
+# My First Post
+
+I've been meaning to start writing for a while now.
+
+---
+
+## about
+
+# About Me
+
+I'm a software engineer living in Portland.
+
+---
+
+## [TEST_DIR]
+
+# Alice's Corner
+
+Hi, I'm Alice. Welcome to my corner of the internet.
+

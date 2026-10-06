@@ -145,7 +145,7 @@ fn root_with_image(rel: &str, rgb: [u8; 3]) -> tempfile::TempDir {
 fn both_passes(md: &str, page: &Page<'_>, link_meta: Option<&HashMap<String, LinkMeta>>) -> String {
     let mut plan = plan_of(md);
     apply_collection_cards(&mut plan, &page.index());
-    apply_link_previews(&mut plan, link_meta);
+    apply_link_previews(&mut plan, &page.index(), link_meta);
     plan.to_html()
 }
 
@@ -225,7 +225,7 @@ fn a_heading_cell_is_opaque() {
 
 #[test]
 fn a_compound_link_cell_carries_its_inner_text() {
-    // The SoCiviC pattern: a whole cell wrapped in one link spanning block
+    // The poster-card pattern: a whole cell wrapped in one link spanning block
     // content. The old scanner recovered the name by stripping tags out of the
     // rendered anchor, which also swept up a heading's permalink `#`.
     let md = ":::grid 1\n[![](poster.png)\n\n### Show Title\n\nA description](/shows/one/)\n:::\n";
@@ -283,6 +283,71 @@ fn folder_links_in_a_grid_become_collection_cards() {
     );
 }
 
+#[test]
+fn a_bare_wikilink_cell_shows_the_linked_pages_title() {
+    // `[[work-b]]` has no `|alias`, so pulldown-cmark synthesizes the raw
+    // target ("work-b") as the link's text. That synthesized text is never
+    // the author's title choice, so the card must show the linked page's
+    // own title instead.
+    let docs = vec![make_doc("Work B", "work-b/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[[work-b]]\n:::\n");
+    assert!(html.contains(">Work B<"), "got: {html}");
+    assert!(!html.contains(">work-b<"), "got: {html}");
+}
+
+#[test]
+fn a_wikilink_alias_overrides_the_linked_pages_title() {
+    // `[[work-b|Another Title]]` — the author wrote an explicit alias, which
+    // must win over the linked page's own title.
+    let docs = vec![make_doc("Work B", "work-b/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[[work-b|Another Title]]\n:::\n");
+    assert!(html.contains(">Another Title<"), "got: {html}");
+}
+
+/// A coverless cell beside a covered sibling in the SAME `:::grid` must read
+/// as a card, not as the bare `.moss-card-no-cover` placeholder box — the
+/// same upgrade `render_list_with_typesetting` already gives a coverless
+/// card in a mixed AUTO-generated listing (see `render_item`'s
+/// `list_has_covers` doc). Before this, `apply_collection_cards` rendered
+/// every cell in isolation and never knew a sibling had a cover.
+#[test]
+fn a_coverless_cell_in_a_mixed_grid_gets_the_quote_slot_not_the_bare_placeholder() {
+    let docs = vec![
+        make_doc("With Cover", "one/index.html", Some("cover.jpg")),
+        make_doc("No Cover", "two/index.html", None),
+    ];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 2\n[With Cover](one/)\n+++\n[No Cover](two/)\n:::\n");
+    assert!(
+        html.contains(r#"data-cover="quote""#),
+        "a coverless card beside a covered sibling must get the quote slot: {html}"
+    );
+    assert!(
+        !html.contains("moss-card-no-cover"),
+        "the bare placeholder must not appear once a sibling has a cover: {html}"
+    );
+}
+
+/// The other half of the same rule: when NO cell in the grid has a cover,
+/// every card is the same shape and the plain placeholder stays — mirrors
+/// the "uniformly coverless list" half of `render_item`'s doc.
+#[test]
+fn a_uniformly_coverless_grid_keeps_the_plain_placeholder() {
+    let docs = vec![
+        make_doc("First", "one/index.html", None),
+        make_doc("Second", "two/index.html", None),
+    ];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 2\n[First](one/)\n+++\n[Second](two/)\n:::\n");
+    assert!(
+        html.contains("moss-card-no-cover"),
+        "when no cell has a cover the plain placeholder stays: {html}"
+    );
+    assert!(!html.contains(r#"data-cover="quote""#), "got: {html}");
+}
+
 /// The ONE-renderer falsifier for the plain `:::grid` card, the twin of
 /// `summary_cells_render_through_the_summary_card_emitter` below: the expected
 /// markup is the grid-card emitter's own output for the shared props builder's
@@ -309,7 +374,11 @@ fn collection_cells_render_through_the_grid_card_emitter() {
         let props = crate::build::components::child_list::props_for_document(
             doc, &docs, "", &overrides, None,
         );
-        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, eager);
+        // `list_has_covers=true`: "Ink Study" has a cover, so "Works" (the
+        // other cell, coverless) must render through the quote-slot branch,
+        // not the bare `.moss-card-no-cover` placeholder — see
+        // `render_item`'s `list_has_covers` doc.
+        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, eager, true);
         // The first card with a cover carries the LCP hint; only one does here.
         eager = false;
         assert!(
@@ -352,7 +421,7 @@ fn a_grid_link_to_a_mixed_case_folder_finds_its_card() {
 #[test]
 fn a_grid_link_naming_no_document_stays_uncarded() {
     // The resolver's job on a miss is to answer "nothing", never to synthesize
-    // a folder URL that no document occupies (moss#903 bug 3).
+    // a folder URL that no document occupies.
     let docs = vec![folder_note("Mirror", "mirror/index.html", "MIRROR/index.md")];
     let graph = moss_core::content_graph::ContentGraph::from_paths(&["MIRROR/index.md"]);
     let page = Page::new("index.html", &docs).with_graph(&graph);
@@ -376,7 +445,7 @@ fn a_relative_href_resolves_inside_the_page_language_tree() {
     // A grid card link on a non-root page uses a relative href the browser
     // resolves against the page's own directory. With a same-named folder at
     // the site root, the href must anchor to the PAGE's url_path. Regression:
-    // the 刘果 `/en/` home's `:::grid [Music](videos.md)` linked to root
+    // a bilingual site's `/en/` home's `:::grid [Music](videos.md)` linked to root
     // `/video/` instead of `/en/video/` — both carry `url: video`.
     let docs = vec![
         make_folder("视频", "video/index.html", None),
@@ -460,6 +529,111 @@ fn external_links_never_become_collection_cards() {
 }
 
 #[test]
+fn an_internal_image_link_cell_keeps_its_authored_image() {
+    // A `Block::LinkCard` built around an image is the author's own card —
+    // resolving its href to a real page in the build must not throw the
+    // image away for an auto-generated page card. Mirrors what an external
+    // image-link cell already does (below).
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[![Alt text](a.jpg)](about/)\n:::\n");
+    assert!(html.contains("<img"), "authored image must survive: {html}");
+    assert!(
+        !html.contains(r#"class="moss-card""#),
+        "must not become an auto page card: {html}"
+    );
+    assert!(
+        html.contains(r#"data-kind="link""#),
+        "wraps as an internal link card, the shape the serializer already emits: {html}"
+    );
+}
+
+#[test]
+fn an_internal_image_with_a_caption_keeps_its_authored_image() {
+    // `detect_compound_link`'s caption carve-out (moss-core) routes an
+    // ordinary image followed by a blank-line caption to `leading_link`
+    // instead of `Block::LinkCard` — a different classify_cell shape, same
+    // authored-image rule. The cell's own paragraph already links the image,
+    // so this shape is left exactly as the serializer rendered it (like
+    // `.no-cards`) rather than nesting a second `<a>` around it.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let md = ":::grid 1\n[![Poster alt](a.jpg)](about/)\n\nA caption paragraph.\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
+    assert!(html.contains("<img"), "authored image must survive: {html}");
+    assert!(
+        !html.contains(r#"class="moss-card""#),
+        "must not become an auto page card: {html}"
+    );
+    assert!(
+        html.contains("A caption paragraph."),
+        "the caption must survive too: {html}"
+    );
+    assert_eq!(
+        html.matches("<a ").count(),
+        1,
+        "exactly one anchor, around the image -- no nested wrapper: {html}"
+    );
+}
+
+#[test]
+fn a_bare_text_internal_link_cell_still_becomes_a_page_card() {
+    // The other half of the same distinction: a link with no authored
+    // content of its own still asks moss to generate a page card.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[About](about/)\n:::\n");
+    assert_eq!(card_count(&html), 1, "got: {html}");
+}
+
+#[test]
+fn an_external_image_link_cell_becomes_a_moss_card_keeping_its_image() {
+    // The owner's "one card kind" decision: unlike an internal whole-cell
+    // link (which keeps the serializer's own `data-kind="link"` chrome
+    // untouched), an EXTERNAL one is overridden into the same `.moss-card`
+    // shape a collection card uses — with the authored image as its cover,
+    // never the retired link-preview shell.
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let md = ":::grid 1\n[![Alt text](a.jpg)](https://example.org/)\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert!(html.contains(r#"class="moss-card" data-external"#), "got: {html}");
+    assert!(
+        html.contains(r#"<div class="moss-card-cover">"#),
+        "authored image becomes the cover, not the no-cover placeholder: {html}"
+    );
+    assert!(html.contains("a.jpg"), "authored image must survive: {html}");
+    assert!(!html.contains("link-preview"), "retired shell must be gone: {html}");
+    // With no cache and no media pipeline in this test's `Page`, moss-core's
+    // own pure `Block::LinkCard` rendering and this pass's override happen
+    // to agree byte-for-byte — both implement the same "one card kind"
+    // shell (see `moss_core::ast::link_card`'s doc comment). That agreement
+    // is itself the point: the plan-with-passes output must equal the
+    // no-passes plan here, unlike before this change where the two shells
+    // (`.moss-card` vs `.moss-grid-card.link-preview`) disagreed.
+    assert_eq!(html, plan_of(md).to_html());
+}
+
+#[test]
+fn no_cards_already_leaves_an_internal_image_link_cell_alone() {
+    // `{.no-cards}` skips `apply_collection_cards` entirely, so it never hit
+    // this bug: the serializer's own `data-kind="link"` markup survives
+    // whether or not the href resolves to a page in the build.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let md = ":::grid 1 {.no-cards}\n[![Alt text](a.jpg)](about/)\n:::\n";
+    assert_eq!(page.cards(md), plan_of(md).to_html());
+    let html = plan_of(md).to_html();
+    assert!(html.contains("<img"), "got: {html}");
+    assert!(html.contains(r#"data-kind="link""#), "got: {html}");
+}
+
+#[test]
 fn a_grid_free_body_is_untouched() {
     let docs = vec![make_doc("Design", "design/index.html", None)];
     let page = Page::new("index.html", &docs);
@@ -481,7 +655,7 @@ fn a_cjk_href_resolves_after_percent_decoding() {
 // ── link previews ──────────────────────────────────────────────────────
 
 #[test]
-fn an_external_link_cell_becomes_a_link_preview() {
+fn an_external_link_cell_becomes_a_moss_card() {
     // The old scanner matched `<a href="…"`, but moss-core emits
     // `<a target="_blank" rel="noopener" href="…">` for external links, so this
     // conversion silently stopped happening. Reading the typed cell restores it.
@@ -492,9 +666,13 @@ fn an_external_link_cell_becomes_a_link_preview() {
         &page,
         None,
     );
-    assert!(html.contains("link-preview"), "got: {html}");
-    assert!(html.contains("mdn.dev"), "domain row: {html}");
-    assert!(html.contains("MDN"), "manual title from the link text: {html}");
+    assert!(html.contains(r#"class="moss-card" data-external"#), "got: {html}");
+    assert!(html.contains("mdn.dev"), "domain kicker: {html}");
+    assert!(
+        html.contains(r#"<span class="moss-card-title">MDN</span>"#),
+        "manual title from the link text: {html}"
+    );
+    assert!(!html.contains("link-preview"), "retired shell must be gone: {html}");
 }
 
 #[test]
@@ -509,6 +687,14 @@ fn a_bare_url_cell_takes_its_title_from_cached_metadata() {
             title: Some("Sly Kitten".to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: "2026-07-30T00:00:00Z".to_string(),
         },
     );
@@ -521,27 +707,164 @@ fn a_bare_url_cell_takes_its_title_from_cached_metadata() {
 }
 
 #[test]
-fn a_bare_url_with_no_cached_metadata_never_fakes_a_title() {
+fn a_bare_url_cell_shows_a_cached_favicon_in_the_kicker() {
     let docs: Vec<ParsedDocument> = vec![];
     let page = Page::new("index.html", &docs);
-    let html = both_passes(":::grid 1\n<https://slykiten.com/>\n:::\n", &page, None);
-    assert!(html.contains("link-preview"), "got: {html}");
-    assert!(html.contains("slykiten.com"), "domain row: {html}");
-    assert!(!html.contains("link-preview-title"), "no fake title: {html}");
+    let mut meta = HashMap::new();
+    meta.insert(
+        "https://slykiten.com/".to_string(),
+        LinkMeta {
+            url: "https://slykiten.com/".to_string(),
+            title: None,
+            description: None,
+            favicon: Some("https://slykiten.com/favicon.ico".to_string()),
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
+            fetched_at: "2026-07-30T00:00:00Z".to_string(),
+        },
+    );
+    let html = both_passes(
+        ":::grid 1\n<https://slykiten.com/>\n:::\n",
+        &page,
+        Some(&meta),
+    );
+    assert!(
+        html.contains(r#"class="moss-card-kicker-favicon""#),
+        "got: {html}"
+    );
+    assert!(html.contains("https://slykiten.com/favicon.ico"), "got: {html}");
 }
 
 #[test]
-fn bare_url_cells_are_the_ones_reported_for_prewarm() {
+fn an_authored_cover_image_survives_alongside_cached_metadata() {
+    // The owner's rule: author content always wins over fetched metadata —
+    // checked on the cover, which is the one slot the author's image and a
+    // fetch could otherwise both claim. A cached title is free to fill the
+    // title slot here (the cell carries no title text of its own, only an
+    // image), but it must never displace the authored cover.
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let mut meta = HashMap::new();
+    meta.insert(
+        "https://example.org/".to_string(),
+        LinkMeta {
+            url: "https://example.org/".to_string(),
+            title: Some("Fetched Title".to_string()),
+            description: None,
+            favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
+            fetched_at: "2026-07-30T00:00:00Z".to_string(),
+        },
+    );
+    let md = ":::grid 1\n[![Alt text](a.jpg)](https://example.org/)\n:::\n";
+    let html = both_passes(md, &page, Some(&meta));
+    assert!(
+        html.contains(r#"<div class="moss-card-cover"><img src="a.jpg""#),
+        "authored image must remain the cover, not a fetched one: {html}"
+    );
+    assert!(
+        html.contains(r#"<span class="moss-card-title">Fetched Title</span>"#),
+        "a cached title is fine when the cell carries no words: {html}"
+    );
+}
+
+#[test]
+fn external_and_internal_cards_share_the_same_shell() {
+    // The owner's "one card kind" decision, checked structurally: both
+    // renderers must emit the same slot classes, not merely similar-looking
+    // markup that happens to drift apart later.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let internal = page.cards(":::grid 1\n[About](about/)\n:::\n");
+    let external = both_passes(":::grid 1\n[Ext](https://example.com)\n:::\n", &page, None);
+    // Kicker is skipped: an internal card only emits one when the linked
+    // page has a `kicker:` of its own, so its absence here isn't a shape
+    // difference. Cover, content, meta and title are unconditional on both
+    // sides and are the real "same shell" claim.
+    for class in [
+        r#"class="moss-card""#,
+        r#"class="moss-card-cover"#,
+        r#"class="moss-card-content""#,
+        r#"class="moss-card-meta""#,
+        r#"class="moss-card-title""#,
+    ] {
+        assert!(internal.contains(class), "internal missing {class}: {internal}");
+        assert!(external.contains(class), "external missing {class}: {external}");
+    }
+}
+
+#[test]
+fn a_bare_url_with_no_cached_metadata_falls_back_to_the_url_itself() {
+    // Never an invented editorial title — but the card still needs
+    // something in its title slot, so it falls back to the URL's own
+    // domain and path rather than a blank space.
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let html = both_passes(":::grid 1\n<https://slykiten.com/>\n:::\n", &page, None);
+    assert!(html.contains(r#"class="moss-card" data-external"#), "got: {html}");
+    assert!(html.contains("slykiten.com"), "domain kicker: {html}");
+    assert!(
+        html.contains(r#"<span class="moss-card-title">slykiten.com</span>"#),
+        "domain+path fallback title: {html}"
+    );
+}
+
+#[test]
+fn every_external_cell_is_reported_for_prewarm_even_with_a_manual_title() {
+    // Owner decision (2026-09): author-written link text wins the TITLE
+    // slot only. It must not suppress the fetch itself — a manually
+    // titled cell still wants its favicon and og:image cover — so both
+    // external URLs are candidates here, not just the bare one. Only the
+    // internal link is excluded.
     let docs: Vec<ParsedDocument> = vec![];
     let page = Page::new("index.html", &docs);
     let mut plan = plan_of(
         ":::grid 3\n<https://a.example/>\n+++\n[Manual](https://b.example/)\nDesc.\n+++\n[Local](local/)\n:::\n",
     );
     apply_collection_cards(&mut plan, &page.index());
+    let mut urls = external_urls_needing_fetch(&plan);
+    urls.sort();
     assert_eq!(
-        external_urls_needing_fetch(&plan),
-        vec!["https://a.example/".to_string()],
-        "only the bare URL wants a fetched title"
+        urls,
+        vec!["https://a.example/".to_string(), "https://b.example/".to_string()],
+        "every external cell wants its favicon/cover fetched, manual title or not"
+    );
+}
+
+#[test]
+fn external_urls_across_build_collects_from_every_document_deduplicated() {
+    // The pre-render pass `blocking.rs` runs before ANY page's collection-
+    // card pass — this reads straight off each doc's raw `body_plan`.
+    let mut doc_a = make_doc("A", "a/index.html", None);
+    doc_a.body_plan = Some(plan_of(":::grid 1\n<https://a.example/>\n:::\n"));
+    let mut doc_b = make_doc("B", "b/index.html", None);
+    doc_b.body_plan = Some(plan_of(
+        ":::grid 2\n<https://a.example/>\n+++\n<https://b.example/>\n:::\n",
+    ));
+    let mut doc_c = make_doc("C", "c/index.html", None);
+    doc_c.body_plan = Some(plan_of("Just prose, no grid at all.\n"));
+    let doc_d = make_doc("D", "d/index.html", None); // no body_plan at all
+    let docs = vec![doc_a, doc_b, doc_c, doc_d];
+
+    let mut urls = external_urls_across_build(docs.iter());
+    urls.sort();
+    assert_eq!(
+        urls,
+        vec!["https://a.example/".to_string(), "https://b.example/".to_string()],
+        "deduplicated across documents, and a doc with no body_plan or no grid contributes nothing"
     );
 }
 
@@ -561,14 +884,75 @@ fn a_cell_already_turned_into_a_card_is_not_reclassified() {
 }
 
 #[test]
-fn an_unresolved_internal_link_cell_becomes_a_link_card() {
+fn an_unresolved_internal_link_with_a_description_keeps_its_own_anchor() {
+    // Every cell that reaches `preview_markup`'s internal branch is a
+    // `leading_link` cell, whose own paragraph already rendered an `<a>` —
+    // wrapping it in a second one would nest anchors, so it is left exactly
+    // as the serializer rendered it.
     let docs: Vec<ParsedDocument> = vec![];
     let page = Page::new("index.html", &docs);
-    let html = both_passes(":::grid 1\n[Foo](/foo)\nA description.\n:::\n", &page, None);
-    assert!(html.contains(r#"data-kind="link""#), "got: {html}");
+    let md = ":::grid 1\n[Foo](/foo)\nA description.\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
     assert!(!html.contains("link-preview"), "got: {html}");
-    // The cell's own content rides inside the anchor.
     assert!(html.contains("A description."), "got: {html}");
+    assert_eq!(
+        html.matches("<a ").count(),
+        1,
+        "exactly one anchor -- no nested wrapper: {html}"
+    );
+}
+
+#[test]
+fn an_unresolved_internal_text_link_with_a_caption_keeps_its_own_anchor() {
+    // The blank-line-separated-caption shape, unresolved: `cell.inner()`
+    // already has its own `<a>` from the link's own paragraph, so wrapping
+    // it again would nest anchors.
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let md =
+        ":::grid 1\n[Missing](missing.md)\n\nA caption paragraph under a text link.\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
+    assert!(
+        html.contains("A caption paragraph under a text link."),
+        "got: {html}"
+    );
+    assert_eq!(
+        html.matches("<a ").count(),
+        1,
+        "exactly one anchor -- no nested wrapper: {html}"
+    );
+}
+
+#[test]
+fn no_cards_resolving_internal_text_link_with_a_caption_keeps_its_own_anchor() {
+    // `.no-cards` skips `apply_collection_cards`, but `apply_link_previews`
+    // runs unconditionally on every grid — it must not nest an anchor here
+    // either, whether or not the link resolves to a page in the build.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let md =
+        ":::grid 1 {.no-cards}\n[About](about/)\n\nA caption paragraph under a text link.\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
+    assert_eq!(
+        html.matches("<a ").count(),
+        1,
+        "exactly one anchor -- no nested wrapper: {html}"
+    );
 }
 
 #[test]
@@ -591,7 +975,7 @@ fn a_two_link_cell_is_left_alone_by_both_passes() {
     assert_eq!(both_passes(md, &page, None), plan_of(md).to_html());
 }
 
-// ── moss#903 bug 1: CJK prose before a grid ────────────────────────────
+// ── CJK prose before a grid ────────────────────────────
 
 #[test]
 fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
@@ -607,16 +991,16 @@ fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
         make_doc("A", "writings/a/index.html", None),
     ];
     let page = Page::new("index.html", &docs);
-    let md = "潮汐作為一個文學計畫，關注的是非虛構寫作的現場。\n\n\
+    let md = "河灣作為一個寫作計畫，關注的是普通人寫作的現場。\n\n\
               :::grid 1\n[文字](writings/)\n:::\n\n之後的段落。\n";
 
     let mut plan = plan_of(md);
     apply_collection_cards(&mut plan, &page.index());
-    apply_link_previews(&mut plan, None);
+    apply_link_previews(&mut plan, &page.index(), None);
     let (lead, trailer) = plan.split_at_lede();
 
     // The lede stays in the cover column, the grid is released past it.
-    assert!(lead.contains("潮汐作為一個文學計畫"), "lead: {lead}");
+    assert!(lead.contains("河灣作為一個寫作計畫"), "lead: {lead}");
     assert!(
         !lead.contains("moss-grid"),
         "the grid escaped the column: {lead}"
@@ -635,11 +1019,11 @@ fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
     assert_eq!(lead.matches('<').count(), lead.matches('>').count());
 }
 
-// ── moss#903 bug 4: long-form body trapped in the cover column ─────────
+// ── long-form body trapped in the cover column ─────────
 
 #[test]
 fn a_long_article_on_a_cover_page_is_not_trapped_in_the_narrow_column() {
-    // Before ADR-034 the ONLY release point was a literal `.moss-grid` match,
+    // Before typed grid cells the ONLY release point was a literal `.moss-grid` match,
     // so a cover-bearing folder home whose body is a long article typeset its
     // entire body in the narrow cover-body column, with half the viewport empty
     // beside it.
@@ -674,8 +1058,7 @@ fn a_cell_of_image_label_and_heading_link_is_opaque() {
     // The shape an author reaches for when hand-building what they wanted a
     // card to be: the cover, a kicker, and the title as a linked heading. It is
     // three blocks, so no card is built and the author gets exactly what they
-    // typed. Documented in docs/reference/shortcode-grammar.md as the trap,
-    // because the fix is counter-intuitive — DELETE the hand-built parts and
+    // typed. This is a known trap, and the fix is counter-intuitive — DELETE the hand-built parts and
     // let the linked page's own `cover:` and `description:` supply them.
     let md = ":::grid 1\n![](poster.png)\n\nPart One\n\n### [Title](/works/one/)\n:::\n";
     assert!(matches!(classify_nth(md, 0), GridCell::Opaque));
@@ -732,7 +1115,7 @@ fn a_cell_that_became_a_card_keeps_the_cards_own_color() {
 /// that a title plus a count has no vertical variant. It does: the count runs
 /// through `i18n::article_count_label`, which writes 四篇 rather than `4 篇`
 /// under vertical CJK — and `4` in a vertical column lies on its side
-/// (zhu-da home, 2026-09-11).
+/// (a vertical site's home, 2026-09-11).
 #[test]
 fn a_grid_folder_card_counts_in_chinese_under_vertical_cjk() {
     let docs = vec![
@@ -833,6 +1216,20 @@ fn a_column_count_does_not_survive_the_summary_variant() {
     assert!(!html.contains("moss-grid"), "got: {html}");
 }
 
+/// `scroll`'s attributes live on the opener the summary variant discards
+/// entirely (it becomes a `.moss-cards-container` `BodySegment::Html`, not a
+/// `.moss-grid`), so `.summary` wins over `scroll` the same way it already
+/// wins over a column count: nothing downstream ever sees `data-scroll`.
+#[test]
+fn scroll_does_not_survive_the_summary_variant() {
+    let docs = vec![make_page_doc("Ink Study", "works/ink-study/index.html", "2024-03-02", "A study.")];
+    let page = Page::new("index.html", &docs);
+    let html = page.summary(":::grid 3 {.summary scroll}\n[Ink Study](works/ink-study/)\n:::\n");
+
+    assert!(!html.contains("data-scroll"), "got: {html}");
+    assert!(!html.contains("moss-grid"), "got: {html}");
+}
+
 /// Token-exact on the typed class list, the way `no-cards` is — `.summary-cards`
 /// is a different class and renders an ordinary grid.
 #[test]
@@ -892,7 +1289,7 @@ fn an_unresolvable_cell_keeps_the_author_markup() {
     );
 }
 
-/// The zhu-da case, and the regression `render_item_with_typesetting` had to be
+/// The vertical-site case, and the regression `render_item_with_typesetting` had to be
 /// taught on 2026-09-11: the count runs through `i18n::article_count_label`,
 /// which writes 四篇 rather than `4 篇` under vertical CJK. Fails if
 /// `typesetting` is not threaded into `render_with_sort`.

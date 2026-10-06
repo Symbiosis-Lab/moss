@@ -5,7 +5,7 @@
 //! covering the whole token. The offsets let callers rewrite the source without
 //! re-scanning.
 //!
-//! **No resolution** happens here. The caller (src-tauri) resolves each
+//! **No resolution** happens here. The caller (moss-build) resolves each
 //! `RawRef` against the project's indexes.
 //!
 //! Recognition runs over [`crate::inert_regions`]'s mask rather than a
@@ -16,7 +16,7 @@
 //! authored `<!-- … -->` comment and inside an indented code block are no
 //! longer extracted. The old doc justified scanning comments with
 //! build-internal `<!-- moss-embed:… -->` sentinels, which never appear in
-//! the author files this module's only consumer (src-tauri's
+//! the author files this module's only consumer (moss-build's
 //! `editor::ref_scan`) reads from disk.
 
 /// Which surface syntax produced this reference.
@@ -38,6 +38,15 @@ pub enum RefSyntax {
     MarkdownLink { label: String },
     /// `![alt](path)` — standard markdown image
     MarkdownImage { alt: String },
+    /// `[id]: path` — a link reference definition. pulldown-cmark resolves
+    /// `[text][id]` uses against it into a normal link, so only the
+    /// definition's own destination is a reference to rewrite; a `[text][id]`
+    /// use names no path itself and needs no edit.
+    Definition { label: String },
+    /// A bare path or attribute value from a rendered `:::hero` or
+    /// `:::gallery` block. It behaves as an embed for resolution, but has no
+    /// markdown token of its own.
+    StructuralAsset,
 }
 
 /// A raw reference extracted from a markdown source string.
@@ -83,11 +92,11 @@ pub struct RawRef {
 /// whether to filter them out.
 ///
 /// **Nested references are reported too.** The label of a markdown link is
-/// re-scanned, so `[![[hero.png]]](/album/)` — ADR-041's link-wrapped embed —
+/// re-scanned, so `[![[hero.png]]](/album/)` — a link-wrapped embed —
 /// yields the outer `MarkdownLink` AND the inner `WikilinkStemEmbed`, and
 /// `[![a](hero.png)](/album/)` yields the outer link and the inner image.
-/// Before that, the inner reference existed only as a substring of the outer
-/// ref's `label`, so a rename left it dangling with no report. Results stay in
+/// Otherwise the inner reference would exist only as a substring of the outer
+/// ref's `label`, and a rename would leave it dangling with no report. Results stay in
 /// source order, with an enclosing reference immediately preceding the ones
 /// nested inside it.
 ///
@@ -98,7 +107,180 @@ pub fn extract_md_references(source: &str) -> Vec<RawRef> {
     let mask = crate::inert_regions::mask_inert(source);
     let mut refs = Vec::new();
     scan_range(source, mask.as_bytes(), 0, source.len(), &mut refs);
+    scan_definitions(source, &mut refs);
+    refs.sort_by_key(|r| r.byte_from);
     refs
+}
+
+/// Scan `source` for link reference definitions (`[id]: path`) and append one
+/// `RawRef` per destination found. A separate line-based pass rather than
+/// part of [`scan_range`]: `[id]:` never opens a bracket token that scanner
+/// recognizes (no `(` follows the `]`), so the two passes can't double-count
+/// the same bytes; a definition is inert wherever [`crate::inert_regions`]
+/// already says the whole LINE is (a fenced/indented code block), the same
+/// rule every other pass in this module defers to.
+fn scan_definitions(source: &str, refs: &mut Vec<RawRef>) {
+    let inert = crate::inert_regions::inert_lines(source);
+    for (idx, &(base, content_len, _)) in line_table(source).iter().enumerate() {
+        if inert.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
+        // SAFETY: base/content_len come from line_table, which only ever
+        // splits on ASCII '\n'/'\r' bytes — both bounds are char boundaries.
+        #[allow(clippy::string_slice)]
+        let line = &source[base..base + content_len];
+        if let Some(def) = parse_definition_line(line) {
+            refs.push(RawRef {
+                text: def.path,
+                syntax: RefSyntax::Definition { label: def.label },
+                byte_from: base,
+                byte_to: base + content_len,
+                ref_from: base + def.path_from,
+                ref_to: base + def.path_to,
+            });
+        }
+    }
+}
+
+/// One `[label]: destination` line, with the destination's LINE-RELATIVE
+/// span. Single-line only — CommonMark also allows the destination to start
+/// on the line after the label, which this does not recognize, matching
+/// `parse_md_link`'s own newline bail-out for the same shape of case.
+struct DefinitionLine {
+    label: String,
+    path: String,
+    path_from: usize,
+    path_to: usize,
+}
+
+fn parse_definition_line(line: &str) -> Option<DefinitionLine> {
+    let (rest, prefix_len) = strip_container_prefixes(line);
+    let mut def = parse_definition_line_inner(rest)?;
+    def.path_from += prefix_len;
+    def.path_to += prefix_len;
+    Some(def)
+}
+
+/// Strip CommonMark container-block prefixes — blockquote markers and
+/// list-item markers — from the start of `line`, returning what's left plus
+/// how many bytes were consumed. Loops, so `> - [id]: x.md` (a list item
+/// inside a blockquote) strips both layers before the definition scanner
+/// below ever sees it; pulldown-cmark resolves a `[text][id]` reference the
+/// same way regardless of which containers its definition sits inside, so a
+/// scanner that only recognized a bare top-level `[id]: path` missed exactly
+/// the definitions the build still rendered as working links.
+///
+/// Single-line only, matching this scanner's own definition-line limitation:
+/// a real container can continue onto a later line without repeating its
+/// marker (lazy continuation), which this does not attempt to track.
+fn strip_container_prefixes(line: &str) -> (&str, usize) {
+    let mut rest = line;
+    let mut consumed = 0usize;
+    loop {
+        let n = blockquote_marker_len(rest).or_else(|| list_item_marker_len(rest));
+        match n {
+            Some(n) if n > 0 => {
+                // SAFETY: blockquote_marker_len/list_item_marker_len only
+                // ever count single-byte ASCII characters (spaces, digits,
+                // '>', '-', '*', '+', '.', ')', a tab), so `n` always lands
+                // on a char boundary.
+                #[allow(clippy::string_slice)]
+                let sliced = &rest[n..];
+                rest = sliced;
+                consumed += n;
+            }
+            _ => break,
+        }
+    }
+    (rest, consumed)
+}
+
+/// `> ` (0-3 leading spaces, `>`, at most one following space or tab).
+fn blockquote_marker_len(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
+    if bytes.get(indent) != Some(&b'>') {
+        return None;
+    }
+    let mut n = indent + 1;
+    if matches!(bytes.get(n), Some(b' ') | Some(b'\t')) {
+        n += 1;
+    }
+    Some(n)
+}
+
+/// A bullet (`-`/`*`/`+`) or ordered (`1.`/`1)`, up to 9 digits) list-item
+/// marker (0-3 leading spaces), which CommonMark requires at least one
+/// trailing space or tab before the item's own content.
+fn list_item_marker_len(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
+    let marker_end = match bytes.get(indent) {
+        Some(b'-') | Some(b'*') | Some(b'+') => indent + 1,
+        _ => {
+            let digits = bytes[indent..].iter().take(9).take_while(|b| b.is_ascii_digit()).count();
+            if digits == 0 {
+                return None;
+            }
+            match bytes.get(indent + digits) {
+                Some(b'.') | Some(b')') => indent + digits + 1,
+                _ => return None,
+            }
+        }
+    };
+    matches!(bytes.get(marker_end), Some(b' ') | Some(b'\t')).then_some(marker_end + 1)
+}
+
+fn parse_definition_line_inner(line: &str) -> Option<DefinitionLine> {
+    let bytes = line.as_bytes();
+    let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
+    if bytes.get(indent) != Some(&b'[') {
+        return None;
+    }
+    let label_start = indent + 1;
+    // SAFETY: label_start is one past the ASCII '[' just confirmed at
+    // `indent`, and `close` is a byte offset `str::find` returned into that
+    // same slice — both are char boundaries.
+    #[allow(clippy::string_slice)]
+    let close = line[label_start..].find(']').map(|p| label_start + p)?;
+    #[allow(clippy::string_slice)]
+    let label = line[label_start..close].trim();
+    // `[^1]: body` is a footnote definition, whose body is prose (it may hold
+    // an ordinary link, which the main scan finds), never a destination.
+    if label.is_empty() || label.starts_with('^') {
+        return None;
+    }
+    let mut j = close + 1;
+    if bytes.get(j) != Some(&b':') {
+        return None;
+    }
+    j += 1;
+    while matches!(bytes.get(j), Some(b' ') | Some(b'\t')) {
+        j += 1;
+    }
+    let dest_raw = line.get(j..)?.trim_end();
+    if dest_raw.is_empty() {
+        return None;
+    }
+
+    if let Some((inner, offset)) = strip_angle_brackets(dest_raw) {
+        let path_from = j + offset;
+        return Some(DefinitionLine {
+            label: label.to_string(),
+            path: inner.to_string(),
+            path_from,
+            path_to: path_from + inner.len(),
+        });
+    }
+
+    // Bare destination: CommonMark allows no whitespace inside it, so it ends
+    // at the first whitespace (a title, if any, follows — irrelevant here
+    // since the path span stops before it).
+    let path = dest_raw.split(|c: char| c.is_ascii_whitespace()).next().unwrap_or("");
+    if path.is_empty() {
+        return None;
+    }
+    Some(DefinitionLine { label: label.to_string(), path: path.to_string(), path_from: j, path_to: j + path.len() })
 }
 
 /// Scan `source[from..to]` for reference tokens, appending to `refs`.
@@ -151,8 +333,10 @@ fn scan_range(source: &str, bytes: &[u8], from: usize, to: usize, refs: &mut Vec
                 let inner = &source[inner_start..close];
                 let token_end = close + 2;
                 // Split on | for alias/pothole
+                // In a table cell the separator is written `\|`; the
+                // backslash belongs to the escape, not to the target.
                 let (path_part, pipe_part) = match inner.split_once('|') {
-                    Some((before, after)) => (before, Some(after)),
+                    Some((before, after)) => (before.strip_suffix('\\').unwrap_or(before), Some(after)),
                     None => (inner, None),
                 };
                 // Only record non-empty targets
@@ -219,7 +403,7 @@ fn scan_range(source: &str, bytes: &[u8], from: usize, to: usize, refs: &mut Vec
                         ref_from: link.path_from,
                         ref_to: link.path_to,
                     });
-                    // The label can itself hold references — ADR-041's
+                    // The label can itself hold references —
                     // `[![[hero.png]]](/album/)`, or the CommonMark spelling
                     // `[![a](hero.png)](/album/)`. Scan it, bounded by the
                     // label's own end.
@@ -319,14 +503,16 @@ fn parse_md_link(
     let path_end = k;
     #[allow(clippy::string_slice)]
     let raw = &source[path_start..path_end];
-    // Strip optional title: `path "title"` → path. Both `trim` and
-    // `strip_link_title` only ever cut from the ends, so the surviving text is
-    // a prefix of the trimmed slice and its span is arithmetic, not a search
-    // (a `find` would land on the wrong copy of a repeated path).
+    // The destination is a prefix of the trimmed slice, so its span is
+    // arithmetic, not a search (a `find` would land on the wrong copy of a
+    // repeated path). Anything after it is a title and stays out of the span.
     let trimmed = raw.trim();
-    let path_from = path_start + (raw.len() - raw.trim_start().len());
-    let path = strip_link_title(trimmed);
-    let path_to = path_from + path.len();
+    let (dest_off, dest_len) = destination_span(trimmed);
+    let path_from = path_start + (raw.len() - raw.trim_start().len()) + dest_off;
+    let path_to = path_from + dest_len;
+    // SAFETY: `destination_span` returns char boundaries of `trimmed`.
+    #[allow(clippy::string_slice)]
+    let path = trimmed[dest_off..dest_off + dest_len].to_string();
 
     Some(ParsedLink {
         label,
@@ -339,23 +525,52 @@ fn parse_md_link(
     })
 }
 
-/// Strip an optional CommonMark link title from a raw link destination string.
-/// `path "My Title"` → `path`, `path 'title'` → `path`, `path (title)` → `path`.
-/// If no title is present, returns the input unchanged.
-fn strip_link_title(raw: &str) -> String {
-    let raw = raw.trim();
-    // Find the last whitespace-separated token that looks like a title
-    if let Some(ws) = raw.rfind(|c: char| c.is_ascii_whitespace()) {
-        let (path_part, maybe_title) = raw.split_at(ws);
-        let maybe_title = maybe_title.trim();
-        let is_title = (maybe_title.starts_with('"') && maybe_title.ends_with('"'))
-            || (maybe_title.starts_with('\'') && maybe_title.ends_with('\''))
-            || (maybe_title.starts_with('(') && maybe_title.ends_with(')'));
-        if is_title {
-            return path_part.trim().to_string();
+/// If `s` (already trimmed) is wrapped in CommonMark's alternate `<dest>`
+/// destination form, return the inner text plus the byte offset (into `s`)
+/// where it starts — always `1`, past the `<`, but named for the caller
+/// rather than inlined so the "why 1" question has one answer. Shared by
+/// `parse_md_link`'s `(<dest>)` and the link-reference-definition scanner's
+/// `[id]: <dest>`, so the two forms decode the wrapper identically.
+fn strip_angle_brackets(s: &str) -> Option<(&str, usize)> {
+    s.strip_prefix('<').and_then(|rest| rest.strip_suffix('>')).map(|inner| (inner, 1))
+}
+
+/// A CommonMark link title: `"…"`, `'…'` or `(…)`, any spaces inside.
+fn is_link_title(s: &str) -> bool {
+    s.len() >= 2
+        && matches!((s.as_bytes()[0], s.as_bytes()[s.len() - 1]), (b'"', b'"') | (b'\'', b'\'') | (b'(', b')'))
+}
+
+/// Where the destination sits in the trimmed inside of `( … )`: `(offset,
+/// len)`, with the optional title after it left out. The `<…>` form excludes
+/// the brackets, so a rewrite replaces only the inside and the brackets
+/// survive; that is what lets a new path that gained a space stay wrapped.
+// SAFETY: every index is the position of an ASCII byte found in `s`, or one
+// past it, so each is a char boundary.
+#[allow(clippy::string_slice)]
+fn destination_span(s: &str) -> (usize, usize) {
+    if let Some((inner, offset)) = strip_angle_brackets(s) {
+        return (offset, inner.len());
+    }
+    if let Some(close) = s.strip_prefix('<').and_then(|rest| rest.find('>')) {
+        let after = &s[close + 2..];
+        if after.starts_with(|c: char| c.is_ascii_whitespace()) && is_link_title(after.trim()) {
+            return (1, close);
         }
     }
-    raw.to_string()
+    // A bare destination holds no whitespace, so it ends at the first.
+    if let Some(ws) = s.find(|c: char| c.is_ascii_whitespace()) {
+        if is_link_title(s[ws..].trim()) {
+            return (0, ws);
+        }
+        // Lenient: an unquoted space in the destination, then a title.
+        if let Some(ws) = s.rfind(|c: char| c.is_ascii_whitespace()) {
+            if is_link_title(s[ws..].trim()) {
+                return (0, s[..ws].trim_end().len());
+            }
+        }
+    }
+    (0, s.len())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -370,8 +585,8 @@ mod tests;
 // `:::gallery` body line, a `:::hero {image=…}` attribute and a frontmatter
 // `cover:` value are asset references with no reference syntax around them,
 // so they were invisible to rename tracking and silently broke on rename.
-// The types below are the second half of the answer; `ref_scan` (src-tauri)
-// unions the two.
+// The types below are the second half of the answer; moss-build's
+// `editor::ref_scan` unions the two.
 
 /// Which container a structurally-extracted path was found in.
 /// Decides quoting when the value is rebuilt.
@@ -468,7 +683,7 @@ pub(crate) fn line_table(source: &str) -> Vec<(usize, usize, usize)> {
 ///
 /// Complements [`extract_md_references`], which sees only bracketed markdown
 /// tokens. A caller that REWRITES must union the two and resolve overlaps —
-/// see `apply_edits` in src-tauri's `editor::ref_scan`.
+/// see `apply_edits` in moss-build's `editor::ref_rewrite`.
 pub fn extract_structural_asset_refs(source: &str) -> Vec<AssetPathSpan> {
     let mut v = crate::ast::shortcode_extract::shortcode_asset_spans(source);
     v.extend(crate::frontmatter::frontmatter_asset_spans(source));

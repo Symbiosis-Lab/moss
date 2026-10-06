@@ -3,22 +3,20 @@
 //! The third of moss's three publish drivers — [`super::prebuilt`] uploads a
 //! directory another tool built, [`super::push`] builds and ships to moss's
 //! own hosting, and this one builds and hands the result to whichever plugin
-//! `[hooks] deploy` names. It is the last one that needed a window, and it
-//! needed one only because nobody had written it: the plugin RUNTIME crossed
-//! at ADR-076, so `HostPorts::plugins` already yields a manager whose
-//! `execute_deploy` is pure moss-build (track P slice P2b, moss#989).
+//! `[hooks] deploy` names. `HostPorts::plugins` yields a manager whose
+//! `execute_deploy` is pure moss-build.
 //!
 //! Shaped like [`super::push::run_hosted_deploy`] on purpose — resolve, build,
 //! gate, then an inner body over what the build produced — because the app's
 //! `deploy_site_body` enters that inner body with a build a watcher already
 //! made, and a driver that interleaved its resolution with its work could not
-//! be entered twice. It does, since track P slice P3: below
+//! be entered twice. Below
 //! [`run_plugin_deploy_inner`] there is one plugin publish in moss, and the
 //! only difference between clicking Publish and typing `moss deploy` is which
 //! preamble got the folder built.
 //!
 //! **What this route does NOT do.** It brings no stack up. The app preflights
-//! the Tor stack before any bytes move (`system::stack_serving`, ADR-050) and
+//! the Tor stack before any bytes move (`system::stack_serving`) and
 //! a one-shot does not; a terminal publish to a stopped OnionPress is refused
 //! by the plugin itself, whose refusal is what tells the author to start it —
 //! that wording is the plugin's, not moss's. And moss runs no probe of its own
@@ -29,8 +27,7 @@
 //! `resume_publish_verification` derives its work from `metadata.generation`
 //! (`stack_serving::verify::pending_verification`) while `record_publish`
 //! deliberately never writes `last_verified_generation`, so opening the folder
-//! in the app afterwards arms verification on what the terminal shipped
-//! (track P slice P4).
+//! in the app afterwards arms verification on what the terminal shipped.
 //!
 //! `resolve_publish_inputs` is deliberately absent. It is the seta
 //! registration path, and calling it here would mint a moss-hosted site for a
@@ -102,6 +99,7 @@ pub async fn run_plugin_deploy(
     folder: &Path,
     host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
     plugins: crate::build::PluginMode,
+    accept_removals: bool,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<DeployResult, String> {
     let folder_str = folder.to_string_lossy().to_string();
@@ -115,7 +113,7 @@ pub async fn run_plugin_deploy(
 
     // The setup gate FIRST, before the build — a credential the target
     // declared and moss does not hold is knowable at t=0, and refusing after a
-    // build spends minutes to say something that was already true (ADR-072).
+    // build spends minutes to say something that was already true.
     // This is the one route the gate can refuse: moss's own hosting has no
     // deploy plugin to be unset up.
     crate::deploy::publish_setup::refuse_publish(&folder_str)?;
@@ -137,6 +135,11 @@ pub async fn run_plugin_deploy(
     // `one_shot::require_sealed` inside the inner body — see its doc for why
     // the absence is a promotion failure and not a missing description.
     let sealed = super::one_shot::build_and_seal(&root, host, plugins).await?;
+
+    // Between the build that found the removals and the gate that reads them.
+    if accept_removals {
+        crate::system::build_records::records().accept_all_pending_removals(&folder_str);
+    }
 
     let ports = super::one_shot::HeadlessDeployPorts;
     run_plugin_deploy_inner(&PluginDeployContext {
@@ -220,7 +223,7 @@ pub async fn run_plugin_deploy_inner(
     // latch. This function is the one place both callers actually converge.
     crate::build::site_config::ensure_config_current(&folder_str)?;
 
-    // The missing-media gate, for every plugin publish there is. It lives here
+    // The publish-preflight gate, for every plugin publish there is. It lives here
     // rather than in each caller because "after the build, before any bytes
     // move" is exactly where this body starts: a one-shot arrives having just
     // run `run_pipeline`, and the app arrives after its in-flight drain and
@@ -232,6 +235,18 @@ pub async fn run_plugin_deploy_inner(
     // manifest there is no generation to check `current` against, and
     // `current` on this path is the PREVIOUS build's tree.
     let sealed = super::one_shot::require_sealed(cx.sealed)?;
+
+    // Force any pending seal to materialize NOW, before the check below reads
+    // `current_generation_id()`. The seal's own materialize phase is
+    // debounced (`build::seal_phase`) since the app and headless `--watch`
+    // no longer promote a generation on every rebuild — without this, a
+    // publish click right after a save would almost always fail
+    // `site_dir_for_plugin`'s check below, because `current` would still lag
+    // the manifest `cx.sealed` already names. A one-shot CLI publish
+    // (`run_plugin_deploy` → `one_shot::build_and_seal`) already materialized
+    // synchronously, so this is a no-op there — settle() only does work when
+    // something is actually pending.
+    crate::build::seal_phase::settle(&mp).await;
     let output_dir = site_dir_for_plugin(&mp, sealed)?;
 
     let manager = match cx.managers.get_or_create(&folder_str) {
@@ -370,8 +385,8 @@ async fn record_landing(
     // Keyed by `slot_for`, never the deployment URL: a target that re-mints
     // its URL on every publish would orphan the record it just wrote.
     if let Some(target) = deployment::slot_for(&deployment.method, None) {
-        let history = crate::deploy::history::HistoryStore::in_app_data(cx.folder);
-        crate::deploy::landed::record_landed(cx.folder, sealed, &target, cx.ports, history.as_ref()).await;
+        let history = crate::deploy::history::HistoryStore::in_vault(cx.folder);
+        crate::deploy::landed::record_landed(cx.folder, sealed, &target, cx.ports, &history).await;
     }
 
     // The bytes are live; what is left is redirects/analytics/DNS.

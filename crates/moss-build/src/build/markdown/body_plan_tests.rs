@@ -45,14 +45,14 @@ fn resolve(doc: &mut moss_core::ast::Document) {
 /// Markdown that exercises every block kind the plan has to segment across:
 /// prose, headings, a grid (its own segment), a gallery, a table, code, lists,
 /// callouts, blockquotes, math, and CJK prose immediately before a grid — the
-/// exact shape that used to abort the build (moss#903 bug 1).
+/// exact shape that used to abort the build.
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("empty", ""),
         ("prose only", "Hello.\n\nSecond paragraph.\n"),
         (
             "cjk prose then grid",
-            "潮汐作為一個文學計畫，關注的是非虛構寫作的現場。\n\n\
+            "河灣作為一個寫作計畫，記錄的是平凡人書寫的日常。\n\n\
              :::grid 2\n[A](a/)\n+++\n[B](b/)\n:::\n\nAfter.\n",
         ),
         (
@@ -62,6 +62,10 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         (
             "two grids",
             "Intro.\n\n:::grid 1\n[A](a/)\n:::\n\nBetween.\n\n:::grid 3 1:2:1 {.no-cards}\n[B](b/)\n:::\n",
+        ),
+        (
+            "subscribe between paragraphs",
+            "Intro.\n\n:::subscribe {button=\"Join\"}\n:::\n\nAfter.\n",
         ),
         (
             "headings and lede",
@@ -210,7 +214,7 @@ fn summary_is_read_from_typed_classes_not_the_serialized_tag() {
     assert!(!grid.summary());
 }
 
-/// The ADR-034 invariant still holds for a `.summary` fence BEFORE the render
+/// The byte-identical-serialization invariant still holds for a `.summary` fence BEFORE the render
 /// pass runs: the class changes what a later phase does with the segment, not
 /// what the serializer emitted.
 #[test]
@@ -244,7 +248,7 @@ fn lede_end_of(md: &str) -> (usize, usize) {
 
 #[test]
 fn lede_ends_at_the_first_heading_after_a_paragraph() {
-    // moss#903 bug 4: a long-form article on a cover-bearing folder home was
+    // A regression where a long-form article on a cover-bearing folder home was
     // typeset in the narrow cover column for its ENTIRE body because the only
     // recognized release point was a literal `.moss-grid`.
     let (end, total) = lede_end_of(
@@ -308,6 +312,333 @@ fn lede_ends_at_a_widened_figure_but_not_a_body_width_one() {
 fn a_short_intro_with_no_release_point_stays_whole() {
     let (end, total) = lede_end_of("Just an intro.\n\nAnd a second line of it.\n");
     assert_eq!(end, total);
+}
+
+// ── first_text_block: the place-map locator's insertion point ──────────
+
+fn first_text_block_of(md: &str) -> Option<usize> {
+    let doc = parse(md);
+    first_text_block(&doc.blocks)
+}
+
+#[test]
+fn first_text_block_is_the_leading_paragraph() {
+    assert_eq!(first_text_block_of("Opening line.\n\nSecond line.\n"), Some(0));
+}
+
+#[test]
+fn first_text_block_skips_a_leading_heading() {
+    assert_eq!(
+        first_text_block_of("## Section\n\nBody paragraph.\n"),
+        Some(1),
+        "the heading is block 0; the locator goes before the paragraph, block 1"
+    );
+}
+
+#[test]
+fn first_text_block_skips_leading_media_and_a_rule() {
+    assert_eq!(
+        first_text_block_of(
+            "![alt](photo.jpg)\n\n---\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n\
+             ```\ncode\n```\n\nBody paragraph.\n"
+        ),
+        Some(4),
+        "figure, rule, table and code block are all media/rules, not text"
+    );
+}
+
+#[test]
+fn first_text_block_is_a_leading_list() {
+    assert_eq!(first_text_block_of("- one\n- two\n"), Some(0));
+}
+
+#[test]
+fn first_text_block_is_a_leading_blockquote() {
+    assert_eq!(first_text_block_of("> plain quote\n"), Some(0));
+}
+
+#[test]
+fn first_text_block_is_none_for_an_all_heading_and_rule_body() {
+    assert_eq!(first_text_block_of("## Section\n\n---\n\n### Another\n"), None);
+}
+
+#[test]
+fn first_text_block_skips_a_callout_even_though_it_is_blockquote_syntax() {
+    // `> [!note] …` parses to the typed `Block::Callout`, not `Block::BlockQuote`
+    // — it renders as its own boxed component (same weight as a table or a
+    // figure), not running prose, so the locator must not stop here.
+    assert_eq!(
+        first_text_block_of("> [!note] Heads up\n> Body of the callout.\n\nReal paragraph.\n"),
+        Some(1)
+    );
+}
+
+// ── BodyPlan::first_text_segments / insert_before_text ──────────────────
+
+#[test]
+fn insert_before_text_lands_between_a_heading_segment_and_the_paragraph() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("## Section\n\nBody paragraph.\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    let html = plan.to_html();
+    let heading = html.find("<h2").expect("heading present");
+    let locator = html.find("<!--LOCATOR-->").expect("locator present");
+    let para = html.find("<p>Body paragraph").expect("paragraph present");
+    assert!(
+        heading < locator && locator < para,
+        "want heading < locator < paragraph, got:\n{html}"
+    );
+}
+
+fn locator_order(md: &str, placement: LocatorPlacement) -> Vec<&'static str> {
+    let hooks = DefaultHooks::new();
+    let mut plan = render_segmented(&parse(md), &hooks);
+    plan.insert_locator("<!--LOCATOR-->".to_string(), placement);
+    let html = plan.to_html();
+    let mut found: Vec<(usize, &'static str)> = [("<h2", "heading"), ("<!--LOCATOR-->", "locator"), ("<p>First", "first"), ("<p>Second", "second")]
+        .iter()
+        .filter_map(|(needle, name)| html.find(needle).map(|at| (at, *name)))
+        .collect();
+    found.sort();
+    found.into_iter().map(|(_, name)| name).collect()
+}
+
+#[test]
+fn insert_locator_follows_the_first_text_block_only_when_asked() {
+    use LocatorPlacement::{AfterText, BeforeText};
+    let md = "## Section\n\nFirst paragraph.\n\nSecond paragraph.\n";
+    assert_eq!(locator_order(md, BeforeText), ["heading", "locator", "first", "second"]);
+    assert_eq!(locator_order(md, AfterText), ["heading", "first", "locator", "second"]);
+    // The opening text is also the last block.
+    assert_eq!(locator_order("First paragraph.\n", AfterText), ["first", "locator"]);
+    // No text block: the front in both modes.
+    assert_eq!(locator_order("## Section\n\n---\n", AfterText), ["locator", "heading"]);
+    assert_eq!(locator_order("## Section\n\n---\n", BeforeText), ["locator", "heading"]);
+}
+
+#[test]
+fn insert_locator_masthead_leaves_the_body_alone() {
+    assert_eq!(locator_order("First paragraph.\n", LocatorPlacement::Masthead), ["first"]);
+}
+
+/// The known limit: a fenced div is flattened into open tag, children, close
+/// tag, so a paragraph inside a div that opens the body IS the first text
+/// block, and the locator lands inside the div, before its closing tag.
+#[test]
+fn insert_locator_after_text_lands_inside_a_fenced_div_that_opens_the_body_known_limit() {
+    let hooks = DefaultHooks::new();
+    let mut plan = render_segmented(&parse("::: {.plate}\nFirst paragraph.\n:::\n\nSecond paragraph.\n"), &hooks);
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::AfterText);
+    let html = plan.to_html();
+    let at = |needle: &str| html.find(needle).unwrap_or_else(|| panic!("{needle} missing in {html}"));
+    assert!(at("<p>First") < at("<!--LOCATOR-->") && at("<!--LOCATOR-->") < at("</div>") && at("</div>") < at("<p>Second"), "{html}");
+}
+
+#[test]
+fn prepend_html_before_an_after_text_insert_keeps_the_locator_after_the_paragraph() {
+    let hooks = DefaultHooks::new();
+    let mut plan = render_segmented(&parse("First paragraph.\n\nSecond paragraph.\n"), &hooks);
+    plan.prepend_html("<!--TITLE-->".to_string());
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::AfterText);
+    let html = plan.to_html();
+    let at = |needle: &str| html.find(needle).unwrap_or_else(|| panic!("{needle} missing in {html}"));
+    assert!(at("<!--TITLE-->") < at("<p>First") && at("<p>First") < at("<!--LOCATOR-->") && at("<!--LOCATOR-->") < at("<p>Second"), "{html}");
+}
+
+#[test]
+fn insert_before_text_is_a_noop_for_an_empty_fragment() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("## Section\n\nBody paragraph.\n");
+    let before = render_segmented(&doc, &hooks).to_html();
+    let mut plan = render_segmented(&doc, &hooks);
+    plan.insert_locator(String::new(), LocatorPlacement::BeforeText);
+    assert_eq!(plan.to_html(), before);
+}
+
+#[test]
+fn insert_before_text_falls_back_to_the_front_with_no_text_block() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("## Only a heading\n\n---\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    let html = plan.to_html();
+    assert!(
+        html.starts_with("<!--LOCATOR-->"),
+        "a body with no text block keeps the locator at the very front: {html}"
+    );
+}
+
+/// Simulates the real call order in the production pipeline: the article
+/// title is prepended (`build::markdown::pipeline`, at parse time) BEFORE
+/// the locator is inserted (`render/html.rs`, at render time). If
+/// `prepend_html` did not also shift `first_text_segments`, the locator
+/// would land one segment too early — right before the heading instead of
+/// before the paragraph, since the title segment it never accounted for
+/// pushed every real segment index up by one.
+#[test]
+fn prepend_html_before_insert_before_text_still_lands_after_the_heading() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("## Section\n\nBody paragraph.\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    plan.prepend_html("<h1 class=\"moss-article-title\">Title</h1>\n".to_string());
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    let html = plan.to_html();
+    let title = html.find("moss-article-title").expect("title present");
+    let heading = html.find("<h2").expect("heading present");
+    let locator = html.find("<!--LOCATOR-->").expect("locator present");
+    let para = html.find("<p>Body paragraph").expect("paragraph present");
+    assert!(
+        title < heading && heading < locator && locator < para,
+        "want title < heading < locator < paragraph, got:\n{html}"
+    );
+}
+
+/// `insert_before_text` must move `lede_segments` the same way `prepend_html`
+/// does, when the locator lands inside the narrow cover column: a body whose
+/// lede is a plain heading-then-paragraph intro (no release point before the
+/// paragraph) keeps the paragraph — and now the locator ahead of it — inside
+/// the lede.
+#[test]
+fn insert_before_text_keeps_the_paragraph_and_locator_together_inside_the_lede() {
+    let hooks = DefaultHooks::new();
+    // No grid/table/wide figure and no heading-after-paragraph, so the whole
+    // body is the lede (`lede_end` returns `blocks.len()`).
+    let doc = parse("## Section\n\nBody paragraph, the whole short intro.\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    assert_eq!(plan.lede_segments, plan.segments.len(), "precondition: whole body is the lede");
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    let (lead, trailer) = plan.split_at_lede();
+    assert!(lead.contains("<!--LOCATOR-->"), "locator belongs in the lede: {lead}");
+    assert!(lead.contains("Body paragraph"), "lead: {lead}");
+    assert_eq!(trailer, "", "nothing releases past the lede here: {trailer}");
+}
+
+/// When the text block the locator would sit before is released PAST the
+/// lede (a full-width grid ends the lede immediately), the locator must land
+/// in the trailer alongside it, not get stranded in the now-empty lede.
+#[test]
+fn insert_before_text_lands_in_the_trailer_when_the_text_block_is_released_past_the_lede() {
+    let hooks = DefaultHooks::new();
+    let doc = parse(":::grid 2\n[A](a/)\n:::\n\nBody paragraph after the grid.\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    assert_eq!(plan.lede_segments, 0, "precondition: the grid releases the lede immediately");
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    let (lead, trailer) = plan.split_at_lede();
+    assert_eq!(lead, "", "lede: {lead}");
+    assert!(trailer.contains("<!--LOCATOR-->"), "trailer: {trailer}");
+    let locator = trailer.find("<!--LOCATOR-->").unwrap();
+    let para = trailer.find("Body paragraph after the grid").expect("paragraph present");
+    assert!(locator < para, "locator must still sit right before its paragraph: {trailer}");
+}
+
+// ── scroll-row accessible name ────────────────────────────────────────
+//
+// A `:::grid {scroll}` row with no explicit `label` is otherwise a keyboard
+// stop with no accessible name — a screen reader announces an unnamed
+// focusable element. `render_segmented` is the one place that can see the
+// blocks preceding a top-level grid, so it names an unlabeled row after the
+// nearest preceding heading's text (see `nearest_heading_label`), the same
+// `aria-label` an author's own `label=` would have produced.
+
+fn grid_open_tag(md: &str) -> String {
+    let hooks = DefaultHooks::new();
+    let doc = parse(md);
+    let plan = render_segmented(&doc, &hooks);
+    let BodySegment::Grid(grid) = plan
+        .segments
+        .into_iter()
+        .find(|s| matches!(s, BodySegment::Grid(_)))
+        .expect("expected a grid segment")
+    else {
+        unreachable!()
+    };
+    grid.open_tag
+}
+
+#[test]
+fn scroll_row_under_a_heading_is_named_by_that_heading() {
+    let open_tag = grid_open_tag(
+        "## Related\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n",
+    );
+    assert!(
+        open_tag.contains(r#"role="region" aria-label="Related""#),
+        "got: {open_tag}"
+    );
+}
+
+#[test]
+fn scroll_row_explicit_label_wins_over_the_heading() {
+    let open_tag = grid_open_tag(
+        "## Related\n\n:::grid 3 {scroll label=\"Custom name\"}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n",
+    );
+    assert!(
+        open_tag.contains(r#"role="region" aria-label="Custom name""#),
+        "got: {open_tag}"
+    );
+    assert!(!open_tag.contains("Related"), "got: {open_tag}");
+}
+
+#[test]
+fn scroll_row_with_no_preceding_heading_gets_no_role() {
+    let open_tag = grid_open_tag(":::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n\nAfter.\n");
+    assert!(open_tag.contains(r#"data-scroll tabindex="0""#), "got: {open_tag}");
+    assert!(!open_tag.contains("role="), "got: {open_tag}");
+    assert!(!open_tag.contains("aria-label"), "got: {open_tag}");
+}
+
+#[test]
+fn scroll_row_picks_the_nearer_of_two_preceding_headings() {
+    let open_tag = grid_open_tag(
+        "## First\n\nBody one.\n\n## Second\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n",
+    );
+    assert!(
+        open_tag.contains(r#"aria-label="Second""#),
+        "got: {open_tag}"
+    );
+    assert!(!open_tag.contains("First"), "got: {open_tag}");
+}
+
+#[test]
+fn scroll_row_heading_fallback_flattens_inline_markup() {
+    // `nearest_heading_label` reuses `inlines_to_plain_text`, the shared
+    // flattening policy — a heading with emphasis in it still produces a
+    // plain `aria-label`, not the markdown asterisks.
+    let open_tag = grid_open_tag(
+        "## Read *this* first\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n",
+    );
+    assert!(
+        open_tag.contains(r#"aria-label="Read this first""#),
+        "got: {open_tag}"
+    );
+}
+
+#[test]
+fn a_scroll_row_that_fits_still_gets_the_accessible_name_machinery() {
+    // Owner-side rule: a fitting row (`fits_without_scrolling()`) still IS a
+    // scroll row (`is_scroll_row()`) — it only looks like a plain grid on a
+    // wide screen, and becomes a real scroll region once the viewport
+    // narrows — so it needs a name for assistive tech just as much as a row
+    // that always scrolls, and gets `data-fits` alongside `data-scroll`.
+    let open_tag = grid_open_tag("## Related\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n:::\n");
+    assert!(open_tag.contains("data-scroll"), "got: {open_tag}");
+    assert!(open_tag.contains("data-fits"), "got: {open_tag}");
+    assert!(open_tag.contains(r#"tabindex="0""#), "got: {open_tag}");
+    assert!(
+        open_tag.contains(r#"role="region" aria-label="Related""#),
+        "got: {open_tag}"
+    );
+}
+
+#[test]
+fn a_single_cell_scroll_row_gets_no_accessible_name_machinery() {
+    // The one case that opts all the way out: nothing to scroll at any
+    // width, so `is_scroll_row()` itself is false.
+    let open_tag = grid_open_tag("## Related\n\n:::grid 3 {scroll}\nA\n:::\n");
+    assert!(!open_tag.contains("data-scroll"), "got: {open_tag}");
+    assert!(!open_tag.contains("tabindex"), "got: {open_tag}");
+    assert!(!open_tag.contains("role="), "got: {open_tag}");
+    assert!(!open_tag.contains("aria-label"), "got: {open_tag}");
 }
 
 #[test]

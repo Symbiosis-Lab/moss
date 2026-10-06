@@ -102,6 +102,15 @@ pub(crate) fn extract_zip_path_limited(
     extract_zip_safe_limited_reader(file, target_dir, max_entries, max_total_uncompressed)
 }
 
+/// Unpack the archive at `archive` into `target` under the guards above, with
+/// ceilings the caller sets: at most `max_entries` entries and `max_bytes`
+/// written. For a host unpacking a downloaded archive whose plausible size it
+/// knows, which a plugin's 512 MiB ceiling would far exceed. The error is the
+/// guard's message.
+pub fn extract_zip_capped(archive: &Path, target: &Path, max_entries: usize, max_bytes: u64) -> Result<(), String> {
+    extract_zip_path_limited(archive, target, max_entries, max_bytes).map_err(|e| e.to_string())
+}
+
 fn extract_zip_safe_limited_reader<R: Read + Seek>(
     reader: R,
     target_dir: &Path,

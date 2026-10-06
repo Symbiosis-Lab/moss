@@ -1,4 +1,4 @@
-//! The listing group model — membership as a value, not N×H edges (ADR-044).
+//! The listing group model — membership as a value, not N×H edges.
 //!
 //! A listing host reads each listed child's **raw body** at render time
 //! (`resolve_page_description` falls back to an excerpt of `content`), and
@@ -6,13 +6,13 @@
 //! edge for it. Lacking an edge type, `render/blocking.rs` used to substitute
 //! "render every page that could possibly be a member's parent" — 114 of 214
 //! pages on the reference vault, on every save, including saves that changed
-//! no output byte (moss#968 Finding 2).
+//! no output byte.
 //!
 //! The replacement is *change pruning on a derived projection*: a **listing
 //! group** is the unit of dependency, and a host re-renders iff a group it
 //! reads has a moved digest.
 //!
-//! Three rules, all from ADR-044, all load-bearing:
+//! Three rules, all load-bearing:
 //!
 //! 1. **Everything a host can observe about a child is a digest input** — the
 //!    card fields *and* the resolved sort/style/group plan, which the card
@@ -37,7 +37,7 @@ use crate::build::folder_embed::{
     effective_group_for_axis, resolve_children_config, select_children_by_slug,
 };
 use crate::build::types::ParsedDocument;
-use crate::types::content::ProjectStructure;
+use crate::types::content::{MediaMetadata, ProjectStructure};
 
 /// `children_depth`, reduced to the two values the selector branches on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -139,7 +139,7 @@ impl ListingGroups {
 
         let mut keys: BTreeMap<String, GroupKey> = BTreeMap::new();
         for doc in documents {
-            if !hosts_listing(doc) {
+            if !hosts_listing(doc) && !is_series_member(doc, documents) {
                 continue;
             }
             if let Some(read) = groups_read_by(doc, documents) {
@@ -179,7 +179,7 @@ fn digest_of(
         .map(|d| projections.get(d.url_path.as_str()))
         .collect();
 
-    // The member-derived half of the listing plan (ADR-044 rule 1, second
+    // The member-derived half of the listing plan (rule 1, second
     // bullet). The host's OWN overrides (`children_style`, `children_group`,
     // `sort:`) are fields of the host document, so they already move the
     // host's facade; what the host cannot see in its own fingerprint is how
@@ -207,7 +207,7 @@ fn digest_of(
 
 /// Everything a listing card can observe about one child.
 ///
-/// **Blank-out on a clone** (ADR-044 rule 2). The five body fields are the
+/// **Blank-out on a clone** (rule 2). The five body fields are the
 /// ones a card provably cannot read — a card renders no HTML of the child's
 /// body, no links out of it and no transclusion — and each is replaced, where
 /// the card *does* observe a derived form of it, by that resolved value.
@@ -255,7 +255,7 @@ fn project_child(
     stripped.body_plan = None;
     stripped.outgoing_links = Vec::new();
     stripped.embed_deps = Vec::new();
-    // moss#1041: a card never displays a CHILD's own `lang` — the only lang a
+    // A card never displays a CHILD's own `lang` — the only lang a
     // listing reads is the HOST's own (`folder_embed.rs`'s `let lang =
     // documents[i].lang`, for localized "N articles" strings), which already
     // moves the host's own facade directly. Left in, a translation flipping
@@ -304,13 +304,13 @@ fn project_child(
 }
 
 /// The demoted predicate. It used to answer "render it"; it now answers
-/// "which groups does it read" (ADR-044).
+/// "which groups does it read".
 ///
 /// NOT a `url_path.ends_with("/index.html")` test: pretty URLs give EVERY page
 /// that shape, which would make every page a host.
 pub fn hosts_listing(doc: &ParsedDocument) -> bool {
     doc.kind == PageKind::Folder
-        || doc.url_path == "index.html"
+        || crate::build::render::lang_roots::is_language_root(&doc.url_path)
         || doc.is_home_override
         || doc.children_source.is_some()
         || doc.sidebar.is_some()
@@ -321,23 +321,25 @@ pub fn hosts_listing(doc: &ParsedDocument) -> bool {
 ///
 /// `None` means **render**. Over-approximation is the only safe default —
 /// rustc keeps `eval_always` for the same reason, and it is what all host
-/// shapes did before moss#968.
+/// shapes did before this model.
 pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<Vec<GroupKey>> {
     let mut keys: Vec<GroupKey> = Vec::new();
 
-    // (a) The root homepage. `synthesize_children_marker(.., is_homepage: true)`
-    //     defaults depth to "all" and — in default mode only, i.e. with no
-    //     `children_source` redirecting the listing — turns on both homepage
-    //     filters.
-    if doc.url_path == "index.html" {
-        let default_mode = doc.children_source.is_none();
+    // (a) A home page — the root's or a language's own `<lang>/index.html`.
+    //     `synthesize_children_marker` lists the tree the home sits at (`""`
+    //     for the root, `<lang>` otherwise) unless `children_source` redirects
+    //     it; only the root home defaults depth to "all" and turns on both
+    //     filters (in default mode, i.e. with no `children_source`).
+    if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
+        let (tree, is_root) = crate::build::folder_embed::home_scope(&doc.url_path);
+        let default_mode = is_root && doc.children_source.is_none();
         let folder_slug = match doc.children_source.as_deref() {
-            None => String::new(),
+            None => tree.to_string(),
             Some(reference) => resolve_children_source_slug(reference, documents)?,
         };
         keys.push(GroupKey {
             folder_slug,
-            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), true),
+            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), is_root),
             scope_default_tree: default_mode,
             exclude_nav: default_mode,
         });
@@ -347,7 +349,7 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
     //     the page's own url-derived folder path, ignoring `children_source`
     //     on this branch — and defaults depth to "direct".
     if doc.kind == PageKind::Folder
-        && doc.url_path != "index.html"
+        && !crate::build::render::lang_roots::is_language_root(&doc.url_path)
         && doc.url_path.ends_with("/index.html")
     {
         keys.push(GroupKey {
@@ -395,6 +397,26 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
         });
     }
 
+    // (e) A series-chain step reads its parent folder's listing for prev/next
+    //     ordering (`sequence_siblings`, `render/html.rs`) — the exact key
+    //     case (b) above already computes for the parent's own folder index,
+    //     since `select_children_by_slug` is the same membership call either
+    //     way. No extra digest work: this just registers one more reader of
+    //     a key that (per case (b)) is already built for any folder.
+    if is_series_member(doc, documents) {
+        let parent_folder = series_parent_folder(doc);
+        if let Some(parent_doc) =
+            documents.iter().find(|pd| pd.url_path == format!("{parent_folder}/index.html"))
+        {
+            keys.push(GroupKey {
+                folder_slug: parent_folder,
+                depth: Depth::from_frontmatter(parent_doc.children_depth.as_deref(), false),
+                scope_default_tree: false,
+                exclude_nav: false,
+            });
+        }
+    }
+
     // A host that matched the predicate but no arm above (e.g. a home-override
     // page whose url is not a folder index) is an unmodelled shape.
     if keys.is_empty() {
@@ -404,6 +426,49 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
         keys.dedup();
         Some(keys)
     }
+}
+
+/// `doc`'s parent folder, in the same shape `render/html.rs`'s series-nav
+/// block derives it from a direct-child URL (`"series/part-1/index.html"` ->
+/// `"series"`). Callers must have already checked `parts.len() >= 3` (via
+/// [`is_series_member`], which shares this exact derivation) before trusting
+/// the result.
+fn series_parent_folder(doc: &ParsedDocument) -> String {
+    let parts: Vec<&str> = doc.url_path.split('/').collect();
+    parts[..parts.len() - 2].join("/")
+}
+
+/// True when `doc` is a step in a parent folder's series prev/next chain —
+/// the exact membership `sequence_siblings` (`render/html.rs`) walks when it
+/// builds that chrome. A `label`/`weight`/`date`/`series` edit on any one
+/// member can reorder or relabel every other member's prev/next block, and
+/// nothing about that reaches the dependency graph (no link, no listing
+/// host) or the ordinary per-page facade diff.
+///
+/// Deliberately does not re-derive the resolved shell type (`ShellType`,
+/// `page/shell.rs`) that decides whether `doc` actually renders the series
+/// block — over-approximating past that costs one extra render, never a
+/// stale one, and re-deriving it here would duplicate render/html.rs's own
+/// resolution instead of asking it.
+pub fn is_series_member(doc: &ParsedDocument, documents: &[ParsedDocument]) -> bool {
+    if !crate::build::render::html::is_sequence_step(doc) {
+        return false;
+    }
+    let parts: Vec<&str> = doc.url_path.split('/').collect();
+    if parts.len() < 3 {
+        return false;
+    }
+    let parent_folder = series_parent_folder(doc);
+    let Some(parent_doc) =
+        documents.iter().find(|pd| pd.url_path == format!("{parent_folder}/index.html"))
+    else {
+        return false;
+    };
+    // `is_sequence_step` above already excludes a member that opted itself
+    // out with `series: false`; what's left is whether the PARENT's chrome
+    // is on at all, the one precedence decision `render::html::series_chrome_on`
+    // owns.
+    crate::build::render::html::series_chrome_on(parent_doc)
 }
 
 /// Mirrors the sidebar source resolution in `render/html.rs`: the provenance
@@ -458,7 +523,7 @@ fn resolve_sidebar_slug(reference: &str, documents: &[ParsedDocument]) -> Option
 }
 
 /// The build-global inputs to card rendering that no per-child projection
-/// covers (moss#968 FM-4).
+/// covers.
 ///
 /// A mismatch is a full-render bypass alongside `asset_versions`, not a
 /// per-group diff: these move the rendered listing of *every* group at once,
@@ -481,9 +546,10 @@ pub fn listing_globals(
     // One digest PER INPUT rather than one over the tuple. Same verdict —
     // any entry differing is the same bypass the combined hash triggered —
     // but a verdict that can say which of the eight moved. `image_files` is
-    // the one that matters: a cover arriving or being enriched full-renders
-    // the site through this branch, and the combined hash could only report
-    // that as "listing globals moved".
+    // the one that matters: a cover arriving full-renders the site through
+    // this branch, and the combined hash could only report that as "listing
+    // globals moved". A cover being ENRICHED no longer does — see
+    // [`image_placeholders`].
     [
         ("math", debug_hash(&math)),
         ("typesetting", debug_hash(&typesetting)),
@@ -495,12 +561,41 @@ pub fn listing_globals(
         // (width/height/LQIP/dominant colour on every cover `<img>`). The
         // lookup itself is built inside the render loop, so hash the table it
         // is built from.
-        ("image_files", debug_hash(&project.image_files)),
+        ("image_files", debug_hash(&without_placeholders(&project.image_files))),
         ("video_files", debug_hash(&project.video_files)),
     ]
     .into_iter()
     .map(|(name, digest)| (name.to_string(), digest))
     .collect()
+}
+
+/// `image_files` with the two placeholder fields blanked — a clone blanked,
+/// not the other fields listed, so a field added to `MediaMetadata` lands in
+/// the full-render digest by default.
+fn without_placeholders(files: &[MediaMetadata]) -> Vec<MediaMetadata> {
+    files
+        .iter()
+        .map(|m| MediaMetadata { dominant_color: None, lqip_data_uri: None, ..m.clone() })
+        .collect()
+}
+
+/// Per image path, a digest of its dominant colour and LQIP.
+///
+/// These two are filled in LATE by design: a preview scan reads only the
+/// header, and the background encoder writes them once it has decoded the
+/// pixels, so the build after a cold cache is the first to see them. Inside
+/// the `image_files` digest they full-rendered the site on the first edit
+/// after every cold start, when the only pages whose output changed were the
+/// few that show one of those images. Kept apart, a move re-renders exactly
+/// those pages — the verdict finds them in each page's previous output, since
+/// everything that reads these fields decorates an element carrying the
+/// image's own URL.
+pub fn image_placeholders(project: &ProjectStructure) -> BTreeMap<String, String> {
+    project
+        .image_files
+        .iter()
+        .map(|m| (m.path.clone(), debug_hash(&(&m.dominant_color, &m.lqip_data_uri))))
+        .collect()
 }
 
 #[cfg(test)]

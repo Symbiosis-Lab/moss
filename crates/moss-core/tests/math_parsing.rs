@@ -7,8 +7,6 @@
 //! `<p>Energy .</p>`. Silent deletion of the author's content. Every test
 //! below is a guard against that, not a test of typesetting (there is no
 //! engine in P1 — math renders as escaped source in `<code class="moss-math">`).
-//!
-//! See docs/archive/2026-07-21-latex-math-design.md §4 (P1) and ADR-030.
 
 use moss_core::ast::{parse_with_config, render_document, DefaultHooks, ParseConfig};
 
@@ -353,7 +351,7 @@ mod plain_text_collectors_keep_math {
 // ---------------------------------------------------------------------------
 
 /// The `.moss-math` component contract is what theme authors read, via
-/// `moss describe` and `docs/reference/contract.md`. Nothing compared its
+/// `moss describe` and the generated contract documentation. Nothing compared its
 /// declared `example_html` to a real render, so when the P1 fallback
 /// changed to keep the `$` delimiters, the contract kept advertising the
 /// old bare-TeX output and no test noticed. `components_sync_test` cannot

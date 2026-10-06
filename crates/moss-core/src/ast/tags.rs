@@ -1,4 +1,4 @@
-//! Inline `#tag` extraction (Obsidian dialect) — issue #649 P1.
+//! Inline `#tag` extraction (Obsidian dialect).
 //!
 //! Obsidian treats `#tag` in body text as a tag; moss historically read
 //! only frontmatter `tags:`, so a typical Obsidian note silently lost

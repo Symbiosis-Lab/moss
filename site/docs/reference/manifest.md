@@ -32,16 +32,20 @@ Each plugin lives in `.moss/plugins/<name>/` inside the project.
 | `global_name` | `string` | no | Global JavaScript variable name the plugin exports. Defaults to PascalCase(name) + "Plugin". |
 | `display_name` | `string` | no | Human-readable name shown in the moss Settings UI section title (e.g. "Comments"). |
 | `icon` | `string` | no | Path to the plugin icon file, relative to the plugin directory. Falls back to icon.svg / icon.png / logo.svg / logo.png. |
-| `requires` | `string[]` | no | Privileged host capabilities this plugin needs granted. Recognized value: `execute_binary` (run a native program). A call to it fails unless it is declared here. |
 | `domain` | `string` | no | Primary domain for cookie access (e.g. "matters.town"). Required for plugins using cookie-based authentication. |
 | `domains` | `string[]` | no | Full set of domains the plugin operates on (e.g. prod + staging). Used for scope-wide cookie clearing on force-fresh login. |
 | `config` | `object` | no | Plugin-specific configuration key-value pairs (e.g. login_url, api_endpoint). Merged with .moss/config.toml at runtime. |
-| `config_schema` | `object` | no | Optional configuration schema for validation. Maps config field names to type strings. |
-| `config_labels` | `object` | no | Settings UI label overrides. Maps config field names to display labels (e.g. {"enabled": "Enable Comments"}). |
-| `config_descriptions` | `object` | no | Settings UI help text. Maps config field names to description strings. |
-| `config_placeholders` | `object` | no | Settings UI placeholder text. Maps config field names to placeholder strings (e.g. {"api_key": "Enter your API key"}). |
-| `config_verify` | `object` | no | Endpoint verification specs. After saving config, moss probes each declared URL and shows "Server unreachable" on failure. |
-| `contributes` | `object` | no | Optional schema contributions (frontmatter fields, embed renderers, job descriptors). Follows the VS Code contributes pattern. |
+| `config_schema` | `object` | no | Legacy alias: field name -> type string, folded at parse into the contribution's setup.settings[]. New manifests declare settings[] directly. |
+| `config_labels` | `object` | no | Legacy alias: field name -> label, folded into settings[].label. A dotted "<field>.<value>" key labels one enum option. |
+| `config_descriptions` | `object` | no | Legacy alias: field name -> help text, folded into settings[].description. |
+| `config_options` | `object` | no | Legacy alias: field name -> allowed values, folded into settings[].options on a string field. |
+| `config_placeholders` | `object` | no | Legacy alias: field name -> placeholder text, folded into settings[].placeholder. |
+| `contributes` | `object` | no | Contributions (deploy targets, frontmatter fields, embed renderers, job descriptors, stack declarations), VS Code style. Each contribution may carry a setup block — needs (host-checked preconditions like "stack"), settings (fields moss draws, the Field vocabulary), credentials, and check (the plugin implements the check_setup hook). A stack contribution carries its own artifact pin (id, version, sources) instead of a setup block. |
+| `min_moss_version` | `string` | no | Minimum moss version this plugin supports (semver). The registry client checks it at install and load; older moss ignores the field. |
+| `repository` | `string` | no | Source repository URL. Display and provenance only. |
+| `homepage` | `string` | no | Homepage URL. Display only. |
+| `requires_stack` | `boolean` | no | Legacy alias: parses as needs: ["stack"] on every contribution. New manifests declare the need inside the contribution's setup block. |
+| `requires` | `array` | no | Declared host-capability requirements, named per binary: "execute_binary:<basename>" grants exactly one executable (e.g. "execute_binary:git"). The bare "execute_binary" blanket is a deprecated alias that still grants every binary, with a warning per run. |
 <!-- auto:end:manifest -->
 
 ## Example manifest

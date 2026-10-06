@@ -146,7 +146,7 @@ describe('extractLinkTargets', () => {
   });
 
   test('a link wrapping an embed reports the OUTER url', () => {
-    // Before ADR-041 the outer Link never survived the parse, so this yielded
+    // Before this fix the outer Link never survived the parse, so this yielded
     // zero targets: the destination was neither lintable nor Cmd-clickable.
     const results = extractLinkTargets(makeState('[![[a.png]]](/awards/)'));
 

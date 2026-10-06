@@ -1,0 +1,86 @@
+# Builds the Obsidian plugin and attaches manifest.json, main.js, and
+# styles.css to a GitHub release — the three files Obsidian's community
+# plugin loader and BRAT both expect as release assets. This is separate
+# from release.yml's `release: published` trigger: that file fires off a
+# single whole-product `vX.Y.Z` release object that this repo doesn't
+# create until a human publishes it, and the plugin's own cadence is
+# unrelated to that release. So this workflow triggers directly on the
+# plugin's own tag push and creates the release itself.
+#
+# Tag scheme: `obsidian-moss-vX.Y.Z`, prefixed because this repo also cuts
+# plain `vX.Y.Z` tags for the whole product — a bare version tag would
+# collide. Obsidian's official community-plugin directory requires the
+# release tag to equal manifest.json's version with no prefix, so this
+# scheme does not qualify the plugin for that directory as-is; BRAT reads
+# manifest.json/main.js/styles.css straight off a release's assets and does
+# not enforce a tag/version match, so it works for BRAT installs (see
+# packages/obsidian-moss/README.md — pin the tag, don't rely on "latest",
+# since "latest" in this repo can resolve to an unrelated product release).
+
+name: Release Obsidian plugin
+
+on:
+  push:
+    tags:
+      - 'obsidian-moss-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          SKIP_RUST_INSTALL: 1
+
+      # Catches a mistagged release before it ships mismatched assets — the
+      # tag is what a BRAT "frozen version" install pins to, so it has to
+      # actually match what manifest.json claims.
+      - name: Tag must match the plugin's manifest version
+        working-directory: packages/obsidian-moss
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#obsidian-moss-v}"
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $TAG_VERSION, but manifest.json says $MANIFEST_VERSION"
+            exit 1
+          fi
+
+      - name: Build
+        working-directory: packages/obsidian-moss
+        run: npm run build
+
+      - name: Verify release assets exist
+        working-directory: packages/obsidian-moss
+        run: |
+          set -euo pipefail
+          for f in manifest.json main.js styles.css; do
+            test -f "$f" || { echo "::error::missing $f"; exit 1; }
+          done
+
+      - name: Create the GitHub release and attach plugin assets
+        working-directory: packages/obsidian-moss
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            manifest.json main.js styles.css \
+            --repo "${{ github.repository }}" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

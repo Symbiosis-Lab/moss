@@ -1,6 +1,6 @@
 //! Preview-only Artalk stub: receives the comment form's POST during preview
 //! and returns an Artalk-shaped success so the real client JS plays its full
-//! success path — without any traffic to the production server (design §7).
+//! success path — without any traffic to the production server.
 //! Ephemeral by design: nothing is persisted; reload clears it.
 //!
 //! ## How the form is rerouted
@@ -29,7 +29,7 @@
 //! fall back to `finalContent` (raw unescaped user input) for `innerHTML` —
 //! an unnecessary self-XSS vector in the preview iframe.
 //!
-//! Consumed response shape (verified against artalk.ts lines ~113–130):
+//! Consumed response shape:
 //!   { id: number, content: string, date: string, nick: string,
 //!     link: string, rid: number, is_pending: bool }
 

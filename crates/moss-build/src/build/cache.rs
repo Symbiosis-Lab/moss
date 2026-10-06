@@ -18,19 +18,29 @@
 //! ## Layout on disk
 //!
 //! ```text
-//! .moss/build/cache/
+//! .moss/cache/
 //! ├── objects/          # ObjectStore — raw blobs keyed by SHA-256
 //! │   └── ab/cd/<full_hash>
 //! └── transforms/       # TransformCache — JSON records keyed by source hash
 //!     └── ab/cd/<source_hash>.json
 //! ```
+//!
+//! Synced, a sibling of `.moss/build.nosync/` — build both via `for_site`, not a hand join.
 
+use crate::build::stat::{recording_clock, FileStat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+mod blob_wait;
+mod records;
+mod shard_wait;
+use shard_wait::Touch;
+pub use records::{Merged, RecordMode};
 
 /// Size of the read buffer used by [`ObjectStore::hash_file`].
 ///
@@ -56,18 +66,30 @@ const HASH_BUF_SIZE: usize = 64 * 1024;
 /// This two-level fan-out keeps directory listings manageable even for
 /// repositories with hundreds of thousands of objects (the same strategy
 /// git uses).
+///
+/// `Clone` is cheap and deliberate: both fields are just `PathBuf`s, no open
+/// handles, so a caller that needs to hand a store across a lock boundary
+/// (e.g. the math render cache's process-global "current site" pointer) can
+/// clone it out under the lock and do the actual I/O unsynchronized.
+#[derive(Clone)]
 pub struct ObjectStore {
-    /// Root directory — typically `.moss/build/cache/objects/`.
+    /// Root directory — typically `.moss/cache/objects/`.
     base: PathBuf,
 }
 
 impl ObjectStore {
     /// Create a new `ObjectStore` rooted at `base`.
     ///
-    /// `base` is typically `.moss/build/cache/objects/`. The directory is created
+    /// `base` is typically `.moss/cache/objects/`. The directory is created
     /// lazily (on first write), not here.
     pub fn new(base: PathBuf) -> Self {
         Self { base }
+    }
+
+    /// `mp`'s content-addressed object store — `.moss/cache/objects/`. Prefer this
+    /// over `ObjectStore::new(mp.cache_objects())` at every call site that has an `mp`.
+    pub fn for_site(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::new(mp.cache_objects())
     }
 
     /// Returns the root directory of this object store.
@@ -107,6 +129,63 @@ impl ObjectStore {
         Ok(format!("{:x}", hasher.finalize()))
     }
 
+    /// What is known about `dest`'s shard directory, in words that do not vary
+    /// between two builds that fail the same way. This much is safe inside a
+    /// returned `Err(String)`; [`failure_context`](Self::failure_context) adds
+    /// the parts that are not.
+    fn shard_state(dest: &Path) -> String {
+        let shard = dest.parent().unwrap_or(dest);
+        format!(
+            "shard dir exists={} dataless={}",
+            shard.is_dir(),
+            crate::build::icloud::is_dataless_dir(shard)
+        )
+    }
+
+    /// The state around a failed store or link, as ONE log line at the failure
+    /// site. Kept out of the returned `Err(String)` on purpose: that string
+    /// reaches advisory text, which dedups on its exact wording, so a varying
+    /// field in it would warn once per rebuild instead of once.
+    fn failure_context(&self, dest: &Path, tmp: Option<&Path>) -> String {
+        let mut line = Self::shard_state(dest);
+        if let Some(tmp) = tmp {
+            line.push_str(&format!("; pending tmp exists={}", tmp.symlink_metadata().is_ok()));
+        }
+        line.push_str(&format!("; {}", last_gc_summary(&self.base)));
+        line
+    }
+
+    /// Move the fully written `tmp` to its content-addressed `dest`.
+    fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path, mode: RecordMode) -> Result<(), String> {
+        // Publishing shared content must preserve its identity, even if the
+        // source changed during a file copy or another writer arrived meanwhile.
+        // Verify the local pending file once; never read a cloud placeholder.
+        let verified = Self::hash_file_once(tmp).and_then(|hash| {
+            if hash == oid { Ok(()) } else { Err(std::io::Error::other("pending bytes do not match the content hash")) }
+        });
+        if let Err(e) = verified {
+            // allow:unlink the pending file owned by this store attempt
+            let _ = fs::remove_file(tmp);
+            return Err(format!("Failed to verify pending blob {}: {}", oid, e));
+        }
+        // allow:unlink a temp inside the CAS shard dir, not staging
+        let renamed = shard_wait::in_shard(&self.base, dest, mode, Touch::File, || {
+            fs::rename(tmp, dest)  // allow:unlink a temp inside the CAS shard dir, not staging
+        });
+        let Err(rename_err) = renamed else { return Ok(()) };
+        // A concurrent writer wins only by supplying the exact local bytes.
+        // Mere placeholder metadata cannot turn a refused rename into success.
+        let won = crate::build::io_utils::output_present(dest)
+            && Self::hash_file_once(dest).is_ok_and(|hash| hash == oid);
+        // The temp is a sibling: cross-device fallback is unreachable, and a
+        // direct copy over a shared placeholder would truncate its live entry.
+        // allow:unlink a temp inside the CAS shard dir, not staging
+        let _ = fs::remove_file(tmp);
+        if won { return Ok(()) }
+        log::warn!("CAS store of {} failed: {}", oid, self.failure_context(dest, None));
+        Err(format!("Failed to publish blob {}: {}", oid, rename_err))
+    }
+
     /// Store a file in the object store, returning its SHA-256 OID.
     ///
     /// The write is atomic: the blob is first written to a temporary file
@@ -114,35 +193,40 @@ impl ObjectStore {
     /// same pattern as git-lfs's "clean filter" — a crash can never leave
     /// a half-written blob at the final path.
     ///
-    /// If the blob already exists (same hash), this is a no-op — the
-    /// existing blob is kept and the OID is returned. This makes the
-    /// operation idempotent.
-    pub fn store_file(&self, source: &Path) -> Result<String, String> {
+    /// An existing local blob is kept. A cloud-only entry is atomically
+    /// republished from these bytes under the same hash: successful storage
+    /// supplies a local blob, so readers do not wait on the cloud again after
+    /// regenerating an asset. Shared content is neither removed nor changed.
+    ///
+    /// `mode` says what a refusal because the shard is still in the cloud
+    /// costs: see [`RecordMode`].
+    pub fn store_file(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
         let oid = Self::hash_file(source)?;
         let dest = self.blob_path(&oid);
         let source_size = fs::metadata(source).map(|m| m.len()).unwrap_or(0);
 
-        // Idempotent: if the blob already exists AND passes validation,
-        // skip the write. If the blob is corrupt (0-byte but source is
-        // non-empty), validate_blob removes it and we fall through to
-        // re-store.
-        if dest.exists() {
+        // Reuse validated local bytes. Cloud entries are republished below;
+        // validate_blob removes a downloaded empty blob before re-storing.
+        // Best-effort: a probe that cannot tell (permission, not-a-directory,
+        // an undownloaded shard) reads as absent and falls through to the
+        // write, which handles its own directory failures and reports them.
+        if dest.exists() && !crate::build::icloud::is_still_in_the_cloud(&dest) {
             if self.validate_blob(&oid, source_size).is_ok() {
                 return Ok(oid);
             }
-            // validate_blob already removed the corrupt blob; fall through.
         }
 
         // Ensure the parent directory (e.g., `base/ab/cd/`) exists.
         if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
+            shard_wait::in_shard(&self.base, &dest, mode, Touch::Dir, || {
+                crate::build::io_utils::create_output_dir_all(parent)
+            })
+            .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
         // Write to a temp file in the same directory, then rename.
         // `fs::rename` is atomic on POSIX when source and dest are on the
-        // same filesystem. If they're on different filesystems (cross-device),
-        // rename fails with EXDEV — we fall back to copy + remove.
+        // same filesystem; a sibling pending file stays on the same mount.
         //
         // UUID suffix prevents collisions when multiple concurrent tasks store
         // the same blob (e.g., background asset copy racing with rebuild).
@@ -152,13 +236,16 @@ impl ObjectStore {
         // Refs: https://www.idownloadblog.com/2019/08/06/icloud-drive-file-folder-name-exclusion-list/
         //       https://eclecticlight.co/2024/07/09/excluding-folders-and-files-from-time-machine-spotlight-and-icloud-drive/
         let tmp = dest.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
-        fs::copy(source, &tmp)  // allow:raw_write the temp blob this call just minted, under .moss/cache
-            .map_err(|e| format!("Failed to copy to pending {}: {}", tmp.display(), e))?;
+        shard_wait::in_shard(&self.base, &dest, mode, Touch::File, || {
+            fs::copy(source, &tmp)  // allow:raw_write the temp blob this call just minted, under .moss/cache
+        })
+        .map_err(|e| format!("Failed to copy to pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
         // Post-copy validation: reject 0-byte temp files when source is
         // non-empty (e.g., fs::copy raced with iCloud materialization).
         let tmp_size = fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
         if source_size > 0 && tmp_size == 0 {
+            // allow:unlink a temp inside the CAS shard dir, not staging
             let _ = fs::remove_file(&tmp);
             return Err(format!(
                 "fs::copy produced 0-byte temp for {} (source: {} bytes)",
@@ -167,25 +254,7 @@ impl ObjectStore {
             ));
         }
 
-        match fs::rename(&tmp, &dest) {
-            Ok(()) => {}
-            Err(rename_err) => {
-                // Another thread may have won the race and placed the blob.
-                // If dest now exists, that's success — return Ok(oid).
-                if dest.exists() {
-                    let _ = fs::remove_file(&tmp);
-                    return Ok(oid);
-                }
-                // Cross-device fallback: copy then remove temp.
-                fs::copy(&tmp, &dest).map_err(|e| {  // allow:raw_write CAS blob under .moss/cache — cloud-excluded, dest is content-addressed
-                    format!(
-                        "rename failed ({}), copy fallback also failed: {}",
-                        rename_err, e
-                    )
-                })?;
-                let _ = fs::remove_file(&tmp);
-            }
-        }
+        self.place_pending(&oid, &tmp, &dest, mode)?;
 
         Ok(oid)
     }
@@ -193,10 +262,11 @@ impl ObjectStore {
     /// Store raw bytes in the object store, returning the SHA-256 OID.
     ///
     /// Like [`store_file`](Self::store_file), the write is atomic (temp +
-    /// rename) and idempotent (existing blob is kept). This variant avoids
+    /// rename) and idempotent (existing local blob is kept). A cloud-only blob
+    /// is republished from these same bytes. This variant avoids
     /// an intermediate file when the caller already has bytes in memory —
-    /// e.g., a small JSON metadata blob.
-    pub fn store_bytes(&self, data: &[u8]) -> Result<String, String> {
+    /// e.g., a small JSON metadata blob. `mode` is as for `store_file`.
+    pub fn store_bytes(&self, data: &[u8], mode: RecordMode) -> Result<String, String> {
         let oid = {
             let mut hasher = Sha256::new();
             hasher.update(data);
@@ -204,36 +274,25 @@ impl ObjectStore {
         };
         let dest = self.blob_path(&oid);
 
-        if dest.exists() {
+        if crate::build::io_utils::output_present(&dest) {
             return Ok(oid);
         }
 
         if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
+            shard_wait::in_shard(&self.base, &dest, mode, Touch::Dir, || {
+                crate::build::io_utils::create_output_dir_all(parent)
+            })
+            .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
         // Use `.pending.<uuid>` — see store_file() comment for iCloud Drive rationale.
         let tmp = dest.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
-        fs::write(&tmp, data)  // allow:raw_write the temp blob this call just minted, under .moss/cache
-            .map_err(|e| format!("Failed to write pending {}: {}", tmp.display(), e))?;
+        shard_wait::in_shard(&self.base, &dest, mode, Touch::File, || {
+            fs::write(&tmp, data)  // allow:raw_write the temp blob this call just minted, under .moss/cache
+        })
+        .map_err(|e| format!("Failed to write pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
-        match fs::rename(&tmp, &dest) {
-            Ok(()) => {}
-            Err(rename_err) => {
-                if dest.exists() {
-                    let _ = fs::remove_file(&tmp);
-                    return Ok(oid);
-                }
-                fs::copy(&tmp, &dest).map_err(|e| {  // allow:raw_write CAS blob under .moss/cache — cloud-excluded, dest is content-addressed
-                    format!(
-                        "rename failed ({}), copy fallback also failed: {}",
-                        rename_err, e
-                    )
-                })?;
-                let _ = fs::remove_file(&tmp);
-            }
-        }
+        self.place_pending(&oid, &tmp, &dest, mode)?;
 
         Ok(oid)
     }
@@ -247,31 +306,54 @@ impl ObjectStore {
             return Some(p);
         }
         // A plain miss is ordinary and silent; one line per object would be a
-        // cold cache's worth of noise. Only a blob that is there is logged.
+        // cold cache's worth of noise. Only a blob that is there is logged. One
+        // the cloud holds is normal on a second machine: asked for so a later
+        // build finds it, recomputed now.
         if p.exists() {
-            log::warn!("[CAS] unusable blob at {}, treating as missing", oid);
+            if crate::build::icloud::is_evicted(&p) {
+                crate::build::cloud_readiness::request_download(&p);
+                log::debug!("[CAS] blob {} is in the cloud, requested; treating as missing", oid);
+            } else {
+                log::warn!("[CAS] unusable blob at {}, treating as missing", oid);
+            }
         }
         None
     }
 
     /// Validate a stored blob's size against the expected source size.
     ///
-    /// If the source was non-empty but the blob is not a usable output (a
-    /// 0-byte stub, or dataless after an eviction raced `fs::copy`), it is
-    /// removed so that [`store_file`](Self::store_file)
-    /// can write fresh content, and an `Err` is returned.
+    /// If the source was non-empty but the blob is a downloaded 0-byte stub, it
+    /// is removed so that [`store_file`](Self::store_file) can write fresh
+    /// content, and an `Err` is returned. A blob the cloud holds is present, not
+    /// corrupt: its key is its hash, so it is the same bytes on every machine,
+    /// and validation never removes it. When a store holds fresh local bytes,
+    /// it can republish that same hash atomically without changing the content.
     ///
     /// This is the single place where blob integrity is checked and
-    /// self-healing happens. Called by `store_file` (idempotency check)
-    /// and `link_to` (pre-link check).
+    /// self-healing happens. Called by `store_file` (idempotency check).
+    ///
+    /// A blob that cannot be CHECKED is not removed: an I/O error other than a
+    /// positive `NotFound` says nothing about the bytes, and deleting on it
+    /// takes a healthy blob every other build still links.
     pub fn validate_blob(&self, oid: &str, source_size: u64) -> Result<(), String> {
-        let path = self.blob_path(oid);
-        if source_size > 0 && !crate::build::io_utils::output_present(&path) {
-            log::warn!("[CAS] unusable blob detected, removing: {}", oid);
-            let _ = fs::remove_file(&path);
-            return Err(format!("Unusable blob: {}", oid));
+        use crate::build::io_utils::Presence;
+        if source_size == 0 {
+            return Ok(());
         }
-        Ok(())
+        let path = self.blob_path(oid);
+        if crate::build::icloud::is_still_in_the_cloud(&path) {
+            return Ok(());
+        }
+        match crate::build::io_utils::probe_path(&path) {
+            Presence::Present => Ok(()),
+            Presence::Unverified(e) => Err(format!("Unverifiable blob {}: {}", oid, e)),
+            Presence::Absent | Presence::Evicted => {
+                log::warn!("[CAS] unusable blob detected, removing: {}", oid);
+                // allow:unlink an unusable blob under cache/objects, not staging
+                let _ = fs::remove_file(&path);
+                Err(format!("Unusable blob: {}", oid))
+            }
+        }
     }
 
     /// Copy a cached blob to a target path.
@@ -286,7 +368,7 @@ impl ObjectStore {
     /// Hardlinks share the same inode. When a cloud sync provider (iCloud,
     /// Dropbox, OneDrive, Google Drive) evicts a file to reclaim disk
     /// space, it zeroes out the data at the inode level. With hardlinks,
-    /// ALL copies (cache blob, site/, site-stage/) become 0 bytes
+    /// ALL copies (cache blob, staging/, the generation) become 0 bytes
     /// simultaneously — there is no independent copy to fall back on.
     ///
     /// COW clones (via `fclonefileat`) create an independent inode that
@@ -324,11 +406,41 @@ impl ObjectStore {
     /// ### Tmp-sibling sweep
     ///
     /// A killed process leaks `<target>.tmp.<uuid>` instead of corrupting
-    /// `<target>`. The next `link_to` to the same `target` sweeps any stale
-    /// `.tmp.*` siblings on entry, bounding the leak to one cycle per kill.
+    /// `<target>`. The build's permitted staging sweep removes it; sweeping
+    /// here could take a concurrent `link_to`'s temp for the same target
+    /// mid-rename.
     pub fn link_to(&self, oid: &str, target: &Path) -> Result<(), String> {
-        let blob = self.blob_path(oid);
+        self.link_to_inode(oid, target, None).map(drop)
+    }
+
+    /// [`link_to`](Self::link_to), returning the inode it renamed into place
+    /// where the platform reports one — so a caller recording the target's
+    /// stat can tell its own link from one a concurrent build renamed over it.
+    pub(crate) fn link_to_inode(&self, oid: &str, target: &Path, local: Option<&Path>) -> Result<Option<u64>, String> {
+        let mut blob = self.blob_path(oid);
+        // A blob in the cloud is never read as it is. Where the caller holds
+        // the same bytes (`local`: a file whose content is `oid`) they are the
+        // source and the blob is only asked for, so a later build finds it;
+        // otherwise it is waited for, once, and checked against its name.
+        if crate::build::icloud::is_still_in_the_cloud(&blob) {
+            match local.filter(|l| !crate::build::icloud::is_evicted(l)) {
+                Some(local) => {
+                    crate::build::cloud_readiness::request_download(&blob);
+                    blob = local.to_path_buf();
+                }
+                None if self.ready_blob(oid).is_none() => {
+                    return Err(format!(
+                        "Failed to copy {} -> {}: blob {} is in the cloud and did not arrive intact in time",
+                        blob.display(),
+                        target.display(),
+                        oid
+                    ));
+                }
+                None => {}
+            }
+        }
         if !blob.exists() {
+            log::warn!("CAS link of {} failed, blob absent: {}", oid, self.failure_context(&blob, None));
             return Err(format!("Blob {} does not exist in object store", oid));
         }
 
@@ -342,19 +454,10 @@ impl ObjectStore {
 
         // Create parent directories for the target.
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
+            crate::build::io_utils::create_output_dir_all(parent)
                 .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
-        // Sweep stale `.tmp.*` siblings from prior killed link_to calls so
-        // iCloud Drive doesn't accumulate visible orphan files. Best-effort;
-        // failures here don't fail the link_to itself.
-        //
-        // We use the suffix `.tmp.<uuid>` rather than `.pending.<uuid>` (which
-        // store_file uses inside the CAS shard dir) because link_to writes to
-        // a user-visible destination (the output tree, or a vault path during
-        // a publish-history restore), not the cache dir. The two patterns are
-        // intentionally different so iCloud-allowlist tooling can tell them apart.
         let target_basename = target
             .file_name()
             .and_then(|n| n.to_str())
@@ -368,18 +471,6 @@ impl ObjectStore {
                 "link_to target has no file name component: {}",
                 target.display()
             ));
-        }
-        if let Some(parent) = target.parent() {
-            let tmp_prefix = format!("{}.tmp.", target_basename);
-            if let Ok(rd) = fs::read_dir(parent) {
-                for entry in rd.flatten() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if name.starts_with(&tmp_prefix) {
-                            let _ = fs::remove_file(entry.path());
-                        }
-                    }
-                }
-            }
         }
 
         // Atomic write: copy to a sibling tmp, then rename over the target.
@@ -396,6 +487,7 @@ impl ObjectStore {
         ));
 
         if let Err(e) = fs::copy(&blob, &tmp) {  // allow:raw_write the temp this call just minted, under .moss/cache
+            // allow:unlink the temp this call minted beside the target; the rename replaces the entry in place
             let _ = fs::remove_file(&tmp);
             return Err(format!(
                 "Failed to copy {} -> {}: {}",
@@ -406,14 +498,16 @@ impl ObjectStore {
         }
         // Stat the temp instead of trusting fs::copy's return value — on
         // Windows that's CopyFileEx's progress count, which Wine reports as 0.
-        let copied = match fs::metadata(&tmp) {
-            Ok(m) => m.len(),
+        let (copied, inode) = match fs::metadata(&tmp) {
+            Ok(m) => (m.len(), crate::build::stat::stat_identity(&m).1),
             Err(e) => {
+                // allow:unlink the temp this call minted beside the target; the rename replaces the entry in place
                 let _ = fs::remove_file(&tmp);
                 return Err(format!("Failed to stat {} after copy: {}", tmp.display(), e));
             }
         };
         if copied != blob_size {
+            // allow:unlink the temp this call minted beside the target; the rename replaces the entry in place
             let _ = fs::remove_file(&tmp);
             return Err(format!(
                 "Blob {} copy truncated: expected {} bytes, got {} (iCloud fault-in race?)",
@@ -421,6 +515,7 @@ impl ObjectStore {
             ));
         }
 
+        // allow:unlink the temp this call minted beside the target; the rename replaces the entry in place
         if let Err(e) = fs::rename(&tmp, target) {
             let _ = fs::remove_file(&tmp);
             return Err(format!(
@@ -430,7 +525,7 @@ impl ObjectStore {
                 e
             ));
         }
-        Ok(())
+        Ok(inode)
     }
 
     /// Compute the sharded blob path for a given OID, using git's two-level
@@ -462,6 +557,7 @@ pub struct TransformRecord {
     pub source_size: u64,
     /// Map of transform name (e.g., "thumbnail", "webp") to its output
     /// entry.
+    #[serde(serialize_with = "records::sorted")]
     pub transforms: HashMap<String, TransformEntry>,
 }
 
@@ -490,8 +586,12 @@ pub struct TransformEntry {
 /// ```text
 /// <base>/<oid[0..2]>/<oid[2..4]>/<source_oid>.json
 /// ```
+///
+/// `Clone` (see [`ObjectStore`]'s derive) lets a caller stash the paths
+/// behind a lock and clone them out for unsynchronized I/O.
+#[derive(Clone)]
 pub struct TransformCache {
-    /// Root directory — typically `.moss/build/cache/transforms/`.
+    /// Root directory — typically `.moss/cache/transforms/`.
     base: PathBuf,
     /// Reference to the object store, used to verify that output blobs
     /// still exist on disk.
@@ -502,12 +602,23 @@ impl TransformCache {
     /// Create a new `TransformCache`.
     ///
     /// - `base` — root directory for transform JSON files (e.g.,
-    ///   `.moss/build/cache/transforms/`).
+    ///   `.moss/cache/transforms/`).
     /// - `objects` — the [`ObjectStore`] that holds the actual blobs;
     ///   needed by [`find_cached_output`](Self::find_cached_output) to
     ///   verify blob existence.
     pub fn new(base: PathBuf, objects: ObjectStore) -> Self {
         Self { base, objects }
+    }
+
+    /// `mp`'s transform cache, paired with `mp`'s object store. Prefer this over
+    /// hand-assembling `TransformCache::new(mp.cache_transforms(), ObjectStore::new(mp.cache_objects()))`.
+    pub fn for_site(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::new(mp.cache_transforms(), ObjectStore::for_site(mp))
+    }
+
+    /// Returns the root directory of this transform cache — typically `.moss/cache/transforms/`.
+    pub fn root(&self) -> &Path {
+        &self.base
     }
 
     /// The object store backing this cache's transform outputs.
@@ -520,13 +631,12 @@ impl TransformCache {
         &self.objects
     }
 
-    /// Read and deserialize a transform record for the given source OID.
-    ///
-    /// Returns `None` if the record file doesn't exist or can't be parsed.
-    pub fn get(&self, source_oid: &str) -> Option<TransformRecord> {
-        let path = self.record_path(source_oid);
-        let data = fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&data).ok()
+    /// Read and deserialize a transform record for the given source OID: `None` if it
+    /// is absent, unreadable or unparsable. Writers that merge into a record use
+    /// [`merge`](Self::merge), which tells those apart. There is no default mode:
+    /// a lookup that guards an encode must say [`RecordMode::Wait`].
+    pub fn get_with(&self, source_oid: &str, mode: RecordMode) -> Option<TransformRecord> {
+        self.read(source_oid, mode).present()
     }
 
     /// Write a transform record atomically.
@@ -538,12 +648,17 @@ impl TransformCache {
     /// excludes `.tmp` files from sync and fileproviderd may remove them.
     /// On ENOENT, retries after re-creating parent AND re-writing the temp
     /// file (the source may have been removed, not just the parent).
-    pub fn put(&self, record: &TransformRecord) -> Result<(), String> {
+    ///
+    /// `mode` says what a refusal because the shard is still in the cloud
+    /// costs: see [`RecordMode`].
+    pub fn put(&self, record: &TransformRecord, mode: RecordMode) -> Result<(), String> {
         let path = self.record_path(&record.source_oid);
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
+            shard_wait::in_shard(&self.base, &path, mode, Touch::Dir, || {
+                crate::build::io_utils::create_output_dir_all(parent)
+            })
+            .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
         let json = serde_json::to_string_pretty(record)
@@ -555,16 +670,22 @@ impl TransformCache {
         // race on one temp + a rename of a vanished file. Mirrors store_file/
         // store_bytes. `.pending` (not `.tmp`) so iCloud doesn't exclude it.
         let tmp = path.with_extension(format!("json.pending.{}", uuid::Uuid::new_v4()));
-        fs::write(&tmp, json.as_bytes())  // allow:raw_write temp for the index's own atomic save, under .moss/cache
-            .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
+        shard_wait::in_shard(&self.base, &path, mode, Touch::File, || {
+            fs::write(&tmp, json.as_bytes())  // allow:raw_write temp for the index's own atomic save, under .moss/cache
+        })
+        .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
 
-        if let Err(first_err) = fs::rename(&tmp, &path) {
+        let renamed = shard_wait::in_shard(&self.base, &path, mode, Touch::File, || {
+            fs::rename(&tmp, &path)  // allow:unlink rename into place under cache/transforms, not staging
+        });
+        if let Err(first_err) = renamed {
             if first_err.kind() == std::io::ErrorKind::NotFound {
                 if let Some(parent) = path.parent() {
-                    let _ = fs::create_dir_all(parent);
+                    let _ = crate::build::io_utils::create_output_dir_all(parent);
                 }
                 // Re-write temp file — it may have been removed too
                 let _ = fs::write(&tmp, json.as_bytes());  // allow:raw_write temp for the index's own atomic save, under .moss/cache
+                // allow:unlink rename into place under cache/transforms, not staging
                 fs::rename(&tmp, &path).map_err(|e| {
                     format!(
                         "Failed to rename {} -> {} (retry after ENOENT): {}",
@@ -593,6 +714,7 @@ impl TransformCache {
     pub fn remove(&self, source_oid: &str) -> Result<(), String> {
         let path = self.record_path(source_oid);
         if path.exists() {
+            // allow:unlink a transform record under cache/transforms, not staging
             fs::remove_file(&path)
                 .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
         }
@@ -608,8 +730,8 @@ impl TransformCache {
     /// 2. That record contains an entry for the given `transform` name.
     /// 3. The entry's `params` match `current_params` exactly (deep
     ///    equality on `serde_json::Value`).
-    /// 4. The output blob (identified by the entry's OID) still exists
-    ///    in the [`ObjectStore`].
+    /// 4. The output blob is usable now, or is in the cloud and arrives within
+    ///    its deadline hashing to its OID ([`ObjectStore::ready_blob`]).
     ///
     /// If any check fails, `None` is returned and the caller should
     /// re-run the transform.
@@ -618,9 +740,22 @@ impl TransformCache {
         source_oid: &str,
         transform: &str,
         current_params: &serde_json::Value,
+        mode: RecordMode,
     ) -> Option<String> {
+        self.find_cached_entry(source_oid, transform, current_params, mode).map(|entry| entry.oid)
+    }
+
+    /// [`find_cached_output`](Self::find_cached_output), returning the whole entry
+    /// so a caller that wants its recorded size does not read the record again.
+    pub fn find_cached_entry(
+        &self,
+        source_oid: &str,
+        transform: &str,
+        current_params: &serde_json::Value,
+        mode: RecordMode,
+    ) -> Option<TransformEntry> {
         // 1. Record exists?
-        let record = self.get(source_oid)?;
+        let record = self.get_with(source_oid, mode)?;
 
         // 2. Transform entry exists?
         let entry = record.transforms.get(transform)?;
@@ -630,12 +765,10 @@ impl TransformCache {
             return None;
         }
 
-        // 4. Output blob still exists on disk?
-        if self.objects.get_path(&entry.oid).is_none() {
-            return None;
-        }
+        // 4. Output blob usable, or arriving?
+        self.objects.ready_blob(&entry.oid)?;
 
-        Some(entry.oid.clone())
+        Some(entry.clone())
     }
 
     /// Compute the path where a transform record is stored on disk, under the
@@ -669,19 +802,30 @@ pub struct CachedMediaMeta {
     /// Whether the source is an animated gif/webp. `#[serde(default)]` so
     /// cache entries written before this field existed deserialize as
     /// `false` — a bounded, self-healing gap (the next content change
-    /// re-sniffs and writes the real value); see moss#919.
+    /// re-sniffs and writes the real value).
     #[serde(default)]
     pub is_animated: bool,
 }
 
-/// A single entry in the hash index, mapping file stat fields to a
-/// content hash.
+/// A single entry in the hash index: the stat record a file had when its bytes
+/// were hashed, and the hash.
+///
+/// Only `size`, `mtime` and `content_hash` existed in the first format. The
+/// rest default when missing (see [`FileStat`]'s serde shape) so an index written
+/// by that version still loads — its entries simply never match a full-stat
+/// lookup, and are rewritten the next time the file is hashed (see
+/// [`HashIndex::lookup`]).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HashIndexEntry {
-    /// File size in bytes (corresponds to `st_size`).
-    pub size: u64,
-    /// Modification time as Unix epoch seconds (corresponds to `st_mtime`).
-    pub mtime: u64,
+    /// The file's stat record when its bytes were hashed, stored as flat keys.
+    #[serde(flatten)]
+    pub stat: FileStat,
+    /// When the hashed bytes were read, Unix seconds — the clock
+    /// [`FileStat::vouches_for`] needs before it trusts a zero sub-second mtime.
+    /// `None` in an index written before the field existed, which that rule
+    /// reads as "unknown" and fails open on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<u64>,
     /// SHA-256 content hash (hex, 64 chars).
     pub content_hash: String,
 }
@@ -703,12 +847,22 @@ pub struct HashIndexEntry {
 ///   Git handles this by comparing actual content for entries whose mtime
 ///   equals the index mtime (see racy-git.txt for details).
 ///
-/// Our simplified version:
-///   - Key: (relative_path) → { size: u64, mtime: u64, content_hash: String }
-///   - If (size, mtime) match: trust content_hash, skip ObjectStore::hash_file()
-///   - If either differs: re-hash via ObjectStore::hash_file(), update entry
-///   - Racy-clean edge case is acceptable for media metadata caching —
-///     worst case is one extra ffprobe call, not data corruption
+/// Our version:
+///   - Key: (relative_path) → the file's [`FileStat`] + `content_hash`
+///   - [`lookup`](Self::lookup) trusts `content_hash` only while the file's stat
+///     still vouches for the entry ([`FileStat::vouches_for`]), and fails OPEN — a
+///     miss costs one hash — never to a hit
+///   - [`lookup_whole_second`](Self::lookup_whole_second) is the older, weaker
+///     rule (size + whole-second mtime), kept for the one caller that cannot hash
+///     on a miss: the video path
+///
+/// The racy-clean edge case is NOT acceptable for an image: its content hash
+/// names the encode, so a false hit ships the previous picture's variant. Each
+/// entry carries the moment its bytes were read (`recorded_at`), per entry
+/// rather than per index as git keeps it, because entries outlive the index
+/// they were hashed into: [`carry_forward`](Self::carry_forward) and
+/// [`save_merging`](Self::save_merging) copy them into indexes written later,
+/// whose own write time would vouch for reads it never saw.
 ///
 /// Reference: <https://git-scm.com/docs/racy-git>
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -723,6 +877,22 @@ impl HashIndex {
         Self {
             entries: HashMap::new(),
         }
+    }
+
+    /// Load a hash index for a reader that must not act on a blind read:
+    /// `Ok(None)` when the file does not exist, `Err` when it exists but cannot
+    /// be read or parsed (`InvalidData`). [`load`](Self::load)'s empty-on-error
+    /// is right for a worker — it costs a re-hash — and wrong for the GC mark
+    /// phase, where an empty index marks nothing live.
+    pub fn load_strict(path: &Path) -> std::io::Result<Option<Self>> {
+        let data = match fs::read_to_string(path) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        serde_json::from_str(&data)
+            .map(Some)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     /// Load a hash index from a JSON file on disk.
@@ -747,7 +917,7 @@ impl HashIndex {
     /// file (the source may have been removed, not just the parent).
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
+            crate::build::io_utils::create_output_dir_all(parent)
                 .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
@@ -764,14 +934,16 @@ impl HashIndex {
             .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
 
         // Rename is atomic on the same filesystem. No cross-device fallback needed
-        // because tmp and target share the same parent directory (.moss/build/cache/).
+        // because tmp and target share the same parent directory (.moss/build.nosync/cache/).
+        // allow:unlink rename into place for cache/hash-index.json, not staging
         if let Err(first_err) = fs::rename(&tmp, path) {
             if first_err.kind() == std::io::ErrorKind::NotFound {
                 if let Some(parent) = path.parent() {
-                    let _ = fs::create_dir_all(parent);
+                    let _ = crate::build::io_utils::create_output_dir_all(parent);
                 }
                 // Re-write temp file — it may have been removed too
                 let _ = fs::write(&tmp, json.as_bytes());  // allow:raw_write temp for the index's own atomic save, under .moss/cache
+                // allow:unlink rename into place for cache/hash-index.json, not staging
                 fs::rename(&tmp, path).map_err(|e| {
                     format!(
                         "Failed to rename {} -> {} (retry after ENOENT): {}",
@@ -801,44 +973,206 @@ impl HashIndex {
     /// last clobber the other's freshly-added entries, forcing a full re-hash of
     /// that category on the next build. `save_merging` re-reads the current
     /// on-disk entries and layers `self`'s on top (self wins on key collision),
-    /// so neither worker loses the other's contribution. Scan output keeps using
-    /// plain `save` (it is authoritative and prunes stale entries).
+    /// so neither worker loses the other's contribution. The scan, which also
+    /// prunes, uses [`save_pruned`](Self::save_pruned).
     pub fn save_merging(&self, path: &Path) -> Result<(), String> {
+        self.save_pruned(path, |_| true)
+    }
+
+    /// [`save_merging`](Self::save_merging) that first drops every on-disk entry
+    /// `keep` rejects. For the scan: it is authoritative for the media it
+    /// resolves (it leaves out, on purpose, an entry recorded for another instant
+    /// of a file) and for which files exist, but the parse cache records page
+    /// hashes in the same file, and those must survive while their page does.
+    pub fn save_pruned(&self, path: &Path, keep: impl Fn(&str) -> bool) -> Result<(), String> {
         let mut merged = Self::load(path);
+        merged.entries.retain(|key, _| keep(key));
         for (key, entry) in &self.entries {
             merged.entries.insert(key.clone(), entry.clone());
         }
         merged.save(path)
     }
 
-    /// Look up the cached content hash for a file.
+    /// The content hash recorded for `relative_path`, if the file still shows the
+    /// stat record it was hashed at.
     ///
-    /// Returns `Some(content_hash)` if (size, mtime) match the cached entry.
-    /// Returns `None` if the entry is missing or stat fields differ.
-    pub fn lookup(&self, relative_path: &str, size: u64, mtime: u64) -> Option<&str> {
+    /// Fails open. A field that is `Some` on both sides and differs is a miss (the
+    /// rule `SourceMetadata` uses), and so is a missing sub-second mtime on either
+    /// side — an entry from before the field existed, one recorded by
+    /// [`update_whole_second`](Self::update_whole_second), a file whose mtime the
+    /// platform will not report: a whole-second match cannot rule out a same-size
+    /// rewrite in the same second. What an exact-zero sub-second reading proves is
+    /// [`FileStat::vouches_for`]'s to say: only what an entry's `recorded_at` shows
+    /// was already old when it was hashed. A miss costs one hash; a hit that should
+    /// have missed is a stale image.
+    pub fn lookup(&self, relative_path: &str, stat: &FileStat) -> Option<&str> {
         let entry = self.entries.get(relative_path)?;
-        if entry.size == size && entry.mtime == mtime {
-            Some(&entry.content_hash)
-        } else {
-            None
+        count_hit(entry.stat.vouches_for(stat, entry.recorded_at).then_some(entry.content_hash.as_str()))
+    }
+
+    /// [`lookup`](Self::lookup)'s older rule: size and whole-second mtime only,
+    /// blind to a same-size rewrite in the same second.
+    ///
+    /// For the video path, which cannot afford the full-stat rule: the render thread
+    /// hashes no multi-GB source, and a stricter worker would
+    /// rehash every video on any ctime or inode change (a cloud provider
+    /// re-materializing it) and on the first build after this rule changed. Callers
+    /// record with [`update_whole_second`](Self::update_whole_second), so what they
+    /// leave in the index is never mistaken for a full stat record.
+    ///
+    /// Needs no coarse-timestamp guard: it never reads a sub-second field at all, so
+    /// a filesystem that rounds one to zero changes nothing here — this rule was
+    /// already as coarse as whole seconds get, by design, on every filesystem.
+    pub fn lookup_whole_second(&self, relative_path: &str, size: u64, mtime: u64) -> Option<&str> {
+        let entry = self.entries.get(relative_path)?;
+        count_hit((entry.stat.size == size && entry.stat.mtime == mtime).then_some(entry.content_hash.as_str()))
+    }
+
+    /// Record `content_hash` for a file as it stood at `stat`, without saying when
+    /// the bytes were read — so [`lookup`](Self::lookup) never trusts the entry on an
+    /// exact-zero sub-second mtime. See [`update_read_at`](Self::update_read_at).
+    pub fn update(&mut self, relative_path: String, stat: &FileStat, content_hash: String) {
+        self.update_read_at(relative_path, stat, content_hash, None);
+    }
+
+    /// Record `content_hash` for bytes read no earlier than `recorded_at`
+    /// ([`recording_clock`], sampled before the read), from a file as it stood at
+    /// `stat`.
+    ///
+    /// `stat` must be taken BEFORE the bytes are read: a write landing during the
+    /// hash then leaves an entry the file no longer matches, where the other order
+    /// would pair the new stat with the old bytes' hash and vouch for it.
+    pub(crate) fn update_read_at(&mut self, relative_path: String, stat: &FileStat, content_hash: String, recorded_at: Option<u64>) {
+        REHASHED.fetch_add(1, Ordering::Relaxed);
+        self.entries.insert(
+            relative_path,
+            HashIndexEntry { stat: *stat, recorded_at, content_hash },
+        );
+    }
+
+    /// [`update`](Self::update) for a caller that only has size and whole-second
+    /// mtime: the entry carries no sub-second field, so [`lookup`](Self::lookup)
+    /// will never trust it.
+    pub fn update_whole_second(&mut self, relative_path: String, size: u64, mtime: u64, content_hash: String) {
+        self.update(relative_path, &FileStat::whole_second(size, mtime), content_hash);
+    }
+
+    /// Copy `relative_path`'s entry from `previous` exactly as it was recorded.
+    ///
+    /// For carrying a hit forward into a fresh index. Copying, rather than
+    /// re-recording the hit under the file's current stat, is what keeps the record
+    /// honest: a hit that came from [`lookup_whole_second`](Self::lookup_whole_second)
+    /// could be a stale one, and stamping it with today's stat would turn it into an
+    /// entry [`lookup`](Self::lookup) trusts. That is not only a video's concern: the
+    /// scan answers an evicted image by the whole-second rule too, and its hit may be
+    /// a strict entry that only ctime and inode disagree with.
+    pub fn carry_forward(&mut self, previous: &HashIndex, relative_path: &str) {
+        if let Some(entry) = previous.entries.get(relative_path) {
+            self.entries.insert(relative_path.to_string(), entry.clone());
         }
     }
 
-    /// Insert or update an entry in the hash index.
-    pub fn update(&mut self, relative_path: String, size: u64, mtime: u64, content_hash: String) {
-        self.entries.insert(
-            relative_path,
-            HashIndexEntry {
-                size,
-                mtime,
-                content_hash,
-            },
+    /// The content hash of `file`: the recorded one while [`lookup`](Self::lookup)
+    /// trusts it, otherwise hashed now and recorded.
+    ///
+    /// Never reads a file that is still in the cloud — that is an `Err`. The read
+    /// blocks for the provider's whole download or fails, and a re-materialised file
+    /// has a new ctime and inode, so the strict lookup misses on exactly the files
+    /// the old size-and-second key answered without one. A hit still answers.
+    pub fn resolve(&mut self, file: &Path, relative_path: &str) -> Result<String, String> {
+        self.resolve_with(file, relative_path, ObjectStore::hash_file, crate::build::icloud::is_still_in_the_cloud)
+    }
+
+    /// [`resolve`](Self::resolve) with its two effects passed in: a test can hash
+    /// without a real file and put one in the cloud, and a caller that reads the bytes
+    /// itself (the parse cache) still gets the lookup, the guard and the record.
+    pub(crate) fn resolve_with(
+        &mut self,
+        file: &Path,
+        relative_path: &str,
+        hash_file: impl FnOnce(&Path) -> Result<String, String>,
+        in_the_cloud: impl FnOnce(&Path) -> bool,
+    ) -> Result<String, String> {
+        // Stat before anything is read: see `update`.
+        let stat = FileStat::of(
+            &fs::metadata(file).map_err(|e| format!("Failed to stat {}: {}", file.display(), e))?,
         );
+        if let Some(hash) = self.lookup(relative_path, &stat) {
+            return Ok(hash.to_string());
+        }
+        self.hash_and_record(&stat, file, relative_path, hash_file, in_the_cloud)
+    }
+
+    /// [`resolve`](Self::resolve) for a scan that builds a new index beside the last
+    /// one, at the stat its walk took: what `previous` still vouches for is carried
+    /// across as recorded (see [`carry_forward`](Self::carry_forward)), the rest is
+    /// hashed and recorded here.
+    pub(crate) fn resolve_from(
+        &mut self,
+        previous: &HashIndex,
+        stat: &FileStat,
+        file: &Path,
+        relative_path: &str,
+    ) -> Result<String, String> {
+        if let Some(hash) = previous.lookup(relative_path, stat) {
+            let hash = hash.to_string();
+            self.carry_forward(previous, relative_path);
+            return Ok(hash);
+        }
+        self.hash_and_record(stat, file, relative_path, ObjectStore::hash_file, crate::build::icloud::is_still_in_the_cloud)
+    }
+
+    /// What a miss comes to: no read of a file in the cloud, else its hash, recorded at
+    /// the stat taken before the read.
+    fn hash_and_record(
+        &mut self,
+        stat: &FileStat,
+        file: &Path,
+        relative_path: &str,
+        hash_file: impl FnOnce(&Path) -> Result<String, String>,
+        in_the_cloud: impl FnOnce(&Path) -> bool,
+    ) -> Result<String, String> {
+        if in_the_cloud(file) {
+            return Err(format!("{} is still in the cloud; not reading it to hash it", file.display()));
+        }
+        let recorded_at = recording_clock();
+        let hash = hash_file(file)?;
+        self.update_read_at(relative_path.to_string(), stat, hash.clone(), recorded_at);
+        Ok(hash)
     }
 }
 
+// The index's answers, process-wide, for the one line a build prints about it: a build
+// is served by a dozen short-lived indexes and what they saved spans all of them. Every
+// path that hashes for want of a hit records the result through `update`, so that is
+// what a rehash is.
+static HITS: AtomicU64 = AtomicU64::new(0);
+static REHASHED: AtomicU64 = AtomicU64::new(0);
+
+fn count_hit<T>(hit: Option<T>) -> Option<T> {
+    if hit.is_some() {
+        HITS.fetch_add(1, Ordering::Relaxed);
+    }
+    hit
+}
+
+/// Print, at `info`, what the index did since the last call, and start over.
+pub fn report_hash_index_activity() {
+    let (hits, rehashed) = (HITS.swap(0, Ordering::Relaxed), REHASHED.swap(0, Ordering::Relaxed));
+    let line = format!("[cache] hash-index: {hits} hits, {rehashed} rehashed");
+    #[cfg(test)]
+    LAST_LINE.with(|last| *last.borrow_mut() = Some(line.clone()));
+    log::info!("{line}");
+}
+
+// The line the last `report_hash_index_activity` on this thread printed.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LAST_LINE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
 // ---------------------------------------------------------------------------
-// Singleflight — Go's x/sync/singleflight for Rust (ADR-010, Phase 4)
+// Singleflight — Go's x/sync/singleflight for Rust
 // ---------------------------------------------------------------------------
 
 /// Dedup concurrent work on the same key (Go's x/sync/singleflight).
@@ -1132,119 +1466,143 @@ pub struct GcResult {
     pub bytes_freed: u64,
 }
 
+/// When each object store in this process was last swept, and how much it
+/// removed — read back only by failure forensics, so a missing blob's log line
+/// can say whether a sweep ran just before it went missing.
+static LAST_GC: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, (std::time::Instant, usize)>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn record_gc(objects_dir: &Path, objects_removed: usize) {
+    if let Ok(mut map) = LAST_GC.lock() {
+        map.insert(objects_dir.to_path_buf(), (std::time::Instant::now(), objects_removed));
+    }
+}
+
+fn last_gc_summary(objects_dir: &Path) -> String {
+    match LAST_GC.lock().ok().and_then(|m| m.get(objects_dir).copied()) {
+        Some((at, removed)) => format!("last GC {} s ago removed {}", at.elapsed().as_secs(), removed),
+        None => "no GC in this process".to_string(),
+    }
+}
+
 /// Run mark-and-sweep garbage collection on the cache.
 ///
-/// This function identifies and removes orphaned data in two phases:
+/// The whole mark phase runs before anything is deleted:
 ///
-/// 1. **Sweep TransformCache**: any transform record whose source OID is NOT
-///    in the HashIndex (i.e., the source file no longer exists or was modified)
-///    is deleted.
+/// 0. **Load the HashIndex** to determine the source OIDs live on this machine.
+/// 1. **Mark transform records**: every record contributes its output OIDs. A
+///    record whose source is not live here is condemned only once it is older
+///    than [`RECORD_TTL`]: the cache is shared by every machine that opens the
+///    folder, and a source this machine never scanned is live on the one that
+///    stored the record. This machine cannot tell, so until then it keeps it.
+/// 2. **Mark `hashes.json`**'s file hashes.
 ///
-/// 2. **Sweep ObjectStore**: any blob whose OID is NOT referenced by a live
-///    transform entry, the HashIndex content hashes, or the SiteHashes file map
-///    is deleted.
+/// Then the sweep deletes the condemned records and every blob no mark reached.
+///
+/// Every mark input must be READABLE. A missing index or `hashes.json` is an
+/// answer (nothing live from it); an index, record, shard directory or
+/// `hashes.json` that exists and cannot be read or parsed is not, because it
+/// marks less and so deletes more — one unreadable `hash-index.json` makes
+/// every blob garbage. Any such error aborts with nothing deleted.
 ///
 /// ## Arguments
 ///
-/// - `build_dir` — the `.moss/build/` directory containing `cache/`, `hashes.json`,
-///   and `cache/hash-index.json`.
+/// - `mp` — names the store (`cache_objects`, `cache_transforms`) and the two
+///   per-machine mark inputs (`cache_hash_index`, `hashes`).
 ///
-/// ## Safety
-///
-/// This must NOT be called during build — it assumes the cache is quiescent.
-/// Running GC concurrently with a build could delete blobs that are about to be
-/// referenced.
-pub fn gc(build_dir: &Path) -> GcResult {
-    let cache_dir = build_dir.join("cache");
-    let objects_dir = cache_dir.join("objects");
-    let transforms_dir = cache_dir.join("transforms");
-    let hash_index_path = cache_dir.join("hash-index.json");
-    let hashes_path = build_dir.join("hashes.json");
+/// `_token` proves no build or detached encode of this folder holds a cache
+/// lease (`lifecycle::try_begin_cache_gc`): a writer stores its blobs and
+/// transform records before the hash index that marks them live is saved, so a
+/// sweep beside one deletes what it just wrote.
+pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifecycle::CacheGcToken) -> Result<GcResult, String> {
+    let objects_dir = mp.cache_objects();
+    let transforms_dir = mp.cache_transforms();
+    let hash_index_path = mp.cache_hash_index();
+    let hashes_path = mp.hashes();
+    let unreadable = |input: &Path, e: std::io::Error| format!("{} unreadable ({})", input.display(), e);
 
-    // Phase 0: Load the HashIndex to determine live source OIDs.
-    let hash_index = HashIndex::load(&hash_index_path);
+    // Phase 0: the HashIndex names the live source OIDs.
+    let hash_index = HashIndex::load_strict(&hash_index_path)
+        .map_err(|e| unreadable(&hash_index_path, e))?
+        .unwrap_or_else(HashIndex::new);
     let live_source_oids: std::collections::HashSet<&str> = hash_index
         .entries
         .values()
         .map(|e| e.content_hash.as_str())
         .collect();
 
-    // Phase 1: Sweep TransformCache — remove records for deleted/changed sources.
-    let mut transforms_removed: usize = 0;
-    let mut live_output_oids: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // Also collect source OIDs themselves as live (they may be stored in objects/)
-    let mut live_oids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for oid in &live_source_oids {
-        live_oids.insert((*oid).to_string());
-    }
-
-    if transforms_dir.is_dir() {
-        // Walk the sharded directory: transforms/ab/cd/<source_oid>.json
-        for prefix1 in read_dir_entries(&transforms_dir) {
-            let p1 = transforms_dir.join(&prefix1);
-            if !p1.is_dir() {
+    // Phase 1: mark transform records. Source OIDs are live themselves (they
+    // may be stored in objects/); a live record's outputs are live.
+    let mut referenced_oids: std::collections::HashSet<String> =
+        live_source_oids.iter().map(|oid| (*oid).to_string()).collect();
+    let mut condemned_records: Vec<PathBuf> = Vec::new();
+    let mut shard_dirs: Vec<PathBuf> = Vec::new();
+    // transforms/ab/cd/<source_oid>.json
+    for prefix1 in read_dir_strict(&transforms_dir).map_err(|e| unreadable(&transforms_dir, e))? {
+        let p1 = transforms_dir.join(&prefix1);
+        if !p1.is_dir() {
+            continue;
+        }
+        for prefix2 in read_dir_strict(&p1).map_err(|e| unreadable(&p1, e))? {
+            let p2 = p1.join(&prefix2);
+            if !p2.is_dir() {
                 continue;
             }
-            for prefix2 in read_dir_entries(&p1) {
-                let p2 = p1.join(&prefix2);
-                if !p2.is_dir() {
+            for filename in read_dir_strict(&p2).map_err(|e| unreadable(&p2, e))? {
+                let file_path = p2.join(&filename);
+                if !file_path.is_file() {
                     continue;
                 }
-                for filename in read_dir_entries(&p2) {
-                    let file_path = p2.join(&filename);
-                    if !file_path.is_file() {
-                        continue;
-                    }
-                    // Extract source OID from filename: <source_oid>.json
-                    let source_oid = match filename.strip_suffix(".json") {
-                        Some(oid) => oid.to_string(),
-                        None => continue, // Not a transform record
-                    };
-
-                    if live_source_oids.contains(source_oid.as_str()) {
-                        // This transform record is live — collect its output OIDs
-                        if let Ok(data) = fs::read_to_string(&file_path) {
-                            if let Ok(record) = serde_json::from_str::<TransformRecord>(&data) {
-                                for entry in record.transforms.values() {
-                                    live_output_oids.insert(entry.oid.clone());
-                                }
-                            }
-                        }
-                    } else {
-                        // Orphaned transform record — delete it
-                        if fs::remove_file(&file_path).is_ok() {
-                            transforms_removed += 1;
-                        }
-                    }
+                let Some(source_oid) = filename.strip_suffix(".json") else {
+                    continue; // not a transform record
+                };
+                if !live_source_oids.contains(source_oid) && older_than(&file_path, RECORD_TTL) {
+                    condemned_records.push(file_path);
+                    continue;
                 }
-                // Clean up empty prefix2 directories
-                let _ = fs::remove_dir(&p2); // Only succeeds if empty
+                let data = fs::read_to_string(&file_path).map_err(|e| unreadable(&file_path, e))?;
+                let record = serde_json::from_str::<TransformRecord>(&data).map_err(|e| {
+                    unreadable(&file_path, std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                })?;
+                // A surviving record keeps everything it names, its source
+                // included: the machine that stored it may hold that source
+                // only here.
+                referenced_oids.insert(record.source_oid);
+                referenced_oids.extend(record.transforms.into_values().map(|entry| entry.oid));
             }
-            // Clean up empty prefix1 directories
-            let _ = fs::remove_dir(&p1);
+            shard_dirs.push(p2);
         }
+        shard_dirs.push(p1);
     }
 
-    // Phase 2: Collect all referenced OIDs.
-    // Sources: live transform output OIDs + HashIndex content hashes + SiteHashes file values
-    let mut referenced_oids = live_oids;
-    referenced_oids.extend(live_output_oids);
-
-    // Add SiteHashes file map values (output file hashes that may be stored as blobs)
-    if let Ok(content) = fs::read_to_string(&hashes_path) {
-        if let Ok(site_hashes) = serde_json::from_str::<serde_json::Value>(&content) {
+    // Phase 2: mark the output hashes `hashes.json` names (they may be blobs).
+    match fs::read_to_string(&hashes_path) {
+        Ok(content) => {
+            let site_hashes = serde_json::from_str::<serde_json::Value>(&content).map_err(|e| {
+                unreadable(&hashes_path, std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })?;
             if let Some(files) = site_hashes.get("files").and_then(|f| f.as_object()) {
-                for hash in files.values() {
-                    if let Some(h) = hash.as_str() {
-                        referenced_oids.insert(h.to_string());
-                    }
-                }
+                referenced_oids.extend(files.values().filter_map(|h| h.as_str()).map(str::to_string));
             }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(unreadable(&hashes_path, e)),
     }
 
-    // Phase 3: Sweep ObjectStore — remove unreferenced blobs.
+    // Sweep: the condemned records, their emptied shard directories (a
+    // `remove_dir` succeeds only on an empty one), then unreferenced blobs.
+    let mut transforms_removed: usize = 0;
+    for record in &condemned_records {
+        // allow:unlink cache/objects and cache/transforms, not staging
+        if fs::remove_file(record).is_ok() {
+            transforms_removed += 1;
+        }
+    }
+    for dir in &shard_dirs {
+        // allow:unlink cache/objects and cache/transforms, not staging
+        let _ = fs::remove_dir(dir);
+    }
+
     let mut objects_removed: usize = 0;
     let mut bytes_freed: u64 = 0;
 
@@ -1273,6 +1631,7 @@ pub fn gc(build_dir: &Path) -> GcResult {
                     if !referenced_oids.contains(filename.as_str()) {
                         // Unreferenced blob — delete it
                         let file_size = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+                        // allow:unlink cache/objects and cache/transforms, not staging
                         if fs::remove_file(&file_path).is_ok() {
                             objects_removed += 1;
                             bytes_freed += file_size;
@@ -1280,17 +1639,50 @@ pub fn gc(build_dir: &Path) -> GcResult {
                     }
                 }
                 // Clean up empty prefix2 directories
+                // allow:unlink cache/objects and cache/transforms, not staging
                 let _ = fs::remove_dir(&p2);
             }
             // Clean up empty prefix1 directories
+            // allow:unlink cache/objects and cache/transforms, not staging
             let _ = fs::remove_dir(&p1);
         }
     }
 
-    GcResult {
+    record_gc(&objects_dir, objects_removed);
+    Ok(GcResult {
         transforms_removed,
         objects_removed,
         bytes_freed,
+    })
+}
+
+/// How long a transform record nothing on this machine references is kept
+/// before GC condemns it. Ninety days bounds the cost of another machine's
+/// record being condemned here — one regeneration per record per quarter,
+/// paid on that machine — without letting records for deleted sources live
+/// forever.
+pub(crate) const RECORD_TTL: std::time::Duration = std::time::Duration::from_secs(90 * 24 * 60 * 60);
+
+/// Whether `path` was last written more than `ttl` ago. An unreadable or
+/// future mtime answers no: condemning on a guess is what the TTL exists to
+/// prevent.
+fn older_than(path: &Path, ttl: std::time::Duration) -> bool {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|written| written.elapsed().ok())
+        .is_some_and(|age| age > ttl)
+}
+
+/// Directory entries for a GC mark input: an absent directory has none, an
+/// unreadable one is an error.
+fn read_dir_strict(dir: &Path) -> std::io::Result<Vec<String>> {
+    match fs::read_dir(dir) {
+        Ok(entries) => entries
+            .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e),
     }
 }
 

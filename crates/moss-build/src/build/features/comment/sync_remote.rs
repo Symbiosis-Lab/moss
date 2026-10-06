@@ -1,8 +1,8 @@
 //! Remote sync for Artalk comments: fetch, translate, reconcile, persist.
 //!
-//! FIXME(ADR-025): the comment mirror is still persisted as `comment.json`
-//! (materialized JSON), not the planned append-only `comment.jsonl` event log
-//! (impl-plan §1.3). This is an INTENTIONAL deferral: the mirror is a rebuildable
+//! FIXME: the comment mirror is still persisted as `comment.json`
+//! (materialized JSON), not the planned append-only `comment.jsonl` event log.
+//! This is an INTENTIONAL deferral: the mirror is a rebuildable
 //! cache, and the precious local-first artifact (`moderation.jsonl`) already uses
 //! the JSONL `event_log` substrate. Migrate the mirror to JSONL when convenient.
 
@@ -18,7 +18,7 @@ fn normalize_artalk_comment(raw: &serde_json::Value) -> Option<NormalizedComment
     // Prefer Artalk's rendered HTML (`content_marked`) over the raw markdown
     // source (`content`), and SANITIZE at ingest: comment HTML is attacker-
     // controlled and is rendered into baked pages + the dehydrated store. Never
-    // trust the upstream server's sanitization (ADR-025 §11).
+    // trust the upstream server's sanitization.
     let raw_html = raw
         .get("content_marked")
         .and_then(|c| c.as_str())
@@ -88,18 +88,18 @@ pub(super) fn translate_page_key(
 /// `moderation.jsonl` for each one that does not already have a corresponding
 /// hide event. This is the one-time migration that makes tombstone removal safe.
 ///
-/// **Idempotent:** already-covered comment ids are skipped. If no owner
-/// identity exists for this project, logs a warning and returns without
-/// modifying anything — the caller will run with the (soon-to-be-removed)
-/// tombstone path intact for this sync pass rather than silently dropping
-/// deletions.
+/// **Idempotent:** already-covered comment ids are skipped. Returns how many
+/// old marks still have no signed event: `0` when there were none or all were
+/// converted; otherwise (no usable signing key here, or an append failed
+/// partway) the number left. The caller must not let the server's copy
+/// overwrite the cache while any are left, or the owner's decisions are lost.
 ///
 /// `site_name` is the Artalk site identifier (same value used in sync).
 fn migrate_tombstones_to_signed_events(
     data: &CommentData,
     project_path: &str,
     site_name: &str,
-) {
+) -> usize {
     // Load existing events to build a skip-set (idempotent guard).
     let existing_events = super::moderation::load_mod_events(project_path);
     let already_hidden: HashSet<(&str, &str)> = existing_events
@@ -126,92 +126,36 @@ fn migrate_tombstones_to_signed_events(
         .collect();
 
     if tombstones.is_empty() {
-        return;
+        return 0;
     }
 
-    // Load identity — if absent, skip migration gracefully (tombstone path
-    // still runs this sync pass via the reconcile caller).
-    let mut id_svc = crate::identity::service::IdentityService::new(
-        std::path::Path::new(project_path),
-    );
-    let identity = match id_svc.get() {
-        Ok(Some(_)) => {
-            // Ensure signing key is loaded before we take identity out.
-            if let Err(e) = id_svc.ensure_signing_key() {
-                log::warn!(
-                    target: "sync",
-                    "tombstone migration: signing key unavailable ({e}), skipping migration"
-                );
-                return;
-            }
-            // get() again after ensure to borrow the now-ready identity.
-            match id_svc.get() {
-                Ok(Some(id)) => id.clone(),
-                _ => {
-                    log::warn!(target: "sync", "tombstone migration: identity disappeared after ensure_signing_key");
-                    return;
-                }
-            }
-        }
-        Ok(None) => {
-            log::warn!(
-                target: "sync",
-                "tombstone migration: no owner identity for this project — skipping migration; \
-                 tombstone preservation is still active this pass"
-            );
-            return;
-        }
-        Err(e) => {
-            log::warn!(
-                target: "sync",
-                "tombstone migration: identity load error ({e}), skipping migration"
-            );
-            return;
-        }
-    };
-
-    let Ok(signing_key) = identity.signing_key_loaded() else {
-        log::warn!(target: "sync", "tombstone migration: signing key not loaded after ensure");
-        return;
-    };
-
-    let log_path = super::moderation::moderation_log_path(project_path);
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-
+    // The one locked writer assigns each sequence number and appends, so this
+    // cannot share a number with a hide made by the command or the app at the
+    // same moment. It never creates a key: with none usable it fails, and the
+    // marks not yet converted are reported to the caller.
+    let mut emitted = 0;
     for (source, id, page) in &tombstones {
-        let seq = match super::moderation::next_seq(project_path) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!(target: "sync", "tombstone migration: seq error for id={id}: {e}");
-                continue;
-            }
-        };
-        let event = super::moderation::sign_mod_event(
-            signing_key,
-            "hide",
+        match super::moderation::append_owner_event(
+            project_path,
+            super::moderation::ModKind::Hide,
             source,
             id,
-            site_name,
             page,
-            seq,
-            ts,
-        );
-        if let Err(e) = super::event_log::append_jsonl(&log_path, &event) {
-            log::warn!(
-                target: "sync",
-                "tombstone migration: could not append hide event for id={id}: {e}"
-            );
+            site_name,
+        ) {
+            Ok(_) => emitted += 1,
+            Err(e) => {
+                log::debug!(target: "sync", "tombstone migration: could not hide id={id}: {e}");
+                return tombstones.len() - emitted;
+            }
         }
     }
 
     log::info!(
         target: "sync",
-        "tombstone migration: emitted {} signed hide events",
-        tombstones.len()
+        "tombstone migration: emitted {emitted} signed hide events"
     );
+    0
 }
 
 /// Full-state reconcile for one article: server wins.
@@ -220,7 +164,7 @@ fn migrate_tombstones_to_signed_events(
 /// server-wins. Deletions propagate (a comment absent from the server is
 /// dropped). Signed `hide` events in `moderation.jsonl` are the sole
 /// bake-time moderation path (`reduce::retain_visible`); tombstones in
-/// `comment.json` are no longer created or consulted. See ADR-025.
+/// `comment.json` are no longer created or consulted.
 fn reconcile_article_comments(
     _existing: Vec<NormalizedComment>,
     incoming: Vec<NormalizedComment>,
@@ -377,7 +321,7 @@ fn load_comment_data_strict(
 /// **`pub(in crate::build::features)` — do not widen.** This function does
 /// blocking network I/O (each request can take 30s+ when the upstream is
 /// unreachable). Calling it from the build's critical path hangs the
-/// whole pipeline — see moss issue #570.
+/// whole pipeline.
 ///
 /// The legitimate caller is
 /// [`crate::build::features::sync::spawn_native_process_sync`], which runs
@@ -413,11 +357,22 @@ pub(in crate::build::features) fn process_comments(
     // `reconcile_article_comments` is plain server-wins and `retain_visible`
     // (signed events) is the sole bake-time moderation path.
     //
-    // Idempotent: already-migrated ids are skipped. Gracefully skipped when no
-    // owner identity exists (rare; leaves tombstone field in comment.json but
-    // the field is no longer read by reconcile — tombstones will simply be
-    // overwritten on next server sync).
-    migrate_tombstones_to_signed_events(&data, project_path, site_name);
+    // Idempotent: already-migrated ids are skipped. If any old mark could not
+    // be signed (no signing key on this machine, or a write failed) the
+    // refresh is skipped: the reconcile below would replace the cache with the
+    // server's copy and erase the owner's decisions for good. Same handling as
+    // a failed fetch: recorded as a failed refresh with its reason, never a
+    // failed build.
+    let unsigned = migrate_tombstones_to_signed_events(&data, project_path, site_name);
+    if unsigned > 0 {
+        // Returned as an error so the caller records and logs it like a failed
+        // fetch: the status then says why comments are stale, once.
+        return Err(format!(
+            "comments were not refreshed: {unsigned} earlier hide decision(s) could not be signed on this machine \
+             (no signing key here, or the write failed); they will be converted when the folder is opened where its key is"
+        )
+        .into());
+    }
 
     let fetched = fetch_artalk_comments(server_url, site_name, &known_uids, &url_path_to_uid)?;
     data.schema_version = "1.1.0".to_string();
@@ -443,6 +398,7 @@ pub(in crate::build::features) fn process_comments(
     }
 
     let social_dir = MossPaths::new(std::path::Path::new(project_path)).social_dir();
+    // allow:raw_write .moss/data/social, not the build tree
     std::fs::create_dir_all(&social_dir)
         .map_err(|e| format!("cannot create {}: {e}", social_dir.display()))?;
     let path = social_dir.join("comment.json");
@@ -584,6 +540,7 @@ mod tests {
     /// A tombstone in loaded data produces a signed hide event on migration.
     #[test]
     fn test_migration_tombstone_emits_signed_hide_event() {
+        crate::infra::home::with_moss_home(|_home| {
         let tmp = tmp_dir();
         let project_path = tmp.path().to_str().unwrap();
 
@@ -629,11 +586,13 @@ mod tests {
         assert_eq!(events[0].target, "10");
         assert_eq!(events[0].source, "artalk");
         assert_eq!(events[0].site, "test-site");
+        });
     }
 
     /// Re-running migration emits nothing new (idempotent).
     #[test]
     fn test_migration_idempotent() {
+        crate::infra::home::with_moss_home(|_home| {
         let tmp = tmp_dir();
         let project_path = tmp.path().to_str().unwrap();
 
@@ -665,6 +624,7 @@ mod tests {
 
         let events = load_mod_events(project_path);
         assert_eq!(events.len(), 1, "second run must not duplicate the hide event");
+        });
     }
 
     /// Migration with no identity: no events emitted, no panic.
@@ -968,5 +928,130 @@ mod tests {
             err.kind,
             err.detail
         );
+    }
+
+    /// The migration writes through the locked owner writer: while another
+    /// writer holds the moderation lock it waits, and only then appends.
+    #[test]
+    fn test_migration_waits_for_the_moderation_lock() {
+        crate::infra::home::with_moss_home(|_home| {
+            let tmp = tmp_dir();
+            let project_path = tmp.path().to_str().unwrap().to_string();
+            Identity::generate().unwrap().save(tmp.path()).unwrap();
+            let data = CommentData {
+                schema_version: "1.1.0".to_string(),
+                articles: BTreeMap::from([(
+                    "uid1".to_string(),
+                    ArticleComments { comments: vec![make_comment("30", Some("removed"))] },
+                )]),
+            };
+            let lock = crate::infra::folder_lock::acquire_named(tmp.path(), "moderation").unwrap();
+            let pp = project_path.clone();
+            let worker = std::thread::spawn(move || migrate_tombstones_to_signed_events(&data, &pp, "test-site"));
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            assert!(load_mod_events(&project_path).is_empty(), "migration appended while the lock was held");
+            drop(lock);
+            worker.join().unwrap();
+            assert_eq!(load_mod_events(&project_path).len(), 1);
+        });
+    }
+
+    /// A one-shot local stand-in for the comment server: answers every request
+    /// with `{"data": [comment 10 on page uid1, active]}`.
+    fn serve_one_active_comment() -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten().take(4) {
+                let mut stream = stream;
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let body = r#"{"data":[{"id":10,"page_key":"uid1","content":"from the server","date":"2026-02-02","nick":"Server Nick"}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        url
+    }
+
+    fn folder_with_old_hide_mark() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tmp_dir();
+        let social = MossPaths::new(tmp.path()).social_dir();
+        std::fs::create_dir_all(&social).unwrap();
+        let data = CommentData {
+            schema_version: "1.1.0".to_string(),
+            articles: BTreeMap::from([(
+                "uid1".to_string(),
+                ArticleComments { comments: vec![make_comment("10", Some("removed"))] },
+            )]),
+        };
+        let cache = social.join("comment.json");
+        std::fs::write(&cache, serde_json::to_string_pretty(&data).unwrap()).unwrap();
+        (tmp, cache)
+    }
+
+    fn sync(tmp: &tempfile::TempDir, server: &str) -> Result<CommentSyncOutcome, CommentSyncError> {
+        let articles = vec![("uid1".to_string(), "posts/a".to_string())];
+        process_comments(tmp.path().to_str().unwrap(), server, "test-site", &articles)
+    }
+
+    /// Old hide marks with no key to sign them: the pass must not refresh the
+    /// cache, or the server's copy would erase the owner's decisions.
+    #[test]
+    fn test_sync_keeps_old_hide_marks_when_they_cannot_be_signed() {
+        crate::infra::home::with_moss_home(|_home| {
+            let (tmp, cache) = folder_with_old_hide_mark();
+            let before = std::fs::read(&cache).unwrap();
+            assert!(sync(&tmp, &serve_one_active_comment()).is_err(), "the refresh is reported as skipped");
+            assert_eq!(std::fs::read(&cache).unwrap(), before, "cache untouched");
+            assert!(!tmp.path().join(".moss/identity").exists(), "no key created");
+            assert!(load_mod_events(tmp.path().to_str().unwrap()).is_empty());
+        });
+    }
+
+    /// Once a usable key is present the marks become signed events and the
+    /// refresh runs as before.
+    #[test]
+    fn test_sync_converts_old_hide_marks_then_refreshes() {
+        crate::infra::home::with_moss_home(|_home| {
+            let (tmp, cache) = folder_with_old_hide_mark();
+            Identity::generate().unwrap().save(tmp.path()).unwrap();
+            let outcome = sync(&tmp, &serve_one_active_comment()).unwrap();
+            assert!(outcome.changed, "the refresh ran");
+            let events = load_mod_events(tmp.path().to_str().unwrap());
+            assert_eq!((events.len(), events[0].target.as_str()), (1, "10"));
+            let text = std::fs::read_to_string(&cache).unwrap();
+            assert!(text.contains("from the server") && !text.contains("removed"));
+        });
+    }
+
+    /// The recorded status after a pass: a skipped refresh is not a success and
+    /// says why; a converted-and-refreshed pass is.
+    #[test]
+    fn test_sync_status_after_skip_and_after_refresh() {
+        use crate::build::features::sync::{load_comment_sync_state, record_comment_sync_result};
+        crate::infra::home::with_moss_home(|_home| {
+            let (tmp, _cache) = folder_with_old_hide_mark();
+            let pp = tmp.path().to_str().unwrap();
+            let articles = vec![("uid1".to_string(), "posts/a".to_string())];
+            let server = serve_one_active_comment();
+
+            let skipped = process_comments(pp, &server, "test-site", &articles);
+            record_comment_sync_result(pp, &skipped, 100.0);
+            let state = load_comment_sync_state(pp);
+            assert!(state.last_success_at.is_none(), "a skipped refresh is not a success");
+            assert!(state.last_error.unwrap().detail.contains("earlier hide decision"));
+
+            Identity::generate().unwrap().save(tmp.path()).unwrap();
+            let refreshed = process_comments(pp, &server, "test-site", &articles);
+            record_comment_sync_result(pp, &refreshed, 200.0);
+            let state = load_comment_sync_state(pp);
+            assert_eq!(state.last_success_at, Some(200.0));
+            assert!(state.last_error.is_none());
+        });
     }
 }

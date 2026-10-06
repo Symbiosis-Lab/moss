@@ -15,9 +15,8 @@
 //! 4 MiB-aligned window, leaving the file dataless; iCloud does not adopt it and
 //! always sends the whole file. Coordination removes the difference — it asks
 //! for the file, not for a range, so every provider sends all of it in one
-//! round trip. Measured on a real evicted Drive file, 8,594,307 bytes: the
-//! coordinated call alone, **with no read inside the accessor block**, returned
-//! in 4.26 s with the flag cleared and every block resident.
+//! round trip: the coordinated call alone, **with no read inside the accessor
+//! block**, returns with the flag cleared and every block resident.
 //!
 //! # Why it is confined to one caller
 //!
@@ -31,11 +30,11 @@
 //!
 //! That inverts the usual risk. A stray POSIX read on the wrong thread fails
 //! fast and is a bug moss survives; a stray coordinated read on the wrong
-//! thread is moss#986 again — a thread gone for the life of the process, and
+//! thread costs a whole thread for the life of the process, and
 //! if it is the main thread, the app.
 //!
 //! Therefore: **the only legitimate caller is `build::cloud_prefetch`'s reader
-//! pool**, whose threads exist to be lost (ADR-047) and whose wedge accounting
+//! pool**, whose threads exist to be lost and whose wedge accounting
 //! already guarantees a file that eats a thread is never handed over again. Do
 //! not call this from a build thread, an async task, a Tauri command, or the
 //! main thread. If you need bytes rather than materialization, use

@@ -2,8 +2,7 @@
 //!
 //! Heuristics are the default; a dialect row records only the deltas
 //! heuristics get wrong (sentinel URL values, active-child wrappers, chrome
-//! component names). A future builder costs a table row, not a module —
-//! design: `docs/archive/2026-07-27-import-conventions-engine-design.md`.
+//! component names). A future builder costs a table row, not a module.
 
 /// How the walker treats one component `type` value. A type may carry
 /// SEVERAL rules — they all apply, in table order (Blog.Section has both a
@@ -82,11 +81,11 @@ fn pascal_case_component(ty: &str) -> bool {
     ty.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
-/// Strikingly's `$S` component tree. Match arms come from the harbor
-/// corpus census (`潮汐/.port/census-summary.txt`): ALL prose is
-/// `RichText.value`; real videos are bare `Video` components; `Media`
-/// wrappers carry a stock placeholder video and select their active child
-/// via `current`; `Background.useImage=false` is an explicit opt-out.
+/// Strikingly's `$S` component tree. Match arms come from the riverbend
+/// (河灣) corpus census: ALL prose is `RichText.value`; real videos are
+/// bare `Video` components; `Media` wrappers carry a stock placeholder
+/// video and select their active child via `current`;
+/// `Background.useImage=false` is an explicit opt-out.
 pub(crate) static STRIKINGLY: JsonDialect = JsonDialect {
     rules: &[
         (

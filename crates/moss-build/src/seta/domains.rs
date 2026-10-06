@@ -1,7 +1,6 @@
 //! Domain search, purchase, and ownership endpoints for moss-seta.
 //!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted) per
-//! docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 7.
+//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
 //!
 //! The types these methods speak live in the sibling `wire` module and are
 //! re-exported here, so `seta::domains::X` keeps naming them.

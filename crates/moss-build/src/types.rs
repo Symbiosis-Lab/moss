@@ -21,4 +21,4 @@ pub mod toast;
 // The previous `pending_renames` queue and its tests were removed in PR-1.
 // Rename pair stitching now happens at the watcher
 // layer via `notify-debouncer-full`'s inode/file-id pairing; see
-// `src-tauri/src/build/watch.rs`.
+// the desktop app's build watch module.

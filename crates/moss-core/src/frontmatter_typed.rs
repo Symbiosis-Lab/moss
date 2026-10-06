@@ -1,7 +1,7 @@
 //! Typed frontmatter structs for the build pipeline.
 //!
-//! Lives in moss-core so validation, the resolver, and src-tauri's pipeline
-//! all share one definition. See ADR-018 for the boundary rule.
+//! Lives in moss-core so validation, the resolver, and moss-build's
+//! pipeline all share one definition.
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub enum SeriesField {
 /// Analytics configuration for script injection.
 ///
 /// Supports two frontmatter formats:
-/// - String shorthand: `analytics: "https://guo.goatcounter.com/count"` (provider auto-detected from URL)
+/// - String shorthand: `analytics: "https://mysite.goatcounter.com/count"` (provider auto-detected from URL)
 /// - Object form: `analytics: { provider: goatcounter, url: "..." }`
 #[derive(Debug, Serialize, Default, Clone)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -146,6 +146,11 @@ pub struct FrontMatter {
     pub date: Option<String>,
     /// Navigation weight for ordering (lower numbers = higher priority)
     pub weight: Option<i32>,
+    /// A shorter name for the site's own navigation (nav bar, footer links)
+    /// than `title`. Blank counts as unset. Everywhere the page is named as
+    /// content (heading, `<title>`, cards, breadcrumbs, feeds) keeps `title`.
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub nav_label: Option<String>,
     /// Custom URL slug (e.g., "links" -> "/links/"). Pin a stable ASCII slug when
     /// the filename isn't one — moss's convention is to name files after the page
     /// title in their own language, then pin `url:` here (隐私.md + url: privacy -> /privacy).
@@ -183,15 +188,74 @@ pub struct FrontMatter {
         serialize_with = "serialize_term_claim"
     )]
     pub tag_page: Option<crate::terms::TermClaim>,
+    /// Editor name(s), field-agnostic sibling of `author` — same shapes and
+    /// normalizer, feeding whichever term kind's `fields` names "editor".
+    #[serde(
+        default,
+        deserialize_with = "deserialize_name_list",
+        serialize_with = "serialize_name_list"
+    )]
+    pub editor: Option<Vec<String>>,
+    /// Jury member name(s), same shapes and normalizer as `author`/`editor`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_name_list",
+        serialize_with = "serialize_name_list"
+    )]
+    pub jury: Option<Vec<String>>,
+    /// Place name(s), same shapes and normalizer as `author`/`editor`/`jury`
+    /// — feeding whichever term kind's `fields` names "location". Each name
+    /// is looked up in `.moss/places.toml` (`crate::terms` knows nothing
+    /// about the gazetteer; that lookup happens in moss-build).
+    #[serde(
+        default,
+        deserialize_with = "deserialize_name_list",
+        serialize_with = "serialize_name_list"
+    )]
+    pub location: Option<Vec<String>>,
+    /// Opt in to drawing `location:`'s already-ordered list as a route: a
+    /// dashed line through the stops in list order, with numbered badges,
+    /// on this page's own map and locator (`moss-build`'s
+    /// `build::place_map::svg::route` actually draws it; this crate only
+    /// carries the flag through). No second ordered-list field — the one
+    /// `location:` already keeps its declared order is the route. Has no
+    /// effect on a listing map (the places root, a folder's `style: map`
+    /// card), which never draws a route regardless of this flag.
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub route: Option<bool>,
+    /// Term-page claim for the `editor` field — same shapes and behaviour as
+    /// `author_page`, in whichever kind carries `editor`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_term_claim",
+        serialize_with = "serialize_term_claim"
+    )]
+    pub editor_page: Option<crate::terms::TermClaim>,
+    /// Term-page claim for the `jury` field — same shapes and behaviour as
+    /// `author_page`, in whichever kind carries `jury`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_term_claim",
+        serialize_with = "serialize_term_claim"
+    )]
+    pub jury_page: Option<crate::terms::TermClaim>,
+    /// Term-page claim for the `location` field — same shapes and behaviour
+    /// as `author_page`, in whichever kind carries `location`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_term_claim",
+        serialize_with = "serialize_term_claim"
+    )]
+    pub place_page: Option<crate::terms::TermClaim>,
     /// Byline shown under the article title: the credit lines a reader sees,
     /// as the author wrote them. One row per list entry, or per line of a
     /// block scalar:
     ///
     /// ```yaml
     /// byline: |
-    ///   作者　糜緒洋
-    ///   編輯　謝丁
-    ///   首發媒體　[端傳媒](https://…)
+    ///   作者　陳遠山
+    ///   編輯　周一
+    ///   首發媒體　[遠聲媒體](https://…)
     /// ```
     ///
     /// A display string, not structured data: moss renders each row as inline
@@ -206,9 +270,9 @@ pub struct FrontMatter {
     ///
     /// ```yaml
     /// colophon: |
-    ///   首發媒體　[端傳媒](https://…)、[單讀](https://…)
-    ///   封面　基輔米迦勒修道院門口的陣亡將士紀念牆（拍攝：糜緒洋）
-    ///   編輯　謝丁，記者、作家，曾任《正午》主編
+    ///   首發媒體　[遠聲媒體](https://…)、[夜讀](https://…)
+    ///   封面　山城舊教堂門口的無名將士紀念牆（拍攝：陳遠山）
+    ///   編輯　周一，記者、作家，曾任《遠方》主編
     /// ```
     ///
     /// Two fields rather than one because publications agree on the split: a
@@ -239,6 +303,31 @@ pub struct FrontMatter {
     /// `external_url` only. Remove the alias one release after merge.
     #[serde(alias = "source_url")]
     pub external_url: Option<String>,
+    /// The address this page was imported from — provenance, not syndication.
+    /// Written automatically by `moss import`. Unlike `external_url` (a
+    /// manual linkblog pointer meaning "the canonical home is elsewhere"),
+    /// `origin` makes no claim that the content is published anywhere but
+    /// here — a site port's old address is going away, not gaining a
+    /// mirror. A future redirect feature reads a site's declared former
+    /// domain(s) against this field's host to keep old links working across
+    /// a port.
+    pub origin: Option<String>,
+    /// Event start: a local date (all-day) or local date-time, `YYYY-MM-DD` or
+    /// `YYYY-MM-DD HH:MM`. Wall-clock time where the event happens; no offset.
+    /// A page with `start` is an event. Kept as text (see [`crate::event`]).
+    pub start: Option<String>,
+    /// Event end, same forms as `start`. A multi-day all-day `end` is inclusive.
+    pub end: Option<String>,
+    /// IANA zone name the `start`/`end` wall-clock times are in, e.g.
+    /// `Asia/Taipei`. moss-core checks only its shape, not a zone database.
+    pub timezone: Option<String>,
+    /// Event status: `cancelled`, `postponed`, `moved-online` or
+    /// `rescheduled`. Absent means scheduled.
+    pub status: Option<String>,
+    /// Where to get tickets: a URL.
+    pub tickets: Option<String>,
+    /// Where to attend online: a URL.
+    pub online: Option<String>,
     /// Analytics configuration for privacy-focused analytics
     pub analytics: Option<AnalyticsConfig>,
     /// Site logo image path (rendered before site name in nav)
@@ -311,7 +400,7 @@ pub struct FrontMatter {
     /// The sidebar callsite reads this flag (not `sidebar.is_some()`) so a
     /// conflict like `sidebar: "[[A]]" + children: "[[B]]"` — where the alias
     /// yields and warns "sidebar ignored" — actually skips the right rail
-    /// rather than rendering it. Removed alongside the alias itself (#633).
+    /// rather than rendering it. Removed alongside the alias itself.
     #[serde(skip_serializing, default)]
     pub _from_sidebar_alias: Option<bool>,
     /// Listing sort: axis (date/weight/title) or explicit list of child stems.
@@ -337,10 +426,16 @@ pub struct FrontMatter {
     /// Translation key for linking arbitrary files as translations
     #[serde(rename = "translationKey")]
     pub translation_key: Option<String>,
-    /// Whether to show comments on this page: default true on an article; default FALSE on a folder-index page (homepage included), which needs explicit `comments: true` to opt in (#1013)
+    /// Whether to show comments on this page: default true on an article; default FALSE on a folder-index page (homepage included), which needs explicit `comments: true` to opt in
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub comments: Option<bool>,
-    /// Durable page identity: 8 RANDOM hex chars minted at first build — never derivable, never changed once published (docs/reference/social-data-standard.md)
+    /// Page-level opt-out for the term map a claimed term page or a real
+    /// folder index at a place-typed term namespace root (`places/index.md`)
+    /// hosts below its own content. `false` hides it; unset or `true`
+    /// renders it when one would otherwise show. No effect elsewhere.
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub map: Option<bool>,
+    /// Durable page identity: 8 RANDOM hex chars minted at first build — never derivable, never changed once published
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub uid: Option<String>,
     /// Typesetting direction: "horizontal" (default) or "vertical"
@@ -375,7 +470,7 @@ impl FrontMatter {
     }
 }
 
-/// One dropped field, for build advisories and (later) chip diagnostics (ADR-020).
+/// One dropped field, for build advisories and (later) chip diagnostics.
 ///
 /// Only `Dropped` outcomes exist today — a field whose value couldn't satisfy
 /// its typed field and was removed so its neighbours survive. Severity tiers
@@ -396,7 +491,7 @@ pub struct FieldWarning {
 /// `deserialize_with` on `FrontMatter` — no per-field code — and serde_yaml
 /// coerces YAML scalars, so a numeric uid/title becomes a string here.
 ///
-/// Resilience (ADR-020): if a value genuinely cannot satisfy its typed field
+/// Resilience: if a value genuinely cannot satisfy its typed field
 /// (e.g. `weight: high`, or an `analytics` object missing its required `url`),
 /// that ONE field is dropped and every good neighbour survives. Offending
 /// fields are found by deserializing each field in ISOLATION — this is
@@ -507,7 +602,7 @@ where
 }
 
 /// Serialize `author` back to its dominant authored form: exactly one name
-/// emits a plain string (`author: 馬欣宜`), several emit a list. Keeps the
+/// emits a plain string (`author: 林小滿`), several emit a list. Keeps the
 /// single-author round-trip byte-shape stable for every existing file.
 pub fn serialize_name_list<S>(v: &Option<Vec<String>>, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -616,8 +711,7 @@ where
 /// one such field fails the WHOLE `FrontMatter` (and the pipeline blanks every
 /// field). Stringify int/float/bool scalars so a numeric value can't poison its
 /// neighbors. Integer round-trips exactly; a float token is lossy (YAML already
-/// collapsed it to f64) — accepted because losing the whole block is worse. See
-/// ADR-020.
+/// collapsed it to f64) — accepted because losing the whole block is worse.
 pub fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -880,11 +974,17 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
             match key {
                 "title" => frontmatter.title = Some(value.to_string()),
                 "date" => frontmatter.date = Some(value.to_string()),
+                "start" => frontmatter.start = Some(value.to_string()),
+                "end" => frontmatter.end = Some(value.to_string()),
+                "timezone" => frontmatter.timezone = Some(value.to_string()),
+                "status" => frontmatter.status = Some(value.to_string()),
+                "tickets" => frontmatter.tickets = Some(value.to_string()),
+                "online" => frontmatter.online = Some(value.to_string()),
                 "weight" => frontmatter.weight = value.parse().ok(),
                 "url" => frontmatter.url = Some(value.to_string()),
                 "cover" => frontmatter.cover = Some(value.to_string()),
                 // D1: children is boolean — "true" → Some(true), "false" → Some(false)
-                // D5: `list` alias removed (breaking change) — see docs/archive/2026-03-05-sidebar-redesign.md
+                // D5: `list` alias removed (breaking change)
                 "children" => {
                     match value {
                         "true" | "" => frontmatter.children = Some(true),
@@ -920,6 +1020,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                     ),
                 },
                 "description" => frontmatter.description = Some(value.to_string()),
+                "nav_label" => frontmatter.nav_label = Some(value.to_string()),
                 "lang" => frontmatter.lang = Some(value.to_string()),
                 "translationKey" | "translation_key" => {
                     frontmatter.translation_key = Some(value.to_string())
@@ -947,12 +1048,12 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 // Handle boolean with explicit value. Strip quotes first: authors
                 // copying YAML habits into simplified frontmatter (`nav: 'true'`)
                 // would otherwise compare "'true'" != "true" and silently land on
-                // `false` — a worse variant of #925 (miscoercion, not just drop).
+                // `false` — a worse variant of that failure mode (miscoercion, not just drop).
                 "nav" | "home" | "draft" | "listed" | "breadcrumb" | "footer" | "comments" => {
                     let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
                     // Anything other than "true"/"false" is a likely typo (e.g.
                     // "yes", "Ture"); warn rather than silently defaulting to
-                    // false — the same #925 failure mode in this hand-rolled
+                    // false — the same failure mode in this hand-rolled
                     // parser, mirroring the "children"/"children_in" warnings above.
                     let flag = match unquoted {
                         "true" | "" => Some(true),
@@ -1212,14 +1313,14 @@ mod project_typed_tests {
     #[test]
     fn byline_accepts_a_block_scalar_with_a_markdown_link() {
         let (byline, warnings) = byline_of(
-            "byline: |\n  作者　糜緒洋\n  編輯　謝丁\n  首發媒體　[端傳媒](https://theinitium.com/a)\n",
+            "byline: |\n  作者　陳遠山\n  編輯　周一\n  首發媒體　[遠聲媒體](https://example.org/a)\n",
         );
         assert_eq!(
             byline.unwrap(),
             vec![
-                "作者　糜緒洋",
-                "編輯　謝丁",
-                "首發媒體　[端傳媒](https://theinitium.com/a)"
+                "作者　陳遠山",
+                "編輯　周一",
+                "首發媒體　[遠聲媒體](https://example.org/a)"
             ]
         );
         assert!(warnings.is_empty());
@@ -1227,8 +1328,8 @@ mod project_typed_tests {
 
     #[test]
     fn byline_accepts_a_list() {
-        let (byline, warnings) = byline_of("byline:\n  - 作者　糜緒洋\n  - 編輯　謝丁\n");
-        assert_eq!(byline.unwrap(), vec!["作者　糜緒洋", "編輯　謝丁"]);
+        let (byline, warnings) = byline_of("byline:\n  - 作者　陳遠山\n  - 編輯　周一\n");
+        assert_eq!(byline.unwrap(), vec!["作者　陳遠山", "編輯　周一"]);
         assert!(warnings.is_empty());
     }
 
@@ -1242,14 +1343,14 @@ mod project_typed_tests {
     #[test]
     fn colophon_parses_like_byline_and_is_independent_of_it() {
         let m: serde_yaml::Mapping = serde_yaml::from_str(
-            "byline: 作者　糜緒洋\ncolophon: |\n  首發媒體　[端傳媒](https://theinitium.com/a)\n  封面　拍攝：糜緒洋\n",
+            "byline: 作者　陳遠山\ncolophon: |\n  首發媒體　[遠聲媒體](https://example.org/a)\n  封面　拍攝：陳遠山\n",
         )
         .expect("yaml parses");
         let (fm, warnings) = project_typed(&m);
-        assert_eq!(fm.byline.unwrap(), vec!["作者　糜緒洋"]);
+        assert_eq!(fm.byline.unwrap(), vec!["作者　陳遠山"]);
         assert_eq!(
             fm.colophon.unwrap(),
-            vec!["首發媒體　[端傳媒](https://theinitium.com/a)", "封面　拍攝：糜緒洋"]
+            vec!["首發媒體　[遠聲媒體](https://example.org/a)", "封面　拍攝：陳遠山"]
         );
         assert!(warnings.is_empty());
     }
@@ -1319,7 +1420,7 @@ mod tests {
     // serde_json::Value (Pod::Integer => json!(val)) then serde_json::from_value,
     // which — unlike serde_yaml — does NOT coerce numbers to String. Without
     // deserialize_string_lenient these FAIL ("invalid type: integer, expected a
-    // string") and the whole FrontMatter would blank. See ADR-020.
+    // string") and the whole FrontMatter would blank.
     #[test]
     fn numeric_uid_via_json_path_coerces_and_preserves_siblings() {
         let v = serde_json::json!({ "title": "Kept Title", "uid": 46160604u64, "date": "2025-05-28" });
@@ -1387,7 +1488,7 @@ mod tests {
 
     #[test]
     fn quoted_nav_string_coerces_instead_of_vanishing() {
-        // Regression for #925: `nav: 'true'` (quoted YAML string) must not
+        // Regression: `nav: 'true'` (quoted YAML string) must not
         // silently drop the field. Every Option<bool> field shares the same
         // lenient deserializer, so this is a single behavior, not per-field.
         let fm: FrontMatter = serde_yaml::from_str("nav: 'true'\n").expect("parse");
@@ -1445,7 +1546,7 @@ mod tests {
     #[test]
     fn simplified_frontmatter_invalid_bool_value_is_unset_not_false() {
         // A typo'd bool value (not "true"/"false") must not silently become
-        // `Some(false)` — that's the same #925 failure mode (a page author
+        // `Some(false)` — that's the same failure mode (a page author
         // writes `nav: yes` expecting it to show, and it silently doesn't)
         // in this parser's own hand-rolled bool matching.
         let (fm, _) = parse_simplified_frontmatter("nav: yes\n---\nbody\n");
@@ -1462,6 +1563,48 @@ mod tests {
         assert_eq!(flag.listed, Some(true));
         let (none, _) = parse_simplified_frontmatter("nav\n---\nbody\n");
         assert_eq!(none.listed, None);
+    }
+
+    #[test]
+    fn editor_and_jury_round_trip_like_author() {
+        // Name lists: single-string and list forms deserialize into
+        // Vec<String>, same contract as `author` — `editor`/`jury` share its
+        // deserializer/serializer, field-agnostically.
+        let fm: FrontMatter =
+            serde_yaml::from_str("editor: Ada Lin\njury:\n  - Kane\n  - Kaneda\n").expect("parse");
+        assert_eq!(fm.editor.as_deref(), Some(&["Ada Lin".to_string()][..]));
+        assert_eq!(fm.jury.as_deref(), Some(&["Kane".to_string(), "Kaneda".to_string()][..]));
+
+        let single = FrontMatter { editor: Some(vec!["Ada Lin".to_string()]), ..Default::default() };
+        let yaml = serde_yaml::to_string(&single).expect("serialize");
+        assert!(
+            yaml.contains("editor: Ada Lin\n"),
+            "a single editor name serializes as a plain string, like author: {yaml}"
+        );
+
+        // Term claims: same shapes as author_page/tag_page.
+        let fm: FrontMatter =
+            serde_yaml::from_str("editor_page: true\njury_page: Kane\n").expect("parse");
+        assert_eq!(fm.editor_page, Some(crate::terms::TermClaim::UseTitle));
+        assert_eq!(fm.jury_page, Some(crate::terms::TermClaim::Name("Kane".to_string())));
+    }
+
+    #[test]
+    fn location_and_place_page_round_trip_like_editor_and_jury() {
+        let fm: FrontMatter =
+            serde_yaml::from_str("location: Kyoto\nplace_page: true\n").expect("parse");
+        assert_eq!(fm.location.as_deref(), Some(&["Kyoto".to_string()][..]));
+        assert_eq!(fm.place_page, Some(crate::terms::TermClaim::UseTitle));
+
+        let single = FrontMatter { location: Some(vec!["Kyoto".to_string()]), ..Default::default() };
+        let yaml = serde_yaml::to_string(&single).expect("serialize");
+        assert!(
+            yaml.contains("location: Kyoto\n"),
+            "a single place name serializes as a plain string, like author: {yaml}"
+        );
+
+        let fm: FrontMatter = serde_yaml::from_str("place_page: Kyoto\n").expect("parse");
+        assert_eq!(fm.place_page, Some(crate::terms::TermClaim::Name("Kyoto".to_string())));
     }
 }
 
@@ -1758,5 +1901,44 @@ mod url_path_tests {
             simplified_frontmatter_keys("Just prose.\n"),
             Vec::<String>::new()
         );
+    }
+
+    // ── event fields ──────────────────────────────────────────────────────
+    // `start`/`end` are venue-local wall-clock text. A YAML 1.1 loader turns an
+    // unquoted `2026-11-01 14:00` into a UTC timestamp and shifts the hour;
+    // serde_yaml does not, and these tests pin that so a parser swap cannot
+    // silently change an event's time.
+
+    #[test]
+    fn event_times_arrive_as_their_original_text_in_the_yaml_dialect() {
+        let m: serde_yaml::Mapping = serde_yaml::from_str(
+            "start: 2026-11-01 14:00\nend: 2026-11-03\ntimezone: Asia/Taipei\nstatus: cancelled\ntickets: https://tickets.example/x\nonline: https://live.example/x\n",
+        )
+        .expect("yaml parses");
+        let (fm, warnings) = project_typed(&m);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(fm.start.as_deref(), Some("2026-11-01 14:00"));
+        assert_eq!(fm.end.as_deref(), Some("2026-11-03"));
+        assert_eq!(fm.timezone.as_deref(), Some("Asia/Taipei"));
+        assert_eq!(fm.status.as_deref(), Some("cancelled"));
+        assert_eq!(fm.tickets.as_deref(), Some("https://tickets.example/x"));
+        assert_eq!(fm.online.as_deref(), Some("https://live.example/x"));
+        let t: FrontMatter = serde_yaml::from_str("start: 2026-11-01T14:00\n").expect("parse");
+        assert_eq!(t.start.as_deref(), Some("2026-11-01T14:00"));
+    }
+
+    #[test]
+    fn event_times_arrive_as_their_original_text_in_the_simplified_dialect() {
+        let (fm, _) = parse_simplified_frontmatter(
+            "start: 2026-11-01 14:00\nend: 2026-11-03\ntimezone: Asia/Taipei\nstatus: cancelled\ntickets: https://tickets.example/x\nonline: https://live.example/x\n---\nbody\n",
+        );
+        assert_eq!(fm.start.as_deref(), Some("2026-11-01 14:00"));
+        assert_eq!(fm.end.as_deref(), Some("2026-11-03"));
+        assert_eq!(fm.timezone.as_deref(), Some("Asia/Taipei"));
+        assert_eq!(fm.status.as_deref(), Some("cancelled"));
+        assert_eq!(fm.tickets.as_deref(), Some("https://tickets.example/x"));
+        assert_eq!(fm.online.as_deref(), Some("https://live.example/x"));
+        let (day, _) = parse_simplified_frontmatter("start: 2026-11-01\n---\nbody\n");
+        assert_eq!(day.start.as_deref(), Some("2026-11-01"));
     }
 }

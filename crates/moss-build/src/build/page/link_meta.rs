@@ -22,6 +22,44 @@ pub struct LinkMeta {
     pub description: Option<String>,
     #[serde(default)]
     pub favicon: Option<String>,
+    /// The linked page's `og:image` (falling back to `twitter:image`),
+    /// resolved to an absolute `http(s)://` URL. This is the REMOTE URL
+    /// only — never emitted in built HTML. The build downloads it into
+    /// moss's own content-addressed cache and stores the resulting LOCAL
+    /// asset in a separate cache (see `build::media::remote_cover`); this
+    /// field exists so that download step knows what to fetch, and so a
+    /// change in the remote URL (a site swapping its social-preview image)
+    /// is visible on the next refresh even though the LOCAL cover cache is
+    /// keyed by content hash, not by this URL.
+    #[serde(default)]
+    pub og_image: Option<String>,
+    /// Content-store id of the downloaded `og_image` bytes (sha256, via
+    /// `ObjectStore::store_bytes`), and the format it was sniffed as
+    /// (never trusted from the URL or a `Content-Type` header). `None`
+    /// when there's no `og_image`, or the download/decode failed.
+    #[serde(default)]
+    pub cover_oid: Option<String>,
+    #[serde(default)]
+    pub cover_ext: Option<String>,
+    /// The rest of these are filled in by
+    /// `build::media::remote_cover::materialize_remote_covers`, once the
+    /// downloaded bytes above have actually been encoded into THIS build's
+    /// output — a separate step from the network fetch above, run with
+    /// `output_dir`/`PendingManifest` in scope. `cover_served_path` is a
+    /// root-relative path already staged on disk (checked with
+    /// `io_utils::output_present` before use — a stale entry whose file
+    /// didn't survive a rebuild must fall back to the placeholder, not
+    /// synthesize a 404ing `<source>`).
+    #[serde(default)]
+    pub cover_served_path: Option<String>,
+    #[serde(default)]
+    pub cover_width: Option<u32>,
+    #[serde(default)]
+    pub cover_height: Option<u32>,
+    #[serde(default)]
+    pub cover_lqip: Option<String>,
+    #[serde(default)]
+    pub cover_color: Option<String>,
     pub fetched_at: String, // ISO 8601
 }
 
@@ -29,8 +67,8 @@ pub struct LinkMeta {
 ///
 /// Priority: og:title > `<title>` for title.
 ///
-/// Description is intentionally not parsed: the link-preview card renders
-/// only title + favicon/domain (see `render_link_preview`). Skipping the
+/// Description is intentionally not parsed: the external grid card renders
+/// only title + favicon/domain (see `build::components::grid_card::render_external_card`). Skipping the
 /// description selectors saves disk bytes per cache entry and parser work
 /// per fetch — both small but free wins.
 pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
@@ -68,8 +106,49 @@ pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
         .filter(|s| !s.is_empty());
 
     let origin = extract_origin(url);
+
+    // Cover image: og:image, falling back to twitter:image (the same
+    // priority order as title). Resolved with the same `resolve_url` a
+    // relative favicon uses, but restricted to http(s) — unlike a favicon,
+    // this is never inlined; the build downloads it, so a `data:` or other
+    // opaque-scheme value is simply not a fetchable image. Computed before
+    // the favicon match below, which consumes `origin` by value on its
+    // `None` arm.
+    let og_image_content = Selector::parse(r#"meta[property="og:image"]"#)
+        .ok()
+        .and_then(|sel| document.select(&sel).next())
+        .and_then(|el| el.value().attr("content"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            Selector::parse(r#"meta[name="twitter:image"]"#)
+                .ok()
+                .and_then(|sel| document.select(&sel).next())
+                .and_then(|el| el.value().attr("content"))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+    let og_image = og_image_content
+        .map(|href| resolve_url(&href, &origin))
+        .filter(|url| is_http_url(url));
+
     let favicon = match favicon_href {
-        Some(href) => Some(resolve_url(&href, &origin)),
+        Some(href) => {
+            let resolved = resolve_url(&href, &origin);
+            // The fetched page is untrusted, and this string is copied
+            // verbatim into `<img src="…">` on every page that links out
+            // to it (`build::components::grid_card::render_external_card`). `data:,` (no payload after
+            // the comma) is a deliberate "we have no favicon" placeholder
+            // some sites emit to stop browsers guessing /favicon.ico, and
+            // anything else that isn't a small http(s)/raster-data URL is
+            // dropped the same way rather than handed to the sink — see
+            // `is_safe_favicon_url`.
+            if is_safe_favicon_url(&resolved) {
+                Some(resolved)
+            } else {
+                None
+            }
+        }
         None => origin.map(|o| format!("{o}/favicon.ico")),
     };
 
@@ -78,8 +157,27 @@ pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
         title,
         description: None,
         favicon,
+        og_image,
+        // Filled in by `fetch_link_meta_with_timeout` after this returns —
+        // downloading the image is I/O, and this function stays pure so it
+        // can be unit-tested with a plain HTML string, no network.
+        cover_oid: None,
+        cover_ext: None,
+        cover_served_path: None,
+        cover_width: None,
+        cover_height: None,
+        cover_lqip: None,
+        cover_color: None,
         fetched_at: now_iso8601(),
     }
+}
+
+/// True for a URL a build may issue an HTTP(S) request against. Used to
+/// gate `og_image`: a favicon may be inlined as `data:`, but a cover image
+/// is always downloaded, so anything without an http(s) scheme is simply
+/// not a candidate.
+fn is_http_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
 }
 
 /// Extract origin (scheme + host) from a URL string.
@@ -95,10 +193,67 @@ fn extract_origin(url: &str) -> Option<String> {
     }
 }
 
+/// True when `href` already carries a URI scheme (`data:`, `mailto:`,
+/// `blob:`, `https:`, ...) per RFC 3986 §3.1: a letter, then letters,
+/// digits, `+`, `-`, or `.`, then `:`. Anything matching this is already
+/// absolute and must never be joined to an origin. Protocol-relative
+/// (`//host/...`) has no scheme and is handled separately.
+fn has_uri_scheme(href: &str) -> bool {
+    let Some(colon) = href.find(':') else {
+        return false;
+    };
+    let scheme = &href[..colon];
+    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// Raster favicon MIME types kept verbatim as a `data:` URL. SVG is
+/// deliberately excluded even though it is `image/*`: an SVG payload can
+/// carry `<script>` or an `onload` handler, and while every current
+/// browser disables script execution for an `<img>`-context image, that is
+/// a property of the browser, not of these bytes — the same fetched page
+/// is untrusted regardless.
+const ALLOWED_DATA_FAVICON_TYPES: [&str; 5] =
+    ["image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon"];
+
+/// A fetched page's `data:` favicon fully controls this string, and it is
+/// copied into every generated page that links there — 8 KiB comfortably
+/// fits a 16×16–32×32 icon.
+const MAX_DATA_FAVICON_BYTES: usize = 8 * 1024;
+
+/// True for a favicon URL safe to hand to `render_external_card`'s `<img
+/// src="…">`: `http(s)://` (already the fetch origin's own scheme, or an
+/// absolute URL the page named), or a small `data:` URL of a raster image
+/// type with an actual payload. Everything else — `data:,` (the "no
+/// favicon" placeholder), `data:image/svg+xml` and `data:text/html`
+/// (script-capable payloads), and opaque schemes such as `javascript:`,
+/// `file:`, `blob:`, `mailto:` (never a renderable image, `file:` a small
+/// local-disclosure risk if the built page is ever opened over `file://`)
+/// — comes from an untrusted fetched page and is dropped to `None` rather
+/// than reaching the sink.
+fn is_safe_favicon_url(url: &str) -> bool {
+    if url.starts_with("https://") || url.starts_with("http://") {
+        return true;
+    }
+    let Some(rest) = url.strip_prefix("data:") else {
+        return false;
+    };
+    let Some((media_type, data)) = rest.split_once(',') else {
+        return false;
+    };
+    let mime = media_type.split(';').next().unwrap_or("");
+    !data.is_empty()
+        && ALLOWED_DATA_FAVICON_TYPES.contains(&mime)
+        && url.len() <= MAX_DATA_FAVICON_BYTES
+}
+
 /// Resolve a potentially relative URL against an origin.
 fn resolve_url(href: &str, origin: &Option<String>) -> String {
-    if href.starts_with("https://") || href.starts_with("http://") {
-        // Already absolute
+    if has_uri_scheme(href) {
+        // Already absolute: https:, http:, data:, mailto:, blob:, ... A
+        // scheme means the href is opaque and self-contained — joining it
+        // onto an origin produced `https://example.org/data:,` for a
+        // page's `data:,` favicon placeholder, which 404s in the browser.
         href.to_string()
     } else if href.starts_with("//") {
         // Protocol-relative
@@ -182,7 +337,7 @@ const CACHE_FRESHNESS_DAYS: u64 = 7;
 /// Check if a cached entry is still fresh (< CACHE_FRESHNESS_DAYS old).
 ///
 /// Uses the same epoch-day algorithm as `now_iso8601` (round-trip consistent).
-/// Per moss issue #574 review: previous arithmetic mixed `m*30+d` which
+/// A prior review found the previous arithmetic mixed `m*30+d` which
 /// double-counted month boundaries (a Jan 31 → Feb 1 diff read as 0 days,
 /// while the threshold "7" was actually 217 because we compared in the same
 /// broken metric). Fixed by going through the inverse of `days_to_ymd`.
@@ -254,9 +409,9 @@ fn read_fresh_cache(moss_dir: &Path, url: &str) -> Option<LinkMeta> {
 /// (concurrent render or another prewarm worker) can't observe a half-written
 /// file. Same pattern as `write_url_list_atomic` further down. Same-FS
 /// rename is atomic on POSIX, which is enough here.
-fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
+pub(crate) fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
     let dir = cache_dir(moss_dir);
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::build::io_utils::create_output_dir_all(&dir);
     let path = cache_path(moss_dir, &meta.url);
     let Ok(json) = serde_json::to_string_pretty(meta) else { return };
     // Tempfile name must collide-avoid across parallel workers writing
@@ -267,9 +422,11 @@ fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
     tmp_name.push(format!(".tmp.{}", std::process::id()));
     tmp.set_file_name(tmp_name);
     if std::fs::write(&tmp, &json).is_err() {  // allow:raw_write the temp for this cache's own atomic save, not the output tree
+        // allow:unlink the link-meta cache under .moss, not staging
         let _ = std::fs::remove_file(&tmp);
         return;
     }
+    // allow:unlink the link-meta cache under .moss, not staging
     if std::fs::rename(&tmp, &path).is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -278,34 +435,169 @@ fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
 /// Fetch metadata for a URL, using cache if available and fresh.
 ///
 /// Cache location: `{moss_dir}/build/cache/link-meta/{sha256-of-url}.json`
-/// Cache TTL: 7 days.
+/// Response body size cap for a link-metadata fetch. Title and favicon
+/// live in `<head>`, so nothing legitimate needs more; a page that never
+/// closes its head or a misconfigured server pointed at a large binary
+/// must not tie up a fetch worker copying megabytes it will never parse.
+/// Enforced by capping the reader (`Read::take`), not by trusting a
+/// `Content-Length` header — an untrusted server can lie about or omit it.
+const MAX_LINK_META_RESPONSE_BYTES: u64 = 512 * 1024;
+
+/// Read at most [`MAX_LINK_META_RESPONSE_BYTES`] from `reader`, lossy-UTF8
+/// decoded, and whether the read itself succeeded (a genuine I/O error, not
+/// hitting the cap, is the only way this is `false`). Split out from
+/// [`fetch_link_meta_with_timeout`] so the cap's behavior can be pinned
+/// with a plain in-memory reader — no network, no timing — rather than a
+/// wall-clock race against a throttled test server.
+fn read_capped_body(reader: impl std::io::Read) -> (String, bool) {
+    use std::io::Read as _;
+    let mut buf = Vec::new();
+    let read_ok = reader
+        .take(MAX_LINK_META_RESPONSE_BYTES)
+        .read_to_end(&mut buf)
+        .is_ok();
+    (String::from_utf8_lossy(&buf).into_owned(), read_ok)
+}
+
+/// Build a ureq agent with `timeout` set THREE ways: the overall per-call
+/// timeout (`.timeout`, already in use), plus the connect and read phases
+/// individually. Belt and suspenders, not redundant: ureq's overall/connect
+/// timeout has been found unreliable against some stalls, so a
+/// caller that only trusted `.timeout()` could still hang past the budget
+/// it asked for. Neither line alone is proven reliable in every case; the
+/// orchestrator (`fetch_all_link_meta_parallel_bounded`) is the actual
+/// backstop — it stops WAITING on a stuck worker at the deadline regardless
+/// of what ureq does internally. These are the second line, not the fix.
+fn ureq_agent_with_timeout(timeout: std::time::Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .timeout_connect(timeout)
+        .timeout_read(timeout)
+        .build()
+}
+
+/// The bare host from an `http(s)://` URL — same lightweight ad-hoc parsing
+/// style as [`extract_origin`] above, not the `url` crate (not already a
+/// direct dependency of this crate). Handles a bracketed IPv6-with-port form
+/// (`[::1]:8080`) and a plain `host:port`/`host` form; anything else
+/// (malformed input) falls through to the raw string, which then simply
+/// fails the `IpAddr` parse in [`is_unsafe_fetch_target`] and is treated as
+/// an ordinary hostname.
+fn bare_host(url: &str) -> &str {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or(after_scheme);
+    let authority = authority.rsplit('@').next().unwrap_or(authority); // drop userinfo
+    match authority.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(rest),
+        None => authority.split(':').next().unwrap_or(authority),
+    }
+}
+
+/// True when `url`'s literal host is private (RFC1918), link-local
+/// (169.254.0.0/16 — the address every major cloud provider serves instance
+/// metadata from — and its IPv6 twin `fe80::/10`), unspecified, multicast, or
+/// unique-local IPv6 (`fc00::/7`).
+///
+/// Deliberately does NOT include loopback: this crate's own test suite fakes
+/// "a real remote server" with a `127.0.0.1` `TcpListener` throughout (every
+/// `spawn_*_server` helper in this file and in `html_tests.rs`), so blocking
+/// it here would make the fetch this guards untestable in this codebase's
+/// own idiom, not just harder to exploit. Loopback is also the narrower
+/// threat of the two: reaching the build machine's OWN local services is
+/// less valuable to an attacker than reaching its private network or its
+/// cloud metadata endpoint, which is what link-local and RFC1918 actually
+/// gate.
+///
+/// A build fetches a URL the VAULT AUTHOR wrote in their own content — on a
+/// human's own machine that is not a privilege boundary, since they already
+/// have whatever network access this check would otherwise be guarding.
+/// This exists for the case this fetch actually runs unattended
+/// (`exits_after_build`: a CI runner or a hosted build), where a linked
+/// THIRD-PARTY page's own link could otherwise point the build machine's
+/// request at its own private network or cloud metadata endpoint. It is a
+/// literal-host check only: a hostname that resolves to one of these
+/// addresses only at connect time (DNS rebinding), or a redirect `Location`
+/// pointing at one, is NOT caught here — closing those needs a custom
+/// resolver/connector, more machinery than this proportional guard is
+/// trying to be.
+fn is_unsafe_fetch_target(url: &str) -> bool {
+    let host = bare_host(url);
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_multicast(),
+        Ok(std::net::IpAddr::V6(v6)) => {
+            v6.is_unspecified()
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local, fc00::/7
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local unicast, fe80::/10
+        }
+        Err(_) => false,
+    }
+}
+
+/// Fetch (or serve from a fresh cache) one URL's link metadata. Cache TTL:
+/// 7 days.
+///
+/// The two callers — [`fetch_all_link_meta_parallel`] (10s per request,
+/// [`FETCH_BUDGET`] total) and [`fetch_new_link_meta_for_build`]
+/// ([`BUILD_FETCH_PER_REQUEST_TIMEOUT`], [`BUILD_FETCH_BUDGET`] total) —
+/// both go through [`fetch_all_link_meta_parallel_bounded`]'s worker pool,
+/// so this function itself takes the timeout as a parameter rather than
+/// picking one.
 ///
 /// # Visibility
 ///
-/// **`pub(crate)` only — do not widen.** This function does blocking
-/// network I/O (10s timeout, but per moss issue #574, ureq's connect
-/// timeout is unreliable and can stall ~30s). Calling it from the build's
-/// render path freezes the pipeline. The legitimate caller is
-/// [`crate::build::features::sync::spawn_native_process_sync`], which runs
-/// it on a `spawn_blocking` worker as a background task.
-pub(crate) fn fetch_link_meta(url: &str, moss_dir: &Path) -> LinkMeta {
+/// **`private` only — do not widen.** This function does blocking network
+/// I/O (ureq's connect timeout is unreliable and can stall well past the
+/// timeout given). Calling it from the build's render path freezes the
+/// pipeline; both real callers run it on a background thread pool instead.
+fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::Duration) -> LinkMeta {
     // 1. Check fresh cache
     if let Some(cached) = read_fresh_cache(moss_dir, url) {
         return cached;
     }
 
-    // 2. Try HTTP fetch
-    let result = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
+    // 2. Refuse an unsafe target rather than fetch it — see `is_unsafe_fetch_target`.
+    if is_unsafe_fetch_target(url) {
+        return stale_or_empty(moss_dir, url);
+    }
+
+    // 3. Try HTTP fetch
+    let result = ureq_agent_with_timeout(timeout)
         .get(url)
         .set("User-Agent", "moss/0.1 (+https://moss.sh)")
         .call();
 
     match result {
         Ok(resp) => {
-            if let Ok(html) = resp.into_string() {
-                let meta = parse_link_meta(url, &html);
+            let (html, read_ok) = read_capped_body(resp.into_reader());
+            if read_ok {
+                let mut meta = parse_link_meta(url, &html);
+                // Author content always wins over anything fetched — but
+                // there's no author content to compare against here, only
+                // the fetch itself. "Keep the last successful copy until a
+                // refresh succeeds": carry the PREVIOUS entry's cover
+                // forward whenever this fetch doesn't produce a new one
+                // (no og:image this time, or the download/decode failed),
+                // so a transient failure or a page that dropped its
+                // og:image doesn't blank out a cover that was working.
+                let previous = read_cache(moss_dir, url);
+                match meta.og_image.as_deref().and_then(|img| download_og_image(img, moss_dir, timeout)) {
+                    Some((oid, ext)) => {
+                        meta.cover_oid = Some(oid);
+                        meta.cover_ext = Some(ext);
+                    }
+                    None => {
+                        if let Some(prev) = previous {
+                            meta.cover_oid = prev.cover_oid;
+                            meta.cover_ext = prev.cover_ext;
+                            meta.cover_served_path = prev.cover_served_path;
+                            meta.cover_width = prev.cover_width;
+                            meta.cover_height = prev.cover_height;
+                            meta.cover_lqip = prev.cover_lqip;
+                            meta.cover_color = prev.cover_color;
+                        }
+                    }
+                }
                 write_cache(moss_dir, &meta);
                 meta
             } else {
@@ -317,6 +609,81 @@ pub(crate) fn fetch_link_meta(url: &str, moss_dir: &Path) -> LinkMeta {
     }
 }
 
+/// Response body size cap for a downloaded cover image — generous enough
+/// for a real social-preview image, small enough that a misconfigured
+/// server pointed at a large file can't tie up a fetch worker.
+const MAX_OG_IMAGE_DOWNLOAD_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Decode-time dimension cap for a downloaded cover image. No real
+/// social-preview image is anywhere near this large; the point is rejecting
+/// a "decompression bomb" — a few compressed bytes whose header claims an
+/// enormous canvas — from its declared dimensions alone, before the decoder
+/// allocates a pixel buffer for it. `image::Limits::default()`'s 512MiB
+/// allocation ceiling alone still lets every one of `FETCH_CONCURRENCY`'s
+/// parallel workers hold up to 512MiB decoding one at once; this tightens
+/// that ceiling rather than replacing it.
+const MAX_OG_IMAGE_DIMENSION: u32 = 10_000;
+
+/// Download `image_url`, verify it's actually a raster image moss's
+/// pipeline can re-encode, and store the bytes in the site's
+/// content-addressed cache. Returns `(oid, ext)` — `ext` is derived from
+/// the SNIFFED format (magic bytes via `image::guess_format`), never
+/// trusted from the URL or a `Content-Type` header alone, since both come
+/// from an untrusted server. `None` on any failure: non-image content
+/// type, oversized body, bytes that don't actually decode, or a target
+/// [`is_unsafe_fetch_target`] refuses — every case degrades to "no cover
+/// this build" (or the carried-forward previous cover), never a build
+/// failure.
+fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Option<(String, String)> {
+    if is_unsafe_fetch_target(image_url) {
+        return None;
+    }
+    let resp = ureq_agent_with_timeout(timeout)
+        .get(image_url)
+        .set("User-Agent", "moss/0.1 (+https://moss.sh)")
+        .call()
+        .ok()?;
+    // Cheap early exit on an explicit non-image Content-Type. Not the
+    // authoritative check — a server can omit or lie about it — but avoids
+    // downloading a body we're going to discard.
+    if let Some(ct) = resp.header("Content-Type") {
+        let ct = ct.split(';').next().unwrap_or(ct).trim();
+        if !ct.is_empty() && !ct.starts_with("image/") {
+            return None;
+        }
+    }
+    let mut buf = Vec::new();
+    {
+        use std::io::Read as _;
+        resp.into_reader()
+            .take(MAX_OG_IMAGE_DOWNLOAD_BYTES)
+            .read_to_end(&mut buf)
+            .ok()?;
+    }
+    // The authoritative check: sniff the magic bytes and require moss's
+    // pipeline to actually be able to decode it. `should_skip`'s CMYK/
+    // animated/SVG rejections in the real conversion still apply later —
+    // this only rules out "not an image at all" and a truncated download
+    // (a cap mid-stream will usually fail to decode as a complete image).
+    let format = image::guess_format(&buf).ok()?;
+    let ext = match format {
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::WebP => "webp",
+        _ => return None,
+    };
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_OG_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_OG_IMAGE_DIMENSION);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&buf));
+    reader.set_format(format);
+    reader.limits(limits);
+    reader.decode().ok()?;
+    let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
+    let oid = store.store_bytes(&buf, crate::build::cache::RecordMode::Request).ok()?;
+    Some((oid, ext.to_string()))
+}
+
 /// Return stale cached data if available, otherwise empty LinkMeta.
 fn stale_or_empty(moss_dir: &Path, url: &str) -> LinkMeta {
     read_cache(moss_dir, url).unwrap_or(LinkMeta {
@@ -324,6 +691,14 @@ fn stale_or_empty(moss_dir: &Path, url: &str) -> LinkMeta {
         title: None,
         description: None,
         favicon: None,
+        og_image: None,
+        cover_oid: None,
+        cover_ext: None,
+        cover_served_path: None,
+        cover_width: None,
+        cover_height: None,
+        cover_lqip: None,
+        cover_color: None,
         fetched_at: now_iso8601(),
     })
 }
@@ -356,10 +731,51 @@ const FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 /// # Visibility
 ///
 /// **`pub(crate)` only — do not widen.** Same blocking-I/O constraint as
-/// [`fetch_link_meta`].
+/// `fetch_link_meta_with_timeout`.
 pub(crate) fn fetch_all_link_meta_parallel(urls: &[&str], moss_dir: &Path) -> usize {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
+    fetch_all_link_meta_parallel_bounded(
+        urls,
+        moss_dir,
+        FETCH_BUDGET,
+        std::time::Duration::from_secs(10),
+        "prewarm",
+    )
+}
+
+/// Shared worker pool behind both [`fetch_all_link_meta_parallel`] (the
+/// next-build prewarm, generous budget) and
+/// [`fetch_new_link_meta_for_build`] (this build's own short-budget fetch).
+/// `log_label` names the caller in the budget-exceeded warning, so a log
+/// line can tell which pass ran out of time.
+/// Enforces `budget` in the ORCHESTRATOR, not per request. A prior version
+/// of this function used `std::thread::scope`, which JOINS every worker
+/// before returning — so a single stuck fetch (ureq's own timeout is
+/// unreliable, and a blackholed public host can stall ~30s past whatever
+/// timeout it was given) held the whole call hostage regardless of
+/// `per_request_timeout`, defeating `budget` entirely. This version spawns
+/// detached workers (plain `std::thread::spawn`, never joined) that each
+/// send a completion signal over a channel as they finish; the orchestrator
+/// only waits on that channel via `recv_timeout`, so it returns at the
+/// deadline no matter how long a straggler worker keeps running.
+///
+/// A straggler is ABANDONED for this build's purposes: its result never
+/// reaches this function's return value, so the render that follows never
+/// sees it. But `fetch_link_meta_with_timeout` writes the cache internally
+/// as its very last step before returning — a straggler that eventually
+/// finishes (while the process is still alive; a one-shot CLI build that
+/// exits right after this call kills it first) still leaves a fresh cache
+/// entry for whatever reads it next, exactly like a URL this budget never
+/// reached at all. Nothing needs to special-case that: it falls out of
+/// simply not cancelling the thread (ureq has no cancellation API, and Rust
+/// threads can't be force-killed either).
+fn fetch_all_link_meta_parallel_bounded(
+    urls: &[&str],
+    moss_dir: &Path,
+    budget: std::time::Duration,
+    per_request_timeout: std::time::Duration,
+    log_label: &'static str,
+) -> usize {
+    use std::sync::{mpsc, Arc, Mutex};
     use std::time::Instant;
 
     // Filter out URLs that are already cached fresh — those need no fetch.
@@ -373,48 +789,110 @@ pub(crate) fn fetch_all_link_meta_parallel(urls: &[&str], moss_dir: &Path) -> us
         return 0;
     }
 
-    let queue = Mutex::new(cold.clone().into_iter());
-    let fetched = AtomicUsize::new(0);
-    let deadline = Instant::now() + FETCH_BUDGET;
+    let queue = Arc::new(Mutex::new(cold.clone().into_iter()));
+    let moss_dir_owned = moss_dir.to_path_buf();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let worker_count = FETCH_CONCURRENCY.min(cold.len());
 
-    std::thread::scope(|scope| {
-        for _ in 0..FETCH_CONCURRENCY.min(cold.len()) {
-            scope.spawn(|| {
-                loop {
-                    if Instant::now() >= deadline {
-                        // Budget exhausted; drop remaining URLs. They'll be
-                        // picked up next build (cache stays cold for them).
-                        break;
-                    }
-                    let next = match queue.lock() {
-                        Ok(mut q) => q.next(),
-                        Err(e) => {
-                            // Mutex poisoning means a sibling worker panicked.
-                            // Bail loudly rather than silently swallowing work.
-                            log::warn!(
-                                target: "link-meta",
-                                "prewarm queue mutex poisoned ({e}), worker exiting"
-                            );
-                            break;
-                        }
-                    };
-                    let Some(url) = next else { break };
-                    let _ = fetch_link_meta(&url, moss_dir);
-                    fetched.fetch_add(1, Ordering::SeqCst);
-                }
-            });
+    for _ in 0..worker_count {
+        let queue = Arc::clone(&queue);
+        let moss_dir = moss_dir_owned.clone();
+        let done_tx = done_tx.clone();
+        // Not joined, not scoped: a worker that outlives this function's
+        // deadline is exactly the case this design exists to not wait on.
+        std::thread::spawn(move || {
+            loop {
+                let next = match queue.lock() {
+                    Ok(mut q) => q.next(),
+                    // Mutex poisoning means a sibling worker panicked. Bail
+                    // quietly rather than propagating a poison panic here —
+                    // the orchestrator's own budget-exceeded warning below
+                    // already reports an incomplete run.
+                    Err(_) => break,
+                };
+                let Some(url) = next else { break };
+                let _ = fetch_link_meta_with_timeout(&url, &moss_dir, per_request_timeout);
+                // A send error means the receiver was already dropped (the
+                // orchestrator returned at its deadline) — that IS the
+                // abandonment this function provides; nothing to do about it.
+                let _ = done_tx.send(());
+            }
+        });
+    }
+    // Drop our own sender: once every worker's clone is ALSO dropped (they
+    // all reach the end of their loop), `recv`/`recv_timeout` correctly
+    // reports the channel as disconnected instead of hanging forever.
+    drop(done_tx);
+
+    let deadline = Instant::now() + budget;
+    let mut completed = 0usize;
+    while completed < cold.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
         }
-    });
+        match done_rx.recv_timeout(remaining) {
+            Ok(()) => completed += 1,
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            // Every worker finished (queue drained) before the deadline —
+            // not the timeout path, but the same "nothing left to wait for"
+            // outcome.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
 
-    let n = fetched.load(Ordering::SeqCst);
-    if n < cold.len() {
+    if completed < cold.len() {
         log::warn!(
             target: "link-meta",
-            "prewarm budget ({:?}) exceeded: {} of {} cold URLs fetched; remainder will retry next build",
-            FETCH_BUDGET, n, cold.len()
+            "{log_label} budget ({:?}) exceeded: {} of {} cold URLs fetched before the deadline; \
+             stragglers keep running and may still warm the cache for a later reader, but this build won't wait on them",
+            budget, completed, cold.len()
         );
     }
-    n
+    completed
+}
+
+/// Total wall-time budget for THIS build's own link-metadata fetch — the
+/// short pass that runs before render so a card can be complete on the
+/// very build that introduces its link, rather than waiting for the next
+/// build's prewarm to catch up. Deliberately much shorter than
+/// [`FETCH_BUDGET`] (60s): this one is on the critical path of every
+/// build, prewarm is a best-effort catch-up for URLs already known from a
+/// previous build's `.urls.json`.
+pub(crate) const BUILD_FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Per-request timeout for the build-time fetch. Shorter than the prewarm
+/// path's 10s: on a 3s total budget, one slow host must not be allowed to
+/// spend the whole thing.
+const BUILD_FETCH_PER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Fetch metadata for external grid-cell links this build's own pages
+/// introduce, before render — so a card is complete on its first build
+/// instead of showing the no-metadata form until the next one. `urls` is
+/// this build's candidate set (gathered from the already-parsed documents;
+/// see `build::render::grid_cells`); a URL with no fresh cache entry is
+/// fetched, under [`BUILD_FETCH_BUDGET`] total and
+/// [`BUILD_FETCH_PER_REQUEST_TIMEOUT`] per request.
+///
+/// A URL the budget doesn't reach, or that fails/times out, is left cold —
+/// its card renders in the no-metadata form, and `record_urls_for_prewarm`
+/// (called by render as usual) still records it, so the *next* build's
+/// prewarm picks it up exactly as it always has. This function only closes
+/// the one-build lag for the common case (a fast, reachable host); it
+/// never removes the fallback.
+///
+/// # Visibility
+///
+/// **`pub(crate)` only — do not widen.** Same blocking-I/O constraint as
+/// `fetch_link_meta_with_timeout`.
+pub(crate) fn fetch_new_link_meta_for_build(urls: &[&str], moss_dir: &Path) -> usize {
+    fetch_all_link_meta_parallel_bounded(
+        urls,
+        moss_dir,
+        BUILD_FETCH_BUDGET,
+        BUILD_FETCH_PER_REQUEST_TIMEOUT,
+        "build-time link-meta fetch",
+    )
 }
 
 /// Synchronously prewarm the link-meta cache for the persisted URL list,
@@ -462,7 +940,7 @@ pub(crate) fn prewarm_link_meta_for_build_with_progress(
 // ---------------------------------------------------------------------------
 // Render-side API: cache reads + per-build URL recording for prewarm bridge.
 //
-// Design (moss issue #574 review feedback):
+// Design (from a prior review's feedback):
 //
 // 1. Render is a pure cache reader — `read_link_meta_from_cache` has NO
 //    side effects, so two pages racing don't lose-update a shared file.
@@ -561,8 +1039,8 @@ fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
         Some(p) => p,
         None => return,
     };
-    if let Err(e) = std::fs::create_dir_all(parent) {
-        log::warn!(target: "link-meta", "create_dir_all({:?}) failed: {}", parent, e);
+    if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
+        log::warn!(target: "link-meta", "could not create {:?}: {}", parent, e);
         return;
     }
     let json = match serde_json::to_string_pretty(urls) {
@@ -578,8 +1056,10 @@ fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
         log::warn!(target: "link-meta", "write tempfile failed: {}", e);
         return;
     }
+    // allow:unlink the link-meta URL list under .moss, not staging
     if let Err(e) = std::fs::rename(&tmp, &path) {
         log::warn!(target: "link-meta", "rename tempfile failed: {}", e);
+        // allow:unlink the link-meta URL list under .moss, not staging
         let _ = std::fs::remove_file(&tmp);
     }
 }
@@ -612,6 +1092,14 @@ pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path) -> HashMap<Stri
                         title: None,
                         description: None,
                         favicon: None,
+                        og_image: None,
+                        cover_oid: None,
+                        cover_ext: None,
+                        cover_served_path: None,
+                        cover_width: None,
+                        cover_height: None,
+                        cover_lqip: None,
+                        cover_color: None,
                         fetched_at: now_iso8601(),
                     },
                 );
@@ -660,6 +1148,71 @@ mod tests {
         // Description is intentionally not parsed for new entries (renderer
         // ignores it; saves bandwidth + bytes per cache file).
         assert_eq!(meta.description, None);
+    }
+
+    #[test]
+    fn test_parse_og_image() {
+        let html = r#"
+        <html><head>
+            <meta property="og:image" content="https://example.com/cover.jpg">
+        </head><body></body></html>
+        "#;
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image.as_deref(), Some("https://example.com/cover.jpg"));
+    }
+
+    #[test]
+    fn test_parse_og_image_relative_resolves_against_origin() {
+        let html = r#"
+        <html><head>
+            <meta property="og:image" content="/assets/cover.png">
+        </head></html>
+        "#;
+        let meta = parse_link_meta("https://example.com/post", html);
+        assert_eq!(meta.og_image.as_deref(), Some("https://example.com/assets/cover.png"));
+    }
+
+    #[test]
+    fn test_parse_twitter_image_fallback_when_no_og_image() {
+        let html = r#"
+        <html><head>
+            <meta name="twitter:image" content="https://example.com/twitter-card.jpg">
+        </head></html>
+        "#;
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image.as_deref(), Some("https://example.com/twitter-card.jpg"));
+    }
+
+    #[test]
+    fn test_parse_og_image_prefers_og_over_twitter() {
+        let html = r#"
+        <html><head>
+            <meta property="og:image" content="https://example.com/og.jpg">
+            <meta name="twitter:image" content="https://example.com/twitter.jpg">
+        </head></html>
+        "#;
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image.as_deref(), Some("https://example.com/og.jpg"));
+    }
+
+    #[test]
+    fn test_parse_og_image_absent_when_no_meta_tag() {
+        let html = "<html><head><title>No cover here</title></head></html>";
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image, None);
+    }
+
+    #[test]
+    fn test_parse_og_image_data_url_is_not_a_fetch_candidate() {
+        // Unlike a favicon, a cover image is never inlined — the build
+        // downloads it, and a `data:` URL is not something to download.
+        let html = r#"
+        <html><head>
+            <meta property="og:image" content="data:image/png;base64,iVBORw0KGgo=">
+        </head></html>
+        "#;
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image, None);
     }
 
     #[test]
@@ -714,6 +1267,14 @@ mod tests {
             title: Some("Test Title".to_string()),
             description: Some("Test Desc".to_string()),
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: now_iso8601(),
         };
 
@@ -759,6 +1320,14 @@ mod tests {
             title: Some("Cached".to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: now_iso8601(),
         };
         write_cache(&tmp, &cached);
@@ -923,6 +1492,14 @@ mod tests {
             title: Some("Old Title".to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: "2020-01-01T00:00:00Z".to_string(), // Very old
         };
 
@@ -983,6 +1560,158 @@ mod tests {
         assert_eq!(meta.favicon.as_deref(), Some("https://cdn.example.com/icon.png"));
     }
 
+    // `resolve_url` unit tests: a `data:` (or any other scheme-carrying)
+    // href is already absolute and must never be joined to the origin —
+    // that join produced the malformed `https://example.org/data:,`, a
+    // real 404 seen for pages that declare `<link rel="icon" href="data:,">`
+    // as a "no favicon" placeholder.
+    #[test]
+    fn resolve_url_data_scheme_is_not_joined_to_origin() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(resolve_url("data:,", &origin), "data:,");
+    }
+
+    #[test]
+    fn resolve_url_data_image_base64_is_not_joined_to_origin() {
+        let origin = Some("https://example.org".to_string());
+        let data_url = "data:image/png;base64,iVBORw0KGgo=";
+        assert_eq!(resolve_url(data_url, &origin), data_url);
+    }
+
+    #[test]
+    fn resolve_url_absolute_https_is_unchanged() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(
+            resolve_url("https://cdn.example.com/icon.png", &origin),
+            "https://cdn.example.com/icon.png"
+        );
+    }
+
+    #[test]
+    fn resolve_url_protocol_relative_takes_scheme_from_origin() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(
+            resolve_url("//cdn.example.com/icon.png", &origin),
+            "https://cdn.example.com/icon.png"
+        );
+    }
+
+    #[test]
+    fn resolve_url_root_relative_is_joined_to_origin() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(resolve_url("/favicon.ico", &origin), "https://example.org/favicon.ico");
+    }
+
+    #[test]
+    fn resolve_url_relative_path_is_joined_to_origin() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(resolve_url("icon.png", &origin), "https://example.org/icon.png");
+    }
+
+    #[test]
+    fn test_favicon_empty_data_url_placeholder_yields_no_favicon() {
+        // Some sites declare `data:,` (empty payload) as a deliberate
+        // "we have no favicon, don't bother guessing /favicon.ico either"
+        // signal. Render must produce no <img> at all — same as when a
+        // page has no <link rel="icon"> and (unlike that case) we must
+        // not fall back to guessing /favicon.ico, since the site already
+        // told us explicitly there is nothing to show.
+        let html = r#"
+        <html><head>
+            <link rel="icon" href="data:,">
+            <title>Test</title>
+        </head><body></body></html>
+        "#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn test_favicon_data_image_base64_is_kept_verbatim() {
+        let html = r#"
+        <html><head>
+            <link rel="icon" href="data:image/png;base64,iVBORw0KGgo=">
+        </head><body></body></html>
+        "#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(
+            meta.favicon.as_deref(),
+            Some("data:image/png;base64,iVBORw0KGgo=")
+        );
+    }
+
+    // The favicon string is copied verbatim into `<img src="…">` on every
+    // page that links out to the fetched site (`render_external_card`). A
+    // fetched page is untrusted input, so any scheme other than http(s) or
+    // a small raster `data:` image must be dropped to `None` rather than
+    // handed to the sink — `has_uri_scheme`/`resolve_url` only decide
+    // whether to join to an origin, not whether the result is safe to emit.
+    #[test]
+    fn favicon_javascript_scheme_is_dropped() {
+        let html = r#"<html><head><link rel="icon" href="javascript:alert(1)"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_file_scheme_is_dropped() {
+        let html = r#"<html><head><link rel="icon" href="file:///etc/passwd"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_mailto_scheme_is_dropped() {
+        let html = r#"<html><head><link rel="icon" href="mailto:x@example.org"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_data_svg_is_dropped() {
+        // SVG can carry `<script>`/event-handler content; excluded even
+        // though it is `image/*` — see `is_safe_favicon_url`.
+        let html = r#"<html><head><link rel="icon" href="data:image/svg+xml,<svg onload=alert(1)>"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_data_text_html_is_dropped() {
+        let html = r#"<html><head><link rel="icon" href="data:text/html,<script>alert(1)</script>"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_oversized_data_url_is_dropped() {
+        let huge = "A".repeat(9 * 1024);
+        let html = format!(
+            r#"<html><head><link rel="icon" href="data:image/png;base64,{huge}"></head></html>"#
+        );
+        let meta = parse_link_meta("https://example.org/page", &html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn is_safe_favicon_url_accepts_http_https_and_small_raster_data_urls() {
+        assert!(is_safe_favicon_url("https://example.org/icon.png"));
+        assert!(is_safe_favicon_url("http://example.org/icon.png"));
+        assert!(is_safe_favicon_url("data:image/png;base64,iVBORw0KGgo="));
+        assert!(is_safe_favicon_url("data:image/x-icon;base64,AA=="));
+    }
+
+    #[test]
+    fn is_safe_favicon_url_rejects_non_raster_and_opaque_schemes() {
+        assert!(!is_safe_favicon_url("data:,"));
+        assert!(!is_safe_favicon_url("data:image/svg+xml,<svg/>"));
+        assert!(!is_safe_favicon_url("data:text/html,<script></script>"));
+        assert!(!is_safe_favicon_url("javascript:alert(1)"));
+        assert!(!is_safe_favicon_url("file:///etc/passwd"));
+        assert!(!is_safe_favicon_url("mailto:x@example.org"));
+        assert!(!is_safe_favicon_url("blob:https://example.org/abc"));
+    }
+
     /// Helper: write a fresh (today-stamped) cache entry for a URL so
     /// prewarm sees it as already cached.
     fn seed_fresh_cache(moss_dir: &Path, url: &str, title: &str) {
@@ -991,6 +1720,14 @@ mod tests {
             title: Some(title.to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: now_iso8601(),
         };
         write_cache(moss_dir, &meta);
@@ -1015,6 +1752,14 @@ mod tests {
             title: Some(title.to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: stale_ts,
         };
         write_cache(moss_dir, &meta);
@@ -1143,8 +1888,8 @@ mod tests {
     #[test]
     fn test_parallel_fetch_actually_populates_cold_cache() {
         // Exercise the genuine parallel-fetch path: cold URLs, real (loopback)
-        // HTTP, real `fetch_link_meta` writing real cache files. Closes the
-        // gap that the other tests leave open by only seeding fresh caches.
+        // HTTP, real cache files written by the fetch. Closes the gap that
+        // the other tests leave open by only seeding fresh caches.
         let html: &'static str = r#"<html><head>
             <meta property="og:title" content="Test Title">
             <link rel="icon" href="/favicon.ico">
@@ -1202,6 +1947,597 @@ mod tests {
         // Stale: read_cache returns Some, but read_fresh_cache returns None.
         assert!(read_cache(&tmp, "https://stale.example.test/").is_some());
         assert!(read_fresh_cache(&tmp, "https://stale.example.test/").is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── build-time fetch: budget, per-request timeout, response cap ────────
+
+    fn fresh_tmp(label: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!(
+            "moss_{label}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn build_fetch_budget_and_timeout_are_short_and_named() {
+        // Pins the numbers this feature reports: a regression that silently
+        // widened them back toward the prewarm path's 60s/10s would still
+        // compile and pass every other test here.
+        assert_eq!(BUILD_FETCH_BUDGET, std::time::Duration::from_secs(3));
+        assert_eq!(
+            BUILD_FETCH_PER_REQUEST_TIMEOUT,
+            std::time::Duration::from_millis(1500)
+        );
+        assert!(BUILD_FETCH_BUDGET < FETCH_BUDGET, "must stay well under the prewarm budget");
+    }
+
+    /// A server that sleeps `delay_ms` before responding, `requests` times —
+    /// each accepted connection handled on its OWN thread, so the client's
+    /// concurrent workers are actually served in parallel rather than
+    /// serialized behind a single accept loop (which is fine for the other
+    /// tests' instant responses, but would hide the budget's effect here).
+    fn spawn_slow_test_server(
+        html: &'static str,
+        delay_ms: u64,
+        requests: usize,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            let mut workers = Vec::with_capacity(requests);
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else { break };
+                workers.push(std::thread::spawn(move || {
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf);
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    let body = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
+                        html.len(),
+                        html
+                    );
+                    let _ = stream.write_all(body.as_bytes());
+                }));
+            }
+            for w in workers {
+                let _ = w.join();
+            }
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn a_short_total_budget_leaves_the_slow_remainder_cold() {
+        // More URLs than `FETCH_CONCURRENCY` (8), each slow enough that the
+        // budget expires before a second round starts. Real proof the
+        // budget bounds WALL TIME, not just a per-request timeout: with no
+        // budget at all this would take 2 rounds * 150ms. The 200ms budget
+        // is comfortably above one 150ms round (so it isn't testing the
+        // stricter "shorter than any single response" case — that's
+        // `the_orchestrator_never_waits_on_a_stuck_worker` below) and
+        // comfortably below two.
+        let html = "<html><head><title>Slow</title></head></html>";
+        let url_count = 16;
+        let (base, server) = spawn_slow_test_server(html, 150, url_count);
+        let urls: Vec<String> = (0..url_count).map(|i| format!("{base}/{i}")).collect();
+        let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        let tmp = fresh_tmp("short_budget");
+
+        let start = std::time::Instant::now();
+        let fetched = fetch_all_link_meta_parallel_bounded(
+            &url_refs,
+            &tmp,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            "test",
+        );
+        let elapsed = start.elapsed();
+
+        assert!(
+            fetched < url_count,
+            "a 200ms budget must not let a second 150ms round start: fetched {fetched} of {url_count}"
+        );
+        assert!(fetched > 0, "a budget comfortably above one round's response time should still see it complete");
+        assert!(
+            elapsed < std::time::Duration::from_millis(800),
+            "must not run anywhere near the un-budgeted 2-round time: {elapsed:?}"
+        );
+
+        // Deliberately not joined: the whole point of this test is that the
+        // budget stops the client short of `url_count` connections, so the
+        // server's accept loop is left waiting for ones that never arrive.
+        // Joining it here would hang the test on exactly the behavior being
+        // proven correct.
+        drop(server);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn the_orchestrator_never_waits_on_in_flight_work_past_the_deadline() {
+        // A budget SHORTER than a single response: the old `thread::scope`
+        // implementation joined every worker before returning, so it would
+        // have waited out the in-flight 150ms request regardless of the
+        // 20ms budget. The fix returns AT the deadline — zero completions
+        // is the correct answer here, not a flake.
+        let html = "<html><head><title>Slow</title></head></html>";
+        let (base, server) = spawn_slow_test_server(html, 150, 1);
+        let url = format!("{base}/only");
+        let urls = [url.as_str()];
+        let tmp = fresh_tmp("never_waits");
+
+        let start = std::time::Instant::now();
+        let fetched = fetch_all_link_meta_parallel_bounded(
+            &urls,
+            &tmp,
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_secs(5),
+            "test",
+        );
+        let elapsed = start.elapsed();
+
+        assert_eq!(fetched, 0, "the in-flight request had not finished by the 20ms deadline");
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "must return at the deadline, not wait for the 150ms response: {elapsed:?}"
+        );
+
+        drop(server); // straggler left running deliberately — see the test above
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn build_time_fetch_returns_within_budget_against_a_blackholed_connection() {
+        // ureq's own timeout has been unreliable in the
+        // past, and a genuinely blackholed PUBLIC host (packets silently
+        // dropped mid-CONNECT, no RST) can stall well past the timeout
+        // given, up to ~30s in the worst case. A local listener can't
+        // reproduce that exact phase (loopback always completes the TCP
+        // handshake instantly) — this reproduces the nearest local analog,
+        // an accepted connection that never responds, which on this
+        // ureq/OS combination `.timeout_read()` alone already catches in
+        // ~1.5s (measured by ablating `ureq_agent_with_timeout`'s explicit
+        // connect/read lines: same result, timeout() alone also caught it
+        // here). The orchestrator fix is what removes the DEPENDENCY on
+        // that being reliable at all: `the_orchestrator_never_waits_on_in_
+        // flight_work_past_the_deadline` above proves its own budget
+        // enforcement against a real, fast, non-hanging response, with no
+        // ureq timeout involved either way. This test stays as the
+        // regression guard for the scenario actually named in the issue —
+        // generous slack, hard ceiling, proving "nowhere near 30s".
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // Accept and hold — never read the request, never write a
+            // response, never close. The listener (and every accepted
+            // stream) leaks for the rest of the test process's life, which
+            // is fine: nothing here is ever joined or waited on.
+            while let Ok((stream, _)) = listener.accept() {
+                std::mem::forget(stream);
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/blackhole");
+        let urls = [url.as_str()];
+        let tmp = fresh_tmp("blackhole_budget");
+
+        let start = std::time::Instant::now();
+        let _ = fetch_new_link_meta_for_build(&urls, &tmp);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < BUILD_FETCH_BUDGET + std::time::Duration::from_secs(3),
+            "the orchestrator must enforce the budget itself rather than trust ureq's own \
+             (documented-unreliable) timeout — nowhere near the ~30s a blackholed \
+             host can otherwise cause: {elapsed:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fetch_new_link_meta_for_build_populates_cache_for_a_fast_server() {
+        // The actual public entry point `blocking.rs` calls, against a real
+        // (loopback) server — proves the wiring end to end, not just the
+        // shared bounded-fetch helper.
+        let html = r#"<html><head><meta property="og:title" content="Build Fetched"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 5);
+        let urls: Vec<String> = (0..5).map(|i| format!("{base}/{i}")).collect();
+        let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        let tmp = fresh_tmp("build_fetch_fast");
+
+        let fetched = fetch_new_link_meta_for_build(&url_refs, &tmp);
+        assert_eq!(fetched, 5);
+        for u in &urls {
+            let cached = read_cache(&tmp, u).expect("cache miss after build-time fetch");
+            assert_eq!(cached.title.as_deref(), Some("Build Fetched"));
+        }
+
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fetch_new_link_meta_for_build_finishes_promptly_when_the_server_is_down() {
+        // "Offline build still finishes promptly": bind an ephemeral port,
+        // then drop the listener before fetching — nothing listens there
+        // any more, so the connection is refused immediately (a real local
+        // refusal, not a guess about some fixed port's behavior under a
+        // sandboxed network stack), well under the per-request timeout.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let url = format!("http://127.0.0.1:{port}/unreachable");
+        let urls = [url.as_str()];
+        let tmp = fresh_tmp("build_fetch_offline");
+        let start = std::time::Instant::now();
+        let fetched = fetch_new_link_meta_for_build(&urls, &tmp);
+        let elapsed = start.elapsed();
+        assert_eq!(fetched, 1, "a failed fetch still counts as attempted, not skipped");
+        assert!(
+            elapsed < BUILD_FETCH_BUDGET,
+            "connection-refused must fail fast, not eat the whole budget: {elapsed:?}"
+        );
+        let cached = read_cache(&tmp, urls[0]);
+        assert!(
+            cached.map(|c| c.title.is_none()).unwrap_or(true),
+            "no metadata on a failed fetch, but no panic either"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn read_capped_body_stops_at_the_byte_ceiling_not_the_stream_end() {
+        // Deterministic — no network, no timing race. `io::repeat` is an
+        // infinite reader; if the cap didn't apply, `.take()` inside
+        // `read_capped_body` would never stop and this test would hang
+        // rather than fail, which is exactly why the size is finite but
+        // still 100x the cap: enough to prove truncation, never enough to
+        // make an ablated cap's "read everything" branch slow.
+        use std::io::Read as _;
+        let source = std::io::repeat(b'x').take(100 * MAX_LINK_META_RESPONSE_BYTES);
+        let (body, read_ok) = read_capped_body(source);
+        assert!(read_ok);
+        assert_eq!(body.len() as u64, MAX_LINK_META_RESPONSE_BYTES);
+    }
+
+    #[test]
+    fn read_capped_body_passes_through_a_response_under_the_cap_untouched() {
+        let html = "<html><head><title>Small</title></head></html>";
+        let (body, read_ok) = read_capped_body(html.as_bytes());
+        assert!(read_ok);
+        assert_eq!(body, html);
+    }
+
+    /// A server that sends a real `<title>` immediately, then pads the body
+    /// far past the response cap. Proves the cap is actually WIRED into the
+    /// network fetch path (`read_capped_body` above pins the cap's own byte
+    /// logic in isolation) — the outcome checked is the parsed title, not a
+    /// timing race, so this stays reliable under parallel test-suite load.
+    fn spawn_oversized_test_server(body_len: usize, requests: usize) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let prefix = "<html><head><title>Oversized</title></head><body>";
+                let suffix = "</body></html>";
+                let pad_len = body_len.saturating_sub(prefix.len() + suffix.len());
+                let mut body = String::with_capacity(body_len);
+                body.push_str(prefix);
+                body.extend(std::iter::repeat('x').take(pad_len));
+                body.push_str(suffix);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn a_response_far_over_the_cap_still_yields_the_title_that_fits_near_the_front() {
+        let (base, server) = spawn_oversized_test_server(4 * 1024 * 1024, 1);
+        let tmp = fresh_tmp("oversized_ok");
+        let url = format!("{base}/big");
+        let meta = fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(10));
+        assert_eq!(meta.title.as_deref(), Some("Oversized"));
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── og:image download ───────────────────────────────────────────────
+
+    /// A tiny real (encoded) PNG, generated in-memory — a genuine decodable
+    /// image, not a hand-rolled byte guess.
+    fn tiny_png_bytes() -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([200, 40, 40]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    /// A server that responds once with `body` under `content_type` (or no
+    /// header at all when `content_type` is `None`), then a 404 for every
+    /// request after the first — mirrors a real "image present at first
+    /// path, missing everywhere else" origin without a second listener.
+    fn spawn_byte_server(
+        body: Vec<u8>,
+        content_type: Option<&'static str>,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else { return };
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let ct_header = content_type
+                .map(|ct| format!("Content-Type: {ct}\r\n"))
+                .unwrap_or_default();
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{ct_header}\r\n", body.len());
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+        });
+        (url, handle)
+    }
+
+    fn spawn_404_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else { return };
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn download_og_image_stores_a_real_image_and_returns_its_oid_and_format() {
+        let png = tiny_png_bytes();
+        let (base, server) = spawn_byte_server(png.clone(), Some("image/png"));
+        let tmp = fresh_tmp("download_og_image_ok");
+        let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
+        let (oid, ext) = result.expect("a real PNG must download and decode");
+        assert_eq!(ext, "png");
+        let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(tmp.clone()));
+        let stored = store.ready_blob(&oid).expect("oid must resolve in the object store");
+        assert_eq!(std::fs::read(stored).unwrap(), png, "stored bytes should be identical to the download");
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_rejects_a_non_image_content_type() {
+        let (base, server) = spawn_byte_server(b"<html>not a real image</html>".to_vec(), Some("text/html"));
+        let tmp = fresh_tmp("download_og_image_wrong_ct");
+        let result = download_og_image(&format!("{base}/page.html"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_none(), "an explicit non-image Content-Type must short-circuit before decoding");
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_rejects_bytes_that_dont_actually_decode() {
+        // A server can claim any Content-Type it likes — the sniff+decode
+        // is the real gate, not the header.
+        let (base, server) = spawn_byte_server(b"this is not image data at all".to_vec(), Some("image/jpeg"));
+        let tmp = fresh_tmp("download_og_image_fake_ct");
+        let result = download_og_image(&format!("{base}/fake.jpg"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_none(), "a lying Content-Type must not bypass the decode check");
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_returns_none_on_404() {
+        let (base, server) = spawn_404_server();
+        let tmp = fresh_tmp("download_og_image_404");
+        let result = download_og_image(&format!("{base}/missing.png"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_none());
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fetch_link_meta_carries_forward_the_previous_cover_when_a_refresh_fails() {
+        // "Keep serving the last successfully cached copy until the
+        // metadata refresh succeeds": seed a cache entry with a cover
+        // already materialized-looking, then fetch again against a page
+        // whose og:image now 404s. The cover fields must survive.
+        let tmp = fresh_tmp("carry_forward_cover");
+        let html_with_dead_image = r#"<html><head>
+            <meta property="og:title" content="Still Here">
+            <meta property="og:image" content="/gone.png">
+        </head></html>"#;
+        let (base, server) = spawn_test_server(html_with_dead_image, 1);
+        let url = format!("{base}/post");
+
+        let previous = LinkMeta {
+            url: url.clone(),
+            title: Some("Old Title".to_string()),
+            description: None,
+            favicon: None,
+            og_image: Some(format!("{base}/old-cover.png")),
+            cover_oid: Some("deadbeefdeadbeef".to_string()),
+            cover_ext: Some("png".to_string()),
+            cover_served_path: Some("_moss/link/deadbeefdeadbeef.png".to_string()),
+            cover_width: Some(400),
+            cover_height: Some(300),
+            cover_lqip: Some("data:image/webp;base64,AAAA".to_string()),
+            cover_color: Some("#ff0000".to_string()),
+            fetched_at: "2020-01-01T00:00:00Z".to_string(),
+        };
+        write_cache(&tmp, &previous);
+
+        let meta = fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(5));
+        assert_eq!(meta.title.as_deref(), Some("Still Here"), "title still refreshes normally");
+        assert_eq!(
+            meta.cover_served_path.as_deref(),
+            Some("_moss/link/deadbeefdeadbeef.png"),
+            "the old cover must survive a failed image refresh"
+        );
+        assert_eq!(meta.cover_width, Some(400));
+
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── unsafe fetch targets (SSRF-style guard) ─────────────────────────
+
+    #[test]
+    fn bare_host_strips_scheme_port_userinfo_and_ipv6_brackets() {
+        assert_eq!(bare_host("https://example.com/a?b#c"), "example.com");
+        assert_eq!(bare_host("http://example.com:8080/"), "example.com");
+        assert_eq!(bare_host("http://user:pass@example.com/"), "example.com");
+        assert_eq!(bare_host("http://[::1]:8080/"), "::1");
+        assert_eq!(bare_host("http://[fe80::1]/"), "fe80::1");
+    }
+
+    #[test]
+    fn is_unsafe_fetch_target_blocks_private_and_link_local_v4() {
+        assert!(is_unsafe_fetch_target("http://10.0.0.5/"));
+        assert!(is_unsafe_fetch_target("http://172.16.0.1/"));
+        assert!(is_unsafe_fetch_target("http://192.168.1.1/"));
+        // The address every major cloud provider serves instance metadata
+        // from — the highest-value real-world target this guard exists for.
+        assert!(is_unsafe_fetch_target("http://169.254.169.254/latest/meta-data/"));
+        assert!(is_unsafe_fetch_target("http://0.0.0.0/"));
+    }
+
+    #[test]
+    fn is_unsafe_fetch_target_blocks_link_local_and_unique_local_v6() {
+        assert!(is_unsafe_fetch_target("http://[fe80::1]/"));
+        assert!(is_unsafe_fetch_target("http://[fc00::1]/"));
+        assert!(is_unsafe_fetch_target("http://[fd12:3456::1]/"));
+        assert!(is_unsafe_fetch_target("http://[::]/"));
+    }
+
+    #[test]
+    fn is_unsafe_fetch_target_allows_loopback_and_ordinary_hosts() {
+        // Loopback is deliberately NOT blocked — see the doc comment on
+        // `is_unsafe_fetch_target`: this crate's own test suite fakes a real
+        // remote server with a `127.0.0.1` listener throughout, so blocking
+        // it would make the guarded fetch untestable in this codebase's own
+        // idiom, for a narrower threat than link-local/private already cover.
+        assert!(!is_unsafe_fetch_target("http://127.0.0.1:4000/"));
+        assert!(!is_unsafe_fetch_target("http://[::1]/"));
+        assert!(!is_unsafe_fetch_target("http://localhost/"));
+        assert!(!is_unsafe_fetch_target("https://example.com/post"));
+        assert!(!is_unsafe_fetch_target("https://slykiten.com/"));
+    }
+
+    #[test]
+    fn fetch_link_meta_with_timeout_refuses_a_private_target_without_a_cache_entry() {
+        // Elapsed time, not just the `None` result, is the decisive proof:
+        // 169.254.169.254 is unreachable from this machine either way, so a
+        // guard that quietly did nothing would still return `None` here —
+        // just after actually attempting (and timing out on) the connection.
+        // The guard's whole point is to skip that attempt, so a real network
+        // round trip taking any meaningful fraction of the 5s timeout would
+        // mean it didn't fire.
+        let tmp = fresh_tmp("unsafe_target_no_cache");
+        let start = std::time::Instant::now();
+        let meta = fetch_link_meta_with_timeout(
+            "http://169.254.169.254/latest/meta-data/",
+            &tmp,
+            std::time::Duration::from_secs(5),
+        );
+        let elapsed = start.elapsed();
+        assert_eq!(meta.title, None, "an unsafe target must never be fetched");
+        assert!(read_cache(&tmp, "http://169.254.169.254/latest/meta-data/").is_none());
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "must reject before attempting any connection, not after timing one out: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_refuses_a_private_target() {
+        let tmp = fresh_tmp("unsafe_image_target");
+        let start = std::time::Instant::now();
+        let result = download_og_image(
+            "http://169.254.169.254/latest/meta-data/iam/",
+            &tmp,
+            std::time::Duration::from_secs(5),
+        );
+        let elapsed = start.elapsed();
+        assert!(result.is_none(), "an unsafe target must never be downloaded");
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "must reject before attempting any connection, not after timing one out: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── og:image decompression-bomb guard ───────────────────────────────
+
+    /// A REAL, validly-encoded, small (well under a megabyte on the wire)
+    /// PNG that is nonetheless absurdly wide — the shape a "declared
+    /// dimensions far past what a real image needs" bomb takes, but genuinely
+    /// decodable if nothing capped it. Deliberately real rather than a
+    /// truncated/fake file: a fake one would be rejected by the decode step
+    /// regardless of any dimension limit, which would prove nothing about
+    /// `MAX_OG_IMAGE_DIMENSION` specifically. Deliberately narrow height (10px)
+    /// so the total pixel count — and so `image::Limits::default()`'s
+    /// pre-existing 512MiB allocation ceiling — stays far under its own
+    /// threshold, isolating THIS cap rather than riding on that one.
+    fn absurdly_wide_png_bytes() -> Vec<u8> {
+        let width = MAX_OG_IMAGE_DIMENSION * 5;
+        let img = image::RgbImage::from_pixel(width, 10, image::Rgb([10, 10, 10]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn download_og_image_rejects_a_canvas_over_the_dimension_cap() {
+        let bomb = absurdly_wide_png_bytes();
+        // Real image, but its declared width alone (5x the cap) already
+        // dwarfs anything a real og:image needs — the point of the test.
+        let (base, server) = spawn_byte_server(bomb, Some("image/png"));
+        let tmp = fresh_tmp("og_image_over_cap");
+        let result = download_og_image(&format!("{base}/wide.png"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_none(), "a canvas over MAX_OG_IMAGE_DIMENSION must be rejected");
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_accepts_a_real_image_well_under_the_dimension_cap() {
+        // Guards against an over-tight cap breaking the ordinary case.
+        let (base, server) = spawn_byte_server(tiny_png_bytes(), Some("image/png"));
+        let tmp = fresh_tmp("og_image_normal");
+        let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_some(), "an ordinary small image must still download");
+        let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

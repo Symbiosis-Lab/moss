@@ -24,12 +24,12 @@ pub(crate) use folder_lang::{folder_of, resolve_folder_languages, FolderLangCach
 /// map from `parent_directory → file_path`. A file in this map wins its
 /// folder's home slot regardless of filename — see [`compute_home_file_winners`].
 ///
-/// This is the supported way to make `en/Liu Guo.md` (or any other
+/// This is the supported way to make `en/Mountain Home.md` (or any other
 /// non-INDEX_STEM, non-self-named filename) the homepage of a folder.
 /// Without this, moss falls back to the filename-only detection
 /// in [`moss_core::home::detect_home_file_in_folder`] and the file lands
-/// at a slug-based URL (`en/liu-guo/`) while moss synthesizes an empty
-/// `en/index.html` titled `"En"` (issue #587).
+/// at a slug-based URL (`en/mountain-home/`) while moss synthesizes an empty
+/// `en/index.html` titled `"En"`.
 ///
 /// # Election rules
 ///
@@ -63,17 +63,20 @@ pub(crate) fn compute_home_overrides(
     markdown_files: &[crate::types::content::FileInfo],
     root: &crate::vault::paths::VaultRoot,
 ) -> std::collections::HashMap<String, String> {
-    compute_home_overrides_with_evicted(markdown_files, root, &crate::build::icloud::is_evicted)
+    let source_path = root.path();
+    let is_evicted = &crate::build::icloud::is_evicted_and_requested;
+    compute_home_overrides_with_evicted(markdown_files, root, &|p| source_path.join(p), is_evicted)
 }
 
-/// Same as [`compute_home_overrides`] with an injectable eviction predicate —
-/// see docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3. A
-/// dataless (cloud-evicted) source file is skipped exactly like a read
-/// error (`Err(_) => continue`, just below) rather than blocking this
-/// serial, single-threaded scan on the OS materializing it.
+/// Same as [`compute_home_overrides`] with an injectable eviction predicate,
+/// and each file read from `locate(path)` (the path under the site folder for
+/// every build). A dataless (cloud-evicted) source file is skipped exactly
+/// like a read error (`Err(_) => continue`, just below) rather than blocking
+/// this serial, single-threaded scan on the OS materializing it.
 pub(crate) fn compute_home_overrides_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
     root: &crate::vault::paths::VaultRoot,
+    locate: &dyn Fn(&str) -> std::path::PathBuf,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
@@ -95,13 +98,11 @@ pub(crate) fn compute_home_overrides_with_evicted(
     // root while `blocking.rs`, eight lines away, patched around the same problem
     // with a local canonicalize fallback. Two consumers of one string, two answers.
     let root_basename = root.name();
-    let source_path = root.path();
 
     let mut facts: Vec<FileFacts> = Vec::new();
     for fi in markdown_files {
-        let abs = source_path.join(&fi.path);
+        let abs = locate(&fi.path);
         if is_evicted(&abs) {
-            crate::build::cloud_readiness::request_download(&abs);
             continue;
         }
         let content = match std::fs::read_to_string(&abs) {
@@ -115,7 +116,7 @@ pub(crate) fn compute_home_overrides_with_evicted(
             }
         };
 
-        // ONE parser (ADR-020): same path the editor + build pipeline use.
+        // ONE parser: same path the editor + build pipeline use.
         let (home, translation_key): (Option<bool>, Option<String>) =
             if crate::build::markdown::is_simplified_frontmatter(&content) {
                 let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
@@ -430,7 +431,7 @@ pub(crate) fn compute_home_file_winners(
 /// Given `dir_overrides = {"视频" → "video"}`:
 /// - `"视频/aimeili.mov"` → `"video/aimeili.mov"`
 /// - `"视频/sub/clip.mp4"` → `"video/sub/clip.mp4"`
-/// - `"News/chps-new-hub.png"` (no override) → `"news/chps-new-hub.png"`
+/// - `"News/new-hub.png"` (no override) → `"news/new-hub.png"`
 /// - `"News/Winter-Song.mov"` (no override) → `"news/Winter-Song.mov"`
 /// - `"News"` (directory only, no override) → `"News"`
 pub(crate) fn resolve_path_with_overrides(
@@ -469,12 +470,11 @@ pub(crate) fn build_page_map(
         root_folder_name,
         home_file_winners,
         home_overrides,
-        &crate::build::icloud::is_evicted,
+        &crate::build::icloud::is_evicted_and_requested,
     )
 }
 
-/// Same as [`build_page_map`] with an injectable eviction predicate — see
-/// docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3.
+/// Same as [`build_page_map`] with an injectable eviction predicate.
 #[cfg(test)]
 pub(crate) fn build_page_map_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
@@ -497,7 +497,6 @@ pub(crate) fn build_page_map_with_evicted(
         // Cloud-dataless source: skip like a read error rather than blocking
         // this serial, single-threaded scan on materialization.
         if is_evicted(&source_file_path) {
-            crate::build::cloud_readiness::request_download(&source_file_path);
             continue;
         }
 
@@ -510,7 +509,7 @@ pub(crate) fn build_page_map_with_evicted(
             }
         };
 
-        // Parse frontmatter to get url override (ONE parser, ADR-020).
+        // Parse frontmatter to get url override (ONE parser).
         let frontmatter_url: Option<String> = if crate::build::markdown::is_simplified_frontmatter(&content) {
             let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
             fm.url
@@ -543,6 +542,48 @@ pub(crate) fn build_page_map_with_evicted(
 /// `(url_path, is_index)` and, for a winning index file with a `url:`
 /// override, the `(dir, slug)` pair to fold into `dir_overrides`.
 ///
+/// Every page of `markdown_files` as slug deduplication
+/// ([`crate::build::markdown::resolve_duplicate_slugs_with_lang`]) receives it,
+/// in `markdown_files` order: the address [`page_map_entry`] gives it, whether
+/// it is its folder's home, its language as `process_markdown_file` resolves
+/// it, and whether it fills a slot instead of being a page. Each file is read
+/// from `locate(path)` instead of from `path` under the site folder, so this
+/// answers for a tree whose files have not been moved there yet. It reads the
+/// build's folder-language cache and writes no cache.
+pub(crate) fn pages_before_dedup(
+    markdown_files: &[crate::types::content::FileInfo],
+    root: &crate::vault::paths::VaultRoot,
+    site_lang: crate::i18n::Language,
+    locate: &dyn Fn(&str) -> std::path::PathBuf,
+    is_evicted: &dyn Fn(&Path) -> bool,
+) -> Vec<crate::build::types::ParsedDocument> {
+    let overrides = compute_home_overrides_with_evicted(markdown_files, root, locate, is_evicted);
+    let winners = compute_home_file_winners(markdown_files, root.name(), &overrides);
+    let mut scan = FrontmatterScanCache::default();
+    let scanned = frontmatter_cache::scan_frontmatter_urls_with_evicted(markdown_files, locate, &mut scan, is_evicted);
+    let (entries, _, _) = frontmatter_cache::assemble_page_map(markdown_files, &scanned, root.name(), &winners, &overrides);
+    let mut folder_cache = FolderLangCache::load(&crate::moss_paths::MossPaths::new(root.path()).cache_folder_lang());
+    let folder_langs =
+        folder_lang::resolve_folder_languages_with(markdown_files, locate, is_evicted, &mut folder_cache, &scan);
+
+    let mut pages = Vec::new();
+    for (path, url_path, is_index) in entries {
+        let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("untitled");
+        let folder = crate::i18n::folder_language(&path, folder_langs.get(&folder_of(&path)).copied());
+        let (lang, _) = crate::i18n::resolve_document_language(scan.declared_lang(&path), stem, site_lang, folder);
+        let page = crate::build::types::ParsedDocument {
+            url_path,
+            kind: if is_index { moss_core::PageKind::Folder } else { moss_core::PageKind::Article },
+            lang,
+            slot_only: crate::build::footer::is_excluded_from_pages(&path),
+            source_path: Some(path),
+            ..Default::default()
+        };
+        crate::build::scan::slug::admit_unless_reserved_device_output(&mut pages, page);
+    }
+    pages
+}
+
 /// Factored out so [`build_page_map_and_external_urls_cached_with_evicted`]
 /// can share it: that path gets `frontmatter_url` from a cache instead of a
 /// fresh read, but everything downstream of the extraction is identical.
@@ -587,7 +628,7 @@ pub(super) fn page_map_entry(
     // Promote home-override files (the `home: true` marker) — files
     // that won the home slot via frontmatter, not filename. These need
     // to go to `<folder>/index.html` so the folder home is the file's
-    // URL, not a synthesized empty page (issue #587).
+    // URL, not a synthesized empty page.
     let is_home_override = home_overrides.values().any(|p| p == file_path);
     if !filename_match_is_home && is_home_override {
         is_index = true;
@@ -706,8 +747,8 @@ pub(super) fn apply_cascading_dir_overrides(
 /// and returns a `source_path → external_url` map of the entries that have
 /// one set to an absolute http(s) URL.
 ///
-/// Mirrors `build_page_map`'s pre-scan but extracts a different field. See
-/// moss#679 (JSON Feed 1.1 linkblog pattern) for why `external_url:` exists.
+/// Mirrors `build_page_map`'s pre-scan but extracts a different field
+/// (JSON Feed 1.1 linkblog pattern) for why `external_url:` exists.
 ///
 /// Production now calls [`build_page_map_and_external_urls_cached`] instead,
 /// which folds this scan into the same cached read+parse pass as
@@ -719,11 +760,10 @@ pub(crate) fn build_external_url_map(
     markdown_files: &[crate::types::content::FileInfo],
     source_path: &Path,
 ) -> std::collections::HashMap<String, String> {
-    build_external_url_map_with_evicted(markdown_files, source_path, &crate::build::icloud::is_evicted)
+    build_external_url_map_with_evicted(markdown_files, source_path, &crate::build::icloud::is_evicted_and_requested)
 }
 
-/// Same as [`build_external_url_map`] with an injectable eviction predicate —
-/// see docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3.
+/// Same as [`build_external_url_map`] with an injectable eviction predicate.
 #[cfg(test)]
 pub(crate) fn build_external_url_map_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
@@ -738,7 +778,6 @@ pub(crate) fn build_external_url_map_with_evicted(
         let file_path = &file_info.path;
         let source_file_path = source_path.join(file_path);
         if is_evicted(&source_file_path) {
-            crate::build::cloud_readiness::request_download(&source_file_path);
             continue;
         }
         let content = match std::fs::read_to_string(&source_file_path) {
@@ -749,7 +788,7 @@ pub(crate) fn build_external_url_map_with_evicted(
             }
         };
 
-        // ONE parser (ADR-020): same path the editor + build pipeline use.
+        // ONE parser: same path the editor + build pipeline use.
         let external_url: Option<String> = if crate::build::markdown::is_simplified_frontmatter(&content) {
             let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
             fm.external_url
@@ -761,7 +800,7 @@ pub(crate) fn build_external_url_map_with_evicted(
             // http(s) only — same safety guard as the card-href substitution
             // in page.rs and the wikilink resolver in pipeline.rs.
             // Warn before silently dropping so the user knows why the field
-            // is being ignored. See moss#684.
+            // is being ignored.
             warn_invalid_external_url(&url, file_path);
             if is_valid_external_url(&url) {
                 out.insert(file_path.clone(), url);
@@ -778,7 +817,7 @@ pub(crate) fn build_external_url_map_with_evicted(
 /// warning — see `warn_invalid_external_url`.
 ///
 /// Pure predicate with no side effects; kept separate so it can be tested
-/// independently of the logger. See moss#684.
+/// independently of the logger.
 pub(crate) fn is_valid_external_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
@@ -787,7 +826,7 @@ pub(crate) fn is_valid_external_url(url: &str) -> bool {
 /// URL.  `file_path` is used only for the diagnostic message.
 ///
 /// Call this before the http(s) guard that silently drops the value so the
-/// user learns *why* the field is being ignored. See moss#684.
+/// user learns *why* the field is being ignored.
 pub(super) fn warn_invalid_external_url(raw_url: &str, file_path: &str) {
     if !raw_url.is_empty() && !is_valid_external_url(raw_url) {
         log::warn!(
@@ -806,10 +845,9 @@ pub(super) fn warn_invalid_external_url(raw_url: &str, file_path: &str) {
 /// site that consumes this field (card href, canonical link, sitemap, RSS).
 ///
 /// Emits a build warning when the field is set to a non-http(s) value so the
-/// user is informed rather than silently ignored. See moss#684.
+/// user is informed rather than silently ignored.
 ///
 /// Centralized here so future call sites can't accidentally weaken the guard.
-/// See moss#679.
 pub fn external_url(
     raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> Option<String> {

@@ -1,4 +1,4 @@
-//! Per-folder inferred language (ADR-065), computed once per build in the
+//! Per-folder inferred language, computed once per build in the
 //! scan/reduce phase and fed into `crate::i18n::resolve_document_language`
 //! (via `process_markdown_file`'s `folder_lang` parameter) as a richer
 //! source for rung 3 — the same slot [`crate::i18n::path::ancestor_lang_from_path`]
@@ -8,8 +8,8 @@
 //!
 //! moss used to call `i18n::detect::detect_language` on every page's own
 //! body, on every build. That made a document's language move on a typo
-//! fix, which fed a fingerprint and could force a full site render (see
-//! ADR-065). The fix is not to delete content detection — a vault with no
+//! fix, which fed a fingerprint and could force a full site render. The
+//! fix is not to delete content detection — a vault with no
 //! naming convention still needs SOME answer better than the site default
 //! — it's to run it once per FOLDER, over the folder's whole file set,
 //! instead of once per PAGE, over one file's bytes.
@@ -33,7 +33,7 @@
 //! fresh read per folder.)
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::i18n::{detect, filename::parse_filename_stem, path::ancestor_lang_from_path, Language};
 
@@ -53,7 +53,7 @@ pub(super) struct FolderLangEntry {
     lang: Option<String>,
 }
 
-/// Persisted `.moss/build/cache/folder-lang.json`. See the module doc for
+/// Persisted `.moss/build.nosync/cache/folder-lang.json`. See the module doc for
 /// why membership, not content, is the cache key.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FolderLangCache {
@@ -71,7 +71,7 @@ impl FolderLangCache {
     }
 
     /// Persist to disk. Goes through `io_utils` because this file lives
-    /// under `.moss/build/` (ADR-043 — dataless is absent there).
+    /// under `.moss/build.nosync/` (dataless is treated as absent there).
     pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -104,7 +104,20 @@ pub(crate) fn resolve_folder_languages(
     cache: &mut FolderLangCache,
     declarations: &super::frontmatter_cache::FrontmatterScanCache,
 ) -> HashMap<String, Language> {
-    let is_evicted: &dyn Fn(&Path) -> bool = &crate::build::icloud::is_evicted;
+    let locate = |p: &str| source_path.join(p);
+    let is_evicted = &crate::build::icloud::is_evicted_and_requested;
+    resolve_folder_languages_with(markdown_files, &locate, is_evicted, cache, declarations)
+}
+
+/// [`resolve_folder_languages`] with each file read from `locate(path)` and
+/// an injectable eviction predicate.
+pub(super) fn resolve_folder_languages_with(
+    markdown_files: &[crate::types::content::FileInfo],
+    locate: &dyn Fn(&str) -> PathBuf,
+    is_evicted: &dyn Fn(&Path) -> bool,
+    cache: &mut FolderLangCache,
+    declarations: &super::frontmatter_cache::FrontmatterScanCache,
+) -> HashMap<String, Language> {
     let mut by_folder: HashMap<String, Vec<&crate::types::content::FileInfo>> = HashMap::new();
     for file_info in markdown_files {
         if ancestor_lang_from_path(&file_info.path).is_some() {
@@ -145,9 +158,8 @@ pub(crate) fn resolve_folder_languages(
             let bodies: Vec<String> = files
                 .iter()
                 .filter_map(|f| {
-                    let abs_path = source_path.join(&f.path);
+                    let abs_path = locate(&f.path);
                     if is_evicted(&abs_path) {
-                        crate::build::cloud_readiness::request_download(&abs_path);
                         return None;
                     }
                     std::fs::read_to_string(&abs_path).ok().map(|c| detect::strip_frontmatter(&c))
@@ -197,7 +209,7 @@ pub(crate) fn resolve_folder_languages(
 /// `Language`. A folder declaring `fr` therefore gets NO folder-level answer at
 /// all — it is a declaration, so it stops the inference from overruling it, and
 /// its pages fall through to the site default (the same ceiling `<html lang>`
-/// had before #977, and tracked with it).
+/// has, and tracked with it).
 ///
 /// Read on every build rather than through the FILE-SET cache: that cache
 /// exists so that editing a body cannot move a folder's language, and a `lang:`
@@ -253,7 +265,7 @@ enum Declaration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::i18n::fixtures::REAL_UKRAINE_DERUSSIFICATION_BODY;
+    use crate::i18n::fixtures::SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY;
     use crate::types::content::FileInfo;
 
     /// Every production caller resolves folder languages against a
@@ -274,37 +286,37 @@ mod tests {
     }
 
     /// The invariant this module exists to hold: editing a folder's ONE
-    /// file's body — even the real Ukraine article's real bytes, whose
+    /// file's body — even a realistic long-form article's real bytes, whose
     /// markup-heavy shape is exactly what used to flip the per-page
     /// detector — must not move the folder's resolved language, because a
     /// rebuild with the same file SET reuses the cached verdict without
     /// re-reading content at all.
     #[test]
-    fn editing_the_real_ukraine_article_does_not_move_its_folder_language() {
+    fn editing_a_realistic_article_does_not_move_its_folder_language() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("awards/writing/s4/ukraine-derussification");
+        let folder = dir.path().join("awards/writing/s2/rainy-season-letter");
         std::fs::create_dir_all(&folder).unwrap();
-        let article_path = folder.join("戰火下的文學抉擇.md");
-        std::fs::write(&article_path, REAL_UKRAINE_DERUSSIFICATION_BODY).unwrap();
+        let article_path = folder.join("雨季裡的一封信.md");
+        std::fs::write(&article_path, SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY).unwrap();
 
-        let files = vec![file("awards/writing/s4/ukraine-derussification/戰火下的文學抉擇.md")];
+        let files = vec![file("awards/writing/s2/rainy-season-letter/雨季裡的一封信.md")];
         let mut cache = FolderLangCache::default();
 
         let before = resolve(&files, dir.path(), &mut cache);
         assert_eq!(
-            before.get("awards/writing/s4/ukraine-derussification"),
+            before.get("awards/writing/s2/rainy-season-letter"),
             Some(&Language::ZhHant)
         );
 
         // Edit the body — same file, same folder membership — and rebuild
         // against the SAME (now-populated) cache, as a real second build
         // would.
-        let edited = format!("{REAL_UKRAINE_DERUSSIFICATION_BODY}\n\n<!-- rebuild-bench 1787295798955 -->\n");
+        let edited = format!("{SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY}\n\n<!-- rebuild-bench 1787295798955 -->\n");
         std::fs::write(&article_path, &edited).unwrap();
 
         let after = resolve(&files, dir.path(), &mut cache);
         assert_eq!(
-            after.get("awards/writing/s4/ukraine-derussification"),
+            after.get("awards/writing/s2/rainy-season-letter"),
             Some(&Language::ZhHant),
             "a body edit with an unchanged file set must not move the folder's resolved language"
         );

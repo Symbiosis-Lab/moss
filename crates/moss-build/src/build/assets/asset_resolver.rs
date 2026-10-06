@@ -155,9 +155,9 @@ fn resolve_asset_directory_in(
 /// theme/ is for user-facing design assets, assets/ is for cached
 /// build tool downloads (JupyterLite, etc.).
 pub fn get_moss_assets_dir() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
-    let assets_dir = home.join(".moss").join("assets");
+    let assets_dir = crate::infra::home::moss_home()?.join("assets");
     if !assets_dir.exists() {
+        // allow:raw_write ~/.moss/assets, not the build tree
         std::fs::create_dir_all(&assets_dir)
             .map_err(|e| format!("Failed to create assets directory: {}", e))?;
     }
@@ -176,10 +176,12 @@ fn extract_zip_to_asset_dir(data: &[u8], asset_dir: &Path, sha256: &str) -> Resu
 
     // Clean up any previous failed extraction
     if tmp_dir.exists() {
+        // allow:unlink the downloaded asset cache, not the build tree
         std::fs::remove_dir_all(&tmp_dir)
             .map_err(|e| format!("Failed to clean up temp directory: {}", e))?;
     }
 
+    // allow:raw_write ~/.moss/assets, not the build tree
     std::fs::create_dir_all(&tmp_dir)
         .map_err(|e| format!("Failed to create temp extraction directory: {}", e))?;
 
@@ -207,11 +209,13 @@ fn extract_zip_to_asset_dir(data: &[u8], asset_dir: &Path, sha256: &str) -> Resu
         let out_path = tmp_dir.join(&name);
 
         if file.is_dir() {
+            // allow:raw_write ~/.moss/assets, not the build tree
             std::fs::create_dir_all(&out_path)
                 .map_err(|e| format!("Failed to create directory {}: {}", name, e))?;
         } else {
             // Ensure parent directory exists
             if let Some(parent) = out_path.parent() {
+                // allow:raw_write ~/.moss/assets, not the build tree
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent dir for {}: {}", name, e))?;
             }
@@ -232,10 +236,12 @@ fn extract_zip_to_asset_dir(data: &[u8], asset_dir: &Path, sha256: &str) -> Resu
 
     // Atomic rename: remove old dir if present, then rename tmp → final
     if asset_dir.exists() {
+        // allow:unlink the downloaded asset cache, not the build tree
         std::fs::remove_dir_all(asset_dir)
             .map_err(|e| format!("Failed to remove old asset directory: {}", e))?;
     }
 
+    // allow:unlink the downloaded asset cache, not the build tree
     std::fs::rename(&tmp_dir, asset_dir)
         .map_err(|e| format!("Failed to rename temp directory to final: {}", e))?;
 

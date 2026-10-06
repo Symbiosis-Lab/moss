@@ -1,13 +1,10 @@
 //! The per-folder rebuild worker: a capacity-1 request slot drained by one
 //! dedicated task per watched folder.
 //!
-//! Phase 1a of `docs/archive/2026-08-18-watcher-reliability-architecture.md`
-//! ("Piece 2 — a rebuild path that cannot wedge"). Before this, every producer
-//! of a rebuild — the watcher's select loop, the target reconciler, the cloud
-//! supervisor, the publish thaw — awaited the ENTIRE build inline through
-//! `trigger_rebuild_with_lock`, so one wedged build parked event processing,
-//! reconciliation and shutdown for the life of the process. Now producers
-//! enqueue and return; the worker builds one at a time.
+//! Every producer of a rebuild — the watcher's select loop, the target
+//! reconciler, the cloud supervisor, the publish thaw — enqueues and returns
+//! rather than awaiting the build inline, so one wedged build cannot park event
+//! processing, reconciliation and shutdown. The worker builds one at a time.
 //!
 //! ## The primitive
 //!
@@ -38,8 +35,7 @@ use futures::FutureExt;
 use crate::build::BuildTrigger;
 
 /// How long the worker waits before re-trying admission when the folder's
-/// stage-write lock is held (design doc, Piece 2: "Re-admission is try-lock,
-/// not pile-up … it retries next tick"). The common holder is a prior
+/// stage-write lock is held (re-admission is try-lock, not pile-up). The common holder is a prior
 /// generation's seal tail, which releases without poking the slot — so the
 /// retry must be timer-driven, not poke-driven, or a parked request could
 /// outlive the contention that parked it.
@@ -200,6 +196,11 @@ pub struct WorkerHandle {
     /// lock-retry wait after a busy spell would end instantly and for free.
     wake_seq: std::sync::atomic::AtomicU64,
     shutdown: std::sync::atomic::AtomicBool,
+    /// Watcher tasks currently running on this handle. A re-armed watch
+    /// reuses the registered handle, so the old task's exit must not shut
+    /// down what the new one still drives; only the last one out does. Only
+    /// touched under the registry lock (see [`attach`] / [`detach`]).
+    watchers: std::sync::atomic::AtomicUsize,
     /// Finish time and wall duration of the most recently COMPLETED admission
     /// — the sweep's measured-from-finish pacing input (phase 3): its
     /// arrival-driven rebuild interval is `max(floor, last build duration)`,
@@ -218,6 +219,7 @@ impl WorkerHandle {
             building: std::sync::atomic::AtomicBool::new(false),
             wake_seq: std::sync::atomic::AtomicU64::new(0),
             shutdown: std::sync::atomic::AtomicBool::new(false),
+            watchers: std::sync::atomic::AtomicUsize::new(0),
             last_completed: Mutex::new(None),
         }
     }
@@ -245,7 +247,7 @@ impl WorkerHandle {
     /// Is the in-flight build past its deadline? (Diagnostics/UX surface;
     /// never a coordination mechanism.) Read by the sweep every tick and
     /// surfaced to the preview as `FolderHealthChanged` — a corner-panel
-    /// advisory (moss#1075).
+    /// advisory.
     pub fn is_degraded(&self) -> bool {
         self.degraded.load(Ordering::SeqCst)
     }
@@ -268,10 +270,32 @@ impl WorkerHandle {
         self.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Deposit a request, merging with any occupant, and wake the worker.
-    pub fn enqueue(&self, req: RebuildRequest) {
+    /// Deposit a request, merging with any occupant under one critical
+    /// section, and wake the worker.
+    ///
+    /// The one place this check-and-merge happens, and it has to be one atomic
+    /// operation rather than a caller reading `is_building()` and then
+    /// separately calling `restore`/`restore_visibly`: `take_for_attempt`
+    /// dequeues and flips `building` to `true` under this same slot lock, so a
+    /// caller that checked `is_building()` in a separate critical section could
+    /// observe `false`, have `take_for_attempt` run, and then merge a request
+    /// whose `gate_paths` was never cleared against a build that had, by then,
+    /// already started — reopening the exact mixed-baseline race this
+    /// building-flag check exists to close (see the field doc on `building`).
+    pub fn enqueue(&self, mut req: RebuildRequest) {
         {
             let mut slot = self.lock_slot();
+            // A build can copy a source file early, then compute its final
+            // content-hash stash after a newer save lands. In that ordering
+            // the stash describes the newer source while the promoted output
+            // still contains the older bytes. The catch-up request must not
+            // be gated against that mixed baseline or it will be discarded.
+            // `take_for_attempt` sets `building` under this same slot lock, so
+            // there is no dequeue-to-admission window where an arrival can
+            // retain a suppressible gate.
+            if self.building.load(Ordering::SeqCst) {
+                req.gate_paths = None;
+            }
             *slot = Some(match slot.take() {
                 Some(occupant) => merge_requests(occupant, req),
                 None => req,
@@ -284,6 +308,18 @@ impl WorkerHandle {
     /// Remove the queued request, if any.
     pub fn take(&self) -> Option<RebuildRequest> {
         self.lock_slot().take()
+    }
+
+    /// Dequeue the next request and mark its admission in flight as one
+    /// atomic slot operation. Producers use that mark to make arrivals during
+    /// the attempt unconditional; see [`enqueue`](Self::enqueue).
+    fn take_for_attempt(&self) -> Option<RebuildRequest> {
+        let mut slot = self.lock_slot();
+        let req = slot.take();
+        if req.is_some() {
+            self.building.store(true, Ordering::SeqCst);
+        }
+        req
     }
 
     /// Return a dequeued-but-not-admitted request to the slot (the freeze
@@ -402,7 +438,7 @@ pub async fn run_worker_loop<Fut>(
         if handle.shutdown_requested() {
             break;
         }
-        match handle.take() {
+        match handle.take_for_attempt() {
             None => handle.work.notified().await,
             Some(req) => {
                 // Snapshot BEFORE the attempt: any producer wake from here on
@@ -419,7 +455,6 @@ pub async fn run_worker_loop<Fut>(
                 // panicking, merges harmlessly), and let backoff absorb it.
                 let backup = req.clone();
                 let started = std::time::Instant::now();
-                handle.building.store(true, Ordering::SeqCst);
                 let outcome = match std::panic::AssertUnwindSafe(attempt(req))
                     .catch_unwind()
                     .await
@@ -570,7 +605,18 @@ fn workers() -> std::sync::MutexGuard<'static, std::collections::HashMap<String,
 /// registered (mirrors `FileWatcherState`'s "shouldn't happen, but be safe"),
 /// the old worker is asked to exit.
 pub fn register(folder: &str) -> Arc<WorkerHandle> {
+    register_with(folder, 0)
+}
+
+/// [`register`], with the first watcher task already counted — inserted under
+/// the registry lock so no [`detach`] can run between the two.
+pub fn register_counted(folder: &str) -> WatcherSlot {
+    WatcherSlot { folder: folder.to_string(), handle: register_with(folder, 1) }
+}
+
+fn register_with(folder: &str, watchers: usize) -> Arc<WorkerHandle> {
     let handle = Arc::new(WorkerHandle::new());
+    handle.watchers.store(watchers, Ordering::SeqCst);
     if let Some(old) = workers().insert(folder.to_string(), handle.clone()) {
         old.request_shutdown();
     }
@@ -584,6 +630,46 @@ pub fn deregister(folder: &str, handle: &Arc<WorkerHandle>) {
     if map.get(folder).is_some_and(|h| Arc::ptr_eq(h, handle)) {
         map.remove(folder);
     }
+}
+
+/// One watcher task's claim on `folder`'s worker. Dropping it — at the task's
+/// end, on a panic, or because the task's future was dropped unpolled — is the
+/// only way the claim is released, so no exit path can forget to.
+///
+/// The last claim out asks the worker to exit and removes the registration; an
+/// earlier one (a re-armed watch's predecessor) leaves both alone, since its
+/// successor still drains the slot. Never pair it with [`deregister`].
+pub struct WatcherSlot {
+    folder: String,
+    handle: Arc<WorkerHandle>,
+}
+
+impl WatcherSlot {
+    pub fn handle(&self) -> &Arc<WorkerHandle> {
+        &self.handle
+    }
+}
+
+impl Drop for WatcherSlot {
+    fn drop(&mut self) {
+        let mut map = workers();
+        if self.handle.watchers.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.handle.request_shutdown();
+            if map.get(&self.folder).is_some_and(|h| Arc::ptr_eq(h, &self.handle)) {
+                map.remove(&self.folder);
+            }
+        }
+    }
+}
+
+/// Claim `folder`'s registered worker for a watcher task, or `None` if
+/// nothing is registered. Under the registry lock, so it cannot interleave
+/// with a [`WatcherSlot`] drop that is deciding to tear the handle down.
+pub fn attach(folder: &str) -> Option<WatcherSlot> {
+    let map = workers();
+    let handle = map.get(folder)?.clone();
+    handle.watchers.fetch_add(1, Ordering::SeqCst);
+    Some(WatcherSlot { folder: folder.to_string(), handle })
 }
 
 /// The slot for `folder`, if a watcher (and thus a worker) is running for it.

@@ -3,7 +3,7 @@
 //! A `<a href="/authors/ling/">` is unambiguous: no base to guess, nothing to
 //! fetch. Either the build wrote something at that path or it did not, and moss
 //! holds the complete list of what it wrote by the time the manifest seals. So
-//! the check is a set difference, and until moss#1187 it was simply never made
+//! the check is a set difference, and until this module existed it was simply never made
 //! — a term-page namespace rename (`/author/` → `/authors/`, same day, one
 //! release apart) turned 36 already-authored links on a live site into 404s and
 //! the build said `Build complete` and nothing else.
@@ -13,7 +13,7 @@
 //! Three answers, cheapest first, and a reference needs only one of them:
 //!
 //! 1. **A manifest key**, exact or as `<path>/index.html` for a directory URL.
-//!    Redirect stubs are in here too — `feeds::redirects::emit_redirect_stubs`
+//!    Redirect stubs are in here too — `feeds::redirects::emit_redirect_table`
 //!    writes a real meta-refresh file through the same `emit`, so a link to a
 //!    renamed page's OLD url resolves against the stub and this module needs no
 //!    knowledge of `.moss/data/redirects.json` at all.
@@ -40,6 +40,17 @@
 //! Counting it would fail an existing `--strict` CI on upgrade for a site that
 //! is not broken, which is a worse outcome than the miss this closes. Promoting
 //! it later is a one-word change once the field tells us the false-positive rate.
+//!
+//! One exception, added 2026-09-16: [`dead_links_among_promises`] scopes this
+//! audit's output down to the references THIS build itself made and has not
+//! yet kept — a video (or its poster) dispatched to a background encode
+//! before the page that embeds it was sealed. That subset is not a maybe;
+//! moss knows for certain it will produce the file, on this same folder, from
+//! this same build. `deploy::refuse_publish` refuses on it, the same way it
+//! already refuses on missing files — closing the window where a publish
+//! could land between a generation's seal and the follow-up rebuild that
+//! completes it, shipping a live page with a dead `<video>`. Every other dead
+//! link this module finds stays exactly as advisory as before.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -51,7 +62,14 @@ use crate::build::served_path::ServedPath;
 /// than written into the scan loop so ratchet row (p) — which reads a literal
 /// `href=\"` inside a `find`/`split` argument as an HTML string-mutation pass —
 /// does not count a read-only audit as one.
-const URL_ATTRS: [&str; 2] = ["href=", "src="];
+///
+/// `poster=` joined the other two 2026-09-16: `moss_core::render::video`
+/// emits it unconditionally (the still frame shown before a `<video>`'s real
+/// source lands), derived from the same source path as `src=` via the same
+/// `to_thumb`/`to_mp4` pair — so a video still mid-encode leaves exactly the
+/// same kind of unsatisfied reference in `poster=` that it does in `src=`,
+/// and until now this module could not see it.
+const URL_ATTRS: [&str; 3] = ["href=", "src=", "poster="];
 
 /// One root-relative reference whose target the build did not write.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,6 +93,9 @@ pub struct DeadLink {
 /// writes `slug/index.html` and authors write `/slug/`, `/slug`, and
 /// `/slug/index.html` interchangeably.
 pub fn candidate_keys(href: &str) -> Option<Vec<String>> {
+    // The value is attribute text, so entities come off first: `&#39;` holds a
+    // `#` that would otherwise read as a fragment, and `&amp;` is not a file name.
+    let href = moss_core::html_entities::decode(href);
     let path = href.split(['?', '#']).next().unwrap_or("");
     if !path.starts_with('/') || path.starts_with("//") {
         return None;
@@ -103,7 +124,7 @@ pub fn candidate_keys(href: &str) -> Option<Vec<String>> {
 /// Every `href`/`src` attribute value in `html`, in document order.
 ///
 /// A substring scan, not a parse. The alternative is a second HTML parser in a
-/// tree that has fought to keep one markdown parser (ADR-036), for a check whose
+/// tree that has fought to keep one markdown parser, for a check whose
 /// worst failure mode is a missing advisory. The `=` must follow the attribute
 /// name immediately and the name must be preceded by whitespace, so `data-src`,
 /// `xlink:href` and `srcset` are all left alone.
@@ -188,17 +209,124 @@ pub fn audit(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
     dead
 }
 
+/// How many dead links the summary line quotes by name before falling back to
+/// "and N more" — enough to start a grep, not enough to recreate the flood
+/// this module used to produce.
+const SUMMARY_EXAMPLES: usize = 3;
+
+/// How many dead links the printed list names before "and N more". The summary
+/// stays one log line so a log bundle is not flooded; this list is terminal-only
+/// output, so it can afford enough lines to act on.
+const LIST_CAP: usize = 20;
+
+/// The one-line WARN summary for `dead`, or `None` when there's nothing to
+/// report. Split out from `audit_and_report` so the wording is testable
+/// without capturing the global `log` sink.
+fn summary_line(dead: &[DeadLink]) -> Option<String> {
+    if dead.is_empty() {
+        return None;
+    }
+    let examples: Vec<String> = dead
+        .iter()
+        .take(SUMMARY_EXAMPLES)
+        .map(|link| format!("'{}' in '{}'", shown(link), link.page))
+        .collect();
+    let remainder = dead.len() - examples.len();
+    let suffix = if remainder > 0 {
+        format!(", and {remainder} more")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "Dead links: {} root-relative reference(s) this build wrote no page or asset for ({}{})",
+        dead.len(),
+        examples.join(", "),
+        suffix,
+    ))
+}
+
+/// The href as the matcher read it, with entities decoded: `&#39;` printed raw
+/// would send the author grepping for text their source does not contain.
+fn shown(link: &DeadLink) -> String {
+    moss_core::html_entities::decode(&link.href)
+}
+
+/// One line per dead link (`'<href>' in '<page>'`), at most [`LIST_CAP`], then
+/// "and N more". Empty when there is nothing to list.
+fn list_lines(dead: &[DeadLink]) -> Vec<String> {
+    let mut lines: Vec<String> = dead
+        .iter()
+        .take(LIST_CAP)
+        .map(|link| format!("  '{}' in '{}'", shown(link), link.page))
+        .collect();
+    if dead.len() > LIST_CAP {
+        lines.push(format!("  and {} more", dead.len() - LIST_CAP));
+    }
+    lines
+}
+
+/// Print [`list_lines`] with `cli_eprintln!`: unlike `cli_warn!` it leaves the
+/// `--strict` problem count alone, and unlike `log::warn!` it never enters a
+/// log bundle.
+fn print_list(dead: &[DeadLink]) {
+    for line in list_lines(dead) {
+        crate::cli_eprintln!("{line}");
+    }
+}
+
 /// Run the audit and say what it found. The entry point the seal tail calls.
-pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) {
-    for link in audit(stage_dir, sealed) {
-        // `log::warn!`, not `log_warn_problem!` — see the module docs on why
-        // this stays out of the `--strict` count.
-        log::warn!(
+///
+/// One `log::warn!` per BUILD, not per link (2026-09-16): a site with one
+/// stale namespace produces one dead href repeated on every page that linked
+/// it, and at 100+ occurrences that flood pushed real errors out of the "RECENT
+/// ERRORS" window a Send Logs bundle keeps (100 most recent warn/error
+/// signatures) — a user's bundle held nothing but `link_audit` lines. The
+/// per-link detail moves to `log::debug!`, which the headless logger still
+/// captures for anyone re-running with verbose logging; only the warn-level
+/// signature is what a bundle's summary competes over. The terminal also gets
+/// the links themselves (see [`print_list`]), since an author told "32 dead
+/// links" could not act on a count and three examples.
+///
+/// Returns the full list (still advisory) so the caller can additionally
+/// scope it down to this build's own unfulfilled promises — see
+/// [`dead_links_among_promises`].
+pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
+    let dead = audit(stage_dir, sealed);
+    // `log::warn!`, not `log_warn_problem!` — see the module docs on why this
+    // stays out of the `--strict` count.
+    if let Some(line) = summary_line(&dead) {
+        log::warn!("{line}");
+        print_list(&dead);
+    }
+    for link in &dead {
+        log::debug!(
             "Dead link: '{}' in '{}' — this build wrote no page or asset there",
             link.href,
             link.page
         );
     }
+    dead
+}
+
+/// Of `dead`, the ones a key in `promised` would resolve — this build's own
+/// still-pending promise (a video, or its poster, the render phase already
+/// referenced but whose encode has not landed) rather than a pre-existing
+/// broken link. `promised` is `AssetRegistry::pending_keys()` plus, for each
+/// pending video, its derived poster key (posters are never registry-tracked
+/// — see `DeliveryKind::registry_tracked` in `build/media/video.rs`).
+///
+/// This is the one subset the publish gate refuses on (`deploy::
+/// refuse_publish`); everything else `audit` finds stays advisory-only,
+/// exactly as the module docs describe — a stale link to a deleted page, an
+/// external host, a deliberately unbuilt draft, or an optional variant the
+/// site never emits all resolve to no promise and pass through untouched.
+pub fn dead_links_among_promises(dead: &[DeadLink], promised: &HashSet<String>) -> Vec<DeadLink> {
+    dead.iter()
+        .filter(|link| {
+            candidate_keys(&link.href).is_some_and(|keys| keys.iter().any(|k| promised.contains(k)))
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]

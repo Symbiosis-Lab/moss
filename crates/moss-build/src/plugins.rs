@@ -3,10 +3,10 @@
 //! builder/plugin fingerprints, and the `.moss/config.toml` plugin-config
 //! readers in `discovery`; the install half: the bundled-plugin installer,
 //! the registry catalog and the download/verify client; and the runtime: the
-//! manager, its engine adapter and the signal route (ADR-076). The Tauri
+//! manager, its engine adapter and the signal route. The Tauri
 //! commands and the desktop host stay app-side.
 //!
-//! `src-tauri`'s `plugins.rs` re-exports most of these at their old paths, so
+//! The desktop app's `plugins.rs` re-exports most of these at their old paths, so
 //! app-side `crate::plugins::…` spellings are unchanged. `admission` is the
 //! exception: only the app installs its verdict, and only the loader asks it.
 pub mod adapter_host;
@@ -19,7 +19,7 @@ pub mod hook_state;
 pub mod install;
 pub mod manager;
 // Headless plugin-file I/O + the portable runtime halves the QuickJS engine
-// dispatches into (open-CLI slice 2, #1019).
+// dispatches into (open-CLI slice 2).
 pub mod project_files;
 pub mod registry;
 pub mod runtime;

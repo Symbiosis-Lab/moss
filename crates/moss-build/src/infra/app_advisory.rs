@@ -4,7 +4,7 @@
 //! The FOURTH string surface, after:
 //!   - `infra::app_strings` — native tray/menu chrome (`AppLanguage`)
 //!   - `i18n::strings` — generated-site output (`i18n::Language`, per-site)
-//!   - `frontend/app/i18n/ui-strings.ts` — webview UI (TypeScript)
+//!   - the app's own webview UI strings (TypeScript)
 //!
 //! Keyed by `AppLanguage` and resolved against the process-global app language
 //! (`app_config::app_language()`, seeded once at the top of `run()`), so it is
@@ -55,8 +55,7 @@ advisory_strings! {
     // Two files carry the same `url:` — usually a folder copied in Finder,
     // which keeps the original's frontmatter verbatim. Shown on the `url`
     // chip of the file that has to change, so it says "this page" and names
-    // only the other file. See
-    // docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
+    // only the other file.
     url_taken => {
         en: "Another page already uses this address: {keeper}. This page is being published at /{moved_to} instead. Change this url to give it an address of its own.",
         zh_hans: "另一个页面已经在用这个网址：{keeper}。这个页面暂时发布在 /{moved_to}。请修改这里的 url，给它一个自己的网址。",
@@ -96,6 +95,13 @@ advisory_strings! {
     // so preview keeps rendering, but silently wrong. This is the notice that
     // says so; publish refuses outright instead (see `push.rs`).
     config_schema_version_ahead => { en: "Your site's settings were saved by a newer version of moss (schema {found}); this app only understands up to {max}, so some settings may be showing their defaults here. Update moss to see and publish the real configuration.", zh_hans: "你的网站设置是由较新版本的青苔保存的（schema {found}）；此应用只支持到 {max}，因此这里的部分设置可能显示为默认值。请更新青苔以查看并发布真实的配置。", zh_hant: "你的網站設定是由較新版本的青苔儲存的（schema {found}）；此應用程式只支援到 {max}，因此這裡的部分設定可能顯示為預設值。請更新青苔以檢視並發佈真實的設定。" },
+    // Addresses the last publish served that this build does not, with no
+    // deleted source to explain them. No " — " here: `groupNotices` splits on it.
+    addresses_going_offline => {
+        en: "Addresses your site has served would stop working if you published now: {list}. Run `moss deploy --dry-run` to see why, then add a redirect or accept losing them.",
+        zh_hans: "如果现在发布，网站已经提供过的这些地址将失效：{list}。用 `deploy --dry-run` 查看原因，然后添加重定向，或确认接受失去它们。",
+        zh_hant: "如果現在發佈，網站已經提供過的這些位址將失效：{list}。用 `deploy --dry-run` 查看原因，然後新增重新導向，或確認接受失去它們。"
+    },
     // `duplicate_note_id` — the non-live half of this pair — stood here and was
     // deleted on 2026-08-30. It fired only when moss had picked correctly and
     // nothing was at stake: either no page under that ID was published, or the
@@ -116,7 +122,7 @@ advisory_strings! {
     // writes and owns is not something an author should have to hear about, and
     // every remedy on offer was one moss could take itself. It now does — see
     // the never-built rule in `build::render::uid_dedup`.
-    // Six strings about `.moss/deploy/`'s record of what is live (moss#1079)
+    // Six strings about `.moss/deploy/`'s record of what is live
     // stood here and were deleted on 2026-08-29. Nothing in that condition is
     // the author's to fix, and the next publish ends it — so the panel showed
     // a non-technical writer a noun she has never seen ("the record of what's
@@ -184,8 +190,8 @@ pub fn t(key: &str) -> String {
     lookup(app_language(), key).unwrap_or(key).to_string()
 }
 
-/// Resolve a key with `{name}` placeholder interpolation — mirror of the TS
-/// `interpolate()` in `frontend/app/i18n/index.ts`.
+/// Resolve a key with `{name}` placeholder interpolation — mirror of the app's
+/// own TS `interpolate()`.
 pub fn fmt(key: &str, params: &[(&str, &str)]) -> String {
     let mut s = lookup(app_language(), key).unwrap_or(key).to_string();
     for (k, v) in params {
@@ -207,7 +213,7 @@ mod tests {
         }
     }
 
-    /// Twin of frontend/app/i18n/__tests__/comment-sync-reason-parity.test.ts.
+    /// Twin of the app's own comment-sync-reason-parity test.
     /// The Services row (TS, services.comments.reason_*) and this advisory
     /// table (sync_reason_*) must tell the same story per locale — these nine
     /// strings are asserted byte-for-byte on BOTH sides, so drift in either
@@ -259,7 +265,7 @@ mod tests {
     /// sentence with a bare Latin "moss" in it is drift, not a brand decision;
     /// it shipped for a whole release in these advisories before an author asked
     /// what "moss" was (2026-08-29). The TS twin is
-    /// `frontend/app/i18n/no-untranslated-leakage.test.ts`.
+    /// the app's own no-untranslated-leakage test.
     #[test]
     fn chinese_values_call_the_product_qingtai() {
         /// Keys whose Chinese value legitimately keeps the Latin name — e.g. a

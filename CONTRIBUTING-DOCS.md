@@ -4,7 +4,7 @@
 
 Shortcode documentation pages use `:::grid 2 {.sc-demo}` blocks that show Markdown source on the left and a live rendered shortcode on the right. The left and right cells must stay in sync.
 
-A pre-commit hook runs automatically when you commit changes under `site/docs/author/shortcodes/`. You can also run it manually:
+A pre-commit hook runs automatically when you commit changes under `site/docs/writing/shortcodes/`. You can also run it manually:
 
 ```bash
 bash scripts/check-sc-demos.sh

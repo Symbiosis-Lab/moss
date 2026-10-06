@@ -1,4 +1,4 @@
-//! Verdict tests (moss#968 Stage 1 + Stage 2).
+//! Verdict tests.
 //!
 //! The escape hatches are asserted by NAME here — the whole point of
 //! `FullCause` is that a site permanently taking the full path stops looking
@@ -50,7 +50,7 @@ fn doc(url: &str, kind: PageKind, body: &str, description: Option<&str>) -> Pars
 
 /// One folder index (a listing host) over two described articles, plus the
 /// root home. The two hosts are what re-rendered unconditionally before
-/// moss#968.
+/// this model.
 fn vault() -> Vec<ParsedDocument> {
     vec![
         doc("index.html", PageKind::Folder, "home body", Some("Home")),
@@ -63,6 +63,7 @@ fn vault() -> Vec<ParsedDocument> {
 struct Harness {
     _dir: tempfile::TempDir,
     cache: std::path::PathBuf,
+    output: std::path::PathBuf,
     project: ProjectStructure,
     overrides: std::collections::HashMap<String, String>,
     skip: bool,
@@ -73,9 +74,11 @@ impl Harness {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("dep-cache.json");
+        let output = dir.path().join("out");
         Self {
             _dir: dir,
             cache,
+            output,
             project: project(),
             overrides: std::collections::HashMap::new(),
             skip: true,
@@ -94,6 +97,7 @@ impl Harness {
                 policy: IncrementalPolicy { skip_unchanged_renders: self.skip },
                 project: &project,
                 cache_path: &self.cache,
+                output_dir: &self.output,
                 asset_versions: "v1",
                 dir_overrides: &self.overrides,
                 site_lang: crate::i18n::Language::En,
@@ -115,7 +119,7 @@ fn assert_full(verdict: &RenderVerdict, cause: FullCause) {
 
 // ---- the number this whole design exists to move -------------------------
 
-/// The Stage-0 baseline on `harbor/潮汐`: a no-op save re-renders 114 of
+/// The Stage-0 baseline on `riverbend/河灣`: a no-op save re-renders 114 of
 /// 214 pages, of which every listing host was rendered *by the predicate*, not
 /// by the diff. After Stage 2 the same save must skip every page — hosts
 /// included.
@@ -140,7 +144,7 @@ fn a_no_op_rebuild_skips_every_page_including_every_listing_host() {
 }
 
 /// A body edit to a child that carries a frontmatter `description:` renders
-/// that page and nothing else. Before moss#968 it rendered the page *and*
+/// that page and nothing else. Before this model it rendered the page *and*
 /// both listing hosts.
 #[test]
 fn a_body_edit_below_the_lede_renders_one_page_and_no_host() {
@@ -203,12 +207,15 @@ fn each_full_render_says_why() {
     grown.push(doc("writings/gamma/index.html", PageKind::Article, "g", Some("G")));
     assert_full(&h.run(&grown), FullCause::PathSetMoved);
 
-    // SurfaceChanged — a cross-page-visible field moved.
+    // SurfaceChanged — a cross-page-visible field moved by an UNCLASSIFIED
+    // field (`children_source`, which `field_is_classified` does not name).
+    // A classified field (e.g. `label` on a listed child) instead
+    // narrows; see `a_classified_label_edit_narrows_to_its_listing_host`.
     let h = Harness::new();
     h.run(&vault());
-    let mut relabelled = vault();
-    relabelled[2].label = "Renamed".into();
-    assert_full(&h.run(&relabelled), FullCause::SurfaceChanged);
+    let mut redirected = vault();
+    redirected[2].children_source = Some("writings".to_string());
+    assert_full(&h.run(&redirected), FullCause::SurfaceChanged);
 
     // GlobalInvalidator — the root homepage's EXCERPT feeds every page's
     // <meta name="description">, so moving it is site-wide.
@@ -241,7 +248,7 @@ fn each_full_render_says_why() {
     assert_full(&h.run(&docs), FullCause::LangGlobalsMoved);
 }
 
-/// The actual false positive moss#1041 reports: an ordinary leaf page with
+/// The actual false positive: an ordinary leaf page with
 /// NO translation-group siblings has its `lang` re-decided (frontmatter edit,
 /// or content-detection flipping on a rewritten paragraph). Nothing else in
 /// the corpus reads this page's raw `.lang` — `translations` on every OTHER
@@ -272,7 +279,7 @@ fn a_lang_change_with_no_translation_group_stays_incremental() {
 }
 
 /// A genuine translation PAIR is a different case, and this test's original
-/// form (see moss#1041 investigation) wrongly expected it to also stay
+/// form wrongly expected it to also stay
 /// incremental. It can't: `translations` has a real cross-page reader the
 /// dependency graph cannot see — `render/blocking.rs`'s auto-index folder
 /// filter reads an arbitrary OTHER document's `.translations` (via
@@ -312,7 +319,7 @@ fn a_translation_siblings_lang_change_still_full_renders_via_surface_changed() {
 /// reaches no other page, so it must not re-render the site.
 ///
 /// The old rule tested the home page's whole facade, so every keystroke while
-/// editing the homepage was a full render — 223 pages on harbor. The only
+/// editing the homepage was a full render — 223 pages on riverbend. The only
 /// body-derived value another page reads out of a home is rung 6 of the
 /// description chain, and this edit does not move it.
 #[test]
@@ -370,7 +377,7 @@ fn a_cache_without_listing_digests_renders_every_host_exactly_once() {
     let h = Harness::new();
     h.run(&vault());
 
-    // Strip the two moss#968 fields, leaving a moss#922-era cache.
+    // Strip the two listing-digest fields, leaving an older-era cache.
     let raw = std::fs::read_to_string(&h.cache).unwrap();
     let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let obj = value.as_object_mut().unwrap();
@@ -414,4 +421,338 @@ fn the_group_set_is_keyed_by_shape_not_by_host() {
         })
         .is_some());
     assert_eq!(groups.len(), 2, "the root home's group and writings/'s group");
+}
+
+/// A `.moss/places.toml`-only edit (no document frontmatter touched) has no
+/// dedicated `listing_globals` entry — `listing_globals` is built in exactly
+/// one place (`render/incremental/verdict.rs`'s own call, passing only
+/// `project`/`dir_overrides`/`site_lang`/`typesetting`/`math`, no
+/// `SiteConfig`, no `term_kinds`), so a places-only edit has to move a
+/// document's own `also_in` for the verdict to see it at all. It does:
+/// `derive_terms`'s roll-up (task A5) writes the parent chain into
+/// `also_in`, which is inside the whole-document `Debug` surface
+/// `facade.rs::surface_debug` hashes (it strips only a short, explicitly
+/// named list of body-only fields, and `also_in` is not one of them), so
+/// `FullCause::SurfaceChanged` already catches this with nothing new to
+/// wire — no `listing_globals` extension is added here, deliberately.
+///
+/// Ablated by disabling the ancestor-push loop in `derive_terms` pass 2:
+/// `also_in` never moves at all with the loop gone, so there is nothing
+/// for the surface diff to see and the verdict stays `Incremental` rather
+/// than firing with the wrong membership. That reddens the FIRST
+/// assertion below (`assert_full`, verdict stays `Incremental` because
+/// `also_in` does not move), not the membership assertion at the end —
+/// with the loop gone there is no wrong page left to list the document on.
+#[test]
+fn a_places_toml_only_edit_full_renders_via_surface_changed_and_moves_membership() {
+    let h = Harness::new();
+
+    let places_kind = |parent_of_kyoto: &str| crate::build::terms::TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: [("places/kyoto".to_string(), parent_of_kyoto.to_string())].into_iter().collect(),
+        explorer: None, line: None,
+    };
+
+    let mut before_docs = vec![doc("posts/a/index.html", PageKind::Article, "A body", Some("A"))];
+    before_docs[0].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut before_docs, vec![places_kind("Japan")]);
+    h.run(&before_docs);
+
+    // The only change: Kyoto's `parent` in `.moss/places.toml` moves from
+    // Japan to Kansai — re-run `derive_terms` the same way a real rebuild
+    // would, with no document frontmatter touched.
+    let mut after_docs = vec![doc("posts/a/index.html", PageKind::Article, "A body", Some("A"))];
+    after_docs[0].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut after_docs, vec![places_kind("Kansai")]);
+
+    let verdict = h.run(&after_docs);
+    assert_full(&verdict, FullCause::SurfaceChanged);
+    match verdict.basis() {
+        VerdictBasis::Full(_, Some(witness)) => {
+            assert!(witness.contains("also_in"), "witness must name also_in: {witness}");
+        }
+        other => panic!("expected a witness naming the moved field, got {other:?}"),
+    }
+
+    // The new ancestor lists the document; the old one no longer does — not
+    // merely "a full render happened," but that membership actually moved
+    // to the right page.
+    let also_in = after_docs[0].also_in.as_ref().expect("Kyoto and Kansai both recorded");
+    assert!(also_in.contains(&"places/kansai".to_string()), "got {also_in:?}");
+    assert!(!also_in.contains(&"places/japan".to_string()), "got {also_in:?}");
+}
+
+// ---- the dependents narrowing: classified surface moves no longer force Full ----
+
+#[track_caller]
+fn assert_incremental(verdict: &RenderVerdict) {
+    match verdict.basis() {
+        VerdictBasis::Incremental { .. } => {}
+        other => panic!("expected an incremental (narrowed) verdict, got {other:?}"),
+    }
+}
+
+/// The narrowest case: a title edit on a leaf article that no listing host,
+/// nav bar or breadcrumb trail reads renders only itself.
+/// `listed: Some(false)` is what removes it from every listing group's
+/// membership (`folder_embed::select_children_by_slug`'s `is_listable`
+/// gate) — without it, the root homepage's own default listing would read
+/// this leaf too, which is correct behavior but would defeat the point of a
+/// SINGLETON assertion here.
+#[test]
+fn a_leaf_title_edit_render_set_is_bounded_to_the_page_itself() {
+    let h = Harness::new();
+    let mut docs = vault();
+    let mut isolated = doc("writings/gamma/index.html", PageKind::Article, "Gamma lede.\n\nGamma tail.", Some("G"));
+    isolated.listed = Some(false);
+    docs.push(isolated);
+    h.run(&docs);
+
+    let idx = docs.iter().position(|d| d.url_path == "writings/gamma/index.html").unwrap();
+    docs[idx].title = "Renamed Gamma".into();
+    let verdict = h.run(&docs);
+    assert_incremental(&verdict);
+    for src in ["index.md", "writings/index.md", "writings/alpha/index.md", "writings/beta/index.md"] {
+        assert!(verdict.may_skip(src), "{src} reads nothing that moved");
+    }
+    assert!(!verdict.may_skip("writings/gamma/index.md"));
+}
+
+/// A classified field move (here `label`) on a LISTED child narrows to that
+/// child's listing host instead of forcing `FullCause::SurfaceChanged` — the
+/// pre-existing group-digest loop (`listing::groups_read_by`) already covers
+/// this once the early `Full` return stops short-circuiting it. Confirmed
+/// against the real verdict rather than assumed: `writings/beta` — an
+/// unrelated sibling — must stay skippable.
+#[test]
+fn a_classified_label_edit_narrows_to_its_listing_host() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut relabelled = docs.clone();
+    let idx = relabelled.iter().position(|d| d.url_path == "writings/alpha/index.html").unwrap();
+    relabelled[idx].label = "Renamed".into();
+    let verdict = h.run(&relabelled);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("writings/alpha/index.md"));
+    assert!(!verdict.may_skip("writings/index.md"), "the listing host must see the moved child projection");
+    assert!(verdict.may_skip("writings/beta/index.md"), "an unrelated sibling must not be swept in");
+}
+
+/// `lang` is blanked out of the surface entirely (`facade::surface_debug`),
+/// so a reassigned nav item's own page never even enters `surface_changed` —
+/// which would under-render if nothing else caught it. `nav_globals` reads
+/// `doc.lang` unblanked and fresh every build for exactly this reason,
+/// bucketing a nav-eligible doc by its CURRENT language rather than trusting
+/// the surface to notice.
+///
+/// This specific scenario, though, is ALSO caught by a pre-existing, coarser
+/// gate one step earlier in the same `if`/`else if` chain:
+/// `render::lang_roots::lang_switcher_globals`'s `nav_footer_lang_membership`
+/// hashes `(url_path, lang)` for every nav/footer-eligible doc and forces
+/// `FullCause::LangGlobalsMoved` — a whole-site render, same safe direction,
+/// independent of the classification this file otherwise tests — whenever a
+/// nav-eligible doc's `lang` moves. So
+/// the OUTCOME here is `Full`, not a narrowed per-language render; what this
+/// test pins is that it is `Full` for a REASON now covered twice, not zero
+/// times. `a_nav_items_weight_edit_widens_to_its_language_not_the_site`
+/// (below) is the scenario where `lang_switcher_globals` stays silent
+/// (weight is not part of its membership tuple) and `nav_globals` is the
+/// only thing standing between this edit and the old blanket `Full`.
+#[test]
+fn a_nav_items_lang_reassignment_is_still_safe_via_the_coarser_lang_globals_gate() {
+    use crate::i18n::Language;
+
+    let h = Harness::new();
+    let mut docs = vault();
+    let mut about = doc("about/index.html", PageKind::Article, "About body", Some("About"));
+    about.nav = Some(true);
+    about.lang = Language::En;
+    docs.push(about);
+    h.run(&docs);
+
+    let about_idx = docs.iter().position(|d| d.url_path == "about/index.html").unwrap();
+    docs[about_idx].lang = Language::ZhHans;
+    assert_full(&h.run(&docs), FullCause::LangGlobalsMoved);
+}
+
+/// The same channel, the field that names it: a nav item's `weight` moves the
+/// language's whole nav digest (order changed), not just the item's own page.
+#[test]
+fn a_nav_items_weight_edit_widens_to_its_language_not_the_site() {
+    use crate::i18n::Language;
+
+    let h = Harness::new();
+    let mut docs = vault();
+    let mut about = doc("about/index.html", PageKind::Article, "About body", Some("About"));
+    about.nav = Some(true);
+    about.weight = Some(1);
+    about.lang = Language::En;
+    let mut zh_leaf = doc("zh-hans/other/index.html", PageKind::Article, "zh leaf", Some("O"));
+    zh_leaf.lang = Language::ZhHans;
+    docs.push(about);
+    docs.push(zh_leaf);
+    h.run(&docs);
+
+    let about_idx = docs.iter().position(|d| d.url_path == "about/index.html").unwrap();
+    docs[about_idx].weight = Some(2);
+    let verdict = h.run(&docs);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("about/index.md"));
+    assert!(!verdict.may_skip("index.md"), "the en homepage must refresh its nav order");
+    assert!(verdict.may_skip("zh-hans/other/index.md"), "a different language must not be swept in");
+}
+
+/// The homepage-title channel: editing a language's home page's `title`
+/// widens to every page of THAT language, proven by a second language
+/// staying untouched.
+#[test]
+fn a_homepage_title_edit_widens_to_its_language_not_the_site() {
+    use crate::i18n::Language;
+
+    let h = Harness::new();
+    let mut docs = vault();
+    let mut zh_home = doc("zh-hans/index.html", PageKind::Folder, "zh home body", Some("ZH Home"));
+    zh_home.lang = Language::ZhHans;
+    docs.push(zh_home);
+    h.run(&docs);
+
+    docs[0].title = "New Home Title".into();
+    let verdict = h.run(&docs);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("index.md"));
+    assert!(!verdict.may_skip("writings/index.md"), "an en page must refresh the site title it shows");
+    assert!(verdict.may_skip("zh-hans/index.md"), "a different language's home must not be swept in");
+}
+
+/// The breadcrumb-ancestor channel: a folder index's `label` (the ancestor
+/// segment text every descendant's trail shows) widens to that folder's
+/// descendants — and ONLY that folder's, proven by an unrelated sibling
+/// folder staying skippable.
+#[test]
+fn a_folder_indexs_label_edit_widens_to_its_breadcrumb_descendants_only() {
+    let h = Harness::new();
+    let mut docs = vault();
+    docs[0].breadcrumb = Some(true);
+    docs.push(doc("other/index.html", PageKind::Folder, "other body", Some("Other")));
+    docs.push(doc("other/leaf/index.html", PageKind::Article, "leaf body", Some("Leaf")));
+    h.run(&docs);
+
+    let writings_idx = docs.iter().position(|d| d.url_path == "writings/index.html").unwrap();
+    docs[writings_idx].label = "Renamed Writings".into();
+    let verdict = h.run(&docs);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("writings/index.md"));
+    assert!(!verdict.may_skip("writings/alpha/index.md"), "a breadcrumb descendant must refresh its trail");
+    assert!(!verdict.may_skip("writings/beta/index.md"), "a breadcrumb descendant must refresh its trail");
+    assert!(verdict.may_skip("other/index.md"), "an unrelated folder must not be swept in");
+    assert!(verdict.may_skip("other/leaf/index.md"), "an unrelated folder's descendant must not be swept in");
+}
+
+/// The site-wide (not per-language) shape of the breadcrumb-ENABLE toggle:
+/// flipping the homepage's `breadcrumb:` flag reaches every page's trail,
+/// regardless of language, because `compute_breadcrumb_segments` always
+/// reads the literal root `index.html` for this — see
+/// `dependents::home_breadcrumb_globals`'s doc comment.
+#[test]
+fn a_homepage_breadcrumb_toggle_widens_the_whole_site() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut flipped = docs.clone();
+    flipped[0].breadcrumb = Some(true);
+    let verdict = h.run(&flipped);
+    assert_incremental(&verdict);
+    for src in ["index.md", "writings/index.md", "writings/alpha/index.md", "writings/beta/index.md"] {
+        assert!(!verdict.may_skip(src), "{src} must refresh once breadcrumbs turn on site-wide");
+    }
+}
+
+/// The series-siblings channel: a step's `weight` (reading-order position)
+/// moves the whole chain's prev/next labels — every sibling in the SAME
+/// series folder narrows in, an unrelated leaf elsewhere does not, and the
+/// verdict stays narrowed rather than forcing `Full`.
+#[test]
+fn a_series_members_weight_edit_narrows_to_its_siblings() {
+    let h = Harness::new();
+    let mut docs = vault();
+    let mut parent = doc("series/index.html", PageKind::Folder, "series body", Some("Series"));
+    parent.series = Some(crate::build::types::SeriesField::Flag(true));
+    let mut part1 = doc("series/part-1/index.html", PageKind::Article, "Part one.", Some("Part 1"));
+    part1.weight = Some(1);
+    let mut part2 = doc("series/part-2/index.html", PageKind::Article, "Part two.", Some("Part 2"));
+    part2.weight = Some(2);
+    docs.push(parent);
+    docs.push(part1);
+    docs.push(part2);
+    h.run(&docs);
+
+    let part1_idx = docs.iter().position(|d| d.url_path == "series/part-1/index.html").unwrap();
+    docs[part1_idx].weight = Some(3);
+    let verdict = h.run(&docs);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("series/part-1/index.md"));
+    assert!(!verdict.may_skip("series/part-2/index.md"), "a series sibling must refresh its prev/next chrome");
+    assert!(verdict.may_skip("writings/beta/index.md"), "a page outside the series must not be swept in");
+}
+
+/// The fail-safe boundary itself: a field this module does not model
+/// (`sidebar`, alongside `translations`/`children_source`/`is_home_override`)
+/// still forces `FullCause::SurfaceChanged` for the whole build, unchanged
+/// from before this narrowing existed.
+#[test]
+fn an_unclassified_field_edit_still_forces_full() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut edited = docs.clone();
+    edited[1].sidebar = Some("elsewhere".to_string());
+    assert_full(&h.run(&edited), FullCause::SurfaceChanged);
+}
+
+/// The first edit after a cold start. A preview scan leaves an image's
+/// dominant colour and LQIP empty and the background encoder fills them in, so
+/// the next build sees them move with nothing about the site edited. That
+/// used to be a `listing globals moved` full render — every page, on a real
+/// site 244 of them, for the handful whose output actually changed. It must
+/// now render exactly the pages whose previous output shows the image.
+#[test]
+fn an_image_gaining_its_placeholder_renders_only_the_pages_that_show_it() {
+    let mut h = Harness::new();
+    let cover = |color: Option<&str>| crate::types::content::MediaMetadata {
+        path: "writings/alpha/cover.png".into(),
+        file_type: "png".into(),
+        dimensions: Some((1200, 800)),
+        dominant_color: color.map(str::to_string),
+        lqip_data_uri: color.map(|_| "data:image/jpeg;base64,AAAA".to_string()),
+        ..Default::default()
+    };
+    let docs = vault();
+    for d in &docs {
+        let page = h.output.join(&d.url_path);
+        std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+        let body = if d.url_path == "writings/index.html" {
+            r#"<div class="moss-grid-card"><img src="/writings/alpha/cover.png" width="1200" height="800"></div>"#
+        } else {
+            "<p>no images</p>"
+        };
+        std::fs::write(page, body).unwrap();
+    }
+    h.project.image_files = vec![cover(None)];
+    h.run(&docs);
+
+    h.project.image_files = vec![cover(Some("#336699"))];
+    let verdict = h.run(&docs);
+
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("writings/index.md"), "the listing that shows the cover must pick up its placeholder");
+    for carried in ["index.md", "writings/alpha/index.md", "writings/beta/index.md"] {
+        assert!(verdict.may_skip(carried), "{carried} does not show the image");
+    }
 }

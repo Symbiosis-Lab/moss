@@ -1,7 +1,7 @@
 //! Build-local types: parsed document model, series metadata, and source file metadata.
 //!
 //! These types are consumed exclusively within the build pipeline and are co-located
-//! here per the codebase restructure plan (docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 5).
+//! here as part of an earlier codebase restructure plan.
 //!
 //! Consumers import these directly from `crate::build::types` — the old
 //! `crate::types` back-compat re-exports were removed 2026-08-12 (M5a landing 3).
@@ -9,48 +9,9 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-// SeriesField moved to moss-core (ADR-018). Re-exported for backward compat.
+// SeriesField moved to moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::SeriesField;
-
-/// One media reference that resolves to nothing.
-///
-/// Broken is a fact about the SOURCE, and this is the build's verdict on it:
-/// the render pass keeps the resolver's own `MissingAsset` diagnostics and
-/// hands them out on `SiteBuildResult`, so a reference with no file behind it
-/// travels with the build that found it rather than being re-derived by a
-/// second scan that is free to disagree. An asset that is merely still
-/// encoding has a source file and never appears here. The publish gate and the
-/// command that shows the author which files to fix are the app half, in
-/// `crate::missing_media`.
-///
-/// Both fields are the author's own strings, not resolved paths — `reference`
-/// especially, because it is what they will search their document for.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct MissingMedia {
-    /// Markdown file holding the reference, relative to the site root.
-    pub source_path: String,
-    /// The reference exactly as the author typed it.
-    pub reference: String,
-}
-
-impl MissingMedia {
-    /// Every blocking reference in a run of resolve diagnostics.
-    ///
-    /// `DiagnosticKind::MissingAsset` is the one kind a publish is refused
-    /// over; everything else in the same stream is advisory and logged.
-    pub fn from_diagnostics<'a>(
-        diagnostics: impl IntoIterator<Item = &'a moss_core::resolve::Diagnostic>,
-    ) -> Vec<Self> {
-        diagnostics
-            .into_iter()
-            .filter(|d| d.kind == moss_core::resolve::DiagnosticKind::MissingAsset)
-            .map(|d| MissingMedia {
-                source_path: d.source_path.clone(),
-                reference: d.reference.clone(),
-            })
-            .collect()
-    }
-}
+pub use crate::build::render::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
 /// Parsed markdown document with frontmatter and content.
 ///
@@ -70,7 +31,7 @@ pub struct ParsedDocument {
     /// Document title.
     ///
     /// For ARTICLE pages: always equals `label` (frontmatter `title:` if non-
-    /// empty, else filename) — per `docs/reference/title-rendering.md`.
+    /// empty, else filename).
     ///
     /// For INDEX/folder pages: frontmatter `title:` if non-empty, else the
     /// filename/folder name (`filename_text`). NEVER sourced from body content
@@ -100,6 +61,11 @@ pub struct ParsedDocument {
     /// Source priority: frontmatter `title` → title-cased filename
     /// (folder name for index/self-named notes). Never sourced from body content.
     pub label: String,
+    /// Frontmatter `nav_label`, trimmed; `None` when absent or blank. Read only
+    /// by the site's own navigation (nav bar, footer links) through
+    /// [`ParsedDocument::nav_text`]; everything that names the page as content
+    /// keeps `label`/`title`.
+    pub nav_label: Option<String>,
     /// Navigation weight for ordering (lower numbers = higher priority)
     pub weight: Option<i32>,
     /// Analytics configuration for privacy-focused analytics
@@ -123,12 +89,12 @@ pub struct ParsedDocument {
     pub is_root_level: bool,
     /// True iff this document is its folder's home via the `home: true`
     /// frontmatter marker rather than its filename — i.e. it won the home
-    /// slot in [`crate::build::scan::page_map::compute_home_overrides`]
-    /// (issue #587). This is the ONE centralized home-override signal: the
+    /// slot in [`crate::build::scan::page_map::compute_home_overrides`].
+    /// This is the ONE centralized home-override signal: the
     /// markdown pipeline derives it once (from the page_map URL shape) and
     /// every consumer reads it from here instead of re-deriving from
     /// `translation_key == "home"`. Render code uses it to suppress the
-    /// folder-title `<h1>` on a language home (e.g. `en/Liu Guo.md` →
+    /// folder-title `<h1>` on a language home (e.g. `en/Mountain Home.md` →
     /// `en/index.html`), which is the language-specific site root, not a
     /// generic folder listing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -165,9 +131,9 @@ pub struct ParsedDocument {
     /// may target additional slots via the `slot:` frontmatter field above,
     /// but reserved-name detection is the canonical signal.
     ///
-    /// Lands in PR7b of the typed-AST migration (moss#599); replaces the
+    /// Lands as part of the typed-AST migration; replaces the
     /// filesystem-scan + on-demand re-render at `build/footer.rs::render_footer_pages_from_disk`
-    /// (deleted in the same PR) by letting `footer.md` flow through the
+    /// (deleted in the same change) by letting `footer.md` flow through the
     /// normal parse pipeline with this flag set, and the page-emission
     /// loop in `build/render/blocking.rs` skip it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -210,6 +176,21 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub author: Vec<String>,
+    /// Editor names from frontmatter `editor:` — field-agnostic sibling of
+    /// `author`, feeding whichever term kind's `fields` names "editor".
+    /// Unread until `build::terms::derive_terms` is rewritten over kinds.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub editor: Vec<String>,
+    /// Jury member names from frontmatter `jury:` — same story as `editor`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub jury: Vec<String>,
+    /// Place names from frontmatter `location:` — same story as `editor`/
+    /// `jury`, feeding whichever term kind's `fields` names "location".
+    #[serde(skip)]
+    #[specta(skip)]
+    pub location: Vec<String>,
     /// Term-page claim from `author_page:` — this page is the author page
     /// for the claimed name (see `moss_core::terms::TermClaim`). Resolved by
     /// `build::terms::derive_terms` into [`Self::term_listing`] on the
@@ -221,15 +202,101 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub tag_page: Option<moss_core::terms::TermClaim>,
+    /// Term-page claim from `editor_page:` — same as `author_page`, for
+    /// whichever kind carries the `editor` field.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub editor_page: Option<moss_core::terms::TermClaim>,
+    /// Term-page claim from `jury_page:` — same as `author_page`, for
+    /// whichever kind carries the `jury` field.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub jury_page: Option<moss_core::terms::TermClaim>,
+    /// Term-page claim from `place_page:` — same as `author_page`, for
+    /// whichever kind carries the `location` field.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_page: Option<moss_core::terms::TermClaim>,
     /// The term pseudo-folder key (`authors/<slug>`, `tags/<slug>`) whose
     /// member listing this page hosts. Set by `build::terms::derive_terms`
     /// on the page that WINS a term claim — and only when the author didn't
     /// route `children` explicitly (their routing wins) — so `render/html.rs`
-    /// and the ADR-044 listing digest read one resolved field instead of
+    /// and the listing-group digest read one resolved field instead of
     /// re-running claim resolution.
     #[serde(skip)]
     #[specta(skip)]
     pub term_listing: Option<String>,
+    /// The claiming page's listing, split by field: for each of the term
+    /// kind's `fields` (in kind order), the member `url_path`s that field
+    /// claims; plus a trailing `(None, urls)` group for members reachable
+    /// only through a hand-authored `also_in:` cross-list. `None` unless
+    /// this page hosts a term listing (`term_listing.is_some()`). Set by
+    /// `build::terms::derive_terms` in the same pass as `term_listing`, so
+    /// the render layer — which cannot see `TermIndex` — reads one resolved
+    /// field instead of re-deriving the split.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub term_sections: Option<Vec<(Option<String>, Vec<String>)>>,
+    /// This place term's direct children, `(display, url, count)` — set
+    /// alongside `term_sections`, same condition. `None` for a non-place
+    /// claiming page, and for a leaf place with no children.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_children: Option<Vec<(String, String, usize)>>,
+    /// The automatic place line: a generated markdown row naming every
+    /// place this document declares via `location:`, linked to each
+    /// place's term page. Set by `build::terms::set_place_lines`, after
+    /// `derive_terms`, alongside `link_terms_in_bylines`. `None` when
+    /// `location:` is unset, or the site declares no place-typed kind.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_line: Option<String>,
+    /// The same resolved place names `place_line` carries, plain and
+    /// unlinked, joined the same way (", "), with no role label — for a
+    /// card's compact meta line to show next to its date. Set alongside
+    /// `place_line` by `build::terms::set_place_lines`, from the same
+    /// filtered, ordered name list, so the two never drift apart. `None`
+    /// under the same conditions as `place_line`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_names: Option<String>,
+    /// True for a folder-index page sitting exactly at a place-typed term
+    /// namespace root — an authored `places/index.md` with no `place_page:`
+    /// claim, or a synthetic one when no such file exists. An authored page
+    /// is flagged once in `build::terms::derive_terms` from
+    /// `TermIndex::place_namespace_roots` (the same "render layer cannot see
+    /// `TermIndex`" reasoning as `term_sections` above); a synthetic page is
+    /// flagged inline by `render::blocking::synthetic_folder_doc`, from the
+    /// same `TermIndex`, because it is constructed after that pass already
+    /// ran. Gates the term-map splice AND the explorer root's hidden-heading
+    /// treatment in `render/html.rs`: such a page's own intro no longer wins
+    /// outright over the map the unclaimed synthetic root would have shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(skip)]
+    pub is_place_namespace_root: bool,
+    /// The one per-page switch for this page's own map. On a claimed term
+    /// page or a place-namespace-root page it gates the term map spliced
+    /// below the content (see `is_place_namespace_root`): `Some(false)`
+    /// suppresses it, unset or `Some(true)` renders it when one would
+    /// otherwise show. On a located page it gates the article locator:
+    /// `Some(false)` hides it, `Some(true)` shows it even when `[site]
+    /// locator` is `none`, unset follows the site.
+    pub map: Option<bool>,
+    /// An authored reference to this page's own map replaces its automatic locator.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(skip)]
+    pub has_own_map_embed: bool,
+    /// Opt-in from frontmatter `route:` to draw this page's `location:` list,
+    /// in its existing declared order, as a route: a dashed line through the
+    /// stops with numbered badges, on this page's own map and the locator
+    /// beside it (`build::place_map::svg::route`). Mapped from
+    /// `frontmatter.route` by the canonical constructor
+    /// (`markdown::pipeline::process_markdown_file`). No effect without a
+    /// `location:` list, and no effect on a listing map (the places root, a
+    /// folder's `style: map` card), which never draws a route.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(skip)]
+    pub route: bool,
     /// Whether to render child pages below content.
     /// Accepts bool or wikilink in frontmatter (e.g. `children: "[[News]]"`).
     /// true = render children, false = hide, None = default to true.
@@ -251,7 +318,7 @@ pub struct ParsedDocument {
     /// Wrapped in [`moss_core::Resolved`] so the renderer can tell
     /// author intent apart from auto-detected defaults — explicit
     /// `children_group: year` survives a non-Date sort axis (the
-    /// liu-guo regression). Only auto-detected values are overridden.
+    /// regression on a real site). Only auto-detected values are overridden.
     pub children_group: Option<moss_core::Resolved<String>>,
     /// What children to include: "direct" (default), "all" descendants
     pub children_depth: Option<String>,
@@ -280,13 +347,10 @@ pub struct ParsedDocument {
     pub breadcrumb: Option<bool>,
     /// Override site-wide footer setting
     pub footer: Option<bool>,
-    /// Footer alignment: "left" (default) or "right"
-    #[serde(default)]
-    pub footer_align: Option<String>,
     /// Frontmatter values to cascade to all descendants
     ///
     /// `BTreeMap`, not `HashMap`: this field is part of the `Debug` string
-    /// `PageFacade` hashes (moss#922) for the incremental-build facade
+    /// `PageFacade` hashes for the incremental-build facade
     /// diff. `HashMap`'s per-process-random hasher makes its `Debug`
     /// iteration order — and thus the facade hash — differ between build
     /// invocations for byte-identical content; `BTreeMap` iterates in
@@ -311,7 +375,7 @@ pub struct ParsedDocument {
     /// answers "which interface strings" and `<html lang>` asks "what language
     /// is this text", and those diverge for a `ja/` tree: the chrome is
     /// honestly the site default's, but the content is Japanese and used to say
-    /// otherwise (#977). Set by `i18n::declared_lang_tag`.
+    /// otherwise. Set by `i18n::declared_lang_tag`.
     #[serde(skip)]
     #[specta(skip)]
     pub lang_tag: Option<String>,
@@ -345,8 +409,7 @@ pub struct ParsedDocument {
     /// parse time by `transform_events`. Feeds the body-image rung of
     /// `cover.rs::resolve_cover_chain` so the cover fallback no longer
     /// requires a regex post-pass over rendered HTML (Step 5 of the
-    /// structural-html-emission migration; see
-    /// `docs/reference/structural-html-emission.md`).
+    /// structural-html-emission migration).
     ///
     /// Intentionally excludes raw HTML `<img>` tags embedded in markdown
     /// source (pulldown-cmark passes them as `Event::Html`, not
@@ -377,8 +440,6 @@ pub struct ParsedDocument {
     /// or at synthesis time (for per-asset pages, in `render.rs`). All downstream
     /// code classifies pages by reading this field — do not infer kind from filename,
     /// extension, or other fields.
-    ///
-    /// See `moss/docs/reference/page-kinds.md`.
     #[serde(skip)]
     #[specta(skip)]
     pub kind: moss_core::PageKind,
@@ -410,7 +471,7 @@ pub struct ParsedDocument {
     /// Raw frontmatter as generic key-value pairs (preserves all fields including plugin-specific ones like `syndicated`)
     ///
     /// `BTreeMap`, not `HashMap` — see the doc comment on `cascade` above
-    /// for why (moss#922 `PageFacade` determinism).
+    /// for why (`PageFacade` determinism).
     #[serde(skip)]
     #[specta(skip)]
     pub raw_frontmatter: std::collections::BTreeMap<String, serde_json::Value>,
@@ -427,19 +488,19 @@ pub struct ParsedDocument {
     /// Populated by `build::scan::sort_inference::populate_direct_children_sorts`.
     pub(crate) direct_children_sort: Option<moss_core::sort::ResolvedSort>,
     /// `html_content` in the pieces the serializer emitted it in, plus the
-    /// typed grid cells behind them (ADR-034).
+    /// typed grid cells behind them.
     ///
     /// Rendering happens per page, before any page knows about the others, so
     /// two structural decisions have to wait for whole-build state: which grid
     /// cells link to a collection, and where a cover-bearing folder home
     /// releases its narrow column. The render phase makes them on the typed
     /// `Block`s recorded here instead of re-parsing `html_content` — the
-    /// scanning that produced moss#903's char-boundary abort.
+    /// scanning that produced an earlier char-boundary abort.
     ///
     /// `None` for documents synthesized outside `process_markdown_file`
     /// (tests, generated index pages); those fall back to `html_content`
-    /// treated as one opaque segment, which is exactly the pre-ADR-034
-    /// behavior minus the grid/cover enhancements they never needed.
+    /// treated as one opaque segment, which is exactly the behavior before
+    /// typed grid cells, minus the grid/cover enhancements they never needed.
     ///
     /// Not serialized: it is derived build state, and the frontend has no use
     /// for a second copy of the body.
@@ -453,15 +514,14 @@ pub struct ParsedDocument {
     /// `![[embed]]` transclusions (`LinkType::Embed`) — there is no separate
     /// "embed_deps" field to duplicate that split.
     ///
-    /// Not read by anything yet (moss#922 Stage 3 — the future `DepGraph`,
-    /// Stage 4, is the first consumer). Not serialized: it's derived build
+    /// Not read by anything yet (the future `DepGraph` is the first
+    /// consumer). Not serialized: it's derived build
     /// state the frontend has no use for, same rationale as `body_plan`.
     #[serde(skip)]
     #[specta(skip)]
     pub outgoing_links: Vec<moss_core::resolve::OutgoingLink>,
     /// `(target, immediate_embedder)` pairs for every `![[transclusion]]` the
-    /// resolve phase spliced into this document's markdown, transitively
-    /// (moss#922 Stage 7).
+    /// resolve phase spliced into this document's markdown, transitively.
     ///
     /// Verbatim `ResolveResult::embed_deps` (`moss_core::resolve`). NOT the
     /// same relation as `outgoing_links`' `LinkType::Embed` entries: a
@@ -480,27 +540,31 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub embed_deps: Vec<(String, String)>,
-    /// Every media reference in this document that resolves to no file.
-    ///
-    /// The `DiagnosticKind::MissingAsset` diagnostics raised while this
-    /// document was parsed — by the AST URL pass for `![alt](gone.png)`, by
-    /// the wikilink dispatcher for `![[gone.jpg]]`. Carried on the document
-    /// because both run inside `process_markdown_file`, out of reach of the
-    /// render loop that assembles the build's verdict.
-    ///
-    /// Not serialized: derived build state, same rationale as `embed_deps`.
-    /// The build's own copy — `SiteBuildResult::missing_media` — is what the
-    /// publish gate reads.
+    /// Missing references with physical source evidence; not serialized.
     #[serde(skip)]
     #[specta(skip)]
-    pub missing_media: Vec<MissingMedia>,
+    pub missing_reference_occurrences: Vec<MissingReferenceOccurrence>,
 }
 
 impl ParsedDocument {
+    /// The text the site's own navigation shows for this page: `nav_label`
+    /// when set, else the chrome `label`.
+    pub fn nav_text(&self) -> &str {
+        self.nav_label.as_deref().unwrap_or(&self.label)
+    }
+
+    /// Whether this page shows its own map: `map:` when the page sets it,
+    /// else `site_default`. The one definition of the `map` key's meaning,
+    /// read for a place page's term map (default on) and for a located
+    /// article's locator (default `[site] locator`).
+    pub fn shows_own_map(&self, site_default: bool) -> bool {
+        self.map.unwrap_or(site_default)
+    }
+
     /// Rewrite the page body, keeping the typed plan and the flattened
     /// `html_content` in sync.
     ///
-    /// `html_content` IS [`Self::body_plan`] flattened (ADR-034), and the render
+    /// `html_content` IS [`Self::body_plan`] flattened, and the render
     /// phase renders from the plan. So a pass that edited only the string would
     /// be silently discarded at render time, and a pass that edited only the
     /// plan would be invisible to the ~38 places that read the bytes (RSS,
@@ -574,7 +638,7 @@ impl ParsedDocument {
     /// 3. `slot_only == true` — layout chrome (e.g. `footer.md`) that fills a
     ///    layout slot rather than rendering as a page. Structurally detected by
     ///    `crate::build::footer::is_excluded_from_pages`; see
-    ///    `ParsedDocument::slot_only` and PR7b (moss#599).
+    ///    `ParsedDocument::slot_only`.
     ///
     /// All list-emitting sites call this helper so any future visibility flag
     /// is added in one place.
@@ -603,8 +667,7 @@ impl ParsedDocument {
 /// Set during markdown processing as shortcodes/blocks fire. Aggregated by
 /// the build feature pass to decide which feature-CSS modules and JS
 /// bundles to embed. This is the prototype for the eventual `SiteFeatures`
-/// registry described in `docs/reference/html-css-contract.md` (roadmap
-/// step 8). When that lands, `PageFeatures` becomes a typed enum-set or
+/// registry (a later roadmap step). When that lands, `PageFeatures` becomes a typed enum-set or
 /// bitset; today it's a struct of `bool`s for legibility.
 ///
 /// **Adding a new feature flag:** add a field here, set it where the feature
@@ -633,6 +696,10 @@ pub struct PageFeatures {
     /// (`moss_core::ast::footnotes::FootnoteIndex::build`), never from
     /// emitted HTML.
     pub footnotes: bool,
+    /// True if the page has a `:::grid N {scroll}` row. Gates the scroll-row
+    /// runtime script via [`SiteAssets`]. Read from the typed AST
+    /// (`moss_core::ast::has_scroll_row_recursive`).
+    pub scroll_rows: bool,
 }
 
 impl PageFeatures {
@@ -644,6 +711,7 @@ impl PageFeatures {
             inline_apply: self.inline_apply || other.inline_apply,
             callouts: self.callouts || other.callouts,
             footnotes: self.footnotes || other.footnotes,
+            scroll_rows: self.scroll_rows || other.scroll_rows,
         }
     }
 }
@@ -683,6 +751,8 @@ pub struct SiteAssets {
     /// is why it is named `has_footnotes` rather than `footnotes`: it reads
     /// at the `SITE_SCRIPTS` gate as a question, not as a partial name.
     pub has_footnotes: bool,
+    /// Any page has a `:::grid N {scroll}` row. Gates `scroll-row.js`.
+    pub scroll_rows: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
     pub link_preview: bool,
     /// `[site].heading_anchors` — click-to-copy section permalinks. Defaults ON.
@@ -713,6 +783,15 @@ pub struct SiteAssets {
     /// where the ladder's `<source>` also comes from, so the gate and the tag
     /// that needs it cannot disagree.
     pub video_ladder: bool,
+    /// `features::should_inject_places_explorer` — a place-typed namespace
+    /// root (real or synthetic) is in use in this build AND its kind
+    /// resolves `explorer` true. Not a page fact folded here the way
+    /// `callouts`/`has_footnotes` are: it needs the term index alongside the
+    /// kinds table, so the caller (`render/blocking.rs`, right where
+    /// `media_pages`/`video_ladder` are also set) computes it and this field
+    /// just carries the answer through to the `places-explorer` script/CSS
+    /// gates.
+    pub places_explorer: bool,
 }
 
 impl SiteAssets {
@@ -737,13 +816,18 @@ impl SiteAssets {
         let mut out = Self {
             callouts: false,
             has_footnotes: false,
+            scroll_rows: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
         for page in pages {
             out.callouts |= page.features.callouts;
-            out.vertical |= page.typesetting.as_deref() == Some("vertical");
+            out.vertical |= crate::build::render::config::effective_typesetting(
+                page.typesetting.as_deref(),
+                site_typesetting,
+            ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
+            out.scroll_rows |= page.features.scroll_rows;
         }
         out
     }
@@ -766,10 +850,11 @@ pub struct SourceMetadata {
     ///
     /// `None` when the writer could not read an mtime at all, or when the
     /// manifest predates this field (`#[serde(default)]` on read). The
-    /// watcher gate's size+mtime fast path requires `Some` and an exact
-    /// nanosecond match — a whole-second match alone cannot distinguish the
-    /// hashed file from a same-size rewrite landing in the same second, so
-    /// missing precision fails OPEN to hashing, never to suppression.
+    /// watcher gate's size+mtime fast path requires `Some` and a match that
+    /// [`FileStat::vouches_for`](crate::build::stat::FileStat::vouches_for)
+    /// accepts — a whole-second match alone cannot distinguish the hashed file
+    /// from a same-size rewrite landing in the same second, so missing
+    /// precision fails OPEN to hashing, never to suppression.
     #[serde(default)]
     pub mtime_nanos: Option<u32>,
     /// Inode change time (ctime) as Unix seconds, where the platform reports
@@ -779,8 +864,7 @@ pub struct SourceMetadata {
     /// mtime-preserving editors); ctime cannot. A ctime disagreement never
     /// suppresses — it only demotes the size+mtime fast path to the hash
     /// tier, so false positives (a permission change bumps ctime) cost one
-    /// hash and self-absorb. git's index does exactly this. See
-    /// docs/archive/2026-08-18-watcher-reliability-architecture.md.
+    /// hash and self-absorb. git's index does exactly this.
     #[serde(default)]
     pub ctime: Option<i64>,
     /// Inode number, where the platform reports one. Replace-via-rename (the
@@ -791,20 +875,17 @@ pub struct SourceMetadata {
     pub inode: Option<u64>,
 }
 
-/// The forgery-resistant half of a stat record: (ctime seconds, inode).
-///
-/// `(None, None)` on platforms that report neither — every consumer must
-/// fail open on `None` (compare only when both sides are `Some`).
-pub fn stat_identity(md: &std::fs::Metadata) -> (Option<i64>, Option<u64>) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        (Some(md.ctime()), Some(md.ino()))
+impl SourceMetadata {
+    /// The record for bytes hashing to `hash`, read from a file as it stood at
+    /// `stat` — the one place a stat becomes a manifest source entry.
+    pub(crate) fn from_stat(hash: String, stat: crate::build::stat::FileStat) -> Self {
+        let crate::build::stat::FileStat { size, mtime, mtime_nanos, ctime, inode } = stat;
+        Self { hash, size, mtime, mtime_nanos, ctime, inode }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = md;
-        (None, None)
+
+    /// The stat record half, for [`FileStat::vouches_for`](crate::build::stat::FileStat::vouches_for).
+    pub(crate) fn stat(&self) -> crate::build::stat::FileStat {
+        crate::build::stat::FileStat { size: self.size, mtime: self.mtime, mtime_nanos: self.mtime_nanos, ctime: self.ctime, inode: self.inode }
     }
 }
 
@@ -815,6 +896,42 @@ impl moss_core::sort::SortableDoc for ParsedDocument {
     fn declared_sort(&self) -> Option<&moss_core::sort::SortField> { self.sort.as_ref() }
     fn clean_stem(&self) -> &str { &self.clean_stem }
     fn is_folder_index(&self) -> bool { self.kind == moss_core::PageKind::Folder }
+
+    /// A folder's own directory name — NOT `clean_stem`, which for a folder
+    /// names its home FILE, not the folder itself, and is "index" whenever
+    /// that file is the generic `index.md` rather than a self-named one. An
+    /// explicit `sort: [a, b, c]` names folders the way the body links to
+    /// them (`[[Appendix]]`, or a bare `appendix`), not by their home
+    /// file's filename.
+    ///
+    /// Read off `source_path` (the raw on-disk relative path, e.g.
+    /// `"appendix/index.md"`) rather than `url_path`: a page's `clean_stem`
+    /// is the raw filename, untouched by slug rules, so a folder's own name
+    /// has to come from an equally raw source to match the same way a page
+    /// does — a directory named with a space or a CJK interpunct
+    /// (`京都・鎌倉/`) slugs to `url_path`'s `京都-鎌倉`, which an author's
+    /// `sort: [京都・鎌倉]` (typed exactly as the folder reads) would never
+    /// match. Falls back to the `url_path` segment only when `source_path`
+    /// is unavailable (a hand-built test document, say), and to
+    /// `clean_stem` after that, same as before.
+    fn order_match_name(&self) -> &str {
+        if self.is_folder_index() {
+            self.source_path
+                .as_deref()
+                .and_then(|p| p.rsplit('/').nth(1))
+                .or_else(|| {
+                    self.url_path
+                        .trim_end_matches("index.html")
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                })
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&self.clean_stem)
+        } else {
+            &self.clean_stem
+        }
+    }
 }
 
 impl moss_core::sort::SortableLabel for ParsedDocument {
@@ -842,6 +959,120 @@ mod tests {
         assert!(doc.declared_sort().is_none());
         assert_eq!(doc.clean_stem(), "post");
         assert_eq!(doc.label(), "Post");
+    }
+
+    /// `order_match_name` is what `sort: [a, b, c]` matches a child against.
+    /// For a leaf it's `clean_stem` (its own filename) — unaffected.
+    #[test]
+    fn order_match_name_is_clean_stem_for_a_leaf() {
+        use moss_core::sort::SortableDoc;
+        let doc = ParsedDocument {
+            url_path: "blog/appendix.html".to_string(),
+            clean_stem: "appendix".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        assert_eq!(doc.order_match_name(), "appendix");
+    }
+
+    /// The bug this exists for: a folder's home file is very often literally
+    /// `index.md`, so its `clean_stem` is the fixed string "index" — never
+    /// the folder's own name an author writes in `sort: [a, appendix]`.
+    /// `order_match_name` must read the folder's own name off its URL
+    /// instead, the same way `render/html.rs`'s sibling lookup already does.
+    #[test]
+    fn order_match_name_is_the_folder_name_not_its_index_files_clean_stem() {
+        use moss_core::sort::SortableDoc;
+        let doc = ParsedDocument {
+            url_path: "blog/appendix/index.html".to_string(),
+            clean_stem: "index".to_string(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        assert_eq!(doc.order_match_name(), "appendix");
+    }
+
+    /// A folder named with a CJK interpunct (`京都・鎌倉`) slugs to
+    /// `京都-鎌倉` in its URL — the interpunct isn't alphanumeric, so
+    /// `generate_slug` turns it into a separator. `order_match_name` must
+    /// still read `京都・鎌倉`, straight off the raw on-disk path, so it
+    /// matches a `sort: [...]` entry written exactly as the folder reads —
+    /// the same way a page named `京都・鎌倉.md` already matches by its own
+    /// untouched `clean_stem`.
+    #[test]
+    fn order_match_name_matches_a_cjk_interpunct_name_the_same_way_a_page_does() {
+        use moss_core::sort::SortableDoc;
+        let folder = ParsedDocument {
+            url_path: "works/京都-鎌倉/index.html".to_string(),
+            source_path: Some("works/京都・鎌倉/index.md".to_string()),
+            clean_stem: "index".to_string(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let page = ParsedDocument {
+            url_path: "works/京都-鎌倉-2/index.html".to_string(),
+            clean_stem: "京都・鎌倉".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        assert_eq!(folder.order_match_name(), "京都・鎌倉");
+        assert_eq!(page.order_match_name(), "京都・鎌倉");
+    }
+
+    /// End-to-end regression for the same bug, through `sort_by_resolved`
+    /// itself: `sort: [appendix, intro]` kept its declared order in a flat
+    /// folder, but silently fell back to the inferred axis the moment the
+    /// named child was a subfolder with a child of its own (`appendix/`,
+    /// home file `appendix/index.md` — a self-named `appendix/appendix.md`
+    /// never hit this, since its clean_stem already happened to equal
+    /// "appendix"). `appendix` must keep its declared first position.
+    #[test]
+    fn explicit_order_keeps_a_subfolder_in_its_declared_position() {
+        let intro = ParsedDocument {
+            url_path: "journal/intro.html".to_string(),
+            clean_stem: "intro".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        let appendix = ParsedDocument {
+            url_path: "journal/appendix/index.html".to_string(),
+            clean_stem: "index".to_string(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let appendix_note = ParsedDocument {
+            url_path: "journal/appendix/notes.html".to_string(),
+            clean_stem: "notes".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        let closing = ParsedDocument {
+            url_path: "journal/closing.html".to_string(),
+            clean_stem: "closing".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+
+        // `appendix_note` is `appendix`'s own child, not a direct child of
+        // `journal/` — it plays no part in the sort below; it just gives
+        // `appendix` the shape the bug report names ("a subfolder that has
+        // children of its own"), the reason its home file is `index.md`
+        // rather than a self-named one in the first place.
+        let _ = &appendix_note;
+
+        let resolved = moss_core::sort::ResolvedSort {
+            axis: moss_core::sort::SortAxis::Title,
+            explicit_order: Some(vec!["appendix".to_string(), "intro".to_string()]),
+            series_default: true,
+        };
+        let docs: Vec<&ParsedDocument> = vec![&intro, &appendix, &closing];
+        let sorted = moss_core::sort::sort_by_resolved(&docs, &resolved);
+
+        assert_eq!(
+            sorted.iter().map(|d| d.url_path.as_str()).collect::<Vec<_>>(),
+            vec!["journal/appendix/index.html", "journal/intro.html", "journal/closing.html"],
+            "appendix (a subfolder) must keep its declared first position"
+        );
     }
 
     #[test]

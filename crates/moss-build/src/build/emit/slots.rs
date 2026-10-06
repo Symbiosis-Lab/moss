@@ -3,7 +3,8 @@
 //!
 //! Slot injection rewrites `<!-- slot:... -->` markers into real content, so
 //! every page it touches has different bytes than the render phase registered.
-//! This module runs that pass and re-registers the rewritten pages, which is
+//! This module runs that pass and hands its receipts to the manifest — the
+//! final hash, and the CAS object `ship_phase` reads the page from — which is
 //! why it owns both halves: a caller that ran one without the other would seal
 //! a manifest describing bytes that are no longer on disk.
 //!
@@ -12,7 +13,7 @@
 //! bytes vs final bytes", and this is the first point where the stage holds
 //! this build's final bytes.
 //!
-//! Lifted out of `build::pipeline` (moss#968) where it was a private helper.
+//! Lifted out of `build::pipeline` where it was a private helper.
 
 use crate::build::outcome::BuildStopped;
 use crate::build::manifest::PendingManifest;
@@ -29,7 +30,7 @@ pub fn apply_to_stage_and_manifest(
     slots: &ResolvedSlots,
     pending: &mut PendingManifest,
     site_result: &mut SiteResult,
-    // Shadow-verification snapshots (moss#968 §10 gate 4). `Some` only under
+    // Shadow-verification snapshots. `Some` only under
     // `MOSS_INCREMENTAL_VERIFY=1`; consumed at the END of this function because
     // that is the first moment the stage holds post-injection bytes.
     carry_verification: Option<CarryVerification>,
@@ -37,40 +38,51 @@ pub fn apply_to_stage_and_manifest(
     // Construction is free of I/O — ObjectStore/TransformCache are just path
     // handles — so building fresh ones here (rather than threading them
     // through from further up) matches the established per-call-site idiom.
-    let object_store = crate::build::cache::ObjectStore::new(paths.cache_objects());
-    let transform_cache = crate::build::cache::TransformCache::new(
-        paths.cache_transforms(),
-        crate::build::cache::ObjectStore::new(paths.cache_objects()),
-    );
+    let object_store = crate::build::cache::ObjectStore::for_site(paths);
+    let transform_cache = crate::build::cache::TransformCache::for_site(paths);
     // Emit the feature stylesheets the resolved slots link to, BEFORE the
     // injection that writes those <link> tags into pages. Slot resolution can
     // name a content-hashed file but has no manifest to write one; this is the
     // first point that has both. See `build::emit::feature_styles`.
     crate::build::emit::feature_styles::emit(slots.feature_styles(), stage_dir, pending)?;
 
-    let changed = crate::build::enhance::inject_slots_into_directory_cached(
+    // The record of which blob each staged page was linked from, so a page
+    // whose stage file already holds its final bytes is not written again.
+    let mut staged = crate::build::lifecycle::cas_heal::StagedLinks::load(paths, "pages", stage_dir);
+    let receipts = crate::build::enhance::inject_slots_into_directory_cached(
         paths.project_root(),
         stage_dir,
         slots,
         &object_store,
         &transform_cache,
+        pending.take_unwritten_pages(),
+        &mut staged,
     )
     // `with_context`, not `format!`: re-stringifying would discard the deferred
     // verdict. `BuildStopped` has no `Display`, so that mistake cannot compile.
     .map_err(|e| e.with_context("Slot injection failed on site-stage"))?;
+    staged.save();
 
-    // Registers what the injection pass REPORTS it wrote, never what a read of
-    // the stage says is there. The hash arrives in the receipt because the
-    // injected bytes existed in memory at write time and nowhere afterwards.
-    for (rel_path_str, hash) in changed {
-        let sp = crate::build::served_path::ServedPath::from_source(&rel_path_str)
-            .map_err(|e| format!("slot-inject registration: invalid path {rel_path_str}: {e}"))?;
-
-        pending.register_hashed(&sp, &hash, crate::build::manifest::HashBucket::Files);
-        let Some(entry) = pending.files().get(sp.as_str()).cloned() else {
+    // Takes what the injection pass REPORTS, never what a read of the stage says
+    // is there. The hash and the CAS object arrive in the receipt because the
+    // bytes existed in memory when the pass held them and nowhere afterwards.
+    //
+    // The pass reports on every `.html` in the stage, including pages an earlier
+    // build left there, so a receipt is not proof that this build made the page.
+    // `attach_final_bytes` gives the final bytes only to pages the render phase
+    // already registered, and drops the rest — see it for what a stale page
+    // would otherwise do. Nothing that used to be registered here is lost: a page
+    // keeps its markers only until the first pass that fills them, so the pages
+    // the pass rewrites are the ones this build just rendered.
+    for receipt in receipts {
+        // A stage path no page of this build could have (`_moss/...` bundles the
+        // search lane laid down last time) is simply not one.
+        let Ok(sp) = crate::build::served_path::ServedPath::from_source(&receipt.page_path) else {
             continue;
         };
-
+        let Some(entry) = pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid) else {
+            continue;
+        };
         site_result.hashes.insert_file_hash(&sp, entry);
     }
 
@@ -83,3 +95,21 @@ pub fn apply_to_stage_and_manifest(
 
     Ok(())
 }
+
+/// Write rendered pages to the stage as rendered, slot markers and all: what
+/// an entry point with no slot pass after it leaves.
+pub(crate) fn write_as_rendered(
+    stage_dir: &Path,
+    pages: std::collections::BTreeMap<String, String>,
+) -> Result<(), BuildStopped> {
+    for (page_path, html) in pages {
+        let path = stage_dir.join(&page_path);
+        crate::build::io_utils::write_output_if_changed(&path, html.as_bytes())
+            .map_err(|e| format!("Failed to write HTML file {}: {}", path.display(), e))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "slots_tests.rs"]
+mod tests;

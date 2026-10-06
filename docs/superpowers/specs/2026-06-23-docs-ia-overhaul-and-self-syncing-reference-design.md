@@ -160,7 +160,7 @@ and frontmatter fields. Extend it to also emit:
   from `describe`.)
 
 Sources already exist in `crates/moss-core/src/contract/`, the CLI definition, and
-`src-tauri/src/assets/templates/`; this surfaces them through the existing describe
+the desktop app's template assets; this surfaces them through the existing describe
 command (or, for the DOM skeleton, the generator reading the template) so the whole
 contract has a generated source. Follows moss-app conventions (worktree → develop → release); gated by the
 existing describe totality tests.
@@ -283,7 +283,7 @@ i18n) returned approve-with-changes. Incorporated decisions:
 - `translationKey` atomicity: move both language sides together; the final key on
   `docs/index.md` is `docs-start` in all langs, `how-moss-works.md` keeps `docs`.
 - Verified: the moss app does **not** deep-link any reorganized `/docs/` path (grep of
-  `src-tauri/src` + `frontend/app`), so URL-churn risk is LOW. The one stale doc URL in
+  the app's source tree), so URL-churn risk is LOW. The one stale doc URL in
   the binary (`describe.rs` → `landing.mosspub.com/contract/v1/reference.md`) is
   noted for a follow-up app update, not a blocker.
 
@@ -301,12 +301,11 @@ i18n) returned approve-with-changes. Incorporated decisions:
   `UNTRANSLATED.md` manifest, so the trees don't silently diverge.
 
 ### Phase 0 source-location corrections (verified against code)
-- Hooks (`Capability`/`PluginHook`) live in `src-tauri/src/plugins/types.rs`; slots
-  (`SLOT_NAMES`) in `src-tauri/src/plugins/enhance.rs` + `src-tauri/src/build/slots.rs`;
-  manifest (`PluginManifest`) in `src-tauri/src/plugins/types.rs` — **Tauri layer, not
-  `moss-core/contract/`.** They are surfaced through the existing
-  `src-tauri/src/describe.rs` entry point (which runs in Tauri context).
-- CLI commands are a bare match block in `src-tauri/src/startup/run_mode.rs` with no
+- Hooks (`Capability`/`PluginHook`) and manifest (`PluginManifest`) live in the desktop
+  app's plugin types module; slots (`SLOT_NAMES`) in the app's plugin-enhance and
+  build-slots modules — **Tauri layer, not `moss-core/contract/`.** They are surfaced
+  through the app's existing describe entry point (which runs in Tauri context).
+- CLI commands are a bare match block in the app's startup run-mode module with no
   registry — the fuzzy part of Phase 0 (hand-register a table or refactor dispatch).
 - html-structure: include `page-content.html` alongside `shell.html` +
   `article-content.html`; the generator can read these templates directly (no Phase 0

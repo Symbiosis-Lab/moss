@@ -3,11 +3,10 @@
 //! # Who owns this file
 //!
 //! The **app** owns `.moss/config.toml`: every setting is written from a
-//! settings modal, and every writer lives in the app crate
-//! ([ADR-059](../../../../docs/decisions/ADR-059-config-reader-and-migration-runner-after-the-crate-split.md)).
+//! settings modal, and every writer lives in the app crate.
 //! What ships here is the **reader**, because the CLI reads config too and
 //! `moss-cli` cannot depend on the app crate (`scripts/check-crate-dag.mjs`
-//! rule 4). Ownership did not move; the reader's home did.
+//! rule 4).
 //!
 //! # What is here, and what deliberately is not
 //!
@@ -15,8 +14,8 @@
 //! key up. Not here: opening the file. That read is eviction-aware on macOS
 //! (an iCloud-evicted config must never read as "absent", or a default is
 //! written over the user's settings), and the code that proves absence from an
-//! error lives in the build tree's cloud modules, which do not cross into this
-//! crate until a later step. So a caller reads the bytes however its platform
+//! error lives in the build tree's cloud modules (`build::cloud_readiness`),
+//! not here. So a caller reads the bytes however its platform
 //! requires and hands the string to [`ConfigFile::parse`]:
 //!
 //! - the app reads through `build::cloud_readiness` (see
@@ -26,14 +25,13 @@
 //!   that is the whole story**. It is not the whole story on macOS, which
 //!   moss-cli ships on: an iCloud-evicted config returns `NotFound` there, and
 //!   a CLI that believed it would build the user's site with every setting at
-//!   its default. The CLI needs the eviction-aware read too — which is one more
-//!   reason that cluster crosses the crate line at step 4.
+//!   its default. The CLI needs the eviction-aware read too.
 //!
-//! Splitting it this way is also what keeps this module honest about the third
-//! rule in ADR-059: **advanced users hand-edit this file.** Nothing here can
+//! Splitting it this way is also what keeps this module honest about a core
+//! rule: **advanced users hand-edit this file.** Nothing here can
 //! write, so nothing here can disturb a comment, a key order or a quoting
 //! style. A reader preserves them by construction; the one writer primitive
-//! this crate holds, [`crate::vault::config`] (ADR-059 amendment, 2026-09-07),
+//! this crate holds, [`crate::vault::config`],
 //! preserves them with `infra::toml_rewrite`, and the app's modal-driven
 //! writers go through the same door.
 
@@ -69,8 +67,8 @@ impl ConfigFile {
     /// caller would then act on.
     ///
     /// The parsed value is migrated to `CURRENT_VERSION` **in memory** before
-    /// any key is read (open-CLI slice 3, #1019). ADR-059 warned that once
-    /// moss-cli is a separate binary "no single migration point both reach"
+    /// any key is read (open-CLI slice 3). Once
+    /// moss-cli is a separate binary, "no single migration point both reach"
     /// exists, and a host that forgets to migrate renders a v4 config's absent
     /// keys as defaults with no error anywhere — migrating at the one parse
     /// funnel closes that class for every host, current and future. The
@@ -109,7 +107,7 @@ impl ConfigFile {
     /// `ConfigFile` (e.g. the pipeline's one-parse-per-build `cfg`) should
     /// call this instead of re-reading and re-parsing the file.
     pub fn schema_version_ahead(&self) -> Option<u32> {
-        crate::config::migrations::version_ahead(&self.root)
+        crate::config::migrations::version_ahead(&self.root, crate::config::migrations::CURRENT_VERSION)
     }
 
     /// A string field under `[site]`, e.g. `lang`, `typesetting`.
@@ -131,16 +129,6 @@ impl ConfigFile {
             .and_then(|v| v.as_bool())
     }
 
-    /// A boolean field under `[terms]`, e.g. `author`, `tags`. Same
-    /// absent-is-not-false contract as [`Self::site_bool`]; both term
-    /// dimensions default ON at the construction site.
-    pub fn terms_bool(&self, field: &str) -> Option<bool> {
-        self.root
-            .get("terms")
-            .and_then(|terms| terms.get(field))
-            .and_then(|v| v.as_bool())
-    }
-
     /// The top-level `environment` key. Top-level rather than under `[site]`
     /// so it never collides with `state.toml`'s `[deployment]` section.
     pub fn environment(&self) -> Option<&str> {
@@ -148,8 +136,8 @@ impl ConfigFile {
     }
 
     /// `[build].passthrough` — an ordered list of path strings. Entries with
-    /// no prefix are explicit passthrough roots; a `!` prefix opts a directory
-    /// OUT of auto-detection. Empty when the key is absent.
+    /// no prefix are explicit passthrough directories or scanned HTML files; a
+    /// `!` prefix removes a match. Empty when the key is absent.
     pub fn build_passthrough(&self) -> Vec<String> {
         self.root
             .get("build")
@@ -184,8 +172,7 @@ impl ConfigFile {
     }
 
     /// `[history].enabled` — whether a landed publish snapshots into the
-    /// app-local publish-history store
-    /// ([ADR-083](../../../../docs/decisions/ADR-083-publish-history-lives-outside-the-vault.md)).
+    /// vault's own publish-history store, at `.moss/history/`.
     /// `None` when unset; the caller's default is on.
     pub fn history_enabled(&self) -> Option<bool> {
         self.root
@@ -210,6 +197,139 @@ impl ConfigFile {
         Some(cursor)
     }
 
+    /// Every `[terms.<key>]` table, plus a built-in `RawKind` for each of
+    /// `authors`/`tags` that NO declared table already used — the one
+    /// unified config read `build::terms::term_kinds` turns into
+    /// `TermKind`s. Raw here: `fields` is not yet filtered through
+    /// `moss_core::schema_fields::name_list_fields()`, and `title` is not
+    /// yet resolved — both happen exactly once, in `term_kinds`, not here.
+    ///
+    /// A declared `[terms.authors]` or `[terms.tags]` table IS that kind —
+    /// its own `fields` and `title` win outright, not just its own
+    /// declared fields layered on top of the built-in default. Reading the
+    /// sub-tables first and skipping the matching built-in is what makes
+    /// that true: the old order (built-ins unconditionally, then every
+    /// declared table appended) produced two `RawKind`s sharing one key
+    /// whenever an author declared `[terms.tags]` or `[terms.authors]`,
+    /// which `term_kinds` had no way to reconcile — `roots_in_use` and
+    /// `synthetic_folder_keys` would seed the same pseudo-folder twice, and
+    /// `members_by_field` would double-count every member.
+    ///
+    /// A `[terms.<key>]` table with no `fields` array is skipped with a
+    /// diagnostic — a kind that names no fields would derive nothing anyway,
+    /// and is more likely a typo (`field = [...]`) than an intentional
+    /// no-op.
+    pub fn terms_kinds(&self) -> Vec<RawKind> {
+        let mut declared: Vec<RawKind> = Vec::new();
+        if let Some(terms) = self.root.get("terms").and_then(|v| v.as_table()) {
+            for (key, value) in terms {
+                // The legacy `author`/`tags` booleans live in this same
+                // table but are not sub-tables, so `as_table()` already
+                // excludes them here — no separate key check needed.
+                let Some(table) = value.as_table() else { continue };
+                let Some(fields) = table.get("fields").and_then(|v| v.as_array()) else {
+                    crate::build::cli_output::log_warn_problem!(
+                        "[terms.{key}] has no `fields` array; skipping"
+                    );
+                    continue;
+                };
+                let fields: Vec<String> =
+                    fields.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
+                let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
+                let explorer = table.get("explorer").and_then(|v| v.as_bool());
+                let line = table.get("line").and_then(|v| v.as_bool());
+                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer, line });
+            }
+        }
+        let declared_keys: std::collections::HashSet<&str> =
+            declared.iter().map(|k| k.key.as_str()).collect();
+
+        let mut kinds = Vec::with_capacity(declared.len() + 2);
+        for (ns, field) in crate::build::terms::BUILTIN_DEFAULT_FIELDS {
+            if declared_keys.contains(ns) {
+                continue;
+            }
+            kinds.push(RawKind {
+                key: ns.to_string(),
+                fields: if self.legacy_terms_flag(field).unwrap_or(true) {
+                    vec![field.to_string()]
+                } else {
+                    Vec::new()
+                },
+                title: None,
+                kind_type: None,
+                explorer: None, line: None,
+            });
+        }
+        kinds.extend(declared);
+        kinds
+    }
+
+    /// The `[redirects]` table: old address, new address, as the author wrote
+    /// them. Optional — a config without it is a config with no hand-declared
+    /// redirects, and adding the table needs no schema bump. A value that is
+    /// not a string, or a `redirects` that is not a table, is reported and
+    /// skipped; the entries around it still read.
+    pub fn declared_redirects(&self) -> Vec<(String, String)> {
+        use crate::build::cli_output::log_warn_problem;
+        let Some(value) = self.root.get("redirects") else { return Vec::new() };
+        let Some(table) = value.as_table() else {
+            log_warn_problem!("[redirects] must be a table of old address = new address; ignoring it");
+            return Vec::new();
+        };
+        let mut pairs = Vec::new();
+        for (from, to) in table {
+            match to.as_str() {
+                Some(to) => pairs.push((from.clone(), to.to_string())),
+                None => log_warn_problem!("[redirects] \"{from}\" must be a string address; skipping it"),
+            }
+        }
+        pairs
+    }
+
+    /// A boolean field under `[terms]`, e.g. `author`, `tags`: the legacy,
+    /// pre-kinds toggle `terms_kinds` folds into the two built-ins' `fields`.
+    /// `None` means the key is absent, which is not the same as `false` —
+    /// `terms_kinds` supplies the default (on). Private: nothing outside
+    /// `terms_kinds` reads a raw per-field `[terms]` boolean any more.
+    fn legacy_terms_flag(&self, field: &str) -> Option<bool> {
+        self.root
+            .get("terms")
+            .and_then(|terms| terms.get(field))
+            .and_then(|v| v.as_bool())
+    }
+}
+
+/// One `[terms.<key>]` table before `build::terms::term_kinds` filters its
+/// `fields` and resolves its `title` into a `TermKind`. See
+/// [`ConfigFile::terms_kinds`].
+#[derive(Debug, Clone)]
+pub struct RawKind {
+    /// URL namespace / pseudo-folder prefix (`authors`, `tags`, or a
+    /// declared key like `people`).
+    pub key: String,
+    /// Frontmatter field names as configured, not yet checked against
+    /// `moss_core::schema_fields::name_list_fields()`.
+    pub fields: Vec<String>,
+    /// Explicit `title` from the table, when the author set one. `None` for
+    /// the two built-ins (their title comes from `i18n::term_root_title`)
+    /// and for a declared kind that didn't set one (its title is its key).
+    pub title: Option<String>,
+    /// The declared `type = "..."` key, unvalidated — `"place"` is the only
+    /// value `build::terms::term_kinds` recognizes today; anything else is a
+    /// diagnostic there, not here. `None` for the two built-ins and for a
+    /// declared kind that didn't set one.
+    pub kind_type: Option<String>,
+    /// `[terms.<key>] explorer`, unvalidated and not yet gated on
+    /// `kind_type`: `term_kinds` reads this only for the place-typed kind
+    /// and drops it for every other one, the same way `type` itself is only
+    /// ever meaningful there. `None` for the two built-ins and for a
+    /// declared kind that didn't set the key.
+    pub explorer: Option<bool>,
+    /// `[terms.<key>] line`, unvalidated and gated on `kind_type` the same
+    /// way as `explorer`: `term_kinds` keeps it only for the place-typed kind.
+    pub line: Option<bool>,
 }
 
 #[cfg(test)]

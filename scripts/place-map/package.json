@@ -1,0 +1,18 @@
+{
+  "name": "@moss/place-map-generator",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Offline generator for the checked-in moss place-map data pack",
+  "engines": {
+    "python": ">=3.11"
+  },
+  "scripts": {
+    "check": "python3 generate.py --check",
+    "generate": "node generate.mjs",
+    "test": "python3 -B -m unittest discover -s . -p 'test_*.py' && node --test test_generate.mjs"
+  },
+  "devDependencies": {
+    "d3-contour": "4.0.2",
+    "shpjs": "6.1.0"
+  }
+}

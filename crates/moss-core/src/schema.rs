@@ -104,7 +104,6 @@ pub struct FieldDefinition {
     /// Source of this field definition.
     /// `None` for builtin fields, `Some("review")` for plugin-contributed fields.
     /// Used by the frontend to group fields by source in the editor form.
-    /// See docs/reference/plugin-schema-contributions.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// UI group name for the add-property dropdown (e.g. "Common", "Children").
@@ -339,7 +338,19 @@ mod tests {
         // (`children_more` added 2026-09 — names the More link's target when
         // `children_limit` truncates a listing, even on a self-listing.)
         // (`children_covers` added 2026-09 — "only" keeps pages with a cover.)
-        assert_eq!(schema.frontmatter.fields.len(), 42);
+        // (`editor`/`jury`/`editor_page`/`jury_page` added 2026-09 — the
+        // term-kinds generalization of `author`/`author_page` beyond the two
+        // built-in namespaces; see moss_core::terms and build::terms.)
+        // (`location`/`place_page` added 2026-09 — the geography term kind;
+        // see moss_core::terms and build::terms::places.)
+        // (`origin` added 2026-09 — provenance for an imported page's source
+        // URL, replacing `moss import`'s prior POSSE-flavored `syndicated:`.)
+        // (`map` added 2026-09 — opt out of the term map a claimed term page
+        // or a real folder index at a place namespace root hosts.)
+        // (`start`/`end`/`timezone`/`status`/`tickets`/`online` added 2026-10 — the
+        // event fields; see moss_core::event.)
+        // (`nav_label` added 2026-10 — a shorter nav-bar name than `title`.)
+        assert_eq!(schema.frontmatter.fields.len(), 57);
     }
 
     #[test]

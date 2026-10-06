@@ -1,4 +1,4 @@
-//! Generic append-only JSONL event log — the ADR-025 local-first substrate.
+//! Generic append-only JSONL event log — the local-first substrate.
 //!
 //! One JSON object per line. Appending is O(1) and crash-safe: a process that
 //! dies mid-write can only corrupt the final line, and [`read_jsonl`] skips any
@@ -6,7 +6,7 @@
 //! superseded by newer events (never edited in place).
 //!
 //! Reused by the signed moderation log (`moderation.jsonl`) and intended to back
-//! the future subscriber/analytics event logs (ADR-025) — one helper, not three.
+//! the future subscriber/analytics event logs — one helper, not three.
 
 use std::io::Write;
 use std::path::Path;
@@ -18,6 +18,7 @@ use serde::Serialize;
 /// absent. The newline terminator makes a torn final line detectable.
 pub fn append_jsonl<T: Serialize>(path: &Path, event: &T) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
+        // allow:raw_write .moss/data, not the build tree
         std::fs::create_dir_all(parent)?;
     }
     let line = serde_json::to_string(event).map_err(std::io::Error::other)?;

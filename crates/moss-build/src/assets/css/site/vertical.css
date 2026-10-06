@@ -1,6 +1,6 @@
 /* moss site stylesheet partial: vertical
    Shipped only when `SiteAssets::vertical` is true — see
-   src-tauri/src/build/emit/stylesheet.rs (CSS_PARTIALS).
+   `build::emit::stylesheet::CSS_PARTIALS`.
    Wrapped in @layer shortcodes to match the position these rules
    held inside site.css; multiple @layer blocks of the same name merge. */
 
@@ -27,9 +27,24 @@
    a flex column on html. `width: 100%` restores what that same
    orthogonal-item bug takes away on the cross axis (no default stretch).
    `min-height: 100svh` matches body's own `100svh` term. */
+/* `max-width: 100vw` + `overflow-x: hidden` stop a second orthogonal-flow
+   bug: with html's own overflow-x left at the default `visible`, the CSS
+   Overflow spec's propagation rule hands the viewport's horizontal
+   scrolling to body, so html's own box is left unconstrained and grows to
+   body's full unclipped scrollable width (thousands of px on a real
+   article). Chromium fails to paint the visible slice of a root box that
+   oversized -- WebKit happens to paint it correctly, which is why this
+   only ever showed up in one engine. Declaring html's own overflow-x here
+   (not visible) turns propagation off by spec, so body's own
+   `overflow-x: auto` a few lines down goes back to doing what its own
+   comment already says: body is its own scroll container, rather than the
+   whole viewport scrolling on a
+   phantom multi-thousand-px page. */
 html:has(body[data-typesetting="vertical"]) {
   background: var(--moss-color-bg);
   min-height: 100svh;
+  max-width: 100vw;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -37,9 +52,28 @@ html:has(body[data-typesetting="vertical"]) {
 body[data-typesetting="vertical"] {
   /* Written once so the head-margin calc below and `height` agree; `em`
      inside a custom property resolves against the font-size of the element
-     that uses it, i.e. this body's own --moss-vertical-font-size. */
+     that uses it, i.e. this body's own font-size — --moss-reading-size,
+     redefined below, so a larger reader step also widens this column: the
+     same "same character count, bigger characters" measure `em` always
+     meant, now that the step actually reaches this body's text at all.
+     Duplicated as an upper bound in moss-core's `sizes_vertical_body`
+     (contract/sizes.rs), which declares body images' `sizes=` as
+     `A * (100vh - 4rem)`: this column must never exceed `100vh - 4rem`, or
+     those images fetch short rungs. The vertical-sizes render gate pins it. */
   --moss-vertical-column: min(38em, 100svh - 4rem);
-  font-size: var(--moss-vertical-font-size, clamp(1rem, 1.9svh, 1.4rem));
+  /* The reader's Aa control (site.css `html.scale-*`) writes only
+     --moss-reading-step; --moss-reading-size's own formula (tokens.json)
+     folds it in for horizontal typesetting, but this body's text is sized
+     from --moss-vertical-font-size, not that formula's base, so without this
+     line the control does nothing on a vertical page at all —
+     --moss-vertical-font-size itself never varies with the step. Redefining
+     --moss-reading-size here — vertical.css's own name for "this column's
+     reading size" — from the vertical base times that same step makes every
+     ratio already built on it (article h1-h6/caption/title in site.css,
+     --moss-read-line below) follow both the vertical text and the reader's
+     step from this one substitution, rather than each needing its own. */
+  --moss-reading-size: calc(var(--moss-vertical-font-size) * var(--moss-reading-step));
+  font-size: var(--moss-reading-size);
   margin-top: calc((100svh - var(--moss-vertical-column)) * 0.382);
   margin-bottom: 0;
   width: 100%;
@@ -54,18 +88,23 @@ body[data-typesetting="vertical"] {
      to its container and stops binding. Declared on body so it also
      overrides the `data-content-width` presets at equal specificity. */
   --moss-content-width: 100%;
+  /* --moss-read-line (tokens.json) is one line of body text — the unit
+     site.css measures article p/h1-h6/figure margins against. Its default
+     formula already reads --moss-reading-size, redefined above, so only the
+     leading needs restating here: --moss-read-leading is the number that
+     formula multiplies by, restated from the `article` rule's own hardcoded
+     1.8 below rather than left a second hardcoded 1.8 for the two to drift
+     out of. */
+  --moss-read-leading: 1.8;
+  --moss-read-line: calc(var(--moss-reading-size) * var(--moss-read-leading));
 }
 
-/* Force visible scrollbar (macOS overlay scrollbars auto-hide) */
+/* Keep horizontal column navigation without painting a second UI bar. */
+body[data-typesetting="vertical"] {
+  scrollbar-width: none;
+}
 body[data-typesetting="vertical"]::-webkit-scrollbar {
-  height: 8px;
-}
-body[data-typesetting="vertical"]::-webkit-scrollbar-track {
-  background: var(--moss-color-bg);
-}
-body[data-typesetting="vertical"]::-webkit-scrollbar-thumb {
-  background: var(--moss-border-medium);
-  border-radius: 4px;
+  display: none;
 }
 
 /* ── Main content ── */
@@ -79,8 +118,40 @@ body[data-typesetting="vertical"] main {
 }
 
 body[data-typesetting="vertical"] article {
-  line-height: 1.8;
+  /* --moss-read-leading, not a restated 1.8: the body rule above redefines
+     it from this same number so --moss-read-line (the prose margin ladder's
+     unit) stays in lockstep with whatever leading actually renders here. */
+  line-height: var(--moss-read-leading);
   letter-spacing: 0.05em;
+}
+
+/* The place-map locator is a column-block in the flow, not a float. site.css
+   floats it to the "right", which beside horizontal text is the inline end
+   and here is the BOTTOM of a column: the box (kept horizontal-tb, so it is
+   22rem wide and ~15rem tall) then reaches sideways across the next
+   columns, a front page's cards included, and on an article it hangs below
+   the meta columns' top, aligned to nothing. Unfloated it takes its place
+   in the flow where the markup puts it, starts at the columns' top edge
+   like any other block, and at phone width sits at that same position
+   (site.css already makes it full width there). The gap to the next column
+   is the physical left margin `.moss-align-right` already sets; the bottom
+   margin it also sets is harmless. `align-self` keeps the head alignment
+   when a theme makes the locator's parent a flex column with centred items
+   (a figure wrapper that centres its caption on the column's midline would
+   otherwise centre the map too, 130px below the columns' top). */
+body[data-typesetting="vertical"] .moss-place-locator.moss-align-right {
+  float: none;
+  align-self: flex-start;
+}
+
+/* Width tokens (`|wide`, `|page`, `|screen`) are inert here. They widen a
+   block past the measure, and the measure is already the whole column, so a
+   band could only gain the container's inset — and a figure should stand in
+   the text band, head-aligned (see the hero note below). site.css's escape
+   is logical, so a body-width band already sits in the column; this pins
+   every token to it. */
+body[data-typesetting="vertical"] article.container > [data-width] {
+  --moss-escape: 100%;
 }
 
 /* ── Navigation ── */
@@ -112,34 +183,94 @@ body[data-typesetting="vertical"] .breadcrumb-separator::before {
   color: var(--moss-color-muted);
 }
 
-/* ── Hero ──
-   Horizontally the hero bleeds edge to edge; a vertical figure is sized to
-   the column measure instead (research §5, jlreq 4.3.2): the plate stands in
-   the text band, head-aligned, the full band tall. The band is the
-   `.container` inset, which the hero — emitted outside <main> — never had.
+/* ── Font selector (vertical mode) ──
+   transform's scale axis has no logical form either, same as translate and
+   aspect-ratio elsewhere in this file — scaleX/scaleY swap by hand per mode.
+   transform-origin is the same story: it has no logical keyword form (only
+   left/center/right/top/bottom or lengths), so the physical value in
+   site.css is horizontal-tb's, and this rule supplies vertical-rl's. */
+body[data-typesetting="vertical"] .font-pill {
+  transform: scaleY(0.001);
+  transform-origin: top center;
+}
+body[data-typesetting="vertical"] .font-pill.visible {
+  transform: scaleY(1);
+}
 
-   `max-width: 100vw`: block axis = physical width under inherited
-   `vertical-rl`, and a flex item's main size is content-fit by default, so
-   nothing bounded it. `vw` not `%`: `body`'s own `width: 100%` is circular
-   here (its auto size grows to fit the hero). See
-   docs/archive/2026-09-11-hero-plate-variant.md. */
+/* `.font-anchor`'s font-size in site.css is pinned to the UNSCALED
+   horizontal base (--moss-reading-size-base times the script scale, never
+   --moss-reading-step) for a reason stated there: the control's own glyph
+   must not compound with the size it's choosing. Body's own font-size under
+   vertical typesetting is `--moss-reading-size` too now (above, this file),
+   but redefined from a different, viewport-height base and WITH the step
+   folded in — so matching it here instead would make this glyph grow and
+   shrink as the reader clicks Aa, the same compounding bug the horizontal
+   rule exists to avoid. Anchoring to the raw, unscaled
+   --moss-vertical-font-size keeps the same "control never scales with
+   itself" invariant on this axis; `.date-line .date` (which DOES track the
+   step, inheriting body's own font-size directly with no size rule of its
+   own) only matches this glyph at the default step, same as horizontally. */
+body[data-typesetting="vertical"] .font-anchor {
+  font-size: var(--moss-vertical-font-size);
+}
+
+/* ── Hero ──
+   A vertical figure is sized to the column measure (research §5, jlreq
+   4.3.2): the plate stands in the text band, head-aligned, full band tall.
+   The band is the `.container` inset the hero, emitted outside <main>, lacks.
+
+   The hero is a flex item of body's row, sized along the block axis
+   (physical width). `max-width: 100vw` bounds it; `vw` because body's
+   `width: 100%` is circular here. `flex-shrink: 0` because `overflow:
+   hidden` zeroes its minimum size: a long page squeezed the section below
+   its plate and cropped it (2026-09-23). */
 body[data-typesetting="vertical"] .moss-hero {
   padding-inline: var(--moss-container-padding);
   max-width: 100vw;
+  flex-shrink: 0;
 }
 
-/* Same cap, on the plate/captioned image's own BLOCK axis — not the INLINE
-   axis site.css's `max-inline-size: 100%` already covers. Site.css's
-   `max-block-size: var(--moss-hero-max-height, 70vb)` capped this by
-   coincidence (`vb` is flow-relative, reads viewport width here); the
-   mobile reset removes it assuming it caps a photo's height, as it does
-   horizontally. `vw` not `%`: even a `vw`-capped `.moss-hero` isn't
-   definite for a descendant's `%` here (verified live). */
+/* Same cap, on the plate/captioned image's BLOCK axis — site.css's
+   `max-inline-size: 100%` already covers INLINE. `vw` not `%`: a `vw`-capped
+   `.moss-hero` still isn't a definite size for a descendant's `%` here. */
 body[data-typesetting="vertical"] .moss-hero[data-captioned] img,
 body[data-typesetting="vertical"] .moss-hero[data-fit="plate"] img,
 body[data-typesetting="vertical"] .moss-hero[data-captioned] video,
 body[data-typesetting="vertical"] .moss-hero[data-fit="plate"] video {
   max-block-size: 100vw;
+}
+
+/* ── Body scroll images (data-aspect="scroll") ──
+   A handscroll is unrolled right to left, and this page already scrolls
+   right to left (this whole file's opening comment: "unrolling a scroll"),
+   so the fix here is not a scroller at all — it's letting the image take
+   the column's own height and join the page's ordinary flow, the same way
+   any other vertical figure does. site.css's horizontal-mode rule made it
+   a fixed-height, `overflow-x: auto` strip instead (its own nested
+   scroller, needed there because horizontal typesetting has no free
+   dimension for an extreme-aspect image to expand into); every one of
+   those declarations is reset here.
+
+   `max-inline-size` (site.css: 100%) becomes the fix itself, not a percent.
+   The `.moss-hero` rule above already found the reason live: a percent
+   here needs the FULL ancestor chain to carry a resolvable height, and a
+   theme's own container (a flex column with `align-items: center` instead
+   of the default `stretch`, say) breaks that chain in a way this crate
+   cannot audit for every theme. `var(--moss-vertical-column)` is the exact
+   length body's OWN height is already fixed to (this file, top) — every
+   vertical figure's real ceiling — and needs no ancestor to resolve at
+   all. */
+body[data-typesetting="vertical"] picture[data-aspect="scroll"],
+body[data-typesetting="vertical"] img[data-aspect="scroll"] {
+  max-inline-size: var(--moss-vertical-column);
+  overflow-x: visible;
+  -webkit-overflow-scrolling: auto;
+  background: none;
+}
+
+body[data-typesetting="vertical"] picture[data-aspect="scroll"] img {
+  max-inline-size: 100%;
+  max-block-size: none;
 }
 
 /* ── Footer and colophon ──
@@ -171,6 +302,18 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   writing-mode: horizontal-tb;
 }
 
+/* A grid-card figcaption is not a photo credit under a full-width plate —
+   it is the card's own title, the alt text of a `[![alt](img)](href)` cell
+   (`Block::LinkCard` in moss-core's renderer), which reads as card copy
+   alongside `.moss-card-title` a few rules down. That text was never forced
+   horizontal, so a caption naming the same card should not be either. Carve
+   it back out of the exception above; `inherit` rather than `vertical-rl`
+   outright, so the rule states "stop overriding" and not a second, possibly
+   drifting, opinion about which axis card copy runs on. */
+[data-typesetting="vertical"] .moss-grid-card figcaption {
+  writing-mode: inherit;
+}
+
 /* The three `.moss-card*` rules below asked for `--moss-font-serif`, which no
    token defines. The reads were invalid at computed-value time, so these cards
    have always rendered in the inherited body face — never a serif one. Dropping
@@ -179,9 +322,9 @@ body[data-typesetting="vertical"] .moss-table-scroll {
    question, not a cleanup: `--moss-font-heading` is the serif stack (Iowan Old
    Style / Palatino / Songti SC) and is the obvious candidate. Wiring it would
    change how every vertical-typesetting site renders, so it wants a look at the
-   result first. Tracked in #955. */
+   result first. */
 /* ── Grid cards (vertical mode) ── */
-/* One rule, stated once in docs/reference/design/preview-cards.md, holds at
+/* One rule holds at
    every viewport: the grid's line count (`:::grid N`) runs along the INLINE
    axis, which vertical-rl points down the page, so `grid-template-columns`
    (site.css, unrestated here) stacks N cards down the column with no
@@ -200,7 +343,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
 
    `aspect-ratio` is the one property this rule cannot state once: it is
    width/height, physical, with no flow-relative spelling. The design ratio
-   is inline:block = 4:3 (docs/reference/design/preview-cards.md); under
+   is inline:block = 4:3; under
    horizontal-tb that IS width:height, so site.css's default reads 4/3
    directly, but under vertical-rl inline is the physical height, so the
    same 4:3 ratio inverts to width:height = 3/4. This is the transposed
@@ -220,7 +363,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
    read this rule's own 3/4, never a narrower override). This is the same
    fact the grid-flow rule above already rests on ("a vertical page's column
    height is `100svh`-derived, not viewport WIDTH"), just met here on the
-   ratio instead of the column count: docs/archive/2026-09-15-card-cover-ratio-scope.md. */
+   ratio instead of the column count. */
 
 [data-typesetting="vertical"] :is(.moss-cards[data-layout="grid"], .moss-grid) .moss-card-cover {
   aspect-ratio: var(--moss-card-cover-ratio, 3 / 4);
@@ -231,6 +374,136 @@ body[data-typesetting="vertical"] .moss-table-scroll {
 }
 [data-typesetting="vertical"] :is(.moss-cards[data-layout="grid"], .moss-grid) .moss-card-title {
   line-height: 1.7;
+}
+
+/* Counters site.css's `@media (max-width: 768px) .moss-grid[data-columns]`
+   collapse (added for the default, horizontal inline axis — see that
+   rule's comment). These restate the same per-count values site.css's
+   `.moss-grid[data-columns="N"]` rules already declare, at one attribute
+   selector higher specificity, so they win under the collapse media query
+   too; `data-columns="1"` needs no counter since a single column already
+   reads the same as the collapse. */
+[data-typesetting="vertical"] .moss-grid[data-columns="2"] {
+  grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
+}
+[data-typesetting="vertical"] .moss-grid[data-columns="3"] {
+  grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
+}
+[data-typesetting="vertical"] .moss-grid[data-columns="4"] {
+  grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+}
+
+/* Scrolling row (`:::grid N {scroll}`), transposed rather than disabled:
+   site.css's base rule already places one card per grid "column", and a
+   grid's columns are both SIZED and POSITIONED along the INLINE axis —
+   vertical-rl points that down the page — so the unmodified `grid-auto-flow:
+   column` stacks N cards top to bottom here instead of side by side, each
+   spanning the row's full (block-axis) width, with `grid-auto-columns`
+   giving each one the same "N cards plus a peek" share of the row's own
+   INLINE size (its height) that it gives the row's WIDTH under horizontal
+   typesetting — the calc() is a fraction of the container's inline size
+   either way, so the four `grid-auto-columns` formulas below are the exact
+   values site.css already declares for `[data-scroll][data-columns="N"]`,
+   restated only because they need to win a specificity race (next
+   paragraph), not because the numbers change.
+
+   `overflow-x: auto` is the one physical property in the base rule with no
+   safe logical spelling: `overflow-inline`/`overflow-block` exist (CSS
+   Overflow Level 3) but are too new for this file's Safari floor (see the
+   `overflow-x: hidden` comment on `html:has(...)` above), so the axis is
+   swapped by hand — `overflow-y: auto` scrolls the row down the line.
+   Declaring `overflow-x: visible` alongside it is documentation, not the
+   last word: CSS Overflow §3 forces a box's other axis to stop being
+   `visible` once one axis isn't, so both compute to `auto`. That is exactly
+   what the un-touched `padding-block: 4px` above (site.css) already
+   compensates for — being logical, it pads left/right here instead of
+   top/bottom, wherever the forced-auto block axis now clips a focus ring.
+   `scroll-snap-type: inline proximity` and `overscroll-behavior-inline:
+   contain` (site.css, both logical) need no restatement either.
+
+   `grid-template-columns` needs restoring to `none` specifically for a
+   scroll row: the per-count `[data-columns="N"]` rules above restate
+   site.css's WRAPPING template for `.moss-grid[data-columns="N"]`
+   generally (no `[data-scroll]` exclusion, since until now a scroll row
+   under vertical typesetting fell back to that same wrapping layout) — at a
+   specificity that would otherwise re-apply here too and fight
+   `grid-auto-columns`. One more attribute selector (`[data-scroll]`) beats
+   them regardless of source order.
+
+   And the per-count `grid-auto-columns` formulas need restating
+   unconditionally (no media query): they have to win the same specificity
+   race the wrapping per-count rules above already run, against site.css's
+   `@media (max-width: 768px)` phone collapse (divides by a flat 1.3) — the
+   wrong reason to shrink a card here, for the same cause the wrapping grid
+   has no phone variant either (comment further up): the constraining
+   dimension under vertical typesetting is the row's own SVH-derived height,
+   never the viewport's WIDTH. */
+[data-typesetting="vertical"] .moss-grid[data-scroll] {
+  overflow-y: auto;
+  overflow-x: visible;
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns] {
+  grid-template-columns: none;
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="1"] {
+  grid-auto-columns: calc(
+    100% - var(--moss-grid-scroll-peek, 2.5rem) - var(--moss-space-md)
+  );
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="2"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 2 * var(--moss-space-md)) / 2
+  );
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="3"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 3 * var(--moss-space-md)) / 3
+  );
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="4"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 4 * var(--moss-space-md)) / 4
+  );
+}
+
+/* `data-fits` (site.css) counters the transpose above the SAME breakpoint
+   site.css uses, for a fitting row's twin reason: `.moss-grid[data-columns=
+   "N"]` (this file, unconditional) already renders it as plain-grid N cards
+   stacked down the column whenever `[data-scroll]` isn't in the selector at
+   all, so restoring exactly that shape above 769px only needs
+   `grid-template-columns` back. site.css's own `[data-fits]` rule sits at
+   the SAME specificity (one class, three attributes) as this file's own
+   `[data-scroll][data-columns]` rule two rules up (one class, three
+   attributes — `[data-typesetting]` counts too, even though it's on an
+   ancestor), so it would lose the tie by source order: partials load AFTER
+   core (`stylesheet.rs`'s `CSS_PARTIALS`), but THIS rule sits below line
+   358's inside the same file, and equal specificity + later source wins —
+   so restating it here, one attribute selector higher
+   (`[data-typesetting]` again, `[data-fits]` again), the same technique the
+   collapse-counter rules above already use, is what actually settles it.
+   `overflow-y: visible` undoes this file's own always-scrolling
+   `overflow-y: auto`. `grid-auto-flow: row` undoes site.css's
+   `[data-scroll] { grid-auto-flow: column }`, unconditional there for every
+   typesetting — the plain-count rules above rely on the same 'row' default
+   (never restated because nothing before this ever set it to 'column' on a
+   non-scroll grid), so a scroll row has to explicitly ask for it back. */
+@media (min-width: 769px) {
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits] {
+    grid-auto-flow: row;
+    overflow-y: visible;
+  }
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="1"] {
+    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
+  }
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="2"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
+  }
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="3"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
+  }
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="4"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+  }
 }
 
 /* ── Child summary cards (vertical mode) ── */
@@ -245,8 +518,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
    site.css; what remains here is typography only. This reverts the two
    ordering hacks that briefly stood in their place — `order: -1` on the
    cover (2026-09-10) and `display: contents` on the body with `order: -2`
-   on the title (2026-09-11) — superseded the same day per
-   docs/archive/2026-09-11-vertical-card-title-first.md.
+   on the title (2026-09-11) — superseded the same day.
    Bare [data-typesetting] selector works whether attr is on body or any ancestor. */
 
 [data-typesetting="vertical"] .moss-cards[data-layout="list"] .moss-card-meta,
@@ -254,13 +526,42 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   letter-spacing: 0.02em;
   text-orientation: upright;
 }
-/* The horizontal two-line clamp is a valid rotation (it would clamp to two
-   columns), but a vertical card is a column-group whose block length is
-   free: a full description costs columns, not band height, so the clamp is
-   undone deliberately (zhu-da, 2026-09-06; base rule no longer forces
-   `display: -webkit-box`, so there is no writing-mode override left to
-   undo here — the base's `max-block-size` two-line cap is what remains to
-   lift). */
+/* `.moss-card-description`'s ellipsis clamp (site.css: `display: -webkit-box`
+   + `-webkit-box-orient: vertical` + `-webkit-line-clamp: 2`) forces
+   `writing-mode: horizontal-tb` on the description regardless of the card's
+   own vertical-rl — the legacy multi-line-truncation box lays out along the
+   PHYSICAL horizontal axis no matter what. Undone here for every card shape
+   that class reaches (:::cards grid and list layouts, :::grid cells), not
+   just list below: core cannot scope the ellipsis away from vertical
+   typesetting itself, because core CSS never references `data-typesetting`
+   at all (gates_change_what_ships/gates_are_independent rely on that for
+   every horizontal site), so the undo has to live in the one file that
+   already knows about vertical typesetting. `display: block` alone already
+   drops the box model; the other two are reset to their initial values for
+   clarity, restoring exactly the plain block clip site.css's own base rule
+   still carries underneath.
+
+   `line-clamp` (the standard, unprefixed property site.css also sets) is
+   NOT reset here on purpose: it is defined to clamp a normal block box
+   without the legacy flexbox model, so it does not force `horizontal-tb` the
+   way the prefixed pair does — nothing to undo, once an engine implements
+   it. It is instead reset below, for list only, alongside that layout's own
+   "no clamp at all" choice. */
+[data-typesetting="vertical"] .moss-card-description {
+  display: block;
+  -webkit-box-orient: horizontal;
+  -webkit-line-clamp: none;
+}
+
+/* The horizontal two-line clamp's SIZE limit — the base rule's
+   `max-block-size`, still in effect after the reset above — is a valid
+   rotation for grid and `:::grid` cells (it clamps to two columns instead of
+   two lines), but a LIST card is a column-group whose block length is free:
+   a full description costs columns, not band height, so the size limit is
+   undone deliberately here, on top of the box-model reset above (2026-09-06).
+   `line-clamp: none` travels with it (not with the box-model reset above)
+   because this is the one layout that wants no clamp at all, not just a
+   correctly-oriented one. */
 [data-typesetting="vertical"] .moss-cards[data-layout="list"] .moss-card-title {
   line-height: 1.8;
   white-space: normal;
@@ -271,6 +572,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   line-height: 1.9;
   max-block-size: none;
   overflow: visible;
+  line-clamp: none;
 }
 
 /* ── Folder cover (vertical mode) ── */
@@ -300,6 +602,13 @@ body[data-typesetting="vertical"] .moss-collection-cover-body {
 }
 [data-typesetting="vertical"] .moss-cards[data-layout="minimal"] .moss-prefix-link-title {
   line-height: 1.9;
+  /* Vertical-only: the 年表 title outweighs the date beside it (ef68272ab0).
+     Relocated from site.css, which applied this unconditionally to every
+     site regardless of typesetting mode — a horizontal simple title listing
+     (e.g. a plain homepage) has no such distinction and should just inherit
+     body's size/weight like its sibling .date does. */
+  font-size: var(--moss-size-md);
+  font-weight: var(--moss-font-heading-weight);
 }
 
 /* ── Subscribe form (vertical mode) ── */

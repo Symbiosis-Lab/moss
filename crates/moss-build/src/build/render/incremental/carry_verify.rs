@@ -1,4 +1,4 @@
-//! Shadow verification of the incremental carry decision (moss#968 §10 gate 4).
+//! Shadow verification of the incremental carry decision.
 //!
 //! `MOSS_INCREMENTAL_VERIFY=1` makes the render phase render the *carried* set
 //! anyway and then asks the one question the whole narrowing rests on: **does
@@ -11,7 +11,7 @@
 //! The first cut of this gate compared the freshly rendered `html_page` against
 //! `fs::read(output_file_path)` inside the render closure. Those two things are
 //! not comparable, and the gate reported `DIVERGES` on 428 of 428 pages of
-//! `harbor/潮汐`:
+//! `riverbend/河灣`:
 //!
 //! * the fresh bytes are **pre-slot-injection** — they still carry the
 //!   `<!-- slot:... -->` markers;

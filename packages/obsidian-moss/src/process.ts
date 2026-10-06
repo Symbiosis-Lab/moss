@@ -7,7 +7,7 @@ import {
   parseBuildFailure,
   parseCliError,
   parseProblemCount,
-  parseServerUrl,
+  parseServerEvents,
   type ServerAddress,
 } from "./cli";
 
@@ -19,8 +19,10 @@ export type SpawnFn = (
 ) => ChildProcess;
 
 export interface RunCallbacks {
-  /** The preview server announced its URL on stderr. */
+  /** The preview server announced its URL on stderr (first time, or a later change). */
   onServerReady?(addr: ServerAddress): void;
+  /** Another moss process already serves this vault; the CLI is standing by. */
+  onStandby?(): void;
   /** A fatal `Build failed:` / `Error:` line appeared. */
   onError?(message: string): void;
   /** Non-fatal problem summary (`moss: N problems reported above …`). */
@@ -39,7 +41,8 @@ export class MossProcess {
   private child: ChildProcess | null = null;
   private stopRequested = false;
   private stderrBuf = "";
-  private announcedServer = false;
+  private lastServerUrl: string | null = null;
+  private standbyAnnounced = false;
   private announcedProblems = false;
   private announcedError = false;
 
@@ -58,7 +61,8 @@ export class MossProcess {
     if (this.child) throw new Error("MossProcess already running");
     this.stopRequested = false;
     this.stderrBuf = "";
-    this.announcedServer = false;
+    this.lastServerUrl = null;
+    this.standbyAnnounced = false;
     this.announcedProblems = false;
     this.announcedError = false;
 
@@ -107,11 +111,20 @@ export class MossProcess {
   }
 
   private scan(callbacks: RunCallbacks): void {
-    if (!this.announcedServer) {
-      const addr = parseServerUrl(this.stderrBuf);
-      if (addr) {
-        this.announcedServer = true;
-        callbacks.onServerReady?.(addr);
+    // Replayed against persisted state on every chunk, so an event already
+    // acted on (same URL, or a standby line already announced since the
+    // last URL) is a no-op the second and later times it shows up in the
+    // accumulated buffer.
+    for (const event of parseServerEvents(this.stderrBuf)) {
+      if (event.type === "url") {
+        if (event.addr.url !== this.lastServerUrl) {
+          this.lastServerUrl = event.addr.url;
+          this.standbyAnnounced = false;
+          callbacks.onServerReady?.(event.addr);
+        }
+      } else if (!this.standbyAnnounced) {
+        this.standbyAnnounced = true;
+        callbacks.onStandby?.();
       }
     }
     if (!this.announcedError) {

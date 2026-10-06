@@ -1,5 +1,5 @@
 //! The carrier's session: which vault the HTTP command carrier is serving and
-//! the token that unlocks it, as ONE record (ADR-075 rule 4). `invoke.rs`
+//! the token that unlocks it, as ONE record. `invoke.rs`
 //! holds the arms; this file holds what they run against.
 
 use std::path::PathBuf;
@@ -21,7 +21,7 @@ use crate::vault::paths::VaultRoot;
 /// pointer (which stays correct across folder switches) — see [`Self::bind`]. The token and the vault are ONE record: a token is
 /// minted when a vault is bound and retired when a different vault is bound,
 /// so a forgotten browser tab cannot follow the server to whatever folder it
-/// is next pointed at (ADR-075 rule 4). Before this, the token was minted once
+/// is next pointed at. Before this, the token was minted once
 /// per server while the root moved underneath it per request.
 ///
 /// A request never reads this cell twice. The token gate binds, admits, and
@@ -87,7 +87,7 @@ impl InvokeCtx {
     /// session now in force — authoritative across folder switches. Binding
     /// the vault already bound returns the existing session; binding a
     /// different one mints a fresh token, publishes it to that vault's
-    /// `.moss/build/http-token`, and retires the previous session — which is
+    /// `.moss/build.nosync/http-token`, and retires the previous session — which is
     /// what invalidates every token handed out for the previous vault. A serve
     /// dir that resolves to no vault retires the session in force and returns
     /// `None`: the gated tiers then 401 and the token-free tier reports no
@@ -127,7 +127,7 @@ impl InvokeCtx {
         match super::carrier_token::publish(vault.path(), &token) {
             Ok(()) => log::info!(
                 target: "preview",
-                "HTTP carrier token published under .moss/build/ (loopback-readable)"
+                "HTTP carrier token published under .moss/build.nosync/ (loopback-readable)"
             ),
             Err(e) => log::warn!(target: "preview", "could not publish HTTP carrier token: {e}"),
         }

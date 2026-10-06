@@ -1,14 +1,12 @@
 //! Watcher supervision: the sweep judges the watcher by outcomes, and this
 //! module carries the evidence between the two.
 //!
-//! Phase 3 of `docs/archive/2026-08-18-watcher-reliability-architecture.md`
-//! ("The sweep is also the watcher's supervisor"). The incident that design
-//! answers — notify's macOS FSEvents stream dying with no flag, no error, no
-//! Rescan (LOG-8D03-T0942-08-18) — emits nothing a health check could poll,
-//! so the watcher is judged by the one signal a silent-but-dead stream cannot
-//! fake: **drift the sweep catches that the watcher never delivered.**
+//! notify's macOS FSEvents stream can die with no flag, no error, no Rescan,
+//! emitting nothing a health check could poll, so the watcher is judged by the
+//! one signal a silent-but-dead stream cannot fake: **drift the sweep catches
+//! that the watcher never delivered.**
 //!
-//! ## The strike rule, exactly as the design states it
+//! ## The strike rule
 //!
 //! - **A strike is a drift catch, aged sweep-relative.** When the sweep
 //!   dispatches fresh drift it arms a candidate carrying this registry's
@@ -28,7 +26,7 @@
 //!   (File-Provider death loop, FUSE mount with no event support) degrades to
 //!   sweep-only operation with occasional retries: the n-th recreation is
 //!   honored only after `min(2^(n-1) × 60s, 1h)`. Both constants are
-//!   conservative on purpose — the design prefers a false "watcher healthy"
+//!   conservative on purpose — a false "watcher healthy" is preferred
 //!   (the sweep still bounds staleness) over recreate churn, since recreation
 //!   is itself a brief event-loss window on macOS. Any delivered batch resets
 //!   the count: a watcher that speaks is a watcher that works.
@@ -208,6 +206,27 @@ impl WatcherHealth {
     pub async fn recreate_requested(&self) {
         self.recreate.notified().await;
     }
+
+    /// Whether this folder's watcher is in the backed-off "degraded to
+    /// sweep-only operation" state `strike` already logs (above) — true from
+    /// the first strike a backoff window suppresses, false again the moment
+    /// a delivered batch proves the watcher alive. A single honored strike is
+    /// NOT degraded: one recreation is the design's ordinary self-heal, and
+    /// reporting it would flap a host's health surface on routine recovery.
+    ///
+    /// Nothing reads this today: the sweep already bounds preview staleness
+    /// to one interval regardless of watcher health (a drift dispatch runs
+    /// before a strike is even armed), so this state is silent everywhere
+    /// except the ERROR log above — for up to [`RECREATE_BACKOFF_CAP`] at a
+    /// time, a persistently broken watcher drops rename fidelity and
+    /// responsiveness to `.moss/theme` and `.moss/config.toml` (paths only
+    /// the watcher reports; see `drift_eligible` in the sweep) with no
+    /// user-visible signal. A host can fold this into its own advisory
+    /// surface — e.g. this crate's `FolderHealthChanged.degraded`, which
+    /// today reflects only the rebuild worker's overdue-build watchdog.
+    pub fn is_degraded(&self) -> bool {
+        self.degraded_logged.load(Ordering::SeqCst)
+    }
 }
 
 /// The sweep's half of the strike rule: the one armed candidate, and the two
@@ -215,7 +234,7 @@ impl WatcherHealth {
 /// matures it. Extracted from the sweep loop so the arming → maturity →
 /// recreate path is pinned by unit tests against a real ledger (spec review
 /// should-fix 2); the end-to-end fault-injection replay (kill the event
-/// stream under a live watcher) is tracked as moss#1076.
+/// stream under a live watcher) is tracked separately.
 pub struct StrikeArm {
     candidate: Option<HealthMark>,
 }
@@ -314,7 +333,7 @@ static BLIND_REPORTED: LazyLock<Mutex<std::collections::HashSet<String>>> =
 /// eligible set is empty. Those two states were indistinguishable in the log,
 /// so the heartbeat that exists to make a dead loop diagnosable reported full
 /// health while the loop compared nothing at all, 585 times, over a client's
-/// live folder with an unrebuilt edit sitting on disk (#1080).
+/// live folder with an unrebuilt edit sitting on disk.
 ///
 /// A log line and nothing else. The vaults this fires on are real people's
 /// folders, open in an editor right now; a mid-edit banner over a diagnostic

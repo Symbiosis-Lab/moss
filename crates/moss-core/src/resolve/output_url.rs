@@ -130,8 +130,8 @@ mod tests {
         // The same target, referenced from any depth, is the same URL — and the
         // mixed-case source folder resolves to the slug the file lands under.
         assert_eq!(
-            pinned_url("MIRROR/潮汐/cover-IMG.png", &o),
-            "/mirror/%E6%BD%AE%E6%B1%90/cover-IMG.png"
+            pinned_url("MIRROR/河灣/cover-IMG.png", &o),
+            "/mirror/%E6%B2%B3%E7%81%A3/cover-IMG.png"
         );
         // Leading `/` (author-written absolute ref) is tolerated, not doubled.
         assert_eq!(

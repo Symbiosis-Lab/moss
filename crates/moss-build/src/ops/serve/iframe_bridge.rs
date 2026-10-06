@@ -20,19 +20,20 @@ use axum::{
     response::IntoResponse,
 };
 use http_body_util::BodyExt;
+use lol_html::{element, HtmlRewriter, Settings};
 
 /// Bridge script loaded from separate JS file for editor support
 const IFRAME_BRIDGE_SCRIPT: &str = include_str!("js/iframe-bridge.js");
 
-/// Preview-only blueprint placeholder for media that isn't there yet.
+/// Preview-only blueprint placeholder for a file that isn't there yet.
 ///
-/// Built from `frontend/bridge/asset-placeholder.ts`. Injected into `<head>`, not
+/// Built from the desktop app's asset-placeholder bridge script. Injected into `<head>`, not
 /// before `</body>` like everything else in this module: it registers a
 /// capture-phase `error` listener, and an image that fails while the parser is
 /// still working through the body would fire before a body-end script existed.
 ///
 /// PREVIEW ONLY, deliberately. A published site never carries this, because a
-/// published site can never contain a broken image — moss refuses to deploy one.
+/// published site can never contain a broken file — moss refuses to deploy one.
 /// The placeholder is a working state, and the work happens locally.
 const ASSET_PLACEHOLDER_SCRIPT: &str = include_str!("js/asset-placeholder.js");
 
@@ -196,11 +197,16 @@ box-shadow:0 4px 12px rgba(0,0,0,0.18);pointer-events:none;z-index:50}}\
 /// CSS → survives idiomorph morphs (re-injected on every served response).
 /// `content-visibility` is recent WebKit (Safari 18+); older engines ignore the
 /// declaration → graceful no-op, no regression.
+///
+/// Excludes media inside a `.moss-grid[data-scroll]` row (`:not(.moss-grid[data-scroll]
+/// *)`): a scroll row's cards share ONE grid row track (`grid-auto-flow: column`), so
+/// an off-screen card falling back to the 600px placeholder height stretches every
+/// card in the row, not just the one out of view.
 const PREVIEW_CHEAP_REFLOW_STYLE: &str = "<style id=\"moss-preview-cheap-reflow\">\
-article figure.moss-image,\
-article p:has(> img),\
-article p:has(> picture),\
-article .moss-embed{\
+article figure.moss-image:not(.moss-grid[data-scroll] *),\
+article p:has(> img):not(.moss-grid[data-scroll] *),\
+article p:has(> picture):not(.moss-grid[data-scroll] *),\
+article .moss-embed:not(.moss-grid[data-scroll] *){\
 content-visibility:auto;contain-intrinsic-size:auto none auto 600px}\
 </style>\n";
 
@@ -220,8 +226,8 @@ content-visibility:auto;contain-intrinsic-size:auto none auto 600px}\
 /// is theme-aware, so the wash stays legible in dark mode.
 ///
 /// `.moss-fm-flash` is the hover-driven strength of the same wash: hovering a
-/// chip in the property bar flashes the element(s) the field renders as
-/// (docs/archive/2026-08-14-frontmatter-hints.md, tier 2). Class-based rather
+/// chip in the property bar flashes the element(s) the field renders as.
+/// Class-based rather
 /// than an inline `animation` write because hover needs a clean clear on
 /// hover-out and a reduced-motion form: under `prefers-reduced-motion` the
 /// animation is dropped and the class holds a static tint for as long as the
@@ -254,7 +260,7 @@ to{background-color:transparent}}\
 ///     (set in shell CSS) shows through, avoiding WKWebView's white
 ///     default.
 ///
-/// # Chrome clearance: owned by the shell (ADR-039)
+/// # Chrome clearance: owned by the shell
 ///
 /// The preview iframe is inset below the floating titlebar by the shell
 /// (`#moss-preview-iframe { top: var(--moss-titlebar-height) }`), so the
@@ -262,11 +268,8 @@ to{background-color:transparent}}\
 /// clearance of its own — no body padding, no `scroll-padding-top`. The
 /// served document is byte-identical for a preview and a real web visit.
 ///
-/// The `moss-shell-frame` class described below is still injected but is
-/// now **inert**: `site.css` defines no rules for it. It is retained so
-/// this change stays trivially revertable; removing the marker middleware
-/// and the topology check is follow-up work on #926. The historical
-/// two-mechanism design was:
+/// The `moss-shell-frame` class is still injected by both mechanisms below,
+/// but `site.css` defines no rules for it, so it has no visible effect:
 ///
 ///   1. **Server-side, before first paint (primary path):** when the
 ///      request URL carries the `__moss_shell` query param (the SHELL_MARKER
@@ -292,7 +295,7 @@ to{background-color:transparent}}\
 /// # Marker propagation
 ///
 /// The shell stamps `__moss_shell=1` onto every iframe URL it constructs
-/// (see `frontend/app/preview/shell-marker.ts`). The bridge's link-click
+/// (see the desktop app's shell-marker module). The bridge's link-click
 /// interceptor re-stamps the marker when navigating internally (see the
 /// link interceptor in `iframe-bridge.ts`). Together this covers ~99% of
 /// in-iframe navigation paths: link clicks, programmatic Navigation API
@@ -302,34 +305,30 @@ to{background-color:transparent}}\
 /// # Nested iframes (chrome leak guard)
 ///
 /// Nested `<iframe src="./sketch.html">` loads from previewed content
-/// (e.g. p5 sketches in the 刘果 `交互` pages) bypass the bridge entirely
+/// (e.g. p5 sketches in a site's interactive pages) bypass the bridge entirely
 /// when constructing the URL — the browser fires the request directly
 /// from the parent document's parser. So the marker is never present on
 /// the nested URL, the middleware doesn't add the class, and the bridge's
 /// topology check (running inside the nested iframe) confirms it's not
 /// shell-mounted and skips the class-add path. **Result: nested iframes
 /// have no class, no padding, no flash, no inverse-flash. Chrome geometry
-/// cannot leak in.** This was the load-bearing guarantee that motivated
-/// the topology check originally; it survives intact.
+/// cannot leak in.**
 ///
 /// # Real-browser parity
 ///
-/// A real-browser visit (e.g. liu-guo.com served from GitHub Pages) never
+/// A real-browser visit (e.g. a site served from GitHub Pages) never
 /// hits this middleware and never loads the bridge script. The HTML is
 /// served byte-identical to what the moss build wrote out, so the
 /// served-on-web layout is unchanged. (The `__moss_shell` query param is
 /// stamped only by the moss shell, never by published links.)
 ///
-/// # No chrome-height constant here (ADR-039)
+/// # No chrome-height constant here
 ///
-/// This used to emit `scroll-padding-top: 48px` so anchor targets cleared the
-/// floating titlebar, duplicating `system::utils::TITLEBAR_HEIGHT` and the
-/// `.moss-shell-frame body { padding-top }` literal in `site.css` (history:
-/// 48 → 38 → 52 → 48). The shell now insets the preview iframe below the
-/// chrome, so the iframe's viewport top *is* the first visible row: an anchor
-/// scrolled to y=0 lands fully visible, and scroll padding would push it down
-/// by a titlebar's height for no reason. The constant lives in exactly one
-/// place again — do not reintroduce it here.
+/// The shell insets the preview iframe below the chrome, so the iframe's
+/// viewport top *is* the first visible row: an anchor scrolled to y=0 lands
+/// fully visible, and scroll padding would push it down by a titlebar's height
+/// for no reason. The height constant (`system::utils::TITLEBAR_HEIGHT`) lives
+/// in exactly one place — do not duplicate it here.
 ///
 /// `site.css` does set a root `scroll-padding-top`, and that is a different
 /// constant for a different piece of chrome: the site's own floating nav
@@ -480,9 +479,6 @@ fn find_class_attr(tag_inner: &str) -> Option<usize> {
 /// Rewriting the attribute on an inactive form does not make the form active —
 /// `artalk.ts` reads and submits the URL as a fetch destination, but the section's
 /// inactive class is set at render time and not re-examined during submission.
-/// Verified by reading `render_comment_section` in `build/features/comment/render.rs`:
-/// the `active` flag controls which section tag is emitted (with or without
-/// `moss-service-inactive`), and once baked that class does not change at runtime.
 ///
 /// Only one form per page is expected (single `#moss-comment-form` id). If somehow
 /// multiple forms are present, only the first occurrence is rewritten (the `find`
@@ -501,23 +497,53 @@ fn rewrite_comment_form_server_url(html: &str) -> String {
     format!("{before}{FORM_MARKER}/__moss/comments\"{after}")
 }
 
-/// Remove `<!--moss:no-preview-->…<!--/moss:no-preview-->` regions from served
-/// preview HTML. The published artifact keeps these (mode-independent); only
-/// the preview origin must not fire foreign analytics on every reload.
+/// Remove every `<script data-moss-deploy-only …>…</script>` element from
+/// served preview HTML (the pageview beacon, the site-wide analytics tag —
+/// `build::features::mark_deploy_only` is the sole writer of the attribute).
+/// The published artifact keeps these scripts (mode-independent); only the
+/// preview origin must not fire foreign analytics/tracking on every reload —
+/// and, since the attribute survives ship (`build::ship::apply_transform`
+/// deliberately leaves it alone), this now holds regardless of which
+/// generation backed the response: a page served out of a SHIP-TRANSFORMED
+/// generation strips the same as fresh staging output. An earlier
+/// `<!--moss:no-preview-->` comment-marker scheme could not: ship removed
+/// the marker but kept the wrapped script for deploy, so a shipped
+/// generation's markup had nothing left for a marker-based strip to find.
+///
+/// Uses `lol_html` (moss's existing HTML-rewriting tool, cf.
+/// `build/markdown/html_post.rs`, `build/feeds/search.rs`,
+/// `build/site_meta/spa_inject.rs`) rather than a hand-rolled scan: a real
+/// HTML5 tokenizer is quote-aware inside an attribute value (a bare
+/// `find('>')` is not) and applies the actual script-end-tag rule — the
+/// first case-insensitive `</script` sequence closes the element regardless
+/// of what the raw text around it looks like, the same rule a browser
+/// applies. `Element::remove()` drops the element AND its content, so the
+/// script body goes with it, not just its tags. Malformed input that lol_html
+/// can't rewrite is passed through unchanged rather than dropped.
 fn strip_preview_only_scripts(html: &str) -> String {
-    const OPEN: &str = "<!--moss:no-preview-->";
-    const CLOSE: &str = "<!--/moss:no-preview-->";
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    while let Some((before, after_open)) = rest.split_once(OPEN) {
-        out.push_str(before);
-        match after_open.split_once(CLOSE) {
-            Some((_region, after_close)) => rest = after_close,
-            None => { rest = after_open; break; } // unbalanced: drop the marker, keep going
-        }
+    let mut output = Vec::with_capacity(html.len());
+    let rewritten: Result<(), String> = (|| {
+        let mut rewriter = HtmlRewriter::new(
+            Settings {
+                element_content_handlers: vec![element!(
+                    "script[data-moss-deploy-only]",
+                    |el| {
+                        el.remove();
+                        Ok(())
+                    }
+                )],
+                ..Settings::default()
+            },
+            |c: &[u8]| output.extend_from_slice(c),
+        );
+        rewriter.write(html.as_bytes()).map_err(|e| e.to_string())?;
+        rewriter.end().map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    match rewritten {
+        Ok(()) => String::from_utf8(output).unwrap_or_else(|_| html.to_string()),
+        Err(_) => html.to_string(),
     }
-    out.push_str(rest);
-    out
 }
 
 
@@ -698,9 +724,11 @@ pub async fn inject_iframe_bridge(
     // URL. The preview-shim.ts rewrite stays as defense-in-depth.
     let html = rewrite_comment_form_server_url(&html);
 
-    // Step 1b: strip <!--moss:no-preview-->…<!--/moss:no-preview--> regions.
-    // The published artifact keeps them (analytics script is mode-independent);
-    // the preview origin must not fire foreign analytics on every reload.
+    // Step 1b: strip every `<script data-moss-deploy-only>` element (the
+    // beacon, the analytics tag). The published artifact keeps them
+    // (mode-independent); the preview origin must not fire foreign
+    // analytics on every reload — regardless of which generation this
+    // response was served from.
     let html = strip_preview_only_scripts(&html);
 
     // Step 1c: guarantee data-moss-preview on <body>. The zero-flicker window
@@ -733,7 +761,7 @@ pub async fn inject_iframe_bridge(
 
     // Last: the blueprint placeholder, into <head> rather than before </body>
     // (see `inject_placeholder_into_head`). Preview-only — a published site
-    // cannot contain a broken image, so it has nothing to placeholder.
+    // cannot contain a broken file, so it has nothing to placeholder.
     let injected_html = inject_placeholder_into_head(&html);
 
     // Remove Content-Length header since we modified the body

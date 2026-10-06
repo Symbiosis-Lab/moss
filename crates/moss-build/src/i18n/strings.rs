@@ -140,7 +140,14 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "切换菜单",
             Language::ZhHant => "切換選單",
         },
-        // Skip link (WCAG 2.4.1, moss#1047): the first focusable element on
+        // `[site] header = "nav"` masthead: the link list's leading item,
+        // replacing the brand link that mode drops.
+        "nav_home" => match lang {
+            Language::En => "Home",
+            Language::ZhHans => "首页",
+            Language::ZhHant => "首頁",
+        },
+        // Skip link (WCAG 2.4.1): the first focusable element on
         // every page, visually hidden until it receives keyboard focus, and
         // jumping straight to <main id="main-content"> — see shell.html and
         // `moss-skip-link` in site.css / components.rs.
@@ -167,7 +174,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "第 {n} 篇，共 {total} 篇",
             Language::ZhHant => "第 {n} 篇，共 {total} 篇",
         },
-        // Floating nav island (ADR-049). All three name a control that has no
+        // Floating nav island. All three name a control that has no
         // visible text of its own: the trail's landmark, the "…" that stands in
         // for the levels the trail had to drop, and the sections glyph.
         "nav_breadcrumb" => match lang {
@@ -187,7 +194,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         },
         // Search palette strings. Consumed by the site runtime, not by any Rust
         // emitter: generate-artifacts' `search-runtime` emitter lowers these
-        // (plus `nav_search`) into frontend/site/search.generated.ts, so the
+        // (plus `nav_search`) into js-src/site/search.generated.ts, so the
         // client and Rust never drift.
         "search_placeholder" => match lang {
             Language::En => "Search this site",
@@ -208,6 +215,11 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::En => "Toggle theme",
             Language::ZhHans => "切换主题",
             Language::ZhHant => "切換主題",
+        },
+        "hero_pause" => match lang {
+            Language::En => "Pause the changing pictures",
+            Language::ZhHans => "暂停图片轮播",
+            Language::ZhHant => "暫停圖片輪播",
         },
         "reading_preferences" => match lang {
             Language::En => "Reading preferences",
@@ -250,6 +262,42 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::En => "Tags",
             Language::ZhHans => "标签",
             Language::ZhHant => "標籤",
+        },
+
+        // Per-field section headings on a term page (`moss-term-role`,
+        // task A9), looked up by frontmatter field name.
+        "term_role_author" => match lang {
+            Language::En => "Author",
+            Language::ZhHans | Language::ZhHant => "作者",
+        },
+        // A declared kind may list `tags` beside a person field; the heading
+        // is the dimension's own name, same as its namespace root.
+        "term_role_tags" => match lang {
+            Language::En => "Tags",
+            Language::ZhHans => "标签",
+            Language::ZhHant => "標籤",
+        },
+        "term_role_editor" => match lang {
+            Language::En => "Editor",
+            Language::ZhHans => "编辑",
+            Language::ZhHant => "編輯",
+        },
+        "term_role_jury" => match lang {
+            Language::En => "Jury",
+            Language::ZhHans => "评审",
+            Language::ZhHant => "評審",
+        },
+        "term_role_location" => match lang {
+            Language::En => "Location",
+            Language::ZhHans => "地点",
+            Language::ZhHant => "地點",
+        },
+        // The automatic place line's label-to-links separator (task A7) — a
+        // distinct string from any hard-coded punctuation, so a site's
+        // language controls it the same way every other i18n string does.
+        "place_line_separator" => match lang {
+            Language::En => ": ",
+            Language::ZhHans | Language::ZhHant => "：",
         },
 
         // RSS / Subscribe
@@ -494,5 +542,14 @@ mod tests {
     #[test]
     fn test_published_with_moss_zh_hant() {
         assert_eq!(t(Language::ZhHant, "published_with_moss"), "青苔發佈");
+    }
+
+    /// Regression: `term_role_jury` copy-pasted `term_role_author`'s
+    /// `ZhHans | ZhHant` shared arm, which happens to be right for 作者 but
+    /// wrong for jury — Simplified is 评审, not Traditional's 評審.
+    #[test]
+    fn test_term_role_jury_simplified_and_traditional_glyphs_differ() {
+        assert_eq!(t(Language::ZhHans, "term_role_jury"), "评审");
+        assert_eq!(t(Language::ZhHant, "term_role_jury"), "評審");
     }
 }

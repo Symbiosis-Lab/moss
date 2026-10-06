@@ -1,6 +1,5 @@
 // @symbiosis-lab/moss-syntax — the `.` (core) export: zero CM6 at runtime,
-// `@lezer/markdown` type-only. See README.md; design:
-// docs/archive/2026-08-11-cm6-extraction-design.md (#1020).
+// `@lezer/markdown` type-only. See README.md.
 //
 // The module set is collision-free by construction (verified at L1): each
 // module exports a disjoint name set, so a flat re-export is unambiguous.

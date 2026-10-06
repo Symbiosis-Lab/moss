@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::lifecycle::cas_heal::rematerialize;
 use crate::types::assets::{AssetRegistry, AssetState};
 use crate::types::content::{MediaMetadata, SiteHashes};
 use image::{DynamicImage, ImageBuffer, Rgb};
@@ -23,7 +24,7 @@ fn to_params_contains_encoding_fields() {
     assert_eq!(v["quality"], 75);
     assert_eq!(v["max_edge"], 1600);
     assert_eq!(v["strip_exif"], false);
-    assert_eq!(v["flatten_alpha"], true);
+    assert_eq!(v["alpha_preserved"], true);
     // min_size_kb must NOT be in cache params.
     assert!(v.get("min_size_kb").is_none());
 }
@@ -156,56 +157,76 @@ fn fingerprint_deterministic_same_input() {
     img.save_with_format(&img_path, image::ImageFormat::Jpeg)
         .unwrap();
 
-    let items = vec![ImageConversionItem {
-        source_path: PathBuf::from("a.jpg"),
-        source_oid: "0123456789abcdef".to_string(),
-        ext: "jpg".to_string(),
-        dimensions: None,
-        skip: None,
-    }];
     let cfg = ImageCompressionConfig::default();
-
     let source_str = root.to_string_lossy().to_string();
-    let fp1 = compute_image_set_fingerprint(&source_str, &items, &cfg);
-    let fp2 = compute_image_set_fingerprint(&source_str, &items, &cfg);
+    let fp1 = compute_image_item_fingerprint(&source_str, Path::new("a.jpg"), &cfg);
+    let fp2 = compute_image_item_fingerprint(&source_str, Path::new("a.jpg"), &cfg);
     assert_eq!(fp1, fp2);
-    assert_eq!(fp1.len(), 64, "sha256 hex should be 64 chars");
+    assert!(fp1.is_some(), "source exists and is stat-able");
 }
 
+/// An unstat-able source (never written) must not produce a fingerprint —
+/// the caller (`dispatch_image_conversions`) treats `None` as "cannot prove
+/// unchanged" and dispatches it rather than caching a bogus value.
 #[test]
-fn fingerprint_sort_agnostic() {
+fn fingerprint_missing_source_returns_none() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    for name in ["a.jpg", "b.jpg"] {
-        let p = root.join(name);
-        let buf: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(2, 2, |_, _| Rgb([4, 5, 6]));
-        let img = DynamicImage::ImageRgb8(buf);
-        img.save_with_format(&p, image::ImageFormat::Jpeg).unwrap();
-    }
-
-    let items1 = vec![
-        ImageConversionItem {
-            source_path: PathBuf::from("a.jpg"),
-            source_oid: "a".to_string(),
-            ext: "jpg".to_string(),
-            dimensions: None,
-            skip: None,
-        },
-        ImageConversionItem {
-            source_path: PathBuf::from("b.jpg"),
-            source_oid: "b".to_string(),
-            ext: "jpg".to_string(),
-            dimensions: None,
-            skip: None,
-        },
-    ];
-    let items2 = vec![items1[1].clone(), items1[0].clone()];
-
     let cfg = ImageCompressionConfig::default();
-    let root_str = root.to_string_lossy().to_string();
-    let fp1 = compute_image_set_fingerprint(&root_str, &items1, &cfg);
-    let fp2 = compute_image_set_fingerprint(&root_str, &items2, &cfg);
-    assert_eq!(fp1, fp2);
+    let fp = compute_image_item_fingerprint(
+        &tmp.path().to_string_lossy(),
+        Path::new("missing.jpg"),
+        &cfg,
+    );
+    assert!(fp.is_none(), "an unstat-able source must not produce a fingerprint");
+}
+
+/// A config change re-dispatches every image even when no file moved: the compression
+/// params are part of what the gate compares.
+#[test]
+fn the_fingerprint_moves_with_the_compression_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_big_jpeg(&tmp.path().join("a.jpg"), 40, 30);
+    let root = tmp.path().to_string_lossy().to_string();
+    let fp = |config: &ImageCompressionConfig| compute_image_item_fingerprint(&root, Path::new("a.jpg"), config);
+
+    let default = ImageCompressionConfig::default();
+    assert_ne!(fp(&default), fp(&ImageCompressionConfig { quality: default.quality - 10, ..default.clone() }));
+}
+
+/// What `compute_image_item_fingerprint` feeds the fingerprint: the file's whole stat
+/// record, as `FileStat::of` reads it — not a subset of it.
+#[test]
+fn the_fingerprint_of_a_file_is_the_fingerprint_of_its_whole_stat_record() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a.jpg");
+    make_big_jpeg(&file, 40, 30);
+    let cfg = ImageCompressionConfig::default();
+
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&file).unwrap());
+    assert_eq!(
+        compute_image_item_fingerprint(&tmp.path().to_string_lossy(), Path::new("a.jpg"), &cfg),
+        Some(ImageFingerprint { stat, params: cfg.to_params() }),
+    );
+}
+
+/// Replace-via-rename with size and mtime kept: only the inode says the image is a
+/// different file, and the dispatch gate must not carry the old variant forward over it.
+#[cfg(unix)]
+#[test]
+fn an_image_replaced_by_rename_with_its_size_and_mtime_kept_has_a_new_fingerprint() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a.jpg");
+    make_big_jpeg(&file, 40, 30);
+    let cfg = ImageCompressionConfig::default();
+    let root = tmp.path().to_string_lossy().to_string();
+    let before = compute_image_item_fingerprint(&root, Path::new("a.jpg"), &cfg);
+
+    let mut bytes = fs::read(&file).unwrap();
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0xff;
+    crate::build::stat::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
+
+    assert_ne!(compute_image_item_fingerprint(&root, Path::new("a.jpg"), &cfg), before);
 }
 
 // ----- convert_single_image happy path + cache hit + legacy sentinel handling -----
@@ -324,13 +345,117 @@ fn convert_single_image_happy_path() {
     );
 
     // Transform record has an image/webp entry with that oid.
-    let record = h.transforms.get(&source_oid).unwrap();
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     let entry = record.transforms.get("image/webp").unwrap();
     assert_eq!(entry.oid, oid);
     assert_eq!(entry.size, outcome.webp_size);
 }
 
+/// Write an 8×8 RGBA PNG whose (0,0) corner pixel is fully transparent
+/// (alpha 0, red channel set so a white-flatten is distinguishable) and
+/// every other pixel opaque red.
+fn make_corner_transparent_png(path: &Path) {
+    use image::Rgba;
+    let buf: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(8, 8, |x, y| {
+        if x == 0 && y == 0 {
+            Rgba([255, 0, 0, 0])
+        } else {
+            Rgba([255, 0, 0, 255])
+        }
+    });
+    DynamicImage::ImageRgba8(buf)
+        .save_with_format(path, image::ImageFormat::Png)
+        .unwrap();
+}
+
+/// A transparent PNG (a logo, an icon) must come out of the WebP pass with
+/// its alpha channel intact, not flattened to an opaque white box.
+/// `encode_webp` already has an alpha-aware `from_rgba` branch; this pins
+/// that it actually gets alpha data to encode.
+#[test]
+fn convert_single_image_webp_keeps_alpha_on_transparent_png() {
+    let h = harness();
+    let src = h._tmp.path().join("logo.png");
+    make_corner_transparent_png(&src);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let cfg = ImageCompressionConfig::default();
+
+    let outcome = convert_single_image(
+        &src,
+        &source_oid,
+        "logo.webp",
+        &h.temp,
+        &h.staging,
+        &h.objects,
+        &h.transforms,
+        &cfg,
+        None,
+        None,
+        &HashMap::new(),
+    );
+    assert!(
+        outcome.error.is_none(),
+        "expected no error: {:?}",
+        outcome.error
+    );
+
+    let bytes = fs::read(h.staging.join("logo.webp")).unwrap();
+    let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::WebP)
+        .expect("decode emitted webp");
+    assert!(
+        decoded.color().has_alpha(),
+        "emitted WebP must keep an alpha channel for a transparent PNG source"
+    );
+    let rgba = decoded.to_rgba8();
+    assert_eq!(
+        rgba.get_pixel(0, 0)[3],
+        0,
+        "corner pixel must stay transparent, not flattened to opaque white"
+    );
+}
+
 // ----- Task 5: ladder rung encodes -----
+
+#[cfg(unix)]
+#[test]
+fn regenerated_cloud_variants_are_available_to_singleflight_followers() {
+    use crate::build::cache::{Singleflight, ObjectStore};
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 2000, 1200);
+    let source_oid = ObjectStore::hash_file(&src).unwrap();
+    let cfg = ImageCompressionConfig::default();
+    let convert = || convert_single_image(
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging,
+        &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+    );
+    let first = convert();
+    assert!(first.error.is_none(), "{:?}", first.error);
+    assert_eq!(first.rungs.len(), 2, "exercise both responsive widths");
+    let oids: Vec<_> = std::iter::once(first.webp_oid.as_ref().unwrap())
+        .chain(first.rungs.iter().map(|r| r.oid.as_ref().unwrap())).collect();
+    let _cloud: Vec<_> = oids.iter().map(|oid| {
+        crate::build::icloud::pretend::evicted_until_replaced(&h.objects.blob_path(oid))
+    }).collect();
+    crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(Some(std::time::Duration::from_millis(20))));
+    let flights = Singleflight::new();
+    assert!(flights.try_start(&source_oid).0);
+    let (first_caller, follower) = flights.try_start(&source_oid);
+    assert!(!first_caller, "duplicate content joins the active encode");
+    let leader = convert();
+    crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(None));
+    assert!(leader.error.is_none(), "{:?}", leader.error);
+    assert!(leader.rungs.iter().all(|r| r.error.is_none()), "{:?}", leader.rungs);
+    flights.complete(&source_oid, leader);
+    let follower = follower.borrow().clone().expect("the follower receives the leader's outcome");
+    for (oid, rel, dims) in std::iter::once((follower.webp_oid.unwrap(), "copy.webp".to_string(), (2000, 1200)))
+        .chain(follower.rungs.into_iter().map(|r| (r.oid.unwrap(), format!("copy.w{}.webp", r.width), (r.width, r.width * 1200 / 2000))))
+    {
+        assert!(oids.contains(&&oid), "regeneration preserves content identity");
+        assert!(ensure_staged(&h.objects, &oid, &h.staging.join(&rel), &rel), "follower has only the oid: {rel}");
+        assert_eq!(staged_webp_dims(&h.staging.join(&rel)), dims);
+    }
+}
 
 /// Decoded (width, height) of a staged webp output file.
 fn staged_webp_dims(path: &Path) -> (u32, u32) {
@@ -391,7 +516,7 @@ fn rung_encode_produces_exact_width_ladder_files() {
     // Rungs are cached under their own transform kinds (mirrors the
     // "image/sized-raster" idiom) so warm rebuilds link instead of
     // re-encoding.
-    let record = h.transforms.get(&source_oid).unwrap();
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     assert!(record.transforms.contains_key("image/webp-w800"));
     assert!(record.transforms.contains_key("image/webp-w1600"));
 
@@ -667,6 +792,55 @@ fn base_webp_width_matches_deployed_width_within_one_px() {
     }
 }
 
+/// An elongated source keeps its short edge: the base is resized to
+/// `deployed_long_edge`, not to a 2400 long edge, and its width equals the
+/// `deployed_width` the srcset descriptor names. Past WebP's 16383 limit the
+/// long edge clamps there — the encode must succeed, not fail on the limit.
+#[test]
+fn elongated_base_keeps_its_short_edge_and_stays_within_webp_limits() {
+    // max_edge 240 scales the floor case down (floor 120) to keep the encode
+    // cheap; the rule is the same at any cap. 17000×100 is the only proof of
+    // the 16383 clamp, so it runs at the real default.
+    let small = ImageCompressionConfig { max_edge: 240, ..Default::default() };
+    let real = ImageCompressionConfig::default();
+    for (w, hh, cfg, want) in [
+        (300u32, 130u32, &small, (277u32, 120u32)),
+        (300, 30, &small, (300, 30)),
+        (17000, 100, &real, (16383, 96)),
+    ] {
+        let h = harness();
+        let src = h._tmp.path().join("scroll.jpg");
+        make_big_jpeg(&src, w, hh);
+        let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+        let outcome = convert_single_image(
+            &src,
+            &source_oid,
+            "scroll.webp",
+            &h.temp,
+            &h.staging,
+            &h.objects,
+            &h.transforms,
+            cfg,
+            None,
+            None,
+            &HashMap::new(),
+        );
+        assert!(outcome.error.is_none(), "{w}x{hh}: {:?}", outcome.error);
+        let got = staged_webp_dims(&h.staging.join("scroll.webp"));
+        assert_eq!(got, want, "{w}x{hh}");
+        let bound = moss_core::asset_paths::deployed_long_edge(w, hh, cfg.max_edge);
+        assert_eq!(got.0, w * bound / w.max(hh), "{w}x{hh}");
+    }
+}
+
+/// A cache entry written under the long-edge-only rule must miss: its
+/// pixels are the old strip. The params are the transform cache key.
+#[test]
+fn to_params_names_the_resize_policy() {
+    let v = ImageCompressionConfig::default().to_params();
+    assert_eq!(v["resize_policy"], 2);
+}
+
 /// Base-failure promise retraction (review fix): blocking.rs registers
 /// the rung URLs as Pending BEFORE the worker runs; when the BASE
 /// conversion fails, the worker must `set_failed` every registered rung
@@ -685,11 +859,11 @@ async fn base_failure_fails_registered_rung_promises() {
     fs::write(root.join(img_rel), &corrupt).unwrap();
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(img_rel)).unwrap();
 
@@ -707,6 +881,7 @@ async fn base_failure_fails_registered_rung_promises() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -715,6 +890,8 @@ async fn base_failure_fails_registered_rung_promises() {
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
 
     let mut services = BuildServices::headless();
@@ -739,6 +916,104 @@ async fn base_failure_fails_registered_rung_promises() {
     }
 }
 
+/// A base-failure advisory's `item` must be the site-relative path a click
+/// can actually open, not a bare filename. Before the fix, `base_failed`
+/// stripped the source path down to `Path::file_name()`; a source nested
+/// under a subdirectory (the field bug: a photo under `图片/摄影/`) then
+/// pointed the "open this file" click at `<site_root>/<basename>`, which
+/// exists nowhere. Same corrupt-JPEG trick as
+/// `base_failure_fails_registered_rung_promises`, but nested, and captured
+/// through the `BuildReporter` port — the only channel a headless worker
+/// (no Job registry, no window) hands an advisory out through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn base_failed_advisory_names_the_full_nested_source_path() {
+    use crate::build::ports::reporter::BuildReporter;
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let img_rel = "图片/摄影/1570c6b2.jpg";
+    fs::create_dir_all(root.join("图片/摄影")).unwrap();
+    // JPEG magic bytes + garbage: passes has_image_magic, fails decode.
+    let mut corrupt = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    corrupt.extend_from_slice(&[0xAB; 4096]);
+    fs::write(root.join(img_rel), &corrupt).unwrap();
+
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(img_rel)).unwrap();
+
+    let run_ctx = ImageRunContext {
+        items: vec![ImageConversionItem {
+            source_path: PathBuf::from(img_rel),
+            source_oid,
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        config: ImageCompressionConfig::default(),
+        dir_overrides: std::collections::HashMap::new(),
+        tx: None,
+        rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
+        suppressed: Default::default(),
+    };
+
+    let recorder = std::sync::Arc::new(RecordingReporter::default());
+    let mut services = BuildServices::headless();
+    services.reporter = recorder.clone();
+    let services = std::sync::Arc::new(services);
+    services.begin_ui_bound();
+    let services_clone = services.clone();
+    tokio::task::spawn_blocking(move || {
+        run_image_conversion(&services_clone, &run_ctx);
+    })
+    .await
+    .unwrap();
+
+    let advisory = recorder
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|e| match e {
+            PipelineEvent::BackgroundProgress { completed: true, advisories, .. } => {
+                advisories.iter().find(|a| a.item.is_some()).cloned()
+            }
+            _ => None,
+        })
+        .expect("the completion event must carry the base-failure advisory");
+
+    let item = advisory.item.expect("advisory names a file");
+    assert_eq!(
+        item, img_rel,
+        "advisory item must be the full nested site-relative source path, not a basename"
+    );
+    // The guard for the whole class: whatever `item` names, it must actually
+    // resolve under the site root — this is what the frontend's click-to-open
+    // relies on (`resolveAgainstFolder`, which joins the folder + item verbatim).
+    assert!(
+        root.join(&item).exists(),
+        "site_root.join(item) must resolve to the real source file on disk"
+    );
+}
+
 /// A source moss cannot hash must retract its promises, not go quiet.
 ///
 /// The hash-failure arm was the one failure in the worker that told nobody:
@@ -746,11 +1021,12 @@ async fn base_failure_fails_registered_rung_promises() {
 /// and every rung `blocking.rs` had promised stayed Pending forever. The
 /// author saw a placeholder that never resolved and no advisory explaining
 /// it, and the published site referenced a `.webp` that was never staged —
-/// a `<source>` 404 `<picture>` cannot recover from (ADR-013).
+/// a `<source>` 404 `<picture>` cannot recover from.
 ///
-/// The cloud gate above this arm already claims the one transient reason a
-/// readable file fails to hash, so what is left is a real I/O failure and
-/// gets a real failure's answer. Driven through `run_image_conversion` with
+/// The cloud gate above this arm, and the arm before it for a source that
+/// went back to the cloud since, claim the one transient reason a readable
+/// file fails to hash, so what is left is a real I/O failure and gets a real
+/// failure's answer. Driven through `run_image_conversion` with
 /// an empty `source_oid` (forcing the deferred hash) over a path that is a
 /// DIRECTORY: it exists, it is not in the cloud, and reading it fails.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -761,11 +1037,11 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
     fs::create_dir_all(root.join(img_rel)).unwrap();
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
 
     // Mirror blocking.rs: base + rungs registered Pending up front
     // (scan dims 2000×1200 → ladder [800, 1600]).
@@ -783,6 +1059,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -791,6 +1068,8 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
 
     let mut services = BuildServices::headless();
@@ -834,11 +1113,11 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
     fs::write(root.join("photo.w800.webp"), user_bytes).unwrap();
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
     // Simulate the asset-copy leg having landed the user's file in
     // staging (it runs independently of the image worker).
     fs::write(staging.join("photo.w800.webp"), user_bytes).unwrap();
@@ -855,6 +1134,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -863,6 +1143,8 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
         dir_overrides: std::collections::HashMap::new(),
         tx: Some(tx.clone()),
         rung_collisions,
+        carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
 
     let services = std::sync::Arc::new(BuildServices::headless());
@@ -943,7 +1225,7 @@ fn convert_single_image_caches_placeholder_meta_under_stat_key() {
     // media/meta is now cached under the stat key with real placeholder data.
     let record = h
         .transforms
-        .get(stat_key)
+        .get_with(stat_key, crate::build::cache::RecordMode::Request)
         .expect("media/meta should be cached under the stat key");
     let entry = record
         .transforms
@@ -1054,7 +1336,7 @@ fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
             params: serde_json::Value::Null,
         },
     );
-    h.transforms.put(&record).unwrap();
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
     let cfg = ImageCompressionConfig::default();
     let outcome = convert_single_image(
@@ -1087,7 +1369,7 @@ fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
     );
 
     // Sentinel record overwritten with a real entry.
-    let record = h.transforms.get(&source_oid).unwrap();
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     let entry = record.transforms.get("image/webp").unwrap();
     assert!(!entry.oid.is_empty(), "sentinel oid must be replaced");
     assert_ne!(entry.params, serde_json::Value::Null);
@@ -1135,7 +1417,7 @@ fn convert_single_image_writes_webp_even_when_larger_than_source() {
         "WebP file must land on disk"
     );
 
-    let record = h.transforms.get(&source_oid).unwrap();
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     let entry = record.transforms.get("image/webp").unwrap();
     assert!(
         !entry.oid.is_empty(),
@@ -1520,7 +1802,7 @@ fn should_skip_ignores_legacy_sentinel() {
             params: serde_json::Value::Null,
         },
     );
-    h.transforms.put(&record).unwrap();
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
     let cfg = ImageCompressionConfig {
         min_size_kb: 0,
@@ -1556,7 +1838,7 @@ fn should_skip_returns_none_for_normal_jpeg() {
 
 #[test]
 fn should_skip_html_saved_as_png() {
-    // The Yi-website case: server returned a 404 HTML page that was saved
+    // A real site's case: server returned a 404 HTML page that was saved
     // with a .png extension.
     let h = harness();
     let src = h._tmp.path().join("Test.png");
@@ -1631,7 +1913,7 @@ fn should_skip_not_an_image_real_jpeg_passes() {
     );
 }
 
-// ----- format-probe cache (moss#920) -----
+// ----- format-probe cache -----
 
 /// Build a handcrafted CMYK JPEG: SOI, then SOF0 with a 4-component frame.
 /// Mirrors `is_cmyk_jpeg_handcrafted_sof_components4`'s fixture — a real
@@ -1654,7 +1936,7 @@ pub(crate) fn make_cmyk_jpeg(path: &Path) {
 #[test]
 fn format_probe_cache_hit_survives_source_deletion() {
     // A cache HIT must never re-touch `source_path` — that's the entire
-    // point of the cache (moss#920). Prove it: after the first call caches
+    // point of the cache. Prove it: after the first call caches
     // a verdict, delete the source file entirely. A second call with the
     // same (source_oid, params) must still return the identical verdict
     // instead of erroring or silently recomputing (which would see a
@@ -1679,7 +1961,7 @@ fn format_probe_cache_hit_survives_source_deletion() {
     );
 }
 
-// ----- moss#982: a source still in the cloud yields no verdict, and no
+// ----- a source still in the cloud yields no verdict, and no
 // CACHED verdict -----
 
 #[test]
@@ -1704,7 +1986,7 @@ fn a_source_in_the_cloud_gets_its_own_verdict_not_not_an_image() {
 
 #[test]
 fn a_verdict_about_a_source_in_the_cloud_is_never_cached() {
-    // The severe half of moss#982. The format-probe cache is keyed by the
+    // The severe half of this concern. The format-probe cache is keyed by the
     // source's CONTENT oid, and the content of an evicted file never changes —
     // so a verdict computed while the bytes were absent would outlive the
     // eviction FOREVER, permanently breaking an image that had merely been
@@ -1793,8 +2075,8 @@ fn format_probe_cache_key_includes_extension() {
     // Regression pin for a real review finding: without `ext` in the cache
     // key, two calls sharing a `source_oid` but differing only in extension
     // could leak one's verdict into the other's. `raster_with_picture`
-    // forbids AlreadySmall for png/jpg/jpeg specifically (ADR-013 — the
-    // synthesizer emits an unconditional `<picture><source>` for those), so a
+    // forbids AlreadySmall for png/jpg/jpeg specifically (the synthesizer
+    // emits an unconditional `<picture><source>` for those), so a
     // webp's AlreadySmall verdict leaking into a png lookup would strand that
     // `<source>` — the exact 2026-05-19 failure class. Deliberately reuses
     // ONE literal `source_oid` across two different real files/extensions to
@@ -1867,7 +2149,7 @@ fn format_probe_cache_recomputes_on_corrupt_blob() {
         "premise: populates the format-probe cache entry"
     );
 
-    let record = h.transforms.get(&source_oid).expect("cache entry must exist");
+    let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).expect("cache entry must exist");
     let entry = record
         .transforms
         .get(FORMAT_PROBE_TRANSFORM)
@@ -1880,6 +2162,79 @@ fn format_probe_cache_recomputes_on_corrupt_blob() {
         recomputed,
         Some(SkipReason::Cmyk),
         "a corrupt cached blob must not error or panic — recompute the real verdict"
+    );
+}
+
+/// The `AlreadySmall` dimension read used to pick its decoder from the
+/// extension alone (`image::image_dimensions`), so a real image saved under
+/// a mismatched NON-picture extension (a PNG saved as `.bmp` — bmp is not a
+/// ladder/picture source, so `AlreadySmall` is even in play for it) failed
+/// to read dimensions and could never be judged `AlreadySmall`: a silently
+/// wrong "proceed to conversion" verdict, cached under `FORMAT_PROBE_VERSION`
+/// forever. Content-sniffing (`media::decode::sniff_dimensions`) fixes the
+/// read; this pins the VERDICT, not just the read.
+#[test]
+fn already_small_reads_real_dimensions_from_a_mislabeled_extension() {
+    let h = harness();
+    let src = h._tmp.path().join("mislabeled.bmp");
+    // Real PNG bytes, `.bmp` extension: small enough (well under the 200KB /
+    // max_edge defaults) that a correct dimension read must call it AlreadySmall.
+    let img = image::ImageBuffer::from_fn(40, 30, |_, _| image::Rgb([10u8, 20, 30]));
+    img.save_with_format(&src, image::ImageFormat::Png).unwrap();
+    let size = fs::metadata(&src).unwrap().len();
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+
+    assert_eq!(
+        should_skip(&src, "bmp", size, &cfg, &h.transforms, &source_oid, false),
+        Some(SkipReason::AlreadySmall),
+        "a real, small image must be judged AlreadySmall even under a mismatched extension"
+    );
+}
+
+/// A vault built before `FORMAT_PROBE_VERSION` bumped for this fix cached
+/// "not AlreadySmall" (`None`, "proceed to conversion") for a mislabeled file
+/// under the OLD version's params — the pre-fix, extension-only dimension
+/// read failed and never reached the AlreadySmall branch. Without the bump
+/// this stale verdict would be served forever: the content never changes, so
+/// nothing else invalidates it.
+#[test]
+fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
+    let h = harness();
+    let src = h._tmp.path().join("mislabeled.bmp");
+    let img = image::ImageBuffer::from_fn(40, 30, |_, _| image::Rgb([10u8, 20, 30]));
+    img.save_with_format(&src, image::ImageFormat::Png).unwrap();
+    let size = fs::metadata(&src).unwrap().len();
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+
+    let stale_verdict: Option<SkipReason> = None;
+    let json_bytes = serde_json::to_vec(&stale_verdict).unwrap();
+    let blob_oid = h.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
+    let old_params = serde_json::json!({
+        "min_size_kb": cfg.min_size_kb,
+        "max_edge": cfg.max_edge,
+        "ext": "bmp",
+        "v": 2,
+    });
+    let record = crate::build::cache::TransformRecord {
+        source_oid: source_oid.clone(),
+        source_size: size,
+        transforms: std::collections::HashMap::from([(
+            FORMAT_PROBE_TRANSFORM.to_string(),
+            crate::build::cache::TransformEntry {
+                oid: blob_oid,
+                size: json_bytes.len() as u64,
+                params: old_params,
+            },
+        )]),
+    };
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+
+    assert_eq!(
+        should_skip(&src, "bmp", size, &cfg, &h.transforms, &source_oid, false),
+        Some(SkipReason::AlreadySmall),
+        "an entry cached under the pre-fix version must not be served as current"
     );
 }
 
@@ -1912,7 +2267,7 @@ fn format_probe_cache_ignores_empty_source_oid() {
          jpeg must not inherit the CMYK verdict from a shared \"\" cache key"
     );
     assert!(
-        h.transforms.get("").is_none(),
+        h.transforms.get_with("", crate::build::cache::RecordMode::Request).is_none(),
         "an empty source_oid must never be written to the transform cache"
     );
 }
@@ -1921,23 +2276,71 @@ fn format_probe_cache_ignores_empty_source_oid() {
 
 /// The image fingerprint cell is one process-global, so a test that expects
 /// its own value back must not run beside another test that writes it.
+///
+/// That includes every test that runs `dispatch_image_conversions` with a
+/// spawner (the GUI branch), whether or not it reads a value back: the branch
+/// ends by pruning the cell to its own image set
+/// (`retain_image_item_fingerprints`), which drops the entries a concurrent
+/// test primed a moment ago. Two such tests took no lock, and
+/// `a_new_image_only_dispatches_the_new_one…` then found one.jpg and two.jpg
+/// re-dispatched in 3 of 12 runs of this module.
 fn image_fingerprint_test_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
-#[test]
-fn fingerprint_cache_returns_true_on_unchanged() {
-    let _guard = image_fingerprint_test_lock().lock();
-    // Use unique values per run to avoid state from other tests.
-    let a = format!("fp-a-{}", uuid::Uuid::new_v4());
-    // First call: no prior state → unchanged = false
-    assert!(!check_and_update_image_fingerprint(&a));
-    // Second call with same value → unchanged = true
-    assert!(check_and_update_image_fingerprint(&a));
-    // Different value → unchanged = false
-    let b = format!("fp-b-{}", uuid::Uuid::new_v4());
-    assert!(!check_and_update_image_fingerprint(&b));
+/// Record that a worker delivered `path`'s advisories, the way a dispatch queues it and
+/// the worker's end reports it — the ledger's advisory carry-forward
+/// (`ImageLedger.advisories`) fixture. The skip decision itself is disk-origin, so a
+/// test that needs a skip candidate also calls `prime_disk_hash_index` below.
+fn prime_delivered_with_advisories(path: &str, fingerprint: ImageFingerprint, advisories: &[Advisory]) {
+    mark_image_items_pending([(path.to_string(), fingerprint.clone())]);
+    end_image_item(path, &fingerprint, true, advisories);
+}
+
+/// Write `rel_path`'s stat and content hash into the ON-DISK hash index the
+/// way an earlier build's scan or worker would have. This is what makes
+/// `dispatch_image_conversions`'s disk-origin skip check
+/// (`HashIndex::lookup`) see `rel_path` as a skip candidate — the fixture
+/// that replaces the old in-process fingerprint prime for that purpose.
+/// `moss_dir` is the site's `.moss` directory.
+fn prime_disk_hash_index(moss_dir: &Path, rel_path: &str, fingerprint: &ImageFingerprint, source_oid: &str) {
+    let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
+    let index_path = paths.cache_hash_index();
+    let mut index = crate::build::cache::HashIndex::load(&index_path);
+    index.update(rel_path.to_string(), &fingerprint.stat, source_oid.to_string());
+    index.save(&index_path).expect("test hash-index save");
+}
+
+/// Populate a REAL, verifiable transform-cache entry for `source_oid`: store
+/// `webp_bytes` in the object store and record it under `transform` with
+/// `params`. Since `rematerialize_with_oid` never trusts a staged file's
+/// mere presence (it always re-verifies against the transform cache before
+/// linking — see its doc), a skip-candidate fixture needs this alongside
+/// `prime_disk_hash_index`, not the hash index alone. Callers that stage
+/// `webp_bytes` themselves at the destination path get a no-op relink (same
+/// bytes back), so this doubles as the "already correctly staged" fixture
+/// too.
+fn prime_cached_transform(
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+    source_oid: &str,
+    transform: &str,
+    params: &serde_json::Value,
+    webp_bytes: &[u8],
+) -> String {
+    let blob_oid = objects.store_bytes(webp_bytes, crate::build::cache::RecordMode::Request).expect("test blob store");
+    let mut record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request).unwrap_or(crate::build::cache::TransformRecord {
+        source_oid: source_oid.to_string(),
+        source_size: 0,
+        transforms: HashMap::new(),
+    });
+    record.transforms.insert(
+        transform.to_string(),
+        crate::build::cache::TransformEntry { oid: blob_oid.clone(), size: webp_bytes.len() as u64, params: params.clone() },
+    );
+    transforms.put(&record, crate::build::cache::RecordMode::Request).expect("test transform-cache put");
+    blob_oid
 }
 
 // ======================================================================
@@ -2014,7 +2417,7 @@ fn test_collect_images_filters_skipped() {
         ("pic.heic", "heic", None, false),
     ]);
 
-    // Add a .png whose content is an HTML 404 page (the Yi-website case).
+    // Add a .png whose content is an HTML 404 page (a real site's case).
     // build_project_with_images writes dummy zero bytes; overwrite with HTML.
     let html_png = _tmp.path().join("Test.png");
     fs::write(
@@ -2091,18 +2494,10 @@ fn test_collect_images_reuses_stat_matched_hash_without_rehashing() {
     // Pre-populate the index with a stat-match for photo.jpg (as the
     // background worker would have persisted on a prior build).
     let file_path = _tmp.path().join("photo.jpg");
-    let m = fs::metadata(&file_path).unwrap();
-    let mtime = m
-        .modified()
-        .unwrap()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     let mut hash_index = crate::build::cache::HashIndex::new();
     hash_index.update(
         "photo.jpg".to_string(),
-        m.len(),
-        mtime,
+        &crate::build::stat::FileStat::of(&fs::metadata(&file_path).unwrap()),
         "deadbeef".to_string(),
     );
 
@@ -2115,12 +2510,64 @@ fn test_collect_images_reuses_stat_matched_hash_without_rehashing() {
     );
 }
 
+/// What the blocking collect feeds the index: the file's whole stat record. An entry
+/// the worker recorded for another size, mtime, sub-second mtime, ctime or inode is not
+/// this file's, and the oid in it — planted here so a wrongly trusted entry is visible —
+/// must not become the item's. The exact record is the control (the test above).
+#[test]
+fn collect_trusts_an_entry_only_for_the_files_whole_stat_record() {
+    let (structure, tmp) = build_project_with_images(&[("photo.jpg", "jpg", None, true)]);
+    let transforms = crate::build::cache::TransformCache::new(
+        tmp.path().join("cache_transforms"),
+        crate::build::cache::ObjectStore::new(tmp.path().join("cache_objects")),
+    );
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
+    let real = crate::build::stat::FileStat::of(&fs::metadata(tmp.path().join("photo.jpg")).unwrap());
+
+    for (field, changed) in real.each_field_changed() {
+        let mut hash_index = crate::build::cache::HashIndex::new();
+        hash_index.update("photo.jpg".to_string(), &changed, "planted".to_string());
+
+        let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+
+        assert_eq!(items.len(), 1);
+        assert!(items[0].source_oid.is_empty(), "an entry recorded for another {field} was trusted: {:?}", items[0].source_oid);
+    }
+}
+
+/// Replace-via-rename with size and mtime kept: the worker's recorded oid is the old
+/// file's, and only the inode says so. Trusting it would encode the new image under the
+/// old one's cache key and ship the previous picture's variant.
+#[cfg(unix)]
+#[test]
+fn collect_does_not_take_the_oid_of_an_image_replaced_by_rename() {
+    let (structure, tmp) = build_project_with_images(&[("photo.jpg", "jpg", None, true)]);
+    let transforms = crate::build::cache::TransformCache::new(
+        tmp.path().join("cache_transforms"),
+        crate::build::cache::ObjectStore::new(tmp.path().join("cache_objects")),
+    );
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
+    let file = tmp.path().join("photo.jpg");
+    let mut hash_index = crate::build::cache::HashIndex::new();
+    hash_index.resolve(&file, "photo.jpg").unwrap();
+
+    let mut bytes = fs::read(&file).unwrap();
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0xff;
+    crate::build::stat::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
+
+    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+
+    assert_eq!(items.len(), 1);
+    assert!(items[0].source_oid.is_empty(), "took the recorded oid of the file that was replaced: {:?}", items[0].source_oid);
+}
+
 #[test]
 fn a_cmyk_jpeg_is_collected_with_its_verdict_so_its_source_can_be_settled() {
     // The synthesizer promises `<picture><source srcset="plate.webp">` for
     // every jpg from the extension alone. A CMYK source is never encoded, so
     // the collector used to drop it and the promised URL 404ed — which
-    // `<picture>` does not recover from (ADR-013). It must reach the
+    // `<picture>` does not recover from. It must reach the
     // registration loop carrying the verdict.
     let (mut structure, _tmp) = build_project_with_images(&[("plate.jpg", "jpg", None, true)]);
     let plate = _tmp.path().join("plate.jpg");
@@ -2187,11 +2634,11 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
     make_big_jpeg(&img_path, 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&img_path).unwrap();
 
@@ -2203,6 +2650,7 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2231,6 +2679,215 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
     );
 }
 
+/// An image a previous build converted: 1000x600 on disk, its base `.webp` cached
+/// as `b"CACHED BASE"` and its hash-index entry primed, but no rung record or
+/// file. `scan_dimensions` is what the scan reported for it, which decides
+/// which rungs the encoder promises. Returns the context and the staging dir.
+fn unchanged_image_with_cached_base(root: &Path, scan_dimensions: (u32, u32)) -> (BackgroundContext, PathBuf) {
+    let rel = "photo.jpg";
+    make_big_jpeg(&root.join(rel), 1000, 600);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+    let paths = MossPaths::from_moss_dir(moss_dir.clone());
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(rel)).unwrap();
+    let fingerprint = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(rel), &cfg)
+        .expect("source exists and is stat-able");
+    prime_disk_hash_index(&moss_dir, rel, &fingerprint, &source_oid);
+    prime_cached_transform(
+        &crate::build::cache::ObjectStore::for_site(&paths),
+        &crate::build::cache::TransformCache::for_site(&paths),
+        &source_oid,
+        "image/webp",
+        &cfg.to_params(),
+        b"CACHED BASE",
+    );
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from(rel),
+            source_oid,
+            ext: "jpg".to_string(),
+            dimensions: Some(scan_dimensions),
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir,
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    (ctx, staging)
+}
+
+/// An unchanged image whose base output is cached but whose promised 800w rung has
+/// no record: nothing but the worker writes a rung record, so skipping the image
+/// left that srcset candidate missing until the source changed. It goes to the
+/// worker, which reuses the cached base and encodes the rung.
+#[test]
+fn an_unchanged_image_missing_a_promised_rung_is_dispatched_to_produce_it() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    assert_eq!(moss_core::asset_paths::ladder_rungs(1000, 600, false), &[800][..], "premise");
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+
+    assert!(staging.join("photo.w800.webp").exists(), "the missing rung is produced");
+    assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused, not re-encoded");
+}
+
+/// No rung is promised for an image the scan found no wider than the first rung,
+/// so a missing rung record is not a gap. The file on disk is made wider than the
+/// scan says so that a wrongly dispatched image would visibly produce a rung.
+#[test]
+fn an_unchanged_image_with_no_promised_rung_is_still_skipped() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (700, 420));
+    assert!(moss_core::asset_paths::ladder_rungs(700, 420, false).is_empty(), "premise");
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+
+    assert!(staging.join("photo.webp").exists(), "the base is carried forward");
+    assert!(!staging.join("photo.w800.webp").exists(), "skipped: the worker never ran");
+}
+
+/// A clock the test moves by hand.
+fn hand_clock() -> (redispatch_note::Clock, std::sync::Arc<Mutex<std::time::Instant>>) {
+    let now = std::sync::Arc::new(Mutex::new(std::time::Instant::now()));
+    let shared = now.clone();
+    (std::sync::Arc::new(move || *shared.lock().unwrap()), now)
+}
+
+fn advance(now: &Mutex<std::time::Instant>, by: std::time::Duration) {
+    *now.lock().unwrap() += by;
+}
+
+/// Make the 800w rung impossible to produce: a directory sits where its file goes.
+fn block_rung(staging: &Path) {
+    fs::create_dir_all(staging.join("photo.w800.webp")).unwrap();
+}
+
+fn unblock_rung(staging: &Path) {
+    fs::remove_dir_all(staging.join("photo.w800.webp")).unwrap();
+}
+
+/// Put the image back in the state of a cache that lost its rung: no file, no record entry.
+fn forget_rung(ctx: &BackgroundContext, staging: &Path) {
+    let paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
+    let transforms = crate::build::cache::TransformCache::for_site(&paths);
+    let oid = &ctx.image_items[0].source_oid;
+    let mut record = transforms.get_with(oid, crate::build::cache::RecordMode::Request).unwrap();
+    record.transforms.remove("image/webp-w800");
+    transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+    let _ = fs::remove_file(staging.join("photo.w800.webp"));
+}
+
+fn rung_produced(staging: &Path) -> bool {
+    staging.join("photo.w800.webp").is_file()
+}
+
+/// A rung whose re-dispatch did not produce it is left alone for the note's window,
+/// so a cause that persists does not re-encode the image on every build; after the
+/// window it is tried again.
+#[test]
+fn a_rung_a_redispatch_did_not_produce_is_not_retried_within_the_window() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    let (clock, now) = hand_clock();
+    let svc = BuildServices::headless();
+
+    block_rung(&staging);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "premise: the blocked rung is not produced");
+
+    unblock_rung(&staging);
+    advance(&now, std::time::Duration::from_secs(9 * 60));
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "within the window the image is not dispatched again");
+
+    advance(&now, std::time::Duration::from_secs(2 * 60));
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(rung_produced(&staging), "after the window it is tried again");
+}
+
+/// A size that is present when a re-dispatch settles forgets its note: when it goes
+/// missing again it is re-dispatched at once, not held back for the rest of the
+/// window. Drives `settle` directly with the size present while its note is fresh,
+/// since the dispatch path never re-dispatches a size inside its window.
+#[test]
+fn a_produced_rung_clears_the_note() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    let (clock, _now) = hand_clock();
+    let svc = BuildServices::headless();
+
+    block_rung(&staging);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "premise: the blocked rung is not produced and is noted");
+
+    unblock_rung(&staging);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "premise: the note holds the size back inside the window");
+
+    // The size turns up while its note is fresh, and a settle sees it present.
+    fs::write(staging.join("photo.w800.webp"), b"RUNG").unwrap();
+    let redispatched = vec![(ctx.image_items[0].source_oid.clone(), "photo.w800.webp".to_string())];
+    redispatch_note::settle(&ctx.moss_dir, &staging, &redispatched, clock(), false);
+
+    forget_rung(&ctx, &staging);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    assert!(rung_produced(&staging), "missing again, it is re-dispatched immediately");
+}
+
+/// A run cancelled before it reached an image did not fail to produce that image's
+/// size, so it leaves no note: the next dispatch sends the image back at once.
+#[tokio::test]
+async fn a_cancelled_run_notes_nothing_it_did_not_attempt() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
+    let (clock, _now) = hand_clock();
+
+    let mut cancelled = BuildServices::headless();
+    cancelled.session = Some(crate::system::folder_session::FolderSession::new(tmp.path().to_path_buf()));
+    cancelled.session.as_ref().unwrap().cancel.cancel();
+    dispatch_image_conversions_at(Some(&cancelled), &ctx, None, &clock);
+    assert!(!rung_produced(&staging), "premise: the cancelled run never reached the image");
+
+    dispatch_image_conversions_at(Some(&BuildServices::headless()), &ctx, None, &clock);
+    assert!(rung_produced(&staging), "no note was left, so the image is dispatched again");
+}
+
+/// Notes belong to one site cache: another site holding the same image is unaffected.
+#[test]
+fn a_note_in_one_cache_root_does_not_hold_back_another() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let (tmp_a, tmp_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (ctx_a, staging_a) = unchanged_image_with_cached_base(tmp_a.path(), (1000, 600));
+    let (ctx_b, staging_b) = unchanged_image_with_cached_base(tmp_b.path(), (1000, 600));
+    assert_eq!(ctx_a.image_items[0].source_oid, ctx_b.image_items[0].source_oid, "premise: the same image bytes");
+    let (clock, _now) = hand_clock();
+    let svc = BuildServices::headless();
+
+    block_rung(&staging_a);
+    dispatch_image_conversions_at(Some(&svc), &ctx_a, None, &clock);
+    assert!(!rung_produced(&staging_a), "premise: the first site's attempt failed and was noted");
+
+    dispatch_image_conversions_at(Some(&svc), &ctx_b, None, &clock);
+    assert!(rung_produced(&staging_b), "the other site still regenerates its rung");
+}
+
 #[test]
 fn test_image_dispatch_applies_dir_overrides_to_served_path() {
     // Fix for I3: end-to-end check that `ctx.dir_overrides` flows
@@ -2250,11 +2907,11 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
     make_big_jpeg(&img_path, 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&img_path).unwrap();
 
@@ -2273,6 +2930,7 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2314,7 +2972,7 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
 ///
 /// Pre-Track A this lived as `test_update_image_hashes_registers_outputs`
 /// and asserted the on-disk `hashes.json` contained the .webp path after
-/// `update_image_hashes(&ctx)`. The on-disk fallback is gone (#620 Item 2);
+/// `update_image_hashes(&ctx)`. The on-disk fallback is gone;
 /// the runner now sends `EmitMessage::ImageVariants` through the
 /// coordinator channel.
 #[tokio::test]
@@ -2327,6 +2985,7 @@ async fn test_image_outputs_emitted_via_coordinator() {
         rel_path: "images/hero.webp".to_string(),
         hash: "deadbeef00000001".to_string(),
         bucket: HashBucket::ImageVariants,
+        oid: None,
     })
     .await
     .unwrap();
@@ -2368,6 +3027,7 @@ async fn test_image_outputs_emitted_via_coordinator_mapped_path() {
         rel_path: "images/hero.webp".to_string(),
         hash: String::new(),
         bucket: HashBucket::ImageVariants,
+        oid: None,
     })
     .await
     .unwrap();
@@ -2391,9 +3051,9 @@ async fn test_image_outputs_emitted_via_coordinator_mapped_path() {
 /// from `remove_stale_files`. This is the exact bug the architecture
 /// review flagged for CRITICAL-1.
 ///
-/// Pre-Track A this used the on-disk `hashes.json` round-trip (the
+/// This used to rely on the on-disk `hashes.json` round-trip (the
 /// `update_image_hashes` fallback). Now uses the coordinator path —
-/// the only path post-#620 Item 2.
+/// the only path since that fallback was removed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_webp_survives_stale_cleanup_after_dispatch() {
     use crate::build::media::pipeline::remove_stale_files;
@@ -2406,11 +3066,11 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
     make_big_jpeg(&img_path, 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&img_path).unwrap();
 
@@ -2422,6 +3082,7 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2474,12 +3135,560 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
         // .unwrap(): keys from sealed manifest are already-normalized, known valid.
         hashes.insert_image_output(&crate::build::served_path::ServedPath::from_source(k).unwrap());
     }
-    remove_stale_files(&staging, &hashes, "test");
+    remove_stale_files(&staging, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         webp_output.exists(),
         ".webp must survive stale cleanup when registered in image_outputs"
     );
+}
+
+/// The data-loss guard per-item fingerprinting exists for: a vault with 3
+/// already-converted images, adding a 4th, must dispatch ONLY the new one.
+/// Before per-item fingerprinting, adding any one image invalidated the
+/// WHOLE-SET fingerprint and re-dispatched all four; combined with
+/// `emit_image_outputs_via_channel` only registering what a round actually
+/// finished, a build that sealed before the async batch re-registered the
+/// three untouched images would let the seal's own stale-file sweep delete
+/// their already-finished, physically-present outputs (the same class of
+/// bug `5323496908` fixed for video, now enforced per image).
+///
+/// Ablate by reverting `dispatch_image_conversions`'s GUI branch to the old
+/// whole-set decision (`compute_image_set_fingerprint` +
+/// `check_and_update_image_fingerprint`, dispatching every item whenever
+/// the set doesn't match) and this goes red: every untouched image's
+/// sentinel bytes are gone, overwritten by a real re-encode.
+#[tokio::test]
+async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_sweep() {
+    use crate::build::coordinator::test_utils;
+    use crate::build::media::pipeline::{compute_expected_dirs, remove_stale_dirs, remove_stale_files};
+
+    /// Runs blocking work inline on whatever thread calls it — used here so
+    /// the whole dispatch (including any actually-dispatched encode) is
+    /// finished by the time `spawn_blocking` returns, with no separate wait.
+    struct InlineSpawner;
+    impl crate::build::ports::spawner::Spawner for InlineSpawner {
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            task();
+        }
+        fn spawn(
+            &self,
+            _task: crate::build::ports::spawner::Task,
+        ) -> crate::build::ports::spawner::Joining {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    let _guard = image_fingerprint_test_lock().lock();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+
+    // Three already-converted images: real source bytes on disk, a staged
+    // `.webp` with SENTINEL bytes a real encode would never produce, and a
+    // primed per-item fingerprint so dispatch takes the skip branch for
+    // each. The sentinel surviving unchanged is the disk-level proof that
+    // an image was NOT re-dispatched.
+    let heal_paths = MossPaths::from_moss_dir(moss_dir.clone());
+    let heal_objects = crate::build::cache::ObjectStore::for_site(&heal_paths);
+    let heal_transforms = crate::build::cache::TransformCache::for_site(&heal_paths);
+    let params = cfg.to_params();
+
+    let mut items: Vec<ImageConversionItem> = Vec::new();
+    let mut untouched_webps: Vec<PathBuf> = Vec::new();
+    for (i, name) in ["one.jpg", "two.jpg", "three.jpg"].iter().enumerate() {
+        let path = root.join(name);
+        // Distinct dimensions per image: `make_big_jpeg`'s pixels are a pure
+        // function of (w, h), so three same-size calls would share one
+        // content oid — a real collision now that the transform cache is
+        // actually consulted (see `rematerialize_with_oid`'s doc), where it
+        // used to be masked by the presence-first shortcut this file's fix
+        // removed.
+        make_big_jpeg(&path, 400 + i as u32, 300);
+        let source_oid = crate::build::cache::ObjectStore::hash_file(&path).unwrap();
+        let item = ImageConversionItem {
+            source_path: PathBuf::from(*name),
+            source_oid,
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+            fingerprint: None,
+        };
+        let webp_rel = format!("{}.webp", name.trim_end_matches(".jpg"));
+        let webp_path = staging.join(&webp_rel);
+        let sentinel = format!("SENTINEL-{}", i).into_bytes();
+        fs::write(&webp_path, &sentinel).unwrap();
+        let fp = compute_image_item_fingerprint(&root.to_string_lossy(), &item.source_path, &cfg)
+            .expect("source exists and is stat-able");
+        prime_disk_hash_index(&moss_dir, &item.source_path.to_string_lossy(), &fp, &item.source_oid);
+        // `rematerialize_with_oid` never trusts the sentinel's mere presence
+        // (see its doc) — it always re-verifies against the transform cache,
+        // so the fixture needs a real cached record too. Its blob IS the
+        // sentinel, so the verified relink is a same-bytes no-op and the
+        // "untouched" assertion below still holds.
+        prime_cached_transform(&heal_objects, &heal_transforms, &item.source_oid, "image/webp", &params, &sentinel);
+        untouched_webps.push(webp_path);
+        items.push(item);
+    }
+
+    // A brand new, never-before-seen fourth image — no staged output, no
+    // primed fingerprint.
+    let new_path = root.join("four.jpg");
+    // A dimension none of the three above use: same reason as their own
+    // per-index variation — identical dimensions would give this genuinely
+    // new file the SAME content oid as one of them, and `convert_single_
+    // image`'s own content-addressed cache (correctly, by design) would
+    // dedupe it to their cached sentinel instead of running a real encode.
+    make_big_jpeg(&new_path, 500, 300);
+    let new_oid = crate::build::cache::ObjectStore::hash_file(&new_path).unwrap();
+    items.push(ImageConversionItem {
+        source_path: PathBuf::from("four.jpg"),
+        source_oid: new_oid,
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+        fingerprint: None,
+    });
+
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: items,
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(InlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    // blocking_send (inside emit_image_outputs_via_channel) requires a
+    // non-async thread — spawn_blocking, as in production where the
+    // dispatcher runs from the blocking render phase.
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+    let view = sealed.site_hashes_view();
+    remove_stale_files(&staging, view, "test", &crate::build::lifecycle::permit_for_test());
+    remove_stale_dirs(&staging, &compute_expected_dirs(view), &crate::build::lifecycle::permit_for_test());
+
+    for (i, webp_path) in untouched_webps.iter().enumerate() {
+        assert!(
+            webp_path.exists(),
+            "'{}' (untouched image output) was deleted by the stale sweep after a \
+             sibling image was added — sealed image_outputs: {:?}",
+            webp_path.display(),
+            sealed.image_outputs()
+        );
+        assert_eq!(
+            fs::read(webp_path).unwrap(),
+            format!("SENTINEL-{}", i).into_bytes(),
+            "'{}' content changed — it was re-dispatched even though its own \
+             fingerprint and output were unchanged",
+            webp_path.display()
+        );
+    }
+
+    // The new image WAS dispatched: no ffmpeg-style stand-in here — a real
+    // JPEG decode+WebP encode ran, so its bytes are not the sentinel.
+    let new_webp = staging.join("four.webp");
+    assert!(
+        new_webp.exists(),
+        "the new image must have been dispatched and produced a .webp output"
+    );
+    assert_ne!(
+        fs::read(&new_webp).unwrap(),
+        b"SENTINEL-0".to_vec(),
+        "the new image's output must be a real encode, not a carried-forward sentinel"
+    );
+}
+
+// =========================================================================
+// Partial-dispatch advisory carry-forward (moss#1205's remaining gap)
+// =========================================================================
+
+/// `dispatch_image_conversions` carries an unchanged image forward without
+/// ever re-entering `run_image_conversion` — so before this fix, that
+/// image's advisory (e.g. a prior rung failure) was simply absent from every
+/// later completed tick the moment a SIBLING image needed dispatching, and
+/// the app-side sweep (which trusts an absent key as "fixed") deleted a
+/// still-true advisory. The fingerprint cache now carries the advisory
+/// forward alongside the fingerprint it already stores, so the terminal tick
+/// speaks for the whole item set even though only the new image actually ran.
+///
+/// Ablate by reverting the `carried_advisories` plumbing (`ImageLedger`'s
+/// `advisories` map, `ImageRunContext::carried_advisories`) and this goes
+/// red: "broken.jpg" is absent from the terminal tick's advisories.
+#[tokio::test]
+async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
+    use crate::build::coordinator::test_utils;
+    use crate::build::ports::reporter::BuildReporter;
+
+    struct InlineSpawner;
+    impl crate::build::ports::spawner::Spawner for InlineSpawner {
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            task();
+        }
+        fn spawn(
+            &self,
+            _task: crate::build::ports::spawner::Task,
+        ) -> crate::build::ports::spawner::Joining {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    let _guard = image_fingerprint_test_lock().lock();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+
+    // "broken-<uuid>.jpg": already converted, fingerprint primed, and a
+    // rung-failure advisory recorded alongside that delivery — the shape
+    // `end_image_item` leaves behind for a real rung failure. UUID-suffixed
+    // (not the bare literal a sibling test in this file also uses) because
+    // `image_ledger()` is a process-global static keyed by this exact
+    // string, and `image_fingerprint_test_lock()` only serializes tests
+    // that both remember to take it.
+    let heal_paths = MossPaths::from_moss_dir(moss_dir.clone());
+    let heal_objects = crate::build::cache::ObjectStore::for_site(&heal_paths);
+    let heal_transforms = crate::build::cache::TransformCache::for_site(&heal_paths);
+    let params = cfg.to_params();
+
+    let broken_name = format!("broken-{}.jpg", uuid::Uuid::new_v4());
+    let broken_name = broken_name.as_str();
+    let broken_webp = format!("{}.webp", broken_name.trim_end_matches(".jpg"));
+    make_big_jpeg(&root.join(broken_name), 400, 300);
+    fs::write(staging.join(&broken_webp), "SENTINEL").unwrap();
+    let broken_advisory = Advisory::for_source(
+        Scope::File,
+        Severity::ShippedDegraded,
+        broken_name,
+        "800w: rung encode failed".to_string(),
+        Action::None,
+    );
+    let broken_fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(broken_name), &cfg)
+        .expect("source exists and is stat-able");
+    let broken_oid = crate::build::cache::ObjectStore::hash_file(&root.join(broken_name)).unwrap();
+    prime_disk_hash_index(&moss_dir, broken_name, &broken_fp, &broken_oid);
+    // Fixture for `rematerialize_with_oid`'s always-verify relink (see its
+    // doc) — a real cached record whose blob IS the sentinel, so the
+    // verified relink is a same-bytes no-op.
+    prime_cached_transform(&heal_objects, &heal_transforms, &broken_oid, "image/webp", &params, b"SENTINEL");
+    prime_delivered_with_advisories(broken_name, broken_fp, &[broken_advisory]);
+
+    // "fresh-<uuid>.jpg": brand new, so it dispatches for real and produces
+    // no advisory of its own.
+    let fresh_name = format!("fresh-{}.jpg", uuid::Uuid::new_v4());
+    let fresh_name = fresh_name.as_str();
+    make_big_jpeg(&root.join(fresh_name), 400, 300);
+    let fresh_oid = crate::build::cache::ObjectStore::hash_file(&root.join(fresh_name)).unwrap();
+
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![
+            ImageConversionItem {
+                source_path: PathBuf::from(broken_name),
+                source_oid: broken_oid,
+                ext: "jpg".to_string(),
+                dimensions: None,
+                skip: None,
+                fingerprint: None,
+            },
+            ImageConversionItem {
+                source_path: PathBuf::from(fresh_name),
+                source_oid: fresh_oid,
+                ext: "jpg".to_string(),
+                dimensions: None,
+                skip: None,
+                fingerprint: None,
+            },
+        ],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+
+    let recorder = std::sync::Arc::new(RecordingReporter::default());
+    let mut services = BuildServices::headless();
+    services.spawner = Some(std::sync::Arc::new(InlineSpawner));
+    services.reporter = recorder.clone();
+    let services = std::sync::Arc::new(services);
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let _sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let events = recorder.0.lock().unwrap();
+    let terminal = events
+        .iter()
+        .find(|e| matches!(e, PipelineEvent::BackgroundProgress { task, completed: true, .. } if task == "images"))
+        .expect("the images task must reach its own completed:true tick");
+    let PipelineEvent::BackgroundProgress { advisories, .. } = terminal else { unreachable!() };
+    assert!(
+        advisories.iter().any(|a| a.item.as_deref() == Some(broken_name)),
+        "the skip-carried image's advisory must ride the terminal tick even though only \
+         the new image actually ran, got: {advisories:?}"
+    );
+    assert!(
+        !advisories.iter().any(|a| a.item.as_deref() == Some(fresh_name)),
+        "the freshly-dispatched, successfully-converted image must have no advisory, got: {advisories:?}"
+    );
+}
+
+/// The deletion side of the same gap: the author deletes "broken.jpg"
+/// outright while the only remaining image stays unchanged, so nothing needs
+/// the encoder this round. Before this fix `dispatch_image_conversions`
+/// returned with no tick at all when `to_dispatch` was empty — so a stale
+/// advisory for a file that no longer exists on disk would sit until some
+/// UNRELATED future dispatch happened to touch the images task again, which
+/// is not guaranteed to ever happen.
+///
+/// Ablate by reverting the `dropped_advisory` early-fire branch in
+/// `dispatch_image_conversions` and this goes red: no `images` tick is
+/// observed at all.
+#[tokio::test]
+async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch() {
+    use crate::build::coordinator::test_utils;
+    use crate::build::ports::reporter::BuildReporter;
+
+    struct InlineSpawner;
+    impl crate::build::ports::spawner::Spawner for InlineSpawner {
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            task();
+        }
+        fn spawn(
+            &self,
+            _task: crate::build::ports::spawner::Task,
+        ) -> crate::build::ports::spawner::Joining {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    let _guard = image_fingerprint_test_lock().lock();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+
+    // "broken-<uuid>.jpg" carries an advisory from an earlier delivery;
+    // "safe-<uuid>.jpg" does not. Both are unchanged (fingerprint primed,
+    // output present). UUID-suffixed — see the sibling test above for why a
+    // bare literal here is unsafe (`image_ledger()` is a process-global
+    // static keyed by this exact string).
+    let broken_name = format!("broken-{}.jpg", uuid::Uuid::new_v4());
+    let broken_name = broken_name.as_str();
+    let broken_webp = format!("{}.webp", broken_name.trim_end_matches(".jpg"));
+    make_big_jpeg(&root.join(broken_name), 400, 300);
+    fs::write(staging.join(&broken_webp), "SENTINEL").unwrap();
+    let broken_advisory = Advisory::for_source(
+        Scope::File,
+        Severity::ShippedDegraded,
+        broken_name,
+        "800w: rung encode failed".to_string(),
+        Action::None,
+    );
+    let broken_fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(broken_name), &cfg)
+        .expect("source exists and is stat-able");
+    prime_delivered_with_advisories(broken_name, broken_fp, &[broken_advisory]);
+
+    let safe_name = format!("safe-{}.jpg", uuid::Uuid::new_v4());
+    let safe_name = safe_name.as_str();
+    let safe_webp = format!("{}.webp", safe_name.trim_end_matches(".jpg"));
+    make_big_jpeg(&root.join(safe_name), 400, 300);
+    fs::write(staging.join(&safe_webp), "SENTINEL").unwrap();
+    let safe_fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(safe_name), &cfg)
+        .expect("source exists and is stat-able");
+    let safe_oid = crate::build::cache::ObjectStore::hash_file(&root.join(safe_name)).unwrap();
+    prime_disk_hash_index(&moss_dir, safe_name, &safe_fp, &safe_oid);
+    prime_delivered_with_advisories(safe_name, safe_fp, &[]);
+
+    // "broken" is deleted: this build's image set names only the "safe" file.
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from(safe_name),
+            source_oid: safe_oid,
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+
+    let recorder = std::sync::Arc::new(RecordingReporter::default());
+    let mut services = BuildServices::headless();
+    services.spawner = Some(std::sync::Arc::new(InlineSpawner));
+    services.reporter = recorder.clone();
+    let services = std::sync::Arc::new(services);
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let _sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let events = recorder.0.lock().unwrap();
+    let terminal = events
+        .iter()
+        .find(|e| matches!(e, PipelineEvent::BackgroundProgress { task, completed: true, .. } if task == "images"))
+        .expect(
+            "a deletion that drops a recorded advisory must still fire the images \
+             task's completed:true tick even with nothing to dispatch",
+        );
+    let PipelineEvent::BackgroundProgress { advisories, .. } = terminal else { unreachable!() };
+    assert!(
+        !advisories.iter().any(|a| a.item.as_deref() == Some(broken_name)),
+        "the deleted image's advisory must not ride forward, got: {advisories:?}"
+    );
+}
+
+/// An image the ship-time prune found unreferenced is settled: its `.webp` is
+/// missing because the prune removed it, and the worker would drop it before
+/// encoding. Dispatching it anyway logged a self-heal and queued a worker run
+/// for the same images on every build, forever. The second half is the
+/// reason the skip is safe: once a page references the image, it encodes.
+#[test]
+fn an_unreferenced_image_is_not_redispatched_until_a_page_references_it() {
+    use crate::build::ports::reporter::BuildReporter;
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    let _guard = image_fingerprint_test_lock().lock();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    // UUID-suffixed: the fingerprint ledger is a process-global keyed by path.
+    let name = format!("orphan-{}.jpg", uuid::Uuid::new_v4());
+    let webp = format!("{}.webp", name.trim_end_matches(".jpg"));
+    make_big_jpeg(&root.join(&name), 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(&name), &cfg)
+        .expect("source exists and is stat-able");
+    let oid = crate::build::cache::ObjectStore::hash_file(&root.join(&name)).unwrap();
+    // Unchanged since the last build, which pruned its `.webp`: the exact
+    // state that logged "unchanged but its .webp is missing" every build.
+    prime_disk_hash_index(&moss_dir, &name, &fp, &oid);
+    let hashes = SiteHashes {
+        pruned_image_outputs: [webp.clone()].into_iter().collect(),
+        ..SiteHashes::default()
+    };
+    let paths = MossPaths::from_moss_dir(moss_dir.clone());
+    fs::write(paths.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
+
+    let ctx = BackgroundContext {
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from(&name),
+            source_oid: String::new(),
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        ..BackgroundContext::for_test()
+    };
+    let dispatch = || {
+        let recorder = std::sync::Arc::new(RecordingReporter::default());
+        let mut services = BuildServices::headless();
+        services.reporter = recorder.clone();
+        dispatch_image_conversions(Some(&services), &ctx, None);
+        let ran = recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, PipelineEvent::BackgroundProgress { task, .. } if task == "images"));
+        ran
+    };
+
+    assert!(!dispatch(), "an image nothing references must not reach the worker");
+    assert!(!staging.join(&webp).exists());
+
+    fs::write(
+        staging.join("index.html"),
+        format!(r#"<picture><source srcset="/{webp}" type="image/webp"><img src="/{name}"></picture>"#),
+    )
+    .unwrap();
+    assert!(dispatch(), "a page now references it, so it must be dispatched");
+    assert!(staging.join(&webp).exists(), "and encoded");
 }
 
 // =========================================================================
@@ -2513,13 +3722,13 @@ async fn test_image_cancel_aborts_image_runner() {
     make_big_jpeg(&img_path, 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
     fs::write(
-        moss_dir.join("build").join("hashes.json"),
+        moss_dir.join("build.nosync").join("hashes.json"),
         serde_json::to_string_pretty(&SiteHashes::new()).unwrap(),
     )
     .unwrap();
@@ -2546,6 +3755,7 @@ async fn test_image_cancel_aborts_image_runner() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2554,6 +3764,8 @@ async fn test_image_cancel_aborts_image_runner() {
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
     // Mirror dispatch's bookkeeping (runner decrements on early-exit).
     services.begin_ui_bound();
@@ -2598,13 +3810,13 @@ async fn test_image_hashes_updated_on_cancellation() {
     make_big_jpeg(&root.join(img2_rel), 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
     fs::write(
-        moss_dir.join("build").join("hashes.json"),
+        moss_dir.join("build.nosync").join("hashes.json"),
         serde_json::to_string_pretty(&SiteHashes::new()).unwrap(),
     )
     .unwrap();
@@ -2629,6 +3841,7 @@ async fn test_image_hashes_updated_on_cancellation() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
+                fingerprint: None,
             },
             ImageConversionItem {
                 source_path: PathBuf::from(img2_rel),
@@ -2636,6 +3849,7 @@ async fn test_image_hashes_updated_on_cancellation() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
+                fingerprint: None,
             },
         ],
         source_path: root.to_string_lossy().to_string(),
@@ -2645,6 +3859,8 @@ async fn test_image_hashes_updated_on_cancellation() {
         dir_overrides: std::collections::HashMap::new(),
         tx: Some(tx.clone()),
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
     for _ in 0..2 {
         services.begin_ui_bound();
@@ -2771,7 +3987,7 @@ fn flatten_alpha_to_white_on_rgb_image_passes_through() {
 /// this guard, a silent failure in `convert_single_image`'s staging-link
 /// step would still register the path in `image_outputs` and `inner.files`,
 /// breaking deploy with `"Manifest claims '<path>' exists but it's missing
-/// on disk"`. Regression for the CPHS faculty-webp deploy failure
+/// on disk"`. Regression for the large-vault faculty-webp deploy failure
 /// (2026-05-18).
 #[tokio::test]
 async fn emit_image_outputs_skips_missing_staged_files() {
@@ -2783,8 +3999,9 @@ async fn emit_image_outputs_skips_missing_staged_files() {
     std::fs::write(staging.path().join("present.webp"), b"present-bytes").unwrap();
 
     let (tx, rx) = test_utils::build_test_coordinator();
-    let paths = vec!["present.webp".to_string(), "missing.webp".to_string()];
+    let paths = vec![("present.webp".to_string(), None), ("missing.webp".to_string(), None)];
     let staging_path = staging.path().to_path_buf();
+    let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
     // `emit_image_outputs_via_channel` uses `blocking_send` and must run
     // on a non-async thread (matching production, which dispatches it via
     // `tokio::task::spawn_blocking` from `run_image_conversion`).
@@ -2798,6 +4015,7 @@ async fn emit_image_outputs_skips_missing_staged_files() {
             &Some(tx),
             &paths,
             &staging_path,
+            &objects,
             &std::collections::HashSet::new(),
             Some(reg.as_ref()),
         );
@@ -2824,7 +4042,7 @@ async fn emit_image_outputs_skips_missing_staged_files() {
     );
     // Skipping registration is only half the job: the promise must settle
     // `Failed` too, or `degrade` leaves a live <source> for a URL that never
-    // shipped and `<picture>` renders blank (ADR-013 amendment 2026-09-09).
+    // shipped and `<picture>` renders blank (a rule added 2026-09-09).
     assert!(
         matches!(registry.get("missing.webp"), Some(AssetState::Failed(_))),
         "a variant missing at emit must settle Failed so degrade can strip its \
@@ -2838,8 +4056,8 @@ async fn emit_image_outputs_skips_missing_staged_files() {
     );
 }
 
-/// moss#1085 gated the self-heal on the ship-time prune's suppressed set but
-/// not the violation report, so every settled vault logged a permanent false
+/// An earlier fix gated the self-heal on the ship-time prune's suppressed set
+/// but not the violation report, so every settled vault logged a permanent false
 /// "coherence violation: staged .webp missing" for each orphan-pruned
 /// variant. A suppressed path absent from staging is the *expected* state
 /// (the prune deleted it on purpose) — it must produce no violation line.
@@ -2847,13 +4065,14 @@ async fn emit_image_outputs_skips_missing_staged_files() {
 async fn emit_image_outputs_suppressed_absent_produces_no_violation() {
     let staging = tempfile::tempdir().unwrap();
     let (tx, _rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    let paths = vec!["pruned.webp".to_string()];
+    let paths = vec![("pruned.webp".to_string(), None)];
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("pruned.webp".to_string());
     let staging_path = staging.path().to_path_buf();
+    let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     let lines = tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &suppressed, None)
+        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None)
     })
     .await
     .unwrap();
@@ -2873,13 +4092,14 @@ async fn emit_image_outputs_suppressed_absent_produces_no_violation() {
 async fn emit_image_outputs_unsuppressed_absent_still_violates() {
     let staging = tempfile::tempdir().unwrap();
     let (tx, _rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    let paths = vec!["pruned.webp".to_string(), "genuinely-missing.webp".to_string()];
+    let paths = vec![("pruned.webp".to_string(), None), ("genuinely-missing.webp".to_string(), None)];
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("pruned.webp".to_string());
     let staging_path = staging.path().to_path_buf();
+    let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     let lines = tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &suppressed, None)
+        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None)
     })
     .await
     .unwrap();
@@ -2912,13 +4132,14 @@ async fn emit_image_outputs_registers_suppressed_path_that_exists() {
     std::fs::write(staging.path().join("referenced-later.webp"), b"real-bytes").unwrap();
 
     let (tx, rx) = test_utils::build_test_coordinator();
-    let paths = vec!["referenced-later.webp".to_string()];
+    let paths = vec![("referenced-later.webp".to_string(), None)];
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("referenced-later.webp".to_string());
     let staging_path = staging.path().to_path_buf();
+    let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &suppressed, None);
+        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None);
     })
     .await
     .unwrap();
@@ -3226,6 +4447,38 @@ fn sized_raster_oid_reuses_transform_cache() {
     );
 }
 
+/// Overlapping builds each run their own asset walk. On a cold cache they must
+/// share one encode per source, and a later warm walk must encode nothing.
+#[test]
+fn concurrent_sized_raster_calls_share_one_encode() {
+    use crate::build::cache::{ObjectStore, TransformCache};
+    use crate::build::media::fallback_raster::TEST_HOOK_ENCODED_SOURCES;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let objects_root = tmp.path().join("objects");
+    let objects = ObjectStore::new(objects_root.clone());
+    let transforms = TransformCache::new(tmp.path().join("transforms"), ObjectStore::new(objects_root));
+    let src = tmp.path().join("photo.jpg");
+    make_detailed_jpeg(&src, 1600, 1200);
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
+    let cfg = ImageCompressionConfig::default();
+    let encodes = || TEST_HOOK_ENCODED_SOURCES.lock().unwrap().iter().filter(|p| **p == src).count();
+    let size = || sized_raster_oid_for_original(&src, &source_oid, &objects, &transforms, &cfg, SIZED_JPEG_QUALITY);
+
+    let walks = 6;
+    let barrier = std::sync::Barrier::new(walks);
+    let oids: Vec<Option<String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..walks).map(|_| s.spawn(|| { barrier.wait(); size() })).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert!(oids[0].is_some(), "the source must be sized");
+    assert!(oids.iter().all(|o| *o == oids[0]), "every walk must get the same output: {oids:?}");
+    assert_eq!(encodes(), 1, "{walks} concurrent walks must share one encode");
+
+    assert_eq!(size(), oids[0]);
+    assert_eq!(encodes(), 1, "a warm walk must not encode");
+}
+
 #[test]
 fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
     use crate::build::cache::{ObjectStore, TransformCache};
@@ -3265,7 +4518,7 @@ fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
     // (store_file, pipeline.rs) — the keep-smaller decision points the
     // transform at this source oid, so its blob must exist for the cached
     // verbatim decision to resolve on the next build.
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let out = sized_raster_oid_for_original(
@@ -3300,7 +4553,7 @@ fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
 /// Write an OPAQUE, photograph-like truecolour PNG: smooth diagonal gradients
 /// (the part a palette has to approximate) plus fine per-pixel noise (the part
 /// that defeats lossless compression). This is the shape of the real corpus's
-/// expensive files — 潮汐's largest deployed assets are 2000×2500 photographs
+/// expensive files — 河灣's largest deployed assets are 2000×2500 photographs
 /// stored as PNG.
 fn make_photographic_png(path: &Path, w: u32, h: u32) {
     let buf: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(w, h, |x, y| {
@@ -3322,7 +4575,7 @@ fn sized_raster_oid_shrinks_an_opaque_photographic_png() {
     // inside the fallback cap has nothing to gain from resizing, and a
     // TRUECOLOUR re-encode of it is always BIGGER than the author's own file —
     // so the keep-smaller guard used to win every time and moss shipped the
-    // original bytes verbatim. Measured on 潮汐: 469 PNG originals, 133.5 MB of
+    // original bytes verbatim. Measured on 河灣: 469 PNG originals, 133.5 MB of
     // source, 134.0 MB deployed — a 0% saving that looked deliberate but was
     // just a lost size comparison.
     //
@@ -3345,7 +4598,7 @@ fn sized_raster_oid_shrinks_an_opaque_photographic_png() {
     let src = tmp.path().join("photo.png");
     make_photographic_png(&src, 1200, 900);
     let src_len = fs::metadata(&src).unwrap().len();
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let oid = sized_raster_oid_for_original(
@@ -3387,7 +4640,7 @@ fn sized_raster_oid_shrinks_an_opaque_photographic_png() {
 /// Write an OPAQUE, POSTER-like PNG: a grid of `block`-sized uniform squares,
 /// each a slightly different colour. 1,024 distinct colours over 147,456
 /// pixels is a ratio of 0.007 — the flat-artwork side of
-/// `PHOTOGRAPHIC_COLOR_RATIO`, and close to the 潮汐 corpus's PNG median.
+/// `PHOTOGRAPHIC_COLOR_RATIO`, and close to the 河灣 corpus's PNG median.
 fn make_flat_art_png(path: &Path, blocks: u32, block: u32) {
     let side = blocks * block;
     let buf: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(side, side, |x, y| {
@@ -3407,7 +4660,7 @@ fn flat_art_is_quantized_without_dither_speckle() {
     // 256 colours cannot express a sky, and wrong for a poster, where the
     // diffused error lands in large uniform regions and reads as speckle.
     //
-    // 潮汐 is the case that made this concrete: all 469 of its PNGs are
+    // 河灣 is the case that made this concrete: all 469 of its PNGs are
     // pngquant'd posters, comics and diagrams (every one already <=256 source
     // colours), so gating on opacity alone would have dithered the entire PNG
     // corpus of a site whose PNGs are exclusively flat artwork.
@@ -3455,7 +4708,7 @@ fn sized_raster_oid_keeps_png_verbatim_when_palette_cannot_beat_it() {
     // The other half of the guard: lossy must never mean "bigger". A tiny flat
     // graphic compresses to a few hundred bytes losslessly, while ANY indexed
     // PNG pays a fixed 768-byte PLTE chunk — so the palette encode loses, and
-    // the source must be kept verbatim (real: 潮汐 has 3.7 KB PNGs whose
+    // the source must be kept verbatim (real: 河灣 has 3.7 KB PNGs whose
     // palette encode is 13 KB).
     use crate::build::cache::{ObjectStore, TransformCache};
 
@@ -3473,7 +4726,7 @@ fn sized_raster_oid_keeps_png_verbatim_when_palette_cannot_beat_it() {
     DynamicImage::ImageRgb8(buf)
         .save_with_format(&src, image::ImageFormat::Png)
         .unwrap();
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let out = sized_raster_oid_for_original(
@@ -3493,12 +4746,12 @@ fn sized_raster_oid_keeps_png_verbatim_when_palette_cannot_beat_it() {
 
 #[test]
 fn sized_raster_oid_caps_the_fallback_at_fallback_max_edge() {
-    // The deployed raster fallback is sized to FALLBACK_MAX_EDGE — since
-    // moss#976 B1 a literal (1200), independent of both DEPLOY_MAX_EDGE
+    // The deployed raster fallback is sized to FALLBACK_MAX_EDGE — a literal
+    // (1200), independent of both DEPLOY_MAX_EDGE
     // (2400) and the ladder's top rung (1600). At 2400 the fallback was the
     // highest-resolution asset in the build — bigger than every webp a
     // modern browser actually fetches — while being served only to the ~4%
-    // of installs without WebP support; B1 measured 1200 as a further
+    // of installs without WebP support; measurement showed 1200 as a further
     // near-zero-risk cut (~39.5% smaller JPEG, ~29.5% smaller PNG) on top of
     // that first fix.
     use crate::build::cache::{ObjectStore, TransformCache};
@@ -3515,7 +4768,7 @@ fn sized_raster_oid_caps_the_fallback_at_fallback_max_edge() {
     // (pre-B1) cap would have left this untouched at 1800px.
     let src = tmp.path().join("wide.jpg");
     make_detailed_jpeg(&src, 1800, 1200);
-    let source_oid = objects.store_file(&src).unwrap();
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let oid = sized_raster_oid_for_original(
@@ -3611,7 +4864,7 @@ fn sized_raster_oid_png_stores_transparent_png() {
 
 /// Encode `photo.jpg` through the real pipeline, then DELETE the staged
 /// `.webp` to simulate a staging swap / stale-cleanup orphaning an in-flight
-/// encode's output. `rematerialize_webp_from_cas` must re-link the surviving
+/// encode's output. `lifecycle::cas_heal::rematerialize` must re-link the surviving
 /// CAS blob back into staging (the bytes are recoverable; only the staging
 /// LINK was lost), self-healing the coherence violation.
 #[test]
@@ -3658,15 +4911,18 @@ fn rematerialize_relinks_orphaned_staged_webp() {
         "CAS blob must survive"
     );
 
-    // Self-heal — unchanged source (same size+mtime) ⇒ resolve_source_hash
+    // Self-heal — unchanged source (same stat record, primed into the index the
+    // way the real disk-origin skip decision already left it) ⇒ the stat hit
     // recovers the same oid, find_cached_output hits, link_to restores it.
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&src).unwrap());
+    index.update("photo.jpg".to_string(), &stat, source_oid.clone());
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
-        &mut index,
+        &index,
         &src,
         "photo.jpg",
         &staged,
@@ -3682,6 +4938,213 @@ fn rematerialize_relinks_orphaned_staged_webp() {
         cas_bytes,
         "re-linked staged bytes must equal the CAS blob"
     );
+}
+
+/// `rematerialize_with_oid` — the disk-origin skip decision's own heal call —
+/// must never trust a staged file's mere presence: staging carries content
+/// forward between builds, so a source whose bytes changed since the last
+/// encode can still find that EARLIER build's output physically sitting at
+/// the same path. Plant a decoy there, then heal with the oid of the real,
+/// current encode; the decoy must be overwritten, not left in place because
+/// "something was already there" — the exact bug a disk-origin skip decision
+/// must not reintroduce (`rematerialize`'s presence-first shortcut is sound
+/// only when the caller already confirmed the source is unchanged; a bare
+/// stat-index hit proves no such thing).
+///
+/// Ablate by reverting `rematerialize_with_oid` to check presence first (the
+/// way `rematerialize` still does) and this goes red: the staged bytes stay
+/// the decoy's.
+#[test]
+fn rematerialize_with_oid_overwrites_a_stale_staged_file_never_trusts_its_mere_presence() {
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+
+    // Encode once: populates the CAS blob + transform record for THIS content.
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let outcome = convert_single_image(
+        &src,
+        &source_oid,
+        "photo.webp",
+        &h.temp,
+        &h.staging,
+        &h.objects,
+        &h.transforms,
+        &cfg,
+        None,
+        None,
+        &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let staged = h.staging.join("photo.webp");
+    let real_bytes = fs::read(&staged).unwrap();
+
+    // Simulate staging carrying forward a DIFFERENT generation's output: drop
+    // a decoy at the exact same path, distinguishable from the real encode.
+    fs::write(&staged, b"STALE-FROM-A-PREVIOUS-GENERATION").unwrap();
+    assert_ne!(
+        fs::read(&staged).unwrap(),
+        real_bytes,
+        "precondition: decoy differs from the real encode"
+    );
+
+    let params = cfg.to_params();
+    let mut links = staged_links(&h);
+    let outcome = rematerialize_with_oid(&h.objects, &h.transforms, &params, &mut links, &staged, "image/webp", &source_oid);
+    assert!(matches!(outcome, HealOutcome::Healed { .. }), "must relink over the stale file, got {:?}", outcome);
+    assert_eq!(
+        fs::read(&staged).unwrap(),
+        real_bytes,
+        "a file already present at the staging path must never be trusted as already correct"
+    );
+}
+
+/// The harness's record of staged links, as the next build would load it.
+fn staged_links(h: &TestHarness) -> StagedLinks {
+    StagedLinks::load(&MossPaths::from_moss_dir(h._tmp.path().join(".moss")), "test", &h.staging)
+}
+
+/// One encode of `photo.jpg`, then one heal that records the link, then one
+/// more build's heal that must find the record and leave the file alone.
+/// Returns what a test needs to tamper with the staged variant and heal again.
+fn photo_staged_and_recorded(h: &TestHarness) -> (PathBuf, String, serde_json::Value, Vec<u8>) {
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let outcome = convert_single_image(
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let staged = h.staging.join("photo.webp");
+    let params = cfg.to_params();
+    assert!(next_build_relinks(h, &staged, &source_oid, &params), "premise: the first heal links");
+    assert!(!next_build_relinks(h, &staged, &source_oid, &params), "premise: the next heal finds its record");
+    let bytes = fs::read(&staged).unwrap();
+    (staged, source_oid, params, bytes)
+}
+
+/// Heal `staged` the way the next build would, and say whether it relinked.
+fn next_build_relinks(h: &TestHarness, staged: &Path, source_oid: &str, params: &serde_json::Value) -> bool {
+    let mut links = staged_links(h);
+    let outcome = rematerialize_with_oid(&h.objects, &h.transforms, params, &mut links, staged, "image/webp", source_oid);
+    links.save();
+    matches!(outcome, HealOutcome::Healed { .. })
+}
+
+/// A record whose stat still vouches for the staged file names the blob that
+/// file was linked from; once the source changes, the expected blob is a
+/// different one and the file must be relinked, however well its stat matches.
+///
+/// Ablate by dropping the oid comparison from `StagedLinks::holds` and this
+/// goes red: the previous picture's variant stays in place.
+#[test]
+fn a_vouched_staged_variant_of_a_different_blob_is_relinked() {
+    let h = harness();
+    let (staged, _, params, first) = photo_staged_and_recorded(&h);
+    let changed = h._tmp.path().join("changed.jpg");
+    make_big_jpeg(&changed, 320, 240);
+    let changed_oid = crate::build::cache::ObjectStore::hash_file(&changed).unwrap();
+    let outcome = convert_single_image(
+        &changed, &changed_oid, "changed.webp", &h.temp, &h.staging, &h.objects, &h.transforms,
+        &ImageCompressionConfig::default(), None, None, &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let expected = fs::read(h.staging.join("changed.webp")).unwrap();
+    assert_ne!(expected, first, "precondition: the two encodes differ");
+
+    assert!(next_build_relinks(&h, &staged, &changed_oid, &params), "a vouched file of another blob must be relinked");
+    assert_eq!(fs::read(&staged).unwrap(), expected);
+}
+
+/// Another process renaming its own file onto the staged path between this
+/// link and its stat must not leave a record vouching for that file as this
+/// blob: the stat'd inode is not the one the link wrote, so nothing is
+/// recorded and the next build relinks.
+///
+/// Ablate by dropping the inode comparison in `StagedLinks::link` and this
+/// goes red: the foreign file is recorded, held, and kept.
+#[cfg(unix)]
+#[test]
+fn a_file_renamed_over_a_fresh_link_before_its_stat_is_not_recorded() {
+    use crate::build::lifecycle::cas_heal::AFTER_LINK;
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let outcome = convert_single_image(
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let staged = h.staging.join("photo.webp");
+    let real = fs::read(&staged).unwrap();
+    let params = cfg.to_params();
+
+    AFTER_LINK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|path: &Path| {
+            let beside = path.with_extension("other-build");
+            fs::write(&beside, b"ANOTHER-BUILD-RENAMED-THIS-IN").unwrap();
+            fs::rename(&beside, path).unwrap();
+        }));
+    });
+    let relinked = next_build_relinks(&h, &staged, &source_oid, &params);
+    AFTER_LINK.with(|hook| *hook.borrow_mut() = None);
+    assert!(relinked, "premise: no record yet, so the first heal links");
+
+    assert!(next_build_relinks(&h, &staged, &source_oid, &params), "a file this link did not write must not be held");
+    assert_eq!(fs::read(&staged).unwrap(), real);
+}
+
+/// Same-size bytes with a different mtime — an editor, a sync client, another
+/// tool writing into staging in place, so the inode survives — must not be
+/// trusted on the strength of the record of the file that used to be there.
+///
+/// Ablate by dropping the stat check from `StagedLinks::holds` (keep the oid
+/// comparison) and this goes red.
+#[test]
+fn a_staged_variant_rewritten_in_place_is_relinked() {
+    let h = harness();
+    let (staged, source_oid, params, real) = photo_staged_and_recorded(&h);
+    let before = fs::metadata(&staged).unwrap().modified().unwrap();
+    let mut tampered = real.clone();
+    tampered[real.len() / 2] ^= 0xff;
+    fs::write(&staged, &tampered).unwrap();
+    let later = before + std::time::Duration::from_secs(7);
+    fs::File::options().write(true).open(&staged).unwrap().set_modified(later).unwrap();
+
+    assert!(next_build_relinks(&h, &staged, &source_oid, &params), "a tampered staged file must be relinked");
+    assert_eq!(fs::read(&staged).unwrap(), real);
+}
+
+/// The racy cases: a same-size rewrite stamped inside the recorded second, and
+/// an atomic-save replacement that carries the recorded mtime across exactly.
+/// Only the sub-second mtime tells the first apart and only the inode the
+/// second — each must still be relinked.
+///
+/// Ablate by comparing whole-second mtime and size only in
+/// `StagedLinks::holds` and this goes red.
+#[test]
+fn a_same_tick_replacement_of_a_staged_variant_is_relinked() {
+    let h = harness();
+    let (staged, source_oid, params, real) = photo_staged_and_recorded(&h);
+    let mut tampered = real.clone();
+    tampered[real.len() / 2] ^= 0xff;
+
+    let before = fs::metadata(&staged).unwrap().modified().unwrap();
+    fs::write(&staged, &tampered).unwrap();
+    crate::build::stat::FileStat::stamp_in_the_second_of(&staged, before);
+    assert!(next_build_relinks(&h, &staged, &source_oid, &params), "a same-second rewrite must be relinked");
+    assert_eq!(fs::read(&staged).unwrap(), real);
+
+    assert!(!next_build_relinks(&h, &staged, &source_oid, &params), "premise: the relink was recorded");
+    #[cfg(unix)]
+    {
+        crate::build::stat::FileStat::replace_by_rename_keeping_mtime(&staged, &tampered);
+        assert!(next_build_relinks(&h, &staged, &source_oid, &params), "a replacement keeping the mtime must be relinked");
+        assert_eq!(fs::read(&staged).unwrap(), real);
+    }
 }
 
 /// Rung-kind lookup: the same self-heal must recover a LADDER RUNG from
@@ -3739,11 +5202,13 @@ fn rematerialize_recovers_rung_via_rung_kind() {
 
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&src).unwrap());
+    index.update("photo.jpg".to_string(), &stat, source_oid.clone());
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
-        &mut index,
+        &index,
         &src,
         "photo.jpg",
         &staged_rung,
@@ -3774,11 +5239,14 @@ fn rematerialize_noop_without_cas_blob() {
 
     let params = ImageCompressionConfig::default().to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&src).unwrap());
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    index.update("photo.jpg".to_string(), &stat, source_oid);
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
-        &mut index,
+        &index,
         &src,
         "photo.jpg",
         &staged,
@@ -3802,12 +5270,12 @@ fn rematerialize_leaves_present_file_untouched() {
     fs::write(&staged, b"sentinel-existing-bytes").unwrap();
 
     let params = ImageCompressionConfig::default().to_params();
-    let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    let index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
-        &mut index,
+        &index,
         &src,
         "photo.jpg",
         &staged,
@@ -3859,8 +5327,9 @@ fn self_heal_then_emit_registers_relinked_webp() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
         emit_image_outputs_via_channel(
             &Some(tx),
-            &["photo.webp".to_string()],
+            &[("photo.webp".to_string(), None)],
             &h.staging,
+            &h.objects,
             &std::collections::HashSet::new(),
             None,
         );
@@ -3873,11 +5342,13 @@ fn self_heal_then_emit_registers_relinked_webp() {
     // Self-heal, then emit ⇒ REGISTERS the variant with a real content hash.
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&src).unwrap());
+    index.update("photo.jpg".to_string(), &stat, source_oid.clone());
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
-        &mut index,
+        &index,
         &src,
         "photo.jpg",
         &staged,
@@ -3888,8 +5359,9 @@ fn self_heal_then_emit_registers_relinked_webp() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
     emit_image_outputs_via_channel(
         &Some(tx),
-        &["photo.webp".to_string()],
+        &[("photo.webp".to_string(), None)],
         &h.staging,
+        &h.objects,
         &std::collections::HashSet::new(),
         None,
     );
@@ -3898,6 +5370,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
             rel_path,
             hash,
             bucket,
+            ..
         }) => {
             assert_eq!(rel_path, "photo.webp");
             assert!(
@@ -3913,18 +5386,617 @@ fn self_heal_then_emit_registers_relinked_webp() {
     }
 }
 
-/// The fingerprint-skip self-heal re-registers what an EARLIER build produced,
-/// so an absent staged `.webp` there means not-yet-encoded, never vanished, and
-/// the entry must stay `Pending`. Two things break if it settles `Failed`: the
-/// preview server serves the original source bytes for a Pending variant and
-/// gates that passthrough on `!is_failed` (`ops/serve/router.rs`), and
-/// `output_present` is false for a cloud-evicted file, so on a Google-Drive or
-/// iCloud vault `degrade` would strip the `<source>` of a perfectly healthy
-/// variant (moss#1044). The call site says this by passing `None`; a unit test
-/// on `emit_image_outputs_via_channel` cannot see which argument its caller
-/// passes, which is why this one drives `dispatch_image_conversions`.
+/// A suppressed (unreferenced) rung whose staged file is a 0-byte dataless
+/// stub — a cloud-evicted placeholder, or an interrupted write — must not be
+/// registered as present. `heal_and_verify_variant`'s suppressed branch
+/// checks `metadata(..).is_ok_and(|m| m.len() > 0)`, not `.exists()`,
+/// precisely so a 0-byte stub reads as absent.
+///
+/// Ablate by swapping the helper's suppressed check back to `.exists()` and
+/// this goes red: a 0-byte file passes `.exists()`, so the stub would be
+/// registered as present.
 #[test]
-fn self_heal_leaves_a_not_yet_encoded_variant_pending_rather_than_failed() {
+fn heal_and_verify_variant_never_registers_a_zero_byte_suppressed_rung_as_present() {
+    let h = harness();
+    let staged = h.staging.join("photo.w800.webp");
+    fs::write(&staged, b"").unwrap();
+    assert!(
+        staged.exists(),
+        "precondition: the stub exists on disk (the weaker .exists() check would pass)"
+    );
+
+    let mut healed_count = 0usize;
+    let (present, oid) = heal_and_verify_variant(
+        &h.objects,
+        &h.transforms,
+        &serde_json::json!({}),
+        &mut staged_links(&h),
+        &staged,
+        "image/webp-w800",
+        "irrelevant-oid-for-a-suppressed-check",
+        true,
+        &mut healed_count,
+    );
+
+    assert!(!present, "a 0-byte suppressed stub must not read as present");
+    assert!(oid.is_none());
+    assert_eq!(healed_count, 0, "a suppressed check is never a heal");
+}
+
+// ----- Commit 2: heal a just-dispatched batch's own output inline, at registration -----
+
+/// The exact coherence violation real uploads showed: `[ERROR] [image]
+/// coherence violation: staged .webp missing (3× this build); skipping
+/// manifest registration. … Upstream staging-link reported success but the
+/// bytes are not on disk.` `convert_single_image`'s `link_to` really did
+/// succeed — this test encodes through the real pipeline first, so the
+/// staged bytes are genuinely present at that moment — but
+/// `run_image_conversion` registers a whole batch's outputs only ONCE,
+/// after every item finishes. On a cloud-synced vault the exclusion marker
+/// on `.moss/build.nosync/staging` can silently fail to stick — measured
+/// absent there while present on `.moss/cache` at the same time, on a real
+/// vault — so the provider can evict an early-finished item's `.webp`
+/// before that shared registration pass reads it back. `emit_image_outputs_
+/// via_channel` closes that gap itself now: the CAS oid the just-encoded
+/// path already carries in `paths` is enough to re-link the bytes right
+/// where the presence check finds them missing, with no second pass and no
+/// re-derivation of the source path.
+#[test]
+fn emit_image_outputs_heals_an_evicted_staged_webp_when_the_oid_is_known() {
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+
+    // Encode through the real pipeline: this IS the "Upstream staging-link
+    // reported success" moment — link_to really did put good bytes at
+    // photo.webp, and the CAS blob it came from is independently intact.
+    let outcome = convert_single_image(
+        &src,
+        &source_oid,
+        "photo.webp",
+        &h.temp,
+        &h.staging,
+        &h.objects,
+        &h.transforms,
+        &cfg,
+        None,
+        None,
+        &HashMap::new(),
+    );
+    assert!(
+        outcome.error.is_none(),
+        "encode failed: {:?}",
+        outcome.error
+    );
+    let webp_oid = outcome.webp_oid.expect("encode must record the produced webp's CAS oid");
+    let staged = h.staging.join("photo.webp");
+    assert!(
+        staged.exists(),
+        "precondition: staged webp present after encode"
+    );
+
+    // Simulate the eviction race: the provider zeroes the staged file to a
+    // dataless placeholder sometime between this item's own successful
+    // link_to (above) and the batch-wide registration pass about to run
+    // below — the 0-byte-stub convention `output_present` (and this
+    // codebase's own tests) already use to stand in for `SF_DATALESS`.
+    fs::write(&staged, b"").unwrap();
+    assert_eq!(
+        fs::metadata(&staged).unwrap().len(),
+        0,
+        "precondition: staged webp evicted (0 bytes)"
+    );
+
+    // Registering now, WITH the oid the encode already produced, must heal
+    // in place and register — the image is present, not silently missing.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    emit_image_outputs_via_channel(
+        &Some(tx),
+        &[("photo.webp".to_string(), Some(webp_oid))],
+        &h.staging,
+        &h.objects,
+        &std::collections::HashSet::new(),
+        None,
+    );
+    assert!(
+        fs::metadata(&staged).unwrap().len() > 0,
+        "staged webp must be restored to real bytes, not left as a 0-byte stub"
+    );
+    match rx.try_recv() {
+        Ok(EmitMessage::File {
+            rel_path,
+            hash,
+            bucket,
+            ..
+        }) => {
+            assert_eq!(rel_path, "photo.webp");
+            assert!(
+                !hash.is_empty(),
+                "registered variant must carry a content hash"
+            );
+            assert!(matches!(bucket, HashBucket::ImageVariants));
+        }
+        other => panic!(
+            "expected a File registration after the inline heal, got {:?}",
+            other
+        ),
+    }
+}
+
+/// Same eviction race, but the provider removed the file outright rather
+/// than leaving a 0-byte stub — the `Absent` arm of the same match, not
+/// `Evicted`. Both must heal the same way from the oid.
+#[test]
+fn emit_image_outputs_heals_a_removed_staged_webp_when_the_oid_is_known() {
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+
+    let outcome = convert_single_image(
+        &src,
+        &source_oid,
+        "photo.webp",
+        &h.temp,
+        &h.staging,
+        &h.objects,
+        &h.transforms,
+        &cfg,
+        None,
+        None,
+        &HashMap::new(),
+    );
+    assert!(
+        outcome.error.is_none(),
+        "encode failed: {:?}",
+        outcome.error
+    );
+    let webp_oid = outcome.webp_oid.expect("encode must record the produced webp's CAS oid");
+    let staged = h.staging.join("photo.webp");
+    fs::remove_file(&staged).unwrap();
+    assert!(
+        !staged.exists(),
+        "precondition: staged webp removed outright"
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    emit_image_outputs_via_channel(
+        &Some(tx),
+        &[("photo.webp".to_string(), Some(webp_oid))],
+        &h.staging,
+        &h.objects,
+        &std::collections::HashSet::new(),
+        None,
+    );
+    assert!(staged.exists(), "staged webp must be restored");
+    match rx.try_recv() {
+        Ok(EmitMessage::File { rel_path, hash, bucket, .. }) => {
+            assert_eq!(rel_path, "photo.webp");
+            assert!(
+                !hash.is_empty(),
+                "registered variant must carry a content hash"
+            );
+            assert!(matches!(bucket, HashBucket::ImageVariants));
+        }
+        other => panic!(
+            "expected a File registration after the inline heal, got {:?}",
+            other
+        ),
+    }
+}
+
+/// Negative twin: neither a missing oid nor an oid with no backing CAS blob
+/// can heal, so both must still be reported as the coherence violation this
+/// guard exists to catch — mirrors `rematerialize_noop_without_cas_blob` at
+/// this call site.
+#[test]
+fn emit_image_outputs_does_not_fabricate_a_file_without_a_recoverable_oid() {
+    let h = harness();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    let lines = emit_image_outputs_via_channel(
+        &Some(tx),
+        &[
+            ("no-oid.webp".to_string(), None),
+            ("never-stored.webp".to_string(), Some("oid-with-no-blob".to_string())),
+        ],
+        &h.staging,
+        &h.objects,
+        &std::collections::HashSet::new(),
+        None,
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "neither a None oid nor an oid with no backing blob may register a File message"
+    );
+    assert!(
+        !h.staging.join("no-oid.webp").exists() && !h.staging.join("never-stored.webp").exists(),
+        "must not create a phantom staged file"
+    );
+    assert_eq!(
+        lines.len(),
+        1,
+        "both misses collapse into one coherence-violation summary line: {:?}",
+        lines
+    );
+    assert!(
+        lines[0].contains("staged .webp missing") && lines[0].contains("(2×"),
+        "the summary must be the missing-file violation, counting both \
+         unrecoverable paths, not the separate unreadable-file class: {}",
+        lines[0]
+    );
+}
+
+// ----- Phase 1b: thread the just-encoded CAS oid through to the manifest -----
+
+/// Inline no-op `Spawner`, shared shape with the other full-`dispatch_image_
+/// conversions` tests in this file: it puts `dispatch_image_conversions` on
+/// the GUI (fingerprint-skip) path but runs the encode honestly, so the whole
+/// call finishes synchronously and the test needs no extra wait.
+struct OidTestInlineSpawner;
+impl crate::build::ports::spawner::Spawner for OidTestInlineSpawner {
+    fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        task();
+    }
+    fn spawn(
+        &self,
+        _task: crate::build::ports::spawner::Task,
+    ) -> crate::build::ports::spawner::Joining {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// Mirrors `ship_phase_ships_correct_bytes_from_cas_despite_stage_dir_being_
+/// overwritten` (`ship.rs`) for the image worker's own encode path:
+/// `run_image_conversion` now records the just-encoded webp's CAS oid instead
+/// of throwing it away (the mechanical `oid: None` this whole change closes
+/// the gap on), so `ship_phase` can read the immutable blob instead of the
+/// mutable stage path a concurrent build can rewrite between seal and ship.
+/// Driven through the real `dispatch_image_conversions` producer end to end —
+/// a hand-built manifest never acquires a `staged_oid` in the first place and
+/// would prove nothing about this fix.
+#[tokio::test]
+async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrite() {
+    use crate::build::coordinator::test_utils;
+
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_big_jpeg(&root.join("photo.jpg"), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("photo.jpg"),
+        source_oid: crate::build::cache::ObjectStore::hash_file(&root.join("photo.jpg")).unwrap(),
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+        fingerprint: None,
+    };
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![item],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let oid = sealed
+        .staged_oid("photo.webp")
+        .expect("a freshly encoded webp must carry a live staged_oid")
+        .to_string();
+
+    let object_store = crate::build::cache::ObjectStore::new(
+        MossPaths::from_moss_dir(moss_dir.clone()).cache_objects(),
+    );
+    let cas_bytes = fs::read(object_store.get_path(&oid).expect("the oid must name a live CAS blob")).unwrap();
+
+    // A concurrent build rewrites the mutable stage copy after this
+    // manifest's oid was sealed.
+    fs::write(staging.join("photo.webp"), b"CONCURRENT-OVERWRITE").unwrap();
+
+    let site = root.join("site");
+    crate::build::ship::ship_phase(&staging, &site, &sealed, Some(&object_store), None)
+        .expect("ship_phase should succeed");
+
+    let shipped = fs::read(site.join("photo.webp")).unwrap();
+    assert_eq!(
+        shipped, cas_bytes,
+        "ship_phase must ship the CAS blob's bytes, not the concurrently \
+         overwritten mutable stage copy"
+    );
+    assert_ne!(
+        shipped,
+        b"CONCURRENT-OVERWRITE".to_vec(),
+        "premise: the overwrite really changed the stage bytes"
+    );
+}
+
+/// Regression guard: if a future refactor drops the oid on `delivered`'s way
+/// into `emit_image_outputs_via_channel`, this must fail loudly rather than
+/// quietly reverting every image entry to the pre-fix, fingerprint-only ship.
+/// Covers both the base variant and a ladder rung, since both `ensure_staged`
+/// call sites in the main encode path carry their own oid.
+#[tokio::test]
+async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
+    use crate::build::coordinator::test_utils;
+
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // 1000×750 lands one ladder rung (w800): deployed_width(1000,750) = 1000,
+    // and LADDER = [800, 1600] keeps only 800 below that.
+    make_big_jpeg(&root.join("wide.jpg"), 1000, 750);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("wide.jpg"),
+        source_oid: crate::build::cache::ObjectStore::hash_file(&root.join("wide.jpg")).unwrap(),
+        ext: "jpg".to_string(),
+        dimensions: Some((1000, 750)),
+        skip: None,
+        fingerprint: None,
+    };
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![item],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    assert!(
+        sealed.files().contains_key("wide.webp"),
+        "premise: the base variant was registered at all"
+    );
+    assert!(
+        sealed.files().contains_key("wide.w800.webp"),
+        "premise: the rung variant was registered at all"
+    );
+    assert!(
+        sealed.staged_oid("wide.webp").is_some(),
+        "the main encode path must record a staged_oid for the base variant"
+    );
+    assert!(
+        sealed.staged_oid("wide.w800.webp").is_some(),
+        "the main encode path must record a staged_oid for each ladder rung too"
+    );
+}
+
+/// The carry-forward skip path's other half: `dispatch_image_conversions`'s
+/// disk-origin skip never calls `convert_single_image` at all, so it has no
+/// FRESH oid from an encode that just ran — but it must still register the
+/// REAL, verified CAS oid the transform cache holds for this exact content
+/// (recovered via the same `find_cached_output` lookup the heal itself just
+/// used), not `oid: None`. A `None` here would leave the entry with only
+/// `ship_phase`'s audit-only `Fingerprint` fallback instead of a genuine
+/// `ShipSource::Cas` — reopening the overlapping-build race `images/*.webp`
+/// was supposed to be closed against (`overlap_tests.rs`). Never a fabricated
+/// or stale oid either: it must be the one the cache actually verified.
+#[tokio::test]
+async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_fabricated_one() {
+    let _guard = image_fingerprint_test_lock().lock();
+    use crate::build::coordinator::test_utils;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_big_jpeg(&root.join("kept.jpg"), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::write(staging.join("kept.webp"), b"kept-bytes").unwrap();
+
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("kept.jpg"),
+        source_oid: crate::build::cache::ObjectStore::hash_file(&root.join("kept.jpg")).unwrap(),
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+        fingerprint: None,
+    };
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![item.clone()],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    // Prime the on-disk hash index so dispatch's disk-origin check takes the
+    // self-heal/skip path instead of a real encode — the branch that has no
+    // fresh oid at hand.
+    let cfg = ImageCompressionConfig::default();
+    let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
+        .expect("source exists and is stat-able");
+    prime_disk_hash_index(&moss_dir, &item.source_path.to_string_lossy(), &fp, &item.source_oid);
+    // Fixture for `rematerialize_with_oid`'s always-verify relink (see its
+    // doc) — a real cached record whose blob IS "kept-bytes", so the
+    // verified relink is a same-bytes no-op and the premise assertion below
+    // (the skip path, not a real re-encode) still holds.
+    let heal_paths = MossPaths::from_moss_dir(moss_dir.clone());
+    let expected_oid = prime_cached_transform(
+        &crate::build::cache::ObjectStore::for_site(&heal_paths),
+        &crate::build::cache::TransformCache::for_site(&heal_paths),
+        &item.source_oid,
+        "image/webp",
+        &cfg.to_params(),
+        b"kept-bytes",
+    );
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    assert_eq!(
+        fs::read(staging.join("kept.webp")).unwrap(),
+        b"kept-bytes",
+        "premise: this took the skip path, not a real re-encode"
+    );
+    assert!(
+        sealed.files().contains_key("kept.webp"),
+        "premise: still registered despite taking the skip path"
+    );
+    assert_eq!(
+        sealed.staged_oid("kept.webp"),
+        Some(expected_oid.as_str()),
+        "the carry-forward skip path must register the real, verified CAS oid \
+         the transform cache holds for this content — a genuine ShipSource::Cas, \
+         not a fabricated or stale one, and not None either"
+    );
+}
+
+/// The exact end-to-end bug a synthetic sentinel fixture (like the test
+/// above) can't reach: the on-disk hash index can already reflect a
+/// source's NEW content — e.g. from the scan phase's own metadata read,
+/// which runs before this dispatch — while staging still physically holds a
+/// PREVIOUS generation's output at that same path. A disk-index hit alone
+/// is never proof of "unchanged"; that also needs a transform-cache record
+/// for the EXACT oid the index just reported. No such record is primed
+/// here, so the stale file's mere presence is the only thing that could
+/// wrongly vouch for it.
+///
+/// Ablate by reverting `dispatch_image_conversions`'s `outputs_present` to
+/// an independent `std::fs::metadata` presence check (its shape before this
+/// fix — see `rematerialize_with_oid`'s doc for the other half) and this
+/// goes red: the stale bytes are shipped as the skip-carried output instead
+/// of a real re-encode landing.
+#[test]
+fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let name = "photo.jpg";
+    make_big_jpeg(&root.join(name), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    // A stale file already sitting at the staging path — belongs to no
+    // known oid, standing in for "whatever an earlier generation left
+    // here" (a prior encode of this same path, now superseded).
+    let staged = staging.join("photo.webp");
+    fs::write(&staged, b"STALE-FROM-AN-EARLIER-GENERATION").unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+    let item = ImageConversionItem {
+        source_path: PathBuf::from(name),
+        source_oid: String::new(),
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+        fingerprint: None,
+    };
+    // The disk hash index already knows the source's CURRENT content, as if
+    // the scan phase had just re-hashed it — but nothing has ever encoded a
+    // webp for this exact oid, so no transform-cache record is primed.
+    let fp = compute_image_item_fingerprint(&root.to_string_lossy(), &item.source_path, &cfg)
+        .expect("source exists and is stat-able");
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(name)).unwrap();
+    prime_disk_hash_index(&moss_dir, name, &fp, &source_oid);
+
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![item],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    let (tx, _rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+
+    let landed = fs::read(&staged).expect("a real encode must have landed at the staging path");
+    assert_ne!(
+        landed, b"STALE-FROM-AN-EARLIER-GENERATION",
+        "the stale file from an earlier generation was shipped unchanged instead of being re-encoded"
+    );
+}
+
+/// Per-item skip/dispatch, exercised through two siblings with the SAME
+/// recorded (matching) fingerprint but different on-disk state. `kept.jpg`'s
+/// variant is already staged, so it takes the cheap skip path: self-heal
+/// re-registers it WITHOUT ever entering `run_image_conversion` (proven by
+/// its sentinel bytes surviving unchanged). `pending.jpg`'s variant was
+/// never actually produced — a matched fingerprint was never proof the
+/// LAST run that considered it actually left the file on disk — so it must
+/// be dispatched and encoded this round rather than silently staying
+/// unregistered forever (mirrors `dispatch_video_conversions`'s identical
+/// self-heal-by-redispatch rule for a missing output, video.rs). Before
+/// this per-item fix, this file's `self_heal_leaves_a_not_yet_encoded_
+/// variant_pending_rather_than_failed` asserted `pending.webp` stayed
+/// `Pending` forever under a matching WHOLE-SET fingerprint; the never-
+/// mark-Failed half of that concern still holds and is
+/// asserted below, now satisfied by actually encoding the image instead of
+/// leaving it stuck.
+#[test]
+fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_path() {
     /// Runs blocking work inline. Only its presence matters here — it is what
     /// puts `dispatch_image_conversions` on the GUI (fingerprint-skip) path —
     /// but it runs the task honestly so a missed skip encodes rather than
@@ -3947,16 +6019,20 @@ fn self_heal_leaves_a_not_yet_encoded_variant_pending_rather_than_failed() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     // Two images from an earlier build: one whose staged variant is on disk,
-    // one whose variant has not been encoded into this staging generation yet.
+    // one whose variant has not been encoded into this staging generation
+    // yet. Distinct dimensions: `make_big_jpeg`'s pixels are a pure function
+    // of (w, h), so two same-size calls would share one content oid — which
+    // would let "pending.jpg" wrongly borrow "kept.jpg"'s primed transform-
+    // cache record below instead of genuinely testing the missing-output path.
     make_big_jpeg(&root.join("kept.jpg"), 400, 300);
-    make_big_jpeg(&root.join("pending.jpg"), 400, 300);
+    make_big_jpeg(&root.join("pending.jpg"), 401, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build").join("staging");
+    let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
     fs::write(staging.join("kept.webp"), b"kept-bytes").unwrap();
 
     let items: Vec<ImageConversionItem> = ["kept.jpg", "pending.jpg"]
@@ -3967,6 +6043,7 @@ fn self_heal_leaves_a_not_yet_encoded_variant_pending_rather_than_failed() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         })
         .collect();
 
@@ -3992,50 +6069,85 @@ fn self_heal_leaves_a_not_yet_encoded_variant_pending_rather_than_failed() {
         ..BuildServices::headless()
     };
 
-    // Prime the fingerprint cell with this image set's own fingerprint, which
-    // is what a rebuild that changed no image looks like to dispatch.
-    let fp = compute_image_set_fingerprint(
-        &ctx.source_path,
-        &ctx.image_items,
-        &ImageCompressionConfig::default(),
+    // Prime BOTH images' own on-disk hash-index entries, which is what a
+    // rebuild that changed neither image's bytes looks like to dispatch.
+    let cfg = ImageCompressionConfig::default();
+    for item in &items {
+        let rel = item.source_path.to_string_lossy().to_string();
+        let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
+            .expect("source exists and is stat-able");
+        prime_disk_hash_index(&moss_dir, &rel, &fp, &item.source_oid);
+    }
+    // Only "kept.jpg" gets a cached transform record — `rematerialize_with_
+    // oid` never trusts presence alone (see its doc), so this is what makes
+    // its skip path genuine. "pending.jpg" deliberately has NONE: its
+    // matched fingerprint was never proof a real encode exists, which is
+    // exactly the gap this test exercises.
+    let heal_paths = MossPaths::from_moss_dir(moss_dir.clone());
+    prime_cached_transform(
+        &crate::build::cache::ObjectStore::for_site(&heal_paths),
+        &crate::build::cache::TransformCache::for_site(&heal_paths),
+        &items[0].source_oid,
+        "image/webp",
+        &cfg.to_params(),
+        b"kept-bytes",
     );
-    check_and_update_image_fingerprint(&fp);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
     dispatch_image_conversions(Some(&services), &ctx, Some(tx));
 
-    // The self-heal registration ran: the variant that IS on disk reached the
-    // coordinator. Without this the assertions below would pass vacuously on
-    // any build that never took the fingerprint-skip branch at all.
     let registered: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|msg| match msg {
             EmitMessage::File { rel_path, .. } => Some(rel_path),
             _ => None,
         })
         .collect();
+
+    // kept.jpg took the skip path: self-heal found the variant already on
+    // disk and re-registered it WITHOUT re-encoding — its sentinel bytes
+    // prove no real encode touched it, even though its SIBLING dispatched.
     assert!(
         registered.contains(&"kept.webp".to_string()),
-        "self-heal must register the staged variant; got {:?}",
+        "self-heal must register the already-staged variant; got {:?}",
         registered
     );
+    assert_eq!(
+        fs::read(staging.join("kept.webp")).unwrap(),
+        b"kept-bytes",
+        "kept.jpg must not be re-encoded just because a sibling image's output was missing"
+    );
 
+    // pending.jpg's matched fingerprint was never proof the last run that
+    // considered it actually left the file on disk: it must be dispatched
+    // and registered once encoded, not left permanently unregistered.
     assert!(
-        matches!(registry.get("pending.webp"), Some(AssetState::Pending(_))),
-        "a not-yet-encoded variant must stay Pending so preview keeps serving \
-         the source; got {:?}",
+        registered.contains(&"pending.webp".to_string()),
+        "a missing output behind a matched fingerprint must be dispatched and \
+         registered once encoded; got {:?}",
+        registered
+    );
+    assert_ne!(
+        fs::read(staging.join("pending.webp")).unwrap(),
+        b"kept-bytes",
+        "pending.webp must be a real encode of its own source, not kept.jpg's cached bytes"
+    );
+    assert!(
+        matches!(registry.get("pending.webp"), Some(AssetState::Ready)),
+        "the missing variant must reach Ready once dispatch encodes it; got {:?}",
         registry.get("pending.webp")
     );
     assert!(
         registry.failed_keys().is_empty(),
-        "self-heal must settle nothing Failed — on a synced vault an evicted \
-         file reads absent and `degrade` would strip a healthy <source>; \
+        "neither variant may settle Failed — on a synced vault an evicted \
+         file reads absent too, and `degrade` would strip a healthy <source> \
+         if a merely-not-yet-encoded variant were ever marked Failed; \
          failed: {:?}",
         registry.failed_keys()
     );
 }
 
 /// The same minimal 1×1 PNG `should_skip_not_an_image_real_png_passes` uses,
-/// hoisted so the moss#985 tests below assert about a file that really is a
+/// hoisted so the tests below assert about a file that really is a
 /// valid image — the whole point being that it was classified as not one.
 #[cfg(test)]
 fn real_png_bytes() -> &'static [u8] {
@@ -4053,7 +6165,7 @@ fn real_png_bytes() -> &'static [u8] {
 }
 
 // ---------------------------------------------------------------------------
-// An unreadable source is not a verdict about its content (moss#985)
+// An unreadable source is not a verdict about its content
 //
 // Every other NotAnImage test above feeds the probe a READABLE file, which is
 // why a suite of 8,608 tests stayed green while a valid PNG could be cached as
@@ -4097,7 +6209,7 @@ fn an_unreadable_source_is_never_cached_as_not_an_image() {
          still register the variant promise, which NotAnImage would skip"
     );
     assert!(
-        h.transforms.get(oid).is_none(),
+        h.transforms.get_with(oid, crate::build::cache::RecordMode::Request).is_none(),
         "nothing about content nobody read may reach the cache: the verdict is \
          keyed by content oid, and an evicted file's content never changes, so \
          a cached verdict here would outlive the eviction forever"
@@ -4107,7 +6219,7 @@ fn an_unreadable_source_is_never_cached_as_not_an_image() {
 /// The end of the story the previous test starts, and the one that actually
 /// bit: the bytes arrive, and the image converts normally. Before the fix this
 /// build emitted zero `.webp` variants while the synthesizer went on emitting
-/// `<source srcset="…webp">` for the same file — ADR-013's unrecoverable
+/// `<source srcset="…webp">` for the same file — an unrecoverable
 /// chosen-source 404, reached permanently through a transient cloud state.
 #[cfg(unix)]
 #[test]
@@ -4154,7 +6266,767 @@ fn a_readable_non_image_is_still_cached() {
         Some(SkipReason::NotAnImage)
     );
     assert!(
-        h.transforms.get(oid).is_some(),
+        h.transforms.get_with(oid, crate::build::cache::RecordMode::Request).is_some(),
         "a verdict read from real bytes is still worth keeping"
+    );
+}
+
+/// An unreadable staged variant is neither present nor missing. Settling it
+/// `Failed` would have `degrade` strip its `<source>` from a page whose bytes
+/// may be fine; registration reports it `Unverified` instead, and the
+/// generation that carries the mark is withheld.
+#[cfg(unix)]
+#[test]
+fn registration_over_an_unreadable_variant_reports_it_and_never_fails_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let h = harness();
+    let locked_dir = h.staging.join("locked");
+    fs::create_dir_all(&locked_dir).unwrap();
+    fs::write(locked_dir.join("photo.webp"), b"webp bytes").unwrap();
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked_dir).is_ok() {
+        fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: this process can read a 0o000 directory (running as root?)");
+        return;
+    }
+
+    let registry = AssetRegistry::new();
+    registry.set_pending("locked/photo.webp".to_string(), None, None);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    emit_image_outputs_via_channel(
+        &Some(tx),
+        &[("locked/photo.webp".to_string(), None)],
+        &h.staging,
+        &h.objects,
+        &std::collections::HashSet::new(),
+        Some(&registry),
+    );
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        !matches!(registry.get("locked/photo.webp"), Some(AssetState::Failed(_))),
+        "an unreadable variant must not settle Failed — degrade would strip a healthy <source>"
+    );
+    match rx.try_recv() {
+        Ok(EmitMessage::Unverified { rel_path, .. }) => assert_eq!(rel_path, "locked/photo.webp"),
+        other => panic!("expected an Unverified report, got {other:?}"),
+    }
+}
+
+/// A spawner that holds each worker it is handed instead of running it, so a test decides
+/// when a worker reaches its images, and counts how many were spawned.
+#[derive(Default)]
+struct HeldSpawner {
+    held: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+    spawned: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::build::ports::spawner::Spawner for HeldSpawner {
+    fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        self.spawned.fetch_add(1, Ordering::SeqCst);
+        self.held.lock().unwrap().push(task);
+    }
+    fn spawn(&self, _task: crate::build::ports::spawner::Task) -> crate::build::ports::spawner::Joining {
+        unimplemented!("the image dispatch never uses the async half")
+    }
+}
+
+impl HeldSpawner {
+    fn spawned(&self) -> usize {
+        self.spawned.load(Ordering::SeqCst)
+    }
+
+    /// The desktop app's services, with this spawner.
+    fn services(self: &std::sync::Arc<Self>) -> BuildServices {
+        BuildServices { spawner: Some(self.clone()), ..BuildServices::headless() }
+    }
+
+    /// Run every worker held so far, in order, on a blocking thread as a real one would be.
+    async fn run_held(self: &std::sync::Arc<Self>) {
+        let me = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let workers: Vec<_> = std::mem::take(&mut *me.held.lock().unwrap());
+            workers.into_iter().for_each(|worker| worker());
+        })
+        .await
+        .unwrap();
+    }
+
+    /// Run only the oldest worker held.
+    async fn run_oldest(self: &std::sync::Arc<Self>) {
+        let me = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let oldest = {
+                let mut held = me.held.lock().unwrap();
+                (!held.is_empty()).then(|| held.remove(0))
+            };
+            oldest.into_iter().for_each(|worker| worker());
+        })
+        .await
+        .unwrap();
+    }
+}
+
+// ----- a same-size rewrite in the same second is a different file -----
+
+/// A vault with one image, and an image-side rebuild run the way a real one runs
+/// it: the blocking phase collects against the index the last worker persisted,
+/// then the worker encodes whatever it was handed.
+struct RewriteVault {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+    moss_dir: PathBuf,
+}
+
+impl RewriteVault {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let moss_dir = root.join(".moss");
+        for dir in ["staging", "cache/objects", "cache/transforms", "cache/tmp"] {
+            fs::create_dir_all(moss_dir.join("build.nosync").join(dir)).unwrap();
+        }
+        Self { _tmp: tmp, root, moss_dir }
+    }
+
+    fn pic(&self) -> PathBuf {
+        self.root.join("pic.png")
+    }
+
+    /// The staged variant, as the last rebuild left it.
+    fn webp(&self) -> Vec<u8> {
+        fs::read(self.moss_dir.join("build/staging/pic.webp")).expect("the rebuild staged pic.webp")
+    }
+
+    /// Two solid colours whose PNGs are the same number of bytes, so a rewrite
+    /// from one to the other is a same-size rewrite.
+    fn write_pic(&self, rgb: [u8; 3]) {
+        image::RgbImage::from_pixel(24, 24, Rgb(rgb)).save(self.pic()).unwrap();
+    }
+
+    /// Replace the image with same-size different bytes, stamped with the whole
+    /// second the previous write carries (see `FileStat::stamp_in_the_second_of`).
+    fn rewrite_in_the_same_second(&self, rgb: [u8; 3]) {
+        let before = fs::metadata(self.pic()).unwrap();
+        self.write_pic(rgb);
+        assert_eq!(fs::metadata(self.pic()).unwrap().len(), before.len(), "precondition: a same-size rewrite");
+        crate::build::stat::FileStat::stamp_in_the_second_of(&self.pic(), before.modified().unwrap());
+    }
+
+    /// A second (or third) image beside `pic.png`.
+    fn write_named(&self, name: &str, rgb: [u8; 3]) {
+        image::RgbImage::from_pixel(24, 24, Rgb(rgb)).save(self.root.join(name)).unwrap();
+    }
+
+    /// What the blocking phase hands the worker: the images that need encoding, by the
+    /// index the last worker persisted.
+    fn collect(&self) -> Vec<ImageConversionItem> {
+        self.collect_of(&["pic.png"])
+    }
+
+    /// [`collect`](Self::collect) for a vault whose images are `names`.
+    fn collect_of(&self, names: &[&str]) -> Vec<ImageConversionItem> {
+        let paths = MossPaths::from_moss_dir(self.moss_dir.clone());
+        let structure = crate::types::content::ProjectStructure {
+            root_path: self.root.to_string_lossy().to_string(),
+            markdown_files: vec![],
+            html_files: vec![],
+            image_files: names
+                .iter()
+                .map(|name| MediaMetadata {
+                    path: name.to_string(),
+                    file_type: "png".to_string(),
+                    size: fs::metadata(self.root.join(name)).unwrap().len(),
+                    ..Default::default()
+                })
+                .collect(),
+            video_files: vec![],
+            notebook_files: vec![],
+            other_files: vec![],
+            total_files: 0,
+            homepage_file: None,
+            ffmpeg_bin_path: None,
+            evicted_count: 0,
+            evicted_paths: Vec::new(),
+            has_content_folders: false,
+            has_language_trees: false,
+            passthrough_roots: std::collections::HashSet::new(),
+            dirs: Vec::new(),
+        };
+        let transforms = crate::build::cache::TransformCache::new(
+            paths.cache_transforms(),
+            crate::build::cache::ObjectStore::new(paths.cache_objects()),
+        );
+        let mut index = crate::build::cache::HashIndex::load(&paths.cache_hash_index());
+        collect_images_for_conversion(&structure, &transforms, &mut index, &ImageCompressionConfig::default())
+            .into_iter()
+            .filter(|item| item.skip.is_none())
+            .collect()
+    }
+
+    /// The desktop app's services: a spawner, so each image is compared with the
+    /// fingerprint of the last build that considered it. `moss build` has none.
+    fn app_services() -> BuildServices {
+        BuildServices {
+            spawner: Some(std::sync::Arc::new(OidTestInlineSpawner) as std::sync::Arc<dyn crate::build::ports::spawner::Spawner>),
+            ..BuildServices::headless()
+        }
+    }
+
+    /// The same, with the user having cancelled the folder's work before the worker runs.
+    fn cancelled_app_services(&self) -> BuildServices {
+        let session = crate::system::folder_session::FolderSession::new(self.root.clone());
+        session.cancel.cancel();
+        BuildServices { session: Some(session), ..Self::app_services() }
+    }
+
+    /// Dispatch `items` the way a build's background phase does.
+    async fn dispatch(&self, items: Vec<ImageConversionItem>, services: BuildServices) {
+        let ctx = BackgroundContext {
+            image_items: items,
+            source_path: self.root.to_string_lossy().to_string(),
+            staging_dir: self.moss_dir.join("build/staging"),
+            moss_dir: self.moss_dir.clone(),
+            ..BackgroundContext::for_test()
+        };
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, None))
+            .await
+            .unwrap();
+    }
+
+    /// One rebuild of the image side. `with_fingerprint_gate` runs it the way the
+    /// desktop app does (see `app_services`); without, the way `moss build` does.
+    async fn rebuild(&self, with_fingerprint_gate: bool) {
+        let services = if with_fingerprint_gate { Self::app_services() } else { BuildServices::headless() };
+        self.dispatch(self.collect(), services).await;
+    }
+
+    /// One rebuild of the image side, as the desktop app runs it, with the manifest it
+    /// registered read back. Every entry — carried forward or freshly delivered — now
+    /// carries the real, verified CAS oid backing its bytes (`staged_oid`); see
+    /// `rematerialize_with_oid`'s doc for why a skip-carried entry may never register
+    /// with no oid at all.
+    async fn sealed_rebuild(&self, names: &[&str]) -> crate::build::manifest::SealedManifest {
+        self.sealed_rebuild_with_dispatched(names).await.0
+    }
+
+    /// [`sealed_rebuild`](Self::sealed_rebuild), also returning how many images this
+    /// round actually dispatched to `run_image_conversion` (from the "images" task's
+    /// own opening progress tick, `current: 0, total: N`) — the one signal that tells a
+    /// content-addressed carry-forward apart from a real re-encode when the two produce
+    /// byte-identical output, which a same-content rewrite always does.
+    async fn sealed_rebuild_with_dispatched(&self, names: &[&str]) -> (crate::build::manifest::SealedManifest, u32) {
+        use crate::build::coordinator::test_utils;
+        use crate::build::ports::reporter::BuildReporter;
+
+        #[derive(Default)]
+        struct DispatchedCountReporter(std::sync::Mutex<Option<u32>>);
+        impl BuildReporter for DispatchedCountReporter {
+            fn report(&self, event: &PipelineEvent) {
+                if let PipelineEvent::BackgroundProgress { task, current: 0, total, .. } = event {
+                    if task == "images" {
+                        *self.0.lock().unwrap() = Some(*total);
+                    }
+                }
+            }
+        }
+
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let ctx = BackgroundContext {
+            image_items: self.collect_of(names),
+            source_path: self.root.to_string_lossy().to_string(),
+            staging_dir: self.moss_dir.join("build/staging"),
+            moss_dir: self.moss_dir.clone(),
+            ..BackgroundContext::for_test()
+        };
+        let recorder = std::sync::Arc::new(DispatchedCountReporter::default());
+        let services = BuildServices { reporter: recorder.clone(), ..Self::app_services() };
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, Some(tx))).await.unwrap();
+        let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+        // No dispatch at all (every image carried forward) never fires the opening
+        // tick — `dispatch_image_conversions` returns early instead. Zero either way.
+        let dispatched = recorder.0.lock().unwrap().unwrap_or(0);
+        (sealed, dispatched)
+    }
+}
+
+/// The image worker's oid comes from the persisted index, and the index used to be
+/// keyed by (path, size, whole-second mtime). A rewrite of the same size in the same
+/// second matched the previous write's entry, so the old oid was reused, the cached
+/// encode was found under it, and `pic.webp` kept the old picture.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_same_size_rewrite_in_the_same_second_is_re_encoded() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(false).await;
+    let first = vault.webp();
+
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    vault.rebuild(false).await;
+
+    assert_ne!(vault.webp(), first, "pic.png changed on disk but its variant is still the old encode");
+}
+
+/// The desktop app's rebuild has a second whole-second key in front of the index:
+/// an image whose fingerprint (path, size, mtime, config) matches the last build's is
+/// carried forward without ever reaching the worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_same_size_rewrite_in_the_same_second_gets_past_the_fingerprint_gate() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    vault.rebuild(true).await;
+
+    assert_ne!(vault.webp(), first, "the fingerprint gate carried the old variant forward over a changed source");
+}
+
+// ----- the fingerprint gate vouches for an image only once its worker delivered it -----
+
+/// The desktop app skips an image whose fingerprint matches the one recorded the last
+/// time it was considered, when its variant is still in staging. If the fingerprint is
+/// recorded at dispatch, a worker that leaves without encoding (the user cancelled,
+/// the source went back to the cloud) has already vouched for a source it never
+/// encoded, and the variant of the OLD bytes — kept in staging by the stale-output
+/// pass — is what the next build's gate finds present and skips.
+///
+/// Build 1 encodes red. The source becomes blue. Build 2 is dispatched over blue and its
+/// worker `leaves`. Build 3 finds blue unchanged since build 2, and must still encode it.
+async fn a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(
+    leave: impl FnOnce(&RewriteVault) -> (BuildServices, Option<crate::build::icloud::pretend::Guard>),
+) {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    let items = vault.collect();
+    let (services, still_holding) = leave(&vault);
+    vault.dispatch(items, services).await;
+    drop(still_holding);
+    assert_eq!(vault.webp(), first, "premise: the worker that left encoded nothing, so the old variant is still staged");
+
+    vault.rebuild(true).await;
+
+    assert_ne!(vault.webp(), first, "pic.png is blue on disk but its variant is still the red encode: the gate skipped it");
+}
+
+/// The other half: a worker that delivers vouches for its source, so the next build
+/// carries the variant forward instead of dispatching it again — registered with the
+/// SAME verified CAS oid the first build's worker minted, recovered from the transform
+/// cache rather than a fresh encode (see `rematerialize_with_oid`'s doc for why this
+/// must be a real oid, not `None`: `ship_phase`'s overlap protection for image variants
+/// depends on it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_a_worker_delivered_is_carried_forward_by_the_next_build() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let mut oids = Vec::new();
+    for _ in 0..2 {
+        oids.push(vault.sealed_rebuild(&["pic.png"]).await.staged_oid("pic.webp").map(str::to_string));
+    }
+
+    assert!(oids[0].is_some(), "premise: the first build's worker delivered the variant");
+    assert_eq!(
+        oids[1], oids[0],
+        "the second build carried the variant forward and must register the SAME \
+         verified CAS oid the first build's worker delivered, not None"
+    );
+}
+
+/// A warm rebuild over unchanged images relinks nothing. Every link is a
+/// temp-and-rename onto a fresh inode, so the count of staged variants whose
+/// inode moved is the count of relinks. The first build encodes, the second
+/// carries each variant forward and records the link, the third must find
+/// every record still vouched for — and still register each variant's oid.
+///
+/// Ablate by deleting the `Placement::Held` return in `StagedLinks::link`
+/// and this goes red: all three relink.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_warm_rebuild_over_unchanged_images_relinks_no_staged_variant() {
+    use std::os::unix::fs::MetadataExt;
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+    vault.write_named("third.png", [30, 30, 200]);
+    let names = ["pic.png", "other.png", "third.png"];
+    let webps = ["pic.webp", "other.webp", "third.webp"];
+    let inodes = || webps.map(|webp| fs::metadata(vault.moss_dir.join("build/staging").join(webp)).unwrap().ino());
+
+    let first = vault.sealed_rebuild(&names).await;
+    vault.sealed_rebuild(&names).await;
+    let before = inodes();
+    let warm = vault.sealed_rebuild(&names).await;
+
+    let relinked = before.iter().zip(inodes()).filter(|(was, now)| **was != *now).count();
+    assert_eq!(relinked, 0, "a warm rebuild over unchanged images relinked {relinked} staged variant(s)");
+    for webp in webps {
+        assert!(first.staged_oid(webp).is_some(), "premise: the first build delivered {webp}");
+        assert_eq!(warm.staged_oid(webp), first.staged_oid(webp), "{webp} must still register its verified oid");
+    }
+}
+
+/// The core disk-origin-skip property, across a boundary this file's other tests only
+/// simulate piecewise: a genuinely SECOND build — in-process memory wiped, exactly as a
+/// relaunch leaves it — must re-encode the one image that actually changed and dispatch
+/// NOTHING else, telling the two apart using only the on-disk hash index and transform
+/// cache.
+///
+/// The dispatched count (from the "images" task's own opening progress tick) is the
+/// property under test, not the staged oid: for a genuinely unchanged source, a
+/// carry-forward and a full re-encode produce byte-IDENTICAL output (same config, same
+/// bytes in), so they mint the SAME CAS oid either way — oid equality alone cannot
+/// tell "skipped" from "redundantly re-encoded to an identical result". An unchanged
+/// image's carried-forward registration does still keep that real, verified oid rather
+/// than `None` (see `rematerialize_with_oid`'s doc for why), which the assertions below
+/// also check, but that is the overlap-safety property, not this one.
+///
+/// Ablate by reverting `dispatch_image_conversions`'s disk-origin lookup
+/// (`heal_index.lookup`, image.rs) to the old in-process fingerprint match and this goes
+/// red: with the ledger wiped, every one of the three images looks unproven, so all
+/// three dispatch on the second build instead of just the one that changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_build_only_re_encodes_the_one_image_that_actually_changed() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+    vault.write_named("third.png", [30, 30, 200]);
+    let names = ["pic.png", "other.png", "third.png"];
+
+    let (first, first_dispatched) = vault.sealed_rebuild_with_dispatched(&names).await;
+    assert_eq!(first_dispatched, 3, "premise: the first build has nothing cached yet, so all three dispatch");
+    let mut first_oids = std::collections::HashMap::new();
+    for webp in ["pic.webp", "other.webp", "third.webp"] {
+        let oid = first.staged_oid(webp).map(str::to_string);
+        assert!(oid.is_some(), "premise: the first build's worker delivered {webp}");
+        first_oids.insert(webp, oid);
+    }
+
+    // Simulate a genuinely new process: nothing in memory remembers this build ran.
+    retain_image_item_fingerprints(&std::collections::HashSet::new());
+
+    vault.write_named("other.png", [10, 250, 10]); // the one real change
+    let (second, second_dispatched) = vault.sealed_rebuild_with_dispatched(&names).await;
+
+    assert_eq!(
+        second_dispatched, 1,
+        "only the one image that actually changed may dispatch to a real encode"
+    );
+    assert_eq!(
+        second.staged_oid("pic.webp").map(str::to_string),
+        first_oids["pic.webp"],
+        "pic.png is unchanged and must be carried forward under the same verified oid"
+    );
+    assert_eq!(
+        second.staged_oid("third.webp").map(str::to_string),
+        first_oids["third.webp"],
+        "third.png is unchanged and must be carried forward under the same verified oid"
+    );
+    assert!(
+        second.staged_oid("other.webp").is_some(),
+        "other.png changed and must be re-encoded with a fresh, real oid"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_changed_under_a_cancelled_worker_is_encoded_by_the_next_build() {
+    a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(|vault| (vault.cancelled_app_services(), None)).await;
+}
+
+/// The other exit that leaves the old variant: the source is in the cloud when the worker
+/// gets to it (it was local when the blocking phase collected it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_changed_under_a_worker_that_deferred_it_to_the_cloud_is_encoded_by_the_next_build() {
+    a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(|vault| {
+        (RewriteVault::app_services(), Some(crate::build::icloud::pretend::evicted(&vault.pic())))
+    })
+    .await;
+}
+
+// ----- a worker already converting a source is joined, not raced -----
+
+/// A burst of saves rebuilds before the last build's worker has reached its images. The
+/// source is the same bytes in both, so the second dispatch joins the worker that is
+/// already queued: a second one would encode the same image again, with a thread pool and
+/// a megapixel budget of its own, and nothing has yet vouched for the change that would
+/// tell the dispatch to leave it alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_dispatch_before_the_worker_ran_joins_it_instead_of_spawning_another() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    vault.dispatch(vault.collect(), workers.services()).await;
+    assert_eq!(workers.spawned(), 1, "the second dispatch found the source unchanged since the first and spawned its own worker");
+
+    workers.run_held().await;
+    assert_ne!(vault.webp(), first, "premise: the one worker delivered the change");
+    vault.dispatch(vault.collect(), workers.services()).await;
+    assert_eq!(workers.spawned(), 1, "the joined worker delivered this source: nothing to queue");
+}
+
+/// The join is for the same source. One rewritten again after the worker was queued is a
+/// source that worker's dispatch never saw, and nothing that is queued for the old one is
+/// for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dispatch_over_a_source_changed_again_since_the_worker_was_queued_spawns_its_own() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    vault.dispatch(vault.collect(), workers.services()).await;
+    // Stamped by the write itself: `rewrite_in_the_same_second` alternates between two instants
+    // and would put this one back at the mtime the first build recorded.
+    vault.write_pic([30, 200, 30]);
+    vault.dispatch(vault.collect(), workers.services()).await;
+    assert_eq!(workers.spawned(), 2, "the second dispatch joined a worker queued for bytes the source no longer has");
+
+    workers.run_held().await;
+    assert_ne!(vault.webp(), first, "premise: the workers delivered the change");
+}
+
+/// An image that leaves the site while its worker is queued has been dropped from the
+/// records by the dispatch that no longer lists it (`retain_image_item_fingerprints`
+/// removes its `pending` marker too), and the worker that reaches it later must not put
+/// it back: `end_image_item`'s own pending-marker check must see the mismatch and
+/// refuse to record anything for it, the very record the dispatch pruned. "Vouched for"
+/// is read off the ledger's advisories map directly (child-module access to
+/// `ImageLedger`, not a public accessor) since that write is gated by the exact same
+/// pending-marker check as the disk-origin skip candidate this worker would otherwise
+/// help retire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_it() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+    let vouched = |name: &str| image_ledger().advisories.contains_key(name);
+
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect_of(&["pic.png", "other.png"]), workers.services()).await;
+    vault.dispatch(vault.collect_of(&["other.png"]), workers.services()).await;
+    assert_eq!(workers.spawned(), 1, "premise: the second dispatch joined the worker for the image that stayed");
+
+    workers.run_held().await;
+
+    assert!(vouched("other.png"), "premise: the worker delivered the image that stayed");
+    assert!(!vouched("pic.png"), "the worker vouched for an image the site no longer lists");
+}
+
+/// A worker vouches for the source its dispatch saw. One that read the file later has
+/// looked at bytes nobody fingerprinted, and when the blocking phase had already handed it
+/// the hash of the OLD bytes (a stat-matched index entry, so no read) it encoded nothing of
+/// what is on disk now: the cached variant of the old oid was delivered, and a fingerprint
+/// taken at the worker's start would vouch for the new stat with it. Here the source is
+/// rewritten after the dispatch and before the worker runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_rewritten_between_dispatch_and_worker_is_not_vouched_for_by_the_variant_of_the_old_bytes() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+    // A new process: the index still knows the file, nothing remembers a worker delivered it.
+    retain_image_item_fingerprints(&std::collections::HashSet::new());
+
+    let items = vault.collect();
+    assert!(!items[0].source_oid.is_empty(), "premise: the blocking phase found the file in the index");
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(items, workers.services()).await;
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    workers.run_held().await;
+    assert_eq!(vault.webp(), first, "premise: the worker delivered the cached variant of the oid it was given");
+
+    vault.rebuild(true).await;
+
+    assert_ne!(vault.webp(), first, "pic.png is blue on disk but its variant is still the red encode: the worker vouched for the new stat");
+}
+
+/// The worker that finishes an image ends only the marker its own dispatch made. A newer
+/// dispatch over a rewritten source has queued a worker of its own and marked the image
+/// for it; the older worker reaching the image first must leave that mark alone, or the
+/// next dispatch spawns a third worker for bytes the second is about to encode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_older_worker_finishing_an_image_leaves_a_newer_dispatchs_worker_to_be_joined() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    vault.write_pic([30, 30, 200]);
+    vault.dispatch(vault.collect(), workers.services()).await;
+    assert_eq!(workers.spawned(), 2, "premise: the rewritten source is not the one the first worker was queued for");
+
+    workers.run_oldest().await;
+    vault.dispatch(vault.collect(), workers.services()).await;
+
+    assert_eq!(workers.spawned(), 2, "the older worker ended the newer dispatch's marker, and a third worker was spawned");
+    workers.run_held().await;
+}
+
+/// The third exit that leaves the old variant: the worker gets to the image and cannot
+/// read it, so its hash fails. It ships nothing and retracts its promises, and has not
+/// vouched for the source either. Only a source this process cannot read reaches the
+/// exit, hence a `0o000` file, and nothing to test as root, which reads it anyway.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_changed_under_a_worker_whose_hash_failed_is_encoded_by_the_next_build() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    let items = vault.collect();
+    fs::set_permissions(vault.pic(), fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(vault.pic()).is_ok() {
+        fs::set_permissions(vault.pic(), fs::Permissions::from_mode(0o644)).unwrap();
+        eprintln!("skipped: this process can read a 0o000 file (running as root?)");
+        return;
+    }
+    vault.dispatch(items, RewriteVault::app_services()).await;
+    fs::set_permissions(vault.pic(), fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(vault.webp(), first, "premise: the worker that could not read the source encoded nothing");
+
+    vault.rebuild(true).await;
+
+    assert_ne!(vault.webp(), first, "pic.png is blue on disk but its variant is still the red encode: the gate skipped it");
+}
+
+/// The cloud gate ahead of the hash asks whether the source is in the cloud, and the
+/// provider can evict it between that question and the read. The hash's own guard then
+/// refuses, and that refusal is the cloud and not a broken image: it is answered the way
+/// the gate answers (still Pending, nothing shipped, the bytes asked for) and not as a
+/// failed decode (Failed, and a warning image where the picture should be), or a race
+/// decides whether the author sees a broken image.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_that_went_back_to_the_cloud_before_its_hash_was_read_is_deferred_not_failed() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let registry = std::sync::Arc::new(AssetRegistry::new());
+    registry.set_pending("pic.webp".to_string(), Some((24, 24)), None);
+    let items = vault.collect();
+    assert!(items[0].source_oid.is_empty(), "premise: the blocking phase left the hash to the worker");
+    let services = BuildServices { assets: Some(registry.clone()), ..RewriteVault::app_services() };
+
+    // The gate is the first question asked about the file, the hash's guard the second.
+    let _cloud = crate::build::icloud::pretend::evicted_after(&vault.pic(), 1);
+    vault.dispatch(items, services).await;
+
+    assert!(
+        matches!(registry.get("pic.webp"), Some(AssetState::Pending(_))),
+        "a source that went back to the cloud was answered as a failed image: {:?}",
+        registry.get("pic.webp")
+    );
+    assert!(!vault.moss_dir.join("build/staging/pic.webp").exists(), "premise: nothing was encoded");
+}
+
+/// The blocking phase leaves the oid of an image it has not seen to the worker, and the
+/// worker asks the persisted index before it reads the file: a source whose stat the index
+/// still holds costs no read. The index here holds a hash that is not the file's own, so a
+/// worker that hashes the file instead of asking is visible: the encode's record is keyed
+/// by the hash it used. A record for another instant of the file is not this file's, and
+/// is the control — that one is hashed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_worker_takes_the_hash_the_index_holds_for_an_unchanged_file_instead_of_reading_it() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let paths = MossPaths::from_moss_dir(vault.moss_dir.clone());
+    let transforms = crate::build::cache::TransformCache::new(
+        paths.cache_transforms(),
+        crate::build::cache::ObjectStore::new(paths.cache_objects()),
+    );
+    let real = crate::build::cache::ObjectStore::hash_file(&vault.pic()).unwrap();
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(vault.pic()).unwrap());
+
+    let items = vault.collect();
+    assert!(items[0].source_oid.is_empty(), "premise: the blocking phase left the hash to the worker");
+    for (recorded_at, trusted) in [(stat, true), (crate::build::stat::FileStat { size: stat.size + 1, ..stat }, false)] {
+        let planted = if trusted { "ab".repeat(32) } else { "cd".repeat(32) };
+        let mut index = crate::build::cache::HashIndex::new();
+        index.update("pic.png".to_string(), &recorded_at, planted.clone());
+        index.save(&paths.cache_hash_index()).unwrap();
+
+        vault.dispatch(items.clone(), BuildServices::headless()).await;
+
+        assert_eq!(transforms.get_with(&planted, crate::build::cache::RecordMode::Request).is_some(), trusted, "trusted={trusted}: the worker's hash came from the wrong place");
+        assert!(transforms.get_with(&real, crate::build::cache::RecordMode::Request).is_some() != trusted, "trusted={trusted}: the file's own hash is used exactly when the index cannot vouch");
+    }
+}
+
+/// A path that temporarily leaves the image set (an unrelated sibling drops it from
+/// `ctx.image_items` for a round) still has a valid on-disk hash-index entry and
+/// transform-cache record when it returns — identity comes from content and stat, not
+/// from continuous membership in the active set. So an image that left and came back
+/// byte for byte is carried forward exactly like one that never left, registered with
+/// the SAME verified CAS oid every time (never `None`: see `rematerialize_with_oid`'s
+/// doc for why a skip-carried image variant must keep a real, checkable oid); only a
+/// real content change forces a re-encode (covered by the `a_source_changed_under_a_
+/// worker_that_left_*` family above).
+///
+/// Before the disk-origin skip decision, a departure cleared the IN-PROCESS ledger's
+/// record for the path (`retain_image_item_fingerprints`), so a byte-for-byte return
+/// always re-dispatched — real, avoidable CPU for every image any single round's scan
+/// happened not to include. Ablate by reverting the disk lookup (`heal_index.lookup`)
+/// to the old in-process fingerprint match and this goes red: `back`'s staged_oid for
+/// "pic.webp" becomes a freshly-minted oid from a real re-encode instead of matching
+/// `first`'s.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_that_left_the_site_and_came_back_unchanged_is_still_carried_forward() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+
+    let first = vault.sealed_rebuild(&["pic.png", "other.png"]).await;
+    let (pic_oid, other_oid) = (
+        first.staged_oid("pic.webp").map(str::to_string),
+        first.staged_oid("other.webp").map(str::to_string),
+    );
+    assert!(pic_oid.is_some() && other_oid.is_some(), "premise: the first build's worker delivered both");
+
+    let without = vault.sealed_rebuild(&["other.png"]).await;
+    assert_eq!(
+        without.staged_oid("other.webp").map(str::to_string),
+        other_oid,
+        "premise: other.png is unchanged, so it is carried forward under the same oid"
+    );
+
+    let back = vault.sealed_rebuild(&["pic.png", "other.png"]).await;
+
+    assert_eq!(
+        back.staged_oid("pic.webp").map(str::to_string),
+        pic_oid,
+        "pic.png left and came back byte-for-byte — it must still carry forward the same verified oid"
+    );
+    assert_eq!(
+        back.staged_oid("other.webp").map(str::to_string),
+        other_oid,
+        "other.png never left, and stays carried forward under the same oid too"
     );
 }

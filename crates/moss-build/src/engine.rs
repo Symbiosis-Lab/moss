@@ -1,8 +1,8 @@
-//! Off-webview plugin execution engine (#789, Phase 2).
+//! Off-webview plugin execution engine.
 //!
-//! **Architecture C — the integration core.** An rquickjs / quickjs-ng runtime is
-//! `!Send` (single-threaded; we deliberately do NOT enable the experimental
-//! `parallel` feature). But moss's build pipeline awaits plugin hooks inside
+//! An rquickjs / quickjs-ng runtime is `!Send` (single-threaded; we
+//! deliberately do NOT enable the experimental `parallel` feature). But moss's
+//! build pipeline awaits plugin hooks inside
 //! `tauri::async_runtime::spawn(async move { … })` on the MULTI-THREADED tokio
 //! runtime (`build.rs` `spawn_process_hooks`), where the spawned future must be
 //! `Send`. A `!Send` engine value therefore cannot be held across an `.await` in
@@ -11,8 +11,7 @@
 //! Resolution: the engine owns its `!Send` runtime + per-plugin Contexts on a
 //! dedicated OS thread running a current-thread tokio runtime + `LocalSet`;
 //! callers interact over channels. Every public method returns a future that holds
-//! only `Send` channel handles, so it composes with the `Send` build path. This is
-//! the load-bearing boundary the feasibility review flagged.
+//! only `Send` channel handles, so it composes with the `Send` build path.
 //!
 //! ## The drive-loop resolution (load-bearing — see [`engine_loop`])
 //!
@@ -22,16 +21,16 @@
 //! runs INLINE in its loop arm (a quick "restore Persistent + call handler"). The
 //! select pumps the rquickjs schedular every iteration, so a hook parked on an
 //! in-hook `setTimeout` makes progress AND a queued `DeliverEvent` is dequeued and
-//! delivered while that hook is still parked — the Task-14a topology.
+//! delivered while that hook is still parked.
 //!
-//! Why `drive()` and NOT `idle()` (empirically verified against rquickjs 0.12):
+//! Why `drive()` and NOT `idle()` (rquickjs 0.12):
 //! - `AsyncRuntime::idle()` (rquickjs-core `runtime/async.rs`) returns `Poll::Ready`
 //!   ONLY when the schedular is `Empty`; while any spawned future is parked on a
 //!   tokio timer (`SchedularPoll::Pending`) it stays parked HOLDING THE RUNTIME LOCK.
 //!   A parked hook task's `WithFuture::poll` needs that same lock
 //!   (`context/async/future.rs`), so `idle().await` after dispatching a hook STARVES
 //!   the hook for its whole multi-tick duration — the loop never returns to `recv()`,
-//!   and a queued `DeliverEvent` is never dequeued (the verified blocker).
+//!   and a queued `DeliverEvent` is never dequeued.
 //! - `AsyncRuntime::drive()`'s `DriveFuture` (rquickjs-core `runtime/spawner.rs`)
 //!   re-acquires the lock, runs pending jobs, polls the schedular, then returns
 //!   `Poll::Pending` and RELEASES the lock between ticks. So a parked hook task can
@@ -39,12 +38,11 @@
 //!   tick. This is the load-bearing difference: idle parks holding the lock; drive
 //!   releases it.
 //!
-//! A resident `tokio::task::spawn_local(runtime.drive())` was rejected earlier
-//! (Task 8) because it stalled in-hook host-fn futures; the select! is the resolution
-//! — drive() is polled in lock-step with the job recv, not as a detached task. The
-//! 11b smoke test (`dispatch_hook_runs_trivial_bundle_with_timer`, single in-hook
-//! `setTimeout`) and `deliver_event_reaches_hook_parked_in_poll_loop` (the Task-14a
-//! parked-while-deliver topology) are the acceptance gates for this decision.
+//! A resident `tokio::task::spawn_local(runtime.drive())` would stall in-hook
+//! host-fn futures, so `drive()` is polled in lock-step with the job recv, not
+//! as a detached task. `dispatch_hook_runs_trivial_bundle_with_timer` (single
+//! in-hook `setTimeout`) and `deliver_event_reaches_hook_parked_in_poll_loop`
+//! (parked-while-deliver) are the acceptance gates for this decision.
 
 pub mod app_host;
 pub(crate) mod fetch_shim;
@@ -187,7 +185,7 @@ impl QuickJsEngine {
     /// Spawn the engine. Returns the engine handle plus the `DispatchRequest`
     /// receiver the caller MUST drain on a host task, which routes
     /// `__TAURI__.core.invoke`. `app` is `None` on a headless `moss build`
-    /// (#1019) and in tests, where `__TAURI__.event.emit` becomes a no-op and
+    /// and in tests, where `__TAURI__.event.emit` becomes a no-op and
     /// dispatch routes through the injected `HostState` instead.
     pub fn new(app: Option<SharedAppHost>) -> (Self, mpsc::UnboundedReceiver<DispatchRequest>) {
         let (jobs, rx) = mpsc::unbounded_channel::<Job>();

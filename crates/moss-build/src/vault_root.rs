@@ -1,10 +1,9 @@
 //! WHICH folder is the vault root, and what is it CALLED.
 //!
-//! One owner for project-root identity. Before this module the answer was derived at 69
-//! sites by 8 independent resolvers and 6 disagreeing basename algorithms; `moss build .`
-//! and `moss build /abs/path/site` built *different sites* from the same folder because
-//! `Path::new(".").file_name()` is `None` and the empty root name demoted the self-named
-//! home (`site/site.md`) off `/`.
+//! One owner for project-root identity. Independent resolvers disagree: `moss build .`
+//! and `moss build /abs/path/site` would build *different sites* from the same folder,
+//! because `Path::new(".").file_name()` is `None` and the empty root name demotes the
+//! self-named home (`site/site.md`) off `/`.
 //!
 //! Three jobs, three entry points — deliberately NOT one function:
 //!   * [`resolve_input`] — "the user typed a string; make it a real absolute path". The only
@@ -14,7 +13,7 @@
 //!
 //! Not this module's job: "is this path INSIDE the vault?" (`vault::fs::validate_entry_path`),
 //! canonical registry KEYS (plugin manager / preview server / folder session), and OS-input
-//! decoding (`system::path_extractor`, which CALLS this module and rides M5 to `platform/`).
+//! decoding (`system::path_extractor`, which CALLS this module).
 //!
 //! ## The absolute-path contract
 //!
@@ -195,7 +194,7 @@ impl VaultRoot {
     /// a site") and silently wrong for a file. Because the fallback was
     /// indistinguishable from a hit, opening a loose `~/Downloads/notes.md` built
     /// and served all of `~/Downloads`. A caller that must decline needs to SEE
-    /// that there was nothing to find — see ADR-038 (document mode).
+    /// that there was nothing to find (document mode).
     ///
     /// `containing` is implemented in terms of this, so the two can never drift.
     pub fn find_containing(path: &Path) -> Option<Self> {
@@ -204,6 +203,11 @@ impl VaultRoot {
 
     /// Testable core of [`VaultRoot::find_containing`].
     pub fn find_containing_in(path: &Path, cwd: &Path) -> Option<Self> {
+        Self::find_containing_below(path, cwd, dirs::home_dir().as_deref())
+    }
+
+    /// [`VaultRoot::find_containing_in`] with the home folder passed in.
+    pub fn find_containing_below(path: &Path, cwd: &Path, home: Option<&Path>) -> Option<Self> {
         let start_dir = Self::start_dir_in(path, cwd);
 
         // Never walk above the user's home directory: `~/.moss/` is moss's app-level cache
@@ -211,12 +215,11 @@ impl VaultRoot {
         // resolves to `~` and moss scans the entire home directory. Canonical comparison
         // too — on Windows an ancestor can surface as an 8.3 short path
         // (`C:\Users\RUNNER~1`) while `dirs::home_dir()` is the long form.
-        let home_dir = dirs::home_dir();
-        let home_canon = home_dir.as_ref().and_then(|h| h.canonicalize().ok());
+        let home_canon = home.and_then(|h| h.canonicalize().ok());
 
         for ancestor in start_dir.ancestors() {
-            if let Some(ref home) = home_dir {
-                let at_home = ancestor == home.as_path()
+            if let Some(home) = home {
+                let at_home = ancestor == home
                     || matches!(
                         (ancestor.canonicalize().ok(), home_canon.as_ref()),
                         (Some(ac), Some(hc)) if &ac == hc
@@ -275,7 +278,7 @@ pub enum RootKind {
     /// For a FILE target it means a loose document — nobody has asked for a site
     /// here, so building the containing folder would be an unrequested scan of
     /// whatever the file happens to sit in (`~/Downloads`, `~/Desktop`). That is
-    /// the document-mode trigger; see ADR-038.
+    /// the document-mode trigger.
     Unowned,
 }
 
@@ -292,7 +295,7 @@ pub struct VaultTarget {
 
 impl VaultTarget {
     /// True when this target is a loose document: a FILE with no `.moss/`
-    /// ancestor. The document-mode predicate (ADR-038).
+    /// ancestor. The document-mode predicate.
     ///
     /// Deliberately requires BOTH conditions. A directory with no `.moss/` is a
     /// new project and must keep building; a file inside a real vault belongs to
@@ -314,7 +317,7 @@ impl VaultTarget {
         }
         if resolved.is_file() {
             match resolved.extension().map(|e| e.to_string_lossy().to_lowercase()) {
-                Some(ext) if ext == "md" || ext == "markdown" => {}
+                Some(ext) if crate::build::scan::classify::is_page_source(&ext) => {}
                 Some(ext) => return Err(VaultPathError::UnsupportedFileType(format!(".{}", ext))),
                 None => return Err(VaultPathError::UnsupportedFileType("(none)".to_string())),
             }
@@ -322,7 +325,7 @@ impl VaultTarget {
         let (root, root_kind) = match VaultRoot::find_containing(&resolved) {
             Some(vault) => (vault, RootKind::Vault),
             // Same fallback `VaultRoot::containing` applies — but recorded as
-            // such, so a caller can tell a real vault from a guess (ADR-038).
+            // such, so a caller can tell a real vault from a guess.
             None => (VaultRoot::containing(&resolved), RootKind::Unowned),
         };
         let target_file = resolved

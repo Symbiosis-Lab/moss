@@ -7,6 +7,7 @@ import {
   parseBuildFailure,
   parseCliError,
   parseProblemCount,
+  parseServerEvents,
   parseServerUrl,
   splitFlags,
   type DetectEnv,
@@ -17,7 +18,7 @@ import {
 const REAL_STDERR = `Building website from: /tmp/moss-smoke-vault
 [ 10%] build: Building site...
 [done] Build complete
-📁 'moss-smoke-vault': Site generated at /tmp/moss-smoke-vault/.moss/build/current
+📁 'moss-smoke-vault': Site generated at /tmp/moss-smoke-vault/.moss/build.nosync/current
 🌐 Preview server ready! Access at http://localhost:8080
 🤖 Coding agent: read /tmp/moss-smoke-vault/.claude/skills/moss/SKILL.md for how to author and theme this site.
 Press Ctrl+C to stop the server
@@ -51,7 +52,43 @@ describe("parseServerUrl", () => {
   it("survives chunked partial lines", () => {
     const partial = "🌐 Preview server ready! Access at http://local";
     expect(parseServerUrl(partial)).toBeNull();
-    expect(parseServerUrl(partial + "host:8080")).not.toBeNull();
+    // A chunk boundary can also land mid-port ("…:8080" with nothing after
+    // it yet is indistinguishable from "…:80801" still arriving), so
+    // completion needs the line terminator too.
+    expect(parseServerUrl(partial + "host:8080")).toBeNull();
+    expect(parseServerUrl(partial + "host:8080\n")).not.toBeNull();
+  });
+});
+
+describe("parseServerEvents", () => {
+  it("yields a single url event for an ordinary single-server stream", () => {
+    expect(parseServerEvents(REAL_STDERR)).toEqual([
+      { type: "url", addr: { url: "http://localhost:8080", port: 8080 } },
+    ]);
+  });
+
+  it("yields each url in order with the standby line between them", () => {
+    const stream =
+      "🌐 Preview server ready! Access at http://localhost:8081\n" +
+      "served by desktop app (pid 4242, moss 0.12.0); standing by\n" +
+      "🌐 Preview server ready! Access at http://localhost:8090\n";
+    expect(parseServerEvents(stream)).toEqual([
+      { type: "url", addr: { url: "http://localhost:8081", port: 8081 } },
+      { type: "standby" },
+      { type: "url", addr: { url: "http://localhost:8090", port: 8090 } },
+    ]);
+  });
+
+  it("returns nothing before any server line has arrived", () => {
+    expect(parseServerEvents("Building website from: /x\n[ 10%] build: ...\n")).toEqual([]);
+  });
+
+  it("defers a url event until a chunk boundary mid-port is resolved", () => {
+    const cut = "🌐 Preview server ready! Access at http://localhost:8";
+    expect(parseServerEvents(cut)).toEqual([]);
+    expect(parseServerEvents(cut + "080\n")).toEqual([
+      { type: "url", addr: { url: "http://localhost:8080", port: 8080 } },
+    ]);
   });
 });
 

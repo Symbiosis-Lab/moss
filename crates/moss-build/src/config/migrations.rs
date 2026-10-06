@@ -1,6 +1,6 @@
 //! Bringing an older `.moss/config.toml` up to `CURRENT_VERSION` — in memory.
 //!
-//! See `docs/reference/config-migrations.md` for the convention. Typed structs
+//! Typed structs
 //! elsewhere describe the current shape only; this module owns all transforms
 //! from older versions to [`CURRENT_VERSION`].
 //!
@@ -9,8 +9,7 @@
 //! [`migrate_to_current`] rewrites a `toml::Table`. It opens nothing, writes
 //! nothing, and cannot lose a byte of the user's file — so it travels with the
 //! reader into the open crate, where a `moss-cli` build can compute correct
-//! values out of an old config
-//! ([ADR-059](../../../../../docs/decisions/ADR-059-config-reader-and-migration-runner-after-the-crate-split.md)).
+//! values out of an old config.
 //!
 //! Everything that reaches disk stays in the app crate, in
 //! `infra::config_migrations`: reading the file, writing the `.bak-v{n}`
@@ -23,6 +22,17 @@
 use std::fmt;
 
 pub const CURRENT_VERSION: u32 = 6;
+
+/// Current schema version for `.moss/state.toml`'s `[deployment]` block — a
+/// separate version space from [`CURRENT_VERSION`] above, because the two
+/// files are owned and versioned independently (`config.toml` is
+/// hand-edited; `state.toml` is machine-only). state.toml carries no shape
+/// migrations yet, so there is no `MIGRATIONS`-style array or compile-time
+/// length guard for it; this constant exists only to feed [`version_ahead`]'s
+/// guard from [`crate::vault::deployment_state`]'s one write frame. Bump it
+/// by hand, with nothing to remind you, when state.toml's shape changes in a
+/// way an older binary could misread.
+pub const STATE_CURRENT_VERSION: u32 = 1;
 
 #[derive(Debug)]
 pub enum MigrationError {
@@ -87,17 +97,19 @@ pub fn declared_version(raw: &toml::Table) -> u32 {
         .unwrap_or(0)
 }
 
-/// `Some(v)` when `raw` declares a schema a newer moss wrote — the one
-/// predicate every version-ahead guard shares, so a schema bump only has to
-/// touch [`CURRENT_VERSION`] once. `None` covers "absent, at, or behind
-/// current", which is every ordinary config `write_managed_toml` is asked to
-/// save. A document with no top-level `schema_version` key (e.g.
-/// `.moss/state.toml`) reads as v0 here, same as [`declared_version`], so
-/// this is safe to run against any managed TOML document, not just
-/// `config.toml`.
-pub fn version_ahead(raw: &toml::Table) -> Option<u32> {
+/// `Some(v)` when `raw` declares a schema newer than `supported` — the one
+/// predicate every version-ahead guard shares, parametrized on `supported` so
+/// a schema bump only has to touch that schema's own current-version constant
+/// ([`CURRENT_VERSION`] for `config.toml`, [`STATE_CURRENT_VERSION`] for
+/// `state.toml`) rather than this function. `None` covers "absent, at, or
+/// behind `supported`", which is every ordinary save `write_managed_toml` is
+/// asked to make. A document with no top-level `schema_version` key (e.g. a
+/// `.moss/state.toml` from before its first stamp) reads as v0 here, same as
+/// [`declared_version`], so this is safe to run against any managed TOML
+/// document, not just `config.toml`.
+pub fn version_ahead(raw: &toml::Table, supported: u32) -> Option<u32> {
     let v = declared_version(raw);
-    (v > CURRENT_VERSION).then_some(v)
+    (v > supported).then_some(v)
 }
 
 fn write_version(raw: &mut toml::Table, v: u32) {
@@ -105,7 +117,6 @@ fn write_version(raw: &mut toml::Table, v: u32) {
 }
 
 /// v0 to v1: replace `[hooks].syndicate = [...]` with `[channels.<id>]` tables.
-/// See `docs/archive/2026-04-23-channels-architecture-design.md`.
 fn v0_to_v1(raw: &mut toml::Table) -> Result<(), MigrationError> {
     let syndicate_ids: Vec<String> = raw
         .get("hooks")
@@ -153,9 +164,6 @@ fn v0_to_v1(raw: &mut toml::Table) -> Result<(), MigrationError> {
 /// v1 to v2: replace `[features]` + top-level `[comments]` / `[analytics]` /
 /// `[email]` sections with the uniform `[services.<kind>]` shape. Also moves
 /// `features.rss` / `features.rss_footer` to `[site].rss_footer`.
-///
-/// See docs/archive/2026-04-24-services-schema-design.md for the design and
-/// the full migration rules.
 fn v1_to_v2(root: &mut toml::Table) -> Result<(), MigrationError> {
     // Capture legacy data up front (all immutable snapshots so we can
     // mutate `root` below without borrow conflicts).
@@ -310,8 +318,6 @@ fn v1_to_v2(root: &mut toml::Table) -> Result<(), MigrationError> {
 /// validate without `VersionAhead` errors. `or_insert` semantics in the old
 /// step were first-writer-wins, so user-authored values were never clobbered;
 /// the same applies retroactively when this step runs as a no-op.
-///
-/// See `docs/archive/2026-05-05-figure-captions-design.md`.
 fn v2_to_v3(_raw: &mut toml::Table) -> Result<(), MigrationError> {
     Ok(())
 }
@@ -345,8 +351,6 @@ fn is_moss_operated_comment_host(url: &str) -> bool {
 ///   so a stale stored value (api.moss.host died with the HK VPS, stranding
 ///   every site that froze it into config) can never strand a site again.
 ///   Genuinely self-hosted URLs are preserved as overrides.
-///
-/// See docs/archive/2026-06-10-comments-local-first-design.md §3.
 fn v3_to_v4(raw: &mut toml::Table) -> Result<(), MigrationError> {
     let Some(comments) = raw
         .get_mut("services")
@@ -384,7 +388,7 @@ fn v4_to_v5(_raw: &mut toml::Table) -> Result<(), MigrationError> {
 /// Same shape as [`v4_to_v5`], for the same reason: the work is on
 /// `.moss/.gitignore` — pruning the `state.toml` and `deploy/` lines moss no
 /// longer emits, so a vault's publish records can reach git and a fresh clone
-/// knows what is live (moss#993). The stamp records that it has run.
+/// knows what is live. The stamp records that it has run.
 fn v5_to_v6(_raw: &mut toml::Table) -> Result<(), MigrationError> {
     Ok(())
 }

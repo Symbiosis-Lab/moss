@@ -299,8 +299,8 @@ pub fn strip_percent_comments(text: &str) -> std::borrow::Cow<'_, str> {
 /// ASCII space. Newlines are kept, so byte offsets and line positions in the
 /// mask index the original text.
 ///
-/// This is [`moss_core::inert_regions`], the one shared scanner (moss#903
-/// bug 2). It used to be a private fence-and-inline-code copy here, which is
+/// This is [`moss_core::inert_regions`], the one shared scanner. It used to
+/// be a private fence-and-inline-code copy here, which is
 /// why CriticMarkup and `%%` stripping still fired inside authored HTML
 /// comments and indented code blocks — a `{++draft++}` parked in a comment
 /// was accepted and unwrapped, and an indented documentation example showing
@@ -336,35 +336,57 @@ pub fn fix_self_closing_non_void_tags(html: &str) -> String {
     .to_string()
 }
 
-/// Strips HTML tags from a string, keeping only the text content.
-/// Handles nested tags and decodes common HTML entities (&amp;, &lt;, &gt;, &quot;, &#39;, &nbsp;).
-/// Trims leading/trailing whitespace.
+/// Decodes the common HTML entities (`&lt;`, `&gt;`, `&quot;`, `&#39;`,
+/// `&nbsp;` as U+00A0, `&amp;`) in one pass. `&amp;` goes last: decoding it
+/// first would turn `&amp;lt;` into `<` rather than the text `&lt;`. The one
+/// entity decoder: [`strip_html_tags`] and the importer's escaped-HTML builder
+/// fields both use it.
+pub fn decode_html_entities(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", "\u{a0}")
+        .replace("&amp;", "&")
+}
+
+/// Strips HTML tags from a string, keeping only the text content, decoded with
+/// [`decode_html_entities`]. A block-level tag (`p`, `br`, `div`, `li`,
+/// headings, `blockquote`) becomes a space so adjacent paragraphs do not run
+/// together; inline tags leave no gap. Runs of whitespace (a decoded `&nbsp;`
+/// included) collapse to one space and the ends are trimmed.
 ///
-/// Used to derive plain-text labels from H1 content and from other rich-text
-/// surfaces that need a plain form for nav, breadcrumb, meta tags, and RSS.
+/// Today's caller is the `moss comments` listing, which shows the start of a
+/// comment's text. The function is public so any other plain-text label can
+/// share it.
 pub fn strip_html_tags(html: &str) -> String {
-    let mut result = String::new();
+    let mut text = String::new();
+    let mut tag = String::new();
     let mut in_tag = false;
 
     for c in html.chars() {
         match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => result.push(c),
-            _ => {}
+            '<' => {
+                in_tag = true;
+                tag.clear();
+            }
+            '>' if in_tag => {
+                in_tag = false;
+                let name = tag.trim_start_matches('/').split(|c: char| !c.is_ascii_alphanumeric()).next().unwrap_or("");
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "p" | "br" | "div" | "li" | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                ) {
+                    text.push(' ');
+                }
+            }
+            _ if in_tag => tag.push(c),
+            _ => text.push(c),
         }
     }
 
-    // Decode common HTML entities
-    result
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-        .trim()
-        .to_string()
+    let decoded = decode_html_entities(&text);
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 
@@ -379,8 +401,8 @@ pub fn strip_html_tags(html: &str) -> String {
 /// frontmatter cascade or the title-cased filename, so we treat it as
 /// untrusted relative to the HTML output context.
 ///
-/// See `docs/archive/2026-04-28-auto-h1-injection-design.md` for why injection
-/// is article-only and why the `moss-article-title` class is stable contract.
+/// Injection is article-only, and the `moss-article-title` class is a stable
+/// contract.
 pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool) -> String {
     let escaped = html_escape(title);
     let fm_attr = if emit_source_lines { r#" data-source-fm="title""# } else { "" };
@@ -400,7 +422,7 @@ pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_
 /// Layout intent: the date row and reading-preferences control go
 /// immediately after the resolved-title `<h1>`. No walking past blockquotes
 /// or other "title block" tail elements. The strict-contract title pipeline
-/// (see `docs/reference/title-rendering.md`) injects a single `<h1>` at
+/// injects a single `<h1>` at
 /// the top of the body; the date row goes right under it. Predictable
 /// position over inference.
 ///
@@ -413,6 +435,14 @@ pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_
 /// prose, under a heading they have nothing to do with. So the match is
 /// anchored: no leading `<h1`, no title block.
 ///
+/// A claimed leaf's own cover (`folder_cover::render`) wraps that same
+/// leading `<h1>` behind an EMPTY, CSS-collapsed `<h1 class="moss-folder-title">`
+/// inside `.moss-collection-cover-row` > `-cover-body` — so the body no
+/// longer literally starts with the real title. [`split_empty_folder_title_prefix`]
+/// steps past exactly that placeholder first, so the anchored test still
+/// finds the real title instead of falling through to prepend (which would
+/// land the date row and byline above the cover image).
+///
 /// With no title block the fragment is prepended, which puts it at the top of
 /// `<article>` — under a hero, since the hero is hoisted out of the body and
 /// rendered above `<main>`. That is where a byline belongs on a page whose
@@ -422,20 +452,59 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
     if fragment.is_empty() {
         return html_body.to_string();
     }
-    if !html_body.trim_start().starts_with("<h1") {
-        return format!("{}{}", fragment, html_body);
+    let (prefix, body) = split_empty_folder_title_prefix(html_body);
+    if !body.trim_start().starts_with("<h1") {
+        return format!("{}{}{}", prefix, fragment, body);
     }
-    let Some((before, after)) = html_body.split_once("</h1>") else {
-        return format!("{}{}", fragment, html_body);
+    let Some((before, after)) = body.split_once("</h1>") else {
+        return format!("{}{}{}", prefix, fragment, body);
     };
 
     let mut result = String::with_capacity(html_body.len() + fragment.len() + 1);
+    result.push_str(prefix);
     result.push_str(before);
     result.push_str("</h1>");
     result.push('\n');
     result.push_str(fragment);
     result.push_str(after);
     result
+}
+
+/// Splits off a leading `.moss-collection-cover-row` > `-cover-body` wrapper
+/// up through its collapsed, empty `<h1 class="moss-folder-title">` — the
+/// exact shape `folder_cover::render` emits for a claimed leaf's own cover.
+/// Returns `("", html_body)` unchanged for every other caller: a folder
+/// index's own non-empty title never matches this, nor does an ordinary
+/// article's `<h1>` with no cover wrapper.
+fn split_empty_folder_title_prefix(html_body: &str) -> (&str, &str) {
+    let leading_ws = html_body.len() - html_body.trim_start().len();
+    let rest = &html_body[leading_ws..];
+    const ROW_OPEN: &str = "<div class=\"moss-collection-cover-row\">";
+    const BODY_OPEN: &str = "<div class=\"moss-collection-cover-body\">";
+    const TITLE_OPEN: &str = "<h1 class=\"moss-folder-title\"";
+    if !rest.starts_with(ROW_OPEN) {
+        return ("", html_body);
+    }
+    // Cover media (image/video/iframe) between the two opening tags is
+    // arbitrary — search for the body column's marker rather than assume one.
+    let Some(body_rel) = rest.find(BODY_OPEN) else {
+        return ("", html_body);
+    };
+    let after_body_open = body_rel + BODY_OPEN.len();
+    let tail = &rest[after_body_open..];
+    if !tail.starts_with(TITLE_OPEN) {
+        return ("", html_body);
+    }
+    let Some(gt) = tail[TITLE_OPEN.len()..].find('>') else {
+        return ("", html_body);
+    };
+    let tag_end = TITLE_OPEN.len() + gt + 1; // just past the opening tag's '>'
+    if tail[tag_end..].starts_with("</h1>") {
+        let split_at = leading_ws + after_body_open + tag_end + "</h1>".len();
+        (&html_body[..split_at], &html_body[split_at..])
+    } else {
+        ("", html_body)
+    }
 }
 
 /// Minimal HTML text-content escaper for the five characters that change
@@ -555,7 +624,7 @@ fn filter_srcset_candidates(
     Some(surviving.join(", "))
 }
 
-/// Post-seal honest-degradation pass (moss#867): drop webp `srcset`
+/// Post-seal honest-degradation pass: drop webp `srcset`
 /// candidates that reference a terminally-failed image variant, in BOTH
 /// shapes moss-core's `synthesize_inner` (zero I/O) can emit them:
 ///
@@ -572,8 +641,7 @@ fn filter_srcset_candidates(
 /// in both shapes: per the HTML spec's "update-the-source-set" /
 /// "update-the-image-data" algorithms, the browser commits to the picked
 /// candidate and does NOT retry a different one, and does NOT fall back to
-/// a `<picture>`'s inner `<img>` or an `<img>`'s bare `src`
-/// (`docs/decisions/ADR-013-asset-publish-invariant.md`).
+/// a `<picture>`'s inner `<img>` or an `<img>`'s bare `src`.
 ///
 /// Run this once, post-seal — after the background encoder drain, so every
 /// `AssetState` has settled to `Ready` or `Failed`, none still `Pending` —
@@ -1190,9 +1258,9 @@ mod tests {
 
     #[test]
     fn cm_accept_skips_html_comments() {
-        // Same fix as moss#903 bug 2 one layer over: an annotation parked in
-        // an authored comment stays parked instead of being unwrapped inside
-        // it.
+        // Same fix as the inert-scanner regression, one layer over: an
+        // annotation parked in an authored comment stays parked instead of
+        // being unwrapped inside it.
         let input = "<!-- draft: {++new text++} -->\n\nlive";
         assert_eq!(accept_criticmarkup(input), input);
     }
@@ -1290,6 +1358,13 @@ mod tests {
     #[test]
     fn test_strip_html_tags_entities() {
         assert_eq!(strip_html_tags("A &amp; B &lt; C"), "A & B < C");
+    }
+
+    #[test]
+    fn test_strip_html_tags_decodes_once_and_separates_paragraphs() {
+        assert_eq!(strip_html_tags("&amp;lt;b&amp;gt;"), "&lt;b&gt;");
+        assert_eq!(strip_html_tags("<p>one</p><p>two</p>"), "one two");
+        assert_eq!(strip_html_tags("<b>Hel</b>lo"), "Hello");
     }
 
     #[test]
@@ -1504,7 +1579,7 @@ mod tests {
         // not a separator) — but the whole-value path it falls through to must
         // still hand back a `%2C`, or the decode → re-encode round-trip decays
         // it to a literal comma, the browser reads two candidates, and both
-        // 404 with `<picture>` already committed. That is the live harbor
+        // 404 with `<picture>` already committed. That is the live riverbend
         // bug; this test previously asserted the broken output.
         assert_eq!(
             adjust_relative_paths_for_pretty_urls(r#"<source srcset="a%2Cb.webp">"#),
@@ -1747,6 +1822,60 @@ mod tests {
         assert_eq!(splice_after_title_block(body, ""), body);
     }
 
+    /// A claimed leaf's own cover wraps its title: `folder_cover::render`
+    /// puts an EMPTY `<h1 class="moss-folder-title">` first (collapsed by
+    /// `.moss-folder-title:empty`), then the page's real `<h1>`, inside
+    /// `.moss-collection-cover-body`. The fragment must land after the REAL
+    /// title, still inside that column — not before the whole cover row,
+    /// which is what the old anchored "starts with h1" test did here (the
+    /// body starts with `<div`, not `<h1`).
+    #[test]
+    fn splice_after_title_block_lands_inside_a_claimed_leafs_cover_column() {
+        let body = concat!(
+            r#"<div class="moss-collection-cover-row">"#,
+            r#"<div class="moss-collection-cover"><img src="ada.png" /></div>"#,
+            r#"<div class="moss-collection-cover-body">"#,
+            r#"<h1 class="moss-folder-title"></h1>"#,
+            r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
+            r#"<p>Body.</p></div></div>"#,
+        );
+        let frag = "<div class=\"date-line\">2026-04</div>";
+        let out = splice_after_title_block(body, frag);
+        assert_eq!(
+            out,
+            concat!(
+                r#"<div class="moss-collection-cover-row">"#,
+                r#"<div class="moss-collection-cover"><img src="ada.png" /></div>"#,
+                r#"<div class="moss-collection-cover-body">"#,
+                r#"<h1 class="moss-folder-title"></h1>"#,
+                r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
+                "\n",
+                r#"<div class="date-line">2026-04</div>"#,
+                r#"<p>Body.</p></div></div>"#,
+            )
+        );
+    }
+
+    /// The `data-source-fm="title"` editor-preview variant of the empty
+    /// placeholder must be recognized too, not just the bare tag.
+    #[test]
+    fn splice_after_title_block_recognizes_empty_folder_title_with_source_fm() {
+        let body = concat!(
+            r#"<div class="moss-collection-cover-row">"#,
+            r#"<div class="moss-collection-cover"></div>"#,
+            r#"<div class="moss-collection-cover-body">"#,
+            r#"<h1 class="moss-folder-title" data-source-fm="title"></h1>"#,
+            r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
+            r#"<p>Body.</p></div></div>"#,
+        );
+        let out = splice_after_title_block(body, "<div>D</div>");
+        assert!(
+            out.contains("<h1 class=\"moss-article-title\">Ada Lin</h1>\n<div>D</div><p>Body.</p>"),
+            "got: {}",
+            out
+        );
+    }
+
     // ── degrade_failed_variants ─────────────────────────────────────
 
     #[test]
@@ -1904,7 +2033,7 @@ mod tests {
     // `get_attribute` hands that text back raw, entities intact. A repair pass
     // that skips the entity decode derives `assets/a&amp;b.w800.webp` for a
     // registry key of `assets/a&b.w800.webp`, matches nothing, and ships a
-    // chosen-source 404 that `<picture>` cannot fall back from (ADR-013).
+    // chosen-source 404 that `<picture>` cannot fall back from.
 
     /// One asset path, encoded the way the real emitter encodes it into an
     /// attribute: percent-encode the segments, then HTML-escape. Building the

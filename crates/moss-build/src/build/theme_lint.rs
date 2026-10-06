@@ -35,7 +35,7 @@
 //! ## Why plugin-namespaced classes are excluded from the class check
 //!
 //! Plugins inject their own markup under a `moss-embed-plugin-<name>` class
-//! namespace (`src-tauri/src/plugins/embed_adapter.rs`). `COMPONENTS` has no
+//! namespace (the app's plugin embed adapter). `COMPONENTS` has no
 //! entries for plugin classes, so checking them against it would false-positive
 //! on every themed plugin embed. Classes under that namespace are skipped.
 //!

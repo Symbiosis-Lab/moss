@@ -1,27 +1,21 @@
-//! Marker-handler implementations for Deferred embed renderers.
+//! Marker-handler implementations for deferred embed resolution.
 //!
-//! Typed embed renderers in moss-core (Phase A–E) can't perform I/O. When a
-//! renderer needs file content (notebook rendering, CSV parsing, plugin
-//! scripts), it emits a `RenderedEmbed::Deferred { marker }` that src-tauri
-//! resolves in a post-pass via
+//! moss-core can't perform I/O. For an embed that needs file content
+//! (notebook rendering, CSV parsing), its resolve pre-pass emits a marker
+//! comment (`<!-- moss-embed-ipynb:<path> -->` / `<!-- moss-embed-table:<path> -->`)
+//! instead, which moss-build resolves in a post-pass via
 //! [`moss_core::resolve::embeds::resolve_deferred_markers`].
 //!
 //! This module builds a [`MarkerHandlers`] registry pre-populated with the
 //! built-in resolvers:
 //! - `moss-embed-ipynb:<path>` → `<iframe>` to the JupyterLite viewer page
 //! - `moss-embed-table:<path>` → `<table>` via `moss_core::csv_table`
-//!
-//! Plugin-registered handlers (for `moss-embed-plugin-<name>:` markers) are
-//! added by the plugin runtime at pipeline init; see
-//! `src-tauri/src/plugins/embed_adapter.rs`.
 
 use std::path::{Path, PathBuf};
 
 use moss_core::resolve::embed_renderer::{CLASS_EMBED, CLASS_EMBED_NOTEBOOK, CLASS_EMBED_TABLE};
 use moss_core::resolve::embeds::{MarkerHandler, MarkerHandlers};
-use moss_core::resolve::registry::RendererRegistry;
 use moss_core::resolve::Diagnostic;
-use std::collections::HashSet;
 
 /// Construct a [`MarkerHandlers`] seeded with the built-in notebook and
 /// table resolvers.
@@ -57,7 +51,7 @@ pub fn builtin_marker_handlers(site_root: PathBuf, lang: crate::i18n::Language) 
 /// pointing at moss's JupyterLite viewer for the notebook.
 ///
 /// Reuses moss's existing notebook infrastructure (see `build/notebook.rs`):
-/// the site build copies the `.ipynb` into `.moss/build/current/...` and ships
+/// the site build copies the `.ipynb` into `.moss/build.nosync/current/...` and ships
 /// a JupyterLite WASM runtime at `/jupyter/`. The viewer URL for a notebook
 /// `foo.ipynb` is `/jupyter/notebooks/?path=<url-encoded filename>`.
 ///
@@ -155,72 +149,6 @@ fn render_table_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
         data_type: Some("table".to_string()),
     };
     moss_core::csv_table::render(&content, &options)
-}
-
-// ---------------------------------------------------------------------------
-// head_assets collection
-// ---------------------------------------------------------------------------
-
-/// Collect and deduplicate `head_assets` fragments from every renderer in
-/// `registry` whose output appears in `page_html`.
-///
-/// Detection is classname-based: each renderer declares exactly one
-/// classname in its output (via the `moss-embed-*` contract), so we look
-/// for any built-in class substring. When present, we take the renderer's
-/// `head_assets` and add them to the return set.
-///
-/// The output is a single HTML string (one asset per line) ready to splice
-/// into the `<!-- slot:head-end -->` slot of the page template. Empty when
-/// no renderer on the page needs page-level assets.
-///
-/// **Complexity:** `O(registry.len() * page_html.len())` per page. Fast in
-/// practice: the registry is tiny (~10 renderers) and `contains` is an
-/// optimized substring search.
-pub fn collect_head_assets(registry: &RendererRegistry, page_html: &str) -> String {
-    let mut seen: HashSet<&'static str> = HashSet::new();
-    let mut out: Vec<&'static str> = Vec::new();
-
-    for renderer in registry.all() {
-        let assets = renderer.head_assets();
-        if assets.is_empty() {
-            continue;
-        }
-        // Each renderer emits a class from the moss-embed-* namespace — if
-        // none of its classes appear in the page, its assets aren't needed.
-        // We rely on the convention that a renderer's extensions map 1:1
-        // to a specific class; checking by class substring is cheap.
-        if !renderer_appears_in_page(renderer.extensions(), page_html) {
-            continue;
-        }
-        for asset in assets {
-            if seen.insert(*asset) {
-                out.push(*asset);
-            }
-        }
-    }
-
-    out.join("\n")
-}
-
-/// Heuristic: given a renderer's claimed extensions, return true if the
-/// corresponding embed class appears in the page. Each built-in renderer
-/// owns one class; the mapping is stable and small enough to keep inline.
-fn renderer_appears_in_page(extensions: &[&'static str], page_html: &str) -> bool {
-    // Map from any one claimed extension to the renderer's class marker.
-    // Add a row when adding a new renderer with head_assets.
-    for ext in extensions {
-        let class_marker = match *ext {
-            "glb" | "gltf" => "data-type=\"3d\"",
-            // Future head_assets consumers (if any) register here.
-            // Built-ins without head_assets don't need entries — they're
-            // filtered out above because head_assets() returns empty.
-            _ => continue,
-        };
-        if page_html.contains(class_marker) {
-            return true;
-        }
-    }
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -387,60 +315,20 @@ mod tests {
         assert!(!handlers.is_empty());
     }
 
-    #[test]
-    fn test_collect_head_assets_empty_when_no_embeds() {
-        let registry = RendererRegistry::builtin().build();
-        let page = "<article><p>Plain text, no embeds.</p></article>";
-        assert_eq!(collect_head_assets(&registry, page), "");
-    }
-
-    #[test]
-    fn test_collect_head_assets_empty_when_only_image_embed() {
-        // Image renderer declares no head_assets.
-        let registry = RendererRegistry::builtin().build();
-        let page = r#"<p><img src="photo.jpg"></p>"#;
-        assert_eq!(collect_head_assets(&registry, page), "");
-    }
-
-    #[test]
-    fn test_collect_head_assets_emits_model_viewer_script() {
-        // ModelViewerRenderer emits class="moss-embed" data-type="3d" and
-        // declares the model-viewer script as a head asset.
-        let registry = RendererRegistry::builtin().build();
-        let page = r#"<model-viewer class="moss-embed" data-type="3d" src="x.glb"></model-viewer>"#;
-        let out = collect_head_assets(&registry, page);
-        assert!(out.contains("model-viewer"), "got: {}", out);
-        assert!(out.contains("<script"), "got: {}", out);
-    }
-
-    #[test]
-    fn test_collect_head_assets_dedupes_identical_assets() {
-        // Two <model-viewer> elements on the same page → one script import.
-        let registry = RendererRegistry::builtin().build();
-        let page = r#"
-            <model-viewer class="moss-embed" data-type="3d" src="a.glb"></model-viewer>
-            <model-viewer class="moss-embed" data-type="3d" src="b.glb"></model-viewer>
-        "#;
-        let out = collect_head_assets(&registry, page);
-        let script_count = out.matches("<script").count();
-        assert_eq!(script_count, 1, "expected 1 script, got {}: {}", script_count, out);
-    }
-
     // -------------------------------------------------------------------------
     // End-to-end integration: real markdown → resolved HTML via the full pipeline
     // -------------------------------------------------------------------------
     //
-    // Exercises the full moss-core RESOLVE phase with src-tauri marker handlers.
+    // Exercises the full moss-core RESOLVE phase with these marker handlers.
     //
-    // Primary fixture: `src-tauri/tests/fixtures/embed_handlers/` — minimal
+    // Primary fixture: `crates/moss-build/tests/fixtures/embed_handlers/` — minimal
     // .ipynb + .csv checked into the repo. Always runs.
     //
-    // Extended fixture: chps-site (real client-site notebooks + CSVs), used
-    // when `MOSS_CHPS_FIXTURE` env var points to a valid chps-site root.
-    // Skipped silently when unset.
+    // Extended fixture: a real site's notebooks + CSVs, kept outside the
+    // repo, used when the `MOSS_NOTEBOOK_FIXTURE` env var points to that
+    // site's root. Skipped silently when unset.
 
     use moss_core::content_graph::ContentGraphBuilder;
-    use moss_core::resolve::registry::RendererRegistry;
 
     /// In-repo minimal fixture, always present. Cargo runs tests from the
     /// crate root (`crates/moss-build/`), so this path is stable.
@@ -448,11 +336,11 @@ mod tests {
         PathBuf::from("tests/fixtures/embed_handlers")
     }
 
-    /// Optional extended fixture with real client-site content. Set
-    /// `MOSS_CHPS_FIXTURE` to the chps-site root to opt in. Returns None
+    /// Optional extended fixture with real site content. Set
+    /// `MOSS_NOTEBOOK_FIXTURE` to that site's root to opt in. Returns None
     /// when unset or the path doesn't exist.
     fn extended_fixture_root() -> Option<PathBuf> {
-        let path = std::env::var("MOSS_CHPS_FIXTURE").ok()?;
+        let path = std::env::var("MOSS_NOTEBOOK_FIXTURE").ok()?;
         let p = PathBuf::from(path);
         p.exists().then_some(p)
     }
@@ -466,7 +354,6 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Analysis\n\n![[minimal.ipynb]]\n";
-        let registry = RendererRegistry::builtin().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 
@@ -475,7 +362,6 @@ mod tests {
             md,
             &graph,
             &file_reader,
-            &registry,
             &handlers,
         );
 
@@ -512,7 +398,6 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Data\n\n![[minimal.csv]]\n";
-        let registry = RendererRegistry::builtin().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 
@@ -521,7 +406,6 @@ mod tests {
             md,
             &graph,
             &file_reader,
-            &registry,
             &handlers,
         );
 
@@ -561,7 +445,6 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Test\n\n![[minimal.ipynb]]\n";
-        let registry = RendererRegistry::builtin().build();
         // Handlers WITHOUT notebook support — marker must survive.
         let handlers = MarkerHandlers::new();
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
@@ -571,7 +454,6 @@ mod tests {
             md,
             &graph,
             &file_reader,
-            &registry,
             &handlers,
         );
 
@@ -583,29 +465,28 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Extended fixture (opt-in): real client-site content.
+    // Extended fixture (opt-in): real site content.
     //
-    // Run with `MOSS_CHPS_FIXTURE=/path/to/test-sites/chps-site cargo test`.
+    // Run with `MOSS_NOTEBOOK_FIXTURE=/path/to/site cargo test`.
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_e2e_chps_habitable_zone_notebook() {
+    fn test_e2e_external_site_notebook() {
         let Some(root) = extended_fixture_root() else {
-            eprintln!("skipping: MOSS_CHPS_FIXTURE not set");
+            eprintln!("skipping: MOSS_NOTEBOOK_FIXTURE not set");
             return;
         };
-        let nb = "resources/habitable-zone.ipynb";
+        let nb = "resources/orbit-model.ipynb";
         if !root.join(nb).exists() {
-            eprintln!("skipping: {} not under MOSS_CHPS_FIXTURE", nb);
+            eprintln!("skipping: {} not under MOSS_NOTEBOOK_FIXTURE", nb);
             return;
         }
 
         let mut builder = ContentGraphBuilder::new();
-        builder.add_file(nb, "habitable-zone");
+        builder.add_file(nb, "orbit-model");
         let graph = builder.build();
 
-        let md = "# Real notebook\n\n![[habitable-zone.ipynb]]\n";
-        let registry = RendererRegistry::builtin().build();
+        let md = "# Real notebook\n\n![[orbit-model.ipynb]]\n";
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 
@@ -614,7 +495,6 @@ mod tests {
             md,
             &graph,
             &file_reader,
-            &registry,
             &handlers,
         );
 
@@ -625,12 +505,11 @@ mod tests {
         assert!(
             result
                 .content_markdown
-                .contains("/jupyter/notebooks/?path=habitable-zone.ipynb")
+                .contains("/jupyter/notebooks/?path=orbit-model.ipynb")
         );
     }
 
     // Boundary regression tests for the typed embed renderer →
-    // post-processor seam now live in
-    // `src-tauri/tests/boundary_renderer_post_process.rs` (Cargo integration
-    // test), since they cross two crates and are broader than this module.
+    // post-processor seam now live in the desktop app's own integration
+    // tests, since they cross two crates and are broader than this module.
 }

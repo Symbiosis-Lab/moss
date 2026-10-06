@@ -468,9 +468,9 @@ fn router_covers_every_cell() {
     assert_eq!(seen, 20, "router must cover every (hook, trigger) pair");
 }
 
-/// Spot-check specific router rows from ADR-015 § Layer 2 table.
+/// Spot-check specific router rows from the Layer 2 table.
 #[test]
-fn router_spot_checks_match_adr_table() {
+fn router_spot_checks_match_layer2_table() {
     let cases = [
         (
             PluginHook::Import,
@@ -806,7 +806,7 @@ fn spawn_awaiting_progress_succeeded_implicit_resume() {
     let tasks = reg.tasks(&win(), TaskScope::Preview);
     assert!(matches!(tasks[0].state, TaskState::Awaiting { .. }));
 
-    // ADR-015: next progress() implicitly resumes (no explicit resumed()).
+    // Next progress() implicitly resumes (no explicit resumed()).
     h.progress(Some(0.9), Some("propagating DNS".into()));
     let tasks = reg.tasks(&win(), TaskScope::Preview);
     assert!(matches!(tasks[0].state, TaskState::Running { .. }));
@@ -1000,7 +1000,7 @@ fn spawn_then_title_sets_panel_task_title() {
 
 #[test]
 fn title_builder_returns_mut_self_for_chaining_through_let_binding() {
-    // Per ADR-015 § "Internal moss code calls PanelTask directly", the
+    // When internal moss code calls PanelTask directly, the
     // intended call shape is fluent. Because `title` takes `&mut self`,
     // the temporary from `spawn(...)` must be bound to a `mut` local
     // before titling — the binding is the chain.

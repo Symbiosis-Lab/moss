@@ -8,8 +8,7 @@
 //!   1  usage / error
 //!
 //! Both binaries answer both halves: the write goes through
-//! `vault::config::save_environment`, the same door the app's modals use
-//! (ADR-059 amendment, 2026-09-07).
+//! `vault::config::save_environment`, the same door the app's modals use.
 
 use crate::build::site_config::get_environment_field;
 use crate::config::environment::parse_env_name;

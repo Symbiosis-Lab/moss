@@ -56,11 +56,11 @@ fn preview_only_state_without_site_id_is_not_published() {
 #[test]
 fn published_root_carries_site_id() {
     let tmp = tempfile::tempdir().unwrap();
-    published(&tmp.path().join("blog"), "chps");
+    published(&tmp.path().join("blog"), "my-blog");
 
     let report = find_nested_roots(tmp.path(), None, &limits());
     assert_eq!(report.nested[0].published, Some(true));
-    assert_eq!(report.nested[0].site_id.as_deref(), Some("chps"));
+    assert_eq!(report.nested[0].site_id.as_deref(), Some("my-blog"));
 }
 
 #[test]
@@ -76,6 +76,22 @@ fn empty_site_id_is_preview_only() {
 fn unparseable_state_is_unknown_never_an_error() {
     let tmp = tempfile::tempdir().unwrap();
     make_root(&tmp.path().join("half-synced"), Some("[deployment\nnot toml"));
+
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(report.nested[0].published, None);
+    assert_eq!(report.nested[0].site_id, None);
+}
+
+#[test]
+fn version_ahead_state_is_unknown_never_a_guessed_site_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_root(
+        &tmp.path().join("from-the-future"),
+        Some(&format!(
+            "schema_version = {}\n\n[deployment]\nsite_id = \"blog\"\n",
+            crate::config::migrations::STATE_CURRENT_VERSION + 1
+        )),
+    );
 
     let report = find_nested_roots(tmp.path(), None, &limits());
     assert_eq!(report.nested[0].published, None);

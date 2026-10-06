@@ -10,8 +10,7 @@
 //! (read from the map: it has a URL and nothing on disk). Headings are a
 //! separate ask, for one page.
 //!
-//! All I/O is here; the ranker sees `Target`s. Design and audit:
-//! docs/archive/2026-09-05-link-target-completion-audit-and-design.md.
+//! All I/O is here; the ranker sees `Target`s.
 
 use std::collections::BTreeSet;
 use std::path::Path;

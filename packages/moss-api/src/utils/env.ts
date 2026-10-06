@@ -3,7 +3,7 @@
  *
  * Plugins run inside a webview (no Node `process.env`), so reading host
  * environment variables requires a Rust→TS bridge. The
- * `get_plugin_env_var` Tauri command in `src-tauri/src/plugins/runtime.rs`
+ * `get_plugin_env_var` Tauri command in the app's plugin runtime module
  * enforces a server-side allow-list — plugins cannot read arbitrary
  * environment variables, only the ones moss has whitelisted for test /
  * harness use.

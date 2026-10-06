@@ -19,8 +19,8 @@ import type { MarkdownConfig, BlockContext, Line } from '@lezer/markdown';
 import { SHORTCODES } from './contract/shortcodes.generated.js';
 
 // Opener: optional indent, >=3 colons, a name starting [A-Za-z], rest = attrs.
-// The name is OPTIONAL — `:::{.class}` (docs/reference/shortcode-grammar.md
-// "Pure-CSS region") has none, only an attrs block starting with `{`. A bare
+// The name is OPTIONAL — `:::{.class}` ("Pure-CSS region") has none, only
+// an attrs block starting with `{`. A bare
 // `:::` (no name, no `{`) is a close fence, not an opener — callers must
 // still reject that case themselves (see `isOpenMatch`).
 export const SHORTCODE_OPEN_RE = /^(\s*)(:{3,})([A-Za-z][\w-]*)?(.*)$/;
@@ -98,12 +98,9 @@ export const shortcodeBlockConfig: MarkdownConfig = {
 //
 // `:::hero {image=photo.jpg}` names an image, but the name sits in an
 // ATTRIBUTE, not in a markdown embed — so `cm-image-extract`'s Lezer walk
-// (`Image` / `WikilinkEmbed` nodes) never saw it. Three things fall out of
-// that one blind spot: the reference resolver never resolved the path, so the
-// hero tag had nothing to draw a thumbnail from; the hover popover had no
-// target; and a hero pointing at a deleted file got no broken-asset cue while
-// every `![[…]]` in the same document did. `extractImageTargets` calls
-// `shortcodeAssetRef` below, so all three are fixed at one seam.
+// (`Image` / `WikilinkEmbed` nodes) never sees it. `extractImageTargets`
+// calls `shortcodeAssetRef` below so the reference resolver, hover popover
+// and broken-asset cue cover shortcode attributes too.
 //
 // This lives beside the fence grammar rather than in a module of its own
 // because it IS grammar: the same opening line, one level further in. The
@@ -126,7 +123,7 @@ export const shortcodeBlockConfig: MarkdownConfig = {
 // (`gather_multi_line_attrs`). The grammar above does not — `ShortcodeAttrs`
 // ends at EOL — so neither does this, and a hero whose attrs wrap gets no
 // thumbnail and no hover. It also gets no micro-tag params today, for the same
-// reason: `SHORTCODE_OPEN_RE` is line-based. One limitation, not a new one.
+// reason: `SHORTCODE_OPEN_RE` is line-based.
 
 /** One `key=value` item read off an attribute block. */
 export interface AttrKvSpan {
@@ -159,6 +156,13 @@ const isBareword = (c: string): boolean => /[:/._-]/.test(c) || /[\p{Alphabetic}
 
 /** MIRROR of `attrs::match_width_token` — the bare keywords that are NOT an error. */
 const WIDTH_TOKENS = new Set(['body', 'wide', 'page', 'screen', 'full']);
+/**
+ * MIRROR of the `scroll` branch in `attrs.rs`'s bare-keyword match: a second
+ * bare flag, recognized the same way as the width tokens but not one of
+ * them (grid-only semantics, checked separately rather than folded into
+ * `WIDTH_TOKENS`).
+ */
+const SCROLL_FLAG = 'scroll';
 
 /**
  * Read every `key=value` item out of an attribute block.
@@ -203,9 +207,9 @@ export function parseAttrKvSpans(input: string): AttrKvSpan[] | null {
 
     skipWs();
     if (input[i] !== '=') {
-      // A bare keyword is legal only for the width tokens; anything else is
-      // `InvalidKey`, which aborts the block.
-      if (WIDTH_TOKENS.has(key)) continue;
+      // A bare keyword is legal only for the width tokens and `scroll`;
+      // anything else is `InvalidKey`, which aborts the block.
+      if (WIDTH_TOKENS.has(key) || key === SCROLL_FLAG) continue;
       return null;
     }
     i++;

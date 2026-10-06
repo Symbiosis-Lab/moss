@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {
+      "click": "create.newPageButton",
+      "reveals": 3
+    }
+  ]
+}

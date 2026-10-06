@@ -70,8 +70,8 @@ fn sanitize_relative(relative: &str) -> String {
 /// - `https://example.com/blog/2024/intro` → `2024/intro.md`
 /// - `https://example.com/blog/2024/` → `2024/index.md`
 ///
-/// Scope-root special case (scope = `https://example.com/2024/12/22/finding-chinas-voice/`):
-/// - The scope-root URL itself → `finding-chinas-voice.md`
+/// Scope-root special case (scope = `https://example.com/2024/12/22/the-reporters-notebook/`):
+/// - The scope-root URL itself → `the-reporters-notebook.md`
 ///   (last non-empty segment of the scope path becomes the filename, so a
 ///   leaf-article import lands as a single named file in the target folder,
 ///   not `index.md`)
@@ -218,12 +218,12 @@ mod tests {
 
     #[test]
     fn scoped_root_uses_last_path_segment_as_slug() {
-        let s = scope("https://www.thewirechina.com/2024/12/22/finding-chinas-voice-abroad/");
+        let s = scope("https://www.example.com/2024/12/22/the-reporters-notebook-abroad/");
         let r = url_to_file_path(
-            "https://www.thewirechina.com/2024/12/22/finding-chinas-voice-abroad/",
+            "https://www.example.com/2024/12/22/the-reporters-notebook-abroad/",
             &s,
         );
-        assert_eq!(r, "finding-chinas-voice-abroad.md");
+        assert_eq!(r, "the-reporters-notebook-abroad.md");
     }
 
     #[test]

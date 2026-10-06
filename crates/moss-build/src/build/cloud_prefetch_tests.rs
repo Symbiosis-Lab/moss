@@ -223,7 +223,8 @@ fn a_wedged_file_is_never_handed_over_again() {
 #[test]
 fn the_oldest_outstanding_read_is_named_and_aged() {
     // What separates "downloading, just slow" from "the provider abandoned
-    // these" in a stall report. An aggregate count cannot: #986 was one file.
+    // these" in a stall report. An aggregate count cannot: one stall report
+    // was one file.
     let (m, tx, _seen) = gated();
     let p = Prefetcher::with_materializer(1, m, false);
     assert_eq!(p.snapshot().oldest_read, None, "nothing outstanding, nothing to name");

@@ -1,6 +1,6 @@
 //! Pure URL/path transform helpers — no filesystem access, no env lookups.
 //! Used by moss-core's render functions (see crate::render::*) and by
-//! upstream src-tauri call sites.
+//! upstream call sites in moss-build.
 //!
 //! # Design Intent
 //!
@@ -130,12 +130,10 @@ pub fn to_webp(source: &str) -> String {
 /// (png/jpg/jpeg/webp). Single source of truth for the ladder-membership
 /// **GATE** — the "does this extension take part at all?" question, distinct
 /// from the "which rung WIDTHS exist?" question [`ladder_rungs`] answers (whose
-/// own doc enumerates the ladder-DERIVATION sites). Phase B (Task 12) lifted
-/// webp's participation by editing ONLY this predicate, so every gate site
-/// picked up webp in lockstep.
+/// own doc enumerates the ladder-DERIVATION sites). Changing the predicate
+/// changes every gate site in lockstep.
 ///
-/// GATE SITES — the six `is_ladder_source_ext(` production callers
-/// (grep-verified 2026-07-23), each deciding png/jpg/jpeg/webp participation:
+/// GATE SITES — the six `is_ladder_source_ext(` production callers, each deciding png/jpg/jpeg/webp participation:
 /// 1. **emission** — `is_raster_original` (`render/image.rs`);
 /// 2. **registration** — the rung loop in `generate_blocking_content`
 ///    (`build/render/blocking.rs`);
@@ -148,8 +146,7 @@ pub fn to_webp(source: &str) -> String {
 /// 6. **`should_skip`'s AlreadySmall carve-out** — `raster_with_picture`
 ///    (`build/media/image.rs`).
 ///
-/// These six are the "six census sites" named in the design doc and
-/// MIGRATION-STATE. NOTE: `encode_rungs` is NOT a gate site — it is a
+/// NOTE: `encode_rungs` is NOT a gate site — it is a
 /// [`ladder_rungs`] DERIVATION consumer (it computes the rung SET, it does not
 /// gate on extension). A maintainer adding a new participating format updates
 /// THIS list; one adding a rung-set derivation updates [`ladder_rungs`]' census.
@@ -174,7 +171,7 @@ pub fn to_webp(source: &str) -> String {
 /// # use moss_core::asset_paths::is_ladder_source_ext;
 /// assert!(is_ladder_source_ext("png"));
 /// assert!(is_ladder_source_ext("JPG"));
-/// assert!(is_ladder_source_ext("webp")); // joined the ladder in Phase B (Task 12)
+/// assert!(is_ladder_source_ext("webp")); // webp participates in the ladder
 /// ```
 pub fn is_ladder_source_ext(ext: &str) -> bool {
     matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
@@ -207,10 +204,44 @@ pub fn is_webp_source_ext(ext: &str) -> bool {
     ext.eq_ignore_ascii_case("webp")
 }
 
-/// Max edge (px) of any deployed raster. Single source of truth — the encode
-/// pipeline's `ImageCompressionConfig::default()` reads this constant, and the
-/// srcset base-width descriptor caps at it. 2400 covers retina displays.
+/// Long-edge cap (px) of a deployed raster up to 2:1. Single source of truth —
+/// the encode pipeline's `ImageCompressionConfig::default()` reads this
+/// constant, and [`deployed_long_edge`] applies it. 2400 covers retina
+/// displays. A more elongated image may deploy longer: see
+/// [`deployed_long_edge`].
 pub const DEPLOY_MAX_EDGE: u32 = 2400;
+
+/// WebP's hard per-dimension limit: libwebp refuses to encode anything
+/// larger, so no deployed webp may exceed it on either edge.
+pub const WEBP_MAX_DIMENSION: u32 = 16383;
+
+/// The long edge a `natural_w`×`natural_h` source deploys at, under a
+/// long-edge cap of `max_edge` — the one owner of the deploy resize rule.
+///
+/// The long edge is capped at `max_edge`, but the short edge is never
+/// reduced below `max_edge / 2`, the source is never upscaled, and neither
+/// edge exceeds [`WEBP_MAX_DIMENSION`]. As a scale:
+/// `min(1, max(max_edge / long, (max_edge / 2) / short))`, then the WebP clamp.
+///
+/// A long-edge cap alone turned elongated images into strips: a 21969×950
+/// handscroll deployed at 2400×104, useless at any column height (found on a
+/// real vertical-writing site, 2026-09-23); a 1356×5161 hanging scroll at
+/// 631×2400, soft in a horizontal column. `max_edge / 2` is the largest floor
+/// that changes nothing up to 2:1 — at exactly 2:1 the two terms are equal —
+/// so every such image deploys byte-identically to the long-edge-only rule.
+/// `ceil` keeps the encoder's rounded short edge at or above the floor.
+pub fn deployed_long_edge(natural_w: u32, natural_h: u32, max_edge: u32) -> u32 {
+    let long = natural_w.max(natural_h);
+    let short = natural_w.min(natural_h).max(1);
+    let floor = max_edge / 2;
+    let target = if long <= max_edge || short <= floor {
+        long
+    } else {
+        let floored = (u64::from(long) * u64::from(floor)).div_ceil(u64::from(short));
+        max_edge.max(floored as u32)
+    };
+    target.min(long).min(WEBP_MAX_DIMENSION)
+}
 
 /// The responsive ladder: rung widths generated below the deployed base.
 /// Must be strictly ascending — the `take_while` in [`ladder_rungs`] depends on it.
@@ -218,15 +249,60 @@ pub const DEPLOY_MAX_EDGE: u32 = 2400;
 /// vocabulary (named in the moss-core CHANGELOG); consumers should prefer
 /// [`ladder_rungs`] / [`deployed_width`] over indexing `LADDER` directly, so
 /// ladder policy stays in one place.
-/// See docs/archive/2026-07-22-responsive-image-variants-design.md.
 pub const LADDER: [u32; 2] = [800, 1600];
 
+/// The most elongated (long edge ÷ short edge) a deployed base may be
+/// before [`ladder_rungs`] gives up on offering any rung at all. A rung is
+/// a uniform scale of the base, so it is exactly as elongated — past this
+/// ratio an 800-wide rung is thin enough (under 3 digits tall) that it
+/// stops conveying anything a browser would pick it for. The boundary is
+/// INCLUSIVE: a base at exactly this ratio still keeps its ladder
+/// (2400×240, exactly 10:1), and the ladder only empties once the ratio
+/// exceeds it (2400×239, ~10.04:1) — [`ladder_rungs`]'s check is a strict
+/// `<`, not `<=`. 10 sits well clear of every source this crate's own
+/// tests still expect a ladder for — the widest is 2400×316 (7.6:1) — and
+/// well under the narrowest known pathological source, a 2200×100 fixture
+/// (22:1) and real handscrolls (23–27:1); see [`ladder_rungs`]'s doc for
+/// the worked cases.
+pub const MAX_LADDER_ASPECT: u32 = 10;
+
+/// The most elongated (long edge ÷ short edge) a source may be before it
+/// still reads as an ordinary wide or tall photo. Past this,
+/// `render::image`'s default in-column presentation — fit width to the
+/// text measure horizontally, fit height to the plate vertically — has
+/// already squashed it to an unreadable sliver, well before
+/// [`MAX_LADDER_ASPECT`] even makes its responsive ladder pointless: a
+/// presentation concern, checked first, not a downstream consequence of
+/// the rung-generation cutoff. Deliberately far below `MAX_LADDER_ASPECT`
+/// (10) for that reason — by the time a source's ladder disappears, its
+/// in-column presentation has been broken for a while.
+///
+/// 3 matches the traditional handscroll (手卷) / hanging-scroll (立軸)
+/// formats this threshold targets, not an ordinary wide photograph: an
+/// ordinary panorama crop (2:1–3:1) still reads fine laid out at a normal
+/// column width, but a scroll painting routinely runs 3:1 to 30:1 or more.
+pub const SCROLL_SHAPE_ASPECT: u32 = 3;
+
+/// Whether a source's aspect ratio is extreme enough to need the "scroll"
+/// default presentation (`render::image`'s `data-aspect="scroll"`, CSS in
+/// site.css / vertical.css) instead of ordinary in-column sizing — the
+/// long edge past [`SCROLL_SHAPE_ASPECT`] times the short edge, on either
+/// axis: a handscroll's long edge is its width, a hanging scroll's is its
+/// height. The boundary is INCLUSIVE on the ordinary side, matching
+/// [`MAX_LADDER_ASPECT`]'s own convention: exactly 3:1 is still ordinary,
+/// and only a ratio past it is tagged "scroll".
+pub fn is_scroll_shape(natural_w: u32, natural_h: u32) -> bool {
+    let long = natural_w.max(natural_h);
+    let short = natural_w.min(natural_h).max(1);
+    long > short.saturating_mul(SCROLL_SHAPE_ASPECT)
+}
+
 /// Width the deployed base variant actually has after the encoder's
-/// aspect-preserving longest-EDGE resize (`img.resize(max_edge, max_edge,
-/// Lanczos3)` in build/media/image.rs). When the longest edge exceeds
-/// [`DEPLOY_MAX_EDGE`], BOTH dimensions shrink by the same ratio — for
-/// portraits the deployed width is therefore SMALLER than `min(w, 2400)`:
-/// a 3024×4032 portrait deploys at 1800×2400, so its base width is 1800.
+/// aspect-preserving resize to [`deployed_long_edge`] (`img.resize(bound,
+/// bound, Lanczos3)` in build/media/image.rs). BOTH dimensions shrink by the
+/// same ratio — for portraits the deployed width is therefore SMALLER than
+/// the long edge: a 3024×4032 portrait deploys at 1800×2400, so its base
+/// width is 1800.
 ///
 /// Integer math (u64 multiply, truncating divide, floor at 1) mirrors the
 /// image crate's `resize_dimensions` as closely as practical. srcset width
@@ -235,16 +311,30 @@ pub const LADDER: [u32; 2] = [800, 1600];
 /// encode output pins gross agreement.
 pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
     let long_edge = natural_w.max(natural_h);
-    if long_edge <= DEPLOY_MAX_EDGE {
-        return natural_w;
+    let bound = deployed_long_edge(natural_w, natural_h, DEPLOY_MAX_EDGE);
+    deployed_scaled_dim(natural_w, bound, long_edge)
+}
+
+/// Scale `dim` — an edge of a source whose long edge is `long_edge` — by
+/// the same `bound / long_edge` ratio the deploy resize applies to the
+/// long edge itself (`bound` is [`deployed_long_edge`]'s return value).
+/// Shared by [`deployed_width`] (scaling `natural_w` — a no-op read of
+/// `bound` for a landscape source, where `natural_w` already IS
+/// `long_edge`) and [`ladder_rungs`] (scaling the SHORT edge by that same
+/// ratio, to get the deployed base's actual short edge and check it
+/// against [`MAX_LADDER_ASPECT`]) — one ratio-scale primitive instead of
+/// two copies with the dimensions swapped.
+fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
+    if bound >= long_edge {
+        return dim;
     }
-    ((natural_w as u64 * DEPLOY_MAX_EDGE as u64 / long_edge as u64) as u32).max(1)
+    ((u64::from(dim) * u64::from(bound) / u64::from(long_edge)) as u32).max(1)
 }
 
 /// Which ladder rungs exist for a source of `natural_w`×`natural_h` px.
 ///
 /// DETERMINISTIC-AGREEMENT CONTRACT — the ladder-DERIVATION census: the
-/// `ladder_rungs(` production callers (grep-verified 2026-07-23). Keep this
+/// `ladder_rungs(` production callers. Keep this
 /// list current; every set-agreement site derives ladder membership from the
 /// same scan-derived inputs. These answer "which rung WIDTHS exist?"; the
 /// separate participation GATE ("does this extension take part at all?") is the
@@ -257,8 +347,7 @@ pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
 ///    candidates appear in HTML;
 /// 2. **registration** — blocking.rs's rung loop promises each rung URL via
 ///    `set_source_passthrough` + `set_pending`;
-/// 3. **encode** — `encode_rungs` (build/media/rungs.rs, extracted from image.rs
-///    at Task 10.5) derives the same ladder from oriented dims on the
+/// 3. **encode** — `encode_rungs` (build/media/rungs.rs) derives the same ladder from oriented dims on the
 ///    full-encode and warm-cache paths; `convert_single_image`'s `ladder_len`
 ///    (build/media/image.rs) reads the same call to keep the oriented original
 ///    alive for the rung re-encode;
@@ -277,8 +366,7 @@ pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
 ///
 /// A rung is emitted in HTML iff it is registered iff it is encoded. Never
 /// add an input here that one of these sites cannot supply (e.g. encode
-/// outcomes, cache state) — that is the parallel-oracle bug class deleted
-/// 2026-05-20 (see build/media/image.rs:297-310).
+/// outcomes, cache state) — that is the parallel-oracle bug class.
 ///
 /// EXIF-ORIENTATION AGREEMENT (canonical; the pipeline sites back-reference
 /// here). The "same scan-derived dims on every site" premise holds
@@ -288,11 +376,9 @@ pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
 /// orientation through the SAME `read_exif_orientation` the encode side's
 /// `decode_oriented` uses — so the dims scan feeds emission/registration/sweep/
 /// heal equal encode's oriented dims byte-for-byte and the two ladders cannot
-/// diverge. (Before the 2026-07-23 scan-swap fix — design follow-up #1 — scan's
-/// orientation read was JPEG-GATED, so an EXIF-rotated png/webp stored the
-/// UNswapped header dims and could strand an emitted-but-never-encoded rung →
-/// publish-404, preview degrading to the placeholder via the unresolved-promise
-/// sweep.) Do NOT re-gate scan's swap to jpeg-only, and do NOT "fix" any future
+/// diverge. Gating that read to jpeg would let an EXIF-rotated png/webp store
+/// the UNswapped header dims and strand an emitted-but-never-encoded rung →
+/// publish-404. Do NOT re-gate scan's swap to jpeg-only, and do NOT "fix" any future
 /// divergence by narrowing the encode side: the encoder strips EXIF, so a base
 /// that isn't oriented at encode time ships stored sideways (visibly rotated).
 ///
@@ -308,7 +394,7 @@ pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
 /// through the same encode path and inherit the same flattening —
 /// consistent by construction, no 404 risk.
 ///
-/// ANIMATED-FLAG AGREEMENT (Phase B, Task 12). Only ONE of the five sites
+/// ANIMATED-FLAG AGREEMENT. Only ONE of the five sites
 /// passes a non-`false` flag: **emission** passes the scan-derived
 /// `assets.is_animated(src)` for webp sources (an animated webp → empty
 /// ladder → bare `<img>`, no srcset). The four pipeline sites (registration,
@@ -330,9 +416,49 @@ pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
 /// input to this function — e.g. copying the Y1 sized-raster APNG
 /// verbatim-keep guard (build/media/image.rs ~line 830) onto rung encodes —
 /// would create emitted-but-never-encoded rungs, i.e. the non-recoverable
-/// chosen-`<source>` 404 (ADR-013). Task 5 must NOT copy that guard.
+/// chosen-`<source>` 404. Do NOT copy that guard.
+///
+/// A rung is a WIDTH contract (`asset_paths::to_webp_rung`'s `wN`, checked
+/// exactly by `validate_webp_output`), so its OTHER edge is always
+/// `short_edge * rung / long_edge` — the source's own aspect ratio,
+/// unchanged at every rung width because every rung is a uniform scale of
+/// the same source, on WHICHEVER side (width for landscape, height for
+/// portrait) that ratio makes thin. That is also true of the deployed
+/// BASE: it is the same uniform scale (`deployed_scaled_dim`, driven by
+/// [`deployed_long_edge`]'s `bound`), so a rung's thin edge is thin in
+/// exactly the same proportion the base's own is — never worse, never
+/// better. Most of the time that's fine: an ordinary photo or hero far
+/// past 2:1 (2400×316, or the 6000×1500 fixture
+/// `vertical_sizes_render_gate_golden_matches_the_synthesizer` pins) keeps
+/// its full, ordinary ladder, landscape or portrait alike.
+///
+/// The ladder empties when that shared ratio is extreme enough that the
+/// base itself is more than [`MAX_LADDER_ASPECT`] times as long as it is
+/// short — checked as the deployed short edge against the deployed long
+/// edge (`bound`), the same "whichever side is short" comparison for
+/// either orientation, not a landscape-only special case. A 38415×1400
+/// handscroll's long edge clamps at [`WEBP_MAX_DIMENSION`], short edge
+/// landing at ~597 against a ~16383 long edge (27:1) — its `w800` rung
+/// would be 800×29. A 1300×23660 hanging scroll clamps the same way,
+/// short edge ~900 against ~16383 (18:1) — its only rung, `w800`, is
+/// itself narrower than that already-compromised 900px base, making a bad
+/// ratio worse rather than offering a genuinely smaller variant. Neither
+/// needs `WEBP_MAX_DIMENSION` to clamp, though: a 2200×100 source (22:1)
+/// is never resized at all — deploying at its own native size — and is
+/// still too elongated for an 800-wide rung to mean anything (800×36).
+/// Once the ratio is this extreme, no rung width helps: widening one would
+/// break the `wN` contract (breaking `validate_webp_output`) and cropping
+/// would lose content, so the ladder is empty and only the base is
+/// offered — no upscale.
 pub fn ladder_rungs(natural_w: u32, natural_h: u32, is_animated: bool) -> &'static [u32] {
     if is_animated {
+        return &[];
+    }
+    let long_edge = natural_w.max(natural_h);
+    let short_edge = natural_w.min(natural_h);
+    let bound = deployed_long_edge(natural_w, natural_h, DEPLOY_MAX_EDGE);
+    let deployed_short = deployed_scaled_dim(short_edge, bound, long_edge);
+    if u64::from(deployed_short) * u64::from(MAX_LADDER_ASPECT) < u64::from(bound) {
         return &[];
     }
     let base = deployed_width(natural_w, natural_h);
@@ -391,14 +517,20 @@ impl VideoRung {
 /// three times leaner per pixel than the rung it turned away.
 ///
 /// 0.045 is measured, not chosen. Encoding the same source at 45 kbps and
-/// 320x180 (docs/archive/2026-08-27-video-delivery-on-slow-networks.md, Stage 0):
-/// at 30 fps — 0.0260 — faces and wall texture dissolve; at 15 fps — 0.0521 —
+/// 320x180: at 30 fps — 0.0260 — faces and wall texture dissolve; at 15 fps — 0.0521 —
 /// the picture holds. Apple's own leanest published rung, 145 kbps at 416x234x30,
 /// sits at 0.0497, and every other rung in [`VIDEO_LADDER`] is above 0.05.
 ///
 /// This is what forces the bottom rung to 15 fps rather than 30: at 45 kbps
 /// there is no other way to clear the floor.
 pub const MIN_BITS_PER_PIXEL_PER_FRAME: f64 = 0.045;
+
+/// The minimum multiple a clamped rung's effective bitrate must clear over the
+/// rung already kept below it, in [`video_ladder_rungs_within`]'s near-duplicate
+/// check — matching the 1.5-2x spacing [`VIDEO_LADDER`]'s own doc cites from
+/// Apple's authoring spec. A clamp landing under this multiple offers a player
+/// nothing worth switching to, so the rung is dropped rather than kept.
+pub const LADDER_MIN_RUNG_SPACING: f64 = 1.5;
 
 /// The video delivery ladder, lowest rung first.
 ///
@@ -417,8 +549,14 @@ pub const MIN_BITS_PER_PIXEL_PER_FRAME: f64 = 0.045;
 ///
 /// The **top rung is also the delivery ceiling**. There is deliberately no
 /// second `max_video_bitrate_kbps` knob beside this table: two independent
-/// statements of how good the best version gets is the overlap that step 1 of
-/// the archive doc deleted, and re-introducing it here would rebuild it.
+/// statements of how good the best version gets would overlap. The
+/// hosting-budget knobs that narrow a source's ladder (`max_size_mb`,
+/// `hls_max_file_mb`) pick a LOWER rung off this table; the HLS ladder's own
+/// source-bitrate clamp ([`video_ladder_rungs_within`]) goes one step further
+/// and lowers a rung's bitrate BELOW its table value — never above, and never
+/// past what the source itself can supply. The ceiling still holds in the
+/// sense that matters: nothing this crate builds ever asks libx264 for more
+/// than this table's top rung.
 pub const VIDEO_LADDER: [VideoRung; 6] = [
     VideoRung { width: 320, height: 180, fps: 15, video_kbps: 45, audio_kbps: 32, audio_channels: 1 },
     VideoRung { width: 416, height: 234, fps: 30, video_kbps: 145, audio_kbps: 32, audio_channels: 1 },
@@ -447,25 +585,170 @@ pub fn video_ladder_rungs(source_width: u32) -> &'static [VideoRung] {
     &VIDEO_LADDER[..n]
 }
 
+/// Estimated size, in bytes, of the single file an HLS rung writes for a
+/// track running at `kbps` over `duration_secs` — `-hls_flags single_file`
+/// makes a rung's video, and each audio group, exactly one file apiece, so
+/// that file's size is just its bitrate times the whole video's duration.
+///
+/// The 5% margin above the raw `kbps * duration` figure is measured, not
+/// guessed: the two production numbers this budget exists to keep under a
+/// cap were 221,843,463 bytes (1280x720, 2000 kbps) and 122,579,638 bytes
+/// (960x540, 1100 kbps) for a 903.47 s source — 98–99% of the VBV-capped
+/// target in both cases. Overshooting the estimate would silently let an
+/// over-cap file through; undershooting it by more than the measured slack
+/// would drop a rung that actually would have fit.
+fn hls_file_bytes(kbps: u32, duration_secs: f64) -> f64 {
+    (kbps as f64) * 1000.0 / 8.0 * duration_secs * 1.05
+}
+
+/// The two bitrate figures [`video_ladder_rungs_within`] clamps a source's
+/// ladder against. A struct rather than two positional `Option<f64>` args:
+/// the two mean very different things and are easy to swap by position, and
+/// `for_clamp` gives the fallback rule ONE home instead of every caller
+/// spelling out `.or()` for itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SourceBitrate {
+    /// The source's own VIDEO-stream bitrate, kbps — what actually bounds a
+    /// rung, since it is the picture alone. `None` when the container states
+    /// no per-stream figure, which is common for mkv/webm.
+    pub video_kbps: Option<f64>,
+    /// The container's TOTAL bitrate (video + audio + overhead), kbps. Used
+    /// only when `video_kbps` is `None` — a looser clamp, since it is not the
+    /// picture alone, but still tighter than none.
+    pub total_kbps: Option<f64>,
+}
+
+impl SourceBitrate {
+    /// The figure to clamp a rung against: the video stream's own bitrate
+    /// when known, the container total otherwise, `None` if neither is.
+    fn for_clamp(&self) -> Option<f64> {
+        self.video_kbps.or(self.total_kbps)
+    }
+}
+
+/// The rungs worth encoding for a source of `source_width` px and
+/// `duration_secs` seconds, narrowed twice over from [`VIDEO_LADDER`]:
+///
+/// 1. **The source's own bitrate.** Re-encoding a rung above what the source
+///    itself carries cannot add detail the source never captured — it only
+///    inflates the file. A 15-minute, 1280x1080 source shot at 600 kbps
+///    (98 MB) does not look any better muxed at the table's 1100 kbps 960x540
+///    rung; it just becomes a 123 MB file exactly as soft as the original.
+///    Every width-eligible rung at or below `source_bitrate`'s figure is kept
+///    unchanged; the first rung that exceeds it is kept once more, with its
+///    bitrate clamped down to that figure (floored to a whole kbps), and
+///    nothing above it survives — UNLESS the clamp lands within 1.5x of the
+///    rung already kept below it, [`VIDEO_LADDER`]'s own minimum spacing,
+///    making it a near-duplicate offering a player nothing worth switching
+///    to; then it is dropped instead. A source leaner than the bottom rung
+///    has nothing to compare against, so its clamped bottom rung is kept
+///    regardless — and, being the only rung left, a caller reads that result
+///    the same way it already reads an empty-but-for-width one: not a
+///    ladder, just the progressive file.
+/// 2. **The per-file byte budget**, checked against each rung's EFFECTIVE
+///    bitrate (the clamp above, when one applied) rather than the table's — that is what
+///    ffmpeg will actually be asked for, and so what the file will actually
+///    weigh. A rung the table's own bitrate would have pushed over budget can
+///    still fit once clamped.
+///
+/// Both narrowings truncate from the top only. Width narrowing is
+/// [`video_ladder_rungs`], reused rather than re-derived; the bitrate clamp
+/// and the budget check both stop at the first rung they touch, sound for the
+/// same reason width's `take_while` is — a rung higher up the table only ever
+/// costs as much or more, in both `video_kbps` and `audio_kbps`
+/// ([`video_ladder_is_strictly_ascending`],
+/// [`video_ladder_audio_kbps_is_non_decreasing`]) — and clamping only ever
+/// lowers a rung's effective bitrate, so that ordering survives the clamp too.
+///
+/// `source_bitrate` skips the clamp entirely only when [`SourceBitrate::for_clamp`] finds neither figure known.
+///
+/// Returns an owned `Vec`, not a `&'static` slice: a clamped rung's bitrate is
+/// not one of the table's own values, so the result is no longer a literal
+/// prefix of `VIDEO_LADDER` — though it still IS one by width, height, fps and
+/// audio group, which is all naming needs, so
+/// [`video_ladder_rungs_by_count`]'s count-based cache identification still
+/// names the right files.
+///
+/// Never empty, for the same reason [`video_ladder_rungs`] never is: an
+/// over-budget or over-bitrate bottom rung still ships, because a file too
+/// big or too soft beats a video nobody can watch. No `has_audio` input:
+/// a rung's audio check is implied by its
+/// video check ([`video_ladder_video_kbps_exceeds_audio_kbps`]), and
+/// clamping — which only ever lowers `video_kbps`, never `audio_kbps` —
+/// cannot undo that.
+pub fn video_ladder_rungs_within(
+    source_width: u32,
+    duration_secs: f64,
+    max_file_bytes: u64,
+    source_bitrate: SourceBitrate,
+) -> Vec<VideoRung> {
+    let width_rungs = video_ladder_rungs(source_width);
+    let capped: Vec<VideoRung> = match source_bitrate.for_clamp() {
+        None => width_rungs.to_vec(),
+        Some(source_kbps) => {
+            let mut out: Vec<VideoRung> = Vec::new();
+            for r in width_rungs {
+                if (r.video_kbps as f64) <= source_kbps {
+                    out.push(*r);
+                    continue;
+                }
+                let clamped_kbps = source_kbps.floor() as u32;
+                let keep = match out.last() {
+                    // Leaner than the bottom rung: nothing to compare
+                    // against, so the clamped bottom rung is kept regardless.
+                    None => true,
+                    Some(prev) => (clamped_kbps as f64) >= LADDER_MIN_RUNG_SPACING * prev.video_kbps as f64,
+                };
+                if keep {
+                    out.push(VideoRung { video_kbps: clamped_kbps, ..*r });
+                }
+                // Every rung above this one would only fail the same
+                // comparison harder — the table is strictly ascending.
+                break;
+            }
+            out
+        }
+    };
+
+    let fits = |kbps: u32| hls_file_bytes(kbps, duration_secs) <= max_file_bytes as f64;
+    let n = capped
+        .iter()
+        .take_while(|r| fits(r.video_kbps) && fits(r.audio_kbps))
+        .count()
+        .max(1);
+    capped[..n].to_vec()
+}
+
 /// The rungs a ladder of `n` rungs was built from, or `None` if `n` is not a
 /// ladder this table can produce.
 ///
-/// The inverse of [`video_ladder_rungs`], which truncates from the top only —
-/// so a ladder's length names its rungs. A cache holding a ladder knows how
-/// many files it holds but not the width of the source that produced them, and
-/// this is what lets it identify the ladder without re-reading that source.
+/// The inverse of [`video_ladder_rungs`] AND of [`video_ladder_rungs_within`],
+/// which both truncate from the top only — so a ladder's length names its
+/// rungs regardless of which one produced it. A cache holding a ladder knows
+/// how many files it holds but not the width or duration of the source that
+/// produced them, and this is what lets it identify the ladder without
+/// re-reading that source.
+///
+/// Only an inverse of WIDTH, HEIGHT, FPS and AUDIO GROUP, not necessarily of
+/// `video_kbps`: a rung `video_ladder_rungs_within` clamped to the source's
+/// own bitrate can't be recovered here — the row returned for it names the
+/// table's bitrate, not the encoded one. Harmless for every caller today,
+/// which all use this to name FILES (`hls_members`, `audio_groups`), and
+/// naming never reads `video_kbps`.
 pub fn video_ladder_rungs_by_count(n: usize) -> Option<&'static [VideoRung]> {
     (2..=VIDEO_LADDER.len()).contains(&n).then(|| &VIDEO_LADDER[..n])
 }
 
-/// The ladder flattened into a transform-cache key.
+/// Any rung list flattened into a stable string — one rung per comma-joined
+/// segment, each carrying everything about it that shapes bytes on the wire
+/// (resolution, frame rate, video and audio bitrate, audio channels).
 ///
-/// Delivery policy is a const table, not configuration, so nothing in an
-/// encoder's config struct changes when a rung is edited — and every site would
-/// go on serving renditions encoded under the old table, invisibly. Any edit to
-/// any rung changes this string, which is what an edit to it means.
-pub fn video_ladder_fingerprint() -> String {
-    VIDEO_LADDER
+/// Generalizes what [`video_ladder_fingerprint`] used to compute only for the
+/// static table, so a per-video EFFECTIVE ladder (bitrate-clamped, budget-
+/// narrowed — no longer literally a slice of [`VIDEO_LADDER`] once clamped)
+/// can be fingerprinted the exact same way for a transform-cache key.
+pub fn rung_list_fingerprint(rungs: &[VideoRung]) -> String {
+    rungs
         .iter()
         .map(|r| {
             format!(
@@ -475,6 +758,20 @@ pub fn video_ladder_fingerprint() -> String {
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// The static ladder flattened into a transform-cache key, for the
+/// progressive MP4 path — the only cache key this table's own edits still
+/// need to invalidate directly; the HLS ladder's key names its EFFECTIVE
+/// rungs instead (see `hls::ladder_params` in moss-build), so a table edit
+/// invalidates it only when it actually changes what a video encodes at.
+///
+/// Delivery policy is a const table, not configuration, so nothing in an
+/// encoder's config struct changes when a rung is edited — and every site would
+/// go on serving renditions encoded under the old table, invisibly. Any edit to
+/// any rung changes this string, which is what an edit to it means.
+pub fn video_ladder_fingerprint() -> String {
+    rung_list_fingerprint(&VIDEO_LADDER)
 }
 
 /// The single rung a progressive (non-ladder) encode targets: the best one this
@@ -582,16 +879,30 @@ pub const HLS_MASTER_NAME: &str = "master.m3u8";
 /// ladder is silently never offered, leaving seventeen encoded files on every
 /// build that no page ever references.
 pub fn hls_master_stem(url: &str) -> Option<&str> {
-    let dir = url.strip_suffix(HLS_MASTER_NAME)?.strip_suffix('/')?;
-    dir.strip_suffix(".hls")
+    hls_dir_stem(url.strip_suffix(HLS_MASTER_NAME)?.strip_suffix('/')?)
 }
 
-/// The names inside one ladder's directory, master first.
+/// The source stem a ladder directory is named after: `a/clip.hls` →
+/// `Some("a/clip")`. The directory is a bundle named after a file, so a path
+/// normaliser must leave its spelling alone; see [`to_hls_dir`].
+pub fn hls_dir_stem(dir: &str) -> Option<&str> {
+    dir.strip_suffix(".hls").filter(|stem| !stem.is_empty())
+}
+
+/// The names inside one ladder's directory, master first — what the ENCODER
+/// writes for `rungs`. The image ladder re-derives its membership at five
+/// call sites and this module documents that as a fragile contract; video's
+/// encoder does not repeat it — `produce_ladder`/`link_members` (moss-build)
+/// write exactly this list, from here.
 ///
-/// One owner for the census. The image ladder re-derives its membership at
-/// five call sites and this module documents that as a fragile contract; video
-/// does not repeat it — the encoder writes this list and the registry promises
-/// it, both from here.
+/// This is not how a reader answers "what's in this ladder right now,
+/// today, on disk" — a ladder already sitting in a site's build output may
+/// have been produced under an older or newer table than the one running
+/// today, and this function only ever knows the CURRENT table. moss-build's
+/// `hls::ladder_members_from_master` answers that question instead, by
+/// reading the ladder's own `master.m3u8` back: the master playlist is
+/// authoritative for whatever it actually references, independent of which
+/// table wrote it.
 pub fn hls_members(rungs: &[VideoRung]) -> Vec<String> {
     let mut out = vec![HLS_MASTER_NAME.to_string()];
     for i in 0..rungs.len() {
@@ -1042,6 +1353,40 @@ mod tests {
         assert!(VIDEO_LADDER.windows(2).all(|w| w[0].video_kbps < w[1].video_kbps));
     }
 
+    /// `video_ladder_rungs_within`'s near-duplicate check drops a CLAMPED rung
+    /// under `LADDER_MIN_RUNG_SPACING` of the one below it — a real edit to
+    /// this table that violated the same spacing would silently introduce a
+    /// rung the check can never keep, however the source's own bitrate lands.
+    #[test]
+    fn video_ladder_consecutive_rungs_are_at_least_the_min_spacing_apart() {
+        assert!(
+            VIDEO_LADDER
+                .windows(2)
+                .all(|w| w[1].video_kbps as f64 >= LADDER_MIN_RUNG_SPACING * w[0].video_kbps as f64),
+            "{VIDEO_LADDER:?}"
+        );
+    }
+
+    /// `video_ladder_rungs_within`'s `take_while` stops at the first rung that
+    /// fails the budget and never looks past it — sound only because a rung
+    /// higher up the table never needs FEWER bytes than the one below it.
+    #[test]
+    fn video_ladder_audio_kbps_is_non_decreasing() {
+        assert!(VIDEO_LADDER.windows(2).all(|w| w[0].audio_kbps <= w[1].audio_kbps));
+    }
+
+    /// `video_ladder_rungs_within` checks a rung's audio-group file size even
+    /// for a silent source, which writes no audio files at all. That is only
+    /// ever a harmless extra check, never a wrong answer, because this holds:
+    /// the video file is always the pricier of the two at the same duration,
+    /// so a rung that clears the video check always clears the audio one too.
+    /// If a future rung ever violated this, a silent source could get turned
+    /// away by a budget its own ladder would never actually spend.
+    #[test]
+    fn video_ladder_video_kbps_exceeds_audio_kbps() {
+        assert!(VIDEO_LADDER.iter().all(|r| r.video_kbps > r.audio_kbps), "{VIDEO_LADDER:?}");
+    }
+
     /// Truncation is from the top only. A source narrower than every rung still
     /// gets the bottom one — an empty ladder is a video that cannot be played.
     #[test]
@@ -1051,6 +1396,194 @@ mod tests {
         assert_eq!(video_ladder_rungs(640).len(), 3);
         assert_eq!(video_ladder_rungs(200).len(), 1);
         assert_eq!(video_ladder_rungs(200)[0], VIDEO_LADDER[0]);
+    }
+
+    // ── video_ladder_rungs_within ──────────────────────────────────
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// No known bitrate for the source — neither its own video stream nor the
+    /// container total — is today's pre-clamp behavior: the per-file budget is
+    /// the only narrowing, exactly as this function worked before the clamp
+    /// existed. The real bug this budget alone exists for: a 903.47 s,
+    /// 1280-wide source's ladder had every rung fit the WIDTH, but the top two
+    /// rungs' single files measured 221,843,463 and 122,579,638 bytes —
+    /// 515 MB for the whole ladder against a hosting cap meant to bound one
+    /// upload. A 150 MiB cap must drop only the top rung (its file measured
+    /// over 200 MB); a 100 MiB cap must drop the next one too (its file
+    /// measured about 123 MB, over a 100 MiB cap once margin is applied),
+    /// landing on the rung one below the one that actually measured under
+    /// 123 MB.
+    #[test]
+    fn video_ladder_rungs_within_is_the_table_ladder_when_no_bitrate_is_known() {
+        let duration = 903.47;
+        let unknown = SourceBitrate::default();
+        let at_150_mib = video_ladder_rungs_within(1280, duration, 150 * MIB, unknown);
+        assert_eq!(at_150_mib.len(), 5, "{at_150_mib:?}");
+        assert_eq!((at_150_mib.last().unwrap().width, at_150_mib.last().unwrap().height), (960, 540));
+
+        let at_100_mib = video_ladder_rungs_within(1280, duration, 100 * MIB, unknown);
+        assert_eq!(at_100_mib.len(), 4, "{at_100_mib:?}");
+        assert_eq!((at_100_mib.last().unwrap().width, at_100_mib.last().unwrap().height), (768, 432));
+    }
+
+    /// The feature this function exists for, pinned exactly: a 903.47 s,
+    /// 1280-wide source whose own video stream measures 600 kbps. Re-encoding
+    /// its would-be 960x540 rung at the table's 1100 kbps cannot improve a
+    /// picture the source never had, so that rung is dropped; the 768x432 rung
+    /// below it is kept but clamped to 600 kbps, comfortably clear of the
+    /// 1.5x-of-365 near-duplicate floor (600 >= 547.5), and nothing survives
+    /// above it.
+    #[test]
+    fn video_ladder_rungs_within_clamps_the_top_rung_to_the_sources_own_video_kbps() {
+        let source = SourceBitrate { video_kbps: Some(600.0), total_kbps: None };
+        let got = video_ladder_rungs_within(1280, 903.47, 150 * MIB, source);
+        assert_eq!(
+            got,
+            vec![
+                VIDEO_LADDER[0],
+                VIDEO_LADDER[1],
+                VIDEO_LADDER[2],
+                VideoRung { video_kbps: 600, ..VIDEO_LADDER[3] },
+            ],
+            "{got:?}"
+        );
+    }
+
+    /// The container total is only the fallback: with the video stream's own
+    /// bitrate unknown, the same clamp still applies off the container total,
+    /// and the pinned real case above comes out identically.
+    #[test]
+    fn video_ladder_rungs_within_falls_back_to_total_kbps_when_video_kbps_is_unknown() {
+        let source = SourceBitrate { video_kbps: None, total_kbps: Some(600.0) };
+        let got = video_ladder_rungs_within(1280, 903.47, 150 * MIB, source);
+        assert_eq!(
+            got,
+            vec![
+                VIDEO_LADDER[0],
+                VIDEO_LADDER[1],
+                VIDEO_LADDER[2],
+                VideoRung { video_kbps: 600, ..VIDEO_LADDER[3] },
+            ]
+        );
+    }
+
+    /// A source whose own bitrate already exceeds the table's top rung must
+    /// get the unchanged table ladder — the clamp only ever narrows, never
+    /// widens, what a source qualifies for.
+    #[test]
+    fn video_ladder_rungs_within_keeps_the_table_ladder_for_a_high_bitrate_source() {
+        let source = SourceBitrate { video_kbps: Some(5000.0), total_kbps: None };
+        let got = video_ladder_rungs_within(1920, 60.0, 150 * MIB, source);
+        assert_eq!(got, VIDEO_LADDER.to_vec(), "{got:?}");
+    }
+
+    /// The 1.5x-or-drop rule: a 150 kbps source would clamp the 365 kbps rung
+    /// down to 150, but 150 is under 1.5x the 145 kbps rung already kept
+    /// (217.5), so it would be a near-duplicate — dropped, leaving only the
+    /// bottom two rungs.
+    #[test]
+    fn video_ladder_rungs_within_drops_a_clamp_that_would_duplicate_the_rung_below() {
+        let source = SourceBitrate { video_kbps: Some(150.0), total_kbps: None };
+        let got = video_ladder_rungs_within(1280, 100.0, 150 * MIB, source);
+        assert_eq!(got, vec![VIDEO_LADDER[0], VIDEO_LADDER[1]], "{got:?}");
+    }
+
+    /// The boundary the `>=` in the near-duplicate check is for: a clamp
+    /// landing at EXACTLY `LADDER_MIN_RUNG_SPACING` of the rung below must be
+    /// KEPT, not dropped. 730 kbps (the 768x432 rung, kept unclamped below a
+    /// 1095.9 kbps source) times 1.5 is exactly 1095 — and floor(1095.9) is
+    /// exactly that. A `>` in place of `>=` would drop this rung instead.
+    #[test]
+    fn video_ladder_rungs_within_keeps_a_clamp_exactly_at_the_min_spacing() {
+        assert_eq!(LADDER_MIN_RUNG_SPACING * VIDEO_LADDER[3].video_kbps as f64, 1095.0, "sanity: the tie is exact");
+        let source = SourceBitrate { video_kbps: Some(1095.9), total_kbps: None };
+        let got = video_ladder_rungs_within(1280, 60.0, 150 * MIB, source);
+        assert_eq!(
+            got,
+            vec![
+                VIDEO_LADDER[0],
+                VIDEO_LADDER[1],
+                VIDEO_LADDER[2],
+                VIDEO_LADDER[3],
+                VideoRung { video_kbps: 1095, ..VIDEO_LADDER[4] },
+            ],
+            "{got:?}"
+        );
+    }
+
+    /// A source leaner than even the bottom rung has no rung below it to
+    /// compare the 1.5x rule against, so its clamped bottom rung is kept
+    /// regardless — a one-element result a caller reads as "no ladder", the
+    /// same way an all-width-truncated ladder already is.
+    #[test]
+    fn video_ladder_rungs_within_a_source_leaner_than_the_bottom_rung_keeps_one_clamped_rung() {
+        let source = SourceBitrate { video_kbps: Some(20.0), total_kbps: None };
+        let got = video_ladder_rungs_within(1280, 100.0, 150 * MIB, source);
+        assert_eq!(got, vec![VideoRung { video_kbps: 20, ..VIDEO_LADDER[0] }], "{got:?}");
+    }
+
+    /// The per-file budget must be checked against the EFFECTIVE (clamped)
+    /// bitrate, not the table's. At 1000 s and an 80 MiB cap, the table's
+    /// unclamped 730 kbps rung would measure over budget on its own — but the
+    /// same rung clamped to the source's 600 kbps fits, and must be kept.
+    #[test]
+    fn video_ladder_rungs_within_budget_check_uses_the_clamped_bitrate() {
+        let budget = 80 * MIB;
+        assert!(hls_file_bytes(730, 1000.0) > budget as f64, "sanity: the table figure alone would miss");
+        assert!(hls_file_bytes(600, 1000.0) <= budget as f64, "sanity: the clamped figure fits");
+
+        let source = SourceBitrate { video_kbps: Some(600.0), total_kbps: None };
+        let got = video_ladder_rungs_within(1280, 1000.0, budget, source);
+        assert_eq!(
+            got,
+            vec![
+                VIDEO_LADDER[0],
+                VIDEO_LADDER[1],
+                VIDEO_LADDER[2],
+                VideoRung { video_kbps: 600, ..VIDEO_LADDER[3] },
+            ],
+            "{got:?}"
+        );
+    }
+
+    /// A short clip's every rung — even the top one — fits comfortably under
+    /// any real hosting budget, so the budget truncates nothing beyond what
+    /// the width already did: same result as [`video_ladder_rungs`] alone.
+    #[test]
+    fn video_ladder_rungs_within_keeps_the_full_ladder_for_a_short_clip() {
+        let got = video_ladder_rungs_within(1280, 10.0, 150 * MIB, SourceBitrate::default());
+        assert_eq!(got, video_ladder_rungs(1280), "10s at any real bitrate is nowhere near 150 MiB");
+        assert_eq!(got.len(), VIDEO_LADDER.len());
+    }
+
+    /// However tight the budget, the bottom rung always ships: an over-budget
+    /// file that plays beats a video nobody can watch, and it is the same
+    /// `.max(1)` rule [`video_ladder_rungs`] applies for width.
+    #[test]
+    fn video_ladder_rungs_within_never_returns_empty_for_a_very_long_video() {
+        let got = video_ladder_rungs_within(1280, 20_000.0, 1, SourceBitrate::default());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], VIDEO_LADDER[0]);
+    }
+
+    /// The per-rung check is two conditions, not one: a rung's audio group is
+    /// its own single file (`alo.m4s`/`ahi.m4s`) and can exceed the budget on
+    /// its own. Today's `VIDEO_LADDER` never exercises this side in practice —
+    /// every real rung's `video_kbps` exceeds its own `audio_kbps`, so the
+    /// video half is always at least as tight as the audio half for the
+    /// current table — so this pins the estimator's own "and" directly rather
+    /// than through a `VIDEO_LADDER` row, guarding the mechanism for a future
+    /// table edit that narrows that margin.
+    #[test]
+    fn hls_file_bytes_audio_can_be_pricier_than_video_at_the_same_duration() {
+        let duration = 1000.0;
+        let cheap_video_bytes = hls_file_bytes(100, duration);
+        let costly_audio_bytes = hls_file_bytes(192, duration);
+        assert!(cheap_video_bytes < costly_audio_bytes);
+        let budget = ((cheap_video_bytes + costly_audio_bytes) / 2.0) as u64;
+        assert!(cheap_video_bytes <= budget as f64, "the cheaper file fits");
+        assert!(costly_audio_bytes > budget as f64, "the pricier one alone exceeds the same budget");
     }
 
     #[test]
@@ -1082,16 +1615,84 @@ mod tests {
     }
 
     #[test]
+    fn ladder_rungs_extreme_aspect_is_empty() {
+        // A real handscroll: WEBP_MAX_DIMENSION clamps the deployed long
+        // edge to 16383, short edge landing at ~597 — a ~27:1 deployed
+        // ratio, past MAX_LADDER_ASPECT. Its w800 rung would be 800×29.
+        assert_eq!(ladder_rungs(38415, 1400, false), &[] as &[u32]);
+        // The 21969×950 handscroll `deployed_long_edge`'s own docs cite —
+        // WEBP_MAX_DIMENSION clamps it the same way, short edge ~708
+        // against a 16383 long edge (~23:1).
+        assert_eq!(ladder_rungs(21969, 950, false), &[] as &[u32]);
+        // No clamp needed to be this extreme: 2200×100 (22:1) deploys at
+        // its own native size — nothing capped, nothing widened — and is
+        // still past MAX_LADDER_ASPECT. Its w800 rung would be 800×36.
+        assert_eq!(ladder_rungs(2200, 100, false), &[] as &[u32]);
+        // The portrait twin: 1300×23660 clamps the same way as the
+        // handscrolls above (short edge ~900 against a 16383 long edge,
+        // ~18:1) — its only candidate rung, w800, would be narrower than
+        // the already-compromised 900px base, the same "worse, not
+        // smaller" problem, just on the width axis instead of height.
+        assert_eq!(ladder_rungs(1300, 23660, false), &[] as &[u32]);
+        // Far past 2:1 is still "ordinary" under MAX_LADDER_ASPECT: 2400×316
+        // (7.6:1) and 6000×1500 (4:1, this crate's own hero and
+        // vertical-sizes render-gate fixtures) both keep their full ladder.
+        assert_eq!(ladder_rungs(2400, 316, false), &[800, 1600][..]);
+        assert_eq!(ladder_rungs(6000, 1500, false), &[800, 1600][..]);
+        // And an ordinary portrait, however far from square, is unaffected
+        // the same way — 1500×3000 (2:1) keeps deriving its ladder from
+        // deployed_width alone, same as any other source.
+        assert_eq!(ladder_rungs(1500, 3000, false), &[800][..]);
+    }
+
+    #[test]
+    fn ladder_rungs_max_aspect_boundary_is_inclusive() {
+        // Pinned so a future change to MAX_LADDER_ASPECT or the `<`/`<=`
+        // comparison can't shift the cutoff silently. Neither is resized
+        // (long edge 2400 <= DEPLOY_MAX_EDGE), so the deployed short edge
+        // is the natural one, and the check is exactly `ratio > 10`.
+        // Exactly 10:1 (2400×240) is still "ordinary" — the boundary is
+        // inclusive on the kept side.
+        assert_eq!(ladder_rungs(2400, 240, false), &[800, 1600][..]);
+        // One px thinner tips the ratio to ~10.04:1 and empties the ladder.
+        assert_eq!(ladder_rungs(2400, 239, false), &[] as &[u32]);
+    }
+
+    #[test]
+    fn is_scroll_shape_boundary_is_inclusive() {
+        // Ordinary photos, any orientation, well under 3:1: not a scroll.
+        assert!(!is_scroll_shape(1600, 900));
+        assert!(!is_scroll_shape(900, 1600));
+        // Exactly 3:1 is still "ordinary" — inclusive on the kept side.
+        assert!(!is_scroll_shape(2400, 800));
+        assert!(!is_scroll_shape(800, 2400));
+        // One px past 3:1 tips into scroll territory, either axis.
+        assert!(is_scroll_shape(2401, 800));
+        assert!(is_scroll_shape(800, 2401));
+        // The real fixtures this feature targets: a handscroll (河上花圖,
+        // 1600×58, ~27.6:1) and a hanging scroll (portrait, well past 3:1).
+        assert!(is_scroll_shape(1600, 58));
+        assert!(is_scroll_shape(1300, 23660));
+        // Degenerate zero height/width never panics or divides by zero.
+        assert!(is_scroll_shape(100, 0));
+        assert!(!is_scroll_shape(0, 0));
+    }
+
+    #[test]
     fn ladder_rungs_portrait_uses_post_resize_width() {
         // 3024×4032 portrait: the encoder shrinks the longest EDGE to 2400,
         // so the deployed base is 1800 wide — both rungs still below it.
         assert_eq!(ladder_rungs(3024, 4032, false), &[800, 1600][..]);
-        // Extreme portrait 1179×8000: base width 353 — NO rung is below it,
-        // so the ladder must be empty (a w800 rung would be WIDER than the
-        // base: ladder inversion).
-        assert_eq!(ladder_rungs(1179, 8000, false), &[] as &[u32]);
-        // 1200×3600: base width exactly 800 — strict `<` excludes the 800 rung.
-        assert_eq!(ladder_rungs(1200, 3600, false), &[] as &[u32]);
+        // Extreme portrait 500×20000: the WebP limit binds (16383 tall), base
+        // width 409 — NO rung is below it, so the ladder must be empty (a
+        // w800 rung would be WIDER than the base: ladder inversion).
+        assert_eq!(ladder_rungs(500, 20000, false), &[] as &[u32]);
+        // 800×3000: short edge under the floor, deployed whole — base width
+        // exactly 800, and strict `<` excludes the 800 rung.
+        assert_eq!(ladder_rungs(800, 3000, false), &[] as &[u32]);
+        // 1179×8000 keeps its 1179 short edge (under the 1200 floor), so the
+        // hanging scroll now carries a w800 rung instead of a 353-wide base.
+        assert_eq!(ladder_rungs(1179, 8000, false), &[800][..]);
     }
 
     #[test]
@@ -1107,12 +1708,51 @@ mod tests {
         // Portrait: HEIGHT is the longest edge; width shrinks by the same
         // aspect-preserving ratio the encoder applies.
         assert_eq!(deployed_width(3024, 4032), 1800);
-        assert_eq!(deployed_width(1179, 8000), 353);
-        assert_eq!(deployed_width(1200, 3600), 800);
+        // Past 2:1 the short edge keeps at least max_edge / 2 (below).
+        assert_eq!(deployed_width(1179, 8000), 1179);
+        assert_eq!(deployed_width(1200, 3600), 1200);
         // Square at the cap: untouched.
         assert_eq!(deployed_width(2400, 2400), 2400);
         // Degenerate sliver never collapses to 0.
         assert_eq!(deployed_width(1, 100_000), 1);
+    }
+
+    #[test]
+    fn deployed_long_edge_keeps_the_short_edge_of_an_elongated_image() {
+        let dims = |w: u32, h: u32| {
+            let l = deployed_long_edge(w, h, DEPLOY_MAX_EDGE);
+            let long = w.max(h);
+            (w as u64 * l as u64 / long as u64, h as u64 * l as u64 / long as u64)
+        };
+        // A handscroll: short edge under the floor, so no downscale — until
+        // WebP's 16383 limit binds.
+        assert_eq!(deployed_long_edge(21969, 950, DEPLOY_MAX_EDGE), 16383);
+        assert_eq!(dims(21969, 950), (16383, 708));
+        // 4:1 with a big short edge: shrunk until the short edge is 1200.
+        assert_eq!(dims(6000, 1500), (4800, 1200));
+        // A hanging scroll: `ceil` keeps the short edge at the floor.
+        assert_eq!(deployed_long_edge(1356, 5161, DEPLOY_MAX_EDGE), 4568);
+        assert_eq!(dims(1356, 5161), (1200, 4568));
+        // 3:1, short edge under the floor: deployed whole.
+        assert_eq!(deployed_long_edge(3000, 1000, DEPLOY_MAX_EDGE), 3000);
+        // Never upscaled, and the floor tracks the cap it is given.
+        assert_eq!(deployed_long_edge(500, 100, DEPLOY_MAX_EDGE), 500);
+        assert_eq!(deployed_long_edge(4000, 1000, 1600), 3200);
+    }
+
+    #[test]
+    fn deployed_long_edge_is_the_long_edge_cap_up_to_two_to_one() {
+        // Byte-identical deploys for every image up to 2:1: the long edge is
+        // exactly what the long-edge-only rule gave.
+        for w in (1..=8000u32).step_by(53) {
+            for h in (1..=8000u32).step_by(59) {
+                if w.max(h) > 2 * w.min(h) {
+                    continue;
+                }
+                let old = w.max(h).min(DEPLOY_MAX_EDGE);
+                assert_eq!(deployed_long_edge(w, h, DEPLOY_MAX_EDGE), old, "{w}x{h}");
+            }
+        }
     }
 
     #[test]

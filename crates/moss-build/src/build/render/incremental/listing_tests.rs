@@ -1,4 +1,4 @@
-//! Listing-group tests (moss#968 Stage 1b + Stage 2, ADR-044).
+//! Listing-group tests.
 //!
 //! Three of the four correctness gates the design requires with Stage 2 live
 //! here (the fourth, shadow verification, is an end-to-end switch), plus the
@@ -90,7 +90,7 @@ fn members(docs: &[ParsedDocument], slug: &str, flatten: bool) -> Vec<String> {
 /// inlined second copy of this filter, which is why "one selector, therefore
 /// no drift" was false and why the digest could not honour a rule the renderer
 /// honours. It now calls the selector; this fixture pins every rule the copy
-/// had to reimplement. ADR-044 rule 3.
+/// had to reimplement.
 #[test]
 fn the_selector_is_the_single_source_of_truth_for_membership() {
     let docs = vault();
@@ -362,12 +362,57 @@ fn hosts_are_mapped_to_the_groups_they_actually_read() {
     assert!(!hosts_listing(&article("writings/alpha/index.html", "")), "a plain article hosts nothing");
 }
 
+/// A language home lists its own folder at depth `direct`, with none of the
+/// root home's filters; the root home's key is unchanged beside it.
+#[test]
+fn a_language_home_reads_its_own_folder_not_the_root_tree() {
+    let mut docs = vault();
+    docs.push(folder("en/index.html"));
+
+    let en_home = docs.iter().find(|d| d.url_path == "en/index.html").unwrap();
+    let keys = groups_read_by(en_home, &docs).expect("a language home is a modelled shape");
+    assert_eq!(keys, vec![key("en")]);
+
+    let home = docs.iter().find(|d| d.url_path == "index.html").unwrap();
+    assert_eq!(groups_read_by(home, &docs).unwrap(), vec![root_key()]);
+}
+
+/// Editing a post under `en/` must dirty the language home's group and not the
+/// root home's, and editing a root post the reverse.
+#[test]
+fn a_post_edit_dirties_only_the_home_of_its_own_language() {
+    let mut docs = vault();
+    docs.push(folder("en/index.html"));
+    let digest_of = |docs: &[ParsedDocument], host: &str| {
+        let host = docs.iter().find(|d| d.url_path == host).unwrap();
+        let mut p = project();
+        p.has_language_trees = true;
+        let groups = ListingGroups::build(docs, &p, false);
+        groups_read_by(host, docs)
+            .unwrap()
+            .iter()
+            .map(|k| groups.digest(k).cloned().unwrap_or_else(|| panic!("group {} was not built", k.id())))
+            .collect::<Vec<_>>()
+    };
+    let (en_before, root_before) = (digest_of(&docs, "en/index.html"), digest_of(&docs, "index.html"));
+
+    let mut en_edited = docs.clone();
+    en_edited.iter_mut().find(|d| d.url_path == "en/hello/index.html").unwrap().content = "changed lede".into();
+    assert_ne!(digest_of(&en_edited, "en/index.html"), en_before, "en edit must dirty the en home");
+    assert_eq!(digest_of(&en_edited, "index.html"), root_before, "en edit must not dirty the root home");
+
+    let mut root_edited = docs.clone();
+    root_edited.iter_mut().find(|d| d.url_path == "writings/alpha/index.html").unwrap().content = "changed lede".into();
+    assert_ne!(digest_of(&root_edited, "index.html"), root_before, "root edit must dirty the root home");
+    assert_eq!(digest_of(&root_edited, "en/index.html"), en_before, "root edit must not dirty the en home");
+}
+
 /// An unrecognised host shape re-renders. Over-approximation is the only safe
 /// default (rustc keeps `eval_always` for the same reason), and it is what
-/// every host shape did before moss#968.
+/// every host shape did before this model.
 #[test]
 fn an_unmodelled_host_shape_yields_no_groups_and_therefore_renders() {
-    let mut override_home = article("en/liu-guo/index.html", "a language home override");
+    let mut override_home = article("en/mountain-home/index.html", "a language home override");
     override_home.is_home_override = true;
     assert!(hosts_listing(&override_home));
     assert!(
@@ -390,24 +435,95 @@ fn an_unmodelled_host_shape_yields_no_groups_and_therefore_renders() {
 #[test]
 fn a_term_claim_page_hosts_the_terms_group_and_its_membership_moves_with_authorship() {
     let mut claim = article("about/ma/index.html", "bio");
-    claim.term_listing = Some("authors/馬欣宜".to_string());
+    claim.term_listing = Some("authors/林小滿".to_string());
     assert!(hosts_listing(&claim));
 
     let mut docs = vault();
     let mut credited = article("writings/credited/index.html", "x");
-    credited.also_in = Some(vec!["authors/馬欣宜".to_string()]);
+    credited.also_in = Some(vec!["authors/林小滿".to_string()]);
     docs.push(credited);
     docs.push(claim.clone());
 
     let keys = groups_read_by(&claim, &docs).expect("term hosts are a modelled shape");
-    assert!(keys.iter().any(|k| k.folder_slug == "authors/馬欣宜"));
+    assert!(keys.iter().any(|k| k.folder_slug == "authors/林小滿"));
 
     // Crediting one more article moves the group's membership digest — the
     // signal that re-renders the claim page.
-    let before = digest(&docs, &key("authors/馬欣宜"));
+    let before = digest(&docs, &key("authors/林小滿"));
     let mut more = docs.clone();
     let mut another = article("writings/another/index.html", "y");
-    another.also_in = Some(vec!["authors/馬欣宜".to_string()]);
+    another.also_in = Some(vec!["authors/林小滿".to_string()]);
     more.push(another);
-    assert_ne!(digest(&more, &key("authors/馬欣宜")).membership, before.membership);
+    assert_ne!(digest(&more, &key("authors/林小滿")).membership, before.membership);
+}
+
+// ---- series-chain steps as listing-group readers ---------------------------
+
+fn series_vault() -> Vec<ParsedDocument> {
+    let mut parent = folder("series/index.html");
+    parent.series = Some(crate::build::types::SeriesField::Flag(true));
+    let part1 = article("series/part-1/index.html", "one");
+    let part2 = article("series/part-2/index.html", "two");
+    vec![parent, part1, part2]
+}
+
+#[test]
+fn a_series_step_reads_its_parents_folder_listing_key() {
+    let docs = series_vault();
+    let part1 = docs.iter().find(|d| d.url_path == "series/part-1/index.html").unwrap();
+    assert!(is_series_member(part1, &docs));
+
+    let keys = groups_read_by(part1, &docs).expect("a series step is a modelled shape");
+    assert!(
+        keys.iter().any(|k| k.folder_slug == "series" && k.depth == Depth::Direct),
+        "expected the parent's own direct-children key, got {keys:?}"
+    );
+}
+
+#[test]
+fn a_step_that_opted_out_is_not_a_series_member() {
+    let mut docs = series_vault();
+    let idx = docs.iter().position(|d| d.url_path == "series/part-1/index.html").unwrap();
+    docs[idx].series = Some(crate::build::types::SeriesField::Flag(false));
+    assert!(!is_series_member(&docs[idx].clone(), &docs));
+}
+
+#[test]
+fn a_step_is_a_series_member_via_an_inferred_weight_axis_when_the_parent_leaves_series_unset() {
+    // `series_vault()` sets `parent.series = Flag(true)` explicitly, which
+    // never exercises `series_chrome_on`'s `None` arm (`resolved.series_default`).
+    // `resolve_for_direct_children` reads the scan-time `direct_children_sort`
+    // cache, not a live re-inference — `populate_direct_children_sorts` is
+    // what normally fills it from a weight axis or an explicit list order
+    // (`moss_core::sort::resolve_folder_sort`), so a hand-built fixture sets
+    // the cache directly, the same "this folder looks ordered" reading.
+    let mut docs = series_vault();
+    let parent_idx = docs.iter().position(|d| d.url_path == "series/index.html").unwrap();
+    docs[parent_idx].series = None;
+    docs[parent_idx].direct_children_sort = Some(moss_core::sort::ResolvedSort {
+        axis: moss_core::sort::SortAxis::Weight,
+        explicit_order: None,
+        series_default: true,
+    });
+    let part1 = docs.iter().find(|d| d.url_path == "series/part-1/index.html").unwrap().clone();
+    assert!(is_series_member(&part1, &docs), "a weight-inferred sort axis implies series chrome on");
+}
+
+#[test]
+fn no_step_is_a_series_member_when_the_parents_chrome_is_off() {
+    let mut docs = series_vault();
+    let parent_idx = docs.iter().position(|d| d.url_path == "series/index.html").unwrap();
+    docs[parent_idx].series = Some(crate::build::types::SeriesField::Flag(false));
+    let part1 = docs.iter().find(|d| d.url_path == "series/part-1/index.html").unwrap().clone();
+    assert!(!is_series_member(&part1, &docs));
+}
+
+#[test]
+fn a_root_level_document_is_never_a_series_member() {
+    let docs = vault();
+    let about = article("about/index.html", "x");
+    // Only one path segment above it — `is_series_member` requires a real
+    // parent folder two levels up, the same shape `render/html.rs`'s own
+    // series-nav block checks before it looks anything up.
+    assert!(!is_series_member(&about, &docs));
 }

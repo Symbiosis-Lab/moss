@@ -20,6 +20,13 @@ release heading.
 ### Changed
 
 - A `DeployAddress` with both `url` and `value` now renders both — a link and a copy button — instead of moss silently dropping `value` in favor of the link. An IPNS name can be both a bare copyable string and an openable gateway door; give it both fields and both show.
+- `AdvisoryProposal.item`'s doc now says what it has always meant: the site-relative path of the file the advisory is about (e.g. `posts/2026/hello.md`), omitted for a build-wide notice. moss also now enforces it — an `item` that is absolute or escapes the site root via `..` is dropped, so the advisory renders build-wide rather than pointing the reader's click at the wrong file.
+
+## [0.13.1] - 2026-10-06
+
+### Fixed
+
+- Ship the built module and declaration files with the package. Clarify that advisory items are site-relative paths; the public API remains compatible with 0.13.0.
 
 ## [0.13.0] - 2026-08-30
 
@@ -40,6 +47,7 @@ release heading.
 
 ### Fixed
 
+- Git installs now include the built JavaScript and declaration files in the repository, so a package-manager cache cannot leave `@symbiosis-lab/moss-api` without its exported types.
 - `setSecret(key, "")` now erases the key instead of storing an empty string. Signing a user out is how plugins have always spelled this, but moss stored the empty value and every stored-ness check reads `is_some()`, so the account stayed listed as connected on the settings page and moss's publish gate believed it still held a credential nothing could authenticate with. Empty files written by earlier releases also read as absent now, so an account already signed out reports correctly without the user doing anything.
 
 ## [0.12.0] - 2026-08-20
@@ -79,7 +87,7 @@ under Unreleased for seven weeks after users could already install them._
 
 ### Added
 
-- First publish via the open-source release pipeline (#738). moss-api source consolidated into the moss monorepo; CI build pipeline replaces the standalone repo's build setup.
+- First publish via the open-source release pipeline. moss-api source consolidated into the moss monorepo; CI build pipeline replaces the standalone repo's build setup.
 - `httpPostMultipart(url, { textFields, files }, options)` — POST a `multipart/form-data` body (ordered text fields + base64 file parts). Enables binary uploads that the JSON-only `httpPost` cannot express, e.g. uploading image/audio bytes (read via `readSiteFile`) to a syndication target's GraphQL `singleFileUpload`. moss builds the multipart body, generates the boundary, and sets the Content-Type. New `MultipartTextField` / `MultipartFilePart` / `MultipartPostOptions` types.
 - First npm appearance of the [0.8.0] items below: `SocialComment`, `contributes.jobs`, and `startTask()` (`exposeAdvisoryPath()` did not make the bundle; it ships in 0.11.0).
 
@@ -102,7 +110,7 @@ _Pending publish — cumulative since `0.7.12` (last released on main); full det
 
 ### Minor Changes
 
-- #738 Thanks [@guoliu](https://github.com/guoliu)! - First publish via the open-source release pipeline. moss-api source consolidated into the moss monorepo; CI build pipeline replaces the standalone repo's build setup.
+- Thanks [@guoliu](https://github.com/guoliu)! - First publish via the open-source release pipeline. moss-api source consolidated into the moss monorepo; CI build pipeline replaces the standalone repo's build setup.
 
 ## [0.8.0] - 2026-06-11
 

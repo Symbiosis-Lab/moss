@@ -14,15 +14,14 @@
 //! eviction check — see that module for the per-platform detail), and
 //! `request_download` hands the path to `crate::build::cloud_prefetch`, the
 //! bounded pool that downloads by reading on a materialization-enabled
-//! thread. See
-//! docs/archive/2026-06-08-icloud-aware-video-conversion.md and
-//! docs/archive/2026-07-31-cloud-download-waiting-mode.md.
+//! thread.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::build::cache::RecordMode;
 use crate::build::icloud;
 
 /// Whether a source file is ready to be read/probed/converted.
@@ -152,7 +151,28 @@ static PREFETCH: std::sync::LazyLock<crate::build::cloud_prefetch::Prefetcher> =
 ///
 /// [`cloud_prefetch::READERS`]: crate::build::cloud_prefetch::READERS
 pub fn request_download(path: &Path) {
+    #[cfg(test)]
+    icloud::pretend::requested(path);
     PREFETCH.read(path);
+}
+
+// On this thread, shorten the blob download deadline (and the poll) so a test of a
+// file that never arrives does not wait out the real one. `WAITS_RUN` counts
+// the waits on this thread that did not return on the first look.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_DEADLINE: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+    pub(crate) static WAITS_RUN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_poll(poll: Duration) -> Duration {
+    if TEST_DEADLINE.with(|d| d.get()).is_some() { Duration::from_millis(1) } else { poll }
+}
+
+#[cfg(not(test))]
+pub(crate) fn test_poll(poll: Duration) -> Duration {
+    poll
 }
 
 /// Queue depth and in-flight count. Not the user-facing progress — the sweep
@@ -189,6 +209,8 @@ pub fn await_ready(
     if classify(prev, curr) == Readiness::Ready {
         return Settled::Ready;
     }
+    #[cfg(test)]
+    WAITS_RUN.with(|n| n.set(n.get() + 1));
     if prev.dataless || curr.dataless {
         request_download(path);
     }
@@ -200,7 +222,7 @@ pub fn await_ready(
         if cancel() {
             return Settled::Cancelled;
         }
-        std::thread::sleep(poll);
+        std::thread::sleep(test_poll(poll));
         let curr = sample(path);
         match next_step(prev, curr, start.elapsed(), deadline) {
             Step::Done(s) => return s,
@@ -241,15 +263,25 @@ pub const INTERACTIVE_DEADLINE: Duration = Duration::from_secs(15);
 /// file stayed in the cloud. Suppressing the wait rather than the read keeps
 /// the answer honest: the caller still gets the real error, so "unreadable"
 /// can never be mistaken for "absent".
-///
-/// See docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-cloud-gate.md.
 pub fn retry_after_materialize<T>(
     path: &Path,
     deadline: Duration,
     attempt: impl Fn() -> std::io::Result<T>,
 ) -> std::io::Result<T> {
+    retry_reporting_timeout(path, deadline, attempt).0
+}
+
+/// [`retry_after_materialize`], also saying whether the wait really ran to its
+/// deadline. A read that did not wait at all — the file was readable, the error
+/// was not a cloud one, or another thread already holds the path's wait — is not
+/// a timeout, and a caller keeping count of timeouts must not count it.
+pub(crate) fn retry_reporting_timeout<T>(
+    path: &Path,
+    deadline: Duration,
+    attempt: impl Fn() -> std::io::Result<T>,
+) -> (std::io::Result<T>, bool) {
     let first = match attempt() {
-        Ok(value) => return Ok(value),
+        Ok(value) => return (Ok(value), false),
         // `is_offline_not_absent`, not `is_dataless_unavailable`: the latter is
         // EDEADLK-only, which is the Sonoma+ shape. On macOS 12-13 — still
         // supported, still the `minimumSystemVersion` — an evicted file returns
@@ -259,21 +291,22 @@ pub fn retry_after_materialize<T>(
         // that exists. That made this entire recovery layer a no-op on two OS
         // versions.
         Err(e) if icloud::is_offline_not_absent(path, &e) => e,
-        Err(e) => return Err(e),
+        Err(e) => return (Err(e), false),
     };
     if !wait_budget_allows(path) {
         log::debug!(
             "{} is still in the cloud and was already waited out — failing fast",
             path.display()
         );
-        return Err(first);
+        return (Err(first), false);
     }
     match await_ready(path, deadline, POLL_INTERVAL, &|| false, &|| {}) {
         Settled::Ready => {
             forget_wait(path);
-            attempt()
+            (attempt(), false)
         }
-        Settled::TimedOut | Settled::Cancelled => Err(first),
+        // A cancelled wait counts as a timeout; the cancel closure above never cancels today.
+        Settled::TimedOut | Settled::Cancelled => (Err(first), true),
     }
 }
 
@@ -395,7 +428,7 @@ pub fn read_input_if_present(path: &Path) -> std::io::Result<Option<String>> {
 /// three copies drifted: one tested `is_evicted` first and one did not, which
 /// is the difference between failing fast and blocking the render pass on a
 /// platform with no fail-fast policy. Three spellings of one question is how a
-/// fix lands in two of them (moss#986).
+/// fix lands in two of them.
 #[derive(Debug)]
 pub enum Found {
     /// The bytes are local, and here they are.
@@ -507,7 +540,7 @@ pub fn read_page_source(
             // this page's existing HTML; it never reached the gate, so a vault
             // whose page sources were all still downloading rendered titles
             // from directory names and dates as `Unknown`, and moss published
-            // that over the good site it already had (moss#1042).
+            // that over the good site it already had.
             crate::build::cloud_ledger::note_unavailable(path);
             None
         }
@@ -521,7 +554,7 @@ pub fn read_page_source(
 }
 
 /// Raise the cloud gate for a build that stopped because the cloud had not
-/// handed a file back (moss#964).
+/// handed a file back.
 ///
 /// The gate verdict is emitted from inside `build_inner`, just before the
 /// `complete` progress event, because the verdict is the build's own output.
@@ -553,7 +586,7 @@ pub fn raise_gate_for_a_deferred_build(
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
     message: &str,
 ) {
-    // The same monotonicity rule the build's own gate follows (moss#982): a
+    // The same monotonicity rule the build's own gate follows: a
     // sealed generation never becomes unsealed, so once one exists the preview
     // has something to serve and a full-window screen is never the right answer.
     // Two producers of one gate must not disagree about that — this one fires
@@ -596,7 +629,7 @@ pub fn raise_gate_for_a_deferred_build(
         total: evicted_count,
         remaining,
         // The build does not compute the blocking subset; its own gate
-        // verdict is the answer to that question (moss#1077).
+        // verdict is the answer to that question.
         blocking: None,
         unavailable: &[],
     });
@@ -644,9 +677,281 @@ pub fn read_to_string_with_materialize_wait(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
+/// How long one cache record (a few hundred bytes) is waited for. A file that
+/// small arrives in about a second when the provider is answering at all.
+pub const RECORD_WAIT_DEADLINE: Duration = Duration::from_secs(5);
+/// Consecutive timed-out record waits that stop further record waiting.
+const RECORD_WAITS_BEFORE_PAUSE: u32 = 3;
+/// How long record waiting stays off once it has stopped.
+const RECORD_WAIT_PAUSE: Duration = Duration::from_secs(60);
+
+/// Stops a build from paying [`RECORD_WAIT_DEADLINE`] for every record when the
+/// provider is not delivering any: after [`RECORD_WAITS_BEFORE_PAUSE`] waits in
+/// a row that timed out, waiting is off for [`RECORD_WAIT_PAUSE`]. A wait that
+/// succeeds resets the count. Time is passed in, so tests need no sleeping.
+pub struct WaitBreaker {
+    /// Timed-out waits in a row, and when the pause ends if one is running.
+    state: Mutex<(u32, Option<Instant>)>,
+    /// What is being waited for, for the one warning a pause gives.
+    what: &'static str,
+}
+
+impl WaitBreaker {
+    pub const fn new() -> Self {
+        Self::of("cache records")
+    }
+
+    pub const fn of(what: &'static str) -> Self {
+        Self { state: Mutex::new((0, None)), what }
+    }
+
+    pub(crate) fn is_paused(&self, now: Instant) -> bool {
+        // Poisoned: wait, as `wait_budget_allows` does.
+        self.state.lock().map_or(false, |s| s.1.is_some_and(|until| now < until))
+    }
+
+    pub(crate) fn timed_out(&self, now: Instant) {
+        let Ok(mut s) = self.state.lock() else { return };
+        s.0 += 1;
+        if s.0 >= RECORD_WAITS_BEFORE_PAUSE {
+            *s = (0, Some(now + RECORD_WAIT_PAUSE));
+            log::warn!(
+                "{} are not downloading — skipping waits for them for {}s; the work they cache will be redone locally",
+                self.what,
+                RECORD_WAIT_PAUSE.as_secs()
+            );
+        }
+    }
+
+    pub(crate) fn succeeded(&self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.0 = 0;
+        }
+    }
+}
+
+/// One breaker per site cache, keyed by the cache's root: the desktop app holds
+/// several folders open in one process, and a folder on an unreachable drive
+/// must not stop another folder's records from being waited for.
+pub(crate) type Breakers = std::sync::LazyLock<Mutex<HashMap<PathBuf, std::sync::Arc<WaitBreaker>>>>;
+
+static RECORD_BREAKERS: Breakers = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+pub(crate) fn breaker_for(all: &Breakers, root: &Path, what: &'static str) -> std::sync::Arc<WaitBreaker> {
+    let Ok(mut all) = all.lock() else { return std::sync::Arc::new(WaitBreaker::of(what)) };
+    all.entry(root.to_path_buf()).or_insert_with(|| std::sync::Arc::new(WaitBreaker::of(what))).clone()
+}
+
+pub(crate) fn record_breaker(root: &Path) -> std::sync::Arc<WaitBreaker> {
+    breaker_for(&RECORD_BREAKERS, root, "cache records")
+}
+
+/// The steps of one record read, so the tests can supply each of them.
+pub(crate) struct RecordIo<'a> {
+    pub now: &'a dyn Fn() -> Instant,
+    pub read: &'a dyn Fn() -> std::io::Result<String>,
+    /// Is this read error "the file is in the cloud"?
+    pub in_cloud: &'a dyn Fn(&std::io::Error) -> bool,
+    /// Ask the cloud readers for the file; does not wait.
+    pub request: &'a dyn Fn(),
+    /// Read with the wait around it, and say whether the wait ran to its deadline.
+    pub wait: &'a dyn Fn(&dyn Fn() -> std::io::Result<String>) -> (std::io::Result<String>, bool),
+}
+
+/// Read one cache record's text. A placeholder is always requested; whether the
+/// read waits for it is `mode`'s say, and `root`'s breaker's.
+pub fn read_record_text(path: &Path, root: &Path, mode: RecordMode) -> std::io::Result<String> {
+    let read = || crate::build::io_utils::read_record_file(path);
+    read_record_text_with(
+        mode,
+        &record_breaker(root),
+        &RecordIo {
+            now: &Instant::now,
+            read: &read,
+            in_cloud: &|e| icloud::is_offline_not_absent(path, e),
+            request: &|| request_download(path),
+            wait: &|attempt| retry_reporting_timeout(path, RECORD_WAIT_DEADLINE, attempt),
+        },
+    )
+}
+
+/// [`read_record_text`] with its steps supplied. While the breaker is paused a
+/// `Wait` read is a `Request` read: the file is still asked for, so the next
+/// build finds it, but nothing waits.
+pub(crate) fn read_record_text_with(mode: RecordMode, breaker: &WaitBreaker, io: &RecordIo) -> std::io::Result<String> {
+    if mode == RecordMode::Request || breaker.is_paused((io.now)()) {
+        let out = (io.read)();
+        if out.as_ref().is_err_and(|e| (io.in_cloud)(e)) {
+            (io.request)();
+        }
+        return out;
+    }
+    let reads = std::cell::Cell::new(0u32);
+    let counted = || {
+        reads.set(reads.get() + 1);
+        (io.read)()
+    };
+    let (out, timed_out) = (io.wait)(&counted);
+    if timed_out {
+        breaker.timed_out((io.now)());
+    } else if out.is_ok() && reads.get() > 1 {
+        // A second read happened only because a wait ended in arrival.
+        breaker.succeeded();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scripted record read: every step is a closure over counters, so a test
+    /// moves the clock and decides what the provider does without sleeping or
+    /// depending on an operating system's error codes.
+    struct Script {
+        base: Instant,
+        at: std::cell::Cell<u64>,
+        waits: std::cell::Cell<u32>,
+        requests: std::cell::Cell<u32>,
+        /// What a wait ends in: arrival, a real timeout, or "someone else holds the wait".
+        end: std::cell::Cell<WaitEnd>,
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum WaitEnd {
+        Arrives,
+        TimesOut,
+        MemoLost,
+    }
+
+    impl Script {
+        fn new() -> Self {
+            Self {
+                base: Instant::now(),
+                at: 0.into(),
+                waits: 0.into(),
+                requests: 0.into(),
+                end: WaitEnd::TimesOut.into(),
+            }
+        }
+
+        fn go(&self, mode: RecordMode, breaker: &WaitBreaker) -> std::io::Result<String> {
+            let now = || self.base + Duration::from_secs(self.at.get());
+            let read = || Err::<String, _>(std::io::Error::other("in the cloud"));
+            let wait = |attempt: &dyn Fn() -> std::io::Result<String>| {
+                self.waits.set(self.waits.get() + 1);
+                let first = attempt();
+                match self.end.get() {
+                    WaitEnd::Arrives => {
+                        let _ = attempt();
+                        (Ok("{}".to_string()), false)
+                    }
+                    WaitEnd::TimesOut => (first, true),
+                    WaitEnd::MemoLost => (first, false),
+                }
+            };
+            read_record_text_with(
+                mode,
+                breaker,
+                &RecordIo {
+                    now: &now,
+                    read: &read,
+                    in_cloud: &|_| true,
+                    request: &|| self.requests.set(self.requests.get() + 1),
+                    wait: &wait,
+                },
+            )
+        }
+    }
+
+    /// Three record waits in a row that time out stop the fourth from waiting
+    /// at all, for a minute; a wait that succeeds clears the count. The clock
+    /// is a number the test moves, and "did not wait" is the wait never being
+    /// called.
+    #[test]
+    fn three_timed_out_record_waits_pause_waiting_until_one_succeeds() {
+        let sc = Script::new();
+        let breaker = WaitBreaker::new();
+        for _ in 0..3 {
+            assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        }
+        assert_eq!(sc.waits.get(), 3);
+        assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        assert_eq!(sc.waits.get(), 3, "the fourth read must not wait");
+
+        sc.at.set(59);
+        assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        assert_eq!(sc.waits.get(), 3, "still paused at 59s");
+
+        sc.at.set(61);
+        sc.end.set(WaitEnd::Arrives);
+        assert!(sc.go(RecordMode::Wait, &breaker).is_ok());
+        assert_eq!(sc.waits.get(), 4, "waiting resumes after the pause");
+    }
+
+    /// A success between timeouts means the provider is delivering: the count
+    /// starts over, so two more timeouts do not pause.
+    #[test]
+    fn a_successful_record_wait_resets_the_timeout_count() {
+        let sc = Script::new();
+        let breaker = WaitBreaker::new();
+        assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        sc.end.set(WaitEnd::Arrives);
+        assert!(sc.go(RecordMode::Wait, &breaker).is_ok());
+        sc.end.set(WaitEnd::TimesOut);
+        for _ in 0..3 {
+            assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        }
+        assert_eq!(sc.waits.get(), 6, "three timeouts after the success paused waiting");
+        assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        assert_eq!(sc.waits.get(), 6);
+    }
+
+    /// A `Request` read never waits, and a `Wait` read whose breaker is paused
+    /// behaves as one: both ask for the file, so the next build finds it.
+    #[test]
+    fn a_read_that_does_not_wait_still_requests_the_file() {
+        let sc = Script::new();
+        let breaker = WaitBreaker::new();
+        assert!(sc.go(RecordMode::Request, &breaker).is_err());
+        assert_eq!((sc.waits.get(), sc.requests.get()), (0, 1));
+
+        for _ in 0..3 {
+            assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        }
+        assert_eq!((sc.waits.get(), sc.requests.get()), (3, 1), "a wait asks through the wait, not the request step");
+        assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        assert_eq!((sc.waits.get(), sc.requests.get()), (3, 2), "paused: requested, not waited");
+    }
+
+    /// Two workers reading the same record: the one that lost the per-path wait
+    /// returns at once without having waited, and that is not a timeout.
+    #[test]
+    fn a_reader_that_lost_the_wait_to_another_thread_does_not_count_a_timeout() {
+        let sc = Script::new();
+        let breaker = WaitBreaker::new();
+        sc.end.set(WaitEnd::MemoLost);
+        for _ in 0..10 {
+            assert!(sc.go(RecordMode::Wait, &breaker).is_err());
+        }
+        assert_eq!(sc.waits.get(), 10, "waiting was never paused");
+    }
+
+    /// Each site cache has its own breaker: a folder whose waits keep timing out
+    /// does not stop another folder's.
+    #[test]
+    fn one_roots_pause_does_not_reach_another_root() {
+        let a = record_breaker(Path::new("/sites/a/.moss/cache/transforms"));
+        let b = record_breaker(Path::new("/sites/b/.moss/cache/transforms"));
+        let again = record_breaker(Path::new("/sites/a/.moss/cache/transforms"));
+        let now = Instant::now();
+        for _ in 0..RECORD_WAITS_BEFORE_PAUSE {
+            a.timed_out(now);
+        }
+        assert!(a.is_paused(now));
+        assert!(again.is_paused(now), "the same root shares its breaker");
+        assert!(!b.is_paused(now));
+    }
 
     fn s(dataless: bool, size: u64, mtime: i64) -> StatSample {
         StatSample { dataless, size, mtime }
@@ -655,7 +960,7 @@ mod tests {
     /// The classifier every no-wait reader now shares. A file that is simply
     /// missing must come back as `Err`, never as `InCloud`: the callers that
     /// write their file back (`redirects.json`, `state.toml`) decide between
-    /// merge and erase on exactly this distinction (moss#986).
+    /// merge and erase on exactly this distinction.
     #[test]
     fn the_probe_separates_readable_from_missing() {
         let dir = tempfile::tempdir().unwrap();
@@ -697,7 +1002,7 @@ mod tests {
     /// The scan prunes dot-directories and runs before the build, so a file the
     /// provider evicted afterwards contributes nothing to `evicted_count`. An
     /// `evicted_count > 0` precondition here would swallow the gate in exactly
-    /// that case — which is most of them (moss#964 review round 1).
+    /// that case — which is most of them.
     #[test]
     fn a_deferred_build_is_gated_even_when_the_scan_counted_no_evictions() {
         let folder = "/tmp/moss-post-scan-eviction-probe";

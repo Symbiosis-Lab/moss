@@ -34,6 +34,14 @@ weight: 10
 ---
 ```
 
+## Header mode
+
+`[site] header` in `.moss/config.toml` picks what leads the header, left to right. The default, `"brand"`, is what you've already seen above: the site name (or a breadcrumb trail, on a page with no nav items around it) links home, with the nav items and the theme toggle to its right.
+
+Set `[site] header = "nav"` and the brand drops out of the header entirely, on every page — home page included. The nav opens instead with a Home link, followed by the site's own nav items in the usual weight order, all left-aligned; the theme toggle (and search, if enabled) stay on the right. The Home link carries `aria-current="page"` while you're on the home page, the same signal any other nav item gets when it's the exact page you're viewing.
+
+This mode has no breadcrumb trail — Home already gives every page a way back — so a page nested inside a section, deeper than that section's own nav item, has no other "where am I" cue in the header. The nav item for that section marks itself instead: `aria-current="true"` rather than `"page"`, using the same visual treatment as an exact match. Viewing `/essays/2024/some-post/`, for example, highlights the "Essays" nav item even though the page itself isn't `/essays/`.
+
 ## Breadcrumb
 
 When a page has no nav items around it (e.g., an article deep inside a section), moss shows a breadcrumb trail in place of the site name so visitors can navigate back up the tree.
@@ -63,24 +71,13 @@ footer: true
 ---
 ```
 
-### Footer alignment
+Set `[site] rss_footer = true` in `.moss/config.toml` to add an RSS feed link to the left footer. It only appears once your site actually has a feed — a preview or otherwise undeployed build resolves no site URL and writes no `rss.xml`, so the toggle alone never links to a feed that isn't there. The feed lives at `/rss.xml`; the same feed is also served at `/feed.xml`, its address before it moved, so existing subscribers keep working.
 
-By default footer links sit on the left. Use `footer_align: right` to pull a page to the right column (typical for "Imprint", "Colophon", or legal links):
-
-```yaml
-# colophon.md
----
-title: Colophon
-footer: true
-footer_align: right
----
-```
-
-moss also auto-adds an RSS feed link to the left footer when your site emits a feed.
+A footer with nothing to show — no `footer.md`, no `footer: true` pages, no feed link, no subscribe form — doesn't render at all: no empty band, no divider, nothing between your content and moss's own colophon line at the foot of the page.
 
 ### Footer slot
 
-Plugins and themes can emit HTML into the `footer-right` slot — useful for copyright lines, Creative Commons badges, or small legal text.
+Plugins can emit HTML into the `footer-end` slot, the trailing position after the link list — used today for the auto-injected email subscribe form. Authors compose the leading position instead, with `footer.md` or a page's own `slot: footer-left` frontmatter.
 
 ## Language-scoped navigation
 
@@ -90,6 +87,6 @@ If `nav: true` is set on a page in one language tree, the corresponding page in 
 
 ## Related pages
 
-- [[frontmatter]]: `nav`, `weight`, `footer`, `footer_align`, `breadcrumb` field reference
+- [[frontmatter]]: `nav`, `weight`, `footer`, `logo`, `breadcrumb` field reference
 - [[Multilingual sites]]: language trees and how nav scopes to them
 - [[structure]]: how root-level vs nested pages are determined

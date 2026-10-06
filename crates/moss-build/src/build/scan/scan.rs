@@ -4,22 +4,22 @@
 //! to understand its content and structure. It scans folders recursively, categorizes
 //! files by type, and makes intelligent decisions about how the site should be organized.
 //!
-//! ## Media Metadata Extraction (ADR-006)
+//! ## Media Metadata Extraction
 //!
 //! For image and video files, we extract additional metadata:
 //! - **Dimensions**: Read from image headers (fast, ~1ms per file)
 //! - **Dominant color**: Extracted from 100x100 thumbnail for speed
 //! - **EXIF orientation**: Used to swap dimensions for rotated images
 //!
-//! This metadata enables ADR-002 (dynamic SVG placeholders) during page rendering.
+//! This metadata enables dynamic SVG placeholders during page rendering.
 
 use crate::types::content::{FileInfo, MediaMetadata, ProjectStructure};
-use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry, TransformRecord};
-use super::classify::{is_excluded_dir_name, is_page_source, skip_root_agent_config};
+use crate::build::stat::FileStat;
+use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry};
+use super::classify::{classify_extension, left_out_of_site, LeftOut, ScanBucket};
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;
 use std::cell::OnceCell;
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
@@ -87,13 +87,14 @@ impl ScanEventEmitter {
 }
 
 // =========================================================================
-// Media Metadata Extraction Functions (ADR-006)
+// Media Metadata Extraction Functions
 // =========================================================================
 
 /// Extract image dimensions from file header.
 ///
-/// ADR-006: Uses image::image_dimensions() which reads header only (~1ms per file)
-/// This is much faster than loading the entire image into memory.
+/// Reads the header only (~1ms per file) via
+/// `media::decode::sniff_dimensions`, much faster than loading the entire
+/// image into memory.
 ///
 /// # Arguments
 /// * `path` - Path to the image file
@@ -102,8 +103,12 @@ impl ScanEventEmitter {
 /// * `Some((width, height))` - Dimensions if successfully read
 /// * `None` - If file cannot be read or is not a valid image
 pub fn extract_image_dimensions(path: &Path) -> Option<(u32, u32)> {
-    // ADR-006: Use image_dimensions() which reads header only (~1ms per file)
-    match image::image_dimensions(path) {
+    // Header-only read (~1ms per file). Content-sniffed (not
+    // extension-only) via `media::decode::sniff_dimensions` — a file whose
+    // extension lies about its format (a PNG saved as `x.jpg`) still decodes
+    // correctly instead of silently returning `None` and falling back to an
+    // 800x600 placeholder box downstream.
+    match crate::build::media::decode::sniff_dimensions(path) {
         Ok((width, height)) => {
             // EXIF orientation 5-8 (a 90°/270° rotation) swaps the DISPLAY
             // dimensions relative to the stored pixel grid. Read the tag for
@@ -168,7 +173,11 @@ pub fn should_swap_dimensions(orientation: u32) -> bool {
 /// Returns `(dominant_color, lqip_data_uri)` — both are `None` if the
 /// image cannot be loaded (SVG, corrupt, etc.).
 pub fn extract_color_and_lqip(path: &Path) -> (Option<String>, Option<String>) {
-    let img = match image::open(path) {
+    // Content-sniffed, same reason as `extract_image_dimensions` above:
+    // `image::open` alone picks the decoder from the extension, so a
+    // mislabeled file decoded fine by `media::decode::sniff_decode` would
+    // otherwise fail here too and silently lose its color/LQIP.
+    let img = match crate::build::media::decode::sniff_decode(path) {
         Ok(img) => img,
         Err(_) => return (None, None),
     };
@@ -245,7 +254,7 @@ fn sniff_is_animated(path: &Path, extension: &str) -> bool {
 
 /// Extract complete media metadata for an image or video file.
 ///
-/// ADR-006: Combines dimension extraction, EXIF handling, and dominant color
+/// Combines dimension extraction, EXIF handling, and dominant color
 /// into a single MediaMetadata struct for efficient scanning.
 ///
 /// # Arguments
@@ -324,6 +333,21 @@ pub fn extract_media_metadata(
 /// Transform name used for cached media metadata in the TransformCache.
 const MEDIA_META_TRANSFORM: &str = "media/meta";
 
+/// Folded into `media/meta`'s cache `params` (mirrors `FORMAT_PROBE_VERSION`
+/// in `build/media/image.rs`) so a version bump is an ordinary cache miss.
+/// `.moss/cache/transforms/` persists across moss upgrades — without a
+/// version in the key, a decoding-logic fix would keep serving an old wrong
+/// answer for every already-scanned file forever.
+///
+/// **1 → 2**: `extract_image_dimensions`/`extract_color_and_lqip` used to pick
+/// their decoder from the file's extension alone, so a PNG saved with a
+/// `.jpg` extension cached `dimensions: None` (and no color/LQIP) under this
+/// key permanently — the content never changes, so nothing else would ever
+/// invalidate it. The version bump makes every entry a build wrote while that
+/// bug was live miss once and re-extract with the fix, which is the cheapest
+/// possible migration for a vault nobody can inspect by hand.
+const MEDIA_META_VERSION: u32 = 2;
+
 /// Stat-based cache key for an image's placeholder metadata (dimensions +
 /// dominant color + LQIP), shared by the blocking scan and the background media
 /// phase so they read/write the SAME `media/meta` entry.
@@ -339,37 +363,20 @@ pub(crate) fn image_meta_stat_key(relative_path: &str, size: u64, mtime: u64) ->
     format!("stat:{}:{}:{}", relative_path, size, mtime)
 }
 
-/// Resolve the content hash for a file, using the hash index for speed.
-///
-/// If the hash index has a matching entry (same size+mtime), the cached
-/// hash is returned without reading the file.  Otherwise, the file is
-/// hashed via `ObjectStore::hash_file` and the *new* index is updated.
+/// Resolve the content hash for a file, using the hash index for speed: the last
+/// scan's entry while it still matches the file's full stat record, else the file
+/// hashed (never while it is in the cloud) and recorded in the new index.
 fn resolve_content_hash(
     abs_path: &Path,
     relative_path: &str,
-    size: u64,
-    mtime: u64,
+    stat: &FileStat,
     old_index: &HashIndex,
     new_index: &mut HashIndex,
 ) -> Option<String> {
-    // Check old index for a stat-matching entry.
-    if let Some(cached_hash) = old_index.lookup(relative_path, size, mtime) {
-        let hash = cached_hash.to_string();
-        new_index.update(relative_path.to_string(), size, mtime, hash.clone());
-        return Some(hash);
-    }
-
-    // Stat miss — re-hash the file.
-    match ObjectStore::hash_file(abs_path) {
-        Ok(hash) => {
-            new_index.update(relative_path.to_string(), size, mtime, hash.clone());
-            Some(hash)
-        }
-        Err(e) => {
-            log::warn!("Failed to hash {}: {}", relative_path, e);
-            None
-        }
-    }
+    new_index
+        .resolve_from(old_index, stat, abs_path, relative_path)
+        .map_err(|e| log::warn!("Failed to hash {}: {}", relative_path, e))
+        .ok()
 }
 
 /// Try to read cached media metadata from the TransformCache.
@@ -385,11 +392,22 @@ pub(crate) fn read_cached_meta(
     objects: &ObjectStore,
     content_hash: &str,
 ) -> Option<CachedMediaMeta> {
-    let params = serde_json::json!({});
-    let meta_oid = transform_cache.find_cached_output(content_hash, MEDIA_META_TRANSFORM, &params)?;
+    let params = serde_json::json!({ "v": MEDIA_META_VERSION });
+    let meta_oid = transform_cache.find_cached_output(content_hash, MEDIA_META_TRANSFORM, &params, crate::build::cache::RecordMode::Request)?;
     let blob_path = objects.get_path(&meta_oid)?;
     let raw = std::fs::read(blob_path).ok()?;
     serde_json::from_slice(&raw).ok()
+}
+
+impl From<&MediaMetadata> for CachedMediaMeta {
+    fn from(meta: &MediaMetadata) -> Self {
+        Self {
+            dimensions: meta.dimensions,
+            dominant_color: meta.dominant_color.clone(),
+            lqip_data_uri: meta.lqip_data_uri.clone(),
+            is_animated: meta.is_animated,
+        }
+    }
 }
 
 /// Store media metadata in the ObjectStore + TransformCache.
@@ -411,7 +429,7 @@ pub(crate) fn write_cached_meta(
         }
     };
 
-    let meta_oid = match objects.store_bytes(&json_bytes) {
+    let meta_oid = match objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
             log::warn!("Failed to store media meta blob: {}", e);
@@ -419,7 +437,7 @@ pub(crate) fn write_cached_meta(
         }
     };
 
-    let params = serde_json::json!({});
+    let params = serde_json::json!({ "v": MEDIA_META_VERSION });
     let new_entry = TransformEntry {
         oid: meta_oid,
         size: json_bytes.len() as u64,
@@ -429,16 +447,10 @@ pub(crate) fn write_cached_meta(
     // Merge with existing record to preserve other transforms (video/mp4, video/thumbnail).
     // Without this, writing media/meta would overwrite the entire TransformRecord,
     // destroying previously cached video conversion results.
-    let mut record = transform_cache
-        .get(content_hash)
-        .unwrap_or_else(|| TransformRecord {
-            source_oid: content_hash.to_string(),
-            source_size,
-            transforms: HashMap::new(),
-        });
-    record.transforms.insert(MEDIA_META_TRANSFORM.to_string(), new_entry);
-
-    if let Err(e) = transform_cache.put(&record) {
+    let merged = transform_cache.merge(content_hash, source_size, crate::build::cache::RecordMode::Request, |record| {
+        record.transforms.insert(MEDIA_META_TRANSFORM.to_string(), new_entry);
+    });
+    if let Err(e) = merged {
         log::warn!("Failed to write media meta transform record: {}", e);
     }
 }
@@ -474,8 +486,7 @@ fn extract_media_metadata_cached(
     abs_path: &Path,
     relative_path: &str,
     extension: &str,
-    size: u64,
-    mtime: u64,
+    stat: &FileStat,
     modified: Option<String>,
     ffmpeg: Option<&FFmpegManager>,
     old_index: &HashIndex,
@@ -490,6 +501,7 @@ fn extract_media_metadata_cached(
     // deployed site must be complete, not progressive. See `scan_folder_with_dedup_emit`.
     defer_placeholders: bool,
 ) -> MediaMetadata {
+    let (size, mtime) = (stat.size, stat.mtime);
     let is_video = matches!(extension, "mov" | "mp4" | "webm" | "avi" | "mkv" | "m4v");
     // Raster images whose dominant color / LQIP require a full pixel decode.
     // SVG is excluded — it is a vector format (`image::open` can't decode it, so
@@ -533,17 +545,36 @@ fn extract_media_metadata_cached(
         // Burst-capped inside `request_download`, same as above.
         crate::build::cloud_readiness::request_download(abs_path);
     }
+    // The only place this scan caches what it found out about the file, so a non-answer
+    // has one guard to get past, not one per branch below.
+    let store_meta = |key: &str, meta: &MediaMetadata| {
+        if !source_is_evicted {
+            write_cached_meta(objects, transform_cache, key, size, &CachedMediaMeta::from(meta));
+        }
+    };
     let skip_content_read = is_video || defer_this_image || source_is_evicted;
     let content_hash = if skip_content_read {
         // Videos / images / evicted files: only use a cached hash from the
-        // index; never read file content on the blocking scan.
-        old_index.lookup(relative_path, size, mtime).map(|h| {
+        // index; never read file content on the blocking scan. A video and an
+        // evicted file cannot fall back to hashing (a multi-GB read; a download), so
+        // they keep the whole-second rule: a strict miss would lose the metadata
+        // cached under their hash. Safe because the hash only finds placeholder
+        // metadata here and the hit is carried forward as recorded, so the strict
+        // lookup that names an image's encode still does not trust it. A deferred
+        // image on disk uses the full stat record: a miss costs it nothing (its
+        // stat-key metadata below) and the background worker hashes it.
+        let hit = if is_video || source_is_evicted {
+            old_index.lookup_whole_second(relative_path, size, mtime)
+        } else {
+            old_index.lookup(relative_path, stat)
+        };
+        hit.map(|h| {
             let hash = h.to_string();
-            new_index.update(relative_path.to_string(), size, mtime, hash.clone());
+            new_index.carry_forward(old_index, relative_path);
             hash
         })
     } else {
-        resolve_content_hash(abs_path, relative_path, size, mtime, old_index, new_index)
+        resolve_content_hash(abs_path, relative_path, stat, old_index, new_index)
     };
 
     // Step 2: If we have a content hash, check the transform cache.
@@ -588,26 +619,14 @@ fn extract_media_metadata_cached(
         // Skip singleflight (which is hash-keyed, not applicable here). A
         // miss is the routine first-scan case, not a problem to flag — TRACE
         // like the cache-hit branch above, not DEBUG (measured ~520
-        // lines/session in a real upload, 2026-09-15,
-        // docs/archive/2026-09-15-open-feedback-design.md).
+        // lines/session in a real upload, 2026-09-15).
         log::trace!("Media meta stat-cache miss for {} (skipping hash)", relative_path);
         let meta = extract_media_metadata(
             abs_path, relative_path, extension, size, modified, ffmpeg,
         );
 
         // Cache under stat key so subsequent calls in this session are fast.
-        let cached = CachedMediaMeta {
-            dimensions: meta.dimensions,
-            dominant_color: meta.dominant_color.clone(),
-            lqip_data_uri: meta.lqip_data_uri.clone(),
-            is_animated: meta.is_animated,
-        };
-        // See `source_is_evicted` above: caching a non-answer under a key the
-        // arrival does not change makes it permanent.
-        if !source_is_evicted {
-            write_cached_meta(objects, transform_cache, &stat_key, size, &cached);
-        }
-
+        store_meta(&stat_key, &meta);
         return meta;
     }
 
@@ -654,29 +673,18 @@ fn extract_media_metadata_cached(
             "Media meta stat-cache miss for {} (dimensions only; color/LQIP deferred)",
             relative_path
         );
-        let dimensions = extract_image_dimensions(abs_path);
-        let is_animated = sniff_is_animated(abs_path, extension);
-        let cached = CachedMediaMeta {
-            dimensions,
-            dominant_color: None,
-            lqip_data_uri: None,
-            is_animated,
-        };
-        // See `source_is_evicted` above.
-        if !source_is_evicted {
-            write_cached_meta(objects, transform_cache, &stat_key, size, &cached);
-        }
-
-        return MediaMetadata {
+        let meta = MediaMetadata {
             path: relative_path.to_string(),
             file_type: extension.to_string(),
             size,
             modified,
-            dimensions,
+            dimensions: extract_image_dimensions(abs_path),
             dominant_color: None,
             lqip_data_uri: None,
-            is_animated,
+            is_animated: sniff_is_animated(abs_path, extension),
         };
+        store_meta(&stat_key, &meta);
+        return meta;
     }
 
     // Step 3: Cache miss — run the real extraction.
@@ -684,7 +692,13 @@ fn extract_media_metadata_cached(
     // extraction so concurrent scans for the same file share the result.
     log::debug!("Media meta cache miss for {}", relative_path);
 
-    if let (Some(dedup), Some(ref hash)) = (metadata_dedup, &content_hash) {
+    // An evicted source stays out of the singleflight too, not only out of the caches:
+    // it hands one extraction to every concurrent scan of the same content, and this
+    // file's non-answer would be handed to a scan of one that can be read. Reachable now
+    // that an evicted file can hold a hash the index recorded for it while it was local.
+    let shareable_hash = content_hash.as_ref().filter(|_| !source_is_evicted);
+
+    if let (Some(dedup), Some(hash)) = (metadata_dedup, shareable_hash) {
         let dedup_key = format!("meta:{}", hash);
         // Clone data into owned values for the closure (FnOnce + Send).
         let abs_path_owned = abs_path.to_path_buf();
@@ -695,6 +709,7 @@ fn extract_media_metadata_cached(
         let ffmpeg_bin = ffmpeg.map(|f| f.bin_path().to_string());
         // Capture cache paths for reconstruction inside the closure.
         let objects_dir = objects.root().to_path_buf();
+        let transforms_dir = transform_cache.root().to_path_buf();
         let hash_clone = hash.clone();
 
         let (result, shared) = dedup.do_work(&dedup_key, move || {
@@ -713,20 +728,12 @@ fn extract_media_metadata_cached(
             // Reconstruct cache infrastructure from paths because ObjectStore/TransformCache
             // are borrowed from the enclosing scope and cannot be captured by reference in
             // a FnOnce + Send closure. These types are stateless path wrappers, so
-            // reconstruction is safe. Layout: .moss/cache/objects/ → sibling transforms/
-            let cache_dir = objects_dir.parent().unwrap_or(&objects_dir).to_path_buf();
+            // reconstruction is safe — from the two paths captured above, not derived from
+            // one another, so this stays correct even if the store and the transform cache
+            // ever stop being siblings on disk.
             let objects = ObjectStore::new(objects_dir);
-            let transform_cache = TransformCache::new(
-                cache_dir.join("transforms"),
-                ObjectStore::new(objects.root().to_path_buf()),
-            );
-            let cached = CachedMediaMeta {
-                dimensions: meta.dimensions,
-                dominant_color: meta.dominant_color.clone(),
-                lqip_data_uri: meta.lqip_data_uri.clone(),
-                is_animated: meta.is_animated,
-            };
-            write_cached_meta(&objects, &transform_cache, &hash_clone, size, &cached);
+            let transform_cache = TransformCache::new(transforms_dir, ObjectStore::new(objects.root().to_path_buf()));
+            write_cached_meta(&objects, &transform_cache, &hash_clone, size, &CachedMediaMeta::from(&meta));
 
             meta
         });
@@ -746,14 +753,8 @@ fn extract_media_metadata_cached(
     );
 
     // Step 4: Store the result in the transform cache for next time.
-    if let Some(ref hash) = content_hash {
-        let cached = CachedMediaMeta {
-            dimensions: meta.dimensions,
-            dominant_color: meta.dominant_color.clone(),
-            lqip_data_uri: meta.lqip_data_uri.clone(),
-            is_animated: meta.is_animated,
-        };
-        write_cached_meta(objects, transform_cache, hash, size, &cached);
+    if let Some(hash) = &content_hash {
+        store_meta(hash, &meta);
     }
 
     meta
@@ -811,7 +812,7 @@ pub fn file_has_home_marker(path: &std::path::Path) -> bool {
 /// under the dataless fail-fast policy that read fails on an evicted file.
 /// Folded to `false`, "I could not check" becomes "it is not the home" — the
 /// root resolves to nothing and the editor offers to create a home page over
-/// the one that exists (moss#1062).
+/// the one that exists.
 ///
 /// `is_offline_not_absent` is the classifier — the same `outcome::io_stop` and
 /// `cloud_readiness` consult. Any other read failure (permissions, bad I/O) is
@@ -950,17 +951,21 @@ pub fn scan_folder_with_dedup_emit(
     // Avoids ~5-10s download on builds with no video files (Task 4).
     let ffmpeg_cell: OnceCell<Option<FFmpegManager>> = OnceCell::new();
 
-    // Set up cache infrastructure (derived from folder_path).
-    let moss_cache_dir = path.join(".moss").join("build").join("cache");
-    let hash_index_path = moss_cache_dir.join("hash-index.json");
+    // Set up cache infrastructure (derived from folder_path). `hash-index.json`
+    // stays under the per-machine `cache_dir()`, but the object store and
+    // transform cache are the synced content-addressed store — `cache_objects()`
+    // / `cache_transforms()`, the same accessors the background media phase
+    // uses to enrich a stat-key entry with the LQIP it computed. A bare join
+    // under `cache_dir()` here points the blocking scan's read at the
+    // per-machine tree while writers use the synced one, so a warm scan can
+    // never see what the previous build's background phase just wrote.
+    let mp = crate::moss_paths::MossPaths::new(path);
+    let hash_index_path = mp.cache_hash_index();
     let old_index = HashIndex::load(&hash_index_path);
     let mut new_index = HashIndex::new();
 
-    let objects = ObjectStore::new(moss_cache_dir.join("objects"));
-    let transform_cache = TransformCache::new(
-        moss_cache_dir.join("transforms"),
-        ObjectStore::new(moss_cache_dir.join("objects")),
-    );
+    let objects = ObjectStore::for_site(&mp);
+    let transform_cache = TransformCache::for_site(&mp);
 
     // Raster-image metadata extraction (header read + dominant-color/LQIP or
     // stat-key cache I/O) is ~99% of a cold scan and is independent per file, so
@@ -971,8 +976,7 @@ pub fn scan_folder_with_dedup_emit(
         abs_path: std::path::PathBuf,
         relative_path: String,
         extension: String,
-        size: u64,
-        mtime: u64,
+        stat: FileStat,
         modified: Option<String>,
     }
 
@@ -995,27 +999,27 @@ pub fn scan_folder_with_dedup_emit(
     // Nested moss sites pruned by the walk below, reported once after it.
     let mut nested_boundaries: Vec<std::path::PathBuf> = Vec::new();
 
-    // Walk through the directory recursively. `is_excluded_dir_name` applies to
-    // DIRECTORY entries only — a file named `_43A2045.jpg` must not be filtered
-    // by it. Files get one rule of their own: `skip_root_agent_config`.
+    // Walk through the directory recursively, reading what `left_out_of_site`
+    // keeps. A skipped agent file is logged because it sits in plain sight in
+    // the author's folder, so its absence from the built site has to be
+    // explainable from the log.
     for entry in WalkDir::new(path)
         .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            if !e.file_type().is_dir() {
-                return !skip_root_agent_config(&name, e.depth());
-            }
-            if is_excluded_dir_name(&name) {
-                return false;
-            }
-            // Nested-vault boundary (2026-08-19 design §4): a descendant
-            // owning its own `.moss/` is a different site — the outer build
-            // goes around it rather than absorbing its pages.
-            if e.depth() > 0 && e.path().join(".moss").is_dir() {
+        .filter_entry(|e| match left_out_of_site(e) {
+            None => true,
+            Some(LeftOut::NestedSite) => {
                 nested_boundaries.push(e.path().to_path_buf());
-                return false;
+                false
             }
-            true
+            Some(LeftOut::AgentInstructions) => {
+                log::info!("Skipping {}: agent instructions are tooling, not a page", e.file_name().to_string_lossy());
+                false
+            }
+            Some(LeftOut::ExcludedDir) => false,
+            Some(LeftOut::HiddenFile) => {
+                log::info!("Skipping {}: a dot-prefixed file is not published", e.file_name().to_string_lossy());
+                false
+            }
         }) {
         let entry = match entry {
             Ok(entry) => entry,
@@ -1096,10 +1100,13 @@ pub fn scan_folder_with_dedup_emit(
             .unwrap_or("")
             .to_lowercase();
 
-        // Categorize files by extension
-        // ADR-006: Images and videos use MediaMetadata for dimensions and dominant color
-        match extension.as_str() {
-            e if is_page_source(e) => {
+        // Categorize files by extension. `classify_extension` is the single
+        // definition of this match — a caller outside this crate
+        // that needs the same verdict calls it directly instead of
+        // hand-maintaining its own extension list that can drift from this one.
+        // Images and videos use MediaMetadata for dimensions and dominant color.
+        match classify_extension(&extension) {
+            ScanBucket::Page => {
                 markdown_files.push(FileInfo {
                     path: relative_path,
                     file_type: extension.clone(),
@@ -1107,7 +1114,7 @@ pub fn scan_folder_with_dedup_emit(
                     modified,
                 });
             }
-            "html" | "htm" => {
+            ScanBucket::Html => {
                 html_files.push(FileInfo {
                     path: relative_path,
                     file_type: extension.clone(),
@@ -1115,8 +1122,8 @@ pub fn scan_folder_with_dedup_emit(
                     modified,
                 });
             }
-            "jpg" | "jpeg" | "png" | "gif" | "svg" | "webp" | "avif" => {
-                // ADR-006 metadata (dimensions + dominant color/LQIP or stat-key
+            ScanBucket::Image => {
+                // Media metadata (dimensions + dominant color/LQIP or stat-key
                 // cache I/O) is the dominant cold-scan cost; defer it to the
                 // parallel phase 2 below and just record the entry here (walk
                 // order preserved). The synthesizer always emits `<picture>` for
@@ -1126,13 +1133,12 @@ pub fn scan_folder_with_dedup_emit(
                     abs_path: file_path.to_path_buf(),
                     relative_path,
                     extension: extension.clone(),
-                    size,
-                    mtime: mtime_secs,
+                    stat: FileStat::of(&metadata),
                     modified,
                 });
             }
-            "mov" | "mp4" | "webm" | "avi" | "mkv" | "m4v" => {
-                // ADR-006: Videos use FFmpeg for dimensions and dominant color, with caching.
+            ScanBucket::Video => {
+                // Videos use FFmpeg for dimensions and dominant color, with caching.
                 // Lazy resolution (Task 4): FFmpeg is only downloaded/detected when
                 // the first video file is encountered during the directory walk.
                 let ffmpeg = ffmpeg_cell.get_or_init(|| {
@@ -1148,8 +1154,7 @@ pub fn scan_folder_with_dedup_emit(
                     file_path,
                     &relative_path,
                     &extension,
-                    size,
-                    mtime_secs,
+                    &FileStat::of(&metadata),
                     modified,
                     ffmpeg.as_ref(),
                     &old_index,
@@ -1165,7 +1170,7 @@ pub fn scan_folder_with_dedup_emit(
             // No download or processing during scan — just categorization.
             // JupyterLite assets are lazy-downloaded during build's background
             // phase when notebook_files is non-empty (see build.rs).
-            "ipynb" => {
+            ScanBucket::Notebook => {
                 notebook_files.push(FileInfo {
                     path: relative_path,
                     file_type: extension.clone(),
@@ -1173,15 +1178,7 @@ pub fn scan_folder_with_dedup_emit(
                     modified,
                 });
             }
-            "pages" | "docx" | "doc" => {
-                other_files.push(FileInfo {
-                    path: relative_path,
-                    file_type: extension.clone(),
-                    size,
-                    modified,
-                });
-            }
-            _ => {
+            ScanBucket::Document | ScanBucket::Other => {
                 other_files.push(FileInfo {
                     path: relative_path,
                     file_type: extension.clone(),
@@ -1266,8 +1263,7 @@ pub fn scan_folder_with_dedup_emit(
                 &e.abs_path,
                 &e.relative_path,
                 &e.extension,
-                e.size,
-                e.mtime,
+                &e.stat,
                 e.modified.clone(),
                 None, // images don't need FFmpeg
                 &old_index,
@@ -1323,8 +1319,7 @@ pub fn scan_folder_with_dedup_emit(
                 &e.abs_path,
                 &e.relative_path,
                 &e.extension,
-                e.size,
-                e.mtime,
+                &e.stat,
                 e.modified.clone(),
                 None,
                 &old_index,
@@ -1341,8 +1336,17 @@ pub fn scan_folder_with_dedup_emit(
     log::debug!(target: "timing", "[scan] walk={:?} image_meta(parallel, {} imgs)={:?}",
         walk_elapsed, img_n, img_phase_start.elapsed());
 
-    // Save the new hash index (only entries seen this scan — auto-prunes stale).
-    if let Err(e) = new_index.save(&hash_index_path) {
+    // Save the new hash index: this scan's media entries, plus what other writers
+    // recorded for the non-media files it walked (the parse cache's page hashes).
+    // Entries for files that are gone are pruned.
+    let walked_non_media: std::collections::HashSet<&str> = markdown_files
+        .iter()
+        .chain(&html_files)
+        .chain(&notebook_files)
+        .chain(&other_files)
+        .map(|f| f.path.as_str())
+        .collect();
+    if let Err(e) = new_index.save_pruned(&hash_index_path, |path| walked_non_media.contains(path)) {
         log::warn!("Failed to save hash index: {}", e);
     }
 
@@ -1387,8 +1391,7 @@ pub fn scan_folder_with_dedup_emit(
     // using a code outside that list silently won't be scoped — extend the list, or
     // adopt the filed explicit-`languages`-config direction, to cover it.
     // Gates the root homepage's default-language-tree listing scope (the root home
-    // lists only the default tree on a multilingual site). See
-    // docs/archive/2026-06-06-multilingual-children-scoping-design.md.
+    // lists only the default tree on a multilingual site).
     let has_language_trees = markdown_files.iter().chain(html_files.iter())
         .any(|f| moss_core::home::lang_tree_prefix(&f.path).is_some());
 
@@ -1506,6 +1509,8 @@ pub fn build_content_graph(project_structure: &ProjectStructure) -> ContentGraph
     // The main scan now walks formerly-excluded asset folders (assets/, images/,
     // etc.) so their files are already indexed above. Bare-filename wikilink
     // resolution like `![](photo.jpg)` works through the same index.
+
+    crate::build::scan::classify::register_auto_index_dirs(&mut builder, &project_structure.dirs);
 
     builder.build()
 }

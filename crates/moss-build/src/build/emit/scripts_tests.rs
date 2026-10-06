@@ -11,7 +11,9 @@ fn all_on() -> SiteAssets {
         search: true,
         vertical: true,
         has_footnotes: true,
+        scroll_rows: true,
         video_ladder: true,
+        places_explorer: true,
     }
 }
 

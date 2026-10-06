@@ -13,7 +13,7 @@ use std::path::Path;
 /// every consumer that decides whether to touch a root asset (the asset
 /// copy pass, the sweep's drift walk) must call this rather than
 /// re-deriving the same two filenames, or the two can disagree about a file
-/// neither of them will ever act on (moss#1087).
+/// neither of them will ever act on.
 pub fn is_ignored_root_theme_file(relative_path: &str) -> bool {
     relative_path == "style.css" || relative_path == "script.js"
 }

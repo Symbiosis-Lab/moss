@@ -36,7 +36,10 @@ You can also control formatting from the keyboard:
 
 Your site's structure is your folder structure: every folder and markdown file becomes a page, and moss builds the top navigation from the file paths automatically. A folder page renders its child files and folders by default, and the home page renders every file.
 
-Create new folders and files in the editor and each becomes a new page. Above every page is a "+" — click it to [[Define pages with frontmatter|add properties]] such as a cover image, date, and subpage style.
+Create new folders and files in the editor and each becomes a new page:
+
+- Click **New Page** above the tree. [▶](#scene=create-page)
+- Above every page is a **+** — click it and search for a property, such as **Cover**, to [[Define pages with frontmatter|add it]]; date and subpage style work the same way. [▶](#scene=properties)
 
 ![[editing.gif|Add and edit pages]]
 
@@ -66,6 +69,7 @@ Click the "+" on the right of the preview and add the email channel, and a subsc
 The moss editor is meant to be intuitive — just play around, there are no rules to learn first. But if you want to go deeper on building a site with moss, these docs will help.
 
 ### Writing & editing
+* [[Meet the editor|Meet the editor and preview]]
 * [[Write with Markdown|Write with Markdown syntax]]
 * [[Define pages with frontmatter|Set page and site properties with frontmatter]]
 * [[Reference files & media|Reference other pages and media with wikilinks]]

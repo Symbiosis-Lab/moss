@@ -202,8 +202,6 @@ fn write_snapshot(
     if !store::history_enabled(vault_root) {
         return Ok(());
     }
-    let (_, key_source) = store::site_key(vault_root);
-    store::ensure_site_json(root, vault_root, key_source)?;
 
     let object_store = store::object_store(root);
     let entries = build_entries(vault_root, sealed, &object_store, &crate::build::icloud::is_evicted);
@@ -277,7 +275,7 @@ pub(crate) fn record_one(
                 // re-derived from `store_bytes`'s own oid, though the two are
                 // definitionally the same sha256.
                 let hash = format!("{:x}", Sha256::digest(target_str.as_bytes()));
-                if let Err(e) = store.store_bytes(target_str.as_bytes()) {
+                if let Err(e) = store.store_bytes(target_str.as_bytes(), crate::build::cache::RecordMode::Wait) {
                     log::debug!("history: could not store the symlink blob for {src}: {e}");
                 }
                 out.insert(src.to_string(), Entry { mode: MODE_SYMLINK.to_string(), hash, size: None });
@@ -290,9 +288,9 @@ pub(crate) fn record_one(
     // the manifest's own hash is still the honest answer to "what was
     // published".
     let oversize = manifest_size.is_some_and(|s| s > store::HISTORY_MEDIA_CEILING);
-    let already_kept = store.get_path(manifest_hash).is_some();
+    let already_kept = store.holds(manifest_hash);
     if !already_kept && !oversize && !is_evicted(&full) {
-        match store.store_file(&full) {
+        match store.store_file(&full, crate::build::cache::RecordMode::Wait) {
             Ok(oid) if oid != manifest_hash => {
                 // A page the parse cache skipped carries its previous hash
                 // forward, and an mtime-preserving sync client can deliver new
@@ -316,7 +314,7 @@ pub(crate) fn record_one(
 }
 
 // ---------------------------------------------------------------------------
-// git_head — plain file reads, never the git binary (ADR-083: moss reads a
+// git_head — plain file reads, never the git binary (moss reads a
 // vault's .git and never writes it)
 // ---------------------------------------------------------------------------
 

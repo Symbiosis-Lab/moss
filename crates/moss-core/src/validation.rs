@@ -83,6 +83,34 @@ pub fn foreign_field_suggestion(name: &str) -> Option<&'static str> {
         .map(|(_, moss_field)| *moss_field)
 }
 
+/// [`foreign_field_suggestion`], aware of the one name that is foreign only for
+/// some values: `order` with a list is the documented alias for `sort` and
+/// works, so it earns no hint; any other `order` value is ignored and does.
+/// `value` is `None` where the caller has only the key (the simplified dialect).
+pub fn foreign_field_suggestion_for(
+    name: &str,
+    value: Option<&serde_yaml::Value>,
+) -> Option<&'static str> {
+    if name == "order" && matches!(value, Some(serde_yaml::Value::Sequence(_))) {
+        return None;
+    }
+    foreign_field_suggestion(name)
+}
+
+/// The build's warning for a foreign key, or `None` when it earns none.
+///
+/// Owns the wording so a caller loops over keys with no per-key cases: the
+/// `order` alias exception and its tailored advice live here, next to the table
+/// they come from.
+pub fn foreign_field_warning(name: &str, value: Option<&serde_yaml::Value>) -> Option<String> {
+    let moss_field = foreign_field_suggestion_for(name, value)?;
+    Some(if name == "order" {
+        "'order' is only read as a list (an alias for 'sort'); this value was ignored — use 'weight: <number>' to position the page, or 'sort: [a, b]' to order a folder's children.".to_string()
+    } else {
+        format!("'{name}' has no meaning to moss and was ignored — did you mean '{moss_field}'? (Harmless if it is your own field.)")
+    })
+}
+
 /// Diagnostic severity levels (LSP-compatible integer values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
@@ -176,7 +204,7 @@ pub fn validate_frontmatter(
                             diags.push(Diagnostic {
                                 severity: Severity::Warning,
                                 message: format!(
-                                    "field '{}' has invalid date format '{}'; expected YYYY, YYYY-MM or YYYY-MM-DD",
+                                    "field '{}' has invalid date format '{}'; expected YYYY, YYYY-MM, YYYY-MM-DD or an ISO timestamp",
                                     name, s
                                 ),
                                 path: Some(name.clone()),
@@ -184,6 +212,17 @@ pub fn validate_frontmatter(
                                 column: None,
                             });
                         }
+                    }
+                }
+
+                if def.format.as_deref() == Some("event-time") {
+                    if let Some(s) = value.as_str() {
+                        diags.extend(crate::event::validation::check_event_time(name, s));
+                    }
+                }
+                if name == "timezone" {
+                    if let Some(s) = value.as_str() {
+                        diags.extend(crate::event::validation::check_timezone(s));
                     }
                 }
 
@@ -224,7 +263,7 @@ pub fn validate_frontmatter(
         }
         // Name a moss equivalent when the key is one another generator uses,
         // so the hint is actionable instead of merely true.
-        let message = match foreign_field_suggestion(key) {
+        let message = match foreign_field_suggestion_for(key, fm.get(key)) {
             Some(moss_field) => format!(
                 "unknown field '{}' is not defined in the schema — did you mean '{}'?",
                 key, moss_field
@@ -239,6 +278,8 @@ pub fn validate_frontmatter(
             column: None,
         });
     }
+
+    diags.extend(crate::event::validation::check_end_not_before_start(fm));
 
     diags
 }
@@ -315,65 +356,75 @@ fn yaml_type_name(value: &serde_yaml::Value) -> &'static str {
     }
 }
 
-/// Validate a frontmatter date: `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.
+/// Validate a frontmatter date: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or a full ISO
+/// timestamp (`YYYY-MM-DDTHH:MM[:SS[.fraction]]`, optionally followed by `Z` or `±HH:MM`).
 ///
 /// Reduced precision is accepted because a date is often known only to the year
 /// or the month, and padding the rest to `-01-01` is a claim the card then
 /// prints as a real "· 01". The other layers already agree: `format_date_string`
 /// renders `1697-09` as "1697 · 09" and a bare year as itself, and the sort axis
 /// compares the strings lexically, which orders mixed precision by year.
+///
+/// A timestamp is accepted because `normalize_date` already reads one by
+/// splitting on `T`; a validator stricter than the renderer would flag a page
+/// that renders correctly. The zone suffix is optional, as it is there.
 fn is_valid_date(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() > 3 {
-        return false;
+    if let Some((date, time)) = s.split_once('T') {
+        return date.split('-').count() == 3 && is_valid_date(date) && is_valid_time(time);
     }
-    let is_fixed_digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|b| b.is_ascii_digit());
-
-    if !is_fixed_digits(parts[0], 4) {
-        return false;
-    }
-    let Ok(year) = parts[0].parse::<u32>() else {
-        return false;
-    };
-    if year < 1 {
-        return false;
-    }
-    let Some(month_str) = parts.get(1) else {
-        return true;
-    };
-    if !is_fixed_digits(month_str, 2) {
-        return false;
-    }
-    let Ok(month) = month_str.parse::<u32>() else {
-        return false;
-    };
-    if !(1..=12).contains(&month) {
-        return false;
-    }
-    let Some(day_str) = parts.get(2) else {
-        return true;
-    };
-    if !is_fixed_digits(day_str, 2) {
-        return false;
-    }
-    let Ok(day) = day_str.parse::<u32>() else {
-        return false;
-    };
-
-    let days_in_month = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
-                29
-            } else {
-                28
-            }
-        }
+    // Pad a reduced-precision date to a full one, so the calendar rules
+    // (month range, days per month, leap years) have one owner: `parse_ymd`.
+    let padded = match s.split('-').count() {
+        1 => format!("{s}-01-01"),
+        2 => format!("{s}-01"),
+        3 => s.to_string(),
         _ => return false,
     };
+    crate::date::parse_ymd(&padded).is_some()
+}
 
-    (1..=days_in_month).contains(&day)
+/// `HH:MM[:SS[.fraction]]` optionally followed by `Z` or `±HH:MM`.
+fn is_valid_time(s: &str) -> bool {
+    let (clock, zone) = match s.find(['Z', '+', '-']) {
+        Some(i) => s.split_at(i),
+        None => (s, ""),
+    };
+    let zone_ok = match zone.as_bytes() {
+        [] | [b'Z'] => true,
+        [b'+' | b'-', rest @ ..] => {
+            let rest = std::str::from_utf8(rest).unwrap_or("");
+            two_digits(rest.get(..2), 23)
+                && rest.get(2..3) == Some(":")
+                && two_digits(rest.get(3..), 59)
+        }
+        _ => false,
+    };
+    if !zone_ok {
+        return false;
+    }
+    let mut parts = clock.splitn(3, ':');
+    let (Some(h), Some(m)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    if !two_digits(Some(h), 23) || !two_digits(Some(m), 59) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(sec) => {
+            let (whole, frac) = match sec.split_once('.') {
+                Some((w, f)) => (w, Some(f)),
+                None => (sec, None),
+            };
+            two_digits(Some(whole), 59)
+                && frac.map_or(true, |f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()))
+        }
+    }
+}
+
+/// Exactly two ASCII digits whose value is at most `max`.
+fn two_digits(s: Option<&str>, max: u32) -> bool {
+    s.and_then(|s| crate::date::fixed_digits(s, 2)).is_some_and(|v| v <= max)
 }
 
 // ---------------------------------------------------------------------------
@@ -450,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_quoted_true_false_strings_accepted_for_boolean() {
-        // #925: the typed build path (deserialize_bool_lenient) coerces
+        // The typed build path (deserialize_bool_lenient) coerces
         // "true"/"false" strings for bool fields; this diagnostic must agree,
         // or the editor would show a fresh "wrong type" error for a value the
         // build path already accepts.
@@ -685,6 +736,9 @@ mod tests {
         let axis = make_fm(&[("title", str_val("Test")), ("sort", str_val("weight"))]);
         assert!(errors(&axis).is_empty(), "axis form: {:?}", errors(&axis));
 
+        let date_asc = make_fm(&[("title", str_val("Test")), ("sort", str_val("date-asc"))]);
+        assert!(errors(&date_asc).is_empty(), "date-asc form: {:?}", errors(&date_asc));
+
         let bogus = make_fm(&[("title", str_val("Test")), ("sort", str_val("banana"))]);
         assert!(
             errors(&bogus).iter().any(|m| m.contains("invalid value 'banana'")),
@@ -745,6 +799,26 @@ mod tests {
     }
 
     #[test]
+    fn iso_timestamps_are_valid_dates() {
+        assert!(is_valid_date("2019-10-16T07:42:16.551Z"));
+        assert!(is_valid_date("2019-10-16T07:42:16Z"));
+        assert!(is_valid_date("2019-10-16T07:42"));
+        assert!(is_valid_date("2019-10-16T07:42:16+08:00"));
+        assert!(is_valid_date("2019-10-16T07:42:16.5-05:30"));
+        // The date half keeps the calendar rules.
+        assert!(!is_valid_date("2019-02-30T07:42:16Z"));
+        // The time half is checked by hand.
+        assert!(!is_valid_date("2019-10-16T"));
+        assert!(!is_valid_date("2019-10-16Tgarbage"));
+        assert!(!is_valid_date("2019-10-16T25:00:00Z"));
+        assert!(!is_valid_date("2019-10-16T07:61:00Z"));
+        assert!(!is_valid_date("2019-10-16T07:42:16.Z"));
+        assert!(!is_valid_date("2019-10-16T07:42:16+0800"));
+        assert!(!is_valid_date("2019-10-16T07:42:16 Z"));
+        assert!(!is_valid_date("2019/10/16T07:42:16Z"));
+    }
+
+    #[test]
     fn test_is_valid_date() {
         assert!(is_valid_date("2024-01-15"));
         assert!(is_valid_date("2024-02-29")); // leap year
@@ -793,6 +867,26 @@ mod tests {
         // Hugo, Jekyll, Zola and Astro. moss spells it `url:` and used to
         // ignore `slug:` without a word.
         assert_eq!(foreign_field_suggestion("slug"), Some("url"));
+    }
+
+    #[test]
+    fn order_with_a_list_is_the_sort_alias_and_earns_no_hint() {
+        let list: serde_yaml::Value = serde_yaml::from_str("[a, b]").unwrap();
+        let num: serde_yaml::Value = serde_yaml::from_str("3").unwrap();
+        assert_eq!(foreign_field_suggestion_for("order", Some(&list)), None);
+        assert_eq!(foreign_field_suggestion_for("order", Some(&num)), Some("weight"));
+        assert_eq!(foreign_field_suggestion_for("order", None), Some("weight"));
+        // Only `order` is an alias; other foreign names are unaffected by a list.
+        assert_eq!(foreign_field_suggestion_for("slug", Some(&list)), Some("url"));
+    }
+
+    #[test]
+    fn order_warning_says_what_to_use_and_other_names_keep_the_hint() {
+        let num: serde_yaml::Value = serde_yaml::from_str("3").unwrap();
+        let w = foreign_field_warning("order", Some(&num)).unwrap();
+        assert!(w.contains("'weight: <number>'") && w.contains("'sort: [a, b]'"), "{w}");
+        assert!(foreign_field_warning("slug", None).unwrap().contains("did you mean 'url'"));
+        assert_eq!(foreign_field_warning("bogus", None), None);
     }
 
     #[test]

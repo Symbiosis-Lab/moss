@@ -17,6 +17,7 @@ use std::path::Path;
 use super::child_list::ChildItemProps;
 use crate::i18n::{self, Language};
 use crate::build::media::cover::{self, html_escape, CoverType};
+use crate::build::page::meta::render_description_html_in_link;
 
 /// Renders a single folder card as HTML with typesetting context.
 ///
@@ -39,6 +40,14 @@ use crate::build::media::cover::{self, html_escape, CoverType};
 /// the first card with a cover as the LCP candidate. Replaces the prior
 /// `html.insert_str(pos+5, "loading=\"eager\" ")` mutation pattern with a
 /// typed flag so the LCP decision flows through the synthesizer.
+///
+/// `list_has_covers`: whether ANY card in this caller's row/list has a cover
+/// of its own — see the parameter doc on [`render_item`], which this calls
+/// straight through to. A hand-picked `:::grid` cell computes it across its
+/// own siblings the same way [`render_list_with_typesetting`] does
+/// (`build::render::grid_cells::apply_collection_cards`); a caller with no
+/// sibling list to compare against (a lone card, or a context that predates
+/// this parameter) passes `false`.
 pub fn render_item_with_typesetting(
     props: &ChildItemProps,
     root: Option<&Path>,
@@ -46,20 +55,20 @@ pub fn render_item_with_typesetting(
     typesetting: Option<&str>,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     eager: bool,
+    list_has_covers: bool,
 ) -> String {
-    render_item(props, root, lang, typesetting, media_lookup, eager, false)
+    render_item(props, root, lang, typesetting, media_lookup, eager, list_has_covers)
 }
 
-/// Shared by [`render_item_with_typesetting`] (standalone / `.moss-grid`
-/// cells, where there is no sibling list to compare against) and
+/// Shared by [`render_item_with_typesetting`] (a lone card, or `:::grid`
+/// cells whose caller now computes `list_has_covers` across the row) and
 /// [`render_list_with_typesetting`] (which already knows whether ANY card
 /// in the list has a cover).
 ///
 /// `list_has_covers`: when true and THIS card has no cover of its own, the
 /// cover slot becomes a quote card (`data-cover="quote"`) carrying the
 /// page's description — or its title, with no description — instead of
-/// the empty `.moss-card-no-cover` placeholder. Per
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §1: a
+/// the empty `.moss-card-no-cover` placeholder. A
 /// uniformly coverless list (e.g. a term index) keeps the plain
 /// placeholder, because there every card is the same shape and the
 /// placeholder is invisible CSS (`moss-card-cover { display: none }`);
@@ -74,12 +83,21 @@ fn render_item(
     eager: bool,
     list_has_covers: bool,
 ) -> String {
-    // A folder's meta is its count; a leaf's is its date, or nothing. The
-    // slot is emitted either way so the two shapes keep one layout.
-    let count_text = match props.child_count {
-        Some(count) => i18n::article_count_label(lang, count, typesetting),
-        None => props.date_display.clone().unwrap_or_default(),
-    };
+    // A folder's meta is its count (preceded by its own date and place when
+    // its home page declares one); a leaf's is its date and place, or
+    // nothing. The slot is emitted either way so the two shapes keep one
+    // layout. One owner across every listing form — see
+    // `child_list::meta_text`, which also HTML-escapes the result (this slot
+    // used to print the count unescaped, safe only because it was always
+    // machine-generated text).
+    let count_label = props
+        .child_count
+        .map(|count| i18n::article_count_label(lang, count, typesetting));
+    let count_text = super::child_list::meta_text(
+        props.date_display.as_deref(),
+        props.place.as_deref(),
+        count_label.as_deref(),
+    );
 
     let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);
 
@@ -90,15 +108,16 @@ fn render_item(
             cover::render_cover_html(cover_path, ct, &format!("{} cover", props.title), "moss-card-cover", &cover_attrs, true, media_lookup, eager)
         }
         _ if list_has_covers => {
-            let quote_text = props
-                .description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .unwrap_or(props.title.as_str());
+            // The description is markdown (`ChildItemProps::description`'s
+            // contract, per `child_list.rs`), rendered safely inline; the
+            // title fallback is plain chrome text, so it stays a bare escape.
+            let quote_html = match props.description.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(desc) => render_description_html_in_link(desc),
+                None => html_escape(&props.title),
+            };
             format!(
                 r#"<div class="moss-card-cover" data-cover="quote"><p>{}</p></div>"#,
-                html_escape(quote_text)
+                quote_html
             )
         }
         _ => r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string(),
@@ -122,11 +141,10 @@ fn render_item(
 
     // Slot order: kicker, meta, title (horizontal-mode layout).
     //
-    // Per docs/reference/design/preview-cards.md:22-30: "Meta — a small kicker
-    // above (horizontal) or to the right of (vertical) the title…
-    // Production callers populate meta and leave kicker empty." Meta IS the
-    // visual kicker — same uppercase overline treatment, same position above
-    // the title. Emitting `kicker, meta, title` matches both the spec and
+    // Meta IS the visual kicker — a small kicker above (horizontal) or to the
+    // right of (vertical) the title, since production callers populate meta
+    // and leave kicker empty: same uppercase overline treatment, same
+    // position above the title. Emitting `kicker, meta, title` matches
     // the parallel emitter at child_summary::render_with_sort (line 64) so
     // the two card surfaces agree on slot order.
     //
@@ -149,7 +167,7 @@ fn render_item(
         .filter(|s| !s.is_empty())
         .filter(|_| props.child_count.is_none())
         .filter(|_| !used_in_quote_slot)
-        .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, html_escape(d)))
+        .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
         .unwrap_or_default();
 
     format!(
@@ -180,7 +198,6 @@ fn render_item(
 /// a bare `data-embed` attribute on the `.moss-cards-container` this
 /// function builds, distinguishing a body embed from the frontmatter-
 /// synthesized listing for CSS block-rhythm purposes.
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §6.
 pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     cards: &[C],
     root: Option<&Path>,
@@ -189,6 +206,7 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     sort_axis: moss_core::sort::SortAxis,
     is_embed: bool,
+    placement: &moss_core::media::Placement,
 ) -> String {
     if cards.is_empty() {
         return String::new();
@@ -225,16 +243,73 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     // flag — the CSS selects on these to pick the right
     // `--moss-card-min` token.
     let axis_str = match sort_axis {
-        moss_core::sort::SortAxis::Date => "date",
+        // DateAsc presents identically to Date — same density tuning, same
+        // compact-date meta slot; only the comparator's direction differs.
+        moss_core::sort::SortAxis::Date | moss_core::sort::SortAxis::DateAsc => "date",
         moss_core::sort::SortAxis::Weight => "weight",
         moss_core::sort::SortAxis::Title => "title",
     };
     let cover_attr = if has_covers { " data-list-has-covers" } else { "" };
     let container_attr = if is_embed { " data-embed" } else { "" };
+    // Same emit-nothing-when-empty rule as `components::cards_container`.
+    let place = moss_core::render::placement::placement_attrs(placement);
+    let align = place.align_suffix();
 
     format!(
-        r#"<div class="moss-cards-container"{}><div class="moss-cards" data-layout="grid" data-list-axis="{}"{}>{}</div></div>"#,
-        container_attr, axis_str, cover_attr, items
+        r#"<div class="moss-cards-container{}"{}{}{}><div class="moss-cards" data-layout="grid" data-list-axis="{}"{}>{}</div></div>"#,
+        align, place.data_width_attr, place.size_style_attr, container_attr, axis_str, cover_attr, items
+    )
+}
+
+/// Renders a bare external grid-cell link through the SAME `.moss-card`
+/// shell [`render_item_with_typesetting`] builds for an internal page card
+/// — the owner's "one card kind" decision: a link out of the site is a
+/// card too, not a different-looking preview.
+///
+/// `title`, `domain` and `favicon` are the caller's business
+/// (`build::render::grid_cells::external_card_markup` works out author-text-
+/// vs-fetched precedence and reads the link-metadata cache); `cover_html`
+/// is fully-formed HTML — either the author's own image, rendered through
+/// the ordinary cover pipeline, or the plain no-cover placeholder when
+/// there's nothing to show yet. This function only assembles the shell.
+pub fn render_external_card(
+    href: &str,
+    title: &str,
+    domain: &str,
+    favicon: Option<&str>,
+    cover_html: &str,
+) -> String {
+    // Mirrors `render_link_preview`'s favicon handling (deleted alongside
+    // the `.link-preview` shell this replaces): route through the
+    // synthesizer with `ImageContext::Favicon`, which short-circuits to a
+    // bare 16×16 `<img>` — no manifest, no `<picture>`, no LQIP.
+    let favicon_assets = moss_core::asset_snapshot::AssetSnapshot::new();
+    let favicon_html = favicon
+        .filter(|f| !f.is_empty())
+        .map(|f| {
+            moss_core::render::image::synthesize_image_html(
+                f,
+                "",
+                &favicon_assets,
+                moss_core::render::image::ImageContext::Favicon,
+                &moss_core::render::image::ImageRenderOptions {
+                    class: Some("moss-card-kicker-favicon"),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap_or_default();
+    let kicker_html = format!(
+        r#"<span class="moss-card-kicker">{}{}</span>"#,
+        favicon_html,
+        html_escape(domain)
+    );
+    format!(
+        r#"<a href="{}" class="moss-card" data-external target="_blank" rel="noopener">{}<div class="moss-card-content">{}<span class="moss-card-meta"></span><span class="moss-card-title">{}</span></div></a>"#,
+        html_escape(href),
+        cover_html,
+        kicker_html,
+        html_escape(title),
     )
 }
 

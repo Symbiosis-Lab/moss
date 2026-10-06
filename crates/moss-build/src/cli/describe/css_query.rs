@@ -5,8 +5,7 @@
 //!
 //! The emitted stylesheet is ~89 KB minified. Telling an agent to read it is
 //! telling it to spend most of its context on vertical-Chinese typesetting and
-//! immersive fullscreen in order to change a hero. okagaki's whole 136-line
-//! theme fights about 50 rules. So: print the matching ones.
+//! immersive fullscreen in order to change a hero. So: print the matching ones.
 //!
 //! ## Why the source, not the emitted CSS
 //!
@@ -219,6 +218,9 @@ fn shipping_note(sheet: &str) -> &'static str {
              render nothing below a 76rem viewport"
         }
         "site/vertical.css" => "shipped only when some page uses vertical typesetting",
+        "site/places-explorer.css" => {
+            "shipped only when the site has a place-typed namespace root with the explorer on"
+        }
         "comments.css" => "linked only when the site has synced comments",
         "email.css" => {
             "linked only when the email channel is installed or a page has :::subscribe / :::apply"

@@ -4,13 +4,12 @@
 //! Plainly: the editor's slash menu and fence autocomplete used to hand-copy
 //! this knowledge in TypeScript (`SHORTCODE_CATALOG`, `ASSET_ATTR_BY_SHORTCODE`)
 //! and the copies drifted (`apply` was missing). This table is generated into
-//! `frontend/app/editor/shortcodes.generated.ts` by the `shortcode-catalog`
-//! emitter in `src-tauri/dev-bin/generate-artifacts.rs`, CI-diff-gated like
+//! the frontend editor's `shortcodes.generated.ts` by the `shortcode-catalog`
+//! emitter in the desktop app's codegen binary, CI-diff-gated like
 //! `bindings.ts` — so the fact lives in Rust, once.
 //!
 //! Presentation (labels, hints, translations) is deliberately NOT here: hosts
-//! overlay their own i18n on the structural catalog (design:
-//! docs/archive/2026-08-11-cm6-extraction-design.md §4).
+//! overlay their own i18n on the structural catalog.
 //!
 //! The `entry()` match is total over [`ShortcodeKind`] — adding a variant
 //! fails compilation HERE until the catalog describes it.
@@ -26,6 +25,10 @@ pub struct ShortcodeAttrSpec {
     /// scope asset search to these kinds. Empty for plain attrs
     /// (`cols=`, `button=`, …).
     pub asset_kinds: &'static [ExtKind],
+    /// True for a bare keyword inserted WITHOUT `=` (`{scroll}`). False (the
+    /// default shape of every attr in this catalog before this field
+    /// existed) is an ordinary `key=value` attr.
+    pub flag: bool,
 }
 
 /// The full authoring contract for one shortcode.
@@ -59,8 +62,8 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
     ) = match kind {
         ShortcodeKind::Subscribe => (
             &[
-                ShortcodeAttrSpec { name: "button", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "button", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[], flag: false },
             ],
             None,
             "subscribe {button=\"${1:Subscribe}\"}\n:::",
@@ -71,42 +74,45 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
             "buttons\n[${1:Get started}](${2:/})\n:::",
         ),
         ShortcodeKind::Gallery => (
-            &[ShortcodeAttrSpec { name: "cols", asset_kinds: &[] }],
+            &[ShortcodeAttrSpec { name: "per-line", asset_kinds: &[], flag: false }],
             None,
-            "gallery {cols=${1:3}}\n![](${2:photo.jpg})\n:::",
+            "gallery ${1:3}\n![](${2:photo.jpg})\n:::",
         ),
         ShortcodeKind::Hero => (
             &[
                 ShortcodeAttrSpec {
                     name: "image",
                     asset_kinds: &[ExtKind::Image, ExtKind::Video],
+                    flag: false,
                 },
-                ShortcodeAttrSpec { name: "wide", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: false },
             ],
             Some("image"),
             "hero {image=${1:photo.jpg}}\n# ${2:Title}\n${3:Subtitle}\n:::",
         ),
         ShortcodeKind::Grid => (
             &[
-                ShortcodeAttrSpec { name: "cols", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "wide", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "per-line", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "scroll", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "label", asset_kinds: &[], flag: false },
             ],
             None,
-            "grid {cols=${1:2}}\n${2:cell one}\n+++\n${3:cell two}\n:::",
+            "grid ${1:2}\n${2:cell one}\n+++\n${3:cell two}\n:::",
         ),
         ShortcodeKind::Recent => (
             &[
-                ShortcodeAttrSpec { name: "count", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "since", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "last", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "count", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "since", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "last", asset_kinds: &[], flag: false },
             ],
             None,
             "recent {count=${1:5}}\n${2:No posts yet.}\n:::",
         ),
         ShortcodeKind::Apply => (
             &[
-                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "button", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "button", asset_kinds: &[], flag: false },
             ],
             None,
             "apply {button=\"${1:Apply}\"}\n:::",
@@ -188,12 +194,60 @@ mod tests {
     }
 
     #[test]
+    fn grid_and_gallery_templates_teach_the_positional_form() {
+        // Docs lead with `:::grid 2` / `:::gallery 3`; the insertion snippet
+        // should teach the same shape rather than the named `per-line=`
+        // attribute, and must never regress to the deprecated `cols=`.
+        for name in ["grid", "gallery"] {
+            let e = catalog().into_iter().find(|e| e.name == name).expect("entry");
+            assert!(
+                !e.canonical_template.contains("cols=") && !e.canonical_template.contains("per-line="),
+                "{name}: canonical template should teach the positional form, got {:?}",
+                e.canonical_template
+            );
+        }
+    }
+
+    #[test]
     fn only_apply_is_hidden() {
         for e in catalog() {
             assert_eq!(
                 e.authorable,
                 e.kind != ShortcodeKind::Apply,
                 "{}: authorable flag drifted from the §7.1 decision",
+                e.name
+            );
+        }
+    }
+
+    #[test]
+    fn grid_scroll_is_a_flag_attr_label_is_not() {
+        let grid = catalog()
+            .into_iter()
+            .find(|e| e.kind == ShortcodeKind::Grid)
+            .expect("grid entry");
+        let scroll = grid.attrs.iter().find(|a| a.name == "scroll").expect("scroll attr");
+        assert!(scroll.flag, "`scroll` inserts without `=`, editors need `flag: true`");
+        let label = grid.attrs.iter().find(|a| a.name == "label").expect("label attr");
+        assert!(!label.flag, "`label` takes a value; it is not a bare flag");
+    }
+
+    #[test]
+    fn grid_and_gallery_name_the_column_count_attr_per_line() {
+        // `cols` was renamed: "columns" is the wrong word under vertical
+        // typesetting, where the grid's tracks run along the line rather
+        // than down a column. `cols=` still parses (deprecated alias) but
+        // is not the catalog's own name for the attribute any more.
+        for kind in [ShortcodeKind::Grid, ShortcodeKind::Gallery] {
+            let e = catalog().into_iter().find(|e| e.kind == kind).expect("entry");
+            assert!(
+                e.attrs.iter().any(|a| a.name == "per-line"),
+                "{}: catalog should name the attr `per-line`",
+                e.name
+            );
+            assert!(
+                !e.attrs.iter().any(|a| a.name == "cols"),
+                "{}: catalog should not advertise the deprecated `cols` name",
                 e.name
             );
         }

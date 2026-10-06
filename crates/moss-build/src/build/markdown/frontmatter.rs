@@ -6,14 +6,14 @@
 
 // Re-export slug functions needed by callers who historically imported them
 // from the markdown module. generate_slug and slugify_path_segments are now
-// in moss-core (ADR-018) and forwarded via scan::slug.
+// in moss-core and forwarded via scan::slug.
 pub use crate::build::scan::slug::{
     generate_slug, generate_uid, insert_uid_into_frontmatter, replace_uid_in_frontmatter,
     resolve_duplicate_slugs_with_lang,
 };
 
 // AnalyticsConfig, FrontMatter, compute_url_path, and their helpers moved to
-// moss-core (ADR-018). Re-exported for backward compat.
+// moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::{
     AnalyticsConfig,
     FrontMatter,
@@ -27,7 +27,7 @@ pub use moss_core::frontmatter_typed::{
 };
 
 /// Parse a document's traditional-YAML frontmatter into the typed
-/// [`FrontMatter`] using the ONE parser the editor/chips use (ADR-020):
+/// [`FrontMatter`] using the ONE parser the editor/chips use:
 /// `moss_core::frontmatter::parse` + `project_typed`. gray_matter is gone.
 ///
 /// This is the YAML-branch counterpart to `parse_simplified_frontmatter`.
@@ -114,16 +114,41 @@ Some content.
     }
 
     #[test]
+    fn test_frontmatter_route_true_beside_location() {
+        let markdown = r#"---
+title: To Spain
+location: [Dieppe, Bordeaux, Sierra Nevada]
+route: true
+---
+
+# To Spain
+"#;
+        let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
+        assert_eq!(
+            frontmatter.location,
+            Some(vec!["Dieppe".to_string(), "Bordeaux".to_string(), "Sierra Nevada".to_string()])
+        );
+        assert_eq!(frontmatter.route, Some(true));
+    }
+
+    #[test]
+    fn test_frontmatter_route_absent_by_default() {
+        let markdown = "---\ntitle: Untitled\nlocation: Kyoto\n---\n\nBody.\n";
+        let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
+        assert_eq!(frontmatter.route, None);
+    }
+
+    #[test]
     fn test_frontmatter_breadcrumb_string_true() {
         let markdown = r#"---
-title: 刘果
+title: 山居
 breadcrumb: "true"
 ---
-看星星，食烟火。
+第一段。
 "#;
         let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
 
-        assert_eq!(frontmatter.title, Some("刘果".to_string()));
+        assert_eq!(frontmatter.title, Some("山居".to_string()));
         assert_eq!(frontmatter.breadcrumb, Some(true));
     }
 
@@ -583,8 +608,8 @@ analytics: "https://analytics.mysite.com/script.js"
     }
 
     #[test]
-    fn alias_translates_yi_website_pattern_sidebar_plus_children_false() {
-        // Yi-website's literal frontmatter: sidebar: '[[news]]' + children: false.
+    fn alias_translates_sidebar_plus_children_false() {
+        // A real site's literal frontmatter: sidebar: '[[news]]' + children: false.
         // children: false is redundant when sidebar is set (today: !has_sidebar gate);
         // alias must treat both unset and false as "no real children intent".
         let mut fm = fm_with_sidebar("[[news]]");
@@ -664,6 +689,12 @@ analytics: "https://analytics.mysite.com/script.js"
     }
 
     #[test]
+    fn frontmatter_parses_sort_date_asc() {
+        let fm: FrontMatter = serde_yaml::from_str("title: T\nsort: date-asc\n").unwrap();
+        assert!(matches!(fm.sort, Some(moss_core::sort::SortField::Axis(moss_core::sort::SortAxis::DateAsc))));
+    }
+
+    #[test]
     fn frontmatter_parses_sort_list() {
         let fm: FrontMatter = serde_yaml::from_str("title: T\nsort: [intro, setup]\n").unwrap();
         match fm.sort {
@@ -683,7 +714,7 @@ analytics: "https://analytics.mysite.com/script.js"
 
     #[test]
     fn order_with_wikilinks_parses_into_sort_list() {
-        // Real-world 刘果 form: order: ["[[Ch 1]]", "[[Ch 2]]"]
+        // Real-world form: order: ["[[Ch 1]]", "[[Ch 2]]"]
         let fm: FrontMatter = serde_yaml::from_str("title: T\norder:\n  - \"[[Ch 1]]\"\n  - \"[[Ch 2]]\"\n").unwrap();
         match fm.sort {
             Some(moss_core::sort::SortField::List(items)) => {

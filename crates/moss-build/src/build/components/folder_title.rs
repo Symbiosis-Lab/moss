@@ -9,8 +9,7 @@
 //!      listing in `render/blocking.rs`.
 //!
 //! Index pages always carry exactly one `<h1>` after this consolidation, restoring
-//! document-outline parity with article pages. See
-//! `docs/reference/title-rendering.md`.
+//! document-outline parity with article pages.
 
 use crate::build::features::html_escape;
 
@@ -22,14 +21,27 @@ use crate::build::features::html_escape;
 /// click on it points back at the `title` field. Pass `false` where no
 /// markdown source stands behind the heading — a synthetic folder index has no
 /// file to point at. Stripped from shipped HTML by `build::ship`.
-pub fn render(label: &str, emit_source_fm: bool) -> String {
+///
+/// `visually_hidden` adds `.visually-hidden` (site.css's Base & Reset) to the
+/// class list rather than suppressing the heading outright — a places
+/// explorer root (design decision 7, "the map is the page") draws its own
+/// title nowhere visible, but a sighted layout is not the only reader: an
+/// `<h1>` absent from the page entirely leaves screen-reader navigation with
+/// no landmark at all.
+pub fn render(label: &str, emit_source_fm: bool, visually_hidden: bool) -> String {
     let fm_attr = if emit_source_fm {
         r#" data-source-fm="title""#
     } else {
         ""
     };
+    let class = if visually_hidden {
+        "moss-folder-title visually-hidden"
+    } else {
+        "moss-folder-title"
+    };
     format!(
-        r#"<h1 class="moss-folder-title"{}>{}</h1>"#,
+        r#"<h1 class="{}"{}>{}</h1>"#,
+        class,
         fm_attr,
         html_escape(label)
     )

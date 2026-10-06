@@ -9,6 +9,7 @@ const DOM_TESTS = [
   "src/cm6/__tests__/cm-footnote.test.ts",
   "src/cm6/__tests__/cm-shortcode-block.test.ts",
   "src/cm6/__tests__/cm-criticmarkup.test.ts",
+  "src/cm6/__tests__/cm-link-resolver.test.ts",
 ];
 
 export default defineConfig({

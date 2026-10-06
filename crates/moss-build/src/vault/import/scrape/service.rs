@@ -29,6 +29,12 @@ pub fn default_user_agent() -> String {
     format!("moss-import/{} (+https://moss.pub)", crate::system::app_version())
 }
 
+/// [`ScrapeConfig::new`]'s default `max_pages` — the recursive-crawl page
+/// cap. Named so the CLI's `--help` text and progress summary can cite the
+/// same number the config actually enforces, rather than a second copy of
+/// the literal that could drift from it.
+pub const DEFAULT_MAX_PAGES: usize = 200;
+
 /// Configuration for one scrape invocation.
 #[derive(Debug, Clone)]
 pub struct ScrapeConfig {
@@ -52,7 +58,7 @@ impl ScrapeConfig {
             start_url: start_url.into(),
             output_dir: output_dir.into(),
             recursive: false,
-            max_pages: Some(200),
+            max_pages: Some(DEFAULT_MAX_PAGES),
             user_agent: default_user_agent(),
         }
     }
@@ -72,19 +78,52 @@ pub fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> Str
     push_string(&mut out, "lang", metadata.lang.as_deref());
     push_string(&mut out, "description", metadata.description.as_deref());
     push_string(&mut out, "cover", metadata.cover.as_deref());
-    // An import is the user's own content republished here (POSSE): the vault
-    // copy is canonical and `source_url` is a syndication mirror. Record it in
-    // a `syndicated` list — the same field the comment renderer reads to link a
-    // douban/matters comment back out to its origin (see
-    // `build/features/comment/render.rs::syndicated_link_for_source`). A local
-    // file with no known origin (`source_url` empty) has nothing to syndicate.
-    let source = source_url.trim();
-    if !source.is_empty() {
-        out.push_str("syndicated:\n");
-        out.push_str(&format!("  - {}\n", yaml_scalar(source)));
-    }
+    // An event never writes `date`: that stays the page's own published date.
+    push_string(&mut out, "start", metadata.event.start.as_deref());
+    push_string(&mut out, "end", metadata.event.end.as_deref());
+    push_string(&mut out, "location", metadata.event.location.as_deref());
+    push_string(&mut out, "status", metadata.event.status.as_deref());
+    push_string(&mut out, "tickets", metadata.event.tickets.as_deref());
+    push_string(&mut out, "online", metadata.event.online.as_deref());
+    // `moss import` records provenance, not syndication: the source page's
+    // address becomes `origin` (`moss_core::schema_fields::BUILTIN_FIELDS`),
+    // a single URL. Unlike POSSE `syndicated:` — which means the content also
+    // lives at that URL — `origin` makes no such claim: a site port's old
+    // address is going away, not gaining a mirror. A local file with no known
+    // source (`source_url` empty) has no `origin` at all.
+    push_string(&mut out, "origin", Some(source_url));
     out.push_str("---\n\n");
     out
+}
+
+/// Strip stray C0/C1 control chars and YAML-escape `\`/`"`/newlines for
+/// embedding in a double-quoted scalar. Shared by every hand-rolled
+/// frontmatter field this module writes — `push_string`'s metadata values
+/// and `render_error_markdown`'s error-page fields alike — so no caller can
+/// skip the control-char strip and end up with the weaker of two defenses.
+/// Both sources are untrusted (scraped HTML, remote server error text), and
+/// this is the same write-boundary defense-in-depth applied in
+/// `moss_core::frontmatter::serialize` (macOS Tauri multiwebview arrow-key
+/// bug, tauri-apps/tauri#10194), needed here because this hand-rolled writer
+/// bypasses that path entirely.
+///
+/// `\n`/`\r` are escaped, not just stripped of C0/C1 siblings: the stripper
+/// above keeps them as "legitimate whitespace" for callers writing multi-line
+/// bodies, but a value embedded here that keeps a raw newline turns one
+/// written line into several, and the frontmatter reader that finds the
+/// closing `---` (`moss_core::frontmatter::yaml_span`) does a plain
+/// line-by-line scan with no notion of YAML quoting. A value containing
+/// `"\n---\n"` forged a closing fence from inside the scalar, truncating the
+/// real frontmatter early — confirmed to drop `title` entirely rather than
+/// fail safe. Escaping keeps the whole value on one physical line, so no
+/// line inside it can ever trim down to exactly `---`.
+pub(super) fn escape_yaml_string(s: &str) -> String {
+    let clean = moss_core::frontmatter::strip_control_chars_str(s);
+    clean
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn push_string(out: &mut String, key: &str, value: Option<&str>) {
@@ -93,38 +132,8 @@ fn push_string(out: &mut String, key: &str, value: Option<&str>) {
         if trimmed.is_empty() {
             return;
         }
-        // Strip stray C0/C1 control chars before escaping: this metadata comes
-        // from scraped/imported HTML, which is untrusted, and the same
-        // write-boundary defense-in-depth applied in
-        // `moss_core::frontmatter::serialize` (macOS Tauri multiwebview
-        // arrow-key bug, tauri-apps/tauri#10194) must hold here too, since
-        // this hand-rolled writer bypasses that path entirely.
-        let clean = moss_core::frontmatter::strip_control_chars_str(trimmed);
-        // YAML double-quoted: escape \ and "
-        let escaped = clean.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped = escape_yaml_string(trimmed);
         out.push_str(&format!("{}: \"{}\"\n", key, escaped));
-    }
-}
-
-/// Render a value as a YAML scalar. A well-formed http(s) URL is a safe plain
-/// scalar and is emitted bare (matching the vault's hand-authored
-/// `syndicated:` lists); anything else — a malformed `source_url` that reached
-/// us (e.g. a crafted MHTML `Snapshot-Content-Location` that `Url::parse`
-/// rejected, so it flows through verbatim) — is double-quoted and escaped so a
-/// `": "`, a leading indicator (`*`, `@`, …), or whitespace can't corrupt or
-/// break the frontmatter.
-fn yaml_scalar(value: &str) -> String {
-    // Strip stray C0/C1 control chars first — same untrusted-input rationale
-    // as `push_string` above (tauri-apps/tauri#10194): `value` here can be a
-    // `source_url` derived from scraped/imported HTML.
-    let value = &moss_core::frontmatter::strip_control_chars_str(value);
-    let safe_plain = (value.starts_with("http://") || value.starts_with("https://"))
-        && !value.contains(": ")
-        && !value.chars().any(|c| c.is_whitespace());
-    if safe_plain {
-        value.to_string()
-    } else {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
     }
 }
 
@@ -182,13 +191,14 @@ pub fn generate_error_page(source_url: &str, error: &str) -> String {
 /// Unlike [`generate_frontmatter`], this function does not require an
 /// [`ArticleMetadata`] struct — error pages are not articles and should not
 /// pretend to be one. The frontmatter contains only the minimal keys that are
-/// meaningful for an error record: `title`, `external_url`, and `scrape_error`.
+/// meaningful for an error record: `title`, `external_url`, `scrape_error`, and
+/// `listed: false`, so the stub stays out of navigation and listings.
 pub fn render_error_markdown(source_url: &str, error: &str) -> String {
-    let escaped_url = source_url.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_error = error.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped_url = escape_yaml_string(source_url);
+    let escaped_error = escape_yaml_string(error);
 
     let frontmatter = format!(
-        "---\ntitle: \"Page Unavailable\"\nexternal_url: \"{}\"\nscrape_error: \"{}\"\n---\n\n",
+        "---\ntitle: \"Page Unavailable\"\nexternal_url: \"{}\"\nscrape_error: \"{}\"\nlisted: false\n---\n\n",
         escaped_url, escaped_error
     );
     let body = generate_error_page(source_url, error);
@@ -228,19 +238,23 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_emits_syndicated_not_external_url() {
-        // moss import brings in the user's OWN content that was published
-        // elsewhere (POSSE): the vault copy is canonical, the source URL is a
-        // syndication mirror. So the source belongs in a `syndicated` list, not
-        // the linkblog `external_url` field.
+    fn frontmatter_emits_origin_not_external_url() {
+        // moss import records where a page came FROM as provenance, not as a
+        // syndication claim: the vault copy is canonical, and the source URL
+        // is not asserted to also be the content's home (that is what the
+        // linkblog `external_url` field means).
         let meta = ArticleMetadata {
             title: Some("笔记".into()),
             ..Default::default()
         };
         let fm = generate_frontmatter(&meta, "https://book.douban.com/review/8218385/");
         assert!(
-            fm.contains("syndicated:\n  - https://book.douban.com/review/8218385/\n"),
-            "expected a syndicated YAML list pointing at the source; got:\n{fm}"
+            fm.contains("origin: \"https://book.douban.com/review/8218385/\"\n"),
+            "expected an origin field pointing at the source; got:\n{fm}"
+        );
+        assert!(
+            !fm.contains("syndicated"),
+            "import must not write the POSSE syndicated field; got:\n{fm}"
         );
         assert!(
             !fm.contains("external_url"),
@@ -249,10 +263,13 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_syndicated_escapes_yaml_hostile_source() {
+    fn frontmatter_origin_escapes_yaml_hostile_source() {
         // A malformed source_url (e.g. from a crafted MHTML Snapshot-Content-
         // Location that Url::parse rejected) must not corrupt the frontmatter:
         // a leading `*` is a YAML alias indicator and `": "` opens a mapping.
+        // `push_string` always double-quotes, so this is the same guarantee
+        // every other field gets — no field-specific bare-scalar case to keep
+        // safe.
         let meta = ArticleMetadata {
             title: Some("t".into()),
             ..Default::default()
@@ -261,7 +278,7 @@ mod tests {
             let fm = generate_frontmatter(&meta, hostile);
             let escaped = hostile.replace('\\', "\\\\").replace('"', "\\\"");
             assert!(
-                fm.contains(&format!("  - \"{}\"\n", escaped)),
+                fm.contains(&format!("origin: \"{}\"\n", escaped)),
                 "hostile source must be quoted; got:\n{fm}"
             );
             // And it must parse back to exactly the original string.
@@ -269,22 +286,23 @@ mod tests {
                 serde_yaml::from_str(fm.trim_start_matches("---\n").trim_end_matches("---\n\n"))
                     .expect("frontmatter must be valid YAML");
             assert_eq!(
-                doc["syndicated"][0].as_str(),
+                doc["origin"].as_str(),
                 Some(hostile),
-                "syndicated[0] must round-trip to the original source"
+                "origin must round-trip to the original source"
             );
         }
     }
 
     #[test]
-    fn frontmatter_omits_syndicated_when_no_source() {
-        // A local file with no known origin URL (e.g. a plain .html snapshot)
-        // has nothing to syndicate to — omit the key entirely.
+    fn frontmatter_omits_origin_when_no_source() {
+        // A local file with no known source URL (e.g. a plain .html snapshot)
+        // has no origin to record — omit the key entirely.
         let meta = ArticleMetadata {
             title: Some("T".into()),
             ..Default::default()
         };
         let fm = generate_frontmatter(&meta, "");
+        assert!(!fm.contains("origin"), "got:\n{fm}");
         assert!(!fm.contains("syndicated"), "got:\n{fm}");
         assert!(!fm.contains("external_url"), "got:\n{fm}");
     }
@@ -292,25 +310,27 @@ mod tests {
     #[test]
     fn frontmatter_includes_all_set_fields() {
         let meta = ArticleMetadata {
-            title: Some("Finding China's Voice".into()),
+            title: Some("The Reporter's Notebook".into()),
             description: Some("The new diaspora.".into()),
-            author: Some("Yi Liu".into()),
+            author: Some("Jane Doe".into()),
             date: Some("2024-12-22".into()),
-            publisher: Some("The Wire China".into()),
+            publisher: Some("Example Times".into()),
             lang: Some("en".into()),
             cover: Some("./assets/imported/abcd.jpg".into()),
             og_image: None,
+            chrome_images: Vec::new(),
+            event: Default::default(),
         };
         let fm = generate_frontmatter(&meta, "https://x.example/post");
         assert!(fm.starts_with("---\n"));
-        assert!(fm.contains("title: \"Finding China's Voice\""));
+        assert!(fm.contains("title: \"The Reporter's Notebook\""));
         assert!(fm.contains("date: \"2024-12-22\""));
-        assert!(fm.contains("author: \"Yi Liu\""));
-        assert!(fm.contains("publisher: \"The Wire China\""));
+        assert!(fm.contains("author: \"Jane Doe\""));
+        assert!(fm.contains("publisher: \"Example Times\""));
         assert!(fm.contains("lang: \"en\""));
         assert!(fm.contains("description: \"The new diaspora.\""));
         assert!(fm.contains("cover: \"./assets/imported/abcd.jpg\""));
-        assert!(fm.contains("syndicated:\n  - https://x.example/post\n"));
+        assert!(fm.contains("origin: \"https://x.example/post\"\n"));
     }
 
     #[test]
@@ -390,6 +410,68 @@ mod tests {
     }
 
     #[test]
+    fn render_error_markdown_strips_control_chars_in_error() {
+        // Regression: `error` is remote server text (a status line, a reason
+        // phrase) and must get the same C0/C1 strip `push_string` applies to
+        // scraped metadata — not just the quote/backslash escape. Before this
+        // fix the two writers shared the escape but not the strip.
+        let control = "\u{7}".repeat(3); // BEL, a C0 control char
+        let md = render_error_markdown(
+            "https://example.com/page",
+            &format!("Connection reset{control}"),
+        );
+        let frontmatter_end = md.find("---\n\n").expect("frontmatter fence");
+        let frontmatter = &md[..frontmatter_end];
+        assert!(
+            !frontmatter.contains('\u{7}'),
+            "control chars must be stripped from frontmatter; got:\n{md}"
+        );
+        let doc: serde_yaml::Value =
+            serde_yaml::from_str(frontmatter.trim_start_matches("---\n"))
+                .expect("frontmatter must be valid YAML");
+        assert_eq!(doc["scrape_error"].as_str(), Some("Connection reset"));
+    }
+
+    #[test]
+    fn render_error_markdown_escapes_embedded_newline_in_error() {
+        // Regression: the frontmatter boundary finder
+        // (`moss_core::frontmatter::yaml_span`) locates the closing fence by
+        // scanning line-by-line for a line that trims to exactly "---" — it
+        // has no notion of YAML quoting. Before this fix, a raw `\n` reached
+        // the written file (the control-char strip explicitly keeps
+        // LF/CR/TAB as "legitimate whitespace"), so an `error` string
+        // containing "\n---\n" forged a closing fence from inside what was
+        // meant to be one quoted scalar. That truncated the real
+        // frontmatter early — `title` and `external_url` were lost
+        // entirely — and spilled the rest of the (half-escaped) error text
+        // into the page body as literal text, `\"` backslashes and all.
+        let malicious = "Connection reset\n---\ntitle: \"INJECTED\"\nsneaky: \"yes\"";
+        let md = render_error_markdown("https://example.com/page", malicious);
+        let doc = moss_core::frontmatter::parse(&md);
+        assert_eq!(
+            doc.frontmatter.get("title").and_then(|v| v.as_str()),
+            Some("Page Unavailable"),
+            "a forged '---' fence inside the error text must not truncate \
+             the real frontmatter; got:\n{md}"
+        );
+        assert_eq!(
+            doc.frontmatter.get("external_url").and_then(|v| v.as_str()),
+            Some("https://example.com/page")
+        );
+        assert_eq!(
+            doc.frontmatter.get("scrape_error").and_then(|v| v.as_str()),
+            Some(malicious),
+            "the error text must round-trip exactly, as one scalar"
+        );
+        assert_eq!(
+            doc.frontmatter.len(),
+            4,
+            "no extra key (e.g. the forged 'sneaky') may land in frontmatter; got:\n{:#?}",
+            doc.frontmatter
+        );
+    }
+
+    #[test]
     fn frontmatter_strips_stray_control_chars_from_untrusted_metadata() {
         // Regression test: metadata extracted from scraped/imported HTML is
         // untrusted and can carry stray C0 control chars (e.g. via the same
@@ -414,10 +496,9 @@ mod tests {
     }
 
     #[test]
-    fn yaml_scalar_strips_stray_control_chars() {
-        // Same untrusted-input rationale as above, but for the `syndicated:`
-        // list value, which goes through `yaml_scalar` rather than
-        // `push_string`.
+    fn origin_strips_stray_control_chars() {
+        // Same untrusted-input rationale as above, but for the `origin`
+        // value derived from `source_url`.
         let control = "\u{1D}".repeat(3);
         let hostile_source = format!("https://example.com/post{control}");
         let meta = ArticleMetadata {
@@ -428,8 +509,40 @@ mod tests {
 
         assert!(!fm.contains('\u{1D}'), "control chars must be stripped; got:\n{fm}");
         assert!(
-            fm.contains("syndicated:\n  - https://example.com/post\n"),
+            fm.contains("origin: \"https://example.com/post\"\n"),
             "got:\n{fm}"
         );
+    }
+
+    #[test]
+    fn failed_page_stub_is_unlisted_and_a_normal_page_is_not() {
+        let stub = render_error_markdown("https://example.com/gone", "404 Not Found");
+        assert!(stub.contains("\nlisted: false\n"), "stub must be unlisted; got:\n{stub}");
+
+        let meta = ArticleMetadata { title: Some("Hello".into()), ..Default::default() };
+        let page = generate_frontmatter(&meta, "https://example.com/hello");
+        assert!(!page.contains("listed"), "a normal page stays listed; got:\n{page}");
+    }
+
+    #[test]
+    fn generate_frontmatter_writes_event_keys_and_no_date_for_an_event_only_page() {
+        let html = r#"<html><head><script type="application/ld+json">
+          {"@type":"Event","name":"Example Night","startDate":"2026-11-01T19:30:00-04:00",
+           "endDate":"2026-11-01T21:00:00-04:00","eventStatus":"https://schema.org/EventPostponed",
+           "offers":{"url":"https://tickets.example/night"},
+           "location":[{"@type":"Place","name":"Example Hall"},
+                       {"@type":"VirtualLocation","url":"https://stream.example/night"}]}
+          </script></head><body></body></html>"#;
+        let fm = generate_frontmatter(&super::super::metadata::derive(html), "https://example.com/night");
+        assert!(!fm.contains("\ndate:"), "an event never writes date; got:\n{fm}");
+        let at = |k: &str| fm.find(&format!("\n{k}: ")).unwrap_or_else(|| panic!("{k} missing in:\n{fm}"));
+        assert!(fm.contains("\nstart: \"2026-11-01 19:30\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\nend: \"2026-11-01 21:00\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\nlocation: \"Example Hall\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\nstatus: \"postponed\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\ntickets: \"https://tickets.example/night\"\n"), "got:\n{fm}");
+        assert!(fm.contains("\nonline: \"https://stream.example/night\"\n"), "got:\n{fm}");
+        let keys = ["start", "end", "location", "status", "tickets", "online"];
+        assert!(keys.windows(2).all(|w| at(w[0]) < at(w[1])), "key order; got:\n{fm}");
     }
 }

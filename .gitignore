@@ -1,8 +1,19 @@
 node_modules/
 dist/
+!packages/moss-api/dist/
+!packages/moss-api/dist/**
+!packages/moss-syntax/dist/
+!packages/moss-syntax/dist/**
+!packages/moss-watercolor/dist/
+!packages/moss-watercolor/dist/**
 .superpowers/
 site/.moss/build/
+site/.moss/build.nosync/
 site/.moss/cache/
 site/.moss/*.bak-*
 target/
 .DS_Store
+.worktrees/
+
+# Playwright default output dir (render-gate configs pin outputDir to target/test-tmp)
+test-results/

@@ -9,11 +9,11 @@
 //! After site generation, call `build_article_map` to create a mapping from
 //! URL paths (e.g., "posts/my-article.html") to article metadata.
 //!
-//! The map is persisted to `.moss/build/article-map.json` and can be queried by:
+//! The map is persisted to `.moss/build.nosync/article-map.json` and can be queried by:
 //! - Preview system to determine if current page is syndicatable
 //! - Syndication system to get article info for current preview URL
 
-use crate::build::terms::{TermIndex, TermSite};
+use crate::build::terms::{TermIndex, TermKind, TermSite};
 use crate::moss_paths::MossPaths;
 use crate::build::scan::slug::UrlCollision;
 use crate::build::types::ParsedDocument;
@@ -55,8 +55,8 @@ pub fn to_pretty_url(file_path: &str) -> String {
 // Lived in `plugins/types.rs` until 2026-08-17 because its *readers* are the
 // syndication plugins. But the build is what fills it and what persists it —
 // `ArticleMap` right below is nothing but a map of these — so the plugin module
-// was owning a type the build produced, which is the dependency edge ADR-050
-// points the other way. Plugins import it from here now.
+// was owning a type the build produced, which points the dependency edge the
+// wrong way. Plugins import it from here now.
 //
 // The rationale is a plain comment, not a doc comment: this type carries
 // `Type`, so every `///` line here is copied verbatim into `bindings.ts` and
@@ -139,30 +139,65 @@ pub struct ArticleMap {
     ///
     /// Root causes only, never the pages a duplicated folder dragged along
     /// with it. Empty on a site with no duplicated `url:`, which is nearly all
-    /// of them. See
-    /// docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
+    /// of them.
     #[serde(default)]
     pub url_collisions: HashMap<String, UrlCollision>,
 
-    /// URL keys (`posts/`, `authors/`, `authors/馬欣宜/`) of every index page the
+    /// URL keys (`posts/`, `authors/`, `authors/林小滿/`) of every index page the
     /// build SYNTHESIZED: index-less folders, unclaimed term pages, the term
     /// namespace roots. Collected where those pages are emitted (the auto-index
     /// loop in `render/blocking.rs`), the only place the set is true — the
     /// namespace roots are not documents at all. Kept apart from `pages`
     /// because every `pages` consumer joins its value to a source file, and a
     /// synthesized page has none. The editor's URL index reads this so a link
-    /// to a generated page classifies the way the build deploys it
-    /// (docs/archive/2026-09-02-term-links-editor-verify-and-follow.md).
+    /// to a generated page classifies the way the build deploys it.
     #[serde(default)]
     pub generated: Vec<String>,
 
     /// Every term the build derived, keyed by pseudo-folder key
-    /// (`authors/馬欣宜`), exactly as `derive_terms` built it. The claim is
+    /// (`authors/林小滿`), exactly as `derive_terms` built it. The claim is
     /// recorded here so the editor never re-derives it: a claimed term's
     /// generated URL is `Moved` to the claiming page, and the chip gesture
     /// resolves against this record.
     #[serde(default)]
     pub terms: std::collections::BTreeMap<String, TermSite>,
+
+    /// The kinds table this build derived its terms from, in declaration
+    /// order. Persisted so the editor's takeover resolver answers "what
+    /// namespace is this, and what is it called" from the build's own
+    /// answer instead of re-reading `.moss/config.toml` and risking a
+    /// different one. Empty in a map written before term kinds existed.
+    #[serde(default)]
+    pub kinds: Vec<TermKind>,
+
+    /// Term key (`people/ada-lin`) → the subset of its kind's `fields`, in
+    /// `kind.fields` order, that claim at least one member of THAT term. A
+    /// derived summary of `derive_terms`'s per-field membership, not the
+    /// member URLs themselves: the editor needs to know which field to
+    /// write when offering to claim a term, and that is the only question
+    /// it asks. A term with no members has no entry at all.
+    #[serde(default)]
+    pub fields_with_members: std::collections::BTreeMap<String, Vec<String>>,
+
+    /// Every directory that gets an index page — real (an authored
+    /// `index.md`) or synthesized — keyed by its SOURCE directory, not its
+    /// URL slug (see `folder_index_keys`, the single place this mapping is
+    /// written). A directory with a real index is included too: the value
+    /// still names the same URL the build serves that page at, which is
+    /// what lets `ArticleMapIndex::resolve_reference_to_url` fall through to
+    /// it for a folder whose index file isn't stem-matchable (e.g. a bare
+    /// `news/index.md`, whose filename stem is `index`, not `news`).
+    /// `#[serde(default)]` so an older persisted map still loads.
+    ///
+    /// Kept apart from `generated`: that set mixes an index-less content
+    /// folder's auto-generated page with term/namespace-root pages, and
+    /// neither its URL-keyed shape nor `ArticleMapIndex::by_stem`'s
+    /// ambiguity-collapsing construction can tell them apart safely. This
+    /// field exists so `ArticleMapIndex::resolve_reference_to_url` can
+    /// resolve a bare folder wikilink to a folder's index page without ever
+    /// reading `generated`/`terms`/`kinds` for that purpose.
+    #[serde(default)]
+    pub folder_indexes: std::collections::BTreeMap<String, String>,
 }
 
 impl ArticleMap {
@@ -176,6 +211,9 @@ impl ArticleMap {
             url_collisions: HashMap::new(),
             generated: Vec::new(),
             terms: std::collections::BTreeMap::new(),
+            kinds: Vec::new(),
+            fields_with_members: std::collections::BTreeMap::new(),
+            folder_indexes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -187,13 +225,13 @@ impl ArticleMap {
         self.articles.contains_key(normalized)
     }
 
-    /// Save article map to .moss/build/article-map.json
+    /// Save article map to .moss/build.nosync/article-map.json
     pub fn save(&self, moss_dir: &Path) -> Result<(), String> {
         let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
         let map_path = paths.article_map();
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize article map: {}", e))?;
-        // Atomic write (#820): the map is rewritten on every build, and concurrent
+        // Atomic write: the map is rewritten on every build, and concurrent
         // readers (editor `resolve_page_source`, syndication) must never catch a
         // half-truncated file. A plain `fs::write` truncates-then-writes, leaving a
         // window where a reader gets partial/empty JSON → a parse error. Write to a
@@ -205,6 +243,7 @@ impl ArticleMap {
         let tmp_path = map_path.with_extension("json.tmp");
         std::fs::write(&tmp_path, json)  // allow:raw_write the temp for this file's own atomic save; the rename below places it
             .map_err(|e| format!("Failed to write article map: {}", e))?;
+        // allow:unlink rename into place for the article map, not staging
         std::fs::rename(&tmp_path, &map_path)
             .map_err(|e| format!("Failed to commit article map: {}", e))?;
         Ok(())
@@ -232,7 +271,7 @@ impl ArticleMap {
         if key.is_empty() { "/".to_string() } else { format!("/{key}/") }
     }
 
-    /// Load article map from .moss/build/article-map.json
+    /// Load article map from .moss/build.nosync/article-map.json
     pub fn load(moss_dir: &Path) -> Result<Self, String> {
         let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
         let map_path = paths.article_map();
@@ -260,7 +299,7 @@ impl ArticleMap {
 ///
 /// Returns a `BTreeMap`, not a `HashMap`: this map ends up (unmodified,
 /// via `ParsedDocument::raw_frontmatter`) inside the `Debug` string
-/// `PageFacade` hashes (moss#922). `HashMap`'s per-process-random hasher
+/// `PageFacade` hashes. `HashMap`'s per-process-random hasher
 /// makes its `Debug` iteration order — and thus the facade hash — differ
 /// between build invocations for byte-identical frontmatter; verified
 /// empirically against a real vault (208/216 pages "changed" with zero
@@ -387,12 +426,16 @@ pub fn extract_tags(frontmatter: &std::collections::BTreeMap<String, Value>) -> 
 ///
 /// # Arguments
 /// * `documents` - Parsed documents from site generation
+/// * `dirs` - Every directory the scan narrowed to "gets an index page"
+///   (`ProjectStructure.dirs`), the input `folder_index_keys` turns into
+///   `folder_indexes` below
 /// * `url_collisions` - Duplicated `url:` values this build had to move
 ///
 /// # Returns
 /// An ArticleMap containing metadata for all articles
 pub fn build_article_map(
     documents: &[ParsedDocument],
+    dirs: &[String],
     dir_overrides: &std::collections::HashMap<String, String>,
     url_collisions: &[UrlCollision],
     generated: &[String],
@@ -401,13 +444,43 @@ pub fn build_article_map(
     let mut map = ArticleMap::new();
     map.generated = generated.to_vec();
     map.terms = terms.sites().clone();
+    map.kinds = terms.kinds().to_vec();
+    // The single producer of the source-directory→URL mapping (see the field
+    // doc on `ArticleMap::folder_indexes`) — reused here, not re-derived, so
+    // this can never disagree with the render's own folder-index synthesis.
+    map.folder_indexes = crate::build::scan::classify::folder_index_keys(dirs, dir_overrides)
+        .map(|(dir, url)| (dir.clone(), url))
+        .collect();
+    // Term key → the subset of that term's owning kind's fields with at
+    // least one member of THIS term specifically — a derived summary of
+    // `members_by_field`, not the full member-URL lists. Empty when no
+    // field has a member, rather than an empty Vec, so a reader's `.get()`
+    // and a fallback-to-`fields[0]` branch agree on "no members" either way.
+    for term_key in terms.sites().keys() {
+        let Some((ns, _)) = term_key.split_once('/') else { continue };
+        let Some(kind) = terms.kinds().iter().find(|k| k.key == ns) else { continue };
+        let fields_with_a_member: Vec<String> = kind
+            .fields
+            .iter()
+            .filter(|field| {
+                terms
+                    .members_by_field()
+                    .get(&(term_key.clone(), (*field).clone()))
+                    .is_some_and(|members| !members.is_empty())
+            })
+            .cloned()
+            .collect();
+        if !fields_with_a_member.is_empty() {
+            map.fields_with_members.insert(term_key.clone(), fields_with_a_member);
+        }
+    }
 
     for doc in documents {
         // Slot files (`footer.md`) fill layout chrome on every page and emit
         // no page of their own — the render partition skips them
         // (`render/blocking.rs`, the `doc.slot_only` filter). They deliberately
         // stay in `documents` so the slot collector can reach their parsed HTML
-        // through the normal data path (moss#599), which is exactly why this
+        // through the normal data path, which is exactly why this
         // loop has to exclude them explicitly: without this gate `footer.md`
         // lands under the key `footer/`, and the map is the ONLY reason
         // anything believes that URL exists. Two consequences followed —
@@ -415,7 +488,6 @@ pub fn build_article_map(
         // `/footer/` that was never emitted (404), and
         // `editor::commands::resolve_page_source` reported `is_article: true`,
         // which arms the syndicate path in `plugins::syndicate`.
-        // See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
         if doc.slot_only {
             continue;
         }

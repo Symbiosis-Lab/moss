@@ -101,7 +101,7 @@ fn a_solo_upload_is_sized_for_the_whole_link_not_a_third_of_it() {
 /// 8,910,888 bytes is `audio/dreamin.mp3` exactly. Under the old 20 MB
 /// threshold it went out as one PUT and could not finish inside 125s.
 #[test]
-fn the_mp3_that_broke_okagaki_now_chunks() {
+fn the_mp3_that_broke_sample_site_now_chunks() {
     for in_flight in 0..=LIMIT_START {
         assert!(needs_chunking(8_910_888, SEED_BANDWIDTH_BYTES_PER_SEC, in_flight, LIMIT_START));
     }
@@ -174,7 +174,7 @@ fn a_healthy_link_still_gets_the_full_four_mib_request() {
 /// implemented: 135 KB/s x 45 s = 6.07 MB clamps to the 4 MiB ceiling, so the
 /// first request of every publish was the largest one the client can make — the
 /// opposite of "start small and grow from measurement", and a guaranteed 150 s
-/// timeout on the link okagaki actually had.
+/// timeout on the link that large site actually had.
 ///
 /// Any seed at or above ~98 KB/s has this property, which is why the seed is
 /// now derived from the size instead of chosen as a rate.
@@ -305,7 +305,7 @@ fn a_site_of_small_files_still_learns_the_link_before_it_meets_a_big_one() {
     );
 }
 
-// ── Deploy summary (#1133) ───────────────────────────────────────────────────
+// ── Deploy summary ───────────────────────────────────────────────────────────
 
 /// The summary line is the deploy's feedback loop: the 2026-08-27 baseline had
 /// to be reconstructed from a rotated DEBUG log, and this line is what replaces
@@ -338,6 +338,20 @@ fn the_deploy_summary_survives_zero_bytes_and_zero_elapsed() {
     assert!(line.contains("0 bytes"), "{line}");
 }
 
+/// A drifted-hash self-heal (`deploy::upload`) must be visible in the one
+/// line a human actually reads at the end of a deploy, not just in a
+/// per-file `log::warn!` that can scroll by. Printed even at 0 (the other
+/// test above), so the metric's absence is never confusable with "too old a
+/// build to have it".
+#[test]
+fn the_deploy_summary_reports_self_healed_files() {
+    let tp = Throughput::new();
+    tp.note_self_heal();
+    tp.note_self_heal();
+    let line = tp.deploy_summary(Duration::from_secs(1));
+    assert!(line.contains("2 self-healed drift(s)"), "{line}");
+}
+
 /// Confirmed bytes count even when the request is too short to be a bandwidth
 /// sample — the summary reports what transferred, the EWMA reports what it
 /// believes, and the short-request gate applies only to the latter.
@@ -349,7 +363,7 @@ fn confirmed_bytes_count_even_below_the_sample_gate() {
     assert!(tp.deploy_summary(Duration::from_secs(1)).contains("4096 bytes"));
 }
 
-// ── Adaptive concurrency (#1135) ─────────────────────────────────────────────
+// ── Adaptive concurrency ──────────────────────────────────────────────────────
 
 /// Drive one goodput window: pin occupancy to `occ`, then feed `n` completions
 /// of `bytes` each spread across `span`, advancing `*t`. With `n` at the
@@ -535,7 +549,7 @@ fn the_window_bounds_resident_bytes_far_below_the_old_400_mb() {
 
 // ── Retry escalation ─────────────────────────────────────────────────────────
 
-/// Retrying the identical request after a 524 is what spent okagaki's 600 s
+/// Retrying the identical request after a 524 is what spent that large site's 600 s
 /// budget on three failures that each took exactly as long as the first.
 #[test]
 fn escalation_actually_shrinks_the_request() {
@@ -581,8 +595,8 @@ fn the_escalation_floor_is_comfortably_sendable_on_the_slowest_link() {
 // ── Timeout ──────────────────────────────────────────────────────────────────
 
 /// Above CF's cut, so the 524 stays the authoritative signal. Below it, moss
-/// would abort requests CF was still happily proxying — including the okagaki
-/// deploy's own successful 121 s PUT.
+/// would abort requests CF was still happily proxying — including a large live
+/// site's deploy's own successful 121 s PUT.
 #[test]
 fn the_request_timeout_sits_above_the_edge_budget() {
     assert!(

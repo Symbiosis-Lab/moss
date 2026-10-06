@@ -1,4 +1,4 @@
-//! `.moss/build/inventory.json` — the build's own account of every document it
+//! `.moss/build.nosync/inventory.json` — the build's own account of every document it
 //! parsed, whether or not that document became a page.
 //!
 //! ## Why the build owns this file
@@ -29,11 +29,11 @@ use std::path::{Path, PathBuf};
 /// became a page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InventoryEntry {
-    /// Project-root-relative source file, e.g. `works/《潮汐》第一期 — 邊界.md`.
+    /// Project-root-relative source file, e.g. `works/《河灣》第一期 — 遠行.md`.
     /// `None` for synthesized pages that have no markdown file behind them.
     pub source_path: Option<String>,
     /// Where it publishes, relative to the site root, e.g.
-    /// `works/潮汐第一期-邊界/index.html`. Empty for a slot-only document,
+    /// `works/河灣第一期-遠行/index.html`. Empty for a slot-only document,
     /// which is not published at a URL at all.
     pub url_path: String,
     /// The chrome label (nav, breadcrumb, cards) — `label`, not the body H1.
@@ -69,8 +69,7 @@ pub struct InventoryEntry {
     /// to confirm its change had landed.
     ///
     /// This is the document's own language, not the interface language — a
-    /// `ja/` tree reads `ja` here while its chrome stays the site default's
-    /// (#977).
+    /// `ja/` tree reads `ja` here while its chrome stays the site default's.
     ///
     /// `#[serde(default)]` because this file is written by one build and read
     /// by a later `moss list`, and the two can be different moss versions —
@@ -84,9 +83,13 @@ pub struct InventoryEntry {
     pub lang: String,
 }
 
-/// `.moss/build/inventory.json` — written by the build, read by `moss list`.
+/// `.moss/build.nosync/inventory.json` — written by the build, read by `moss list`.
+///
+/// Through `MossPaths::build_dir()`, not a bare join: a cloud sync client's
+/// rename-aside mid-build must not send this file to the decoy while the
+/// held root handle already knows where the real one went.
 pub fn inventory_path(moss_dir: &Path) -> PathBuf {
-    moss_dir.join("build").join("inventory.json")
+    crate::moss_paths::MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir().join("inventory.json")
 }
 
 /// Why `doc` will not appear in a generated article listing.
@@ -150,7 +153,7 @@ pub fn build_inventory(
             // Same precedence the renderer uses (`html.rs`), so this column
             // reports what the page will actually say rather than a second
             // guess at it — including the fallback, which is the SITE's tag
-            // and not the page's UI language (#977: a `fr` site serving
+            // and not the page's UI language (a `fr` site serving
             // English chrome still says `lang="fr"`).
             lang: doc.lang_tag.clone().unwrap_or_else(|| site_lang_tag.to_string()),
         })
@@ -161,13 +164,13 @@ pub fn build_inventory(
     rows
 }
 
-/// Write `.moss/build/inventory.json` from the build's parsed documents.
+/// Write `.moss/build.nosync/inventory.json` from the build's parsed documents.
 ///
 /// Called once per build, right where the article map is saved. Cheap: it
 /// clones a handful of short strings per document and serializes them.
 ///
 /// Goes through `build::io_utils` because everything landing under
-/// `.moss/build/` must (ADR-043) — a raw `fs::write` there fails against a
+/// `.moss/build.nosync/` must — a raw `fs::write` there fails against a
 /// cloud-evicted destination and is caught by `output_write_invariant_test`.
 pub fn write_inventory(
     documents: &[crate::build::types::ParsedDocument],

@@ -1,7 +1,6 @@
 //! DNS record CRUD endpoints for moss-seta.
 //!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted) per
-//! docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 7.
+//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
 
 use serde::{Deserialize, Serialize};
 use super::client::{MossSetaClient, SetaError};

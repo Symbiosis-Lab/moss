@@ -13,8 +13,7 @@
 //! time-critical phases (media metadata during the blocking phase).
 //!
 //! As of `platform::macos::iopolicy::set_dataless_fail_fast` (called once at
-//! startup — see docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-
-//! cloud-gate.md), reading a dataless file's content on macOS no longer
+//! startup), reading a dataless file's content on macOS no longer
 //! blocks-then-succeeds: it fails immediately with `EDEADLK`. Use
 //! `is_dataless_unavailable()` to recognize that failure and defer instead
 //! of hard-failing. **Do NOT use `is_evicted()` as a skip gate for file copy
@@ -53,26 +52,13 @@ use std::path::Path;
 #[cfg(target_os = "macos")]
 const SF_DATALESS: u32 = 0x40000000;
 
-/// Check whether a file is evicted (cloud-only) on iCloud Drive.
-///
-/// Uses `symlink_metadata()` (lstat) which reads inode metadata without
-/// triggering a download of the file's data extents.
-///
-/// Returns `false` for non-existent files, directories, or on non-macOS platforms.
+/// Whether `meta`, a file's `symlink_metadata` (lstat, which reads inode
+/// metadata without triggering a download), says iCloud Drive has evicted it.
+/// `false` for directories and symlinks.
 #[cfg(target_os = "macos")]
-pub fn is_evicted(path: &Path) -> bool {
+fn evicted_meta(meta: &std::fs::Metadata) -> bool {
     use std::os::darwin::fs::MetadataExt;
-
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) => {
-            // Only check regular files (not directories or symlinks)
-            if !meta.is_file() {
-                return false;
-            }
-            (meta.st_flags() & SF_DATALESS) != 0
-        }
-        Err(_) => false,
-    }
+    meta.is_file() && (meta.st_flags() & SF_DATALESS) != 0
 }
 
 /// Windows placeholder-file attribute bits (`<winnt.h>`), set by Files-On-
@@ -82,30 +68,180 @@ const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
 #[cfg(target_os = "windows")]
 const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
 
-/// Check whether a file is a cloud-only placeholder on Windows.
-///
-/// Uses `symlink_metadata()` (lstat-equivalent) — reads directory-entry
-/// attributes without triggering a download.
+/// Whether `meta`, a file's `symlink_metadata` (directory-entry attributes,
+/// read without triggering a download), marks a cloud-only placeholder on
+/// Windows.
 #[cfg(target_os = "windows")]
-pub fn is_evicted(path: &Path) -> bool {
+fn evicted_meta(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
-
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if !meta.is_file() {
-                return false;
-            }
-            (meta.file_attributes()
-                & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS))
-                != 0
-        }
-        Err(_) => false,
-    }
+    meta.is_file()
+        && (meta.file_attributes() & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)) != 0
 }
 
 /// Non-macOS, non-Windows stub: always returns false.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn is_evicted(_path: &Path) -> bool {
+fn evicted_meta(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Is `path` a cloud-only placeholder right now? One `lstat`, never a read — the
+/// platform check is the three `evicted_meta` variants above.
+pub fn is_evicted(path: &Path) -> bool {
+    pretended(path) || std::fs::symlink_metadata(path).is_ok_and(|meta| evicted_meta(&meta))
+}
+
+/// [`is_evicted`], asking for the file to be downloaded when it is. The build
+/// hands this to the readers that skip an offline page, so the page they skip
+/// this build is on disk for the next; a reader that only looks, such as
+/// planning a rename, hands them [`is_evicted`].
+pub fn is_evicted_and_requested(path: &Path) -> bool {
+    let evicted = is_evicted(path);
+    if evicted {
+        crate::build::cloud_readiness::request_download(path);
+    }
+    evicted
+}
+
+/// [`is_evicted`] for a caller already holding `meta`, `path`'s own
+/// `symlink_metadata`: no second `lstat`.
+pub fn is_evicted_stat(path: &Path, meta: &std::fs::Metadata) -> bool {
+    pretended(path) || evicted_meta(meta)
+}
+
+/// Whether a test marked `path` cloud-only — see [`pretend`].
+#[cfg(test)]
+fn pretended(path: &Path) -> bool {
+    pretend::marked(path)
+}
+
+#[cfg(not(test))]
+fn pretended(_path: &Path) -> bool {
+    false
+}
+
+/// Test seam for everything that branches on a file being in the cloud.
+///
+/// Only the file provider can set `SF_DATALESS`, and off macOS the check is a
+/// compile-time `false`, so no test could put a file in the cloud: the code that
+/// must not read one (the hash index's `resolve`, the scan's evicted branch, the
+/// CAS heal) had nothing but a real dataless file to be tried against. A path
+/// marked here answers `is_evicted` (and so `is_still_in_the_cloud`) as true until
+/// the guard drops. Keyed by exact path, so tests on their own temp dirs never see
+/// each other's marks.
+#[cfg(test)]
+pub(crate) mod pretend {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    /// Each marked path with the number of questions about it still to answer "on disk".
+    static MARKED: Mutex<Vec<(PathBuf, usize)>> = Mutex::new(Vec::new());
+
+    /// Paths that stay in the cloud until a download is requested for them.
+    static ARRIVING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    /// Every path a download was requested for, one entry per request.
+    static REQUESTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    #[cfg(unix)]
+    static EVICTED_INODES: Mutex<Vec<(PathBuf, u64)>> = Mutex::new(Vec::new());
+
+    pub(crate) fn marked(path: &Path) -> bool {
+        #[cfg(unix)]
+        if EVICTED_INODES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(p, inode)| {
+            p == path && std::fs::symlink_metadata(path).is_ok_and(|m| {
+                crate::build::stat::stat_identity(&m).1 == Some(*inode)
+            })
+        }) {
+            return true;
+        }
+        if ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|p| p == path) {
+            return true;
+        }
+        let mut marked = MARKED.lock().unwrap_or_else(|e| e.into_inner());
+        match marked.iter_mut().find(|(p, _)| p == path) {
+            Some((_, on_disk_for)) if *on_disk_for > 0 => {
+                *on_disk_for -= 1;
+                false
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Mark `path` as cloud-only for the life of the returned guard.
+    pub(crate) fn evicted(path: &Path) -> Guard {
+        evicted_after(path, 0)
+    }
+
+    /// [`evicted`], except the first `questions` asked about `path` are answered as if
+    /// it were still on disk: the file goes to the cloud after a caller's first check and
+    /// before its read, which is the race every check after the first is for.
+    pub(crate) fn evicted_after(path: &Path, questions: usize) -> Guard {
+        MARKED.lock().unwrap_or_else(|e| e.into_inner()).push((path.to_path_buf(), questions));
+        Guard(path.to_path_buf())
+    }
+
+    /// Mark `path` cloud-only until a download is requested for it, the way a
+    /// provider delivers a file once asked.
+    pub(crate) fn evicted_until_requested(path: &Path) -> Guard {
+        ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).push(path.to_path_buf());
+        Guard(path.to_path_buf())
+    }
+
+    /// Mark the existing inode cloud-only. Replacing it atomically supplies a
+    /// new local inode; a download request alone leaves the placeholder offline.
+    #[cfg(unix)]
+    pub(crate) fn evicted_until_replaced(path: &Path) -> Guard {
+        let inode = crate::build::stat::stat_identity(&std::fs::symlink_metadata(path).unwrap()).1.unwrap();
+        EVICTED_INODES.lock().unwrap_or_else(|e| e.into_inner()).push((path.to_path_buf(), inode));
+        Guard(path.to_path_buf())
+    }
+
+    /// Called by `request_download`: records the request and lets an arriving file land.
+    pub(crate) fn requested(path: &Path) {
+        REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).push(path.to_path_buf());
+        ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| p != path);
+    }
+
+    /// How many downloads were requested for `path`.
+    pub(crate) fn requests_for(path: &Path) -> usize {
+        REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|p| *p == path).count()
+    }
+
+    /// The refusal a provider gives for a write below a directory marked here
+    /// ([`evicted`] for ever, [`evicted_until_requested`] until asked for).
+    pub(crate) fn refusal_below(path: &Path) -> Option<std::io::Error> {
+        let is_above = |dir: &PathBuf| path != dir && path.starts_with(dir);
+        let refused = ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(is_above)
+            || MARKED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(dir, _)| is_above(dir));
+        refused.then(|| std::io::Error::from_raw_os_error(libc::EDEADLK))
+    }
+
+    pub(crate) struct Guard(PathBuf);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            EVICTED_INODES.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| *p != self.0);
+            ARRIVING.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != self.0);
+            REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != self.0);
+            MARKED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| *p != self.0);
+        }
+    }
+}
+
+/// Whether a DIRECTORY carries the dataless flag. [`is_evicted`] answers only
+/// for regular files; this exists for forensics on a vanished CAS shard, where
+/// a dataless shard directory and a deleted one are two different culprits.
+#[cfg(target_os = "macos")]
+pub fn is_dataless_dir(path: &Path) -> bool {
+    use std::os::darwin::fs::MetadataExt;
+    pretended(path)
+        || std::fs::symlink_metadata(path)
+            .map(|meta| meta.is_dir() && (meta.st_flags() & SF_DATALESS) != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_dataless_dir(_path: &Path) -> bool {
     false
 }
 
@@ -185,7 +321,8 @@ pub fn is_still_in_the_cloud(path: &Path) -> bool {
 /// later," and neither is evidence of absence. Anything else — a real
 /// `NotFound`, a permission error, bad I/O — is not this.
 pub fn is_offline_not_absent(path: &Path, err: &std::io::Error) -> bool {
-    is_dataless_unavailable(err)
+    pretended(path)
+        || is_dataless_unavailable(err)
         || (err.kind() == std::io::ErrorKind::NotFound && !is_definitely_absent(path, err))
 }
 

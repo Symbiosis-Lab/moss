@@ -4,7 +4,7 @@
 
 /// A link rendered INSIDE the toast's message, on the message's own line —
 /// for a toast whose sentence ends in a thing you can open ("Published to
-/// okagaki.mosspub.com"). An action button would put the same words on a
+/// sample-site.mosspub.com"). An action button would put the same words on a
 /// second row and say them twice.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, specta::Type)]
 pub struct ToastInlineLink {
@@ -19,7 +19,7 @@ pub struct ToastInlineLink {
 pub struct ToastAction {
     pub label: String,
     /// Frontend event name to fire when the button is clicked. Resolved by
-    /// `frontend/app/shared/ui/toast-manager.ts`.
+    /// the desktop app's toast manager.
     pub event: String,
 }
 
@@ -33,8 +33,8 @@ pub struct ToastAction {
 /// `ack: true` and the frontend renders it success-styled via `showAck`.
 ///
 /// Fields mirror `ToastAdvisory` + the options bag in
-/// `frontend/app/shared/ui/toast-manager.ts`. Per architecture decision 9
-/// (`docs/reference/typed-event-bus.md`): `Option<T>` serializes as
+/// the desktop app's toast manager. Per architecture decision 9:
+/// `Option<T>` serializes as
 /// `T | null` required, not `T?` optional. The TS listener accepts `null` the
 /// same as `undefined`.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, specta::Type)]

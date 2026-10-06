@@ -1,5 +1,5 @@
 //! The three credential arms of the engine seam, and the custody rule they
-//! encode (ADR-072 §3, as amended 2026-08-30).
+//! encode.
 //!
 //! A secret is the keystore one shape down: a token somebody else issued the
 //! user, which the plugin does read because it puts it in a header. The scope is
@@ -14,8 +14,8 @@
 //! stops credential phishing is that a plugin can never DRAW a credential input
 //! — the modal is moss's, the fields come from the manifest, the plugin supplies
 //! ids and sentences and no pixels. Depositing what an authenticated flow
-//! already handed it is a different act, and [`set`] allows it. ADR-032 settled
-//! the same question for signing keys, as custody rather than restriction.
+//! already handed it is a different act, and [`set`] allows it. The same
+//! question was settled for signing keys, as custody rather than restriction.
 //!
 //! The line runs between KEYS, not between plugins. A key the manifest declared
 //! as one moss asks the user for stays moss's to write; every other key in the
@@ -45,8 +45,8 @@ pub(super) fn get(
 /// So the refusal reads the manifest's own answer. A key the manifest declared
 /// under `setup.credentials`, or as a `secret` in `config_schema`, is one moss
 /// asked the user for in moss's own modal; the plugin may not write it. Every
-/// other key in its scope is its own, and depositing there is the act ADR-072
-/// §3 allows. The scope still comes from the dispatch seam, so this narrows
+/// other key in its scope is its own, and depositing there is the act this
+/// module allows. The scope still comes from the dispatch seam, so this narrows
 /// what a plugin may do to itself and takes nothing away from the guarantee
 /// that it can never reach another plugin's store.
 ///

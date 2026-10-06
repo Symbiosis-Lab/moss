@@ -9,7 +9,7 @@
  *
  * Intentionally excluded:
  *   - Image embeds   `![alt](url)`       — `Image` node (not `Link`); skipped
- *   - Embed wikilinks `![[file]]`        — `WikilinkEmbed` node (ADR-041); skipped
+ *   - Embed wikilinks `![[file]]`        — `WikilinkEmbed` node; skipped
  *   - Links inside fenced code blocks    — Lezer's block parser claims fences
  *     before inline parsers run, so no `Link`/`Wikilink` node is ever emitted
  *     inside a `FencedCode` span; no special guard is needed.
@@ -90,8 +90,8 @@ export function extractLinkTargets(state: EditorState): ExtractedTarget[] {
       // the clickable/dim mark (cm-link-resolver) and Cmd+click nav (cm-link-nav)
       // land on the text the user actually sees.
       if (node.name === 'Wikilink') {
-        // Embeds need no guard here: `![[file]]` is a `WikilinkEmbed` node
-        // (ADR-041), a different name this branch never sees. The old
+        // Embeds need no guard here: `![[file]]` is a `WikilinkEmbed` node,
+        // a different name this branch never sees. The old
         // character peek at `node.from - 1` also suppressed the escaped form
         // `\![[Page]]`, which is a genuine link and is now extracted.
 

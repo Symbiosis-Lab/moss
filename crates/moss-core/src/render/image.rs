@@ -1,57 +1,17 @@
 //! Image HTML synthesizer — the single entry point for emitting `<img>` /
 //! `<picture>` markup in moss output.
 //!
-//! See [`docs/reference/structural-html-emission.md`](../../../../../docs/reference/structural-html-emission.md)
-//! for the architectural principle: structural HTML decisions are made at the
+//! The architectural principle: structural HTML decisions are made at the
 //! typed-data layer (pulldown-cmark events, shortcode AST, typed component
 //! props), with all three call sites converging on the function in this
 //! module. Regex post-passes are reserved for non-markdown-origin attribute
 //! injection only.
 //!
-//! # Migration state (post-Step-7, 2026-05-16)
-//!
-//! Steps 1-7 of the structural-html-emission migration are complete:
-//! - Step 1: extracted `synthesize_image_html`
-//! - Step 2: routed markdown `Tag::Image` events
-//! - Step 3: routed `:::hero` shortcode image
-//! - Step 4: routed link-preview favicon
-//! - Step 6: routed every cover image path (folder cards, child summary
-//!   cards, folder index hero, photo/video gallery thumbnails) through
-//!   `render_cover_html`
-//! - Step 7: retired `wrap_img_in_picture` (the structural part of the
-//!   legacy regex post-pass). The synthesizer now owns every `<picture>`
-//!   wrap in moss output. `add_image_placeholder_attributes` survives as
-//!   the attribute-injection seam for the documented carve-outs (see
-//!   below).
-//!
 //! The byte-shape contract is captured by snapshot tests at the bottom of
-//! this file. They are the line of defense against accidental output
-//! drift; any future change to attribute order, quoting, or whitespace
-//! must update them deliberately.
-//!
-//! Later steps will:
-//! - Step 8: switch `MarkdownStandalone` to a `<figure class="moss-image">`
-//!   wrapper (breaking change for user themes — staged separately)
-//! - Add AVIF `<source>` lines once the image pipeline produces AVIF
-//! - Drop the inline LQIP `style=` in favor of a wrapper CSS custom prop
-//!
-//! # Step-8 contract: synthesizer owns the outer `<figure>` (planned)
-//!
-//! `transform_events` currently wraps the synthesizer's `MarkdownStandalone`
-//! output in its own `<figure>` for the three caption-pattern branches
-//! (image+emphasis, separate-emphasis, implicit-figure). After Step 8 the
-//! synthesizer emits `<figure class="moss-image">` itself; if `transform_events`
-//! still wraps, the output will be `<figure><figure class="moss-image">...</figure>
-//! <figcaption>...</figcaption></figure>` — invalid double-wrap.
-//!
-//! The Step-8 contract: caption flows into the synthesizer via
-//! `MarkdownStandalone { caption: Option<&str> }` (or a richer
-//! `CaptionMarkdown` for emphasis-in-caption support), and the three
-//! caption-pattern branches collapse into a single `Event::Html(
-//! synthesize_image_html(..., MarkdownStandalone { caption }))` emission.
-//! The `<figcaption>` becomes the synthesizer's responsibility, NOT
-//! `transform_events`. Captures the spec at
-//! `docs/reference/structural-html-emission.md#output-shape`.
+//! this file; any change to attribute order, quoting, or whitespace must
+//! update them deliberately. The synthesizer owns every `<picture>` wrap in
+//! moss output; `add_image_placeholder_attributes` is only the
+//! attribute-injection seam for the carve-outs below.
 //!
 //! # Carve-outs: bare `<img>` emitters not routed through the synthesizer
 //!
@@ -80,20 +40,18 @@
 //!   input, the markdown HTML is opaque to the synthesizer and gets only
 //!   the additive attribute injection pass.
 //!
-//! Photography/video gallery thumbnails — previously a carve-out — were
-//! folded into the synthesizer in Step 7's commit. The **review colophon
-//! cover** (`build/features/review.rs::render_colophon`) — also previously
-//! a carve-out — was folded in 2026-05-16. Both use
-//! `ImageContext::FolderCardCover` (container-bounded thumbnail semantics).
+//! Photography/video gallery thumbnails and the review colophon cover
+//! (`build/features/review.rs::render_colophon`) go through the synthesizer
+//! with `ImageContext::FolderCardCover` (container-bounded thumbnail
+//! semantics).
 //!
-//! These four remaining carve-outs are flagged here so future maintenance
-//! does not drop their attribute injection. Step 7 retired the structural
-//! part of the regex (`wrap_img_in_picture`); the surviving
-//! `add_image_placeholder_attributes` provides additive attrs only for
-//! these bare-img paths.
+//! The four carve-outs above are flagged so future maintenance does not drop
+//! their attribute injection: `add_image_placeholder_attributes` provides
+//! additive attrs only, for these bare-img paths.
 
 use crate::asset_paths::{
-    deployed_width, is_ladder_source_ext, is_webp_source_ext, ladder_rungs, to_webp, to_webp_rung,
+    deployed_width, is_ladder_source_ext, is_scroll_shape, is_webp_source_ext, ladder_rungs,
+    to_webp, to_webp_rung,
 };
 use crate::asset_snapshot::{AssetSnapshot, FALLBACK_HEIGHT, FALLBACK_WIDTH};
 use crate::contract::sizes as ctx_sizes;
@@ -116,7 +74,6 @@ use std::path::PathBuf;
 /// - `MarkdownInline` → bare `<img>` (or `<picture><img></picture>`)
 /// - `Hero` → bare `<img>` (the hero shortcode wraps with `<header>`)
 /// - `FolderCardCover` → bare `<img>` (`.moss-card-cover > ` wraps)
-/// - `LinkPreview` → bare `<img>` (link-preview anchor wraps)
 /// - `Favicon` → bare 16×16 `<img>` with no `<picture>`, no LQIP
 ///
 /// Not `Copy` (the embedded `&str` caption would force a lifetime on
@@ -180,8 +137,6 @@ pub enum ImageContext<'a> {
     Hero { plate: bool },
     /// Folder-card cover or child-summary cover image.
     FolderCardCover,
-    /// External-link preview thumbnail image.
-    LinkPreview,
     /// Favicon for a link-preview card. Bare 16×16 `<img>`, no `<picture>`,
     /// no LQIP, no responsive variants.
     Favicon,
@@ -275,13 +230,21 @@ pub struct ImageRenderOptions<'a> {
     /// for `:::hero` covers carrying `MediaAttrs`). The caller is responsible
     /// for HTML-escaping values inside this fragment.
     pub extra_attrs: Option<&'a str>,
-    /// Explicit `sizes=` override for the srcset ladder. When `Some`, wins
-    /// over the [`ImageContext`]-derived default — used by callers that know
-    /// the rendered slot better than the context does: a figure carrying a
-    /// `data-width` token ([`crate::contract::sizes::sizes_for_data_width`])
-    /// or an image inside a `.moss-grid` cell
-    /// ([`crate::contract::sizes::sizes_for_grid_cell`]).
-    pub sizes: Option<&'a str>,
+    /// Inputs to the `sizes=` table (`sizes_for`) for a body image: the
+    /// enclosing grid cell's scope ([`crate::contract::sizes::sizes_for_grid_cell`]),
+    /// the figure's raw `data-width` token (for `MarkdownInline`; a
+    /// `MarkdownStandalone` carries its own), and whether the page is vertical.
+    pub grid_cell_sizes: Option<&'a str>,
+    pub data_width: Option<&'a str>,
+    pub vertical: bool,
+    /// Whether to tag an extreme-aspect source `data-aspect="scroll"`
+    /// (`asset_paths::is_scroll_shape`) for the default handscroll/hanging-
+    /// scroll presentation in site.css / vertical.css. Set by body-image
+    /// callers (`MarkdownInline`/`MarkdownStandalone`) only — Hero,
+    /// GalleryThumb and FolderCardCover already have their own dedicated
+    /// extreme-aspect handling (`data-fit="plate"`, fixed crop boxes) and
+    /// must not also pick up the body-image default.
+    pub scroll_shape: bool,
 }
 
 /// Synthesize the HTML for an image reference.
@@ -294,18 +257,14 @@ pub struct ImageRenderOptions<'a> {
 ///
 /// `assets` is the [`AssetSnapshot`] holding pre-fetched per-path dimensions,
 /// LQIP data URIs, dominant colors, and registered variant kinds (WebP/AVIF).
-/// Phase 1 of the unified-image-emission migration (2026-05-25) replaced the
-/// prior `Option<&MediaDimensionLookup>` parameter with this typed contract —
-/// `MediaDimensionLookup` still populates the snapshot in `pipeline.rs`'s
-/// `build_asset_snapshot` boundary, but the synthesizer no longer probes it
-/// directly. Callers that don't have a populated snapshot (test/fragment-
-/// render paths) pass `&AssetSnapshot::new()`; the synthesizer then emits
-/// fallback dims (800×600) and no LQIP/color style.
+/// Callers that don't have a populated snapshot (test/fragment-render paths)
+/// pass `&AssetSnapshot::new()`; the synthesizer then emits fallback dims
+/// (800×600) and no LQIP/color style.
 ///
 /// `context` and `options` describe the call site. `Favicon` short-circuits
 /// to a 16×16 bare `<img>` (no manifest, no LQIP, no `<picture>`).
 ///
-/// Byte-shape contract (preserved through Phase 1's data-source switch):
+/// Byte-shape contract:
 ///
 /// - With no `<picture>` wrap (non-raster):
 ///   `<img src="X" width="W" height="H" loading="lazy" style="…" alt="Y" />`
@@ -324,10 +283,8 @@ pub fn synthesize_image_html(
     options: &ImageRenderOptions<'_>,
 ) -> String {
     // Favicon short-circuit: hardcoded 16×16, no snapshot lookup, no <picture>.
-    // Matches the current emission shape in
-    // `build/markdown/typed_renderers.rs::render_link_preview`. `assets` is
-    // intentionally unused — favicons are UI affordances that never
-    // participate in the variant manifest.
+    // `assets` is intentionally unused — favicons are UI affordances that
+    // never participate in the variant manifest.
     if matches!(context, ImageContext::Favicon) {
         let class_attr = options
             .class
@@ -341,16 +298,12 @@ pub fn synthesize_image_html(
         );
     }
 
-    // Phase 2 scaffold (filled by Phase 2 carve-out agents): the three former
-    // bare-<img> carve-outs become first-class synthesizer contexts. Each
-    // short-circuits before synthesize_inner (which assumes the standard
-    // <picture>/LQIP/dims pipeline that's wrong for these elements).
-    // Site-logo short-circuit (Phase 2B carve-out): bare `<img>` with
+    // The site logo short-circuits before synthesize_inner (which assumes the
+    // standard <picture>/LQIP/dims pipeline): bare `<img>` with
     // `class="site-logo"`, no `<picture>`, no LQIP, no `loading="lazy"` —
     // the logo is above-the-fold; CSS handles sizing
     // (`.site-logo { height: 1.8em }`). Attribute order
-    // (`class`, `src`, `alt`, `aria-hidden`) preserves the pre-Phase-2
-    // byte shape emitted by `nav.rs::generate_navigation`.
+    // (`class`, `src`, `alt`, `aria-hidden`) is part of the byte shape.
     if matches!(context, ImageContext::SiteLogo) {
         // `extra_attrs` rides directly after `class` (the editor preview's
         // `data-source-fm="logo"` annotation); `None` keeps the byte shape.
@@ -431,30 +384,8 @@ pub fn synthesize_image_html(
     // every non-favicon context. The wrapping `<figure class="moss-image">`
     // and optional `<figcaption>` are the only context-dependent
     // structure. Compute the inner first, then wrap if requested.
-    //
-    // The context decides the `sizes=` value for the srcset ladder
-    // (responsive-image-variants Task 3): full-bleed surfaces (hero,
-    // `data-width="screen|full"` figures) span the viewport; wide/page
-    // figures span their escape band (ADR-021 Corollary 2, the data-width
-    // CSS in site.css); cards/gallery thumbs occupy grid cells; everything
-    // else renders in the content column. `options.sizes` overrides all of
-    // it — the caller (figure renderer with a data-width token, grid cell)
-    // knows the slot better than the context does. Only emitted when the
-    // ladder is non-empty — see synthesize_inner.
-    let sizes_value: &str = match options.sizes {
-        Some(s) => s,
-        None => match &context {
-            ImageContext::Hero { plate: true } => ctx_sizes::SIZES_HERO_PLATE,
-            ImageContext::Hero { plate: false } => ctx_sizes::SIZES_FULL_BLEED,
-            ImageContext::MarkdownStandalone { width: Some(w), .. } => {
-                ctx_sizes::sizes_for_data_width(w).unwrap_or(ctx_sizes::SIZES_BODY)
-            }
-            ImageContext::FolderCardCover | ImageContext::LinkPreview => ctx_sizes::SIZES_CARD,
-            ImageContext::GalleryThumb => ctx_sizes::SIZES_GALLERY,
-            _ => ctx_sizes::SIZES_BODY,
-        },
-    };
-    let inner = synthesize_inner(src, alt, assets, options, sizes_value);
+    let sizes_value = sizes_for(src, assets, &context, options);
+    let inner = synthesize_inner(src, alt, assets, options, &sizes_value);
 
     match context {
         ImageContext::MarkdownStandalone {
@@ -504,18 +435,16 @@ pub fn synthesize_image_html(
 /// for the raw-HTML media branch of `emit_standalone_figure_image`
 /// without duplicating the wrapper byte shape. The synthesizer is the
 /// single source of truth for `<figure class="moss-image">` — when the
-/// wrapper class evolves (e.g. `moss-image moss-image--auto` per the
-/// Step-8 spec), only this function changes.
+/// wrapper class evolves, only this function changes.
 pub fn wrap_in_figure(
     inner_html: &str,
     caption: Option<&str>,
     width: Option<&str>,
 ) -> String {
-    // 3-arg shorthand kept for the raw-HTML media branch in
+    // 3-arg shorthand for the raw-HTML media branch in
     // pipeline.rs::emit_standalone_figure_image (wikilink display-keyword
-    // images that don't carry moss: title params — no align / extra
-    // classes / extra attrs). Delegates to the canonical wrapper so the
-    // byte shape stays defined in exactly one place.
+    // images with no align / extra classes / extra attrs). Delegates to the
+    // canonical wrapper so the byte shape is defined in one place.
     let empty_classes: &[String] = &[];
     let empty_attrs: BTreeMap<String, String> = BTreeMap::new();
     wrap_in_figure_full(inner_html, caption, width, None, empty_classes, &empty_attrs)
@@ -619,17 +548,38 @@ fn synthesize_inner(
     // pipeline sites keep `false` (canonical rationale + the EXIF-orientation
     // agreement live on `asset_paths::ladder_rungs`). base_url == src: the served
     // base webp IS the source (`to_webp(src) == src`).
+    // Computed once here — not re-derived inside `render_img_tag`, nor a
+    // second time for the `<picture>`-wrapping decisions below — so the
+    // `<img>`'s own `data-aspect` and its container's can never disagree
+    // about the same source. `asset_paths::is_scroll_shape` on a `None`
+    // (unknown dims) lookup is `false` by construction (`is_some_and`), so
+    // an unknown-dims source never gets a scroll container either.
+    let scroll =
+        options.scroll_shape && lookup_dims(assets, src).is_some_and(|(w, h)| is_scroll_shape(w, h));
+
     if is_webp_source(src) {
-        return match resolve_ladder(assets, src, lookup_animated(assets, src)) {
-            None => render_img_tag(src, alt, assets, options, None),
+        let img_tag = match resolve_ladder(assets, src, lookup_animated(assets, src)) {
+            None => render_img_tag(src, alt, assets, options, None, scroll),
             Some((rungs, base_w)) => {
                 let srcset = build_srcset(src, src, rungs, base_w);
-                render_img_tag(src, alt, assets, options, Some((&srcset, sizes_value)))
+                render_img_tag(src, alt, assets, options, Some((&srcset, sizes_value)), scroll)
             }
         };
+        return wrap_scroll_container(img_tag, scroll, options.vertical);
     }
 
-    let img_tag = render_img_tag(src, alt, assets, options, None);
+    let img_tag = render_img_tag(src, alt, assets, options, None, scroll);
+
+    // `data-aspect="scroll"` lands on the outer `<picture>` too (not just
+    // the inner `<img>` render_img_tag already tagged) because horizontal
+    // typesetting's CSS needs an element with real DOM containment to make
+    // scrollable — an `<img>` has no child content a browser can scroll to
+    // reveal, only a container with the (wider) `<img>` as its child does.
+    // `tabindex="0"` (keyboard-scrollable, same affordance as
+    // `.moss-table-scroll`) is skipped under vertical typesetting: there the
+    // image sits in the page's own horizontal scroll with no nested
+    // scroller, so a second tab stop would be a pointless one.
+    let picture_scroll_attr = scroll_picture_attrs(scroll, options.vertical);
 
     // For raster originals, always emit <picture><source srcset=X.webp>.
     // This markup is MODE-INDEPENDENT — the on-disk HTML is identical in
@@ -642,7 +592,7 @@ fn synthesize_inner(
     //     surfaces a warning SVG (preview/server/placeholder.rs).
     //   • Publish: the seal/persist task AWAITS the background drain barrier
     //     before sealing, so the sealed/deployed generation always contains the
-    //     encoded .webp on disk (ADR-013 by construction).
+    //     encoded .webp on disk (by construction).
     // So the URL is always live in both modes.
     //
     // We must never emit a <source> that might 404 because a chosen <source>
@@ -654,8 +604,7 @@ fn synthesize_inner(
     // For non-raster sources (svg, favicons via Favicon context), no variant
     // exists; emit the bare <img>.
     //
-    // Pattern: explicit promise model. See
-    // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 3).
+    // Pattern: explicit promise model.
     if is_raster_original(src) {
         // to_webp(src) inherits the dir_overrides + relative-prefix already
         // applied to `src` by the upstream renderer. Swapping the extension
@@ -671,20 +620,58 @@ fn synthesize_inner(
         // `None` → the legacy single-URL `<source>` shape.
         match resolve_ladder(assets, src, false) {
             None => format!(
-                r#"<picture><source srcset="{}" type="image/webp">{}</picture>"#,
+                r#"<picture{}><source srcset="{}" type="image/webp">{}</picture>"#,
+                picture_scroll_attr,
                 html_escape(&encode_srcset_url(&srcset_path)),
                 img_tag,
             ),
             Some((rungs, base_w)) => {
                 let srcset = build_srcset(src, &srcset_path, rungs, base_w);
                 format!(
-                    r#"<picture><source srcset="{}" type="image/webp" sizes="{}">{}</picture>"#,
+                    r#"<picture{}><source srcset="{}" type="image/webp" sizes="{}">{}</picture>"#,
+                    picture_scroll_attr,
                     html_escape(&srcset),
                     html_escape(sizes_value),
                     img_tag,
                 )
             }
         }
+    } else {
+        // Non-raster (svg, favicons via Favicon context): no `<picture>` of
+        // its own, same as the webp-source branch above — wrap it under the
+        // same rule if it's scroll-shaped.
+        wrap_scroll_container(img_tag, scroll, options.vertical)
+    }
+}
+
+/// `data-aspect="scroll"` (plus `tabindex="0"` unless `vertical`) for the
+/// `<picture>` that IS the scroll container — shared by every call site that
+/// needs to decide the outer wrapper's attributes from an already-computed
+/// `scroll` bool, so the `is_scroll_shape` dims lookup itself happens in
+/// exactly one place ([`synthesize_inner`]'s own `scroll` binding).
+fn scroll_picture_attrs(scroll: bool, vertical: bool) -> &'static str {
+    if !scroll {
+        ""
+    } else if vertical {
+        r#" data-aspect="scroll""#
+    } else {
+        r#" data-aspect="scroll" tabindex="0""#
+    }
+}
+
+/// Wrap a bare `<img>` — a webp source or a non-raster original, neither of
+/// which gets a `<picture>` of its own otherwise — in one that exists ONLY
+/// to be horizontal typesetting's scroll container (site.css's
+/// `data-aspect="scroll"` rule): an `<img>` alone has no child content a
+/// browser can scroll to reveal, only a container with the (wider) `<img>`
+/// as its child does. Never wraps under vertical typesetting: vertical.css
+/// sizes the bare `<img>` directly as part of the page's own scroll, no
+/// container needed, so wrapping would only add an inert element. Either
+/// way `img_tag` already carries its own `data-aspect` from `render_img_tag`
+/// — this only ever adds the container around it.
+fn wrap_scroll_container(img_tag: String, scroll: bool, vertical: bool) -> String {
+    if scroll && !vertical {
+        format!("<picture{}>{}</picture>", scroll_picture_attrs(true, false), img_tag)
     } else {
         img_tag
     }
@@ -727,6 +714,55 @@ fn is_webp_source(src: &str) -> bool {
         .is_some_and(|(_, ext)| is_webp_source_ext(ext))
 }
 
+/// The `sizes=` value for the srcset ladder — the one place it is decided.
+/// Non-body contexts are fixed. A body image takes, on a vertical page, its
+/// grid cell's scope (a definite box) else the column height × its aspect —
+/// `data-width` is inert there; on a horizontal page, its `data-width` escape
+/// band → its grid cell's scope → the content column.
+fn sizes_for<'s>(
+    src: &str,
+    assets: &AssetSnapshot,
+    context: &ImageContext<'_>,
+    options: &ImageRenderOptions<'s>,
+) -> std::borrow::Cow<'s, str> {
+    use std::borrow::Cow;
+    // A body image tagged `data-aspect="scroll"` renders at up to its own
+    // delivered resolution in BOTH writing modes (site.css / vertical.css),
+    // never fit to the viewport-derived column `SIZES_BODY`/
+    // `sizes_vertical_body` assume below — checked before either context
+    // or the vertical branch decides, for the same reason `SIZES_HERO_PLATE`
+    // is checked before `SIZES_FULL_BLEED`'s own viewport-relative value.
+    if options.scroll_shape {
+        if let Some((w, h)) = lookup_dims(assets, src) {
+            if is_scroll_shape(w, h) {
+                return Cow::Borrowed(ctx_sizes::SIZES_SCROLL);
+            }
+        }
+    }
+    let data_width = match context {
+        ImageContext::MarkdownStandalone { width, .. } => *width,
+        ImageContext::MarkdownInline => options.data_width,
+        ImageContext::Hero { plate: true } => return Cow::Borrowed(ctx_sizes::SIZES_HERO_PLATE),
+        ImageContext::Hero { plate: false } => return Cow::Borrowed(ctx_sizes::SIZES_FULL_BLEED),
+        ImageContext::FolderCardCover => return Cow::Borrowed(ctx_sizes::SIZES_CARD),
+        ImageContext::GalleryThumb => return Cow::Borrowed(ctx_sizes::SIZES_GALLERY),
+        _ => return Cow::Borrowed(ctx_sizes::SIZES_BODY),
+    };
+    if options.vertical {
+        if let Some(cell) = options.grid_cell_sizes {
+            return Cow::Borrowed(cell);
+        }
+        return match lookup_dims(assets, src) {
+            Some((w, h)) => Cow::Owned(ctx_sizes::sizes_vertical_body(w, h)),
+            None => Cow::Borrowed(ctx_sizes::SIZES_BODY),
+        };
+    }
+    match data_width.and_then(ctx_sizes::sizes_for_data_width) {
+        Some(band) => Cow::Borrowed(band),
+        None => Cow::Borrowed(options.grid_cell_sizes.unwrap_or(ctx_sizes::SIZES_BODY)),
+    }
+}
+
 /// Try several path normalizations against `AssetSnapshot.dimensions` so the
 /// synthesizer matches the same set of input forms the prior
 /// `MediaDimensionLookup::get` handled. `src` may arrive as the resolved URL
@@ -740,7 +776,7 @@ fn is_webp_source(src: &str) -> bool {
 ///
 /// Returns `None` when none of the variants is in the snapshot. The caller
 /// supplies the fallback (800×600 for dims, no style for LQIP / color).
-fn lookup_dims(assets: &AssetSnapshot, src: &str) -> Option<(u32, u32)> {
+pub(crate) fn lookup_dims(assets: &AssetSnapshot, src: &str) -> Option<(u32, u32)> {
     probe_paths(src, |p| assets.dims(&p))
 }
 
@@ -885,6 +921,7 @@ pub(crate) fn render_img_tag(
     assets: &AssetSnapshot,
     options: &ImageRenderOptions<'_>,
     srcset_sizes: Option<(&str, &str)>,
+    is_scroll: bool,
 ) -> String {
     // AssetSnapshot's `dims` is keyed by PathBuf; the src arrives as the
     // resolved URL the upstream renderer baked (potentially absolute, e.g.
@@ -954,19 +991,28 @@ pub(crate) fn render_img_tag(
         None => String::new(),
     };
 
+    // `data-aspect="scroll"` (body images only, `options.scroll_shape`):
+    // the default handscroll/hanging-scroll presentation, `asset_paths::
+    // is_scroll_shape`'s threshold. Read on the real dims looked up above,
+    // not the 800×600 fallback (an unknown-dims source never qualifies).
+    // Computed once by the caller (`synthesize_inner`) and threaded here —
+    // not re-derived from `width`/`height` above, which is the FALLBACK-
+    // substituted pair for an unknown-dims source, not necessarily the same
+    // lookup the caller made for its own picture-wrapping decision.
+    let scroll_attr = if is_scroll { r#" data-aspect="scroll""# } else { "" };
+
     // `data-placeholder-src` removed 2026-05-20: the iframe-bridge handler
     // now matches by URL substring against `src` / `srcset` (see
-    // frontend/bridge/iframe-bridge.ts, moss-asset-ready branch). The
+    // moss-build's iframe bridge, moss-asset-ready branch). The
     // AssetRegistry's promise model + the preview server's URL-keyed lookup
-    // make the attribute redundant. See
-    // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 3).
+    // make the attribute redundant.
     //
     // Inline LQIP via `background-image: url(data:image/jpeg;base64,…)` is
     // kept — legitimate production technique (cf. Vercel `blurDataURL`,
     // nextjs.org/docs/app/api-reference/components/image). Shows a blurred
     // preview instantly while the actual bytes are being decoded.
     format!(
-        r#"<img{class_attr} src="{src_esc}"{srcset} width="{w}" height="{h}"{loading}{fetch}{style} alt="{alt}"{extra} />"#,
+        r#"<img{class_attr} src="{src_esc}"{srcset} width="{w}" height="{h}"{loading}{fetch}{style}{scroll} alt="{alt}"{extra} />"#,
         class_attr = class_attr,
         src_esc = html_escape(src),
         srcset = srcset_attr,
@@ -975,6 +1021,7 @@ pub(crate) fn render_img_tag(
         loading = loading_attr,
         fetch = fetchpriority_attr,
         style = style_attr,
+        scroll = scroll_attr,
         alt = html_escape(alt),
         extra = extra,
     )

@@ -73,7 +73,7 @@ impl Walker<'_> {
             NodeRule::Text { field, unescape } => {
                 if let Some(v) = str_field(obj, field) {
                     let html = if *unescape {
-                        unescape_html_entities(v)
+                        crate::build::markdown::html_post::decode_html_entities(v)
                     } else {
                         v.to_string()
                     };
@@ -202,16 +202,6 @@ fn str_field<'a>(obj: &'a serde_json::Map<String, Value>, key: &str) -> Option<&
     obj.get(key).and_then(Value::as_str)
 }
 
-/// Minimal entity unescape for values that arrive HTML-entity-escaped
-/// inside builder JSON (Strikingly `HtmlComponent.value`).
-fn unescape_html_entities(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::dialects::STRIKINGLY;
@@ -220,6 +210,12 @@ mod tests {
 
     fn walk(sections: serde_json::Value) -> WalkOutput {
         walk_tree(&sections, &STRIKINGLY, "resx")
+    }
+
+    #[test]
+    fn an_escaped_ampersand_is_decoded_once() {
+        let out = walk(json!([{"type": "HtmlComponent", "value": "&lt;p&gt;a &amp;lt;b&amp;gt; &amp; c&lt;/p&gt;"}]));
+        assert_eq!(out.blocks, vec![Block::RichText { html: "<p>a &lt;b&gt; & c</p>".into() }]);
     }
 
     #[test]

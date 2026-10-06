@@ -76,6 +76,36 @@ fn test_cheap_reflow_reserves_height_only_never_width() {
 }
 
 #[test]
+fn test_cheap_reflow_excludes_scroll_row_cards() {
+    // Regression: a `:::grid N {scroll}` row (`.moss-grid[data-scroll]`) lays
+    // its cards out with `grid-auto-flow: column` on ONE shared grid row
+    // track. When a card scrolled out of the interest rect fell back to this
+    // rule's 600px placeholder height, that height became the row track's
+    // size — every card in the row (not just the off-screen one) rendered
+    // 600px+ tall until the row was scrolled. Measured: a 22-card scroll row
+    // was 669px tall in preview vs. 269px in the static build. Static
+    // builds never get this style at all, so published sites were
+    // unaffected — this reproduced ONLY in the preview.
+    let out = inject_preview_assets("<html><body></body></html>", false);
+    assert!(
+        out.contains("figure.moss-image:not(.moss-grid[data-scroll] *)"),
+        "figures inside a scroll row must be excluded from the placeholder height; got: {out}"
+    );
+    assert!(
+        out.contains("p:has(> img):not(.moss-grid[data-scroll] *)"),
+        "bare images inside a scroll row must be excluded; got: {out}"
+    );
+    assert!(
+        out.contains("p:has(> picture):not(.moss-grid[data-scroll] *)"),
+        "pictures inside a scroll row must be excluded; got: {out}"
+    );
+    assert!(
+        out.contains(".moss-embed:not(.moss-grid[data-scroll] *)"),
+        "embeds inside a scroll row must be excluded; got: {out}"
+    );
+}
+
+#[test]
 fn test_script_has_rpc_allowlist() {
     // Security: RPC handler should only allow specific methods to prevent
     // arbitrary code execution (addresses CodeQL security alert)
@@ -110,8 +140,7 @@ fn test_script_contains_external_link_handler() {
 
 #[test]
 fn test_script_suppresses_native_context_menu() {
-    // Cut 2 of the context-menu vocabulary (docs/archive/2026-08-15-context-
-    // menu-vocabulary.md): the bridge owns right-click inside the previewed
+    // Cut 2 of the context-menu vocabulary: the bridge owns right-click inside the previewed
     // page — it suppresses the native WebKit menu and posts the click's
     // context ("moss-context-menu") for the shell to render. Both strings
     // survive minification.
@@ -173,10 +202,10 @@ fn style_tag_carries_no_chrome_geometry() {
     // The injected stylesheet must NOT displace the document body, inject
     // chrome elements, or carry the titlebar height in ANY form. Chrome
     // (titlebar overlay, fake scrollbar) is painted by the parent shell,
-    // and since ADR-039 the shell also owns the chrome OFFSET by insetting
+    // and the shell also owns the chrome OFFSET by insetting
     // the preview iframe — so the iframe side has no chrome geometry at
     // all. This invariant prevents the class of bug where chrome geometry
-    // leaks into nested cover or embed iframes (e.g. the 刘果 `交互` p5
+    // leaks into nested cover or embed iframes (e.g. a site's embedded p5
     // sketch regression).
     let css = build_style_tag();
     // Reject `padding-top` selectors that would displace content.
@@ -192,7 +221,7 @@ fn style_tag_carries_no_chrome_geometry() {
         !css.contains("moss-mobile"),
         "style tag must NOT gate on .moss-mobile (no chrome geometry to gate); got: {css}"
     );
-    // ADR-039: with the iframe inset below the chrome, the iframe viewport's
+    // With the iframe inset below the chrome, the iframe viewport's
     // top row is already fully visible, so scroll padding would push anchor
     // targets down by a titlebar height for no reason. Asserting its ABSENCE
     // keeps TITLEBAR_HEIGHT from creeping back into a second location.
@@ -441,8 +470,8 @@ fn inject_class_only_affects_first_html_tag() {
 /// `&html[..scan_limit]`. The fix walks `scan_limit` back to the
 /// nearest char boundary before slicing.
 ///
-/// Reproducer pattern from the wild: a 刘果 article with `<title>` text
-/// like "民歌、锤子与卡在工业革命中的我们 - 刘果" and enough head
+/// Reproducer pattern from the wild: a CJK article with a long `<title>`
+/// (a full Chinese headline plus the site name) and enough head
 /// content (meta tags, syndication links, etc.) to push a CJK char
 /// across byte 4096.
 #[test]
@@ -580,16 +609,16 @@ fn middleware_output_contains_stub_url_and_shim_not_production() {
 // transforms so any such drift breaks immediately at compile/test time.
 
 #[test]
-fn strip_preview_only_scripts_removes_marked_regions() {
-    let html = r#"<head><!--moss:no-preview--><script src="https://x.goatcounter.com/count.js"></script><!--/moss:no-preview--><title>t</title></head>"#;
+fn strip_preview_only_scripts_removes_marked_script_elements() {
+    let html = r#"<head><script src="https://x.goatcounter.com/count.js" data-moss-deploy-only></script><title>t</title></head>"#;
     let out = strip_preview_only_scripts(html);
     assert!(
         !out.contains("goatcounter"),
         "marked analytics must be stripped in preview"
     );
     assert!(
-        !out.contains("moss:no-preview"),
-        "marker comments must be removed too"
+        !out.contains("data-moss-deploy-only"),
+        "the attribute itself must not survive with its script"
     );
     assert!(
         out.contains("<title>t</title>"),
@@ -598,9 +627,85 @@ fn strip_preview_only_scripts_removes_marked_regions() {
 }
 
 #[test]
-fn strip_preview_only_scripts_is_noop_without_markers() {
-    let html = r#"<head><title>t</title></head>"#;
+fn strip_preview_only_scripts_is_noop_without_the_marker_attribute() {
+    let html = r#"<head><script src="/theme.js"></script><title>t</title></head>"#;
     assert_eq!(strip_preview_only_scripts(html), html);
+}
+
+#[test]
+fn strip_preview_only_scripts_strips_regardless_of_attribute_position() {
+    // The attribute can land anywhere in the opening tag — AnalyticsConfig's
+    // two script-tag shapes put it after different existing attributes.
+    let html = r#"<script data-moss-deploy-only defer src="/a.js" data-website-id="x"></script>"#;
+    assert_eq!(strip_preview_only_scripts(html), "");
+}
+
+#[test]
+fn strip_preview_only_scripts_ignores_attribute_name_prefix_collisions() {
+    // `data-moss-deploy-only-extra` must not be treated as our marker.
+    let html = r#"<script data-moss-deploy-only-extra="x" src="/a.js"></script>"#;
+    assert_eq!(strip_preview_only_scripts(html), html);
+}
+
+/// Regression for the source of the bug this module fixes: a page served
+/// from a SHIP-TRANSFORMED generation must strip identically to one served
+/// straight from staging, because `apply_transform` keeps the deploy-only
+/// script AND its marker attribute (only the old comment markers used to be
+/// removed). Uses the real emitter + the real ship transform, not
+/// hand-written fixtures on either side.
+#[test]
+fn strip_matches_between_staging_and_a_ship_transformed_generation() {
+    let deploy = crate::config::deployment::DomainDeploymentConfig {
+        deploy_method: Some("moss".into()),
+        site_id: Some("seam-ship-test".into()),
+        ..Default::default()
+    };
+    let slots = crate::build::features::generate_native_slots(
+        &crate::config::services::ServicesConfig::default(),
+        "/nonexistent-seam-ship-test",
+        false,
+        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+        &std::collections::HashMap::new(),
+        &[],
+        "en",
+        None,
+        Some(deploy),
+        false,
+        None,
+        None,
+    );
+    let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
+    let staging_page = format!(
+        "<html><head>{head_end}<script src=\"/theme.abc123.js\"></script></head><body data-moss-preview><p>hi</p></body></html>"
+    );
+
+    // A ship-transformed generation: what `apply_transform` writes to a
+    // generation directory from the SAME staged bytes.
+    let shipped_bytes = crate::build::ship::apply_transform(
+        crate::build::ship::ShipTransform::StripPreviewAttrs,
+        staging_page.as_bytes(),
+    );
+    let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");
+    assert!(
+        shipped_page.contains("moss-beacon"),
+        "precondition: ship must keep the beacon for deploy, got: {shipped_page}"
+    );
+
+    let staging_served = ensure_preview_body_attr(&strip_preview_only_scripts(&staging_page));
+    let shipped_served = ensure_preview_body_attr(&strip_preview_only_scripts(&shipped_page));
+
+    assert!(
+        !shipped_served.contains("moss-beacon"),
+        "a page from a ship-transformed generation must not carry the beacon, got: {shipped_served}"
+    );
+    assert!(
+        !staging_served.contains("moss-beacon"),
+        "a page from staging must not carry the beacon either, got: {staging_served}"
+    );
+    assert_eq!(
+        staging_served, shipped_served,
+        "staging and a ship-transformed generation must serve byte-identical pages"
+    );
 }
 
 // ====================================================================
@@ -917,4 +1022,145 @@ fn an_attributed_head_still_gets_the_placeholder() {
 fn a_document_with_no_head_is_left_alone() {
     let html = "<div>fragment</div>";
     assert_eq!(inject_placeholder_into_head(html), html);
+}
+
+// ====================================================================
+// Fixture for the JS morph-guard test (js-src/bridge/__tests__/
+// iframe-bridge-morph.test.ts): the "live" page (served from staging) and
+// the "next" page (served from a ship-transformed generation) that
+// `differingScriptKeys` must find no diff between. Real emitted markup on
+// both sides, not hand-written: a test that builds the very markup it then
+// checks passes whether or not the real emitter is right, and proves
+// nothing.
+//
+// The Rust side is the only place that can produce this markup, so it also
+// owns keeping the committed fixture honest: this test regenerates it and
+// fails loudly if the checked-in copy has drifted, naming the env var that
+// updates it (mirrors `SNAPSHOTS=overwrite` for snapshot_tests).
+// ====================================================================
+
+fn build_deploy_only_fixture_pages() -> (String, String) {
+    let deploy = crate::config::deployment::DomainDeploymentConfig {
+        deploy_method: Some("moss".into()),
+        site_id: Some("morph-guard-fixture".into()),
+        ..Default::default()
+    };
+    let services = crate::config::services::ServicesConfig {
+        analytics: Some(crate::config::services::AnalyticsService {
+            common: crate::config::services::ServiceCommon {
+                enabled: None,
+                provider: Some("goatcounter".into()),
+            },
+            script: Some("https://morph-guard-fixture.goatcounter.com/count".into()),
+        }),
+        ..Default::default()
+    };
+    let slots = crate::build::features::generate_native_slots(
+        &services,
+        "/nonexistent-morph-guard-fixture",
+        false,
+        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+        &std::collections::HashMap::new(),
+        &[],
+        "en",
+        None,
+        Some(deploy),
+        false,
+        None,
+        None,
+    );
+    let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
+    // An ordinary theme script alongside the deploy-only ones, so the
+    // fixture also proves the strip leaves unrelated site scripts alone.
+    let page = format!(
+        "<html><head>{head_end}<script src=\"/theme.abc123.js\"></script></head><body data-moss-preview><p>hi</p></body></html>"
+    );
+
+    let live = ensure_preview_body_attr(&strip_preview_only_scripts(&page));
+
+    let shipped_bytes = crate::build::ship::apply_transform(
+        crate::build::ship::ShipTransform::StripPreviewAttrs,
+        page.as_bytes(),
+    );
+    let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");
+    let next = ensure_preview_body_attr(&strip_preview_only_scripts(&shipped_page));
+
+    (live, next)
+}
+
+const LIVE_FIXTURE_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/src/js-src/bridge/__tests__/fixtures/deploy-only-live.html");
+const NEXT_FIXTURE_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/src/js-src/bridge/__tests__/fixtures/deploy-only-next.html");
+
+#[test]
+fn deploy_only_fixture_matches_the_real_emitter() {
+    let (live, next) = build_deploy_only_fixture_pages();
+
+    if std::env::var("DEPLOY_ONLY_FIXTURES").as_deref() == Ok("overwrite") {
+        let dir = std::path::Path::new(LIVE_FIXTURE_PATH).parent().unwrap();
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(LIVE_FIXTURE_PATH, &live).unwrap();
+        std::fs::write(NEXT_FIXTURE_PATH, &next).unwrap();
+        return;
+    }
+
+    // Also the core Rust-visible proof of the fix, independent of the
+    // fixture files: the live and next pages must be byte-identical.
+    assert_eq!(live, next, "live and next must be byte-identical — no generation the strip is blind to");
+
+    let committed_live = std::fs::read_to_string(LIVE_FIXTURE_PATH).unwrap_or_default();
+    let committed_next = std::fs::read_to_string(NEXT_FIXTURE_PATH).unwrap_or_default();
+    assert_eq!(
+        live, committed_live,
+        "the committed JS fixture has drifted from the real emitter — regenerate with \
+         `DEPLOY_ONLY_FIXTURES=overwrite cargo test -p moss-build --lib ops::serve::iframe_bridge::tests::deploy_only_fixture_matches_the_real_emitter`"
+    );
+    assert_eq!(
+        next, committed_next,
+        "the committed JS fixture has drifted from the real emitter — regenerate with \
+         `DEPLOY_ONLY_FIXTURES=overwrite cargo test -p moss-build --lib ops::serve::iframe_bridge::tests::deploy_only_fixture_matches_the_real_emitter`"
+    );
+}
+
+/// A bare `find('>')` scanner would end the open tag at the `>` INSIDE the
+/// quoted attribute value and misparse everything after it — a real HTML5
+/// tokenizer (lol_html) is quote-aware, so this correctly matches and
+/// removes the whole element regardless.
+#[test]
+fn strip_preview_only_scripts_is_quote_aware_inside_an_attribute_value() {
+    let html = r#"<script data-moss-deploy-only data-weird="a>b"></script><title>t</title>"#;
+    assert_eq!(strip_preview_only_scripts(html), "<title>t</title>");
+}
+
+/// A raw-text HTML element (`<script>`, `<style>`, …) ends at the first
+/// case-insensitive `</script` byte sequence, full stop — the tokenizer has
+/// no notion of JS string literals, so an UNESCAPED `</script>` embedded in
+/// an inline script's own text ends the element early, exactly as a real
+/// browser would parse it. lol_html follows that same spec rule: the match
+/// (and `el.remove()`) only covers up to that point, and everything after —
+/// including the stray, unmatched `</script>` end tag, which is dropped
+/// silently since no script element is open to close — survives in the
+/// output as ordinary text/markup. This is not a rewriter bug to work
+/// around; it is why an emitter must never place a literal `</script`
+/// inside a script body it controls (moss's beacon/analytics templates
+/// don't). The standard escape (`<\/script>`, backslash before the slash)
+/// sidesteps it entirely, proven by the second case below.
+#[test]
+fn strip_preview_only_scripts_follows_the_real_script_end_tag_rule() {
+    let unescaped =
+        r#"<script data-moss-deploy-only>var x = "</script>";</script>after<title>t</title>"#;
+    assert_eq!(
+        strip_preview_only_scripts(unescaped),
+        "\";</script>after<title>t</title>",
+        "an unescaped </script> inside the script body ends the element early, leaking the rest"
+    );
+
+    let escaped =
+        r#"<script data-moss-deploy-only>var x = "<\/script>";</script>after<title>t</title>"#;
+    assert_eq!(
+        strip_preview_only_scripts(escaped),
+        "after<title>t</title>",
+        "the standard <\\/script> escape keeps the whole element — and its content — intact for removal"
+    );
 }

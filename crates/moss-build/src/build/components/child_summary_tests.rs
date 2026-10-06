@@ -12,6 +12,8 @@ fn article_props(title: &str, url: &str) -> ChildItemProps {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     }
 }
 
@@ -27,6 +29,8 @@ fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     }
 }
 
@@ -152,6 +156,8 @@ fn test_render_card_escapes_html() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -356,6 +362,8 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
         cover_type: None,
         kicker: Some("The Wire China".to_string()),
         permalink: Some("/works/article/".to_string()),
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -412,6 +420,8 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
         cover_type: None,
         kicker: None,
         permalink: Some("/works/article/".to_string()),
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -449,8 +459,10 @@ fn cjk_date_keeps_separate_meta_inside_card() {
         description: None,
         cover: None,
         cover_type: None,
-        kicker: Some("端傳媒".to_string()),
+        kicker: Some("遠聲媒體".to_string()),
         permalink: Some("/archive/foo/".to_string()),
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -463,7 +475,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
     // card-head with ★; meta renders separately also inside card-head.
     // Both are inside the card-body, no split across the card boundary.
     assert!(
-        html.contains(r#"<div class="moss-card-kicker">端傳媒 <a class="moss-card-permalink""#),
+        html.contains(r#"<div class="moss-card-kicker">遠聲媒體 <a class="moss-card-permalink""#),
         "kicker contains publisher + ★; got: {}",
         html
     );
@@ -494,6 +506,8 @@ fn omits_permalink_when_no_external_url() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -531,6 +545,8 @@ fn renders_kicker_above_title_horizontal() {
         cover_type: None,
         kicker: Some("ESSAYS".to_string()),
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -560,6 +576,45 @@ fn renders_kicker_above_title_horizontal() {
     );
 }
 
+/// The bug this exists for: the kicker-absorbs-the-date branch set
+/// `meta_text` to `None` outright, so a page with BOTH a kicker and a
+/// resolved place lost the place entirely — `with_place` never ran, because
+/// there was no meta text to run it on. The place must still show, in the
+/// meta slot, even though the date itself already moved into the kicker.
+#[test]
+fn kicker_absorbing_the_date_still_shows_the_place() {
+    let props = ChildItemProps {
+        title: "Notes on writing".to_string(),
+        url: "/posts/notes/".to_string(),
+        date_display: Some("2025 · 04".to_string()),
+        date_raw: Some("2025-04-01".to_string()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: Some("ESSAYS".to_string()),
+        permalink: None,
+        url_path: String::new(),
+        place: Some("Cambridge".to_string()),
+    };
+    let html = render_with_sort(
+        &props,
+        crate::i18n::Language::En,
+        None,
+        None,
+        moss_core::sort::SortAxis::Date,
+    );
+    assert!(
+        html.contains(">ESSAYS · 2025</div>"),
+        "kicker still combines publisher + year, got: {}",
+        html
+    );
+    assert!(
+        html.contains(r#"<div class="moss-card-meta">Cambridge</div>"#),
+        "place must still render, in the meta slot, when the kicker absorbed the date; got: {html}"
+    );
+}
+
 #[test]
 fn vertical_head_order_matches_horizontal() {
     // CJK-numeral dates can't be year-extracted, so the kicker stays
@@ -578,6 +633,8 @@ fn vertical_head_order_matches_horizontal() {
         cover_type: None,
         kicker: Some("FOLDER".to_string()),
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -604,6 +661,42 @@ fn vertical_head_order_matches_horizontal() {
     );
 }
 
+/// The place-appended meta line is still just text inside the one
+/// `.moss-card-meta` element — vertical typesetting rotates it with CSS
+/// `writing-mode`, so the fold must not have changed the slot's position
+/// (kicker, meta, title) or introduced a second element.
+#[test]
+fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
+    let props = ChildItemProps {
+        title: "在公開場合寫作".to_string(),
+        url: "/posts/notes/".to_string(),
+        date_display: Some("二〇二五·四".to_string()),
+        date_raw: None,
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: Some("Cambridge".to_string()),
+    };
+    let html = render_with_sort(
+        &props,
+        crate::i18n::Language::ZhHant,
+        Some("vertical"),
+        None,
+        moss_core::sort::SortAxis::Date,
+    );
+    assert!(
+        html.contains(r#"<div class="moss-card-meta">二〇二五·四 · Cambridge</div>"#),
+        "Got: {html}"
+    );
+    let title_pos = html.find(r#"<h3 class="moss-card-title""#).expect("title present");
+    let meta_pos = html.find(r#"<div class="moss-card-meta""#).expect("meta present");
+    assert!(meta_pos < title_pos, "meta still precedes title in vertical mode");
+}
+
 // ── render_with_sort: meta slot is sort-driven (Task 9) ─────
 
 #[test]
@@ -619,6 +712,8 @@ fn meta_renders_date_when_axis_is_date() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -629,6 +724,58 @@ fn meta_renders_date_when_axis_is_date() {
     );
     assert!(html.contains(r#"class="moss-card-meta""#));
     assert!(html.contains("2025 · 03"));
+}
+
+/// A chronology of located, dated summaries (the motivating case: "Cambridge
+/// 1924") shows the place next to the compact date in the summary card too.
+#[test]
+fn meta_shows_the_resolved_place_next_to_the_date() {
+    let props = ChildItemProps {
+        title: "Lecture".into(),
+        url: "/lectures/1924/".into(),
+        date_display: Some("1924".into()),
+        date_raw: Some("1924-10-01".into()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: Some("Cambridge".into()),
+    };
+    let html = render_with_sort(
+        &props,
+        crate::i18n::Language::En,
+        None,
+        None,
+        moss_core::sort::SortAxis::Date,
+    );
+    assert!(
+        html.contains(r#"<div class="moss-card-meta">1924 · Cambridge</div>"#),
+        "Got: {html}"
+    );
+}
+
+/// A folder's count is not a date — its own `location:` must never leak
+/// into the count slot.
+#[test]
+fn meta_never_shows_a_place_beside_a_folders_count() {
+    let props = ChildItemProps {
+        place: Some("Kyoto".into()),
+        ..folder_props("Kyoto Walk", "/works/kyoto-walk/", 2)
+    };
+    let html = render_with_sort(
+        &props,
+        crate::i18n::Language::En,
+        None,
+        None,
+        moss_core::sort::SortAxis::Date,
+    );
+    assert!(
+        !html.contains(r#"<div class="moss-card-meta">2 articles · Kyoto</div>"#),
+        "the count slot must be the count alone: {html}"
+    );
 }
 
 #[test]
@@ -644,6 +791,8 @@ fn meta_collapses_when_axis_is_title() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -671,6 +820,8 @@ fn meta_collapses_when_axis_is_weight() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_with_sort(
         &props,
@@ -689,23 +840,35 @@ fn folder(description: Option<&str>, date_display: Option<&str>) -> ChildItemPro
     props
 }
 
-/// A folder's count is its meta, whatever else the card carries: a
-/// description does not displace it, and on a date listing it wins over the
-/// folder's own date (`docs/reference/design/preview-cards.md`).
+/// A folder's count always shows, whatever else the card carries: a
+/// description does not displace it, and neither does a sort axis. A
+/// dateless folder's meta is the count alone; a folder whose own home page
+/// declares a date (`date` here stands in for that) leads with it instead,
+/// the count still following — never silently dropped by either.
 #[test]
 fn folder_count_fills_the_meta_slot() {
     for (desc, date, axis) in [
         (None, None, moss_core::sort::SortAxis::Title),
         (Some("Get started"), None, moss_core::sort::SortAxis::Title),
-        (Some("Get started"), Some("2025 · 04"), moss_core::sort::SortAxis::Date),
+        (Some("Get started"), None, moss_core::sort::SortAxis::Date),
     ] {
         let html = render_with_sort(&folder(desc, date), crate::i18n::Language::En, None, None, axis);
         assert!(
             html.contains(r#"<div class="moss-card-meta">4 articles</div>"#),
             "axis {axis:?}, description {desc:?}: {html}"
         );
-        assert!(!html.contains("2025 · 04"), "a folder's own date is not what it is picked by");
     }
+    let html = render_with_sort(
+        &folder(Some("Get started"), Some("2025 · 04")),
+        crate::i18n::Language::En,
+        None,
+        None,
+        moss_core::sort::SortAxis::Date,
+    );
+    assert!(
+        html.contains(r#"<div class="moss-card-meta">2025 · 04 · 4 articles</div>"#),
+        "a folder with its own date leads the count with it: {html}"
+    );
 }
 
 /// The two card shapes agree. Asserted alone, each emitter looked right
@@ -720,6 +883,7 @@ fn grid_and_summary_folder_cards_carry_the_same_count() {
         crate::i18n::Language::En,
         None,
         None,
+        false,
         false,
     );
     assert!(summary.contains("4 articles"), "{summary}");

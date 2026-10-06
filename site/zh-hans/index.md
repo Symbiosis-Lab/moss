@@ -1,11 +1,11 @@
 ---
 title: 青苔
-logo: assets/logo.svg
+logo: assets/brand/logo.svg
 children: false
 uid: 41f7bc62
 lang: zh-hans
 translationKey: homepage
-description: 从文件夹到网站
+description: 发布并拥有自己网站的最简单方式。
 ---
 
 # 随处写作，随处发布。一切由你掌控。

@@ -5,7 +5,7 @@
 //! the type must be reachable from `moss-build` when the pipeline crosses.
 //! Resolution *policy* (env vars > config key > default) stays app-side in
 //! `domain::config::resolve_environment` until the eviction-aware config
-//! read crosses with the cloud cluster (ADR-059).
+//! read crosses with the cloud cluster.
 
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +50,7 @@ impl HostingEnvironment {
         }
     }
 
-    /// Artalk comment server base URL, PER ENVIRONMENT (ADR-026). Each env has
+    /// Artalk comment server base URL, PER ENVIRONMENT. Each env has
     /// its own Artalk instance so comment testing never touches production data.
     /// Staging Artalk lives at `staging.mosspub.com/comments` (Caddy →
     /// `artalk-staging`); local/dev uses staging (never production). Self-hosted

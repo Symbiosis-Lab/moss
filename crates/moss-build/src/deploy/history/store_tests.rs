@@ -1,34 +1,4 @@
-use std::fs;
-
 use super::*;
-
-#[test]
-fn site_key_falls_back_to_a_path_hash_before_any_identity_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    let vault = dir.path().join("vault");
-    fs::create_dir_all(&vault).unwrap();
-
-    let (key, source) = site_key(&vault);
-    assert_eq!(source, KeySource::Path);
-    assert_eq!(key.len(), 16);
-    assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
-
-    let (key_again, _) = site_key(&vault);
-    assert_eq!(key, key_again, "the same vault must resolve to the same key");
-}
-
-#[test]
-fn site_key_prefers_the_vault_identity_once_one_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    let vault = dir.path().join("vault");
-    fs::create_dir_all(&vault).unwrap();
-    let identity = crate::identity::Identity::generate().unwrap();
-    identity.save(&vault).unwrap();
-
-    let (key, source) = site_key(&vault);
-    assert_eq!(source, KeySource::Identity);
-    assert_eq!(key, &identity.pubkey[..16]);
-}
 
 #[test]
 fn list_records_is_empty_before_any_publish() {

@@ -17,6 +17,7 @@ fn test_render_image_cover_wraps_content_in_row() {
     let html = render(
         Some("assets/photo.jpg"),
         "Travel",
+        "Travel",
         "<p>Hello</p>",
         CoverType::Image,
         &empty_attrs(),
@@ -45,6 +46,7 @@ fn test_render_video_cover_uses_thumbnail() {
     let html = render(
         Some("clip.mp4"),
         "Demo",
+        "Demo",
         "<p>text</p>",
         CoverType::Video,
         &empty_attrs(),
@@ -67,6 +69,7 @@ fn test_render_video_cover_uses_thumbnail() {
 fn test_render_iframe_cover() {
     let html = render(
         Some("widget.html"),
+        "Interactive",
         "Interactive",
         "<p>text</p>",
         CoverType::Iframe,
@@ -97,6 +100,7 @@ fn editor_preview_cover_wrapper_names_the_cover_field() {
         let html = render(
             Some(path),
             "Travel",
+            "Travel",
             "<p>Hello</p>",
             ct,
             &empty_attrs(),
@@ -124,6 +128,7 @@ fn editor_preview_cover_wrapper_names_the_cover_field() {
     let off = render(
         Some("assets/photo.jpg"),
         "Travel",
+        "Travel",
         "<p>Hello</p>",
         CoverType::Image,
         &empty_attrs(),
@@ -137,6 +142,7 @@ fn editor_preview_cover_wrapper_names_the_cover_field() {
 fn test_render_without_cover_returns_content_unchanged() {
     let html = render(
         None,
+        "Travel",
         "Travel",
         "<p>Hello</p>",
         CoverType::Image,
@@ -152,6 +158,7 @@ fn test_render_escapes_html_in_label() {
     // Label must be escaped for both the alt attribute and the visible h1.
     let html = render(
         Some("cover.jpg"),
+        "Code & Tips",
         "Code & Tips",
         "",
         CoverType::Image,
@@ -184,6 +191,7 @@ fn test_render_with_media_attrs() {
     let html = render(
         Some("photo.jpg"),
         "Travel",
+        "Travel",
         "<p>Hello</p>",
         CoverType::Image,
         &attrs,
@@ -210,6 +218,7 @@ fn test_render_with_fit_and_position() {
     };
     let html = render(
         Some("photo.jpg"),
+        "Travel",
         "Travel",
         "<p>text</p>",
         CoverType::Image,

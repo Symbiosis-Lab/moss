@@ -1,0 +1,28 @@
+# Depth All Test
+
+---
+
+## Article B
+
+Body B.
+
+---
+
+## Article A
+
+Body A.
+
+---
+
+## 2024
+
+---
+
+## Depth All Test
+
+<!--MOSS_MARKER_FOLDER_LIST:path=posts/|from=index.md|depth=all-->
+
+---
+
+## Posts
+

@@ -1,0 +1,122 @@
+# Project X Docs
+
+---
+
+## API Reference
+
+# API Reference
+
+Complete API documentation for Project X.
+
+---
+
+## Getting Started
+
+# Getting Started
+
+Everything you need to get up and running with Project X.
+
+---
+
+## Installation
+
+# Installation
+
+## Requirements
+- Python 3.8+
+- Redis 6.0+
+
+```bash
+pip install project-x
+```
+
+---
+
+## Contributing
+
+# Contributing
+
+We welcome contributions! Fork the repo, create a branch, write tests, submit a PR.
+
+---
+
+## Quick Start
+
+# Quick Start
+
+Get up and running in 5 minutes.
+
+```python
+from projectx import Client
+client = Client()
+```
+
+---
+
+## Changelog
+
+# Changelog
+
+## v2.1.0 (2025-03-15)
+- Added WebSocket support for real-time task updates
+- Improved Redis connection pooling
+
+## v2.0.0 (2025-01-01)
+- Breaking: New authentication system (token-based)
+- Added distributed tracing support
+
+---
+
+## Login
+
+# POST /auth/login
+
+Authenticate a user and receive an API token.
+
+```json
+{
+  "username": "admin",
+  "password": "secret"
+}
+```
+
+---
+
+## Project X Docs
+
+# Project X Documentation
+
+Welcome to the Project X docs. A distributed task queue built for reliability and speed.
+
+---
+
+## Query
+
+# GET /data/query
+
+Query task results from the data store.
+
+## Parameters
+- `task_id` (required): The task identifier
+- `format` (optional): Response format (json, csv)
+
+---
+
+## Token Management
+
+# Token Management
+
+## GET /auth/tokens
+List all active tokens for the current user.
+
+## DELETE /auth/tokens/:id
+Revoke a specific token.
+
+---
+
+## auth
+
+---
+
+## data
+

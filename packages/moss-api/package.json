@@ -1,6 +1,6 @@
 {
   "name": "@symbiosis-lab/moss-api",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Official API for building moss plugins - types and utilities for plugin development",
   "type": "module",
   "main": "./dist/index.mjs",
@@ -44,7 +44,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Symbiosis-Lab/moss-api.git"
+    "url": "git+https://github.com/Symbiosis-Lab/moss.git",
+    "directory": "packages/moss-api"
   },
   "bugs": {
     "url": "https://github.com/Symbiosis-Lab/moss-api/issues"

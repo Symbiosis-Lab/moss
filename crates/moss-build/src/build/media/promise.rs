@@ -17,8 +17,7 @@
 //! error; the browser does NOT walk back to the inner <img>).
 //!
 //! Pattern: explicit promise model (GraphQL @defer, Bazel
-//! ActionResult). See docs/archive/2026-05-20-image-variant-honest-
-//! mirror.md (Layer 1). Closes the catastrophic 404 verified at
+//! ActionResult). Closes the catastrophic 404 verified at
 //! ~/Library/Logs/host.moss.publisher/moss.log L2006/L2446/L2450
 //! on 2026-05-19.
 
@@ -141,7 +140,7 @@ pub(crate) fn promise_image_variants(
     }
 
     // Registration is over ALL collected items; the ENCODER gets only the
-    // ones it can encode (moss#982).
+    // ones it can encode.
     //
     // An item carrying a `skip` verdict has just had its variant URLs
     // settled above — Pending with a passthrough for a source still in the

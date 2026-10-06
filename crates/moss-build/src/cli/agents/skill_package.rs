@@ -224,9 +224,9 @@ pub fn render_pointer() -> String {
 /// say where moss comes from, or the reader is stuck with a path and no way to
 /// act on it.
 ///
-/// The link below deliberately names the repository the current release
-/// repo becomes at the F6 flip, ahead of that rename — see the F6 runbook,
-/// `docs/archive/2026-09-13-f6-flip-day-runbook.md`.
+/// The link below deliberately names the repository this crate lives in
+/// today, set ahead of the rename that made it official so it needed no
+/// follow-up update once the rename landed.
 const NO_BINARY: &str = "\
 ## If that path does not resolve
 
@@ -374,12 +374,11 @@ mod tests {
         }
     }
 
-    /// A download link naming the private repo ships a 404 to every user.
-    /// Keyed to the private repo's post-flip name (`Symbiosis-Lab/moss-desktop`,
-    /// per `docs/archive/2026-09-13-f6-flip-day-runbook.md`) rather than its
-    /// pre-flip name, since the pre-flip name becomes the PUBLIC repo at F6.
+    /// A download link naming a private repo ships a 404 to every user, so
+    /// every organisation link in shipped text must name this public repo.
     #[test]
     fn no_shipped_text_links_the_private_repo() {
+        const ORG: &str = "github.com/Symbiosis-Lab/";
         for (name, text) in [
             ("pointer", render_pointer()),
             ("cursor", render_cursor_mdc()),
@@ -387,11 +386,16 @@ mod tests {
             ("skill source", all_skill_text()),
         ] {
             for line in text.lines() {
-                assert!(
-                    !line.contains("github.com/Symbiosis-Lab/moss-desktop/")
-                        && !line.trim_end().ends_with("github.com/Symbiosis-Lab/moss-desktop"),
-                    "{name} links the PRIVATE source repo: {line}"
-                );
+                for (at, _) in line.match_indices(ORG) {
+                    let repo: String = line[at + ORG.len()..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+                        .collect();
+                    assert_eq!(
+                        repo, "moss",
+                        "{name} links a repo other than the public one: {line}"
+                    );
+                }
             }
         }
     }

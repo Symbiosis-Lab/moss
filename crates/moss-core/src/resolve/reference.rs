@@ -4,7 +4,8 @@
 //! Link is classify-only. Named `classify_reference` to avoid colliding with
 //! `fuzzy_path::resolve_reference` (the [[note]]/ContentGraph resolver).
 
-use crate::resolve::asset_class::{AssetIndex, AssetProvenance};
+use crate::content_graph::ContentGraph;
+use crate::resolve::asset_class::AssetProvenance;
 use crate::resolve::embed_renderer::Sizing;
 use crate::resolve::folder_class::FolderIndex;
 use crate::resolve::link_class::UrlIndex;
@@ -38,7 +39,8 @@ pub enum ReferenceKind {
 /// Index handles a classify call needs. Bundled so the signature stays small
 /// and a future index can be added without re-touching every caller.
 pub struct ReferenceContext<'a> {
-    pub assets: &'a dyn AssetIndex,
+    /// Every file of the site; the one place a file target is resolved.
+    pub assets: &'a ContentGraph,
     pub folders: &'a dyn FolderIndex,
     /// Link arm only; the build supplies a graph-backed impl in sub-project #4.
     /// For unit #1+#2 a Link result is classify-only and this may be a no-op.
@@ -49,14 +51,15 @@ pub struct ReferenceContext<'a> {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedReference {
     pub kind: ReferenceKind,
-    /// Root-relative SOURCE path (real case) for file/folder kinds; None for
-    /// Link/External/Anchor/Ambiguous/NotFound.
+    /// Root-relative SOURCE path (real case) for file/folder kinds, and for
+    /// Ambiguous (the file the build links among the tied candidates); None for
+    /// Link/External/Anchor/NotFound.
     pub target_path: Option<String>,
     pub size: Option<Sizing>,
     pub provenance: Option<AssetProvenance>,
     /// Human-readable resolution note (separator-fallback / case-mismatch / …).
     pub message: Option<String>,
-    /// Populated for Ambiguous (all candidate paths).
+    /// Populated for Ambiguous (the equally near candidate paths).
     pub candidates: Vec<String>,
     /// Resolved page/asset URL for a non-embed Link (None for embeds — the
     /// build emits embed URLs itself; editor embeds use `target_path`).
@@ -90,6 +93,7 @@ impl ResolvedReference {
                 | ReferenceKind::Transclusion
                 | ReferenceKind::Notebook
                 | ReferenceKind::Table
+                | ReferenceKind::Ambiguous
         );
         debug_assert_eq!(
             has_path,
@@ -100,18 +104,39 @@ impl ResolvedReference {
     }
 }
 
-/// Filename extension of a root-relative path, lowercased, no leading dot.
-/// Basename-aware: a dot in a directory name is never mistaken for an extension
-/// (`a.b/README` → ``). Empty when the basename has no extension.
-fn filename_ext(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    match name.rsplit_once('.') {
-        // Guard the empty stem so a dotfile (`.gitignore`) is treated as
-        // extension-less, not as extension `gitignore` — mirrors
-        // `content_graph::filename_stem`.
-        Some((stem, ext)) if !stem.is_empty() => ext.to_lowercase(),
-        _ => String::new(),
+/// One canonical classification result, including the blocking consequence of
+/// an unresolved asset-shaped target.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReferenceVerdict {
+    pub resolved: ResolvedReference,
+    pub missing_kind: crate::resolve::DiagnosticKind,
+}
+
+impl ReferenceVerdict {
+    /// Keep the resolved record only when this reference is the publish gate's
+    /// one blocking missing-asset outcome.
+    pub fn into_missing_asset(self) -> Option<ResolvedReference> {
+        (self.missing_kind == crate::resolve::DiagnosticKind::MissingAsset).then_some(self.resolved)
     }
+}
+
+struct ParsedReference<'a> {
+    path: &'a str,
+    pothole: Option<&'a str>,
+    anchor: Option<String>,
+}
+
+fn parse_reference(inner: &str) -> ParsedReference<'_> {
+    let (path, pothole) = match inner.split_once('|') {
+        Some((path, pothole)) => (path.trim(), Some(pothole)),
+        None => (inner, None),
+    };
+    let path = path.split_once('?').map(|(path, _)| path.trim()).unwrap_or(path);
+    let (path, anchor) = match path.split_once('#') {
+        Some((path, anchor)) => (path.trim(), Some(anchor.to_string())),
+        None => (path, None),
+    };
+    ParsedReference { path, pothole, anchor }
 }
 
 /// Classify a reference's inner text (target + optional |pothole / #anchor /
@@ -122,7 +147,37 @@ pub fn classify_reference(
     is_embed: bool,
     ctx: &ReferenceContext,
 ) -> ResolvedReference {
+    classify_reference_verdict(inner, from_source, is_embed, ctx).resolved
+}
+
+/// Classify an authored reference and retain the canonical missing-asset
+/// consequence alongside the resolved kind.
+pub fn classify_reference_verdict(
+    inner: &str,
+    from_source: &str,
+    is_embed: bool,
+    ctx: &ReferenceContext,
+) -> ReferenceVerdict {
     let inner = inner.trim();
+    let parsed = parse_reference(inner);
+    let resolved = classify_reference_parts(inner, &parsed, from_source, is_embed, ctx);
+    let missing_kind = if matches!(resolved.kind, ReferenceKind::NotFound) {
+        crate::resolve::ext_kind::missing_reference_kind(
+            crate::path_ext::path_extension(parsed.path).as_deref(),
+        )
+    } else {
+        crate::resolve::DiagnosticKind::Other
+    };
+    ReferenceVerdict { resolved, missing_kind }
+}
+
+fn classify_reference_parts(
+    inner: &str,
+    parsed: &ParsedReference,
+    from_source: &str,
+    is_embed: bool,
+    ctx: &ReferenceContext,
+) -> ResolvedReference {
 
     // External short-circuits (mirror classify_link's exception list).
     const EXTERNAL_PREFIXES: &[&str] =
@@ -140,16 +195,9 @@ pub fn classify_reference(
         return r;
     }
 
-    // Split off |pothole, then #anchor.
-    let (path_part, pothole) = match inner.split_once('|') {
-        Some((p, rest)) => (p.trim(), Some(rest)),
-        None => (inner, None),
-    };
-    let (path_no_anchor, anchor) = match path_part.split_once('#') {
-        Some((p, a)) => (p.trim(), Some(a.to_string())),
-        None => (path_part, None),
-    };
-    let size = pothole.and_then(crate::resolve::embed_renderer::Sizing::parse);
+    let path_no_anchor = parsed.path;
+    let anchor = parsed.anchor.clone();
+    let size = parsed.pothole.and_then(crate::resolve::embed_renderer::Sizing::parse);
 
     // Non-embed mode: a `[[note]]` / `[](path)` reference is a Link resolved
     // against the deployed URL space (`ctx.urls`), NOT an embed kind. This runs
@@ -205,7 +253,7 @@ pub fn classify_reference(
         };
     }
 
-    use crate::resolve::asset_class::{resolve_asset_ref, AssetResolution};
+    use crate::resolve::asset_class::AssetResolution;
     use crate::resolve::ext_kind::{reference_kind_for_ext, ExtKind};
 
     // Folder arm: trailing slash, or the target resolves to a directory.
@@ -213,23 +261,9 @@ pub fn classify_reference(
     let folder_rel: Option<String> = if let Some(abs) = path_no_anchor.strip_prefix('/') {
         Some(abs.trim_end_matches('/').to_string())
     } else if looks_like_folder {
-        // source-relative lexical join against from_source's directory
+        // From the page's folder; a path climbing out of the site names none.
         let from_dir = crate::resolve::parent_dir(from_source);
-        let mut parts: Vec<&str> = if from_dir.is_empty() {
-            vec![]
-        } else {
-            from_dir.split('/').collect()
-        };
-        for seg in path_no_anchor.trim_end_matches('/').split('/') {
-            match seg {
-                "" | "." => {}
-                ".." => {
-                    parts.pop();
-                }
-                s => parts.push(s),
-            }
-        }
-        Some(parts.join("/"))
+        crate::content_graph::join_written(from_dir, path_no_anchor.trim_end_matches('/'))
     } else {
         None
     };
@@ -274,46 +308,22 @@ pub fn classify_reference(
     // drift that showed `![[support-band]]` as "not found" while the build
     // transcluded it. `query_ext_kind` is used only to decide the *unresolved*
     // fallback (known-ext miss = broken embed; unknown-ext miss = note Link).
-    let query_ext_kind = reference_kind_for_ext(&filename_ext(path_no_anchor));
+    let query_ext_kind = reference_kind_for_ext(
+        crate::path_ext::path_extension(path_no_anchor).as_deref().unwrap_or(""),
+    );
 
     let resolved: Option<(String, AssetProvenance)> =
-        match resolve_asset_ref(path_no_anchor, from_source, ctx.assets) {
+        match crate::resolve::asset_class::resolve_file_target(path_no_anchor, from_source, ctx.assets) {
             AssetResolution::Resolved { root_rel, provenance } => Some((root_rel, provenance)),
-            AssetResolution::Ambiguous { candidates, .. } => {
+            // Equally near files: the build links `chosen`, so that is the
+            // target; the kind tells the editor it was a coin flip.
+            AssetResolution::Ambiguous { chosen, candidates } => {
                 let mut r = ResolvedReference::not_found();
                 r.kind = ReferenceKind::Ambiguous;
+                r.target_path = Some(chosen);
                 r.candidates = candidates;
+                r.debug_check_invariant();
                 return r;
-            }
-            // Bare extensionless EMBED (`![[note]]`): retry as a markdown note so
-            // the editor and build agree on Transclusion. resolve_asset_ref's
-            // source-relative resolution reproduces the build's lang-scoping for
-            // free (sibling `<lang>/note.md` wins before root). Non-embed refs and
-            // refs that already carry a known extension are untouched.
-            AssetResolution::NotFound
-                if is_embed && matches!(query_ext_kind, ExtKind::Other) =>
-            {
-                let mut hit = None;
-                for note_ext in ["md", "markdown"] {
-                    match resolve_asset_ref(
-                        &format!("{path_no_anchor}.{note_ext}"),
-                        from_source,
-                        ctx.assets,
-                    ) {
-                        AssetResolution::Resolved { root_rel, provenance } => {
-                            hit = Some((root_rel, provenance));
-                            break;
-                        }
-                        AssetResolution::Ambiguous { candidates, .. } => {
-                            let mut r = ResolvedReference::not_found();
-                            r.kind = ReferenceKind::Ambiguous;
-                            r.candidates = candidates;
-                            return r;
-                        }
-                        AssetResolution::NotFound => {}
-                    }
-                }
-                hit
             }
             AssetResolution::NotFound => None,
         };
@@ -321,7 +331,9 @@ pub fn classify_reference(
     match resolved {
         Some((root_rel, provenance)) => {
             // Kind keyed off the RESOLVED file's extension (see comment above).
-            let kind = match reference_kind_for_ext(&filename_ext(&root_rel)) {
+            let kind = match reference_kind_for_ext(
+                crate::path_ext::path_extension(&root_rel).as_deref().unwrap_or(""),
+            ) {
                 ExtKind::Image => ReferenceKind::Image,
                 ExtKind::Iframe => ReferenceKind::Iframe,
                 ExtKind::Pdf => ReferenceKind::Pdf,
@@ -362,12 +374,11 @@ pub fn classify_reference(
 mod tests {
     use super::*;
 
-    use crate::resolve::asset_class::FakeAssetIndex;
     use crate::resolve::folder_class::FakeFolderIndex;
     use crate::resolve::link_class::FakeUrlIndex;
 
     fn ctx<'a>(
-        a: &'a FakeAssetIndex,
+        a: &'a ContentGraph,
         f: &'a FakeFolderIndex,
         u: &'a FakeUrlIndex,
     ) -> ReferenceContext<'a> {
@@ -376,7 +387,7 @@ mod tests {
 
     #[test]
     fn external_url_is_external() {
-        let a = FakeAssetIndex::new(&[]);
+        let a = ContentGraph::from_paths(&[]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("https://example.com/x", "page.md", true, &ctx(&a, &f, &u));
@@ -386,7 +397,7 @@ mod tests {
 
     #[test]
     fn bare_anchor_is_anchor() {
-        let a = FakeAssetIndex::new(&[]);
+        let a = ContentGraph::from_paths(&[]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("#section", "page.md", true, &ctx(&a, &f, &u));
@@ -403,7 +414,7 @@ mod tests {
 
     #[test]
     fn image_file_resolves_to_image_kind() {
-        let a = FakeAssetIndex::new(&["assets/photo.png"]);
+        let a = ContentGraph::from_paths(&["assets/photo.png"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("photo.png", "page.md", true, &ctx(&a, &f, &u));
@@ -414,7 +425,7 @@ mod tests {
 
     #[test]
     fn html_file_resolves_to_iframe_with_size() {
-        let a = FakeAssetIndex::new(&["widgets/app.html"]);
+        let a = ContentGraph::from_paths(&["widgets/app.html"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("widgets/app.html|800x600", "page.md", true, &ctx(&a, &f, &u));
@@ -424,17 +435,29 @@ mod tests {
 
     #[test]
     fn ambiguous_file_match_sets_candidates() {
-        let a = FakeAssetIndex::new(&["a/logo.png", "b/logo.png"]);
+        let a = ContentGraph::from_paths(&["a/logo.png", "b/logo.png"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("logo.png", "page.md", true, &ctx(&a, &f, &u));
         assert_eq!(r.kind, ReferenceKind::Ambiguous);
-        assert_eq!(r.candidates.len(), 2);
+        assert_eq!(r.candidates, vec!["a/logo.png".to_string(), "b/logo.png".to_string()]);
+        // The tie still names the file the build links.
+        assert_eq!(r.target_path.as_deref(), Some("a/logo.png"));
+    }
+
+    #[test]
+    fn the_nearest_copy_is_not_ambiguous() {
+        let a = ContentGraph::from_paths(&["a/logo.png", "b/logo.png"]);
+        let f = FakeFolderIndex::new();
+        let u = FakeUrlIndex::new();
+        let r = classify_reference("logo.png", "b/page.md", true, &ctx(&a, &f, &u));
+        assert_eq!(r.kind, ReferenceKind::Image);
+        assert_eq!(r.target_path.as_deref(), Some("b/logo.png"));
     }
 
     #[test]
     fn folder_with_static_index_is_iframe() {
-        let a = FakeAssetIndex::new(&[]);
+        let a = ContentGraph::from_paths(&[]);
         let mut f = FakeFolderIndex::new();
         f.dirs.insert("Resources/app".into());
         f.static_index.insert("Resources/app".into(), "index.html".into());
@@ -447,7 +470,7 @@ mod tests {
 
     #[test]
     fn folder_with_markdown_index_is_listing() {
-        let a = FakeAssetIndex::new(&[]);
+        let a = ContentGraph::from_paths(&[]);
         let mut f = FakeFolderIndex::new();
         f.dirs.insert("news".into());
         f.md_index.insert("news".into());
@@ -458,11 +481,24 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_path_climbing_out_of_the_site_names_no_folder() {
+        let a = ContentGraph::from_paths(&[]);
+        let mut f = FakeFolderIndex::new();
+        f.dirs.insert("news".into());
+        f.md_index.insert("news".into());
+        let u = FakeUrlIndex::new();
+        let r = classify_reference("../news/", "a/page.md", true, &ctx(&a, &f, &u));
+        assert_eq!(r.kind, ReferenceKind::FolderListing);
+        let r = classify_reference("../../news/", "a/page.md", true, &ctx(&a, &f, &u));
+        assert_ne!(r.kind, ReferenceKind::FolderListing, "{r:?}");
+    }
+
+    #[test]
     fn absolute_file_embed_resolves_to_image() {
         // A leading-slash path with NO trailing slash, naming a real asset, is a
         // file embed — not a folder. The folder arm must let it fall through to
         // the file arm so `![[/assets/photo.png]]` resolves as an Image.
-        let a = FakeAssetIndex::new(&["assets/photo.png"]);
+        let a = ContentGraph::from_paths(&["assets/photo.png"]);
         let f = FakeFolderIndex::new(); // NOT a dir, no indexes
         let u = FakeUrlIndex::new();
         let r = classify_reference("/assets/photo.png", "page.md", true, &ctx(&a, &f, &u));
@@ -473,7 +509,7 @@ mod tests {
 
     #[test]
     fn trailing_slash_unresolved_folder_is_not_found() {
-        let a = FakeAssetIndex::new(&[]);
+        let a = ContentGraph::from_paths(&[]);
         let f = FakeFolderIndex::new(); // empty: not a dir, no indexes
         let u = FakeUrlIndex::new();
         let r = classify_reference("/ghost/", "page.md", true, &ctx(&a, &f, &u));
@@ -482,7 +518,7 @@ mod tests {
 
     #[test]
     fn bare_note_name_is_link() {
-        let a = FakeAssetIndex::new(&[]);
+        let a = ContentGraph::from_paths(&[]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("some-note", "page.md", true, &ctx(&a, &f, &u));
@@ -495,7 +531,7 @@ mod tests {
     fn missing_known_ext_asset_is_not_found() {
         // A known image extension that doesn't resolve stays NotFound (it is a
         // broken asset embed, not a note link).
-        let a = FakeAssetIndex::new(&[]);
+        let a = ContentGraph::from_paths(&[]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("missing.png", "page.md", true, &ctx(&a, &f, &u));
@@ -504,7 +540,7 @@ mod tests {
 
     #[test]
     fn non_embed_md_note_resolves_as_link_not_transclusion() {
-        let a = FakeAssetIndex::new(&["note.md"]);
+        let a = ContentGraph::from_paths(&["note.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::resolving(&[("note.md", "/note/")]);
         let r = classify_reference("note.md", "page.md", false, &ctx(&a, &f, &u));
@@ -514,7 +550,7 @@ mod tests {
 
     #[test]
     fn embed_md_is_still_transclusion() {
-        let a = FakeAssetIndex::new(&["note.md"]);
+        let a = ContentGraph::from_paths(&["note.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("note.md", "page.md", true, &ctx(&a, &f, &u));
@@ -530,7 +566,7 @@ mod tests {
 
     #[test]
     fn bare_embed_resolves_markdown_note_as_transclusion() {
-        let a = FakeAssetIndex::new(&["support-band.md"]);
+        let a = ContentGraph::from_paths(&["support-band.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("support-band", "index.md", true, &ctx(&a, &f, &u));
@@ -543,8 +579,8 @@ mod tests {
     fn bare_embed_prefers_source_relative_md_note() {
         // From a language-tree source, the sibling note wins — mirrors
         // ContentGraph::resolve_path step 1b lang-scoping (source-relative
-        // resolution in resolve_asset_ref gives this for free).
-        let a = FakeAssetIndex::new(&["support-band.md", "zh-hans/support-band.md"]);
+        // resolution in the one resolver gives this for free).
+        let a = ContentGraph::from_paths(&["support-band.md", "zh-hans/support-band.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("support-band", "zh-hans/index.md", true, &ctx(&a, &f, &u));
@@ -557,7 +593,7 @@ mod tests {
     fn bare_embed_resolves_root_note_from_root_source() {
         // Both root and lang-tree notes exist; a root source resolves the root one
         // deterministically (source-relative join), never Ambiguous.
-        let a = FakeAssetIndex::new(&["support-band.md", "zh-hans/support-band.md"]);
+        let a = ContentGraph::from_paths(&["support-band.md", "zh-hans/support-band.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("support-band", "index.md", true, &ctx(&a, &f, &u));
@@ -568,19 +604,19 @@ mod tests {
 
     #[test]
     fn bare_embed_path_qualified_note_is_transclusion() {
-        // `![[work/daowu]]` (path, no extension) resolves work/daowu.md.
-        let a = FakeAssetIndex::new(&["work/daowu.md"]);
+        // `![[work/orchard]]` (path, no extension) resolves work/orchard.md.
+        let a = ContentGraph::from_paths(&["work/orchard.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
-        let r = classify_reference("work/daowu", "index.md", true, &ctx(&a, &f, &u));
+        let r = classify_reference("work/orchard", "index.md", true, &ctx(&a, &f, &u));
         assert_eq!(r.kind, ReferenceKind::Transclusion);
-        assert_eq!(r.target_path.as_deref(), Some("work/daowu.md"));
+        assert_eq!(r.target_path.as_deref(), Some("work/orchard.md"));
     }
 
     #[test]
     fn bare_embed_unresolved_stays_link() {
         // No matching note → still a classify-only Link, not Transclusion.
-        let a = FakeAssetIndex::new(&["other.md"]);
+        let a = ContentGraph::from_paths(&["other.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("support-band", "index.md", true, &ctx(&a, &f, &u));
@@ -592,7 +628,7 @@ mod tests {
     fn bare_link_not_embed_does_not_use_md_fallback() {
         // is_embed=false resolves against the URL space, NOT the note-extension
         // fallback — a non-embed `[[support-band]]` must never become Transclusion.
-        let a = FakeAssetIndex::new(&["support-band.md"]);
+        let a = ContentGraph::from_paths(&["support-band.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
         let r = classify_reference("support-band", "index.md", false, &ctx(&a, &f, &u));
@@ -601,7 +637,7 @@ mod tests {
 
     #[test]
     fn non_embed_link_carries_anchor() {
-        let a = FakeAssetIndex::new(&[]);
+        let a = ContentGraph::from_paths(&[]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::resolving(&[("note", "/note/")]);
         let r = classify_reference("note#heading", "page.md", false, &ctx(&a, &f, &u));

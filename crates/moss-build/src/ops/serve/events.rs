@@ -3,11 +3,10 @@
 //!
 //! ## Why this exists
 //!
-//! Commands were only half the seam. `frontend/app/platform/listen.ts` had a
-//! working Tauri branch and a documented no-op browser branch, so outside the
-//! desktop shell every subscriber was silently dead — no rebuild notice, no
-//! task toast, no failure report. Silently, because a subscription that never
-//! fires looks exactly like a quiet system.
+//! Outside the desktop shell there is no Tauri bus, so without this stream every
+//! subscriber would be silently dead — no rebuild notice, no task toast, no
+//! failure report — and a subscription that never fires looks exactly like a
+//! quiet system.
 //!
 //! ## One publisher per carrier, by construction
 //!
@@ -46,12 +45,20 @@
 //! `fetch` + a `ReadableStream` reader rather than `EventSource` — `EventSource`
 //! cannot set a request header, and putting the token in the query string
 //! would write it into every access log.
+//!
+//! ## Viewer activity
+//!
+//! [`viewer_activity`] is the server's answer to "is anyone looking": a page
+//! navigation, and an event stream opening or closing, each update it. A host
+//! that pauses background work while nobody watches can wake on it instead of
+//! polling. It lives here because the open streams are this module's
+//! receivers, and it is a process global for the same reason the bus is.
 
 use std::sync::{Arc, OnceLock};
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::stream::{Stream, StreamExt};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 use crate::types::events::{MossEvent, MOSS_EVENT_CHANNEL};
 
@@ -65,6 +72,65 @@ const CAPACITY: usize = 512;
 fn bus() -> &'static broadcast::Sender<String> {
     static BUS: OnceLock<broadcast::Sender<String>> = OnceLock::new();
     BUS.get_or_init(|| broadcast::channel(CAPACITY).0)
+}
+
+/// What the preview server has seen of its viewers. Only activity is
+/// reported; how long it keeps the host awake is the host's decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewerActivity {
+    /// The last page navigation, or event stream opening or closing. `None`
+    /// until the first.
+    pub last_activity: Option<std::time::Instant>,
+    /// Browsers holding `GET /__moss/events` open right now. One that went
+    /// away still counts until its stream fails a write, at the next event or
+    /// keep-alive (about 15 s).
+    pub streams: usize,
+}
+
+static ACTIVITY: OnceLock<watch::Sender<ViewerActivity>> = OnceLock::new();
+
+/// Watch the preview's viewers. The first call installs the signal; before
+/// it, a request skips it after one atomic load, so a process that never asks
+/// pays nothing for it.
+pub fn viewer_activity() -> watch::Receiver<ViewerActivity> {
+    ACTIVITY
+        .get_or_init(|| watch::channel(ViewerActivity { last_activity: None, streams: bus().receiver_count() }).0)
+        .subscribe()
+}
+
+/// Record that someone is looking, now.
+pub(crate) fn note_activity() {
+    if let Some(tx) = ACTIVITY.get() {
+        let streams = bus().receiver_count();
+        tx.send_modify(|a| {
+            a.last_activity = Some(std::time::Instant::now());
+            a.streams = streams;
+        });
+    }
+}
+
+/// One open event stream's place on the bus. Opening it and dropping it —
+/// however the stream ends — are both viewer activity.
+struct Subscription(Option<broadcast::Receiver<String>>);
+
+impl Subscription {
+    fn open() -> Self {
+        let rx = bus().subscribe();
+        note_activity();
+        Self(Some(rx))
+    }
+
+    fn rx(&mut self) -> &mut broadcast::Receiver<String> {
+        self.0.as_mut().expect("taken only by drop")
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        // Leave the bus first, so the count reported no longer has this stream.
+        self.0 = None;
+        note_activity();
+    }
 }
 
 /// Publish one named event. Serialization happens once here, not once per
@@ -101,12 +167,12 @@ pub fn publish(event: &MossEvent) {
 /// disconnecting a slow tab would turn a hiccup into a permanently dead
 /// subscription. The gap is logged so it is not invisible.
 fn event_stream(
-    rx: broadcast::Receiver<String>,
+    sub: Subscription,
 ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    futures::stream::unfold(rx, |mut rx| async move {
+    futures::stream::unfold(sub, |mut sub| async move {
         loop {
-            match rx.recv().await {
-                Ok(json) => return Some((Ok(Event::default().data(json)), rx)),
+            match sub.rx().recv().await {
+                Ok(json) => return Some((Ok(Event::default().data(json)), sub)),
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     log::warn!(target: "preview", "carrier: SSE subscriber lagged, {n} events skipped");
                 }
@@ -121,15 +187,15 @@ fn event_stream(
 ///
 /// The stream ends when the session it was admitted under is retired by a
 /// folder switch: these events describe the vault, and a subscriber holding
-/// the previous vault's token must not keep reading the next one's (ADR-075
-/// rule 4). The browser's reconnect then re-presents its token and is 401.
+/// the previous vault's token must not keep reading the next one's. The
+/// browser's reconnect then re-presents its token and is 401.
 pub async fn handle_events(
     axum::Extension(session): axum::Extension<Arc<super::invoke::Session>>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     // Subscribe BEFORE returning, so an event emitted between the request
     // arriving and the stream being polled is buffered rather than missed.
     // `setup-panel.ts` depends on exactly this ordering on the Tauri side.
-    let stream = event_stream(bus().subscribe()).take_until(session.retired().clone().cancelled_owned());
+    let stream = event_stream(Subscription::open()).take_until(session.retired().clone().cancelled_owned());
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
@@ -161,13 +227,54 @@ impl crate::build::ports::announcer::SealAnnouncer for CarrierAnnouncer {
 
     async fn publish_change_set(
         &self,
-        _project_root: &std::path::Path,
+        project_root: &std::path::Path,
         change_set: Option<crate::build::manifest::change_set::ChangeSet>,
     ) {
+        // The removed addresses reach a terminal as an advisory; the rest of
+        // the set has no headless listener.
         if let Some(cs) = change_set {
-            log::debug!(target: "publish", "publish change set: {cs:?}");
+            static ANNOUNCED: std::sync::Mutex<Option<std::collections::HashSet<std::path::PathBuf>>> =
+                std::sync::Mutex::new(None);
+            let mut announced = ANNOUNCED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let announced = announced.get_or_insert_with(Default::default);
+            if let Some(event) = removal_announcement(announced, project_root, &cs.removed) {
+                crate::build::ports::reporter::BuildReporter::report(&CarrierReporter, &event);
+            }
         }
     }
+}
+
+/// The event to publish for this build's removed addresses, or `None`. A
+/// non-empty list is announced every build; an empty one says nothing, except
+/// the one clearing event after a build that had announced a list, so an
+/// advisory a watching browser shows goes away once the author fixes it.
+/// `announced` is the folders whose last announcement was non-empty. A folder
+/// that never had removals puts nothing on the shared event bus.
+fn removal_announcement(
+    announced: &mut std::collections::HashSet<std::path::PathBuf>,
+    folder: &std::path::Path,
+    removed: &[crate::build::manifest::change_set::RemovedAddress],
+) -> Option<crate::build::progress::PipelineEvent> {
+    let event = crate::build::progress::make_removed_addresses_advisory(removed);
+    if shows_on_terminal(&event) {
+        announced.insert(folder.to_path_buf());
+        Some(event)
+    } else {
+        announced.remove(folder).then_some(event)
+    }
+}
+
+/// Does a headless build print this event on the terminal?
+///
+/// The plugin events are its console voice (see [`CarrierReporter`]), and so
+/// is the removed-addresses advisory: it is how a `moss build` user learns a
+/// publish would take an address offline. Other advisories stay with the
+/// carrier's listeners.
+pub fn shows_on_terminal(event: &crate::build::progress::PipelineEvent) -> bool {
+    use crate::build::progress::PipelineEvent;
+    matches!(event, PipelineEvent::PluginProgress(_) | PipelineEvent::PluginNeedsConnection { .. })
+        || matches!(event, PipelineEvent::BackgroundProgress { task, advisories, .. }
+            if task == "addresses" && !advisories.is_empty())
 }
 
 pub struct CarrierReporter;
@@ -181,7 +288,7 @@ impl crate::build::ports::reporter::BuildReporter for CarrierReporter {
         // line must reach stderr and the `--strict` count — the outcome a
         // plugin-bearing `moss build` once hid behind "Build complete", exit 0.
         // `StdoutReporter` owns the wording; this is the one delegation.
-        if matches!(event, PipelineEvent::PluginProgress(_) | PipelineEvent::PluginNeedsConnection { .. }) {
+        if shows_on_terminal(event) {
             crate::build::ports::reporter::StdoutReporter.report(event);
         }
         if let Some(m) = crate::types::events::moss_event_for(event) {
@@ -191,5 +298,60 @@ impl crate::build::ports::reporter::BuildReporter for CarrierReporter {
 
     fn is_terminal(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod removal_announcement_tests {
+    use super::removal_announcement;
+    use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
+    use crate::build::progress::PipelineEvent;
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    fn lost() -> Vec<RemovedAddress> {
+        vec![RemovedAddress {
+            path: "feed.xml".into(),
+            reason: RemovalReason::Unexplained,
+            moved_to: None,
+            source: None,
+        }]
+    }
+
+    fn advisories(event: PipelineEvent) -> usize {
+        match event {
+            PipelineEvent::BackgroundProgress { advisories, .. } => advisories.len(),
+            other => panic!("expected a background tick, got {other:?}"),
+        }
+    }
+
+    /// A folder that never had removals puts nothing on the shared bus.
+    #[test]
+    fn a_build_that_never_had_removals_emits_nothing() {
+        let mut announced = HashSet::new();
+        assert!(removal_announcement(&mut announced, Path::new("/site"), &[]).is_none());
+        assert!(removal_announcement(&mut announced, Path::new("/site"), &[]).is_none());
+    }
+
+    /// Under `--serve --watch` the advisory a browser shows must clear once
+    /// the author fixes it: one clearing event after a non-empty list, then
+    /// silence again.
+    #[test]
+    fn the_build_after_a_removal_is_fixed_emits_one_clearing_event() {
+        let mut announced = HashSet::new();
+        let shown = removal_announcement(&mut announced, Path::new("/site"), &lost()).expect("announced");
+        assert_eq!(advisories(shown), 1);
+
+        let cleared = removal_announcement(&mut announced, Path::new("/site"), &[]).expect("a clearing event");
+        assert_eq!(advisories(cleared), 0);
+        assert!(removal_announcement(&mut announced, Path::new("/site"), &[]).is_none());
+    }
+
+    /// Folders are independent: another folder's fix clears nothing here.
+    #[test]
+    fn the_clearing_event_is_per_folder() {
+        let mut announced = HashSet::new();
+        removal_announcement(&mut announced, Path::new("/a"), &lost());
+        assert!(removal_announcement(&mut announced, Path::new("/b"), &[]).is_none());
     }
 }

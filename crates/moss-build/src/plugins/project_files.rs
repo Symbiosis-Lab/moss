@@ -1,7 +1,6 @@
 //! Plugin-facing project/site file I/O — the headless bodies behind the
 //! `plugin_config.rs` Tauri commands and the QuickJS engine's
-//! file arms (open-CLI plan slice 1,
-//! docs/archive/2026-08-28-open-cli-engine-and-thin-binary-plan.md).
+//! file arms (open-CLI plan slice 1).
 //! Tauri-free by construction; at slice 2 this file moves verbatim into
 //! `crates/moss-build/src/plugins/`, so every `crate::` path below must spell
 //! the same in both crates.
@@ -185,7 +184,7 @@ pub fn write_file_with_dirs(file_path: &std::path::Path, data: &[u8]) -> Result<
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
-    // allow:raw_write plugin storage/project files under the vault root, never .moss/build/ — a fresh path each write, no evicted destination to truncate
+    // allow:raw_write plugin storage/project files under the vault root, never .moss/build.nosync/ — a fresh path each write, no evicted destination to truncate
     fs::write(file_path, data)
         .map_err(|e| format!("Failed to write file: {}", e))
 }
@@ -370,7 +369,7 @@ fn resolve_plugin_project_path(
     PluginPath::sandboxed(relative_path)?.resolve_under(Path::new(project_path))
 }
 
-/// Read a file from the active generation directory (.moss/build/current/)
+/// Read a file from the active generation directory (.moss/build.nosync/current/)
 ///
 /// Returns the file content as base64-encoded string.
 /// Used by deploy plugins to read site files without direct filesystem access.
@@ -384,9 +383,16 @@ fn resolve_plugin_project_path(
 ///
 /// # Security
 /// * Directory traversal (`..`) is blocked
-/// * Files are scoped to the active generation (.moss/build/current/) only
+/// * Files are scoped to the active generation (.moss/build.nosync/current/) only
 /// Shared body for read_site_file — called by the Tauri command and the engine
 /// arm (so QuickJS plugins can read built-site bytes, not just webview callers).
+///
+/// Reads `current_ptr()`, which the seal's materialize phase debounces
+/// (`build::seal_phase`) rather than updating on every build — safe here
+/// because a plugin's deploy hook runs only after the publish path has forced
+/// a synchronous seal (`build::seal_phase::settle`), so `current_ptr()`
+/// matches the generation being published. A caller outside that window sees
+/// whatever generation last materialized.
 pub async fn read_site_file_impl(
     project_path: &str,
     relative_path: &str,
@@ -547,6 +553,16 @@ pub fn list_files_in_dir(site_dir: &std::path::Path) -> Vec<SiteFileInfo> {
 }
 
 /// Shared body for list_site_files_with_sizes — called by the Tauri command and the engine arm.
+///
+/// Reads `current_ptr()`, which the seal's materialize phase now debounces
+/// (`build::seal_phase`). Safe unlike a baked render: this is a live,
+/// on-demand query a frontend panel re-invokes each time it is shown, not a
+/// value computed once during a render and then frozen into shipped HTML —
+/// so a call made mid-debounce just reports the last-materialized
+/// generation's sizes, and the next call after settling reports the new
+/// ones. No permanent staleness to bake in, unlike `color_extract`'s render-
+/// time reads (which this stage moved off `current_ptr()` for exactly that
+/// reason).
 pub fn list_site_files_with_sizes_impl(project_path: &std::path::Path) -> Vec<SiteFileInfo> {
     let site_dir = crate::moss_paths::MossPaths::new(project_path).current_ptr();
     list_files_in_dir(&site_dir)
@@ -669,7 +685,7 @@ mod annotate_tests {
     #[test]
     fn test_annotate_home_files_self_named_root_home() {
         // ROOT-level files (the `""` parent). The self-named root home
-        // (`潮汐.md` in a project named `潮汐`) must win over the alphabetically
+        // (`河灣.md` in a project named `河灣`) must win over the alphabetically
         // earlier sibling. Before the fix the root folder name was `""` (the
         // retired `rfind('/')` on the empty root string), so the self-named rule
         // could not fire and the priority-5 alphabetical fallback flagged
@@ -677,12 +693,12 @@ mod annotate_tests {
         // (`VaultRoot::name()`), passed by `list_project_tree_impl`.
         let paths = vec![
             "aaa.md".to_string(),
-            "\u{5728}\u{5834}.md".to_string(),
+            "\u{6cb3}\u{7063}.md".to_string(),
         ];
         let result = annotate_home_files_marked(
             &paths,
             &std::collections::HashSet::new(),
-            "\u{5728}\u{5834}",
+            "\u{6cb3}\u{7063}",
         );
         let home: Vec<&str> = result
             .iter()
@@ -691,7 +707,7 @@ mod annotate_tests {
             .collect();
         assert_eq!(
             home,
-            vec!["\u{5728}\u{5834}.md"],
+            vec!["\u{6cb3}\u{7063}.md"],
             "the self-named root home must be elected, not the alpha-first sibling"
         );
     }

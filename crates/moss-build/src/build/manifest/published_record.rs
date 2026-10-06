@@ -17,10 +17,10 @@
 //!
 //! # Why not `build::io_utils`
 //!
-//! `io_utils` exists for `.moss/build/**`, where ADR-043's "regenerable output:
+//! `io_utils` exists for `.moss/build.nosync/**`, where the "regenerable output:
 //! dataless is absent" rule applies — moss always holds the replacement bytes,
 //! so it may truncate freely. This record is the opposite: it is durable and
-//! cannot be regenerated from the project (ADR-062). Losing it costs a
+//! cannot be regenerated from the project. Losing it costs a
 //! degraded change set until the next publish lands. So it goes through
 //! `infra::atomic_write`, the one writer in the tree that replaces a file:
 //! a uniquely named sibling temp, fsync, then rename.
@@ -65,6 +65,40 @@ pub fn load_for(paths: &MossPaths, target: Option<&str>) -> Option<PublishedSnap
         .or_else(|| same_method_record(paths, target))
         .or_else(|| read(&legacy_path(paths)))
         .filter(|snap| snap.describes_target(target))
+}
+
+/// The record the removed-address check compares against: the current
+/// target's own record when there is one, otherwise the newest record of any
+/// other target.
+///
+/// [`load_for`] is target-strict on purpose — verbs diffed against another
+/// host's tree would be wrong. A removed address is different: a URL any host
+/// has served is one someone can have stored, and a first publish to a new
+/// host would otherwise compare against nothing and lose it unseen.
+///
+/// Limits, in plain words. Only one record is used, so a newer partial record
+/// can hide an address that only an older record held. A record written for a
+/// prebuilt upload carries no sources, so its removed pages read as
+/// unexplained rather than as the author's doing. "Newest" compares the
+/// timestamps as instants, not as text, so records written with different UTC
+/// offsets order correctly.
+pub fn load_address_baseline(paths: &MossPaths, target: Option<&str>) -> Option<PublishedSnapshot> {
+    load_for(paths, target).or_else(|| {
+        std::fs::read_dir(paths.deploy_records_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .filter_map(|p| read(&p))
+            .max_by_key(|snap| instant(&snap.published_at))
+            .or_else(|| read(&legacy_path(paths)))
+    })
+}
+
+/// `published_at` as an instant; a value that does not parse sorts oldest.
+fn instant(published_at: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(published_at).ok()
 }
 
 /// A record written under the pre-slot key for this target's method.
@@ -124,6 +158,7 @@ pub fn save(paths: &MossPaths, snap: &PublishedSnapshot) -> Result<(), String> {
     // The single slot has been migrated off — see `legacy_path`.
     // Leaving it would let a baseline from before the keyed layout outlive the
     // record that replaced it, and answer for a target it no longer describes.
+    // allow:unlink the legacy publish-record path under .moss, not staging
     let _ = std::fs::remove_file(legacy_path(paths));
     Ok(())
 }

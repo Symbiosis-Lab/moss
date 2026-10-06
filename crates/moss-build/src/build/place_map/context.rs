@@ -1,0 +1,1140 @@
+use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
+
+use moss_core::terms::{term_fold, term_folder_key};
+
+use super::{precision_rank, route_blocked_diagnostic, route_precision_gate, Frame, FrameTier, Pack, ProjectedPoint, Projection};
+use crate::vault::places::Precision;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocatorPlacement { None, AlignRight }
+
+impl LocatorPlacement {
+    pub fn from_config(value: Option<&str>) -> Self {
+        match value {
+            None | Some("") | Some("none") => Self::None,
+            Some("align-right") => Self::AlignRight,
+            Some(other) => {
+                crate::build::cli_output::log_warn_problem!(
+                    "[site].locator must be 'align-right' or 'none', not '{other}'; omitting locator maps"
+                );
+                Self::None
+            }
+        }
+    }
+}
+
+/// Fully-resolved inputs shared by page rendering and map-style embeds.
+#[derive(Debug, Clone)]
+pub struct PlaceMapRenderContext {
+    maps: PlaceMapContext,
+    gazetteer: Arc<crate::vault::places::Gazetteer>,
+    namespace: String,
+    locator: LocatorPlacement,
+    /// The place kind's already cycle-repaired `parents` map — the same one
+    /// `build::terms::places::attach_parents`/`break_cycles` finishes
+    /// building before this context is ever constructed (see the pipeline's
+    /// call order), and the one the terms layer's own ancestor walks read.
+    /// `lies_under` walks this instead of re-deriving its own chain from
+    /// the raw gazetteer, so a parent-chain cycle is fixed in exactly one
+    /// place rather than risking a second, differently-capped repair here.
+    parents: BTreeMap<String, String>,
+    /// `TermKind::explorer_enabled()` for this build's place-typed kind,
+    /// captured once at construction (`pipeline.rs`) from the same `kinds`
+    /// table `namespace`/`parents` already came from. `render_term_map`
+    /// reads this rather than re-reading config, so the injection predicate
+    /// (`features::should_inject_places_explorer`) and the markup handshake
+    /// below can never resolve the default differently.
+    explorer: bool,
+    /// The `_moss/map.<hash>/` directory name for this build's world map and
+    /// regional tiles (`emit::place_map_assets::assets_hash`) — a pure
+    /// function of the pack and the gazetteer, so unlike
+    /// `explorer_places_hash` below it is known at construction, before any
+    /// document is parsed. Empty only when nothing has set it (no
+    /// `with_map_assets_hash` call), which `with_explorer_handshake` reads
+    /// as "not ready" the same way it reads a `None` places hash.
+    map_assets_hash: String,
+    /// `places.<hash>.json`'s content hash, set once `derive_terms` has
+    /// produced this build's finished document set
+    /// (`render::blocking::generate_blocking_content_for_build`, right after
+    /// the pass that fills `ParsedDocument::location`/`byline` for the last
+    /// time) — `None` until then. `render_term_map` only emits the
+    /// `data-moss-places-explorer` handshake once this is `Some`, so a
+    /// namespace root rendered before the hash exists (there is no such
+    /// call site today, but nothing stops a future one) degrades to the
+    /// plain static figure instead of baking in a hash the build might not
+    /// actually write.
+    explorer_places_hash: Option<String>,
+}
+
+impl PlaceMapRenderContext {
+    pub fn new(
+        maps: PlaceMapContext,
+        gazetteer: crate::vault::places::Gazetteer,
+        namespace: String,
+        locator: LocatorPlacement,
+        parents: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            maps,
+            gazetteer: Arc::new(gazetteer),
+            namespace,
+            locator,
+            parents,
+            explorer: true,
+            map_assets_hash: String::new(),
+            explorer_places_hash: None,
+        }
+    }
+
+    /// `TermKind::explorer_enabled()` for the place-typed kind this context
+    /// was built from. Chained onto `new()` rather than widened into it so
+    /// every existing call site (several in this crate's own tests) keeps
+    /// compiling unchanged.
+    pub fn with_explorer(mut self, explorer: bool) -> Self {
+        self.explorer = explorer;
+        self
+    }
+
+    /// This build's `_moss/map.<hash>/` directory name
+    /// (`emit::place_map_assets::assets_hash`) — set once, at construction,
+    /// since unlike the places hash it needs nothing documents haven't
+    /// provided yet.
+    pub fn with_map_assets_hash(mut self, hash: String) -> Self {
+        self.map_assets_hash = hash;
+        self
+    }
+
+    /// This build's `_moss/map.<hash>/` directory name, read back by
+    /// `emit::place_map_labels` so `labels.json` lands beside the SVGs
+    /// `emit::place_map_assets` already writes there, under the identical
+    /// hash, without a second `assets_hash` computation at that call site.
+    /// Empty exactly when [`Self::with_map_assets_hash`] was never called —
+    /// the same "not ready" signal `with_explorer_handshake` reads.
+    pub(crate) fn map_assets_hash(&self) -> &str {
+        &self.map_assets_hash
+    }
+
+    /// `places.<hash>.json`'s content hash, set once the caller's own
+    /// `place_map::places_data::emit_places_data` call (over the SAME
+    /// finished document set `places_data::emit` serializes to disk) has
+    /// produced it. See [`Self::explorer_places_hash`]'s own doc for why
+    /// this is a late `with_*` rather than a `new()` parameter.
+    pub fn with_explorer_places_hash(mut self, hash: String) -> Self {
+        self.explorer_places_hash = Some(hash);
+        self
+    }
+
+    pub fn is_place_key(&self, key: &str) -> bool {
+        key == self.namespace || key.starts_with(&format!("{}/", self.namespace))
+    }
+
+    /// The bundled map pack, gazetteer, place-typed namespace key, and
+    /// cycle-repaired parent map this context already bundles — read by
+    /// `place_map::places_data`, the one other caller outside this module
+    /// that needs these fields, rather than threading each one through its
+    /// own parameter the way the pipeline used to hand-capture them.
+    pub(crate) fn maps(&self) -> &PlaceMapContext {
+        &self.maps
+    }
+
+    pub(crate) fn gazetteer(&self) -> &crate::vault::places::Gazetteer {
+        &self.gazetteer
+    }
+
+    pub(crate) fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    pub(crate) fn parents(&self) -> &BTreeMap<String, String> {
+        &self.parents
+    }
+
+    /// Whether `[site] locator` asks for a locator beside every located
+    /// page: the default a page's own `map:` overrides
+    /// (`ParsedDocument::shows_own_map`). `render_locator` draws one
+    /// regardless; the caller applies the switch.
+    pub fn locator_default(&self) -> bool {
+        self.locator != LocatorPlacement::None
+    }
+
+    pub fn render_locator(&self, names: &[String], route: bool, page_path: &str, ordinal: usize) -> Option<String> {
+        self.render_article_map(names, route, page_path, page_path, ordinal)
+            .map(|svg| format!(r#"<div class="moss-place-locator moss-align-right">{svg}</div>"#))
+    }
+
+    pub fn render_article_map(&self, names: &[String], route: bool, page_path: &str, host_path: &str, ordinal: usize) -> Option<String> {
+        let mut target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names, route);
+        apply_route_gate(&mut target, page_path);
+        if !target.has_coordinates() { return None; }
+        let first = target.places.iter().find(|place| place.point().is_some())?;
+        // The profile (how much detail the locator carries) has to reflect
+        // the WHOLE list's precision, not whichever place happens to be
+        // declared first: emit_svg already picks the coarsest precision
+        // across every declared place for the full/aggregate map, for the
+        // same privacy reason a region-precision place anywhere in the list
+        // demands. A locator that instead kept the first place's precision
+        // (e.g. a [city, city, region, city] list, first = city) requested
+        // full relief/seafloor detail for a frame wide enough to hold a
+        // region, which is how a real multi-place article blew past
+        // LOCATOR_RAW_SAFETY_LIMIT and lost its locator with no warning.
+        let precision = target
+            .places
+            .iter()
+            .map(|place| place.precision)
+            .max_by_key(precision_rank)
+            .unwrap_or(Precision::Country);
+        let options = super::SvgMapOptions::new(host_path, ordinal, &first.display, precision);
+        match super::emit_locator(&self.maps, &target, options) {
+            Ok(locator) => {
+                // The article id `places.<hash>.json` keys THIS page's own
+                // work by (`places_data::page_url`, the same pretty-URL
+                // transform) — so `embed.ts`'s `article=` scope can never
+                // misread a page's own work.
+                let article = super::places_data::page_url(page_path);
+                let svg = self.with_embed_hydration(locator.svg, &format!("article={article}"), &first.display);
+                Some(svg)
+            }
+            Err(error) => {
+                crate::build::cli_output::log_warn_problem!(
+                    "{page_path}: locator dropped — {} bytes exceeds the {} byte safety ceiling",
+                    error.raw_bytes,
+                    super::LOCATOR_RAW_SAFETY_LIMIT
+                );
+                None
+            }
+        }
+    }
+
+    /// Whether `doc` is a place-typed namespace root with a map to draw —
+    /// `render/html.rs`'s one page-assembly fork for design decision 7, "the
+    /// map is the page": such a root's own folder-title heading renders
+    /// `.visually-hidden` instead of the ordinary visible one, and any
+    /// authored body renders below the map rather than above it. A method on
+    /// `&self`, not a free function over the same three bools, so a site
+    /// with no place maps at all (no `PlaceMapRenderContext` to call this
+    /// on) can never answer yes — the `Option::is_some()` check that used to
+    /// sit beside this logic at the call site is now just "do I have a
+    /// context to ask". `is_folder_index`/`is_place_namespace_root`/
+    /// `map_disabled` are `ParsedDocument` fields this module never depends
+    /// on directly (see its own boundary) — the caller reads them off `doc`
+    /// and passes them through.
+    pub fn is_explorer_root(&self, is_folder_index: bool, is_place_namespace_root: bool, map_disabled: bool) -> bool {
+        is_folder_index && is_place_namespace_root && !map_disabled
+    }
+
+    /// [`Self::is_explorer_root`], reading its three signals off `doc`
+    /// itself rather than making every caller re-derive `is_folder_index`
+    /// by hand — `render/html.rs`'s own authored-page path and
+    /// `render/blocking.rs`'s synthetic-folder path both reach this exact
+    /// decision from a `ParsedDocument`, and used to each inline a slightly
+    /// different copy of the same folder-index predicate (one of the two
+    /// read it correctly; the other always passed a hardcoded `false`,
+    /// which is what shipped a visible heading on a places root with no
+    /// authored index page). The predicate is the same one
+    /// `render/html.rs`'s own folder-index detection already uses
+    /// elsewhere in that file.
+    pub fn is_explorer_root_for_doc(&self, doc: &crate::build::types::ParsedDocument) -> bool {
+        let is_folder_index = doc.kind == moss_core::PageKind::Folder
+            && doc.url_path.ends_with("/index.html")
+            && doc.url_path != "index.html";
+        self.is_explorer_root(is_folder_index, doc.is_place_namespace_root, !doc.shows_own_map(true))
+    }
+
+    /// Compose a SYNTHETIC term-listing folder's lead content whole: the
+    /// (possibly `.visually-hidden`) heading, this key's own map in
+    /// explorer-root order, the place children, and the
+    /// member list — everything `render/blocking.rs`'s synthetic-folder
+    /// path (no authored `ParsedDocument` backs it) used to assemble
+    /// inline, one `is_explorer_root` check at a time. Returns the decision
+    /// alongside the composed HTML because the caller still needs it for
+    /// its own breadcrumb-forcing, below this composition.
+    ///
+    /// `render/html.rs`'s AUTHORED-folder path never calls this: an
+    /// authored page's cover/byline/body interleave with the heading and
+    /// map across a much longer stretch of that file (a cover row, a
+    /// claimed-term splice, the children listing), not the flat
+    /// heading-then-map-then-chrome shape a synthetic index always has —
+    /// it reaches the same `is_explorer_root` decision via
+    /// [`Self::is_explorer_root_for_doc`] instead, and splices its own map
+    /// in at its own call site.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_explorer_folder_lead<'a>(
+        maps: Option<&Self>,
+        is_place_namespace_root: bool,
+        map_disabled: bool,
+        page_title: &str,
+        folder: &str,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+        page_path: &str,
+        article_list: &str,
+        place_children_html: &str,
+    ) -> (bool, String) {
+        let is_explorer_root = maps.is_some_and(|m| m.is_explorer_root(true, is_place_namespace_root, map_disabled));
+        let heading = crate::build::components::folder_title::render(page_title, false, is_explorer_root);
+        // No `ParsedDocument` backs this synthetic folder index, so there is
+        // no frontmatter to carry a `route: true` from — this listing's map
+        // is always an aggregate anyway, which `render_term_map` never draws
+        // a route on regardless.
+        let map_html = maps.and_then(|m| m.render_term_map(folder, members, page_path, 0, false, false));
+        // Breadcrumb/children are spliced in only when non-empty, each on
+        // its own line — an empty string here must not add a byte to a
+        // non-place site's output, which the byte-identity witness treats
+        // as a build regression exactly the same as any other.
+        let mut content_html = if is_explorer_root {
+            // The map leads, same as `render/html.rs`'s explorer-root
+            // branch — the hidden heading and breadcrumb follow it rather
+            // than sitting above it.
+            let mut s = map_html.clone().unwrap_or_default();
+            s.push_str(&heading);
+            s
+        } else {
+            heading
+        };
+        // An explorer root hosts no children chrome and no
+        // member listing at all (design decision 7, "the map is the
+        // page" — the reader finds places through the map and its own
+        // breadcrumb menu, never a list of place links below it). A
+        // non-root synthetic index retains its map, member list and children.
+        if !is_explorer_root {
+            if let Some(map) = map_html.as_deref() {
+                content_html.push('\n');
+                content_html.push_str(map);
+            }
+            content_html.push('\n');
+            content_html.push_str(article_list);
+            if !place_children_html.is_empty() {
+                content_html.push('\n');
+                content_html.push_str(place_children_html);
+            }
+        }
+        (is_explorer_root, content_html)
+    }
+
+    /// `is_embed` is true only for a `style:map` body embed
+    /// (`folder_embed.rs`'s dispatch) — a page's own primary map (a real or
+    /// synthesized place term page's own figure, `render/html.rs` and
+    /// `render/blocking.rs`'s own call sites) passes `false`: that figure
+    /// is the page's own content, not a reference to it, and stays exactly
+    /// the static-until-the-root-upgrades-it figure it already was.
+    pub fn render_term_map<'a>(
+        &self,
+        key: &str,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+        page_path: &str,
+        ordinal: usize,
+        route: bool,
+        is_embed: bool,
+    ) -> Option<String> {
+        if !self.is_place_key(key) { return None; }
+        let members = members.into_iter();
+        let own_name = self.gazetteer.iter().find_map(|(display, _)| {
+            (term_folder_key(&self.namespace, display) == key).then(|| display.clone())
+        });
+        let mut target = if let Some(name) = own_name.as_ref() {
+            let direct = self.maps.resolve_locations(&self.namespace, &self.gazetteer, std::slice::from_ref(name), route);
+            if direct.has_coordinates() { direct } else { self.aggregate(key, name, members) }
+        } else {
+            let label = key.strip_prefix(&format!("{}/", self.namespace)).unwrap_or(&self.namespace);
+            self.aggregate(key, label, members)
+        };
+        apply_route_gate(&mut target, page_path);
+        // The same label `emit_svg`'s own aria-label derives (`target.aggregate_name`
+        // for a listing, else the first marked place's own display name) —
+        // computed again here rather than threaded out of `emit_svg`, since
+        // it is one cheap expression and `emit_svg`'s signature is shared by
+        // every other caller in this crate.
+        let embed_name = target
+            .aggregate_name
+            .clone()
+            .or_else(|| target.places.first().map(|place| place.display.clone()))
+            .unwrap_or_else(|| key.to_string());
+        let svg = target.has_coordinates().then(|| super::emit_svg(&self.maps, &target, page_path, ordinal))?;
+        let svg = self.with_explorer_handshake(key, svg);
+        let svg = if is_embed { self.with_embed_hydration(svg, &format!("place={key}"), &embed_name) } else { svg };
+        Some(svg)
+    }
+
+    /// Splice the places-explorer handshake attributes onto the figure's
+    /// opening tag when `key` is the bare namespace root and every piece the
+    /// runtime needs is ready: the explorer is on, and both hashes have been
+    /// set. `emit_svg` is the sole writer of `<figure class="moss-place-map"
+    /// ...>` (its own module doc), and this is the only other place that
+    /// touches that opening tag — never a second spot that could disagree
+    /// about the URLs. A sub-place's own map (`key` holds a `/`) is left
+    /// untouched: the explorer scopes to the root, so a claimed place's
+    /// embed stays exactly the no-JavaScript figure it always was.
+    fn with_explorer_handshake(&self, key: &str, svg: String) -> String {
+        if key != self.namespace || !self.explorer || self.map_assets_hash.is_empty() {
+            return svg;
+        }
+        let Some(places_hash) = self.explorer_places_hash.as_deref() else { return svg };
+        let (Ok(world), Ok(tiles), Ok(labels)) = (
+            crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "world.svg"),
+            crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "tiles.json"),
+            crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "labels.json"),
+        ) else {
+            return svg;
+        };
+        let places = crate::build::served_path::ServedPath::for_places_data_hashed(places_hash);
+        Self::splice_figure_attrs(
+            svg,
+            &format!(
+                "data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-labels=\"{}\" data-scope=\"{}\"",
+                world.to_relative_url(),
+                tiles.to_relative_url(),
+                places.to_relative_url(),
+                labels.to_relative_url(),
+                self.namespace,
+            ),
+        )
+    }
+
+    /// Splice the embed-hydration handshake onto a figure's opening tag: a
+    /// `data-moss-place-embed` flag and a `data-hydrate-url` pointing at the
+    /// places root, carrying `scope_query` (`place=<key>` for a `style:map`
+    /// embed, `article=<url>` for the article locator) plus `embed=1` — the
+    /// two attributes `places-explorer/embed.ts`'s host-page half reads to
+    /// build its own lazy iframe. The static figure underneath is
+    /// untouched either way: a reader with JavaScript off, or whose
+    /// hydration fetch fails, sees exactly the figure this always drew.
+    ///
+    /// A no-op — the plain static figure — when the figure carries a route
+    /// (`data-map-route`), when the explorer is off
+    /// (`should_inject_places_explorer`'s own flag, captured as
+    /// `self.explorer`), or when [`Self::with_explorer_handshake`] already
+    /// claimed this exact figure: the namespace root's own `style:map`
+    /// embed stays the full in-place upgrade target it already was,
+    /// rather than two hydration paths competing for one element.
+    fn with_embed_hydration(&self, svg: String, scope_query: &str, name: &str) -> String {
+        // A figure that draws a route stays the static figure: the live map
+        // draws no route yet, and once it settles it covers the figure, so
+        // upgrading would silently drop the line and its numbered badges.
+        if !self.explorer || svg.contains("data-moss-places-explorer") || svg.contains("data-map-route=") {
+            return svg;
+        }
+        // allow:served-path-url-construct (the place-typed namespace root's
+        // own page — not a hashed asset, so `ServedPath` has no constructor
+        // for it; the same bare `format!("/{}/", key)` `terms.rs`'s own
+        // `term_url` builds a root link with).
+        let root = format!("/{}/", self.namespace);
+        // `data-embed-name`: the plain place/article display name — never a
+        // full sentence — so `places-explorer/embed.ts`'s host-page half can
+        // compose the hydrated iframe's own accessible `title` through its
+        // OWN localised copy (`strings.ts`), the same way every other piece
+        // of runtime UI text in this explorer is localised. Baking a finished
+        // English sentence in here instead would leave every other locale's
+        // embed with an English-only iframe title.
+        Self::splice_figure_attrs(
+            svg,
+            &format!(
+                "data-moss-place-embed data-hydrate-url=\"{root}?{scope_query}&embed=1\" data-embed-name=\"{}\"",
+                escape_attr(name),
+            ),
+        )
+    }
+
+    /// Splice `attrs` right after a figure's opening tag name — the one
+    /// place both handshakes above touch it, so they can never disagree
+    /// about where attributes land. Anchored on the bare `<figure `, not
+    /// `<figure class="moss-place-map"` (what `with_explorer_handshake`
+    /// used before this helper existed): a locator's SVG already carries
+    /// `data-map-locator-profile`, spliced in by `locator.rs` BEFORE
+    /// `class=`, by the time `with_embed_hydration` runs on it, and a
+    /// class-anchored pattern would silently miss that case. Safe for
+    /// `with_explorer_handshake` too — it never runs on locator output, so
+    /// nothing ever sits between `<figure ` and `class=` there either way.
+    fn splice_figure_attrs(svg: String, attrs: &str) -> String {
+        svg.replacen("<figure ", &format!("<figure {attrs} "), 1)
+    }
+
+    fn aggregate<'a>(
+        &self,
+        key: &str,
+        label: &str,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+    ) -> PlaceMapTarget {
+        let mut names = Vec::new();
+        for doc in members {
+            if key == self.namespace || doc.also_in.as_ref().is_some_and(|keys| keys.iter().any(|candidate| candidate == key)) {
+                // A page listed under a parent may also name places
+                // elsewhere; the parent's map marks only its own.
+                names.extend(doc.location.iter().filter(|name| self.lies_under(name, key)).cloned());
+            }
+        }
+        self.maps.resolve_aggregate(&self.namespace, &self.gazetteer, label, &names)
+    }
+
+    /// Whether a place is `key`, or under it through `self.parents` — the
+    /// terms layer's own already cycle-repaired hierarchy, not a second
+    /// walk of the raw gazetteer. A raw walk here used to cap itself at
+    /// eight hops with no cycle detection of its own, so a gazetteer
+    /// parent-chain cycle could make it give up on a place the terms
+    /// layer's ancestor walk (`build/terms.rs` pass 2, over this same
+    /// `parents` map) still reaches and counts as a member. Walking the
+    /// repaired map instead fixes that by construction: there is only one
+    /// cycle repair, and both walks read its result. The namespace root
+    /// holds every place.
+    fn lies_under(&self, name: &str, key: &str) -> bool {
+        if key == self.namespace {
+            return true;
+        }
+        let Some((display, _)) = find_record(&self.gazetteer, name) else {
+            return false;
+        };
+        let mut current = term_folder_key(&self.namespace, display);
+        let mut seen = HashSet::new();
+        seen.insert(current.clone());
+        loop {
+            if current == key {
+                return true;
+            }
+            let Some(parent_display) = self.parents.get(&current) else {
+                return false;
+            };
+            current = term_folder_key(&self.namespace, parent_display);
+            // `parents` is already a fixed point (break_cycles cut every
+            // cycle when it was built); `seen` is a defensive backstop
+            // against a hand-built map reaching this some other way, the
+            // same posture the terms layer's own walks over this map take.
+            if !seen.insert(current.clone()) {
+                return false;
+            }
+        }
+    }
+}
+
+/// Apply the route privacy gate ([`route_precision_gate`]) to an
+/// already-resolved target: a country-precision stop blocks the whole route
+/// rather than drawing a line into one corner of a country, so this clears
+/// `target.route` and prints the one diagnostic the gate allows
+/// ([`route_blocked_diagnostic`]), naming the page and that stop. Shared by
+/// [`PlaceMapRenderContext::render_locator`] and
+/// [`PlaceMapRenderContext::render_term_map`]'s own-place branch — the two
+/// surfaces a route may draw on — so a future caller only has to call this
+/// once rather than re-implementing the check. A no-op, including for an
+/// aggregate/listing target, whenever `target.route` is already false.
+fn apply_route_gate(target: &mut PlaceMapTarget, page_path: &str) {
+    if !target.route {
+        return;
+    }
+    if let Err(stop) = route_precision_gate(&target.places) {
+        crate::build::cli_output::log_warn_problem!("{}", route_blocked_diagnostic(page_path, stop));
+        target.route = false;
+    }
+}
+
+/// The immutable inputs shared by every map rendered during one build.
+/// Decoding is deliberately outside page rendering: a page can borrow this
+/// context without reopening the checked-in pack or the gazetteer.
+#[derive(Debug, Clone)]
+pub struct PlaceMapContext {
+    pack: Arc<Pack>,
+}
+
+impl PlaceMapContext {
+    pub fn new(pack: Pack) -> Self {
+        Self {
+            pack: Arc::new(pack),
+        }
+    }
+
+    pub fn embedded() -> Result<Self, super::DecodeError> {
+        super::embedded().map(Self::new)
+    }
+
+    pub fn pack(&self) -> &Pack {
+        &self.pack
+    }
+
+    /// The embedded pack's raw schema-4 label-payload bytes -- a stable
+    /// fingerprint of "the label set, or the generator that produced it,
+    /// changed" for a caller that needs one (`emit::place_map_assets::
+    /// assets_hash` folds this into the `_moss/map.<hash>/` directory name
+    /// so `labels.json`, served from that same directory, is named
+    /// correctly whenever either changes). Unlike [`Self::pack_fingerprint`],
+    /// this is NOT derived from the source manifest's digest: a generator
+    /// change that encodes different label bytes from the SAME pinned
+    /// sources would leave the manifest digest untouched, so these raw
+    /// bytes are hashed directly instead.
+    pub fn labels_bytes(&self) -> &[u8] {
+        &self.pack.labels_bytes
+    }
+
+    pub fn pack_fingerprint(&self) -> [u8; 32] {
+        self.pack.header.manifest_sha256
+    }
+
+    /// Resolve declared `location:` values in declaration order. A missing
+    /// coordinate intentionally remains in the result so the caller can keep
+    /// the linked place line while omitting only the map target.
+    ///
+    /// `route` carries the page's own `route: true` opt-in through to the
+    /// target; it is the caller's job to pass `false` for anything that
+    /// isn't a single page's own map or locator (see
+    /// [`Self::resolve_aggregate`], which always does).
+    pub fn resolve_locations(
+        &self,
+        namespace: &str,
+        gazetteer: &crate::vault::places::Gazetteer,
+        names: &[String],
+        route: bool,
+    ) -> PlaceMapTarget {
+        let mut seen = HashSet::new();
+        let mut places = Vec::new();
+        for name in names {
+            let Some((display, record)) = find_record(gazetteer, name) else {
+                continue;
+            };
+            let key = term_folder_key(namespace, display);
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            places.push(ResolvedPlace::from_record(key, display.clone(), record));
+        }
+        PlaceMapTarget::from_places(places, route)
+    }
+
+    /// Resolve a listing map (the namespace root, or a parent place with no
+    /// coordinates of its own) from the places its member pages name. The
+    /// frame holds them all and each is marked by its own precision;
+    /// nothing marks the parent, which has no location to mark. A listing
+    /// never draws a route — there is no single page-ordered list to draw
+    /// one from — so this always resolves with `route: false`, regardless
+    /// of whether any member page itself set `route: true`.
+    pub fn resolve_aggregate(
+        &self,
+        namespace: &str,
+        gazetteer: &crate::vault::places::Gazetteer,
+        parent_name: &str,
+        descendants: &[String],
+    ) -> PlaceMapTarget {
+        let mut target = self.resolve_locations(namespace, gazetteer, descendants, false);
+        target.aggregate_name = Some(parent_name.trim().to_string());
+        target
+    }
+
+    pub fn projection(&self, target: &PlaceMapTarget) -> Option<Projection> {
+        target.frame.as_ref().map(Projection::new)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedPlace {
+    pub key: String,
+    pub display: String,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub precision: Precision,
+}
+
+impl ResolvedPlace {
+    fn from_record(
+        key: String,
+        display: String,
+        record: &crate::vault::places::PlaceRecord,
+    ) -> Self {
+        let (latitude, longitude) = record
+            .coords
+            .and_then(|(lat, lon)| {
+                ProjectedPoint::new(lon, lat)
+                    .map(|point| (Some(point.latitude), Some(point.longitude)))
+            })
+            .unwrap_or((None, None));
+        Self {
+            key,
+            display,
+            longitude,
+            latitude,
+            precision: record.precision,
+        }
+    }
+
+    pub fn point(&self) -> Option<ProjectedPoint> {
+        match (self.longitude, self.latitude) {
+            (Some(longitude), Some(latitude)) => ProjectedPoint::new(longitude, latitude),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaceMapTarget {
+    pub places: Vec<ResolvedPlace>,
+    pub frame: Option<Frame>,
+    pub aggregate_name: Option<String>,
+    /// The page's `route: true` opt-in, already gated by the time anything
+    /// outside this module reads it true: [`resolve_locations`](PlaceMapContext::resolve_locations)
+    /// sets the author's own request, and the two call sites that may draw a
+    /// route (`render_locator`, `render_term_map`) run it through
+    /// `apply_route_gate` before rendering, which clears it on a
+    /// country-precision stop. Always `false` on an aggregate/listing
+    /// target — see [`PlaceMapContext::resolve_aggregate`].
+    pub route: bool,
+}
+
+impl PlaceMapTarget {
+    fn from_places(places: Vec<ResolvedPlace>, route: bool) -> Self {
+        let valid: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
+        let floors = places
+            .iter()
+            .filter_map(|place| place.point().map(|_| place.precision));
+        let frame = Frame::from_points(&valid, floors);
+        Self {
+            places,
+            frame,
+            aggregate_name: None,
+            route,
+        }
+    }
+
+    pub fn has_coordinates(&self) -> bool {
+        self.places.iter().any(|place| place.point().is_some())
+    }
+
+    pub fn tier(&self) -> FrameTier {
+        self.frame
+            .as_ref()
+            .map_or(FrameTier::World, |frame| frame.tier)
+    }
+
+    pub fn marker_places(&self) -> impl Iterator<Item = &ResolvedPlace> {
+        self.places.iter().filter(|place| place.point().is_some())
+    }
+}
+
+/// Escape a plain display name for use inside a double-quoted HTML
+/// attribute value — `svg.rs`'s own `xml_escape` is `pub(super)` to that
+/// module alone, and threading a cross-module export through for one short
+/// attribute here is not worth it; every other renderer touching HTML output
+/// in this crate carries the same small local copy (`media.rs`,
+/// `embed_handlers.rs`, `markdown/html_post.rs`, …).
+fn escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn find_record<'a>(
+    gazetteer: &'a crate::vault::places::Gazetteer,
+    name: &str,
+) -> Option<(&'a String, &'a crate::vault::places::PlaceRecord)> {
+    let folded = term_fold(name);
+    gazetteer
+        .iter()
+        .find(|(display, _)| term_fold(display) == folded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gazetteer() -> crate::vault::places::Gazetteer {
+        let table: toml::value::Table = toml::from_str(
+            "[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n\n[\"Harbor East\"]\nlat = 35.1\nlng = 135.1\nprecision = \"region\"\nparent = \"Harbor\"\n",
+        ).unwrap();
+        crate::vault::places::parse_gazetteer(&table)
+    }
+
+    #[test]
+    fn locations_dedupe_canonical_keys_and_keep_first_spelling() {
+        let context = PlaceMapContext::new(super::super::embedded().unwrap());
+        let target = context.resolve_locations(
+            "places",
+            &gazetteer(),
+            &[" harbor ".into(), "HARBOR".into(), "Harbor East".into()],
+            false,
+        );
+        assert_eq!(target.places.len(), 2);
+        assert_eq!(target.places[0].display, "Harbor");
+        assert_eq!(target.places[0].key, "places/harbor");
+    }
+
+    #[test]
+    fn missing_coordinates_stay_in_the_target_but_do_not_make_a_frame() {
+        let table: toml::value::Table =
+            toml::from_str("[\"Unknown\"]\nprecision = \"exact\"\n").unwrap();
+        let context = PlaceMapContext::new(super::super::embedded().unwrap());
+        let target = context.resolve_locations(
+            "places",
+            &crate::vault::places::parse_gazetteer(&table),
+            &["Unknown".into()],
+            false,
+        );
+        assert_eq!(target.places.len(), 1);
+        assert!(!target.has_coordinates());
+        assert!(target.frame.is_none());
+    }
+
+    /// A listing map marks the places its pages name, each by its own
+    /// precision, and never the parent it lists them under.
+    #[test]
+    fn aggregate_target_marks_its_members_not_the_parent() {
+        let context = PlaceMapContext::new(super::super::embedded().unwrap());
+        let target = context.resolve_aggregate(
+            "places",
+            &gazetteer(),
+            "places",
+            &["Harbor".into(), "Harbor East".into()],
+        );
+        assert!(target.frame.is_some());
+        let marked: Vec<(&str, Precision)> = target
+            .marker_places()
+            .map(|place| (place.display.as_str(), place.precision))
+            .collect();
+        assert_eq!(marked, [("Harbor", Precision::City), ("Harbor East", Precision::Region)]);
+        assert_eq!(target.aggregate_name.as_deref(), Some("places"));
+    }
+
+    #[test]
+    fn resolved_keys_use_the_declared_namespace() {
+        let context = PlaceMapContext::new(super::super::embedded().unwrap());
+        let target = context.resolve_locations("locations", &gazetteer(), &["Harbor".into()], false);
+        assert_eq!(target.places[0].key, "locations/harbor");
+    }
+
+    #[test]
+    fn invalid_coordinates_are_not_retained_as_finite_place_values() {
+        let table: toml::value::Table =
+            toml::from_str("[\"Invalid\"]\nlat = 91.0\nlng = nan\nprecision = \"exact\"\n")
+                .unwrap();
+        let context = PlaceMapContext::new(super::super::embedded().unwrap());
+        let target = context.resolve_locations(
+            "places",
+            &crate::vault::places::parse_gazetteer(&table),
+            &["Invalid".into()],
+            false,
+        );
+        assert_eq!(target.places[0].longitude, None);
+        assert_eq!(target.places[0].latitude, None);
+        assert!(!target.has_coordinates());
+    }
+
+    #[test]
+    fn locator_is_opt_in_and_uses_the_sparse_profile() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let off = PlaceMapRenderContext::new(
+            maps.clone(), gazetteer(), "places".into(), LocatorPlacement::None, BTreeMap::new(),
+        );
+        assert!(!off.locator_default());
+
+        let on = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        );
+        assert!(on.locator_default());
+        let html = on.render_locator(&["Harbor".into()], false, "story/index.html", 0).unwrap();
+        assert!(html.contains("moss-place-locator moss-align-right"));
+        assert!(html.contains("data-map-locator-profile=\"exact-city\""));
+    }
+
+    /// The reproduction from the field: a location list that mixes
+    /// precisions (here just [city, region] — the minimal shape that still
+    /// triggers it) must size the locator to the COARSEST place in the
+    /// list, not whichever one was declared first. `gazetteer()`'s "Harbor"
+    /// (city) / "Harbor East" (region) pair already gives us that mix.
+    /// Before the fix this kept "exact-city" (Harbor's own precision, since
+    /// it happened to resolve first) for a frame wide enough to also hold
+    /// Harbor East — full relief/seafloor detail over a region-sized frame,
+    /// which is how a real multi-place article's locator blew past
+    /// LOCATOR_RAW_SAFETY_LIMIT.
+    #[test]
+    fn multi_place_locator_uses_the_coarsest_precision_not_declaration_order() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        );
+        let html = context
+            .render_locator(&["Harbor".into(), "Harbor East".into()], false, "story/index.html", 0)
+            .expect("a mixed-precision list must still produce a locator");
+        assert!(
+            html.contains("data-map-locator-profile=\"region\""),
+            "must use Harbor East's (region) precision, not Harbor's (city, first-declared): {html}"
+        );
+        assert!(!html.contains("data-map-locator-profile=\"exact-city\""));
+    }
+
+    /// `route: true`, threaded as `render_locator`'s own `route` parameter
+    /// the way `render::credits::render_place_locator` threads `doc.route`,
+    /// reaches the drawn line: the privacy gate has nothing to block here
+    /// (both stops are city precision), so the route survives it unchanged.
+    #[test]
+    fn render_locator_with_route_true_draws_the_route_line_and_badges() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        );
+        let html = context
+            .render_locator(&["Harbor".into(), "Harbor East".into()], true, "story/index.html", 0)
+            .expect("a route-eligible list must still produce a locator");
+        assert!(html.contains("data-map-route=\"line\""), "{html}");
+        assert!(html.contains("data-map-route-badge=\"1\""), "{html}");
+        assert!(html.contains("data-map-route-badge=\"2\""), "{html}");
+    }
+
+    /// A region-precision stop joins the route rather than blocking it: its
+    /// badge is drawn hollow, marking an area rather than a point, while the
+    /// city-precision stop beside it keeps the ordinary filled chip.
+    #[test]
+    fn render_locator_draws_a_region_stop_hollow_and_joined() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        );
+        let html = context
+            .render_locator(&["Harbor".into(), "Harbor East".into()], true, "story/index.html", 0)
+            .unwrap();
+        assert!(html.contains("data-map-route-badge=\"1\" data-map-route-badge-style=\"filled\""), "{html}");
+        assert!(html.contains("data-map-route-badge=\"2\" data-map-route-badge-style=\"hollow\""), "{html}");
+    }
+
+    /// `route: false` (the default) draws no route at all, even over the
+    /// same two-stop list the test above draws one from — the flag, not the
+    /// shape of `location:`, decides.
+    #[test]
+    fn render_locator_without_route_draws_no_route_markup() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        );
+        let html = context
+            .render_locator(&["Harbor".into(), "Harbor East".into()], false, "story/index.html", 0)
+            .unwrap();
+        assert!(!html.contains("data-map-route"), "{html}");
+    }
+
+    /// Precision is privacy: a country-precision stop blocks the WHOLE
+    /// route — the gate applied here through `render_locator` rather than
+    /// called directly — and prints the one diagnostic naming the page and
+    /// that stop, rather than silently drawing a line that stops short or
+    /// jumps past it.
+    #[test]
+    fn render_locator_drops_the_route_and_warns_on_a_country_precision_stop() {
+        let table: toml::value::Table = toml::from_str(
+            "[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n\n\
+             [\"Wide Land\"]\nlat = 40.0\nlng = 140.0\nprecision = \"country\"\n",
+        )
+        .unwrap();
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps,
+            crate::vault::places::parse_gazetteer(&table),
+            "places".into(),
+            LocatorPlacement::AlignRight,
+            BTreeMap::new(),
+        );
+        crate::build::cli_output::take_cli_problems();
+        let html = context
+            .render_locator(&["Harbor".into(), "Wide Land".into()], true, "story/index.html", 0)
+            .expect("the list still has a coordinate-bearing stop, so a plain (routeless) locator still renders");
+        assert!(!html.contains("data-map-route"), "{html}");
+        assert_eq!(
+            crate::build::cli_output::take_cli_problems(),
+            1,
+            "the blocked gate must print exactly its one allowed diagnostic"
+        );
+    }
+
+    /// The safety ceiling stops an oversized locator from shipping, and
+    /// dropping it must not be silent: the page has to name itself in a
+    /// warning an agent or a --strict build can see. Real geometry no longer
+    /// reliably clears the ceiling, because every path is simplified in
+    /// screen space and a map's bytes are bounded by its pixels, so the
+    /// fixture overflows it with the place's name, which the figure repeats
+    /// in its accessible label.
+    #[test]
+    fn oversized_locator_is_dropped_with_a_warning_not_silently() {
+        const LONG_NAME: usize = super::super::LOCATOR_RAW_SAFETY_LIMIT;
+        let table: toml::value::Table = toml::from_str(
+            &format!("[\"{}\"]\nlat = 62.0\nlng = 6.0\nprecision = \"city\"\n", "F".repeat(LONG_NAME)),
+        )
+        .unwrap();
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps,
+            crate::vault::places::parse_gazetteer(&table),
+            "places".into(),
+            LocatorPlacement::AlignRight,
+            BTreeMap::new(),
+        );
+        crate::build::cli_output::take_cli_problems(); // count only what the render itself reports
+        let result =
+            context.render_locator(&["F".repeat(LONG_NAME)], false, "story/oversized.html", 0);
+        assert!(result.is_none(), "an oversized locator must be dropped, not shipped");
+        assert!(
+            crate::build::cli_output::take_cli_problems() >= 1,
+            "dropping an oversized locator must warn (and count as a --strict problem), not fail silently"
+        );
+    }
+
+    /// A gazetteer parent chain that loops (P1..P8 cycle back to P1) after
+    /// a short prefix: `attach_parents`/`break_cycles` cuts exactly one
+    /// link of it before this context is ever built, the same repair the
+    /// terms layer's own ancestor walk (`build/terms.rs` pass 2) reads —
+    /// so a document declaring "Leaf" as its location is, by the terms
+    /// layer's own count, a member all the way up to P8. A raw re-walk of
+    /// the gazetteer here, still cyclic and capped at eight hops, would
+    /// give up before reaching P8 and silently drop it from that listing.
+    #[test]
+    fn lies_under_reaches_past_a_repaired_cycle_the_terms_layer_also_counts() {
+        let table: toml::value::Table = toml::from_str(
+            "[\"Leaf\"]\nlat=1.0\nlng=1.0\nprecision=\"city\"\nparent=\"Mid\"\n\n\
+             [\"Mid\"]\nlat=2.0\nlng=2.0\nprecision=\"region\"\nparent=\"P1\"\n\n\
+             [\"P1\"]\nlat=3.0\nlng=3.0\nprecision=\"region\"\nparent=\"P2\"\n\n\
+             [\"P2\"]\nlat=4.0\nlng=4.0\nprecision=\"region\"\nparent=\"P3\"\n\n\
+             [\"P3\"]\nlat=5.0\nlng=5.0\nprecision=\"region\"\nparent=\"P4\"\n\n\
+             [\"P4\"]\nlat=6.0\nlng=6.0\nprecision=\"region\"\nparent=\"P5\"\n\n\
+             [\"P5\"]\nlat=7.0\nlng=7.0\nprecision=\"region\"\nparent=\"P6\"\n\n\
+             [\"P6\"]\nlat=8.0\nlng=8.0\nprecision=\"region\"\nparent=\"P7\"\n\n\
+             [\"P7\"]\nlat=9.0\nlng=9.0\nprecision=\"region\"\nparent=\"P8\"\n\n\
+             [\"P8\"]\nlat=10.0\nlng=10.0\nprecision=\"country\"\nparent=\"P1\"\n",
+        )
+        .unwrap();
+        let gaz = crate::vault::places::parse_gazetteer(&table);
+        let mut kinds = vec![crate::build::terms::TermKind {
+            key: "places".to_string(),
+            fields: vec!["location".to_string()],
+            title: "Places".to_string(),
+            is_place: true,
+            parents: Default::default(), explorer: None, line: None,
+        }];
+        crate::build::terms::places::attach_parents(&mut kinds, &gaz);
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gaz, "places".into(), LocatorPlacement::None, kinds[0].parents.clone(),
+        );
+        assert!(
+            context.lies_under("Leaf", "places/p8"),
+            "the repaired chain still reaches P8 past the cut cycle edge"
+        );
+    }
+
+    fn located_doc(name: &str) -> crate::build::types::ParsedDocument {
+        crate::build::types::ParsedDocument {
+            location: vec![name.to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn ready_root_context() -> PlaceMapRenderContext {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        PlaceMapRenderContext::new(maps, gazetteer(), "places".into(), LocatorPlacement::None, BTreeMap::new())
+            .with_explorer(true)
+            .with_map_assets_hash("abc123".into())
+            .with_explorer_places_hash("def456".into())
+    }
+
+    #[test]
+    fn root_map_carries_the_explorer_handshake_when_everything_is_ready() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor")];
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false, false).unwrap();
+        assert!(html.contains("data-moss-places-explorer"), "{html:.200}");
+        assert!(html.contains("data-world=\"/_moss/map.abc123/world.svg\""), "{html:.200}");
+        assert!(html.contains("data-tiles=\"/_moss/map.abc123/tiles.json\""), "{html:.200}");
+        assert!(html.contains("data-places=\"/_moss/places.def456.json\""), "{html:.200}");
+        assert!(html.contains("data-labels=\"/_moss/map.abc123/labels.json\""), "{html:.200}");
+        assert!(html.contains("data-scope=\"places\""), "{html:.200}");
+    }
+
+    #[test]
+    fn sub_place_map_never_carries_the_handshake() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor East")];
+        let html = context
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false, false)
+            .unwrap();
+        assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
+    }
+
+    #[test]
+    fn explorer_off_leaves_the_root_map_untouched() {
+        let context = ready_root_context().with_explorer(false);
+        let docs = [located_doc("Harbor")];
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false, false).unwrap();
+        assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
+    }
+
+    #[test]
+    fn missing_places_hash_leaves_the_root_map_untouched() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(maps, gazetteer(), "places".into(), LocatorPlacement::None, BTreeMap::new())
+            .with_explorer(true)
+            .with_map_assets_hash("abc123".into());
+        let docs = [located_doc("Harbor")];
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false, false).unwrap();
+        assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
+    }
+
+    // -- style:map embed hydration (is_embed: true) -----------------------
+
+    #[test]
+    fn a_sub_place_style_map_embed_carries_the_embed_hydration_handshake() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor East")];
+        let html = context
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false, true)
+            .unwrap();
+        assert!(html.contains("data-moss-place-embed"), "{html:.200}");
+        assert!(html.contains(r#"data-hydrate-url="/places/?place=places/harbor&embed=1""#), "{html:.200}");
+        assert!(html.contains(r#"data-embed-name="Harbor""#), "{html:.200}");
+        // Never BOTH handshakes on one figure.
+        assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
+    }
+
+    #[test]
+    fn a_root_style_map_embed_keeps_the_explorer_handshake_not_the_embed_one() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor")];
+        let html = context.render_term_map("places", docs.iter(), "places/index.html", 0, false, true).unwrap();
+        assert!(html.contains("data-moss-places-explorer"), "{html:.200}");
+        assert!(!html.contains("data-moss-place-embed"), "{html:.200}");
+    }
+
+    #[test]
+    fn a_style_map_embed_carries_no_hydration_when_the_explorer_is_off() {
+        let context = ready_root_context().with_explorer(false);
+        let docs = [located_doc("Harbor East")];
+        let html = context
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false, true)
+            .unwrap();
+        assert!(!html.contains("data-moss-place-embed"), "{html:.200}");
+    }
+
+    #[test]
+    fn a_pages_own_primary_map_never_carries_the_embed_hydration() {
+        let context = ready_root_context();
+        let docs = [located_doc("Harbor East")];
+        let html = context
+            .render_term_map("places/harbor", docs.iter(), "places/harbor/index.html", 0, false, false)
+            .unwrap();
+        assert!(!html.contains("data-moss-place-embed"), "{html:.200}");
+    }
+
+    #[test]
+    fn render_locator_carries_the_embed_hydration_scoped_to_its_own_article() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        )
+        .with_explorer(true)
+        .with_map_assets_hash("abc123".into())
+        .with_explorer_places_hash("def456".into());
+        let html = context.render_locator(&["Harbor".into()], false, "story/index.html", 0).unwrap();
+        assert!(html.contains("data-moss-place-embed"), "{html}");
+        assert!(html.contains(r#"data-hydrate-url="/places/?article=/story/&embed=1""#), "{html}");
+        assert!(html.contains(r#"data-embed-name="Harbor""#), "{html}");
+    }
+
+    #[test]
+    fn render_locator_carries_no_embed_hydration_when_the_explorer_is_off() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
+        )
+        .with_explorer(false);
+        let html = context.render_locator(&["Harbor".into()], false, "story/index.html", 0).unwrap();
+        assert!(!html.contains("data-moss-place-embed"), "{html}");
+    }
+}

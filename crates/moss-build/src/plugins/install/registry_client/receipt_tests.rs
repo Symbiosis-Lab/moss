@@ -52,7 +52,7 @@ fn a_receipt_from_before_files_existed_reads_as_did_not_record() {
     );
 }
 
-/// moss#1120's load-bearing default: an install with no receipt is exactly
+/// The load-bearing default: an install with no receipt is exactly
 /// the population the pin never reached, so "unknown" must read as stale.
 #[test]
 fn a_missing_or_mismatched_stamp_is_stale_against_a_real_pin() {

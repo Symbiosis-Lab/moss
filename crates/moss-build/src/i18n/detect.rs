@@ -35,10 +35,8 @@ pub fn detect_language(text: &str) -> Option<Language> {
     // threshold on its own; settling it here means that document still
     // resolves correctly instead of falling through to the raw-text
     // fallback below, which would reintroduce the bug this function exists
-    // to close. See docs/archive/2026-08-20-rebuild-loop-incrementality.md
-    // ("The leaf, explained on the instrument's first use: `lang`"), where
-    // appending 35 ASCII characters flipped a real 1,254-byte Traditional
-    // Chinese article from `None` to `Some(En)`.
+    // to close. Appending 35 ASCII characters once flipped a real
+    // 1,254-byte Traditional Chinese article from `None` to `Some(En)`.
     if is_cjk_dominant(&prose) {
         return Some(if is_traditional_chinese(&prose) {
             Language::ZhHant
@@ -147,8 +145,8 @@ fn strip_non_prose(text: &str) -> String {
 /// Strip `<!-- ... -->` comments from markdown SOURCE text.
 ///
 /// Written as a manual char scan rather than `Regex::new`/`.replace_all`
-/// with a `<!--` needle on purpose: ratchet row (p) (`html_string_mutation`,
-/// ADR-034) counts any `Regex::new`/`.replace*`/`.find`-family call whose
+/// with a `<!--` needle on purpose: ratchet row (p) (`html_string_mutation`)
+/// counts any `Regex::new`/`.replace*`/`.find`-family call whose
 /// string argument contains `<` as evidence of a tag-aware pass over
 /// ALREADY-EMITTED HTML bypassing the structural `Vec<Block>` pipeline. This
 /// function does the opposite: it runs on the raw markdown an author typed,
@@ -227,7 +225,7 @@ fn is_cjk_dominant(text: &str) -> bool {
 /// never Simplified, so everything it failed to prove was reported as
 /// Simplified. A real user's vault was pinned to `zh-hans` that way — none of
 /// 測, 試 or 場, the discriminating characters in their own text, were on the
-/// one-sided list (`docs/archive/2026-08-31-site-lang-derived-state.md`).
+/// one-sided list.
 ///
 /// A tie — including the no-evidence case — is Simplified, matching the
 /// shorthand [`Language::from_code`] already applies to a bare `"zh"`.
@@ -316,19 +314,23 @@ fn detect_project_language(
     root_path: &str,
     is_evicted: &dyn Fn(&std::path::Path) -> bool,
 ) -> Option<Language> {
+    // `.take(20)` sits AFTER the filter, not before: the budget is 20 files
+    // actually READ, not the first 20 slots. On a cold cloud vault whose first
+    // 20 entries are dataless, `.take` before the filter used to hand the
+    // whole vote to whatever tiny sample survived past them — see
+    // `detect_project_language_reads_past_an_evicted_prefix_to_find_prose`.
     let texts: Vec<String> = markdown_files
         .iter()
-        .take(20)
         .filter_map(|f| {
             let abs_path = std::path::Path::new(root_path).join(&f.path);
             if is_evicted(&abs_path) {
-                crate::build::cloud_readiness::request_download(&abs_path);
                 return None;
             }
             let content = std::fs::read_to_string(abs_path).ok()?;
             // Strip frontmatter to avoid YAML polluting detection
             Some(strip_frontmatter(&content))
         })
+        .take(20)
         .collect();
 
     let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
@@ -345,7 +347,7 @@ pub(crate) fn strip_frontmatter(content: &str) -> String {
     // Language is detected from BODY text. Leaked field lines skew the vote, so
     // the boundary is `frontmatter_span`'s call for both dialects — this used to
     // see the YAML dialect only, and match the first `\n---` anywhere in the
-    // file rather than a standalone delimiter line (moss#937).
+    // file rather than a standalone delimiter line.
     match moss_core::frontmatter::frontmatter_span(content) {
         #[allow(clippy::string_slice)]
         // Char-aligned: `body` is a line-boundary offset from the splitter.
@@ -439,14 +441,11 @@ pub(crate) fn site_language_vote(texts: &[&str]) -> Option<Language> {
 ///
 /// Priority: explicit `[site] lang` → a homepage `lang:` declaration →
 /// content-detected language (only when the vault has real prose to base it on)
-/// → the user's SYSTEM/OS `system_lang`.
+/// → English.
 ///
-/// Why this exists: the vote bottoms out at English when no file yields a
-/// confident detection, so a signal-less vault silently became English
-/// regardless of the user's locale — that is why the "Published with moss"
-/// colophon rendered English (not 青苔发布) on an empty/ambiguous Chinese site.
-/// An empty vote distinguishes "no real prose" from "confident English",
-/// letting us substitute the system language only in the genuinely-unclear case.
+/// English is the explicit no-signal value rather than the OS locale: the OS
+/// knows nothing about what the author writes, so moss states its own default
+/// instead of guessing from the laptop it happens to be running on.
 ///
 /// ## Why a code and not a `Language`
 ///
@@ -462,20 +461,26 @@ pub(crate) fn site_language_vote(texts: &[&str]) -> Option<Language> {
 /// tag to every reader instead of quietly meaning what it says.
 /// Callers that need the enum (the render path, deciding `<html lang>`) map it
 /// themselves and fall back to English there, where a missing translation is
-/// what the fallback actually means. Returning `Language` here collapsed both
-/// jobs onto the three languages moss ships and lost `fr` on the way out.
-///
-/// `system_lang` is INJECTED (not read from the `app_language()` global) so this
-/// is deterministically unit-testable; the build call site passes
-/// `crate::i18n::build_default_language()`.
+/// what the fallback actually means. Returning `Language` here would collapse
+/// both jobs onto the languages moss ships and lose `fr`.
 pub fn resolve_site_default_lang(
     explicit: Option<&str>,
     homepage_file: Option<&str>,
     markdown_files: &[crate::types::content::FileInfo],
     root_path: &str,
-    system_lang: Language,
 ) -> String {
-    let is_evicted = &crate::build::icloud::is_evicted;
+    let is_evicted = &crate::build::icloud::is_evicted_and_requested;
+    resolve_site_default_lang_with(explicit, homepage_file, markdown_files, root_path, is_evicted)
+}
+
+/// [`resolve_site_default_lang`] with an injectable eviction predicate.
+pub(crate) fn resolve_site_default_lang_with(
+    explicit: Option<&str>,
+    homepage_file: Option<&str>,
+    markdown_files: &[crate::types::content::FileInfo],
+    root_path: &str,
+    is_evicted: &dyn Fn(&std::path::Path) -> bool,
+) -> String {
     // Trimmed AND lowercased, because the consumers compare this code as a
     // string: `Language::from_code` and `is_known_language_code` both fold
     // case, so ` zh-hant ` and `ZH-Hant` sail through validation and then ride
@@ -491,7 +496,7 @@ pub fn resolve_site_default_lang(
         return code.to_lowercase();
     }
     detect_project_language(markdown_files, root_path, is_evicted)
-        .unwrap_or(system_lang)
+        .unwrap_or(Language::En)
         .code()
         .to_string()
 }
@@ -501,7 +506,7 @@ pub fn resolve_site_default_lang(
 ///
 /// It used to reach the render path indirectly: the build copied it into
 /// `[site] lang` and every consumer read it back from there. With that write
-/// gone (docs/archive/2026-08-31-site-lang-derived-state.md) the ladder reads
+/// gone, the ladder reads
 /// the declaration where the author wrote it.
 fn homepage_frontmatter_lang(
     homepage_file: Option<&str>,
@@ -600,10 +605,10 @@ mod tests {
         assert_eq!(detect_language(""), None);
     }
 
-    /// Realistic Traditional Chinese body text (~1,254 bytes in the real
-    /// vault article that surfaced this bug), including a couple of ASCII
-    /// URLs — exactly the mix a real article carries.
-    const REALISTIC_ZH_HANT_ARTICLE: &str = "戰火下的文學抉擇：在動盪的年代裡，作家們面臨著前所未有的挑戰與困境。他們必須在生存與創作之間做出艱難的抉擇，究竟是選擇沉默以求自保，還是繼續執筆記錄下這個時代的真相。許多作家選擇了後者，即使明知這樣的選擇可能為他們帶來危險，他們依然堅持用文字對抗遺忘。這段歷史提醒著我們，文學從來不只是消遣，而是見證與抵抗的重要方式。相關資料可參考 https://example.com/archive/war-literature 與 https://example.com/archive/writers-in-exile 這兩個典藏網站，裡面收錄了大量珍貴的第一手訪談與手稿掃描檔案，對於研究這段歷史的讀者而言，是不可多得的重要資源，值得反覆閱讀與深入探討，也期盼未來有更多學者投入相關領域的研究工作。";
+    /// Realistic Traditional Chinese body text (~1,250 bytes, shaped like a
+    /// real vault article that surfaced this bug), including a couple of
+    /// ASCII URLs — exactly the mix a real article carries.
+    const REALISTIC_ZH_HANT_ARTICLE: &str = "雨季裡的一封信：在漂泊的日子裡，寫信的人面臨著前所未有的猶豫與掙扎。他們必須在沉默與傾訴之間做出艱難的抉擇，究竟是選擇把話留在心裡，還是繼續提筆記錄下這段旅程的真相。許多人選擇了後者，即使明知這樣的選擇可能為他們帶來風險，他們依然堅持用文字對抗遺忘。這段經歷提醒著我們，書信從來不只是問候，而是見證與陪伴的重要方式。相關資料可參考 https://example.com/archive/rainy-season-letters 與 https://example.com/archive/writers-on-the-road 這兩個典藏網站，裡面收錄了大量珍貴的第一手訪談與手稿掃描檔案，對於研究這段旅程的讀者而言，是不可多得的重要資源，值得反覆閱讀與深入探討，也期盼未來有更多讀者投入相關領域的整理工作。";
 
     /// The bug this fix closes: appending a short English sentence to a real
     /// Traditional Chinese article must not flip its detected language.
@@ -656,11 +661,11 @@ mod tests {
         );
     }
 
-    /// The real article's `resolve_document_language`-level regression test
-    /// lives in `i18n::tests::a_trivial_edit_to_the_real_ukraine_article_does_not_flip_its_language`
-    /// (uses the same fixture bytes, exercised through the full priority
-    /// chain). This one is the `detect_language`-only inverse: an English page
-    /// carrying the same
+    /// The folder-level regression test for this same shape of fixture
+    /// lives in `build::scan::page_map::folder_lang` (a synthetic
+    /// markup-heavy Traditional Chinese body, exercised through the full
+    /// priority chain). This one is the `detect_language`-only inverse: an
+    /// English page carrying the same
     /// kind of heavy markup (shortcode directives, wikilink targets,
     /// markdown links with long slugs) must still resolve to English —
     /// stripping markup before detection must not manufacture a Chinese
@@ -760,7 +765,7 @@ mod tests {
     /// iteration order — randomized per process — so the SAME two texts picked
     /// a different winner from one build to the next
     /// (`build_parity_test::parity_cjk_unicode_filenames`, discovered via
-    /// ADR-065's per-folder inference, which ties far more often than the
+    /// per-folder inference, which ties far more often than the
     /// whole-site sample this function was written for).
     ///
     /// The fixtures are length-matched ON PURPOSE, and the test asserts that
@@ -849,7 +854,7 @@ mod tests {
     #[test]
     fn strip_frontmatter_removes_the_simplified_dialect_too() {
         // Language is a majority vote over body text. These field lines used to
-        // survive into it and skew the count (moss#937).
+        // survive into it and skew the count.
         let content = "nav\ntitle: Hello\n---\nThis is the body text.";
         assert_eq!(strip_frontmatter(content), "This is the body text.");
     }
@@ -894,12 +899,12 @@ mod tests {
     fn test_detect_project_lang_empty_has_no_basis() {
         let files: Vec<crate::types::content::FileInfo> = vec![];
         // `None`, not English: an empty vault has no evidence, and it is
-        // `resolve_site_default_lang` that decides what to do with that (the
-        // system language, per its own tests) — the sampler does not guess.
+        // `resolve_site_default_lang` that decides what to do with that (its
+        // own no-signal default, per its own tests) — the sampler does not guess.
         assert_eq!(detect_project_language(&files, "/nonexistent", &never_evicted), None);
     }
 
-    /// Stage 3 (docs/archive/2026-07-31-cloud-download-waiting-mode.md): a
+    /// Stage 3: a
     /// cloud-dataless file must be skipped from the sample exactly like a
     /// read error, not read/blocked on. The injectable predicate lets this
     /// be tested without real `SF_DATALESS` state.
@@ -924,10 +929,54 @@ mod tests {
         );
     }
 
+    /// The client's bug: on a cold cloud vault, `.take(20)` used to run BEFORE
+    /// the eviction filter, so the first 20 file-list slots being dataless
+    /// collapsed the whole sample to nothing even though real prose sat right
+    /// behind them. The budget must be 20 files actually read, not the first
+    /// 20 slots. Without the `.take` reorder in `detect_project_language`,
+    /// this returns `None` instead of `Some(ZhHans)`.
+    #[test]
+    fn detect_project_language_reads_past_an_evicted_prefix_to_find_prose() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = Vec::new();
+        for i in 0..20 {
+            let name = format!("evicted{i}.md");
+            std::fs::write(dir.path().join(&name), "unused").unwrap(); // never read
+            files.push(crate::types::content::FileInfo {
+                path: name,
+                file_type: "md".to_string(),
+                size: 0,
+                modified: None,
+            });
+        }
+        for i in 0..5 {
+            let name = format!("real{i}.md");
+            std::fs::write(
+                dir.path().join(&name),
+                "这是一篇关于软件工程和网页开发的博客文章。我们探讨了构建现代应用程序的各种技术。",
+            )
+            .unwrap();
+            files.push(crate::types::content::FileInfo {
+                path: name,
+                file_type: "md".to_string(),
+                size: 0,
+                modified: None,
+            });
+        }
+        let is_evicted = |p: &std::path::Path| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("evicted"))
+        };
+        assert_eq!(
+            detect_project_language(&files, dir.path().to_str().unwrap(), &is_evicted),
+            Some(Language::ZhHans),
+            "real prose past a dataless prefix must still be sampled, not dropped by the budget"
+        );
+    }
+
     #[test]
     fn an_evicted_only_vault_yields_no_language_at_all() {
-        // Not "English" — the distinction the whole system-language fallback
-        // rests on. A vault whose every file is cloud-dataless has no basis for
+        // Not "English" — the distinction the whole no-signal-default rests
+        // on. A vault whose every file is cloud-dataless has no basis for
         // a language decision, exactly like an empty one.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("only.md"), "This is a perfectly detectable English sentence.").unwrap();
@@ -946,28 +995,21 @@ mod tests {
     }
 
     #[test]
-    fn site_default_lang_falls_back_to_system_when_no_content_basis() {
-        // A signal-less vault (no markdown files / no detectable prose) must NOT
-        // hard-code English: it falls back to the user's system language. This is
-        // the "Published with moss" → 青苔发布 fix for empty/ambiguous Chinese sites.
+    fn no_signal_returns_english_without_consulting_any_os_value() {
+        // A signal-less vault (no markdown files / no detectable prose) is
+        // moss's own explicit default, English — not a guess read off the
+        // machine's locale, which is what rendered an English "Published
+        // with moss" colophon on a Chinese author's ambiguous-content site.
+        // There is no OS-value argument here any more to feed a different
+        // answer through even if one wanted to.
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(
-            resolve_site_default_lang(None, None, &files, "/nonexistent", Language::ZhHans),
-            "zh-hans"
-        );
-        assert_eq!(
-            resolve_site_default_lang(None, None, &files, "/nonexistent", Language::En),
-            "en"
-        );
+        assert_eq!(resolve_site_default_lang(None, None, &files, "/nonexistent"), "en");
     }
 
     #[test]
     fn site_default_lang_prefers_explicit_config_over_everything() {
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(
-            resolve_site_default_lang(Some("zh-hant"), None, &files, "/nonexistent", Language::En),
-            "zh-hant"
-        );
+        assert_eq!(resolve_site_default_lang(Some("zh-hant"), None, &files, "/nonexistent"), "zh-hant");
     }
 
     #[test]
@@ -979,47 +1021,20 @@ mod tests {
         // French site English on the way out. The render path does that
         // collapse itself, where "no translation" is what English means.
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(
-            resolve_site_default_lang(Some("fr"), None, &files, "/nonexistent", Language::En),
-            "fr"
-        );
+        assert_eq!(resolve_site_default_lang(Some("fr"), None, &files, "/nonexistent"), "fr");
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.md"), "---\nlang: ja\n---\nbody").unwrap();
         assert_eq!(
-            resolve_site_default_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap(), Language::En),
+            resolve_site_default_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()),
             "ja"
         );
     }
 
     #[test]
-    fn site_default_lang_uses_detected_content_over_system() {
-        // When the vault HAS real prose, content detection wins — the system
-        // language is only the no-basis fallback, never an override.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("post.md"),
-            "This is an English blog post about software engineering and modern web development.",
-        )
-        .unwrap();
-        let files = vec![crate::types::content::FileInfo {
-            path: "post.md".to_string(),
-            file_type: "md".to_string(),
-            size: 0,
-            modified: None,
-        }];
-        // System says ZhHans, but the English content must win.
-        assert_eq!(
-            resolve_site_default_lang(None, None, &files, dir.path().to_str().unwrap(), Language::ZhHans),
-            "en"
-        );
-    }
-
-    #[test]
-    fn site_default_lang_uses_chinese_content_even_when_system_is_english() {
-        // Symmetric to the above: a Chinese vault on an English-locale machine
-        // must resolve to ZhHans from content — the system language never
-        // overrides a confident content detection.
+    fn site_default_lang_uses_chinese_content_over_the_english_default() {
+        // Content detection still outranks the constant no-signal default: a
+        // Chinese vault must resolve to ZhHans, not fall through to English.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("post.md"),
@@ -1032,11 +1047,9 @@ mod tests {
             size: 0,
             modified: None,
         }];
-        assert_eq!(
-            resolve_site_default_lang(None, None, &files, dir.path().to_str().unwrap(), Language::En),
-            "zh-hans"
-        );
+        assert_eq!(resolve_site_default_lang(None, None, &files, dir.path().to_str().unwrap()), "zh-hans");
     }
+
     #[test]
     fn homepage_frontmatter_lang_outranks_content_detection() {
         // A `lang:` in the homepage is an authoring declaration. It used to
@@ -1056,16 +1069,10 @@ mod tests {
             modified: None,
         }];
         let root = dir.path().to_str().unwrap();
-        assert_eq!(
-            resolve_site_default_lang(None, Some("index.md"), &files, root, Language::En),
-            "zh-hant"
-        );
+        assert_eq!(resolve_site_default_lang(None, Some("index.md"), &files, root), "zh-hant");
         // …and `[site] lang` still outranks the declaration, so an author who
         // sets it in config is not overruled by an old homepage line.
-        assert_eq!(
-            resolve_site_default_lang(Some("en"), Some("index.md"), &files, root, Language::ZhHans),
-            "en"
-        );
+        assert_eq!(resolve_site_default_lang(Some("en"), Some("index.md"), &files, root), "en");
     }
 
     #[test]
@@ -1085,7 +1092,7 @@ mod tests {
             modified: None,
         }];
         assert_eq!(
-            resolve_site_default_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap(), Language::En),
+            resolve_site_default_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()),
             "zh-hans"
         );
     }

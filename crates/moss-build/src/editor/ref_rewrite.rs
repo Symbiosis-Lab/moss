@@ -9,8 +9,9 @@
 //! tests drive directly.
 
 use moss_core::resolve::md_extract::{
-    extract_md_references, extract_structural_asset_refs, PathContainer,
+    extract_md_references, extract_structural_asset_refs, PathContainer, RawRef, RefSyntax,
 };
+use moss_core::resolve::fuzzy_path::{escape_md_destination, percent_encode_path_segments};
 use moss_core::resolve::reference::{classify_reference, ReferenceContext};
 use std::path::Path;
 
@@ -82,21 +83,99 @@ pub(crate) fn apply_edits(source: &str, edits: Vec<Edit>) -> String {
     result
 }
 
-/// Whether a bare reference to the renamed entry can be rewritten safely.
+/// Which Markdown construct a standard-form destination sits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MdKind {
+    Link,
+    Image,
+    Definition,
+}
+
+/// How a reference's destination is spelled in the source, which decides what
+/// a rewritten destination has to escape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DestForm {
+    /// `[t](dest)`, `![t](dest)` or `[id]: dest`; `angle` when the author
+    /// wrote `<dest>`.
+    Markdown { kind: MdKind, angle: bool },
+    /// `[[target]]` / `![[target]]`: no escaping exists, so a name the form
+    /// cannot carry is refused.
+    Wiki,
+    /// A structural value (frontmatter, shortcode attribute, gallery line);
+    /// quoting is `render_bare_value`'s job.
+    Bare,
+}
+
+/// How `rr`'s destination is spelled in `source` (see [`DestForm`]).
+pub(crate) fn dest_form(source: &str, rr: &RawRef) -> DestForm {
+    let angle = rr.ref_from > 0
+        && source.as_bytes()[rr.ref_from - 1] == b'<'
+        && source.as_bytes().get(rr.ref_to) == Some(&b'>');
+    match rr.syntax {
+        RefSyntax::MarkdownLink { .. } => DestForm::Markdown { kind: MdKind::Link, angle },
+        RefSyntax::MarkdownImage { .. } => DestForm::Markdown { kind: MdKind::Image, angle },
+        RefSyntax::Definition { .. } => DestForm::Markdown { kind: MdKind::Definition, angle },
+        RefSyntax::StructuralAsset => DestForm::Bare,
+        _ => DestForm::Wiki,
+    }
+}
+
+/// Characters a wikilink target cannot carry: `|` starts an alias, `#` a
+/// heading, `?` a query, `]` closes the link. A new name holding one cannot be
+/// written in a `[[…]]` link at all.
+pub(crate) const WIKI_UNWRITABLE: [char; 4] = ['|', '#', '?', ']'];
+
+/// Spell `base` (the path part of a destination) plus its verbatim `?query` /
+/// `#fragment` `suffix` as source text for `form`, or `None` when no spelling
+/// of this form parses back as the same destination.
 ///
-/// Two independent questions, because the two ref shapes ask different ones:
-/// - `stem_unique` — no remaining `.md`/`.markdown` file carries the old
-///   STEM. Gates extensionless refs (`[[note]]`). Deliberately still
-///   `.md`-only: widening it to all files would stop a legitimate `[[note]]`
-///   rewrite whenever an unrelated `note.png` happened to exist.
-/// - `name_unique` — no remaining file of ANY extension carries the old FILE
-///   NAME. Gates extension-carrying refs (a bare gallery line `photo.jpg`).
-///   This guard did not exist for assets: the old walk `continue`d on every
-///   non-`.md` file, so for an image rename it was vacuously true.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RefAmbiguity {
-    pub(crate) stem_unique: bool,
-    pub(crate) name_unique: bool,
+/// `percent_style` keeps an authored percent-encoded destination
+/// (`my%20note.md`) percent-encoded. For the standard form the result is
+/// checked by feeding it back through a real CommonMark parser AND this
+/// crate's scanner: a rewrite that stops being a link, or is read as a
+/// different destination, is refused here instead of reaching the file.
+pub(crate) fn render_destination(form: DestForm, base: &str, suffix: &str, percent_style: bool) -> Option<String> {
+    let encoded = |b: &str| if percent_style { percent_encode_path_segments(b) } else { b.to_string() };
+    match form {
+        DestForm::Bare => Some(format!("{}{suffix}", encoded(base))),
+        DestForm::Wiki => {
+            let text = format!("{}{suffix}", encoded(base));
+            let carries = !encoded(base).contains(WIKI_UNWRITABLE);
+            (carries && wikilink_round_trips(&text)).then_some(text)
+        }
+        DestForm::Markdown { kind, angle } => {
+            let path = if percent_style { percent_encode_path_segments(base) } else { escape_md_destination(base, angle) };
+            let text = format!("{path}{suffix}");
+            markdown_round_trips(kind, angle, &text).then_some(text)
+        }
+    }
+}
+
+fn wikilink_round_trips(text: &str) -> bool {
+    let src = format!("[[{text}]]");
+    matches!(extract_md_references(&src).as_slice(), [r] if r.text == text)
+}
+
+fn markdown_round_trips(kind: MdKind, angle: bool, dest: &str) -> bool {
+    use pulldown_cmark::{Event, Parser, Tag};
+    let wrapped = if angle { format!("<{dest}>") } else { dest.to_string() };
+    let src = match kind {
+        MdKind::Link => format!("[x]({wrapped})"),
+        MdKind::Image => format!("![x]({wrapped})"),
+        MdKind::Definition => format!("[x]: {wrapped}\n\n[x]\n"),
+    };
+    let mut parsed: Vec<(bool, String)> = Vec::new();
+    for ev in Parser::new(&src) {
+        if let Event::Start(Tag::Link { dest_url, .. }) = &ev {
+            parsed.push((false, dest_url.to_string()));
+        } else if let Event::Start(Tag::Image { dest_url, .. }) = &ev {
+            parsed.push((true, dest_url.to_string()));
+        }
+    }
+    let parser_agrees = matches!(parsed.as_slice(), [(is_img, d)] if *is_img == (kind == MdKind::Image) && d == dest);
+    let scanned = extract_md_references(&src);
+    let scanner_agrees = matches!(scanned.as_slice(), [r] if r.text == dest);
+    parser_agrees && scanner_agrees
 }
 
 /// Rebuild a structural (syntax-free) value for writing back into the source.
@@ -202,15 +281,15 @@ pub(crate) fn rewrite_for_removal(
 /// asset spans — which is why `AssetPathSpan` deliberately has no matching
 /// rules of its own.
 ///
-/// `from_dir` is the root-relative directory of the referencing file (`""`
-/// at the project root).
+/// Only the authored shapes that name the entry by its root-relative path or
+/// by a bare name are matched here. A path written relative to the page is
+/// spelled by [`exact_style`] / [`exact_spelling`], which also know how to
+/// climb out of a folder with `../`.
 pub(crate) fn match_and_retarget(
     text: &str,
-    from_dir: &str,
     old_root_rel: &str,
     new_root_rel: &str,
     target_is_dir: bool,
-    amb: RefAmbiguity,
 ) -> Option<String> {
     let text_no_anchor = text.split_once('#').map_or(text, |(head, _)| head);
     let text_ref = text_no_anchor
@@ -218,58 +297,218 @@ pub(crate) fn match_and_retarget(
         .map_or(text_no_anchor, |(head, _)| head);
 
     // ── Attempt 1: root-relative (today's rules, byte for byte) ──────────
-    if let Some(new_text) = retarget_root_relative(text_ref, old_root_rel, new_root_rel, target_is_dir, amb) {
+    if let Some(new_text) = retarget_root_relative(text_ref, old_root_rel, new_root_rel, target_is_dir) {
         return Some(new_text);
     }
 
-    // ── Attempt 2: root-anchored (`/assets/hero.png`) ────────────────────
-    // This is the form `link_completions::insert_for` writes whenever the
-    // accepted candidate lives outside the source file's own subtree, so it is
-    // the shape the completion popup puts in a user's file most often. Before
-    // this arm, every one of those refs was invisible to rename and left
-    // dangling with no report — while DELETE already handled them, because
-    // `classify_reference` strips the leading `/` (resolve/reference.rs).
-    //
-    // The authored form is preserved: a ref written `/assets/hero.png` comes
-    // back `/assets/banner.png`, never silently re-spelled document-relative.
-    // A trailing slash (a folder embed, `![[/awards/|style:grid]]`) survives
-    // too — dropping it would turn a folder listing into a file lookup.
-    if let Some(rest) = text_ref.strip_prefix('/') {
-        let trailing_slash = rest.ends_with('/');
-        let abs = normalize_rel(rest)?;
-        let new_abs =
-            retarget_root_relative(&abs, old_root_rel, new_root_rel, target_is_dir, amb)?;
-        let suffix = if trailing_slash { "/" } else { "" };
-        return Some(format!("/{new_abs}{suffix}"));
-    }
-
-    // ── Attempt 3: document-relative ─────────────────────────────────────
-    // Only fires where the arms above returned None, so no match that works
-    // today can regress. Without it, the harbor corpus's actual shape — a
-    // gallery in a subfolder referencing `關於/x.png` — keeps breaking
-    // silently, which is the reported bug wearing a different label.
-    if from_dir.is_empty() {
-        return None;
-    }
-    let abs = normalize_rel(&format!("{from_dir}/{text_ref}"))?;
-    let new_abs = retarget_root_relative(&abs, old_root_rel, new_root_rel, target_is_dir, amb)?;
-    // Re-emit document-relative when the new location is still under
-    // `from_dir`; otherwise fall back to the root-relative form.
-    Some(
-        new_abs
-            .strip_prefix(&format!("{from_dir}/"))
-            .unwrap_or(&new_abs)
-            .to_string(),
-    )
+    None
 }
 
-/// The historical root-relative match rules, plus extension awareness.
+// ── Exact paths ─────────────────────────────────────────────────────────────
+//
+// A destination that names its file EXACTLY (relative to the page, relative to
+// the root, or as a published address) must still name it exactly after the
+// operation, in the same style. Other tools follow only such paths; the
+// resolver's name search would hide a dead one. A reference that never named
+// its file exactly (a bare name, a path that only matches by suffix) is not
+// described by any of this and keeps the resolver-driven rule.
+
+/// What a destination is anchored to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Anchor {
+    /// Relative to the referencing page (`../x.md`, `x.md`, `./x.md`).
+    Page,
+    /// Leading `/`.
+    Root,
+    /// Root-relative without the slash: how a path-shaped wikilink is written.
+    RootBare,
+}
+
+/// How the file is named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PathForm {
+    /// The file's own path, extension included (or the folder itself).
+    Full,
+    /// The file's path without its Markdown extension.
+    NoExt,
+    /// `/docs/`: the address of a folder's home page.
+    AddrHome,
+    /// `/blog/post/`: the address of an ordinary page.
+    AddrPage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactStyle {
+    anchor: Anchor,
+    form: PathForm,
+    /// Authored with a trailing `/`.
+    slash: bool,
+    /// Authored with a leading `./`.
+    dot: bool,
+}
+
+impl ExactStyle {
+    /// Same way of naming the file, ignoring cosmetic `./` and `/`. The two
+    /// address forms are one way: which of them fits depends on the target.
+    pub(crate) fn same_kind(&self, other: &ExactStyle) -> bool {
+        let is_address = |f: PathForm| matches!(f, PathForm::AddrHome | PathForm::AddrPage);
+        self.anchor == other.anchor
+            && (self.form == other.form || (is_address(self.form) && is_address(other.form)))
+    }
+
+    /// A root-anchored published address written with its trailing `/`.
+    pub(crate) fn root_address() -> ExactStyle {
+        ExactStyle { anchor: Anchor::Root, form: PathForm::AddrPage, slash: true, dot: false }
+    }
+
+    /// A root-anchored published address (`/notes/beta/`), which the build
+    /// keeps verbatim rather than resolving.
+    pub(crate) fn is_root_address(&self) -> bool {
+        self.anchor == Anchor::Root && matches!(self.form, PathForm::AddrHome | PathForm::AddrPage)
+    }
+
+    /// `address`, as served for `new_target`, in this style's trailing-slash
+    /// habit: a folder's home written without the slash (`/docs`) stays
+    /// slashless for as long as the target is still a home page.
+    pub(crate) fn respell_address<'a>(&self, address: &'a str, new_target: &str) -> &'a str {
+        if !self.slash && is_home_path(new_target) && address.len() > 1 {
+            address.trim_end_matches('/')
+        } else {
+            address
+        }
+    }
+
+    /// Root-relative without a leading slash, as a path-shaped wikilink is.
+    pub(crate) fn is_root_bare(&self) -> bool {
+        self.anchor == Anchor::RootBare
+    }
+
+    /// The same anchor naming the file by its full path, for a target that
+    /// can no longer be named in this style. Only a path without its
+    /// extension has one: an address never turns into a path, because the
+    /// build keeps a leading-`/` destination verbatim and a `.md` path there
+    /// is not served.
+    pub(crate) fn full_path(&self) -> Option<ExactStyle> {
+        (self.form == PathForm::NoExt).then_some(ExactStyle { form: PathForm::Full, slash: false, ..*self })
+    }
+}
+
+pub(crate) fn dirname(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+fn strip_md_ext(path: &str) -> Option<&str> {
+    path.strip_suffix(".md").or_else(|| path.strip_suffix(".markdown"))
+}
+
+/// Is `path` the page a folder address (`/dir/`) resolves to?
+fn is_home_path(path: &str) -> bool {
+    let Some(stem) = strip_md_ext(path) else { return false };
+    let (dir, stem) = stem.rsplit_once('/').map_or(("", stem), |(d, s)| (d, s));
+    moss_core::home::is_home_file(stem, dir.rsplit('/').next().unwrap_or(""))
+}
+
+/// Minimal `../`-relative spelling of `to_path` from `from_dir` (both
+/// root-relative, filesystem shape). Deliberately NOT `fuzzy_path`'s
+/// `relative_asset_path`: that percent-encodes segments for an HTML `href`,
+/// and this text is written back into markdown SOURCE, where percent-encoding
+/// would be a regression an author never asked for.
+pub(crate) fn relative_root_path(from_dir: &str, to_path: &str) -> String {
+    let from_parts: Vec<&str> = if from_dir.is_empty() { vec![] } else { from_dir.split('/').collect() };
+    let to_parts: Vec<&str> = to_path.split('/').collect();
+    let common = from_parts.iter().zip(to_parts.iter()).take_while(|(a, b)| a == b).count();
+    let ups = from_parts.len() - common;
+    let mut segs: Vec<&str> = std::iter::repeat("..").take(ups).collect();
+    segs.extend_from_slice(&to_parts[common..]);
+    segs.join("/")
+}
+
+/// Does the (percent-decoded, `?`/`#`-stripped) destination `base`, written in
+/// a page whose directory is `from_dir`, name `target` exactly? `target` is a
+/// file, or a folder when `is_dir`. `wiki` forms count only when written with
+/// a `/`: a bare `[[stem]]` is a name, not a path.
+pub(crate) fn exact_style(base: &str, from_dir: &str, target: &str, is_dir: bool, wiki: bool) -> Option<ExactStyle> {
+    if base.is_empty() || (wiki && !base.contains('/')) {
+        return None;
+    }
+    let (anchor, joined) = if let Some(rest) = base.strip_prefix('/') {
+        (Anchor::Root, rest.to_string())
+    } else if wiki && !(base.starts_with("./") || base.starts_with("../")) {
+        (Anchor::RootBare, base.to_string())
+    } else if from_dir.is_empty() {
+        (Anchor::Page, base.to_string())
+    } else {
+        (Anchor::Page, format!("{from_dir}/{base}"))
+    };
+    let slash = base.ends_with('/');
+    let n = moss_core::content_graph::join_written("", &joined)?;
+    let form = if n == target {
+        PathForm::Full
+    } else if is_dir {
+        return None;
+    } else if !slash && strip_md_ext(target) == Some(n.as_str()) {
+        PathForm::NoExt
+    } else if wiki {
+        return None;
+    } else if is_home_path(target) && dirname(target) == n {
+        PathForm::AddrHome
+    } else if slash && strip_md_ext(target) == Some(n.as_str()) {
+        PathForm::AddrPage
+    } else {
+        return None;
+    };
+    Some(ExactStyle { anchor, form, slash, dot: base.starts_with("./") })
+}
+
+/// Spell `new_target` in `style` from a page in `from_dir`: the same anchor
+/// and form the author used, with whatever `./` or `../` segments are needed.
+/// `None` when the new target can no longer be named that way (a path
+/// without its extension for a file that has none).
+pub(crate) fn exact_spelling(style: &ExactStyle, new_target: &str, from_dir: &str) -> Option<String> {
+    let mut slash = style.slash;
+    let path = match style.form {
+        PathForm::Full => new_target,
+        PathForm::NoExt => strip_md_ext(new_target)?,
+        // An address names whatever page is served there: a folder's home page
+        // is its folder's address, any other page is its own path plus `/`.
+        PathForm::AddrHome | PathForm::AddrPage if is_home_path(new_target) => dirname(new_target),
+        PathForm::AddrHome | PathForm::AddrPage => {
+            slash = true;
+            strip_md_ext(new_target)?
+        }
+    };
+    let mut out = match style.anchor {
+        Anchor::Root => format!("/{path}"),
+        Anchor::RootBare => path.to_string(),
+        Anchor::Page => {
+            let mut rel = relative_root_path(from_dir, path);
+            if rel.is_empty() {
+                rel.push('.');
+            }
+            if style.dot && !rel.starts_with("..") && rel != "." {
+                rel.insert_str(0, "./");
+            }
+            rel
+        }
+    };
+    if slash && !out.ends_with('/') {
+        out.push('/');
+    }
+    Some(out)
+}
+
+/// Produce a same-shaped replacement for `text_ref`, given it is already
+/// known (by the caller, via the resolver) to name `old_root_rel`. A FORMATTER,
+/// not a matcher: it never decides WHETHER a reference points at the renamed
+/// entry — the caller resolves that with `classify_reference` first — only
+/// HOW to spell the new target in the same shape the author wrote. `None`
+/// means this shape can't express `old_root_rel` at all (the caller escalates
+/// to an explicit document-relative or root-absolute form instead).
 pub(crate) fn retarget_root_relative(
     text_ref: &str,
     old_root_rel: &str,
     new_root_rel: &str,
     target_is_dir: bool,
-    amb: RefAmbiguity,
 ) -> Option<String> {
     if target_is_dir {
         // Folder rename: any ref whose path starts with the old folder.
@@ -318,7 +557,7 @@ pub(crate) fn retarget_root_relative(
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or(new_root_rel);
-        (amb.name_unique && text_ref == old_name).then(|| new_name.to_string())
+        (text_ref == old_name).then(|| new_name.to_string())
     } else {
         // Extensionless bare ref — a wikilink into the markdown name space.
         let old_stem = Path::new(old_root_rel)
@@ -329,78 +568,8 @@ pub(crate) fn retarget_root_relative(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(new_root_rel);
-        (amb.stem_unique && text_ref == old_stem).then(|| new_stem.to_string())
+        (text_ref == old_stem).then(|| new_stem.to_string())
     }
-}
-
-/// Resolve `.`/`..` segments in a root-relative path. `None` if it escapes
-/// the project root.
-pub(crate) fn normalize_rel(path: &str) -> Option<String> {
-    let mut out: Vec<&str> = Vec::new();
-    for seg in path.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                out.pop()?;
-            }
-            s => out.push(s),
-        }
-    }
-    Some(out.join("/"))
-}
-
-/// Rewrite every reference to `old_root_rel` in `source` to `new_root_rel`.
-///
-/// Both passes run: generic markdown tokens and structural asset spans.
-/// TOKEN EDITS ARE LISTED FIRST, so on overlap the narrow, syntax-preserving
-/// edit wins — a `![](x.png)` gallery line keeps its markdown syntax rather
-/// than being flattened into a bare path by the structural edit covering the
-/// same bytes.
-pub(crate) fn rewrite_refs_by_raw_match(
-    source: &str,
-    from_dir: &str,
-    old_root_rel: &str,
-    new_root_rel: &str,
-    target_is_dir: bool,
-    amb: RefAmbiguity,
-) -> String {
-    let mut edits: Vec<Edit> = Vec::new();
-
-    for rr in extract_md_references(source) {
-        let Some(new_text) =
-            match_and_retarget(&rr.text, from_dir, old_root_rel, new_root_rel, target_is_dir, amb)
-        else {
-            continue;
-        };
-        // Preserve an `#anchor` suffix if the original ref carried one.
-        let anchor_suffix = match rr.text.split_once('#') {
-            Some((_, anchor)) => format!("#{anchor}"),
-            None => String::new(),
-        };
-        // Replace the TARGET SPAN, not the whole token. The surrounding
-        // syntax — brackets, alias, label, alt, link title — is left byte for
-        // byte, and a nested reference (`[![[hero.png]]](/album/)`) does not
-        // overlap its enclosing link's destination, so both get rewritten.
-        // Rebuilding the token from `RefSyntax` re-emitted the stale label and
-        // dropped the inner rewrite.
-        edits.push(Edit {
-            from: rr.ref_from,
-            to: rr.ref_to,
-            text: format!("{new_text}{anchor_suffix}"),
-        });
-    }
-
-    for span in extract_structural_asset_refs(source) {
-        let Some(new_text) =
-            match_and_retarget(&span.path, from_dir, old_root_rel, new_root_rel, target_is_dir, amb)
-        else {
-            continue;
-        };
-        let replacement = render_bare_value(&span.container, span.quote, &new_text, &span.attrs);
-        edits.push(Edit { from: span.value.start, to: span.value.end, text: replacement });
-    }
-
-    apply_edits(source, edits)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

@@ -31,10 +31,14 @@ Supported formats: `.jpg`, `.jpeg`, `.png`, `.gif`, `.svg`, `.webp`, `.avif`.
 Drop video files in your folder and reference them the same way:
 
 ```markdown
-![[demo.mov]]
+![](demo.mov)
 ```
 
+The wikilink `![[demo.mov]]` does the same by name.
+
 moss transcodes `.mov` files to `.mp4` (H.264 + AAC) in the background. The preview opens immediately and video loads progressively as transcoding completes. Reference the original `.mov` filename; moss serves the converted `.mp4` automatically.
+
+The standard form also embeds audio (`![](track.mp3)`), PDF, HTML and 3D model files that are in your site, each giving the same player as its wikilink. A size in the alt text works as it does after the pipe (`![400](demo.mov)` matches `![[demo.mov|400]]`), and plain alt text becomes the player's accessible label, as the text after the pipe does for `![[demo.mov|a label]]`.
 
 ## Display control
 
@@ -84,7 +88,7 @@ An image in its own paragraph — an empty line above it, nothing else on the li
 
 ```html
 <figure>
-  <img src="…/light.jpg" alt="Morning light, Yangshuo">
+  &lt;img src="…/light.jpg" alt="Morning light, Yangshuo">
   <figcaption>Morning light, Yangshuo</figcaption>
 </figure>
 ```
@@ -103,7 +107,7 @@ The third form is best for accessibility: the alt describes the image for screen
 
 For the wikilink form, the alias becomes a caption only when it isn't a [size or fit/position keyword](#display-control) — those are read first.
 
-**No figure is emitted when** the alt is empty (`![[photo.jpg]]` or `![](photo.jpg)`) — moss keeps a plain `<img>` rather than caption an undescribed image — or when the image shares its line with other text (a trailing `*italic*` caption is the one exception, above).
+**No figure is emitted when** the alt is empty (`![[photo.jpg]]` or `![](photo.jpg)`) — moss keeps a plain `&lt;img>` rather than caption an undescribed image — or when the image shares its line with other text (a trailing `*italic*` caption is the one exception, above).
 
 For richer caption markup, hand-write a `<figure>`; raw HTML passes through untouched. Turn the behavior off site-wide with `implicit_figure = false` under `[site]` in `.moss/config.toml`.
 

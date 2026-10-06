@@ -13,9 +13,9 @@
 //!   right. Everything past the lede has to be released back to full width, as
 //!   a sibling AFTER the cover row.
 //!
-//! Before ADR-034 both were answered by re-parsing the page's own rendered HTML
+//! Before this module existed, both were answered by re-parsing the page's own rendered HTML
 //! with regexes and a hand-rolled `<div>`-depth counter. That is what produced
-//! moss#903: a byte cursor advanced past a multi-byte character aborted the
+//! a regression where a byte cursor advanced past a multi-byte character aborted the
 //! build (`start byte index 66 is not a char boundary; it is inside '在'`), and
 //! the release point could only ever be a literal `.moss-grid` match, so a
 //! long-form article with no grid stayed in the ~20-character column forever.
@@ -37,7 +37,21 @@
 
 use moss_core::ast::{
     Block, Document, GridCellParts, GridParts, GridShortcode, RenderHooks, Shortcode,
+    SubscribeShortcode,
 };
+
+/// Where a page's place-map locator goes, chosen once per page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocatorPlacement {
+    /// In the page masthead, after the byline: pages that are not articles.
+    Masthead,
+    /// In the body, immediately before the first text block, where the
+    /// horizontal float sits beside that text.
+    BeforeText,
+    /// In the body, immediately after the first text block, as a block of its
+    /// own: vertical typesetting, where the author's words are read first.
+    AfterText,
+}
 
 /// A page's emitted body, kept in the pieces the serializer produced it in.
 #[derive(Debug, Clone, Default)]
@@ -53,6 +67,20 @@ pub struct BodyPlan {
     /// split is serialized independently, so neither can end mid-element and
     /// the question `html_prefix_is_balanced` existed to answer never arises.
     pub lede_segments: usize,
+    /// How many LEADING segments come before the body's first text block (a
+    /// paragraph, list or blockquote) — see [`first_text_block`]. `0` when
+    /// the first segment already opens with one, which is also the fallback
+    /// for a body with no text block at all: nothing to skip past, so an
+    /// insertion lands at the very front, same place moss has always put a
+    /// place-map locator on a body it cannot subdivide further.
+    pub first_text_segments: usize,
+    /// How many LEADING segments end with the body's first text block: the
+    /// insertion point for a locator that follows the opening text (vertical
+    /// typesetting). Equal to [`first_text_segments`] when the body has no
+    /// text block.
+    ///
+    /// [`first_text_segments`]: BodyPlan::first_text_segments
+    pub after_first_text_segments: usize,
 }
 
 /// One piece of the emitted body.
@@ -63,6 +91,18 @@ pub enum BodySegment {
     /// One `:::grid` block, kept typed so cell enhancement is a match on
     /// `Vec<Block>` rather than a pattern-match on markup.
     Grid(GridEmission),
+    /// One inline `:::subscribe` form, kept typed because its hidden `scope`
+    /// depends on the site's language sections, which exist only after every
+    /// page has parsed. `email::stamp_inline_subscribe_scopes` re-renders it.
+    Subscribe(SubscribeEmission),
+}
+
+/// An inline `:::subscribe` form as its typed arguments and the HTML they
+/// rendered to.
+#[derive(Debug, Clone)]
+pub struct SubscribeEmission {
+    pub args: SubscribeShortcode,
+    pub html: String,
 }
 
 /// A `:::grid` block as both the HTML that was emitted and the typed cells it
@@ -150,6 +190,7 @@ impl BodySegment {
         match self {
             BodySegment::Html(s) => std::borrow::Cow::Borrowed(s),
             BodySegment::Grid(g) => std::borrow::Cow::Owned(g.to_html()),
+            BodySegment::Subscribe(s) => std::borrow::Cow::Borrowed(&s.html),
         }
     }
 }
@@ -161,6 +202,8 @@ impl BodyPlan {
         Self {
             segments: vec![BodySegment::Html(html)],
             lede_segments: 1,
+            first_text_segments: 0,
+            after_first_text_segments: 0,
         }
     }
 
@@ -208,29 +251,90 @@ impl BodyPlan {
                         cell.parts.inner = f(&cell.parts.inner);
                     }
                 }
+                BodySegment::Subscribe(s) => s.html = f(&s.html),
             }
         }
+    }
+
+    /// Every inline subscribe form in the body, for the Reduce pass that
+    /// stamps their scope.
+    pub fn subscribe_forms_mut(&mut self) -> impl Iterator<Item = &mut SubscribeEmission> {
+        self.segments.iter_mut().filter_map(|s| match s {
+            BodySegment::Subscribe(e) => Some(e),
+            _ => None,
+        })
     }
 
     /// Put `html` in front of the body, inside the cover column.
     ///
     /// The one caller is the auto-injected `<h1 class="moss-article-title">`,
-    /// which only fires on article pages — pages that never take the cover
-    /// branch. `lede_segments` still moves so the two features stay composable.
+    /// which runs at parse time — before `render/html.rs` ever reads
+    /// `first_text_segments` to place the locator. A page it fires on CAN
+    /// also take the cover branch — a term-claiming leaf with its own
+    /// `cover:` renders book-open too (`render/html.rs`) — so `lede_segments`
+    /// moving here is exactly what keeps the injected title inside the lede
+    /// that ends up beside the cover, not past it. `first_text_segments`
+    /// moves the same way, for the same reason: every existing segment
+    /// index, including the one the locator is waiting to be inserted
+    /// before, shifts by one.
     pub fn prepend_html(&mut self, html: String) {
         self.segments.insert(0, BodySegment::Html(html));
         self.lede_segments += 1;
+        self.first_text_segments += 1;
+        self.after_first_text_segments += 1;
+    }
+
+    /// Insert the place-map locator `html` into the body at `placement`:
+    /// immediately before the body's first text block (a paragraph, list or
+    /// blockquote), or immediately after it. A leading heading, rule or media
+    /// block (figure, table, code block, another shortcode) stays above it at
+    /// full width, simply by virtue of coming first in the emitted HTML. A
+    /// body with no text block takes the very front either way, and the first
+    /// text block is a top-level one: a paragraph wrapped in a fenced div is
+    /// not recognised. [`LocatorPlacement::Masthead`] inserts nothing.
+    ///
+    /// `idx <= lede_segments` moves `lede_segments` the same way
+    /// [`prepend_html`] always does: an insertion landing inside (or right
+    /// at the edge of) the cover column keeps that column's boundary
+    /// correct. An insertion past the lede (the text block sits in a
+    /// full-width trailer, e.g. after a release-triggering grid) leaves
+    /// `lede_segments` alone, since the locator lands in the trailer with
+    /// it.
+    ///
+    /// No-op for an empty fragment, same guard [`prepend_html`] uses.
+    ///
+    /// [`prepend_html`]: BodyPlan::prepend_html
+    pub fn insert_locator(&mut self, html: String, placement: LocatorPlacement) {
+        let after_text = match placement {
+            LocatorPlacement::Masthead => return,
+            LocatorPlacement::BeforeText => false,
+            LocatorPlacement::AfterText => true,
+        };
+        if html.is_empty() {
+            return;
+        }
+        let at = if after_text { self.after_first_text_segments } else { self.first_text_segments };
+        let idx = at.min(self.segments.len());
+        self.segments.insert(idx, BodySegment::Html(html));
+        if idx <= self.lede_segments {
+            self.lede_segments += 1;
+        }
+        // A cut at or past an insertion in front of it moves with its segment.
+        if !after_text && self.after_first_text_segments >= idx {
+            self.after_first_text_segments += 1;
+        }
     }
 }
 
 /// Index into `blocks` where the narrow folder-cover column ends.
 ///
 /// The cover thumbnail sits beside the *lede*; content past it has half the
-/// viewport empty to its right, which is exactly what moss#903 bug 4 reported.
+/// viewport empty to its right, which is exactly what a real long-form
+/// article once did with no release point to fall back on.
 /// Release happens at whichever comes first:
 ///
 /// - a block that is inherently full-width — `:::grid`, `:::gallery`, a table,
-///   or a figure carrying a non-`body` width token (ADR-021);
+///   or a figure carrying a non-`body` width token;
 /// - the end of the lede — the first heading that follows at least one
 ///   paragraph, i.e. where the intro stops and the article proper starts.
 ///
@@ -255,12 +359,80 @@ pub fn lede_end(blocks: &[Block]) -> usize {
     blocks.len()
 }
 
+/// Index into `blocks` of the body's first text block — a paragraph, list
+/// or blockquote — the place-map locator's insertion point (see
+/// `render::credits`). `None` when the body has none: every block is a
+/// heading, a rule, or media (a figure, a table, a code block, or a
+/// shortcode like `:::grid`/`:::gallery`).
+///
+/// Unlike [`lede_end`], this walks the WHOLE body rather than stopping at
+/// the first release point — a leading heading or wide figure is exactly
+/// what the locator must be skipped past, not a boundary of its own. A
+/// callout (`> [!note]`) never matches the `Block::BlockQuote` arm: the
+/// parser already promotes that syntax to its own `Block::Callout` at parse
+/// time, so there is nothing here for it to reach.
+pub fn first_text_block(blocks: &[Block]) -> Option<usize> {
+    blocks.iter().position(|block| {
+        matches!(block, Block::Paragraph(_) | Block::List { .. } | Block::BlockQuote(_))
+    })
+}
+
+/// The nearest heading's text before index `i` in `blocks` — the accessible
+/// name an unlabeled `:::grid {scroll}` row falls back to (a row directly
+/// under `## Related` is named "Related"). Scans backward and stops at the
+/// FIRST heading found, same parent list only: a grid nested inside a
+/// callout or list item never reaches this function, since `render_segmented`
+/// only special-cases `Shortcode::Grid` at the top level. `None` when nothing
+/// precedes `i`, when the nearest preceding block isn't a heading, or when
+/// the nearest heading is empty — never keeps looking past it for an older
+/// one, or "nearest" would be a lie.
+fn nearest_heading_label(preceding: &[Block]) -> Option<String> {
+    for block in preceding.iter().rev() {
+        if let Block::Heading { children, .. } = block {
+            let text = moss_core::ast::inlines_to_plain_text(children);
+            return if text.is_empty() { None } else { Some(text) };
+        }
+    }
+    None
+}
+
+/// Render a `:::grid`'s parts, falling back to the nearest preceding
+/// heading's text as the scroll row's accessible name when the author wrote
+/// no explicit `label=` — see [`nearest_heading_label`]. `args` is cloned
+/// only on this rare path (a scroll row, no author label, a heading to
+/// borrow from); every other grid — the vast majority — renders through the
+/// caller's own reference with no allocation. Kept to a borrowed-`label`
+/// swap rather than a new `render_grid_parts` parameter: the trait is public
+/// (moss-core is the MIT-licensed open half), and every other caller of
+/// [`RenderHooks::render_grid_parts`] already has no sibling blocks in view,
+/// so a parameter only this one caller could ever fill is a signature every
+/// implementor pays for and none but this one uses.
+///
+/// `args.is_scroll_row()`, not the old cells-exceed-columns test: a row
+/// whose cells fit `columns` still becomes a real scroll region once the
+/// viewport narrows (`GridShortcode::fits_without_scrolling`), so it needs
+/// an accessible name just as much as a row that always scrolls.
+fn grid_parts_with_heading_fallback<H: RenderHooks + ?Sized>(
+    hooks: &H,
+    args: &GridShortcode,
+    source_line: Option<usize>,
+    preceding: &[Block],
+) -> GridParts {
+    if args.is_scroll_row() && args.label.is_none() {
+        if let Some(label) = nearest_heading_label(preceding) {
+            let named = GridShortcode { label: Some(label), ..args.clone() };
+            return hooks.render_grid_parts(&named, source_line);
+        }
+    }
+    hooks.render_grid_parts(args, source_line)
+}
+
 /// Blocks whose rendering assumes the full content column.
 fn is_full_width_block(block: &Block) -> bool {
     match block {
         Block::Shortcode(Shortcode::Grid(_)) | Block::Shortcode(Shortcode::Gallery(_)) => true,
         Block::Table { .. } => true,
-        // ADR-021 width tokens: `body` is the default measure, so only a
+        // Width tokens: `body` is the default measure, so only a
         // widened figure forces a release.
         Block::Figure { width: Some(w), .. } => w != "body",
         _ => false,
@@ -276,9 +448,12 @@ fn is_full_width_block(block: &Block) -> bool {
 /// the same `RenderHooks::render_grid_parts` the flat `Grid` arm uses.
 pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> BodyPlan {
     let lede_end_block = lede_end(&doc.blocks);
+    let text_block_index = first_text_block(&doc.blocks);
     let mut segments: Vec<BodySegment> = Vec::new();
     let mut buf = String::new();
     let mut lede_segments: Option<usize> = None;
+    let mut first_text_segments: Option<usize> = None;
+    let mut after_first_text_segments: Option<usize> = None;
     let mut fnotes = moss_core::ast::footnotes::FootnoteCtx::for_document(&doc.blocks);
 
     for (i, block) in doc.blocks.iter().enumerate() {
@@ -286,12 +461,27 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
             flush(&mut buf, &mut segments);
             lede_segments = Some(segments.len());
         }
+        if Some(i) == text_block_index {
+            flush(&mut buf, &mut segments);
+            first_text_segments = Some(segments.len());
+        }
+        if text_block_index.is_some_and(|t| i == t + 1) {
+            flush(&mut buf, &mut segments);
+            after_first_text_segments = Some(segments.len());
+        }
         let meta = doc.block_meta.get(i).copied().unwrap_or_default();
         match block {
             Block::Shortcode(Shortcode::Grid(args)) => {
                 flush(&mut buf, &mut segments);
-                let parts = hooks.render_grid_parts(args, meta.source_line);
+                let parts =
+                    grid_parts_with_heading_fallback(hooks, args, meta.source_line, &doc.blocks[..i]);
                 segments.push(BodySegment::Grid(emission(args, parts)));
+            }
+            Block::Shortcode(Shortcode::Subscribe(args)) => {
+                flush(&mut buf, &mut segments);
+                let mut html = String::new();
+                moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
+                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html }));
             }
             _ => moss_core::ast::render_block_with_meta(hooks, &mut buf, block, &meta, &mut fnotes),
         }
@@ -305,13 +495,26 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     // fixes `lede_segments` at the tail of real content; the footnote section
     // then always lands in its own segment, in the trailer.
     flush(&mut buf, &mut segments);
+    // A text block that ends the body has no following block to trigger the cut.
+    if text_block_index.is_some() && after_first_text_segments.is_none() {
+        after_first_text_segments = Some(segments.len());
+    }
     let lede_segments = lede_segments.unwrap_or(segments.len());
+    // Unlike `lede_segments`, a body with no text block falls back to `0`
+    // (the very front) rather than `segments.len()` — see
+    // `BodyPlan::first_text_segments`. Resolved here, before the footnote
+    // section is appended, for the same reason `lede_segments` is: the
+    // about-to-be-flushed endnote segment must never count toward either cut.
+    let first_text_segments = first_text_segments.unwrap_or(0);
+    let after_first_text_segments = after_first_text_segments.unwrap_or(first_text_segments);
     moss_core::ast::footnotes::render_section(hooks, &mut buf, &doc.blocks, &mut fnotes);
     flush(&mut buf, &mut segments);
 
     BodyPlan {
         segments,
         lede_segments,
+        first_text_segments,
+        after_first_text_segments,
     }
 }
 

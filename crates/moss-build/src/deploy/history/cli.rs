@@ -1,27 +1,28 @@
-//! `moss history` — the CLI form of publish history (slice 2 of
-//! [docs/archive/2026-09-11-publish-history-design.md](../../../../../docs/archive/2026-09-11-publish-history-design.md)).
+//! `moss history` — the CLI form of publish history.
 //! One row in [`crate::cli::commands::cli_commands`], on `OWN_HELP` because it
 //! parses its own flags. Lives beside [`super::store`]/[`super::record`]/
 //! [`super::restore`]/[`super::timeline`] rather than under `cli/`, which is
-//! at its file budget (see the design's "Placement and budgets").
+//! at its file budget.
 //!
 //! Five forms, dispatched by which flags/positional are present:
 //!
 //! ```text
-//! moss history [--json]                              site timeline
-//! moss history <path> [--json]                        one page's timeline
-//! moss history --save [<name>]                        save a version now
-//! moss history <path> --restore --at <id> [--copy]    restore a page
-//! moss history --restore --at <id> --yes              restore the site
+//! moss history [<folder>] [--json]                              site timeline
+//! moss history [<folder>] <path> [--json]                       one page's timeline
+//! moss history [<folder>] --save [<name>] [--json]              save a version now
+//! moss history [<folder>] <path> --restore --at <id> [--copy]   restore a page
+//! moss history [<folder>] --restore --at <id> --yes             restore the site
 //! ```
 //!
-//! There is no `<folder>` argument anywhere in this command, unlike
-//! `build`/`deploy`/`list` — every form resolves the vault the same way,
+//! With no `<folder>`, every form resolves the vault the same way,
 //! [`VaultRoot::containing`] from the current directory, matching a person
-//! running it from inside their site. A `<path>` argument on the timeline and
-//! page-restore forms is therefore a manifest-relative SOURCE path *within
-//! that vault*, resolved against the root and never a second folder to act on
-//! — see [`relative_source_path`].
+//! running it from inside their site. `<folder>` is recognized the same way
+//! `build` takes its own — [`split_positionals`] treats a bare positional as
+//! the site to act on when it already owns a `.moss/`
+//! ([`crate::nested_roots::owns_moss`]), so a script delivering to someone
+//! else's folder doesn't need to `cd` in first. A `<path>` argument on the
+//! timeline and page-restore forms is a manifest-relative SOURCE path
+//! *within the vault* — see [`relative_source_path`].
 //!
 //! `--save` and `--restore` both need a [`SealedManifest`] of the tree as it
 //! stands right now, and the only way to get one outside the app (which keeps
@@ -37,6 +38,7 @@ use super::restore::{self, RestoreMode, RestoreReport};
 use super::store;
 use super::HistoryStore;
 use crate::build::manifest::{published_record, SealedManifest};
+use crate::cli::list::json_error;
 use crate::moss_paths::MossPaths;
 use crate::vault_root::{resolve_input, VaultRoot};
 
@@ -53,10 +55,21 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
-    let root = VaultRoot::containing(Path::new("."));
+    // A directory that isn't a recognized site folder must be refused before
+    // any build or guard runs — `--save` used to take it as literal label
+    // text, so a mistyped site folder silently built and saved against
+    // whatever `VaultRoot::containing` fell back to instead.
+    if let Some(code) = reject_if_non_site_directory(parsed.path.as_deref(), parsed.json) {
+        return code;
+    }
+
+    let root = match &parsed.folder {
+        Some(folder) => VaultRoot::resolve(folder),
+        None => VaultRoot::containing(Path::new(".")),
+    };
 
     if parsed.save {
-        return run_save(&root, parsed.path);
+        return run_save(&root, parsed.path, parsed.json);
     }
     if parsed.restore {
         // `--at` is required for either restore shape; checked once here so
@@ -82,6 +95,13 @@ pub fn run(args: &[String]) -> i32 {
 
 #[derive(Debug)]
 struct ParsedArgs {
+    /// The site to operate on, when the caller named one explicitly —
+    /// recognized the same way `build <folder>` is: a directory that already
+    /// owns a `.moss/`. `None` keeps the default of the site containing the
+    /// current directory.
+    folder: Option<String>,
+    /// The command's own positional, never the folder: `--save`'s label, or
+    /// a page for the timeline/restore-page forms.
     path: Option<String>,
     json: bool,
     save: bool,
@@ -96,7 +116,7 @@ impl ParsedArgs {
     /// usage and exit 0. `Err` is the whole text to print on stderr before
     /// exiting 1, matching `deploy::DeployArgs::parse`'s contract.
     fn parse(args: &[String]) -> Result<Option<Self>, String> {
-        let mut path: Option<String> = None;
+        let mut positionals: Vec<String> = Vec::new();
         let mut json = false;
         let mut save = false;
         let mut restore = false;
@@ -123,12 +143,7 @@ impl ParsedArgs {
                 a if a.starts_with('-') => {
                     return Err(format!("error: unknown option '{a}'\n{}", usage()));
                 }
-                a => {
-                    if path.is_some() {
-                        return Err(format!("error: moss history takes at most one path\n{}", usage()));
-                    }
-                    path = Some(a.to_string());
-                }
+                a => positionals.push(a.to_string()),
             }
             i += 1;
         }
@@ -137,23 +152,98 @@ impl ParsedArgs {
             return Err(format!("error: --save and --restore cannot be combined\n{}", usage()));
         }
         // The positional after `--save` is the version's NAME, not a
-        // path — `moss history --save "Before rewriting the intro"`. It
-        // was already collected as `path` above; hand it back as the
-        // label instead of refusing it.
-        Ok(Some(ParsedArgs { path, json, save, restore, at, copy, yes }))
+        // path — `moss history --save "Before rewriting the intro"`. Kept
+        // as `path` by `split_positionals` below instead of being refused.
+        let (folder, path) = split_positionals(positionals)?;
+        Ok(Some(ParsedArgs { folder, path, json, save, restore, at, copy, yes }))
     }
+}
+
+/// Separate a site FOLDER (recognized the way `build`'s is — a directory
+/// that already owns a `.moss/`) from the command's own positional:
+/// `--save`'s label, or a page for the timeline/restore-page forms. A folder
+/// is only ever read from the FIRST slot — `moss history <site> --save
+/// "<label>"` — mirroring how `build`'s folder argument always leads.
+fn split_positionals(positionals: Vec<String>) -> Result<(Option<String>, Option<String>), String> {
+    match positionals.len() {
+        0 => Ok((None, None)),
+        1 => {
+            let only = positionals.into_iter().next().expect("len checked above");
+            if is_site_folder(&only) {
+                Ok((Some(only), None))
+            } else {
+                Ok((None, Some(only)))
+            }
+        }
+        2 if is_site_folder(&positionals[0]) => {
+            let mut it = positionals.into_iter();
+            let folder = it.next().expect("len checked above");
+            let rest = it.next().expect("len checked above");
+            Ok((Some(folder), Some(rest)))
+        }
+        _ => Err(format!("error: moss history takes at most one path\n{}", usage())),
+    }
+}
+
+/// Is `raw` already a moss site — [`crate::nested_roots::owns_moss`] (the
+/// same test `build`'s nested-site guard uses), not an ancestor walk. A
+/// folder nobody has turned into a site yet is not recognized — `history`
+/// has nothing to show for one anyway.
+fn is_site_folder(raw: &str) -> bool {
+    let resolved = resolve_input(raw);
+    resolved.is_dir() && crate::nested_roots::owns_moss(&resolved)
+}
+
+/// `path_arg` is an existing directory that [`split_positionals`] already
+/// ruled out as a site folder — never a valid `--save` label or page path.
+fn reject_non_site_directory(path_arg: &str) -> Option<String> {
+    if resolve_input(path_arg).is_dir() {
+        Some(format!(
+            "'{path_arg}' is a folder, not a page. Pass a site folder (one containing .moss) as the argument, or run moss history from inside the site."
+        ))
+    } else {
+        None
+    }
+}
+
+/// `run`'s first guard, factored out so it can be proven on its own: `None`
+/// means proceed, `Some(code)` means `run` must return `code` immediately.
+/// Pure, unlike the guard that runs after it on the resolved `root`
+/// (`cli::site_guard::guard_cli_open`), which also refuses a directory it
+/// considers unsafe but only because of what the *caller's real cwd*
+/// happens to contain — a test of this check through `run` would pass for
+/// that unrelated reason the moment it lost its own refusal, rather than
+/// going red.
+fn reject_if_non_site_directory(path: Option<&str>, json: bool) -> Option<i32> {
+    let path_arg = path?;
+    let message = reject_non_site_directory(path_arg)?;
+    Some(fail(&message, json))
+}
+
+/// The one choke point that honors `--json` on a failure, matching how
+/// `moss list --json` shapes its own errors: `{"error": ...}` on stdout,
+/// never stderr, so a script reading `--json` output always gets valid JSON.
+fn fail(message: &str, json: bool) -> i32 {
+    if json {
+        println!("{}", json_error(message));
+    } else {
+        eprintln!("error: {message}");
+    }
+    1
 }
 
 fn usage() -> &'static str {
     "Usage:
-  moss history [--json]                              site timeline, newest first
-  moss history <path> [--json]                        one page's timeline
-  moss history --save [<name>]                        save a version now
-  moss history <path> --restore --at <id> [--copy]    restore one page
-  moss history --restore --at <id> --yes              restore the whole site
+  moss history [<folder>] [--json]                            site timeline, newest first
+  moss history [<folder>] <path> [--json]                     one page's timeline
+  moss history [<folder>] --save [<name>] [--json]             save a version now
+  moss history [<folder>] <path> --restore --at <id> [--copy]  restore one page
+  moss history [<folder>] --restore --at <id> --yes            restore the whole site
 
-<path> is a file's location within the current site, not a second folder —
-moss history always operates on the site containing the current directory.
+<folder> is a site's folder (one already containing .moss) — pass it to act on a site from
+outside it, the same as `moss build <folder>`; with no folder, moss history operates on the
+site containing the current directory.
+<path> is a file's location within that site, never a folder.
 <id> is a version's id (a timeline row), or an unambiguous prefix of one."
 }
 
@@ -161,13 +251,11 @@ moss history always operates on the site containing the current directory.
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// `HistoryStore::in_app_data` fails only when this platform has no
-/// application data directory at all — every other command that touches the
-/// store hits this same one check, so it lives here rather than at each call
-/// site.
-fn open_store(root: &VaultRoot) -> Result<HistoryStore, String> {
-    HistoryStore::in_app_data(root.path())
-        .ok_or_else(|| "no application data directory on this platform".to_string())
+/// The vault's own history store. Infallible now that it is just a join
+/// against `root` — kept as its own function so every command that touches
+/// the store goes through one name rather than repeating the join.
+fn open_store(root: &VaultRoot) -> HistoryStore {
+    HistoryStore::in_vault(root.path())
 }
 
 /// Turn a CLI path argument into the manifest-relative SOURCE path
@@ -212,16 +300,21 @@ fn resolve_id<'a>(records: &'a [(String, PublishRecord)], needle: &str) -> Resul
     }
 }
 
-/// Run a real headless build of `root` and hand back the manifest it sealed —
-/// [`crate::deploy::one_shot::build_and_seal`], the same build
-/// `deploy::push::run_hosted_deploy` and `deploy::plugin_push::run_plugin_deploy`
-/// use, minus the publish. `--save` and `--restore` both need this: neither is
-/// running inside the app, which keeps a sealed manifest live in `AppState`
-/// as files change, so a terminal process has to make its own.
+/// This process's setup, then a real headless build of `root`, and the
+/// manifest it sealed — [`crate::deploy::one_shot::build_sealed_now`], the
+/// same build `deploy::push::run_hosted_deploy` and
+/// `deploy::plugin_push::run_plugin_deploy` use, minus the publish. `--save`
+/// and `--restore` both need this: neither is running inside the app, which
+/// keeps a sealed manifest live in `AppState` as files change, so a terminal
+/// process has to make its own.
+///
+/// The three setup lines and the runtime are what a fresh CLI process owes and
+/// the shared build does not do — a serving process has already done them, and
+/// `register_session` in particular DRAINS the folder's existing session.
 ///
 /// No `--allow-plugins` here — this command has no such flag — so a
-/// sideloaded plugin is refused exactly as a plain `moss build` refuses one
-/// (ADR-077); a plugin the app has already approved still runs.
+/// sideloaded plugin is refused exactly as a plain `moss build` refuses one;
+/// a plugin the app has already approved still runs.
 fn headless_build_sealed(root: &VaultRoot) -> Result<SealedManifest, String> {
     crate::build::cli_output::install_headless_logger();
     crate::plugins::install::registry_client::enforce::install_headless(false);
@@ -232,13 +325,7 @@ fn headless_build_sealed(root: &VaultRoot) -> Result<SealedManifest, String> {
         .build()
         .map_err(|e| format!("failed to start runtime: {e}"))?;
 
-    runtime.block_on(async {
-        let host = crate::cli::host::cli_host_ports(root.as_str());
-        let taken =
-            crate::deploy::one_shot::build_and_seal(root, host, crate::build::PluginMode::Blocking)
-                .await?;
-        crate::deploy::one_shot::require_sealed(taken)
-    })
+    runtime.block_on(crate::deploy::one_shot::build_sealed_now(root))
 }
 
 /// The site's currently configured publish target, or moss's own target for
@@ -255,48 +342,91 @@ fn current_target(root: &VaultRoot) -> String {
 // --save
 // ---------------------------------------------------------------------------
 
-fn run_save(root: &VaultRoot, name: Option<String>) -> i32 {
+fn run_save(root: &VaultRoot, name: Option<String>, json: bool) -> i32 {
     if let Err(msg) = crate::cli::site_guard::guard_cli_open(root.as_str(), "history") {
-        eprintln!("error: {msg}");
-        return 1;
+        return fail(&msg, json);
     }
-    let store = match open_store(root) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
+    let store = open_store(root);
     let label = name.filter(|s| !s.trim().is_empty());
 
     let sealed = match headless_build_sealed(root) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return fail(&build_failure_message(&e), json),
     };
 
     let target = current_target(root);
     if let Err(e) = store.snapshot_manual(root.path(), &sealed, &target, label) {
-        eprintln!("error: could not save a version: {e}");
-        return 1;
+        return fail(&build_failure_message(&format!("could not save a version: {e}")), json);
     }
 
     // `list_records` sorts by filename, which sorts chronologically (see its
     // own doc) — the record `snapshot_manual` just wrote is always last.
     match store.list_records().pop() {
-        Some((id, _)) => {
-            println!("{id}");
+        Some((id, record)) => {
+            if json {
+                match saved_json(&id, &record) {
+                    Ok(s) => println!("{s}"),
+                    Err(e) => return fail(&format!("could not serialize the saved version: {e}"), json),
+                }
+            } else {
+                println!("{}", saved_summary_line(&id, record.label.as_deref()));
+            }
             0
         }
         None => {
             // Unreachable in practice (the write above just succeeded), but
             // an empty listing is not this function's place to explain.
-            eprintln!("error: saved a version but could not find it afterward");
-            1
+            fail("saved a version but could not find it afterward", json)
         }
     }
+}
+
+/// The build (or the save write itself) failed, so nothing reached the
+/// version store — the honest complement to [`saved_summary_line`]. Said
+/// plainly rather than left for a caller to infer from a nonzero exit code
+/// alone: a script that only checks the exit status still gets this, via
+/// [`fail`] — on stderr, or as the `--json` error's `error` field on stdout
+/// — and a person reading the terminal is not left wondering whether a
+/// half-written version is sitting in `.moss/history`.
+fn build_failure_message(e: &str) -> String {
+    format!("{e} — nothing was saved")
+}
+
+/// `--save`'s plain-text ending: what was saved, clearly marked. Before this,
+/// the whole output was the build's own log with the bare id as its last
+/// line and nothing telling a reader that the line WAS the id.
+fn saved_summary_line(id: &str, label: Option<&str>) -> String {
+    match label {
+        Some(l) => format!("Saved \"{l}\" as version {id}."),
+        None => format!("Saved version {id}."),
+    }
+}
+
+/// `--save --json`'s entire stdout: exactly one JSON OBJECT for the version
+/// just saved (never an array — `--save` makes one version, not a timeline),
+/// shaped like a [`print_json`] row so a caller that already parses
+/// `moss history --json` does not need a second schema. Build progress and
+/// warnings never reach stdout in this mode — they go through `log`/
+/// `cli_eprintln!`, which write to stderr — so this is the only line a
+/// caller reading stdout ever sees.
+fn saved_json(id: &str, record: &PublishRecord) -> serde_json::Result<String> {
+    #[derive(serde::Serialize)]
+    struct SavedJson<'a> {
+        id: &'a str,
+        published_at: &'a str,
+        trigger: Trigger,
+        label: Option<&'a str>,
+        target: &'a str,
+        git_head: Option<&'a str>,
+    }
+    serde_json::to_string_pretty(&SavedJson {
+        id,
+        published_at: &record.published_at,
+        trigger: record.trigger,
+        label: record.label.as_deref(),
+        target: &record.target,
+        git_head: record.git_head.as_deref(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -319,7 +449,7 @@ struct RestorePrep {
 /// rather than living at either call site.
 fn prepare_restore(root: &VaultRoot, at: &str) -> Result<RestorePrep, String> {
     crate::cli::site_guard::guard_cli_open(root.as_str(), "history")?;
-    let store = open_store(root)?;
+    let store = open_store(root);
     let records = store.list_records();
     let id = resolve_id(&records, at)?.to_string();
     let target = records
@@ -485,7 +615,7 @@ fn decorate(
         .filter_map(|row| {
             let record = by_id.get(&row.id)?;
             let kept = page.map(|path| match (record.entries.get(path), &objects) {
-                (Some(entry), Some(objects)) => objects.get_path(&entry.hash).is_some(),
+                (Some(entry), Some(objects)) => objects.holds(&entry.hash),
                 // Absent entry is not "not kept" — the page simply is not in
                 // this version, which the timeline fold already decided is
                 // still worth a stop (a manual/restore record, most often).
@@ -513,13 +643,7 @@ fn decorate(
 }
 
 fn run_site_timeline(root: &VaultRoot, json: bool) -> i32 {
-    let store = match open_store(root) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
+    let store = open_store(root);
     let records = store.list_records();
     if records.is_empty() {
         if json {
@@ -549,18 +673,9 @@ fn run_site_timeline(root: &VaultRoot, json: bool) -> i32 {
 fn run_page_timeline(root: &VaultRoot, path_arg: &str, json: bool) -> i32 {
     let rel = match relative_source_path(root, path_arg) {
         Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return fail(&e, json),
     };
-    let store = match open_store(root) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
+    let store = open_store(root);
     let records = store.list_records();
     if records.is_empty() {
         if json {
@@ -725,6 +840,74 @@ mod tests {
         assert_eq!(parsed.path.as_deref(), Some("Before the rewrite"));
     }
 
+    /// `--save` and `--json` combine — a script that wants the saved id back
+    /// as data, not by scraping the plain-text line.
+    #[test]
+    fn save_accepts_json() {
+        let parsed = ParsedArgs::parse(&["--save".to_string(), "--json".to_string()])
+            .unwrap()
+            .unwrap();
+        assert!(parsed.save);
+        assert!(parsed.json);
+    }
+
+    // -----------------------------------------------------------------
+    // `--save`'s two output shapes
+    // -----------------------------------------------------------------
+
+    /// The plain-text line has to name what happened, not just print a bare
+    /// id a reader has to already know the meaning of.
+    #[test]
+    fn saved_summary_line_names_the_label_and_id() {
+        assert_eq!(
+            saved_summary_line("2026-01-01T00-00-00Z-abc", Some("Before the rewrite")),
+            "Saved \"Before the rewrite\" as version 2026-01-01T00-00-00Z-abc."
+        );
+    }
+
+    #[test]
+    fn saved_summary_line_without_a_label_still_names_the_id() {
+        assert_eq!(
+            saved_summary_line("2026-01-01T00-00-00Z-abc", None),
+            "Saved version 2026-01-01T00-00-00Z-abc."
+        );
+    }
+
+    /// `--save --json` prints exactly one JSON OBJECT (never an array — this
+    /// is one version, not a timeline), with at least `id` and `label`.
+    #[test]
+    fn saved_json_is_one_object_with_id_and_label() {
+        let rec = record("2026-01-01T00-00-00Z-abc", "t");
+        let s = saved_json(&rec.0, &{
+            let mut r = rec.1;
+            r.label = Some("Before the rewrite".to_string());
+            r
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert!(value.is_object(), "must be a single JSON object, not an array: {s}");
+        assert_eq!(value["id"], "2026-01-01T00-00-00Z-abc");
+        assert_eq!(value["label"], "Before the rewrite");
+    }
+
+    #[test]
+    fn saved_json_label_is_null_when_the_save_was_not_named() {
+        let rec = record("2026-01-01T00-00-00Z-abc", "t");
+        let s = saved_json(&rec.0, &rec.1).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(value["label"], serde_json::Value::Null);
+    }
+
+    /// A build that fails must say plainly that nothing was written to the
+    /// version store — the honest complement to "saved as {id}.", not just
+    /// the raw build error.
+    #[test]
+    fn build_failure_message_says_nothing_was_saved() {
+        let msg = build_failure_message("build failed: boom");
+        assert!(msg.contains("nothing was saved"), "{msg}");
+        assert!(msg.contains("boom"), "{msg}");
+    }
+
     /// A page path resolves relative to the SITE, not to the process's
     /// current directory when the two differ — the walk-up in
     /// `VaultRoot::containing` and the strip-prefix here must agree on the
@@ -767,6 +950,131 @@ mod tests {
         let err =
             relative_source_path(&root, outside.path().join("x.md").to_str().unwrap()).unwrap_err();
         assert!(err.contains("not inside the site"), "{err}");
+    }
+
+    // -----------------------------------------------------------------
+    // The site-folder argument — `moss history <site>`, like `build`
+    // -----------------------------------------------------------------
+
+    /// A site this test owns outright: a directory under the workspace
+    /// `target/` (gitignored, unlike a stray `crates/moss-build/target/` in
+    /// a shared checkout) with one buildable page, so `--save` has
+    /// something real to build and seal. Same convention
+    /// `one_shot::tests::a_one_shot_build_hands_its_manifest_to_the_host_announcer`
+    /// uses, for the same reason.
+    fn tmp_site(prefix: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp/history-cli");
+        std::fs::create_dir_all(&base).expect("create temp base");
+        let dir = tempfile::Builder::new().prefix(prefix).tempdir_in(&base).expect("create site dir");
+        std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\n---\n\nHello.\n")
+            .expect("write index.md");
+        // A real client site always already has this — it is what
+        // `owns_moss`/`is_site_folder` keys on. A brand-new, never-built
+        // folder would not, but that is `build <folder>`'s case to handle,
+        // not this one: `history` has nothing to show for a site that has
+        // never been opened.
+        std::fs::create_dir_all(dir.path().join(".moss")).expect("create .moss");
+        let path = dir.path().to_path_buf();
+        (dir, path)
+    }
+
+    /// The gap this file exists to close: `moss history <site>` used to take
+    /// `<site>` as a within-site PATH, or — under `--save` — as the save's
+    /// own label, and silently operate on whatever `VaultRoot::containing`
+    /// fell back to instead of `<site>`. With the fix, a directory that
+    /// already owns a `.moss/` is the site to act on, the same as `build
+    /// <folder>`, decided entirely by `split_positionals`/`is_site_folder`
+    /// and then resolved by `VaultRoot::resolve` — both pure, and the same
+    /// two steps every one of `run`'s five forms shares before they diverge,
+    /// so proving them once proves all five.
+    ///
+    /// Driven at that seam rather than through a real `--save`: `run_save`
+    /// reaches `headless_build_sealed`, which installs this crate's
+    /// process-wide, set-once plugin admission check
+    /// (`plugins::admission::install_check` — "the first caller wins and
+    /// later ones are dropped") and registers a folder session outside of
+    /// any Tokio runtime. A real `--save` here was tried first: it panicked
+    /// on the missing runtime, and skipping just that panic still left the
+    /// admission check wedged into its "headless, nothing approved" verdict
+    /// for the rest of the test binary, failing 19 unrelated tests across
+    /// `host_fns`, `plugins::manager`, `plugins::registry` and
+    /// `deploy::publish_setup` that rely on the documented default — "nothing
+    /// installed means nothing refused... every test binary"
+    /// (`plugins::admission`'s module doc). `deploy::one_shot`'s own hermetic
+    /// build test avoids the same trap with `PluginMode::Skip` and a
+    /// `#[tokio::test]` runtime; `headless_build_sealed` has no such seam to
+    /// give a caller, so a real save cannot be made hermetic here without
+    /// changing production behaviour.
+    #[test]
+    fn a_site_folder_positional_is_recognized_as_the_folder_not_the_save_label() {
+        let (_dir, site) = tmp_site("resolve-folder");
+        // Canonicalized so the string fed in has no `..` for `resolve_input`
+        // to collapse — otherwise the assertion below would compare a
+        // canonicalized `root.path()` against a non-canonical literal.
+        let site_str = site.canonicalize().expect("canonicalize site dir").to_str().unwrap().to_string();
+
+        let parsed = ParsedArgs::parse(&[site_str.clone(), "--save".to_string(), "x".to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            parsed.folder.as_deref(),
+            Some(site_str.as_str()),
+            "a positional that already owns .moss/ must be read as the site, never swallowed as --save's label"
+        );
+        assert_eq!(parsed.path.as_deref(), Some("x"), "the real label after --save must still come through");
+
+        // What `run` does with `parsed.folder` once it has it — never the
+        // `VaultRoot::containing(".")` fallback, which is how the real
+        // incident lost a pre-delivery snapshot while reporting success.
+        let root = VaultRoot::resolve(parsed.folder.as_deref().unwrap());
+        assert_eq!(
+            root.path().to_str(),
+            Some(site_str.as_str()),
+            "root must resolve to the named site, never a cwd-based fallback"
+        );
+    }
+
+    /// The other half of the same gap: a directory that is not a site (no
+    /// `.moss/`) must be refused outright — never silently taken as a
+    /// `--save` label and built/saved against the wrong root, which is what
+    /// the unfixed code did (it never validated `--save`'s positional at
+    /// all).
+    ///
+    /// Calls [`reject_if_non_site_directory`] directly rather than `run`:
+    /// going through `run` resolves `root` with `VaultRoot::containing(".")`
+    /// whenever `folder` is `None` (true here, since `not_a_site` isn't
+    /// recognized as a folder either), and that fallback reads this test
+    /// process's REAL cwd — which, under `cargo test`, is littered with
+    /// other tests' leftover `.moss/` fixtures under `target/test-tmp/` and
+    /// trips `cli::site_guard::guard_cli_open`'s own unrelated refusal. That
+    /// coincidence was caught by ablating `reject_non_site_directory` to a
+    /// no-op and finding this test still green — refused, but by the wrong
+    /// guard, which means it was never exercising the one this test is
+    /// named for.
+    #[test]
+    fn save_refuses_a_non_site_directory_and_exits_nonzero() {
+        let (_dir, not_a_site) = tmp_vault(); // never given a `.moss/`
+        let path_str = not_a_site.to_str().unwrap().to_string();
+
+        let exit = reject_if_non_site_directory(Some(&path_str), true);
+        assert_eq!(exit, Some(1), "a non-site directory must fail, not silently save elsewhere");
+    }
+
+    #[test]
+    fn reject_non_site_directory_accepts_a_real_file_path() {
+        let (_dir, vault) = tmp_vault();
+        // `gone.md` never exists on disk — the restore-a-deleted-page case
+        // `relative_source_path_does_not_require_the_file_to_exist` covers —
+        // and must still be let through as an ordinary path/label, not
+        // mistaken for a folder.
+        assert!(reject_non_site_directory(vault.join("gone.md").to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn reject_non_site_directory_refuses_an_existing_directory() {
+        let (_dir, vault) = tmp_vault();
+        let message = reject_non_site_directory(vault.to_str().unwrap()).unwrap();
+        assert!(message.contains("site folder"), "{message}");
     }
 
     fn record(id: &str, target: &str) -> (String, PublishRecord) {

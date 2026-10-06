@@ -1,32 +1,29 @@
 //! PanelTask — moss's unified task/progress primitive.
 //!
-//! See [ADR-015](../../../../docs/decisions/ADR-015-panel-task-primitive.md)
-//! for the design rationale (Layer 1 internal primitive + Layer 2 plugin
-//! contract). This module owns Layer 1 only — the in-process types, the
+//! The design spans a Layer 1 internal primitive and a Layer 2 plugin
+//! contract. This module owns Layer 1 only — the in-process types, the
 //! per-`(WindowId, TaskScope)` registry, the plugin-task router, and the
 //! wire-snapshot type that flows to frontend renderers via `MossEvent`.
-//! Layer 2 (plugin-facing TS API, Tauri command bridge) lands in T8a per
-//! the onboarding dispatch plan.
+//! Layer 2 (plugin-facing TS API, Tauri command bridge) lives elsewhere.
 //!
-//! ## Wire bridge (added in T2, 2026-05-28)
+//! ## Wire bridge
 //!
-//! T1 deliberately deferred the frontend event bridge because `PanelTask`
-//! contains `Instant` (not `Serialize`). T2 needs *some* event source for
-//! the Ambient renderer, so we advance the deferred scope by one step: a
-//! sibling `PanelTaskWire` struct strips the non-serializable fields and
-//! becomes the payload of `MossEvent::PanelTaskUpdate`. The registry
+//! `PanelTask` contains `Instant` (not `Serialize`), so a sibling
+//! `PanelTaskWire` struct strips the non-serializable fields and is the
+//! payload of `MossEvent::PanelTaskUpdate`. The registry
 //! itself owns an optional emitter installed via `set_emitter` (and
 //! removed via `clear_emitter`) at startup; mutating methods on
 //! `TaskHandle` re-emit a fresh wire snapshot to the frontend after
 //! every state change. The breadcrumb subscriber in
-//! `frontend/app/editor/breadcrumb-hairline.ts` filters on
+//! the desktop app's editor filters on
 //! `tone == "ambient"` && `scope == "action_panel"` and updates DOM
 //! accordingly; preview-scope progress is handled by the progress panel
-//! (`frontend/app/preview/progress-panel.ts`).
+//! in the desktop app.
 //!
+
 //! Pure-Rust callers (tests, non-Tauri code paths) keep using
 //! `TaskRegistry::spawn` / `with_progress`, which carry no emitter and
-//! mutate the registry without emitting — same behavior as before T2.
+//! mutate the registry without emitting.
 //!
 //! The router (`route_plugin_task`) is exhaustive over the closed
 //! `(PluginHook, TriggerContext)` cross product — 24 rows, no wildcard.
@@ -244,7 +241,7 @@ pub fn next_task_id() -> TaskId {
 /// ```
 ///
 /// `Awaiting` transitions back to `Running` on the next non-terminal
-/// progress event (ADR-015: "no explicit resumed() method"). Terminal
+/// progress event: there is no explicit `resumed()` method. Terminal
 /// states (Succeeded, Failed, Cancelled) are final.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -378,8 +375,8 @@ pub enum TaskScope {
     Workspace,
 }
 
-/// Which renderer subscribes to this task. See ADR-015 § "Four UI
-/// surfaces". `Receipt` was merged into `Inline` per round-3 review —
+/// Which renderer subscribes to this task, of the four UI
+/// surfaces. `Receipt` was merged into `Inline` per round-3 review —
 /// the behavior split is the per-task `fade_after` field, not a separate
 /// tone variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
@@ -404,7 +401,7 @@ pub enum TaskTone {
 /// code picks one explicitly; plugin tasks derive `TaskKind` from
 /// `PluginHook` via `From<PluginHook>`. Adding a variant is a deliberate
 /// platform decision, not a free-for-all per the WordPress
-/// `admin_notices` failure mode (ADR-015).
+/// `admin_notices` failure mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
@@ -453,8 +450,8 @@ pub struct PanelTask {
     /// from Matters"). `None` on spawn — set via `TaskHandle::title(...)`
     /// or supplied implicitly by `TaskRegistry::with_progress(..., label, _)`.
     /// Narrated and Inline renderers display the title; Ambient may show
-    /// it in tooltip-on-hover. Per ADR-015 § "Internal moss code calls
-    /// PanelTask directly" the title is part of the fluent spawn chain:
+    /// it in tooltip-on-hover. When internal moss code calls
+    /// PanelTask directly, the title is part of the fluent spawn chain:
     /// `ctx.tasks(scope).spawn(kind, tone).title("…")`.
     pub title: Option<String>,
     /// For `Inline` terminal-state receipts ("Saved · 2s ago" =
@@ -532,13 +529,10 @@ impl PanelTask {
         matches!(self.state, TaskState::Awaiting { .. })
     }
 
-    /// The renderer surface this Job belongs to — **computed, never stored**
-    /// (Step 3 Phase 6 R5; design §3 "tone/surface/display become functions
-    /// the renderer computes"). Replaces the old stored `tone` field: a Job is
-    /// a producer-agnostic value, and the *window* owns presentation.
+    /// The renderer surface this Job belongs to — **computed, never stored**:
+    /// a Job is a producer-agnostic value, and the *window* owns presentation.
     ///
-    /// Precedence (most-specific first), reproducing what `route_plugin_task`
-    /// and the internal producers encoded into the old stored field:
+    /// Precedence (most-specific first):
     ///
     /// 1. **Awaiting state → `Awaiting`.** The one interrupt — it needs *her*
     ///    action. State-driven so the moment a Job enters `Awaiting` the wire
@@ -550,7 +544,7 @@ impl PanelTask {
     /// 2. **Child Job (`parent` set) → `Ambient`.** Media sub-jobs (images /
     ///    videos under the Build parent) live and die at the hairline; success
     ///    makes no sound. Matches `spawn_child`'s producers.
-    /// 3. **Otherwise, `(scope, kind)` picks the resting tone**, per the ADR-015
+    /// 3. **Otherwise, `(scope, kind)` picks the resting tone**, per the
     ///    Layer-2 table and the internal `spawn` producers. Where the router had
     ///    a trigger-dependent collision on a `(scope, kind)` pair (e.g. Import
     ///    is Ambient under OnboardingFlow/Background but Inline/Narrated under
@@ -648,8 +642,6 @@ pub struct PluginTaskSignal {
 ///   propagation surfaces on the Preview (where the deploy lives), not
 ///   the action panel.
 /// - All other `(hook, trigger)` pairs map per the table below.
-///
-/// See ADR-015 § "Layer 2 — plugin contract".
 pub fn route_plugin_task(signal: PluginTaskSignal) -> (TaskScope, TaskKind, TaskTone) {
     use PluginHook::*;
     use TriggerContext::*;
@@ -695,7 +687,7 @@ pub fn route_plugin_task(signal: PluginTaskSignal) -> (TaskScope, TaskKind, Task
         // during build, not in response to a user-driven import/publish
         // gesture. Expanded explicitly (not via wildcard) so future
         // divergence (a Process card surfacing in OnboardingFlow) is a
-        // one-line edit. `Enhance` had the same four rows until ADR-055.
+        // one-line edit. `Enhance` had the same four rows until it was retired.
         (Process, OnboardingFlow) => (TaskScope::Workspace, TaskTone::Ambient),
         (Process, SettingsManual) => (TaskScope::Workspace, TaskTone::Ambient),
         (Process, Background) => (TaskScope::Workspace, TaskTone::Ambient),
@@ -917,7 +909,7 @@ impl TaskRegistry {
     ///
     /// `label` populates the task's `title` field (skipped if empty so the
     /// task stays `title: None` rather than carrying an empty string).
-    /// Mirrors ADR-015 § "closure form with progress + cancellation":
+    /// Mirrors the closure form with progress + cancellation:
     /// `ctx.tasks(scope).with_progress(kind, tone, "Importing 42 files", |…|)`.
     pub fn with_progress<F, T, E>(
         self: &Arc<Self>,
@@ -1215,7 +1207,7 @@ impl TaskHandle {
     /// Update progress. `fraction` should be in `[0.0, 1.0]` when known;
     /// `None` means indeterminate (the Ambient renderer pulses instead
     /// of fills). A `progress()` after `awaiting()` implicitly transitions
-    /// back to `Running` (no explicit `resumed()` per ADR-015).
+    /// back to `Running` (no explicit `resumed()` method).
     pub fn progress(&self, fraction: Option<f32>, message: Option<String>) {
         self.registry.with_task(&self.key, self.id, |task| {
             task.state = TaskState::Running { fraction, message };

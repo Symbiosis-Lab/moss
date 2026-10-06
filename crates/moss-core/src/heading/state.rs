@@ -1,9 +1,11 @@
 //! Article heading rule — single source of truth for the auto-injected
 //! `<h1 class="moss-article-title">` and the editor's pinned heading element.
 //!
-//! Both consumers — the build pipeline (`src-tauri/src/build/markdown/pipeline.rs`)
+//! Both consumers — the build pipeline (moss-build's markdown pipeline)
 //! and the editor command `compute_heading_state`
-//! (`src-tauri/src/editor/commands.rs`) — feed the same inputs into [`compute`]
+//! (moss-build's `editor::content::compute_heading_state_inner`, called by
+//! both the desktop app's Tauri command and the preview server) — feed the
+//! same inputs into [`compute`]
 //! and act on the same answer. Without this module the two paths silently
 //! desync the next time the rule changes.
 //!
@@ -18,8 +20,6 @@
 //!     auto-injection regardless of title — but only if the block has
 //!     something in it. An image-only hero renders no title of its own, so
 //!     letting it claim the slot loses the title outright.
-//!
-//! See `docs/reference/title-rendering.md`.
 
 use crate::home;
 
@@ -76,14 +76,14 @@ pub struct HeadingInputs<'a> {
     /// indexes).
     pub root_folder_name: Option<&'a str>,
     /// `true` iff the file is promoted to its folder's home via the
-    /// `home: true` frontmatter marker (issue #587). Pipeline-only input;
+    /// `home: true` frontmatter marker. Pipeline-only input;
     /// editor passes `false`.
     pub is_home_override: bool,
     /// `true` iff the file is a layout-slot source (e.g. root `footer.md`)
     /// rather than an article. Slot files are embedded as fragments into a
     /// surrounding layout; the auto-injected `<h1 class="moss-article-title">`
     /// would render as an unwanted heading inside that fragment. PR7b
-    /// (moss#599) replaces the pre-2026-05-28 frontmatter-synthesis hack
+    /// replaces the pre-2026-05-28 frontmatter-synthesis hack
     /// (`title: ""` injected at the call site to drive `empty_title=true`)
     /// with this structural input. Editor passes `false`.
     pub slot_only: bool,
@@ -95,14 +95,14 @@ pub struct HeadingInputs<'a> {
 /// Not root-aware: a root-level index-stem (`index.md` with no path parent)
 /// resolves to the stem itself ("index"). Use [`filename_text_with_root`]
 /// when the project's root folder name is available so the site root's home
-/// page reads the folder name instead. See #775.
+/// page reads the folder name instead.
 pub fn filename_text(file_path: &str) -> String {
     filename_text_with_root(file_path, None)
 }
 
 /// Like [`filename_text`], but root-aware: for an index stem at the project
 /// root (where `Path::parent()` has no `file_name`), the resolved text is
-/// `root_folder_name` rather than the bare stem. This is the fix for #775 —
+/// `root_folder_name` rather than the bare stem. This is the fix —
 /// a root `index.md` home page must read the folder name in `<title>`/chrome,
 /// not "index".
 ///
@@ -132,11 +132,11 @@ pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) 
         .or(root_folder_name);
     // Deliberately the index-stem test, not `is_home_file`: substituting the
     // parent name is right for an `index.md`, whose stem carries no text worth
-    // keeping, and wrong for a self-named note (`William Blake.md` in
-    // `william-blake/`), whose stem already IS the title, properly cased.
+    // keeping, and wrong for a self-named note (`Garden Path.md` in
+    // `garden-path/`), whose stem already IS the title, properly cased.
     // `is_home_file` says yes to both, so using it here title-cased the
-    // parent's raw disk name and lost the casing — blakesnotebook.com's site
-    // name, docs/archive/2026-09-14-blakesnotebook-five-fixes-plan.md.
+    // parent's raw disk name and lost the casing of a real site's name
+    // (2026-09-14).
     let is_folder_note = home::is_index_stem_any_lang(stem);
     let source_name = if is_folder_note {
         parent_name.unwrap_or(stem)
@@ -156,17 +156,13 @@ pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) 
 /// 2. **the block has overlay text of its own, once its image is accounted
 ///    for.**
 ///
-/// Without (2) this returned `true` for any hero with a non-blank body line —
-/// including an image-only cover, which is the obvious way to write
-/// "full-bleed cover photo" and by far the commonest hero there is, in either
-/// of its two syntaxes: `:::hero {image=cover.jpg}` / `:::`, or the plain
-/// body-image form `:::hero {.plate}` / `![cover](cover.jpg)` / `:::`. moss
-/// suppressed the title, and the hero renderer draws only the image, the
-/// overlay and the caption; it never consults `doc.title`. So the slot was
-/// handed to a component that put nothing in it and the title vanished from
-/// the page — silently, because `<title>`, the OG tags and RSS all resolve
-/// the same text by other paths. One site adopted full-bleed covers across 87
-/// pages this way, and a second adopted the body-image form across 62 more.
+/// Without (2), an image-only cover — the commonest hero, in either syntax:
+/// `:::hero {image=cover.jpg}` / `:::`, or the body-image form
+/// `:::hero {.plate}` / `![cover](cover.jpg)` / `:::` — would suppress the
+/// title, and the hero renderer draws only the image, the overlay and the
+/// caption; it never consults `doc.title`. The title would vanish from the
+/// page silently, because `<title>`, the OG tags and RSS resolve the same
+/// text by other paths.
 ///
 /// "Has overlay text" rather than "has a heading" is deliberate: any overlay
 /// content means the author put *something* in the title slot, and widening
@@ -207,6 +203,19 @@ pub fn hero_at_top_owns_title(body_markdown: &str) -> bool {
     crate::ast::extract_hero::hero_body_has_overlay_content(args, &body)
 }
 
+/// True when the body's first real line is an ATX level-1 heading (`# Title`,
+/// not `##`). Blank lines and one-line HTML comments before it don't count as
+/// content. Such a body already carries the page's `<h1>`, so a folder index
+/// must not add a second one on top.
+pub fn body_opens_with_h1(body_markdown: &str) -> bool {
+    let first = body_markdown.lines().map(str::trim).find(|line| {
+        !line.is_empty() && !(line.starts_with("<!--") && line.ends_with("-->"))
+    });
+    first
+        .and_then(|line| line.strip_prefix('#'))
+        .is_some_and(|rest| rest.starts_with([' ', '\t']) && !rest.trim().is_empty())
+}
+
 /// Compute the full heading state for a page.
 pub fn compute(input: HeadingInputs<'_>) -> HeadingState {
     let path = std::path::Path::new(input.file_path);
@@ -214,7 +223,7 @@ pub fn compute(input: HeadingInputs<'_>) -> HeadingState {
     // Resolve text + source from frontmatter.title before all other rules.
     // Some(_) → Title source (empty allowed); None → Filename source.
     // Filename mode is root-aware: a root index-stem / self-named home
-    // resolves to the project's folder name, not the bare "index" stem (#775).
+    // resolves to the project's folder name, not the bare "index" stem.
     let (text, source) = match input.frontmatter_title {
         Some(t) => (t.trim().to_string(), HeadingSource::Title),
         None => (
@@ -233,8 +242,8 @@ pub fn compute(input: HeadingInputs<'_>) -> HeadingState {
 
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     // Resolve parent folder name. For nested files (`recipes/recipes.md`)
-    // we pull from the path. For ROOT-level files (`刘果.md` in a vault
-    // named `刘果`) Path::parent() returns the empty path with no
+    // we pull from the path. For ROOT-level files (`山居.md` in a vault
+    // named `山居`) Path::parent() returns the empty path with no
     // file_name, so we fall back to `root_folder_name` — letting
     // self-named-home detection work at the project root.
     let parent_from_path = path
@@ -273,6 +282,16 @@ mod tests {
             is_home_override: false,
             slot_only: false,
         }
+    }
+
+    #[test]
+    fn body_opens_with_h1_cases() {
+        assert!(body_opens_with_h1("# Title\n\ntext"));
+        assert!(body_opens_with_h1("\n<!-- note -->\n\n# Title"));
+        assert!(!body_opens_with_h1("## Title\n\ntext"));
+        assert!(!body_opens_with_h1("Intro paragraph\n\n# Title"));
+        assert!(!body_opens_with_h1("#hashtag"));
+        assert!(!body_opens_with_h1(""));
     }
 
     // ── filename_text ────────────────────────────────────────────────
@@ -323,11 +342,11 @@ mod tests {
         assert_eq!(filename_text_with_root("index.zh-hans.md", Some("My Site")), "My Site");
     }
 
-    // ── filename_text_with_root: root-aware home title (#775) ─────────
+    // ── filename_text_with_root: root-aware home title ─────────
 
     #[test]
     fn text_root_index_uses_root_folder_name() {
-        // Bug #775: a root `index.md` has no path parent, so the bare
+        // A root `index.md` has no path parent, so the bare
         // `filename_text` resolves it to the stem "index". With the root
         // folder name threaded in, the resolved text must be the folder
         // name (no title-casing — matches filename_text's hyphen/underscore
@@ -346,10 +365,10 @@ mod tests {
 
     #[test]
     fn text_root_self_named_uses_root_folder_name() {
-        // `刘果.md` at the root of a vault named `刘果`.
+        // `山居.md` at the root of a vault named `山居`.
         assert_eq!(
-            filename_text_with_root("刘果.md", Some("刘果")),
-            "刘果"
+            filename_text_with_root("山居.md", Some("山居")),
+            "山居"
         );
     }
 
@@ -373,17 +392,17 @@ mod tests {
         );
     }
 
-    /// blakesnotebook.com's root folder-note (moss's 2026-09-14 fix): a
+    /// A site's root folder-note (moss's 2026-09-14 fix): a
     /// self-named note whose stem case doesn't match the disk folder's
     /// kebab-case name must keep its OWN casing, not the folder's. Before
     /// the fix this went through `is_home_file`'s self-named branch and
-    /// substituted the raw disk name ("william-blake" → "william blake"),
+    /// substituted the raw disk name ("garden-path" → "garden path"),
     /// throwing away the file's properly-cased stem.
     #[test]
     fn text_root_self_named_mismatched_case_keeps_own_stem() {
         assert_eq!(
-            filename_text_with_root("William Blake.md", Some("william-blake")),
-            "William Blake"
+            filename_text_with_root("Garden Path.md", Some("garden-path")),
+            "Garden Path"
         );
     }
 
@@ -436,15 +455,15 @@ mod tests {
 
     #[test]
     fn hidden_for_root_self_named_home_with_root_folder_name() {
-        // Regression: a vault opened at `刘果/`, with `刘果.md` at the project
+        // Regression: a vault opened at `山居/`, with `山居.md` at the project
         // root, must be detected as the home file. Path::parent() returns
         // the empty path (no file_name), so without `root_folder_name` the
         // path-based check misses the self-named case.
         let s = compute(HeadingInputs {
-            file_path: "刘果.md",
+            file_path: "山居.md",
             frontmatter_title: None,
             body_markdown: "",
-            root_folder_name: Some("刘果"),
+            root_folder_name: Some("山居"),
             is_home_override: false,
             slot_only: false,
         });
@@ -665,7 +684,7 @@ mod tests {
 
     #[test]
     fn slot_only_hides_heading_regardless_of_title() {
-        // PR7b (moss#599): `footer.md` flows through the normal pipeline
+        // PR7b: `footer.md` flows through the normal pipeline
         // with `slot_only = true`. The auto-injected H1 must be suppressed
         // even when the author writes `title: "Custom"` in the
         // frontmatter — the rendered HTML lands inside a `<footer>` slot,

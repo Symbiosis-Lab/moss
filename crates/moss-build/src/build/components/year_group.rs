@@ -32,6 +32,8 @@ use super::date as date_formatters;
 /// # Arguments
 /// * `articles` - List of article properties to render
 /// * `minimal` - If true, uses minimal styling: month-only dates, no underlines, flexbox layout
+/// * `ascending` - Oldest-first (the folder's `sort: date-asc`) instead of
+///   the default newest-first; also reverses which year section leads.
 ///
 /// # Returns
 /// HTML string with moss-cards-minimal-year-grouped article list
@@ -40,9 +42,10 @@ pub fn render(
     minimal: bool,
     lang: crate::i18n::Language,
     typesetting: Option<&str>,
+    ascending: bool,
 ) -> String {
     let section_class = if minimal { "moss-cards-minimal-year-group minimal" } else { "moss-cards-minimal-year-group" };
-    render_internal(articles, section_class, minimal, lang, typesetting)
+    render_internal(articles, section_class, minimal, lang, typesetting, ascending)
 }
 
 /// Internal render function with all options.
@@ -51,6 +54,7 @@ pub fn render(
 /// * `articles` - List of article properties to render
 /// * `section_class` - CSS class(es) to apply to section elements
 /// * `use_minimal_items` - If true, use render_minimal for article items
+/// * `ascending` - See [`render`].
 ///
 /// # Returns
 /// HTML string with moss-cards-minimal-year-grouped article list
@@ -60,23 +64,21 @@ fn render_internal(
     use_minimal_items: bool,
     lang: crate::i18n::Language,
     typesetting: Option<&str>,
+    ascending: bool,
 ) -> String {
-    // Sort articles by date (newest first) using raw ISO date for precision
-    // Use title as secondary sort key for stable ordering when dates are equal
+    // Dated rows go newest first (oldest first under `ascending`) through the
+    // one date-axis comparator, so two rows on the same date fall in the
+    // order the folder's series links walk. Undated rows lead, as folder
+    // listings keep them, ordered by their display string and then title —
+    // that tiebreak is unaffected by direction, same as `cmp_date_axis`'s own
+    // undated-entries arm.
     let mut sorted_articles = articles.to_vec();
-    sorted_articles.sort_by(|a, b| {
-        let date_cmp = match (&b.date_raw, &a.date_raw) {
-            (Some(b_date), Some(a_date)) => b_date.cmp(a_date), // Newest first
-            (Some(_), None) => std::cmp::Ordering::Less,        // Dated items first
-            (None, Some(_)) => std::cmp::Ordering::Greater,     // Undated items last
-            (None, None) => b.date_display.cmp(&a.date_display), // Fallback to display
-        };
-        // Use title as tiebreaker for stable ordering when dates are equal
-        if date_cmp == std::cmp::Ordering::Equal {
-            moss_core::sort::cmp_labels(&a.title, &b.title) // Alphabetical order for same dates
-        } else {
-            date_cmp
-        }
+    sorted_articles.sort_by(|a, b| match (&a.date_raw, &b.date_raw) {
+        (Some(_), Some(_)) => moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending),
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, None) => b.date_display.cmp(&a.date_display)
+            .then_with(|| moss_core::sort::cmp_labels(&a.title, &b.title)),
     });
 
     // Group by year
@@ -154,7 +156,7 @@ fn render_internal(
 /// four leading ASCII digits — so on a vertical CJK page, where the display
 /// date is already `一七〇三年十二月`, EVERY row returned `None`, the whole
 /// listing collapsed into one headingless section, and 59 works lost their
-/// chronology (zhu-da home, 2026-09-11). The raw date is the same ISO string
+/// chronology (a vertical site's home, 2026-09-11). The raw date is the same ISO string
 /// the sort above already trusts.
 fn year_of(article: &ArticleListItemProps) -> Option<i32> {
     article

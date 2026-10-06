@@ -9,10 +9,12 @@
 use crate::build::types::ParsedDocument;
 use moss_core::PageKind;
 
-// generate_slug and slugify_path_segments moved to moss-core (ADR-018).
+// generate_slug and slugify_path_segments moved to moss-core.
 pub use moss_core::slug::{generate_slug, slugify_path_segments};
 
 /// Lowercase directory segments only; preserve the final basename verbatim.
+/// A ladder directory (`Clip.hls`) is the exception among the directories: it
+/// is a bundle named after a video file, so it keeps that file's spelling.
 ///
 /// This is the rule used by [`ServedPath::from_source`][crate::build::served_path::ServedPath::from_source]
 /// for build-pipeline output paths. The bug it fixes is **case-sensitivity
@@ -28,7 +30,7 @@ pub use moss_core::slug::{generate_slug, slugify_path_segments};
 /// filenames. Lowercase-rewriting `MathJax_Main-Bold.woff` → 404.
 ///
 /// Examples:
-/// - `Resources/habitable-zone.html` → `resources/habitable-zone.html`
+/// - `Resources/orbit-model.html` → `resources/orbit-model.html`
 /// - `jupyter/build/schemas/@jupyter-notebook/foo.json` → `jupyter/build/schemas/@jupyter-notebook/foo.json`
 /// - `News/Sub Section/post.md` → `news/sub section/post.md`
 /// - `Photo (1).jpg` → `Photo (1).jpg` (no dirs)
@@ -55,7 +57,7 @@ pub fn slugify_dir_path(path: &str) -> String {
         .iter()
         .enumerate()
         .map(|(i, seg)| {
-            if i == last {
+            if i == last || moss_core::asset_paths::hls_dir_stem(seg).is_some() {
                 seg.to_string()
             } else {
                 seg.to_lowercase()
@@ -101,7 +103,7 @@ pub fn generate_uid(_relative_path: &str) -> String {
 /// WHERE the frontmatter is, is `moss_core::frontmatter::frontmatter_span`'s
 /// call, never a local scan: this writes its answer back to the author's file,
 /// so a `---` misread as a delimiter corrupts their document. That is exactly
-/// what a local copy did to a page whose body opened with `:::grid` (moss#932).
+/// what a local copy did to a page whose body opened with `:::grid`.
 pub fn insert_uid_into_frontmatter(content: &str, uid: &str) -> String {
     let Some(span) = moss_core::frontmatter::frontmatter_span(content) else {
         return content.to_string();
@@ -160,7 +162,7 @@ pub fn insert_uid_into_frontmatter(content: &str, uid: &str) -> String {
 /// If the content has no `uid:` field in its frontmatter, returns the content
 /// unchanged. Both dialects; the body is never touched — a `uid:` line in an
 /// author's prose or code block used to be rewritten, because this scanned the
-/// whole file rather than the frontmatter (moss#937).
+/// whole file rather than the frontmatter.
 pub fn replace_uid_in_frontmatter(content: &str, new_uid: &str) -> String {
     let Some(span) = moss_core::frontmatter::frontmatter_span(content) else {
         return content.to_string();
@@ -204,8 +206,7 @@ pub fn replace_uid_in_frontmatter(content: &str, new_uid: &str) -> String {
 /// The repair is always an edit to the **loser's** `url:` — the keeper is
 /// named only so the author can see which pair is in conflict. Produced by
 /// [`resolve_duplicate_slugs_with_lang`] and reported at the frontmatter
-/// field, not in the log: see
-/// docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
+/// field, not in the log.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct UrlCollision {
     /// Source path of the file whose `url:` must change.
@@ -271,24 +272,26 @@ pub(crate) fn warn_reserved_folder(dir: &str, mapped_index: &str) -> bool {
     true
 }
 
-/// Pushes `doc` onto `docs`, unless [`is_reserved_device_output`] flags its
+/// Admits `doc` to `docs`, unless [`is_reserved_device_output`] flags its
 /// `url_path` — in which case the page is dropped, with one warning naming
 /// the file, instead of failing the whole build. Called once per page from
 /// the sequential reduce in `build::render::blocking`, before the
-/// whole-corpus passes (slug dedup, folder synthesis, ...) can see it.
-pub(crate) fn push_unless_reserved_device_output(
+/// whole-corpus passes (slug dedup, folder synthesis, ...) can see it. The
+/// returned index is the only valid document owner for any per-source state.
+pub(crate) fn admit_unless_reserved_device_output(
     docs: &mut Vec<crate::build::types::ParsedDocument>,
     doc: crate::build::types::ParsedDocument,
-) {
+) -> Option<usize> {
     if is_reserved_device_output(&doc.url_path) {
         log::warn!(
             "Skipping '{}': its output directory would be a Windows reserved device name ({}) — cannot exist on NTFS",
             doc.source_path.as_deref().unwrap_or(&doc.url_path),
             doc.url_path,
         );
-        return;
+        return None;
     }
     docs.push(doc);
+    Some(docs.len() - 1)
 }
 
 /// Number the DIRECTORY, never the file.
@@ -299,7 +302,6 @@ pub(crate) fn push_unless_reserved_device_output(
 /// disk. `compute_url_path` returns `.../index.html` on every branch; the root
 /// home (`index.html`) is the one page with no directory of its own, and gets
 /// one here, so the result is directory-shaped unconditionally.
-/// See docs/archive/2026-09-01-duplicate-url-override-index-n-404.md.
 fn numbered(url_path: &str, n: u32) -> String {
     match url_path.strip_suffix("/index.html") {
         Some(dir) => format!("{}-{}/index.html", dir, n),
@@ -324,8 +326,7 @@ fn numbered(url_path: &str, n: u32) -> String {
 /// Returns the collisions an author must settle: those where numbering was
 /// needed, minus the ones a numbered ancestor already explains. A
 /// cross-language pair resolved by its prefix is the designed outcome and is
-/// not a collision. See
-/// docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
+/// not a collision.
 pub fn resolve_duplicate_slugs_with_lang(
     documents: &mut [ParsedDocument],
     site_lang: crate::i18n::Language,
@@ -425,7 +426,7 @@ pub fn resolve_duplicate_slugs_with_lang(
     let reported = root_causes(found);
     // The author's copy of this goes on the `url` chip, where the field she
     // has to change is; this is for the support read of an uploaded log,
-    // which is how the 潮汐·週報 report was diagnosed at all.
+    // which is how the 河灣·週刊 report was diagnosed at all.
     for c in &reported {
         log::warn!(
             target: "build",
@@ -445,13 +446,13 @@ fn parent_dir(source_path: &str) -> &str {
 ///
 /// A folder's `url:` cascades to its descendants, so one duplicated folder
 /// produces a collision for the folder AND for every page beneath it — the
-/// 潮汐·週報 report was ~20 of them for a single copied folder. Every deeper
+/// 河灣·週刊 report was ~20 of them for a single copied folder. Every deeper
 /// one is a consequence, and reporting them all buries the single edit that
 /// fixes the lot: the children's own `url:` segments are relative and correct,
 /// so changing the parent's resolves them untouched.
 fn root_causes(found: Vec<(UrlCollision, Option<String>)>) -> Vec<UrlCollision> {
     // Paired with its own index: a folder note lives INSIDE the directory it
-    // cascades over (`獎項/記憶獎/記憶獎.md`), so a collision compared against
+    // cascades over (`評選/散文組/散文組.md`), so a collision compared against
     // its own directory would suppress itself and report nothing at all.
     let cascading: Vec<(usize, String)> = found
         .iter()
@@ -705,7 +706,7 @@ mod tests {
         assert_eq!(replace_uid_in_frontmatter(no_fm, "753659e7"), no_fm);
     }
 
-    /// The shape of a real, in-production `footer.md` (harbor.mosspub.com):
+    /// The shape of a real, in-production `footer.md` (riverbend.mosspub.com):
     /// no frontmatter, opens with literal HTML, and its site map is a
     /// `:::grid 3` whose cells are separated by `---`. A live build stamped
     /// `uid: "2af1e0f6"` in front of that first grid `---`, which rendered as a
@@ -714,9 +715,9 @@ mod tests {
     ///
     /// Byte-identical is the whole assertion. Anything else means moss edited a
     /// file it had no business editing.
-    const HARBOR_FOOTER: &str = concat!(
+    const RIVERBEND_FOOTER: &str = concat!(
         "<div class=\"fs-signup\">\n",
-        "<p class=\"fs-invite\">訂閱潮汐，第一手收到消息。</p>\n",
+        "<p class=\"fs-invite\">訂閱河灣，第一手收到消息。</p>\n",
         "\n",
         ":::subscribe {placeholder=\"你的電子郵件\" button=\"訂閱\"}\n",
         ":::\n",
@@ -726,7 +727,7 @@ mod tests {
         "<nav class=\"fs-map\" aria-label=\"網站地圖\">\n",
         "\n",
         ":::grid 3\n",
-        "**[[獎項]]**\n",
+        "**[[評選]]**\n",
         "\n",
         "- [[現正徵件]]\n",
         "\n",
@@ -752,13 +753,13 @@ mod tests {
     /// status list. `uid: "dd54e60c"` was spliced immediately above that break,
     /// exactly as in the footer. Neither file's first line is a field line, so
     /// today both are refused at the first line of the scan.
-    const HARBOR_README: &str = concat!(
-        "# Harbor Weekly (潮汐 · 週報) → moss port\n",
+    const RIVERBEND_README: &str = concat!(
+        "# Riverbend Review (河灣 · 週刊) → moss port\n",
         "\n",
-        "Entrance / status board for porting https://www.harborweekly.io/ (a\n",
+        "Entrance / status board for porting https://www.riverbend.example/ (a\n",
         "Strikingly site) to moss.\n",
         "\n",
-        "- **The vault:** [`潮汐/`](潮汐/) — the moss site.\n",
+        "- **The vault:** [`河灣/`](河灣/) — the moss site.\n",
         "- **Port records:** [`archive/`](archive/) — the completed port machinery.\n",
         "\n",
         "---\n",
@@ -767,11 +768,11 @@ mod tests {
     );
 
     #[test]
-    fn test_insert_uid_leaves_the_two_corrupted_harbor_files_byte_identical() {
+    fn test_insert_uid_leaves_the_two_corrupted_riverbend_files_byte_identical() {
         // Both files were found carrying a spliced `uid:` line on disk. Whatever
         // wrote them, nothing may write them again.
         for (label, content) in
-            [("footer.md", HARBOR_FOOTER), ("README.md", HARBOR_README)]
+            [("footer.md", RIVERBEND_FOOTER), ("README.md", RIVERBEND_README)]
         {
             assert_eq!(
                 &insert_uid_into_frontmatter(content, "2af1e0f6"),
@@ -945,7 +946,6 @@ mod tests {
     /// that is the only form the preview's `ServeDir` can route. The old
     /// `<dir>/index-2.html` came out as the extensionless `<dir>/index-2` and
     /// 404'd with its bytes on disk.
-    /// See docs/archive/2026-09-01-duplicate-url-override-index-n-404.md.
     #[test]
     fn every_deduplicated_page_gets_a_servable_url() {
         use crate::build::scan::article_map::to_pretty_url;
@@ -980,7 +980,7 @@ mod tests {
     ///
     /// The old lang-prefix branch had no counter, so all three landed on
     /// `zh-hans/about/index.html` — one address, three documents, last render
-    /// wins. Filed as moss#1172; fixed by making both branches claim.
+    /// wins. Fixed by making both branches claim.
     #[test]
     fn a_lang_prefix_is_claimed_once_and_then_numbered() {
         use crate::i18n::Language;
@@ -1027,10 +1027,10 @@ mod tests {
         use crate::i18n::Language;
 
         let mut docs = vec![
-            folder("Comics", "awards/comics/index.html", "獎項/漫畫獎/漫畫獎.md"),
-            folder("Memory", "awards/comics/index.html", "獎項/記憶獎/記憶獎.md"),
-            folder("S1 orig", "awards/comics/s1/index.html", "獎項/漫畫獎/第一季/第一季.md"),
-            folder("S1 copy", "awards/comics/s1/index.html", "獎項/記憶獎/第一季/第一季.md"),
+            folder("Comics", "awards/comics/index.html", "評選/繪本組/繪本組.md"),
+            folder("Memory", "awards/comics/index.html", "評選/散文組/散文組.md"),
+            folder("S1 orig", "awards/comics/s1/index.html", "評選/繪本組/第一屆/第一屆.md"),
+            folder("S1 copy", "awards/comics/s1/index.html", "評選/散文組/第一屆/第一屆.md"),
         ];
         docs[2].kind = PageKind::Folder;
         docs[3].kind = PageKind::Folder;
@@ -1038,8 +1038,8 @@ mod tests {
         let reported = resolve_duplicate_slugs_with_lang(&mut docs, Language::En);
 
         assert_eq!(reported.len(), 1, "got {:?}", reported);
-        assert_eq!(reported[0].loser, "獎項/記憶獎/記憶獎.md");
-        assert_eq!(reported[0].keeper, "獎項/漫畫獎/漫畫獎.md");
+        assert_eq!(reported[0].loser, "評選/散文組/散文組.md");
+        assert_eq!(reported[0].keeper, "評選/繪本組/繪本組.md");
         assert_eq!(reported[0].wanted, "awards/comics/");
         assert_eq!(reported[0].moved_to, "awards/comics-2/");
     }

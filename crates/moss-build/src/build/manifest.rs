@@ -4,7 +4,7 @@
 //! deferred processing phases. Calling [`PendingManifest::seal`] transitions it
 //! to a [`SealedManifest`], which is the read-only deploy contract.
 //!
-//! The transition point is where the #552 invariant is checked:
+//! The transition point is where the manifest invariant is checked:
 //! every key in `blocking_keys` must also appear in `inner.files` OR
 //! `inner.image_outputs`. Moving this check from per-site convention to a
 //! single `seal()` call makes it impossible to deploy with a
@@ -36,7 +36,7 @@
 //! ImageOutputs (2026-05-15), ImageVariants (2026-05-15), and VideoOutputs
 //! (2026-06-11) all had the same root cause: `inner.files.insert()` was an
 //! opt-in per-bucket call that was easy to forget on new buckets. Each omission
-//! caused the artifact to exist locally in `.moss/build/current/` but never reach
+//! caused the artifact to exist locally in `.moss/build.nosync/current/` but never reach
 //! the seta server, producing 404s on the live site. The structural fix moves
 //! `inner.files.insert()` unconditionally before the match statement so the
 //! compiler enforces the invariant — a new bucket cannot skip deploy registration.
@@ -52,15 +52,18 @@ pub mod change_set;
 /// What is LIVE — uid, URL and source path per page — read out of the publish
 /// records for rename detection and duplicate-uid resolution. The record can be
 /// withheld by a cloud provider, so "could not read it" is a value rather than
-/// an empty map (ADR-062).
+/// an empty map.
 pub mod live_baseline;
 /// Every root-relative `href`/`src` the emitted HTML asks for that this
-/// manifest does not promise — the set difference moss#1187 was never taking.
+/// manifest does not promise — a set difference nothing checked before.
 /// Lives here because the sealed file set is what it reads; advisory only.
 pub mod link_audit;
 /// Durable record of what the last confirmed publish shipped, one per target
 /// under `.moss/deploy/records/`. The other half of `change_set`'s diff.
 pub mod published_record;
+/// How `ship_phase` reads one entry's staged bytes: [`ShipSource`] and its accessors.
+mod ship_source;
+use ship_source::ShipSource;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -115,7 +118,6 @@ pub enum HashBucket {
 /// reach into the in-memory `files` map, so orphan entries (e.g., from a
 /// slug rename) leaked into successive `hashes.json` writes and broke
 /// deploy with `"Manifest claims '<path>' exists but it's missing on disk."`
-/// See `docs/archive/2026-05-18-manifest-integrity.md`.
 ///
 /// The **cache fields** (`sources`, `builder_fingerprint`)
 /// carry forward without sweeping — they belong to a separate concern
@@ -123,7 +125,7 @@ pub enum HashBucket {
 /// Their cross-build consistency is out of scope for `PendingManifest`; a
 /// followup will split `SiteHashes` into a proper cache vs. manifest pair.
 ///
-/// `source_to_output` is fully cleared on construction (see `new`).
+/// `source_to_output` and `page_meta` are fully cleared on construction (see `new`).
 ///
 /// Not [`Clone`] — exclusive ownership enforces that only one writer accumulates
 /// into the manifest at a time. Call [`seal`][PendingManifest::seal] to finalize.
@@ -131,13 +133,15 @@ pub enum HashBucket {
 pub struct PendingManifest {
     inner: SiteHashes,
     /// Paths that the blocking phase generated. Must be a subset of
-    /// `(inner.files ∪ inner.image_outputs)` at seal time (the #552 invariant).
+    /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
     blocking_keys: HashSet<String>,
     /// Output-bucket paths registered during this build (mark set). At seal
     /// time, the four output buckets are pruned to retain only keys in this
-    /// set. Populated unconditionally by `register_with_hash`; not exposed
-    /// outside the struct. See module docs for the rationale.
+    /// set. Populated unconditionally by `register_with_hash`; outside the
+    /// struct it is visible only through the refusal in
+    /// [`attach_final_bytes`][PendingManifest::attach_final_bytes]. See module
+    /// docs for the rationale.
     touched: HashSet<String>,
     /// The PREVIOUS build's `source_to_output`, kept because `new` clears the
     /// live one. Read by [`carry_forward_deferred_page`], which is the only way
@@ -147,6 +151,14 @@ pub struct PendingManifest {
     ///
     /// [`carry_forward_deferred_page`]: PendingManifest::carry_forward_deferred_page
     carried_source_to_output: HashMap<String, String>,
+    /// The PREVIOUS build's `page_meta`, kept for the same reason as
+    /// `carried_source_to_output` (which `new` also clears the live copy of):
+    /// [`carry_forward_deferred_page`] needs a deferred page's title/date from
+    /// somewhere, and this build never parsed the file that would normally
+    /// provide them.
+    ///
+    /// [`carry_forward_deferred_page`]: PendingManifest::carry_forward_deferred_page
+    carried_page_meta: HashMap<String, crate::types::content::PageMeta>,
     /// The PREVIOUS build's page-source hashes — every markdown entry in
     /// `inner.sources`. Read by [`carry_forward_page_source`] for pages this
     /// build never read.
@@ -157,7 +169,7 @@ pub struct PendingManifest {
     /// of `sources` on the first warm build and stayed out, after which every
     /// sweep pass read each footer as a file with no baseline entry, i.e. a
     /// CREATE, and dispatched a full rebuild that could not clear it
-    /// (harbor, 2026-08-20).
+    /// (riverbend, 2026-08-20).
     ///
     /// [`carry_forward_page_source`]: PendingManifest::carry_forward_page_source
     carried_page_sources: HashMap<String, crate::build::types::SourceMetadata>,
@@ -171,6 +183,96 @@ pub struct PendingManifest {
     /// 2. `seal` drops the previous build's page entries that are NOT in here,
     ///    which is exactly the set of deleted pages.
     page_sources: HashSet<String>,
+    /// Outputs a producer could not verify (an I/O error that was not a
+    /// positive `NotFound`), keyed by path with the error that stopped it. A
+    /// generation carrying any of these is withheld — see
+    /// `ship::ShipVerdict`.
+    unverified: std::collections::BTreeMap<String, String>,
+    /// Output path → how `ship_phase` should resolve these staged bytes, for
+    /// entries where a producer already knows more than "read `stage_dir`".
+    /// Every entry inserted here is immutable, a [`ShipSource::Cas`] or a
+    /// [`ShipSource::Held`] — `Fingerprint` is stamped only after seal — but
+    /// the field lives on `PendingManifest` rather than only on
+    /// `SealedManifest` because [`seal`][PendingManifest::seal] carries it
+    /// straight into the sealed manifest's own map of the same name.
+    ///
+    /// Three producers fill it: the background workers, through
+    /// [`apply_message`][PendingManifest::apply_message] (the deferred-asset
+    /// walk, image and video encodes), the slot pass, through
+    /// [`attach_final_bytes`][PendingManifest::attach_final_bytes] (this
+    /// build's HTML pages), and the derived outputs (sitemap, feed, `llms.txt`,
+    /// previews), through `register_held`. The last registration of a path
+    /// wins, its source included — see `register_with_hash`.
+    ///
+    /// In-memory only — deliberately not a field of `SiteHashes`/`hashes.json`.
+    /// `ship_phase` reads a `Cas` or `Held` entry (`SealedManifest::staged_oid`
+    /// / `held_bytes`) from its immutable source instead of the mutable
+    /// `stage_dir` path, closing the race where a concurrent build rewrites a
+    /// path between this build sealing its hash and shipping its bytes. An
+    /// entry with no source here ships from `stage_dir` exactly as before.
+    ship_sources: HashMap<String, ShipSource>,
+    /// Rendered pages not yet written to the stage, by output path. The slot
+    /// pass takes them and writes each page once, final bytes only; a later
+    /// registration of the same path drops its entry, since that writer put its
+    /// own bytes in the stage.
+    unwritten_pages: std::collections::BTreeMap<String, String>,
+}
+
+/// Is this `SiteHashes.sources` key in the page half?
+///
+/// The page half is NOT `source_to_output`'s key set — a slot-only source is a
+/// page source with no output. The extension is the property that does
+/// separate the halves: the deferred asset walk that owns the other half never
+/// inserts markdown.
+pub(crate) fn is_page_source_key(src: &str) -> bool {
+    src.rsplit_once('.')
+        .is_some_and(|(_, ext)| crate::build::incremental_gates::is_markdown_extension(ext))
+}
+
+// The vault-config/theme sources read synchronously alongside pages —
+// `.moss/theme/style.css` and `.moss/theme/script.js` in
+// `render::blocking::generate_blocking_content`, `.moss/config.toml` and
+// `.moss/places.toml` in `build_inner` (`pipeline.rs`) — never through the
+// deferred asset walk (`media/pipeline.rs`).
+//
+// This is a CHECKED SUBSET of `scan::classify::MOSS_INTERNAL_ALLOWLIST`, not
+// a derived copy of it and not a second independent list: every key below
+// must name a path the allowlist also admits into the editor's `.moss/` view
+// (`synchronous_config_source_keys_are_covered_by_the_moss_internal_allowlist`,
+// manifest_tests.rs, fails if the two drift), but the allowlist cannot be
+// used directly as this list. Its `.moss/theme` entry is a *directory* —
+// admitting every path under it would also admit theme fonts and textures,
+// which the deferred asset walk hashes, not this synchronous read; the
+// per-key extension check `is_page_source_key` already exists for pages
+// precisely because a directory-shaped membership test cannot tell
+// "read now" from "read later" on its own. Each key here also needs its own
+// `register_page_source_hash` call — the list is inert without one.
+pub(crate) const CONFIG_TOML_SOURCE_KEY: &str = ".moss/config.toml";
+pub(crate) const PLACES_TOML_SOURCE_KEY: &str = ".moss/places.toml";
+pub(crate) const USER_CSS_SOURCE_KEY: &str = ".moss/theme/style.css";
+pub(crate) const USER_JS_SOURCE_KEY: &str = ".moss/theme/script.js";
+
+/// [`CONFIG_TOML_SOURCE_KEY`], [`PLACES_TOML_SOURCE_KEY`],
+/// [`USER_CSS_SOURCE_KEY`] and [`USER_JS_SOURCE_KEY`] together, for
+/// [`is_reload_tracked_source_key`].
+pub(crate) const SYNCHRONOUS_CONFIG_SOURCE_KEYS: &[&str] = &[
+    CONFIG_TOML_SOURCE_KEY,
+    PLACES_TOML_SOURCE_KEY,
+    USER_CSS_SOURCE_KEY,
+    USER_JS_SOURCE_KEY,
+];
+
+/// Is this `SiteHashes.sources` key one `compute_source_change_set`'s
+/// modified-diff may trust?
+///
+/// A markdown page, or one of [`SYNCHRONOUS_CONFIG_SOURCE_KEYS`] — the two
+/// populations `register_page_source_hash` writes synchronously, before the
+/// deferred asset walk runs, which is what makes the diff race-free. Every
+/// other `sources` entry (images, and any other css/toml/yaml/json the
+/// generic passthrough walk happens to hash) is written by that walk, whose
+/// timing `is_page_source_key`'s doc comment already explains is unsafe here.
+pub(crate) fn is_reload_tracked_source_key(src: &str) -> bool {
+    is_page_source_key(src) || SYNCHRONOUS_CONFIG_SOURCE_KEYS.contains(&src)
 }
 
 impl PendingManifest {
@@ -188,34 +290,39 @@ impl PendingManifest {
     /// which is unaffected by this clear.
     ///
     /// The other four output buckets (`files`, `image_outputs`, `video_outputs`,
-    /// `notebook_outputs`) are NOT cleared here — they carry forward so
-    /// mid-build readers (e.g. sitemap generation in
-    /// `generate_blocking_content`) see a coherent view. They are mark-and-sweep
-    /// pruned at [`seal`][PendingManifest::seal] using the `touched` mark set,
-    /// so the on-disk manifest written via `SealedManifest::write_to_disk`
-    /// contains only this build's emissions.
+    /// `notebook_outputs`) are NOT cleared here — they carry forward so a page
+    /// this build could not read can re-register its previous entry
+    /// ([`carry_forward_deferred_page`][PendingManifest::carry_forward_deferred_page]).
+    /// They are mark-and-sweep pruned at [`seal`][PendingManifest::seal] using
+    /// the `touched` mark set, so the on-disk manifest written via
+    /// `SealedManifest::write_to_disk` contains only this build's emissions.
+    /// Until then they also hold the pages of deleted sources, which is why
+    /// the sitemap reads [`pages_registered`][PendingManifest::pages_registered]
+    /// instead.
     pub fn new(carry_forward: SiteHashes) -> Self {
         let mut inner = carry_forward;
+        // git's "smudge". A source entry this build does not re-read is carried
+        // under the new, later clock below, which would vouch for it as if it
+        // had been read after that clock started. For a real sub-second mtime
+        // that changes nothing (equality already proves the write); for an
+        // exact-zero one it would trust a same-tick rewrite that landed after
+        // the old read. So a zero reading the OLD clock could not vouch for is
+        // dropped: the entry fails open to the hash tier until re-recorded.
+        for meta in inner.sources.values_mut() {
+            if meta.mtime_nanos == Some(0) && !crate::build::stat::zero_stamp_settled(meta.mtime, inner.captured_at) {
+                meta.mtime_nanos = None;
+            }
+        }
         // THIS build's racily-clean clock, not the carried-forward one: the
         // sweep compares file mtimes against the moment hashing began, and a
         // stale capture time would mark nothing suspect ever again.
-        inner.captured_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_secs());
+        inner.captured_at = crate::build::stat::recording_clock();
         let carried_source_to_output = std::mem::take(&mut inner.source_to_output);
-        // The page half of `sources` is NOT `source_to_output`'s key set — a
-        // slot-only source is a page source with no output. Select on the
-        // extension, the property that does separate the halves: the deferred
-        // asset walk that owns the other half never inserts markdown.
+        let carried_page_meta = std::mem::take(&mut inner.page_meta);
         let carried_page_sources: HashMap<String, crate::build::types::SourceMetadata> = inner
             .sources
             .iter()
-            .filter(|(src, _)| {
-                src.rsplit_once('.').is_some_and(|(_, ext)| {
-                    crate::build::incremental_gates::is_markdown_extension(ext)
-                })
-            })
+            .filter(|(src, _)| is_page_source_key(src))
             .map(|(src, meta)| (src.clone(), meta.clone()))
             .collect();
         Self {
@@ -223,9 +330,18 @@ impl PendingManifest {
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
             carried_source_to_output,
+            carried_page_meta,
             carried_page_sources,
             page_sources: HashSet::new(),
+            unverified: std::collections::BTreeMap::new(),
+            ship_sources: HashMap::new(),
+            unwritten_pages: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Record that `rel_path`'s output could not be verified this build.
+    pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
+        self.unverified.insert(rel_path, detail);
     }
 
     /// Keep a page's already-published HTML alive when this build could not read
@@ -256,9 +372,18 @@ impl PendingManifest {
     pub fn carry_forward_deferred_page(&mut self, source_rel: &str) -> Option<String> {
         let key = self.carried_source_to_output.get(source_rel)?.clone();
         let entry = self.inner.files.get(&key)?.clone();
-        self.register_with_hash(key.clone(), &entry, HashBucket::Files);
+        self.register_with_hash(key.clone(), &entry, HashBucket::Files, None);
         // The mapping describes what is being served, and this page still is.
         self.inner.source_to_output.insert(source_rel.to_string(), key.clone());
+        // Carry the title/date too, or the page keeps its URL but drops out of
+        // every nav menu and listing page that reads `page_meta` — the exact
+        // gap this build's own failure to read the source would otherwise
+        // leave. Best-effort: an old manifest sealed before this field existed
+        // has nothing to carry, and the page simply has no nav/listing entry
+        // until a build that can read it runs — no worse than before this field.
+        if let Some(meta) = self.carried_page_meta.get(source_rel) {
+            self.inner.page_meta.insert(source_rel.to_string(), meta.clone());
+        }
         Some(key)
     }
 
@@ -275,7 +400,18 @@ impl PendingManifest {
     /// of source case. See `build::served_path` for design.
     pub fn register(&mut self, rel_path: &crate::build::served_path::ServedPath, bytes: &[u8], bucket: HashBucket) {
         let hash = compute_binary_hash(bytes);
-        self.register_with_hash(rel_path.as_str().to_string(), &hash, bucket);
+        self.register_with_hash(rel_path.as_str().to_string(), &hash, bucket, None);
+    }
+
+    /// [`register`][Self::register] a rendered page and leave its stage write to
+    /// the slot pass, which takes it with [`take_unwritten_pages`][Self::take_unwritten_pages].
+    pub(crate) fn register_unwritten_page(&mut self, rel_path: &crate::build::served_path::ServedPath, html: String) {
+        self.register(rel_path, html.as_bytes(), HashBucket::Files);
+        self.unwritten_pages.insert(rel_path.as_str().to_string(), html);
+    }
+
+    pub(crate) fn take_unwritten_pages(&mut self) -> std::collections::BTreeMap<String, String> {
+        std::mem::take(&mut self.unwritten_pages)
     }
 
     /// Apply a manifest registration from a pre-computed xxHash3 hex digest.
@@ -285,8 +421,12 @@ impl PendingManifest {
     /// carry a pre-computed hash (the background worker computed it before
     /// sending). This method is NOT part of the public API — use
     /// [`register`][PendingManifest::register] everywhere else.
-    pub(crate) fn apply_message(&mut self, rel_path: String, hash: &str, bucket: HashBucket) {
-        self.register_with_hash(rel_path, hash, bucket);
+    ///
+    /// `oid` is `Some` only when the sender already knows the CAS object
+    /// backing these exact staged bytes (the deferred-asset walk and the image
+    /// and video encodes); see `ship_sources`.
+    pub(crate) fn apply_message(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
+        self.register_with_hash(rel_path, hash, bucket, oid);
     }
 
     /// Bulk-replace the change-detection cache (`SiteHashes::sources`) with
@@ -347,6 +487,16 @@ impl PendingManifest {
         self.inner.source_to_output.insert(source_path, served_path.as_str().to_string());
     }
 
+    /// Register a page's title/date, keyed identically to
+    /// [`register_source_mapping`][PendingManifest::register_source_mapping].
+    ///
+    /// Call this everywhere `register_source_mapping` is called for a real
+    /// (non-synthetic) page — see `SiteHashes::page_meta` for why it exists
+    /// and `carry_forward_deferred_page` for the other writer.
+    pub fn register_page_meta(&mut self, source_path: String, meta: crate::types::content::PageMeta) {
+        self.inner.page_meta.insert(source_path, meta);
+    }
+
     /// Record a page's raw-source-byte hash, keyed identically to
     /// [`register_source_mapping`][PendingManifest::register_source_mapping].
     ///
@@ -387,7 +537,7 @@ impl PendingManifest {
     /// flow through to the `SealedManifest::write_to_disk` output so the next
     /// build's `load_previous_hashes` can detect plugin/builder changes.
     ///
-    /// Pre-#620 Item 2 the fingerprints were set on `site_result.hashes` and
+    /// Before this, the fingerprints were set on `site_result.hashes` and
     /// `deferred.site_hashes`, then written to `hashes.json` by the legacy
     /// on-disk fallback in `media/pipeline.rs::copy_deferred_assets`. With
     /// the fallback gone, the only writer is the seal+persist task, so the
@@ -408,7 +558,7 @@ impl PendingManifest {
     /// A `pub(crate)` escape hatch for the blocking phase: after all Pattern A
     /// emits have routed through `BuildContext::emit`, `generate_blocking_content`
     /// needs the accumulated state back as `(SiteHashes, HashSet<String>)` for
-    /// `SiteResult` and `BackgroundContext::blocking_keys` (#524 Phase 3). It
+    /// `SiteResult` and `BackgroundContext::blocking_keys`. It
     /// clones because `pending` is `&mut` there, not owned, and the hatch is
     /// deliberately narrow — `inner` and `blocking_keys` stay private.
     /// Superseded by `seal()` once every background phase routes through
@@ -417,12 +567,24 @@ impl PendingManifest {
         (self.inner.clone(), self.blocking_keys.clone())
     }
 
-    /// Read-only access to the accumulated `files` map.
-    ///
-    /// Used by `generate_blocking_content` for sitemap generation (reads HTML keys
-    /// accumulated so far) without consuming the manifest or releasing the borrow.
+    /// Read-only access to the accumulated `files` map — this build's
+    /// registrations AND, until `seal` sweeps them, every entry the previous
+    /// build left, including the pages of sources deleted since. To list what
+    /// this build serves, use [`pages_registered`][Self::pages_registered].
     pub(crate) fn files(&self) -> &HashMap<String, String> {
         &self.inner.files
+    }
+
+    /// The `.html` pages this build has registered so far, whether rendered or
+    /// deliberately carried (an unchanged page, a page still in the cloud) —
+    /// never a leftover of the previous build. What `sitemap.xml` is built from.
+    pub(crate) fn pages_registered(&self) -> impl Iterator<Item = &String> {
+        self.touched.iter().filter(|k| k.ends_with(".html"))
+    }
+
+    /// This build wrote or carried `key` — unlike `files()`, never a leftover.
+    pub(crate) fn is_registered(&self, key: &str) -> bool {
+        self.touched.contains(key)
     }
 
     /// Read-only access to the accumulated `source_to_output` map.
@@ -462,7 +624,7 @@ impl PendingManifest {
     /// than through `register_with_hash`, which would prepend a second `100644:` to
     /// an already-prefixed one; verbatim is what keeps the sealed manifest
     /// byte-identical to the previous build here. Cancel only: a run that finished
-    /// with fewer outputs really did lose a notebook. Before moss#618 the deferred
+    /// with fewer outputs really did lose a notebook. Before this, the deferred
     /// asset walk masked both cases, re-emitting every key that survived its prune.
     pub(crate) fn carry_forward_notebook_outputs(&mut self, previous: &SiteHashes) {
         for key in &previous.notebook_outputs {
@@ -485,9 +647,9 @@ impl PendingManifest {
     /// Two callers, one shape. A **receipt**: the writer hashed the bytes as it
     /// wrote them (the notebook bundle's ~440 files, an injected page, a
     /// rasterized OG card), so re-reading them to recompute a digest moss
-    /// already knows would be waste — and, under ADR-043, a read that can fail.
+    /// already knows would be waste — and a read that can fail.
     /// A **carry-forward**: the previous build's manifest entry, verbatim, for
-    /// an artifact this build did not re-emit (moss#922 Stage 5b — an
+    /// an artifact this build did not re-emit (an
     /// incrementally skipped page keeps `index.html` exactly as the previous
     /// build wrote it, and without re-registration `remove_stale_html` deletes
     /// it). Same family as
@@ -506,19 +668,73 @@ impl PendingManifest {
         hash: &str,
         bucket: HashBucket,
     ) {
-        self.register_with_hash(rel_path.as_str().to_string(), hash, bucket);
+        self.register_with_hash(rel_path.as_str().to_string(), hash, bucket, None);
     }
 
-    fn register_with_hash(&mut self, rel_path: String, hash: &str, bucket: HashBucket) {
+    /// Give a page this build already registered its final bytes: the manifest
+    /// hash of what the site will serve, and the CAS object holding exactly
+    /// those bytes (`None` when the store could not take them, which leaves the
+    /// page to the stage-path fingerprint). Returns the entry now on record, or
+    /// `None` and changes nothing for a path this build does not own.
+    ///
+    /// Attach, not register, and the refusal is the point. The slot pass walks
+    /// every `.html` under `stage_dir`, and the stage keeps what the previous
+    /// build left there: `sweep_staging` spares anything the previous manifest
+    /// listed, and `remove_stale_html` runs AFTER the pass and deletes only
+    /// `index*.html`. Registering a stale page would mark it `touched`, keep it
+    /// through `seal`, and — because a live CAS blob counts as present to
+    /// `drop_absent_outputs` — ship a deleted page from the CAS for good.
+    ///
+    /// A path is this build's own when its registrations already name it: the
+    /// `touched` mark set `seal` prunes by, and nothing carried in from the
+    /// previous manifest. That is what separates a page this build produced from
+    /// one that merely still sits in `stage_dir`.
+    pub(crate) fn attach_final_bytes(
+        &mut self,
+        rel_path: &crate::build::served_path::ServedPath,
+        hash: &str,
+        oid: Option<String>,
+    ) -> Option<String> {
+        if !self.touched.contains(rel_path.as_str()) {
+            return None;
+        }
+        self.register_with_hash(rel_path.as_str().to_string(), hash, HashBucket::Files, oid);
+        self.inner.files.get(rel_path.as_str()).cloned()
+    }
+
+    fn register_with_hash(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
         // Mark-and-sweep mark step: record that this build owns `rel_path`.
         // Every output-bucket entry must pass through this chokepoint
         // (`register`, `apply_message`, and the bucket arms below all call
         // `register_with_hash`). At seal time, the four output buckets are
         // pruned to retain only paths in `touched`, so any carry-forward
         // entry from the previous build that this build did not re-register
-        // is dropped. See module docs and
-        // `docs/archive/2026-05-18-manifest-integrity.md`.
+        // is dropped. See module docs.
         self.touched.insert(rel_path.clone());
+        self.unwritten_pages.remove(&rel_path);
+
+        // The last registration of a path wins, its CAS object included: an oid
+        // is valid only for the (path, hash) pair it was registered with. A
+        // later registration that carries no oid describes bytes nobody has a
+        // blob for, so it drops the one on record instead of leaving it to ship
+        // the OLD bytes under the NEW hash — which deploy refuses whole.
+        //
+        // A path is registered more than once per build. The notebook step
+        // rewrites viewer pages (`notebooks/x.html`) after the slot pass has
+        // seen the previous build's copy of them; and a page the render phase
+        // registered can be re-registered by anything that later learns better.
+        // `ship_sources` holds only `Cas`/`Held` here (`Fingerprint` is stamped
+        // after seal, on `SealedManifest`), so removing is dropping one of them.
+        // `SealedManifest::stamp_ship_fingerprints` remains the one place an
+        // immutable entry is replaced after seal.
+        match oid {
+            Some(oid) => {
+                self.ship_sources.insert(rel_path.clone(), ShipSource::Cas(oid));
+            }
+            None => {
+                self.ship_sources.remove(&rel_path);
+            }
+        }
 
         // Unconditional: every artifact must reach the deploy wire manifest.
         // `inner.files` is the single source `deploy.rs` reads via `sealed.files()`.
@@ -578,8 +794,9 @@ impl PendingManifest {
     /// `apply_message` during this build (the `touched` mark set). Carry-forward
     /// entries from the previous build that this build did not re-emit are
     /// dropped here, so the sealed manifest reflects only this build's
-    /// emissions. The fingerprint cache fields and `source_to_output` (cleared
-    /// at construction and re-populated on every live document) are not pruned.
+    /// emissions. The fingerprint cache fields and `source_to_output` /
+    /// `page_meta` (both cleared at construction and re-populated on every
+    /// live document) are not pruned.
     /// `sources` is pruned only of its **page** half — see the loop below; its
     /// asset half is change-detection cache with its own prune in the asset walk.
     pub fn seal(self) -> SealedManifest {
@@ -605,11 +822,20 @@ impl PendingManifest {
         inner.image_outputs.retain(|k| touched.contains(k));
         inner.video_outputs.retain(|k| touched.contains(k));
         inner.notebook_outputs.retain(|k| touched.contains(k));
+        // Mirrors the output-bucket prune above: a ship source registered for
+        // a path this build ultimately did not keep must not survive into the
+        // sealed manifest either — `register_with_hash` unconditionally marks
+        // the path `touched` in the same call that records one, so this can
+        // only drop entries the output-bucket prune above also dropped.
+        let mut ship_sources = self.ship_sources;
+        ship_sources.retain(|k, _| touched.contains(k));
         let generation_id = compute_manifest_generation_id(&inner.files);
         SealedManifest {
             inner,
             blocking_keys: self.blocking_keys,
             generation_id,
+            unverified: self.unverified,
+            ship_sources,
         }
     }
 }
@@ -631,9 +857,39 @@ pub struct SealedManifest {
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
     /// Same `files()` content → same id across sessions and build modes.
     generation_id: String,
+    /// Every output a producer or the presence pass could not verify, with the
+    /// error — never persisted; it exists to withhold this generation.
+    unverified: std::collections::BTreeMap<String, String>,
+    /// Output path → how `ship_phase` resolves this entry's bytes. An entry
+    /// carries a `Cas` source or a `Fingerprint`, never both — that is a
+    /// property of the map itself now, rather than two same-keyed maps kept
+    /// disjoint by discipline at their two write sites. See [`PendingManifest::ship_sources`] for the `Cas` half
+    /// (carried through `seal()` unchanged apart from the mark-and-sweep
+    /// prune every other bucket also gets) and
+    /// [`stamp_all_ship_fingerprints`][Self::stamp_all_ship_fingerprints] /
+    /// [`stamp_ship_fingerprints`][Self::stamp_ship_fingerprints] for the
+    /// `Fingerprint` half: stamped once right after seal for every `100644:`
+    /// entry with no live `Cas` source, and re-stamped for any key a
+    /// post-seal rewrite touches. `ship_phase` re-stats a `Fingerprint` entry
+    /// immediately before copying and demotes to a real hash comparison on
+    /// any disagreement — see `ship::verify_ship_integrity`. Never
+    /// persisted; exists only to make a seal-to-ship race audible.
+    ship_sources: HashMap<String, ShipSource>,
 }
 
 impl SealedManifest {
+    /// Outputs this generation could not verify, path → error. Non-empty means
+    /// the generation must not be promoted (`ship::ShipVerdict`).
+    pub fn unverified(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.unverified
+    }
+
+    /// Record an output the presence pass could not verify. Its entry is kept:
+    /// an unreadable output is not a missing one.
+    pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
+        self.unverified.insert(rel_path, detail);
+    }
+
     /// All output-path → mode-tagged-hash entries in the deploy manifest.
     pub fn files(&self) -> &HashMap<String, String> {
         &self.inner.files
@@ -699,12 +955,12 @@ impl SealedManifest {
     ///
     /// Used by the seal+persist side task in `build.rs` to run stale-file
     /// cleanup AFTER background workers' EmitMessages have been merged into
-    /// the manifest, closing the deferred-phase race in #621.
+    /// the manifest, closing the deferred-phase race.
     pub fn site_hashes_view(&self) -> &SiteHashes {
         &self.inner
     }
 
-    /// Apply post-seal HTML rewrites (moss#867 honest degradation): update
+    /// Apply post-seal HTML rewrites (honest degradation): update
     /// the hash entry for each rewritten page and recompute `generation_id`
     /// so the corrected content becomes deploy-visible.
     ///
@@ -729,7 +985,7 @@ impl SealedManifest {
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
     }
 
-    /// Drop pruned image-variant keys from the manifest (moss#976 B2): the
+    /// Drop pruned image-variant keys from the manifest: the
     /// bytes were deleted from `stage_dir` by `media::orphan_prune` because
     /// nothing in the emitted output references them, so the manifest must
     /// stop advertising them too — otherwise the NEXT build's incremental
@@ -766,6 +1022,7 @@ impl SealedManifest {
             self.inner.video_outputs.remove(key);
             self.inner.notebook_outputs.remove(key);
             self.blocking_keys.remove(key);
+            self.ship_sources.remove(key);
         }
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
     }

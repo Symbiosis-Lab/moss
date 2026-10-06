@@ -46,25 +46,29 @@ When multiple files could match, moss picks the best one:
 
 Explicit paths like `[[zh-hans/footer]]` always win over the language-tree preference.
 
-## Image embeds
+## Image and media embeds
 
-Embed images with `!` before the brackets:
+Embed an image with standard Markdown, or with a wikilink by putting `!` before the brackets. Both render the same:
 
 ```markdown
+![](photos/photo.jpg)
 ![[photo.jpg]]
-![[poster-farewell.webp]]
 ```
 
-moss resolves the filename by searching the entire content tree — no relative path needed. Put images in an excluded asset folder (`assets/`, `images/`, `static/`, `public/`) so they are served but not treated as content pages, then reference them by bare filename from any markdown file.
+The standard form is the default: write the path relative to the page, and spell a space as `%20` (`![](my%20photo.jpg)`). If nothing is at that path, moss tries the same path from the site root, then falls back to the nearest file with that name, so a path that has gone stale still finds its file. The wikilink needs only the file name and searches the entire content tree, so no path is needed at all. The same two spellings work for video, audio, PDF and 3D model files (`![](clip.mp4)` or `![[clip.mp4]]`).
+
+Put images in an excluded asset folder (`assets/`, `images/`, `static/`, `public/`) so they are served but not treated as content pages, then reference them from any markdown file.
 
 ```
 work/
-├── index.md         ← uses ![[poster-farewell.webp]]
+├── index.md         ← uses ![](assets/poster-farewell.webp)
 └── assets/
     └── poster-farewell.webp   ← not a page; served as a static file
 ```
 
 The language-tree preference (rule 4 above) applies to image resolution too: `![[photo.jpg]]` inside `zh-hans/about.md` prefers `zh-hans/photo.jpg` if it exists.
+
+Some embeds exist only as wikilinks: page, section, table, notebook and folder transclusions (`![[name]]`, see below), the provider players for `![[https://…]]` URLs, and the `style:` keys. In the standard form the text in the brackets is a caption on an image, and on video or audio it plays the role of the text after the pipe: `![640x360 loop](clip.mp4)` is `![[clip.mp4|640x360 loop]]`.
 
 **Pipe syntax** controls display — a fit/position keyword (`![[photo.jpg|contain top]]`), a size (`![[photo.jpg|400]]`), or a caption (`![[photo.jpg|Morning light]]`). See [[media#Display control]] and [[media#Captions]] for the full rules.
 
@@ -87,7 +91,7 @@ moss detects circular embeds and stops before an infinite loop.
 
 ## HTML and interactive embeds
 
-Embed an interactive or animated `.html` file (an animation, a small demo, a widget) with the same `![[...]]` syntax:
+Embed an interactive or animated `.html` file (an animation, a small demo, a widget) with the same `![[...]]` syntax (a standard `![](folder-to-site.html)` that points at an HTML file in your site embeds it the same way):
 
 ```markdown
 ![[folder-to-site.html]]
@@ -99,12 +103,26 @@ This is the preferred way to embed interactive content. Do not hand-write a raw 
 
 The embed fills the page width in a 16:9 frame, so design the file to read well at that shape.
 
+## Maps
+
+Place a map in the body with `style:map`. The embed stays where you write it, with the same width, alignment, and caption controls as other media:
+
+```markdown
+![[#|style:map|align-right 50%|Places in this article]]
+![[Travel diary|style:map|wide]]
+![[/places/kyoto/|style:map|align-left 40%|Kyoto]]
+```
+
+`#` selects the current document. A named document selects that document's `location:` values; neither form transcludes its body. A place target ending in `/` keeps the existing place-map behavior. Article maps use all coordinate-bearing locations from the target's frontmatter, with the same precision and `route:` rules as its own map. A heading or block fragment does not select separate location data.
+
+An explicit map of the current document replaces its automatic locator. The `map:` frontmatter switch and `[site].locator` setting still control automatic maps; they do not hide embeds you place in the body. If the target cannot be resolved or has no coordinate-bearing locations, moss reports an unavailable map instead of embedding the article text.
+
 ## Folder listings
 
 A wikilink whose path ends with `/` embeds a folder's children inline:
 
 ```markdown
-# William Blake's Notebooks
+# A Reader's Notebooks
 
 A personal record of my reading and writing.
 
@@ -123,7 +141,7 @@ The trailing slash signals a folder embed, not a page. The cards inherit the tar
 |---|---|
 | `limit:N` | cap at N items |
 | `more` | append a "More →" link to the source folder when truncated |
-| `sort:date` / `sort:weight` / `sort:title` | override the source folder's sort axis for this embed only |
+| `sort:date` / `sort:date-asc` / `sort:weight` / `sort:title` | override the source folder's sort axis for this embed only |
 
 Examples:
 

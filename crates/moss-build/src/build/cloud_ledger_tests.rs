@@ -64,6 +64,8 @@ fn page_sources_and_config_are_structural_media_is_not() {
     for structural in [
         "index.md",
         "index.markdown",
+        "index.mdown",
+        "note.MKD",
         "post.docx",
         "post.PAGES",
         "page.html",
@@ -110,12 +112,12 @@ fn a_file_moss_never_reads_is_not_structural() {
 
 /// Either half alone is enough — they see different windows in time. The scan
 /// predates the build; the ledger only holds what a read site reached. The
-/// scan-only case is the blueprint-grid shape moss#1042 reported: every page
+/// scan-only case is the blueprint-grid shape a real vault once reported: every page
 /// source was dataless when the walk ran, so no document reached the render
 /// pass, no `read_page_source` ever ran, and the ledger is empty.
 ///
-/// And the COUNT is the decision's own, not a later re-query. moss#1061: the
-/// log explaining a withheld publish re-read `structural_outstanding()` while
+/// And the COUNT is the decision's own, not a later re-query. The
+/// log explaining a withheld publish used to re-read `structural_outstanding()` while
 /// the decision had been made from the scan's list, so a build withheld because
 /// every page source was dataless printed "0 structural source(s) are still
 /// downloading" — a sentence contradicting itself, in the one line an operator
@@ -135,7 +137,7 @@ fn either_half_alone_reports_a_structural_gap_and_says_how_many() {
         "neither — the fully-local case"
     );
 
-    // Media never counts, however much of it is still arriving (ADR-013).
+    // Media never counts, however much of it is still arriving.
     let mixed = [
         std::path::PathBuf::from("/v/index.md"),
         std::path::PathBuf::from("/v/about.md"),
@@ -147,6 +149,35 @@ fn either_half_alone_reports_a_structural_gap_and_says_how_many() {
     // combines its own two: the larger, never the sum, so a source both halves
     // saw is not counted twice.
     assert_eq!(structural_missing_count(&mixed, 1), 2);
+}
+
+/// The path-returning twin of `structural_missing_count`, scan-half only:
+/// the ledger half needs `is_still_in_the_cloud`, which is `false` off macOS
+/// for a path that was never really evicted — see
+/// `structural_outstanding_ignores_media` above for the same constraint.
+#[test]
+fn structural_stale_paths_keeps_only_structural_sources_from_the_scan_half() {
+    let r = root("stale-scan");
+    let scan = [
+        r.join("index.md"),
+        r.join("cover.jpg"),
+        r.join(".moss/theme/style.css"),
+    ];
+    assert_eq!(
+        structural_stale_paths(&scan, &r),
+        vec![r.join(".moss/theme/style.css"), r.join("index.md")],
+        "sorted, and the media reference dropped"
+    );
+}
+
+/// A source appearing twice in the scan's own list — possible when the walk
+/// records both the placeholder and the path it stands for — must not appear
+/// twice in the refusal a person reads.
+#[test]
+fn structural_stale_paths_deduplicates_within_the_scan_half() {
+    let r = root("stale-dedup");
+    let scan = [r.join("index.md"), r.join("index.md")];
+    assert_eq!(structural_stale_paths(&scan, &r), vec![r.join("index.md")]);
 }
 
 /// `structural_outstanding` is `outstanding` restricted to that list. Both

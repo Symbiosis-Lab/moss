@@ -1,0 +1,28 @@
+{
+  "steps": [
+    {
+      "context": "versions.currentFile",
+      "reveals": 10
+    },
+    {
+      "click": "versions.open",
+      "reveals": 6
+    },
+    {
+      "click": "versions.saveToggle",
+      "reveals": 1
+    },
+    {
+      "click": "versions.saveConfirm",
+      "reveals": 1
+    },
+    {
+      "click": "versions.firstRow",
+      "reveals": 1
+    },
+    {
+      "click": "versions.restore",
+      "reveals": 1
+    }
+  ]
+}

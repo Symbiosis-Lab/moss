@@ -29,16 +29,13 @@ both erode legibility.
 serves, printing the URL it bound — read that, do not assume a port. (8080 is
 only the first one tried; a foreign dev server holding it means moss lands
 elsewhere, and a hardcoded `localhost:8080` would audit someone else's site.)
-Inspect built HTML under `.moss/build/current/` (the active frozen generation);
+Inspect built HTML under `.moss/build.nosync/current/` (the active frozen generation);
 the `.css` files under its `_moss/` are minified build output — use
 `moss describe --css <selector>` instead of reading them.
 
-**Check your work.** `moss build` exits 0 even when it reported problems; add
-`--strict` to make warnings fail the build. `moss list [--json]` is the
-inventory of what actually got published — url, kind, date, and the LANG column
-that confirms a new language tree registered. Use `moss rename <old> <new>` for
-renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which
-hand-editing will not.
+**Check your work.** `moss build` exits 0 even when it reported problems; add `--strict` to make warnings fail the build. `moss list [--json]` is the inventory of what actually got published — url, kind, date, and the LANG column that confirms a new language tree registered. Use `moss rename <old> <new>` for renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which hand-editing will not.
+
+**Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` build the whole site first — the same build `moss deploy` runs, minus the publish — so a build that fails refuses to save or restore, and a slow build makes either one just as slow. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move files to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`.
 
 ## First, get the live vocabulary
 
@@ -78,12 +75,26 @@ declarations that fight each other.
 
 ## Canonical project shape and naming convention
 
-- **A folder is a site (or a section); its name is the title.** `my-blog/` →
-  "My Blog". Name the folder as you want the title to appear.
+- **A folder is a site (or a section); its name is the title.** Name the
+  folder as you want the title to appear — moss does not case it for you.
+  Add `logo:` on a home page (the site root's, or a language edition's own)
+  to put a mark before that name in the nav — on every page, every
+  language; `logo:` anywhere else in the site is read by nothing.
 - **The filename IS the title** (Obsidian-style). `My First Essay.md` → title
-  "My First Essay". Do **not** also write a body `# Heading` repeating the
-  title, and do **not** add a `title:` frontmatter field — either causes a
-  duplicated or overridden title.
+  "My First Essay". The only transform is hyphens and underscores becoming
+  spaces — nothing is capitalized or reworded, so `about.md` titles "about"
+  and `our-mission.md` titles "our mission", not "About" or "Our Mission" (a
+  folder's own name goes through the same transform: `my-blog/` titles "my
+  blog", not "My Blog"). Add `title:` whenever the title you want differs from
+  that result even slightly; it is redundant, and safe to omit, only when it
+  matches the filename's derived title character for character. Do **not**
+  also write a body `# Heading` repeating the title — it renders as well, so
+  the title would show twice. One exception: a `:::hero` block at the very
+  top of the body takes over the title slot itself, so a heading written
+  inside it does not duplicate anything. Nothing else does this — a
+  `:::grid` or any other block opening the page still leaves the
+  auto-injected title in place, so a heading after it shows the title twice
+  the same as if the grid weren't there.
 - **Name files in their own language; pin a non-ASCII URL.** The
   filename-as-title rule lets a localized name title the page for you —
   `隐私.md` → "隐私". When the name isn't ASCII, add `url:` to keep the public
@@ -101,7 +112,7 @@ the rest. No `!important`, no `@layer`.
 
 moss's default rules ship **compiled into the binary** — there is no readable
 default stylesheet on disk anywhere in a site folder. Everything under
-`.moss/build/` is regenerated output, not source. A themed site has at least two
+`.moss/build.nosync/` is regenerated output, not source. A themed site has at least two
 stylesheets there: `_moss/style.<hash>.css` (the built-in defaults, minified to
 one line with comments stripped) and `_moss/theme/style.<hash>.css` (a
 hashed copy of your own `.moss/theme/style.css`), plus one
@@ -150,7 +161,7 @@ For shortcodes and partials (content reuse, not styling tiers), see
   selector like `p:first-of-type` would silently restyle the wrong element once
   the page grows. Say which of those applies, in a comment, at the point of use.
 - Never write inline `style="..."` — put the rule in `.moss/theme/style.css`.
-- Images use wikilinks: `![[filename.ext]]`. Never hardcode paths.
+- Images and media use the standard form: `![](photo.jpg)`, written as a path relative to the page. Wikilinks (`![[photo.jpg]]`) work too and find the file by name. Either way moss resolves the file, so never write a site-absolute or `https://` address for a file in the folder.
 - A deck (standfirst) is a `> blockquote` as the first thing in the body. moss
   injects the title itself, so the deck sits directly under it — do not write a
   `# Title` above the blockquote to position it.
@@ -179,6 +190,8 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `moss guide importing`.
 - **Debugging a build, plugin, or shortcode** → read
   `moss guide debugging`.
+- **Reviewing or hiding a site's comments (spam) before publishing** → read
+  `moss guide comments`.
 - **Building a site in more than one language** →
   `moss guide authoring`, Multilingual sites.
 - **Putting the site online** → Publishing below.
@@ -192,12 +205,33 @@ model (dark mode, quiet chrome, `@layer` rules), see
   nothing. The invite allowlist can also refuse registration.
 - **Every publish after the first:** `moss deploy <folder>` — the site id
   already lives in `.moss/state.toml`.
+- **Refused because the live site is newer:** `deploy` to moss hosting
+  (`--prebuilt` included) refuses when the site was published from another
+  copy of the folder after this copy's last publish. Bring this folder up to
+  date with that copy (usually `git pull`) and deploy again. `--overwrite-newer`
+  undoes the other publish — use it only when the human says to. A
+  `[hooks] deploy` plugin's destination is not checked.
+- **Before every real publish, dry-run it:** `moss deploy <folder> --dry-run`
+  builds exactly as a deploy builds (the build may use the network as any
+  build does: plugins the flags allow, link previews from third-party sites), prints the pages added, edited and deleted and
+  the addresses that would go offline, and stops. It uploads nothing and
+  records nothing, and exits 1 where a deploy would be refused by the checks it
+  ran. It does not check what needs the server (whether another copy published
+  since), so a passing dry run is not a promise the deploy goes ahead.
+- **Refused because an address would go offline:** an address the site has
+  served must not vanish unasked. When a build would stop serving one for a
+  reason other than the human deleting its source (a page whose address
+  changed, a generated file no longer produced), `deploy` and `--dry-run`
+  list each address with its cause and refuse. Keep the address working
+  (for a moved page, add the printed `"/old/" = "/new/"` line under
+  `[redirects]` in `.moss/config.toml`), or pass `--accept-removals` — only when
+  the human has said to lose those addresses.
 - **Custom domain:** `moss domain list <folder>` / `moss domain link <folder>
   example.com`.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
 - **Any non-moss host:** `moss build <folder> --site-url=https://example.com`,
-  then upload `.moss/build/current/` yourself. `--site-url` is required there
+  then upload `.moss/build.nosync/current/` yourself. `--site-url` is required there
   because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and
   otherwise derive from moss hosting deployment state, which a non-moss host
   never sets. Flag details: `moss describe --json`.

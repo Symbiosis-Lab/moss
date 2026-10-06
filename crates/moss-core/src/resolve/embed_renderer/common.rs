@@ -6,8 +6,6 @@
 
 use super::Sizing;
 
-pub(super) use crate::path_ext::path_extension_lower;
-
 /// Build a `src` URL for embed elements: `path?query#fragment` (URL order,
 /// independent of authoring order).
 ///
@@ -54,7 +52,7 @@ pub(super) fn dim_attrs(alias: Option<&str>) -> (String, String) {
 /// Escapes `& < > "`. Apostrophe is safe inside `"..."` attributes per HTML5.
 ///
 /// Canonical 4-char attribute escaper for synthesizer output. Used by
-/// Phase 1's Stage 2 dispatcher (still emits HTML) and by the src-tauri
+/// Phase 1's Stage 2 dispatcher (still emits HTML) and by moss-core's own
 /// typed-embed synthesizers (pdf / iframe / model / audio / video) which
 /// import this single source rather than each inlining a private copy.
 pub fn html_escape_attr(s: &str) -> String {
@@ -62,23 +60,6 @@ pub fn html_escape_attr(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-/// Build the ` data-width="value"` attribute fragment (with leading space)
-/// for spec § P9 wrapper-width emission. Empty string when `None` so
-/// formatters can splice unconditionally without an extra conditional.
-///
-/// Values reaching here are pre-validated by [`crate::media::match_width_token`]
-/// (only `body | wide | page | screen`), so HTML escaping is a defensive
-/// belt-and-braces and never actually substitutes.
-///
-/// Retained for Phase 1's Stage 2 dispatcher.
-#[allow(dead_code)]
-pub(super) fn width_attr(width: Option<&str>) -> String {
-    match width {
-        Some(w) => format!(r#" data-width="{}""#, html_escape_attr(w)),
-        None => String::new(),
-    }
 }
 
 /// Extract filename stem (no directory, no extension). Used by renderers that
@@ -148,13 +129,6 @@ mod tests {
         assert_eq!(file_stem("dir/photo.jpg"), "photo");
         assert_eq!(file_stem("noext"), "noext");
         assert_eq!(file_stem(".dotfile"), ".dotfile");
-    }
-
-    #[test]
-    fn test_path_extension_lower() {
-        assert_eq!(path_extension_lower("photo.JPG"), "jpg");
-        assert_eq!(path_extension_lower("dir/file.mp4"), "mp4");
-        assert_eq!(path_extension_lower("noext"), "");
     }
 
     #[test]

@@ -185,8 +185,20 @@ fn test_collect_videos_small_mp4_is_thumbnail_only() {
 // ===========================================
 
 /// A 1080p source, comfortably inside the size budget.
+///
+/// `video_kbps` is always `None` here: `plan_video_encode` judges on
+/// `total_kbps` alone (see its own doc for why), so no test in this section
+/// needs a video-stream-only figure.
 fn source(duration_secs: f64, width: u32, total_kbps: Option<f64>, web: bool) -> SourceVideo {
-    SourceVideo { duration_secs, width, fps: 30.0, total_kbps, has_audio: true, web_playable: web }
+    SourceVideo {
+        duration_secs,
+        width,
+        fps: 30.0,
+        total_kbps,
+        video_kbps: None,
+        has_audio: true,
+        web_playable: web,
+    }
 }
 
 #[test]
@@ -210,9 +222,9 @@ fn plan_puts_a_short_video_on_its_top_rung() {
 
 #[test]
 fn plan_re_encodes_a_small_file_that_is_too_fat_to_stream() {
-    // The headline case of moss#1130: a 30 s 4K clip at 24 Mbps is only ~90 MB,
-    // so the old size gate never sent it to the encoder at all and it shipped at
-    // its camera bitrate. Size was the wrong question.
+    // A 30 s 4K clip at 24 Mbps is only ~90 MB, so the old size gate never sent
+    // it to the encoder at all and it shipped at its camera bitrate. Size was
+    // the wrong question.
     let config = VideoCompressionConfig::default();
     assert!(matches!(
         plan_video_encode(&source(30.0, 3840, Some(24_000.0), true), &config),
@@ -431,7 +443,7 @@ fn test_get_duration_nonexistent_file() {
 
 #[test]
 fn test_ffprobe_binary_config_targets_separate_artifact() {
-    // Root cause of the liu-guo.com video 404s: moss downloaded ffmpeg-only.
+    // Root cause of a real site's video 404s: moss downloaded ffmpeg-only.
     // ffprobe must be provisioned from its OWN evermeet artifact on macOS —
     // the ffmpeg getrelease/zip does not contain it.
     let config = ffprobe_binary_config();
@@ -638,22 +650,60 @@ fn test_validate_encoded_video_checks_duration() {
     );
 }
 
+// ===========================================
+// Thumbnail seek — a fixed 1s seek 0-bytes a poster for a clip that short
+// ===========================================
+
 #[test]
-fn test_thumbnail_scale_uses_800px_width() {
-    // Test that generate_thumbnail uses scale=800:-1 instead of scale=400:-1
-    // This test verifies the command construction, not actual execution
+fn thumbnail_seek_is_half_the_clip_for_a_short_source() {
+    // A 0.8 s clip: a fixed 1 s seek would land past EOF.
+    assert!((thumbnail_seek_secs(0.8) - 0.4).abs() < 1e-9);
+}
 
-    let manager = match FFmpegManager::detect() {
-        Ok(m) => m,
-        Err(_) => return, // Skip if FFmpeg not available
+#[test]
+fn thumbnail_seek_caps_at_one_second_for_a_long_source() {
+    assert_eq!(thumbnail_seek_secs(10.0), 1.0);
+}
+
+#[test]
+fn thumbnail_seek_is_zero_for_an_unknown_duration() {
+    // A failed probe (duration <= 0.0) seeks the first frame, which always
+    // exists, rather than propagating the probe failure into a bad seek.
+    assert_eq!(thumbnail_seek_secs(0.0), 0.0);
+    assert_eq!(thumbnail_seek_secs(-1.0), 0.0);
+}
+
+/// The real bug: a clip shorter than the old fixed 1 s seek produced a
+/// 0-byte poster. Real ffmpeg, because the failure is in what ffmpeg does
+/// with an out-of-range `-ss`, not in argument construction.
+#[test]
+fn a_clip_shorter_than_one_second_still_gets_a_poster() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
     };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("blink.mp4");
+    let ok = std::process::Command::new(&bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=0.8",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        ])
+        .arg(&source)
+        .status()
+        .expect("synthesise");
+    if !ok.success() {
+        eprintln!("skipping: could not synthesise a 0.8s source");
+        return;
+    }
 
-    // We'll test this by checking if the generated command contains "scale=800"
-    // For now, this test documents the requirement
-    // Implementation will update generate_thumbnail() to use 800px
-
-    // This test will be verified through integration testing with actual thumbnail generation
-    assert!(true, "Thumbnail scale requirement documented");
+    let manager = FFmpegManager::from_bin_path(bin);
+    let output = dir.path().join("blink.thumb.jpg");
+    let result = manager.generate_thumbnail(&source, &output, None, None);
+    assert!(result.is_ok(), "expected a poster, got {result:?}");
+    let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    assert!(size > 0, "poster must not be a 0-byte file");
 }
 
 #[test]
@@ -732,6 +782,97 @@ fn test_parse_ffmpeg_time_three_digit_milliseconds() {
 }
 
 // ===========================================
+// strip_ffmpeg_progress (log-tail-budget guard)
+// ===========================================
+
+/// A trimmed-down but real capture: two `\r`-joined progress ticks (ffmpeg's
+/// actual overwrite-in-place framing) followed by the substantive failure
+/// lines a real two-pass mux failure produced on a live vault — a moov-atom
+/// reopen failure mid-mux, reproduced verbatim from a captured `moss.log`.
+fn captured_stderr_fixture() -> String {
+    [
+        "frame= 4163 fps= 85 q=25.0 size=   37120KiB time=00:02:18.83 bitrate=2190.2kbits/s speed=2.84x elapsed=0:00:48.91    ",
+        "\rframe= 4200 fps= 85 q=25.0 size=   37376KiB time=00:02:20.07 bitrate=2185.9kbits/s speed=2.83x elapsed=0:00:49.41    ",
+        "\r[mp4 @ 0xa00c14780] Starting second pass: moving the moov atom to the beginning of the file\n",
+        "[mp4 @ 0xa00c14780] Unable to re-open output file for shifting data\n",
+        "[out#0/mp4 @ 0xa010743c0] Error writing trailer: No such file or directory\n",
+        "frame= 4647 fps= 85 q=-1.0 Lsize=   41489KiB time=00:02:34.98 bitrate=2192.9kbits/s speed=2.84x elapsed=0:00:54.59    \n",
+        "[libx264 @ 0xa01071880] kb/s:1999.04\n",
+        "Conversion failed!\n",
+    ]
+    .concat()
+}
+
+#[test]
+fn strip_ffmpeg_progress_drops_every_progress_tick() {
+    let cleaned = strip_ffmpeg_progress(&captured_stderr_fixture());
+    assert!(
+        !cleaned.contains("frame="),
+        "a progress tick survived filtering: {cleaned}"
+    );
+}
+
+#[test]
+fn strip_ffmpeg_progress_keeps_the_actual_diagnostics() {
+    let cleaned = strip_ffmpeg_progress(&captured_stderr_fixture());
+    assert!(cleaned.contains("Conversion failed!"), "{cleaned}");
+    assert!(cleaned.contains("Unable to re-open"), "{cleaned}");
+    assert!(cleaned.contains("Error writing trailer"), "{cleaned}");
+    assert!(cleaned.contains("kb/s:1999.04"), "{cleaned}");
+}
+
+#[test]
+fn strip_ffmpeg_progress_caps_the_kept_line_count() {
+    let mut blob = String::new();
+    for i in 0..(MAX_STDERR_ERROR_LINES + 50) {
+        blob.push_str(&format!("[warn] non-progress line {i}\n"));
+    }
+    let cleaned = strip_ffmpeg_progress(&blob);
+    assert_eq!(cleaned.lines().count(), MAX_STDERR_ERROR_LINES);
+    // The cap keeps the MOST RECENT lines — the ones nearest the failure.
+    assert!(cleaned.contains(&format!("non-progress line {}", MAX_STDERR_ERROR_LINES + 49)));
+    assert!(!cleaned.contains("non-progress line 0\n"));
+}
+
+// ===========================================
+// Encode start/end log lines (session-diagnosability)
+// ===========================================
+
+#[test]
+fn encode_start_line_names_source_and_rung() {
+    let rung = moss_core::asset_paths::VIDEO_LADDER[2];
+    let line = encode_start_line(Path::new("videos/clip.mov"), rung);
+    assert!(line.contains("videos/clip.mov"), "{line}");
+    assert!(line.contains(&rung.width.to_string()), "{line}");
+    assert!(line.contains(&rung.height.to_string()), "{line}");
+}
+
+#[test]
+fn encode_end_line_success_names_size_and_elapsed() {
+    let outcome = EncodeOutcome::Success { size_bytes: 12_345, retried: false };
+    let line = encode_end_line(Path::new("videos/clip.mov"), Duration::from_millis(2500), &outcome);
+    assert!(line.contains("videos/clip.mov"), "{line}");
+    assert!(line.contains("12345"), "{line}");
+    assert!(line.contains("2.5"), "{line}");
+    assert!(!line.contains("retry"), "{line}");
+}
+
+#[test]
+fn encode_end_line_success_names_a_retry() {
+    let outcome = EncodeOutcome::Success { size_bytes: 999, retried: true };
+    let line = encode_end_line(Path::new("videos/clip.mov"), Duration::from_secs(1), &outcome);
+    assert!(line.contains("retry"), "{line}");
+}
+
+#[test]
+fn encode_end_line_failure_names_the_reason() {
+    let outcome = EncodeOutcome::Failed("Conversion failed!");
+    let line = encode_end_line(Path::new("videos/clip.mov"), Duration::from_secs(3), &outcome);
+    assert!(line.contains("videos/clip.mov"), "{line}");
+    assert!(line.contains("Conversion failed!"), "{line}");
+}
+
+// ===========================================
 // VideoCompressionConfig::to_params() Tests
 // ===========================================
 
@@ -784,77 +925,12 @@ fn to_params_carries_the_ladder_so_editing_a_rung_invalidates_the_cache() {
     }
 }
 
-// ===========================================
-// FFmpeg stderr speed parsing tests
-// ===========================================
-
-#[test]
-fn test_parse_ffmpeg_speed_basic() {
-    assert_eq!(parse_ffmpeg_speed("speed=1.51x"), Some("1.51x".to_string()));
-}
-
-#[test]
-fn test_parse_ffmpeg_speed_embedded_in_line() {
-    let line = "frame=  120 fps= 30 q=28.0 size=    1024kB time=00:00:04.00 bitrate= 2097.2kbits/s speed=1.5x";
-    assert_eq!(parse_ffmpeg_speed(line), Some("1.5x".to_string()));
-}
-
-#[test]
-fn test_parse_ffmpeg_speed_slow() {
-    assert_eq!(
-        parse_ffmpeg_speed("speed=0.832x"),
-        Some("0.832x".to_string())
-    );
-}
-
-#[test]
-fn test_parse_ffmpeg_speed_na() {
-    assert_eq!(parse_ffmpeg_speed("speed=N/A"), Some("N/A".to_string()));
-}
-
-#[test]
-fn test_parse_ffmpeg_speed_missing() {
-    assert_eq!(parse_ffmpeg_speed("frame=120 fps=30"), None);
-}
-
-// ===========================================
-// FFmpeg stderr bitrate parsing tests
-// ===========================================
-
-#[test]
-fn test_parse_ffmpeg_bitrate_basic() {
-    assert_eq!(
-        parse_ffmpeg_bitrate("bitrate=1048.6kbits/s"),
-        Some("1048.6kbits/s".to_string())
-    );
-}
-
-#[test]
-fn test_parse_ffmpeg_bitrate_with_leading_space() {
-    assert_eq!(
-        parse_ffmpeg_bitrate("bitrate= 2097.2kbits/s"),
-        Some("2097.2kbits/s".to_string())
-    );
-}
-
-#[test]
-fn test_parse_ffmpeg_bitrate_embedded_in_line() {
-    let line = "frame=  120 fps= 30 q=28.0 size=    1024kB time=00:00:04.00 bitrate= 2097.2kbits/s speed=1.5x";
-    assert_eq!(
-        parse_ffmpeg_bitrate(line),
-        Some("2097.2kbits/s".to_string())
-    );
-}
-
-#[test]
-fn test_parse_ffmpeg_bitrate_na() {
-    assert_eq!(parse_ffmpeg_bitrate("bitrate=N/A"), Some("N/A".to_string()));
-}
-
-#[test]
-fn test_parse_ffmpeg_bitrate_missing() {
-    assert_eq!(parse_ffmpeg_bitrate("frame=120 fps=30"), None);
-}
+// FFmpeg stderr speed/bitrate parsing (parse_ffmpeg_speed/parse_ffmpeg_bitrate)
+// and their tests were removed here: their only production call site was the
+// per-tick `log::trace!` in spawn_ffmpeg_streaming, itself deleted as the
+// deletion candidate for encode start/end lines superseding it at INFO (see
+// EncodeOutcome/encode_start_line/encode_end_line) — two overlapping
+// progress-visibility mechanisms at different levels is not worth keeping.
 
 // ===========================================
 // Background QoS tests (priority + thread cap)

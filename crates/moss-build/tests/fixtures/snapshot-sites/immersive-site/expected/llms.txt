@@ -1,0 +1,35 @@
+# [TEST_DIR]
+
+---
+
+## Directory App
+
+# Directory App
+
+An interactive app embedded via a directory URL (no .html extension).
+The server resolves `./my-app/` to `./my-app/index.html`.
+
+<iframe src="./my-app/" width="100%" height="400" frameborder="0"></iframe>
+
+---
+
+## Particle Universe
+
+# Particle Universe
+
+An interactive particle simulation.
+
+<iframe src="./particle.html" width="100%" height="600" frameborder="0"></iframe>
+
+---
+
+## interactive
+
+---
+
+## [TEST_DIR]
+
+# Immersive Test Site
+
+Testing interactive iframe fullscreen toggle.
+

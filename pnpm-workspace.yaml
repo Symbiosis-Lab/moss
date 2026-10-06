@@ -1,2 +1,4 @@
 packages:
   - 'packages/*'
+  - 'crates/moss-build'
+  - 'scripts/place-map'

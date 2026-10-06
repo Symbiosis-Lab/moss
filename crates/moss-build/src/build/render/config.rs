@@ -35,7 +35,7 @@ pub struct SiteConfig {
     /// bool so consumers don't have to re-decide the default.
     pub implicit_figure: bool,
     /// `[site].math` — when true, `$…$` and `$$…$$` are parsed as LaTeX
-    /// equations (ADR-030). Default ON: an absent key resolves to `true`
+    /// equations. Default ON: an absent key resolves to `true`
     /// at the construction site, so every site gets math without writing
     /// any config.
     ///
@@ -76,7 +76,7 @@ pub struct SiteConfig {
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub heading_anchors: bool,
-    /// `[site].floating_nav` — the floating nav island (ADR-049). Default OFF
+    /// `[site].floating_nav` — the floating nav island. Default OFF
     /// since 2026-08-30: an absent key resolves to `false` at the construction
     /// site, so a site gets no floating nav until it asks for one. Authors who
     /// want it write `[site].floating_nav = true` (or flip the Services-tab
@@ -84,35 +84,55 @@ pub struct SiteConfig {
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub floating_nav: bool,
+    /// `[site].header` — resolved (`HeaderMode::from_config`, which also
+    /// carries the default and the unrecognized-value fallback), so
+    /// consumers never re-decide either.
+    pub header: crate::build::components::nav::HeaderMode,
     /// CLI `--site-url` override. When set, `resolve_site_url` will use this
     /// value instead of deriving the URL from `.moss/state.toml`. `None` means
     /// "derive from deployment state as usual". Consumed by Task 2.5.
     pub site_url_override: Option<String>,
+    /// `[redirects]` from the config the build parsed once: old address, new
+    /// address, as the author wrote them.
+    pub declared_redirects: Vec<(String, String)>,
     /// `[site].ai_policy` — site-level AI crawler policy that drives the
     /// generated robots.txt. One of `"standard"` (default), `"unrestricted"`,
     /// or `"restricted"`. `None` falls back to the standard policy.
     pub ai_policy: Option<String>,
     /// `[site].search` — full-text search, resolved at the construction site
     /// in `build/pipeline.rs`: `true` when the author turned the Services-tab
-    /// toggle on. Per ADR-010, the gate is expressed here in the
+    /// toggle on. By design, the gate is expressed here in the
     /// per-invocation config, not as a side-channel read inside the pipeline.
     ///
     /// Note this is still not the final "is search live" answer — the render
     /// phase ANDs it with `site_url.is_deployed()` (the same condition RSS
     /// uses) so preview/dev builds neither index nor show the nav button.
     pub search: bool,
-    /// `[terms].author` — generated author term pages (`/authors/<slug>/`) and
-    /// author-mention links. Default ON by key absence, resolved at the
-    /// construction site like `math`; explicit `[terms].author = false` turns
-    /// the dimension off for sites using `author:` as pure metadata.
-    pub terms_author: bool,
-    /// `[terms].tags` — generated tag term pages (`/tags/<slug>/`) and tag
-    /// links. Same default-on-by-absence story as `terms_author`.
-    pub terms_tags: bool,
-    /// moss#922 — what this build may reuse from the last one. Both bits are
-    /// resolved at the entry point (ADR-010: the render phase reads neither the
+    /// The kinds table `build::terms::term_kinds` resolves from
+    /// `.moss/config.toml`'s `[terms]` section — every name-list field's
+    /// namespace, built-in (`authors`, `tags`) and declared alike. The one
+    /// thing `build::terms::derive_terms` reads to decide term membership.
+    pub term_kinds: Vec<crate::build::terms::TermKind>,
+    /// Decoded geography, gazetteer, place namespace and locator preference.
+    pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
+    /// What this build may reuse from the last one. Both bits are
+    /// resolved at the entry point (by design, the render phase reads neither the
     /// build trigger nor the environment). See [`IncrementalGates`].
     pub incremental: IncrementalGates,
+}
+
+impl SiteConfig {
+    /// The `[site]` answers `process_markdown_file` reads, as the one value
+    /// both it and the parse cache's fingerprint take.
+    pub fn markdown(&self) -> crate::build::markdown::SiteMarkdown<'_> {
+        crate::build::markdown::SiteMarkdown {
+            implicit_figure: self.implicit_figure,
+            math: self.math,
+            hard_line_breaks: self.hard_line_breaks,
+            heading_anchors: self.heading_anchors,
+            typesetting: self.typesetting.as_deref(),
+        }
+    }
 }
 
 /// Hand-written rather than derived for one field: `#[derive(Default)]` gives
@@ -137,14 +157,26 @@ impl Default for SiteConfig {
             link_preview: false,
             heading_anchors: false,
             floating_nav: false,
+            header: crate::build::components::nav::HeaderMode::Brand,
             site_url_override: None,
+            declared_redirects: Vec::new(),
             ai_policy: None,
             search: false,
-            terms_author: false,
-            terms_tags: false,
+            term_kinds: Vec::new(),
+            place_maps: None,
             incremental: IncrementalGates::default(),
         }
     }
+}
+
+/// A page's effective typesetting: its own `typesetting:` if it set one, else
+/// `[site].typesetting`. The one owner of that precedence — the page shell,
+/// the stylesheet's vertical partial and a body image's `sizes=` (through
+/// [`crate::build::markdown::SiteMarkdown`]) must agree on which pages are
+/// vertical, and three hand-written copies of this line were how they could
+/// drift apart.
+pub(crate) fn effective_typesetting<'a>(page: Option<&'a str>, site: Option<&'a str>) -> Option<&'a str> {
+    page.or(site)
 }
 
 /// `suppress` omits the attribute when the resolved value equals the default (e.g. "horizontal").

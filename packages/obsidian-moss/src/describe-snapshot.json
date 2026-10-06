@@ -88,7 +88,7 @@
         "value": "rgba(45, 90, 45, 0.28)",
         "dark_value": "rgba(74, 124, 74, 0.4)",
         "type": "color",
-        "description": "Quiet accent for ambient indicators (hairlines, tree-row left-borders). ~28% opacity of moss-color-accent. Consumed by the breadcrumb and preview hairlines (ADR-015 Ambient renderer). Ambient only — never a focus indicator: it composites too close to the page to satisfy 1.4.11. Use moss-color-ui-accent for focus."
+        "description": "Quiet accent for ambient indicators (hairlines, tree-row left-borders). ~28% opacity of moss-color-accent. Consumed by the breadcrumb and preview hairlines. Ambient only — never a focus indicator: it composites too close to the page to satisfy 1.4.11. Use moss-color-ui-accent for focus."
       },
       {
         "name": "moss-color-bg",
@@ -167,13 +167,13 @@
         "name": "moss-vertical-card-measure",
         "value": "13em",
         "type": "dimension",
-        "description": "How far a grid-shaped card runs along the column under vertical typesetting (data-typesetting=\"vertical\"), read by crates/moss-build/src/assets/css/site/vertical.css. The card's plate is 0.75 of it, a 3:4 portrait. `em`, not `rem`, so it scales with --moss-vertical-font-size and keeps the same share of the 38em band on a short and a tall screen. The site-tunable knob for vertical card density; that cards run along the scroll rather than N abreast is a moss default, not a knob. docs/archive/2026-09-11-vertical-cards-design.md"
+        "description": "How far a grid-shaped card runs along the column under vertical typesetting (data-typesetting=\"vertical\"), read by crates/moss-build/src/assets/css/site/vertical.css. The card's plate is 0.75 of it, a 3:4 portrait. `em`, not `rem`, so it scales with --moss-vertical-font-size and keeps the same share of the 38em band on a short and a tall screen. The site-tunable knob for vertical card density; that cards run along the scroll rather than N abreast is a moss default, not a knob."
       },
       {
         "name": "moss-width-wide",
         "value": "min(calc(56 * var(--moss-reading-size)), var(--moss-site-max-width))",
         "type": "dimension",
-        "description": "Width of a data-width=\"wide\" content band (ADR-021 Corollary 2). Font-stable multiple of --moss-reading-size like moss-content-width; the min() clamp is load-bearing — the reader font-scale control scales --moss-reading-size (scale-xlarge = 1.25x), and without the clamp a wide band at xlarge overruns --moss-site-max-width and stops aligning with the nav. data-width=\"page\" reuses --moss-site-max-width directly (it must stay identical to the .container width or the band stops aligning with nav/footer); there is deliberately no second token for it."
+        "description": "Width of a data-width=\"wide\" content band. Font-stable multiple of --moss-reading-size like moss-content-width; the min() clamp is load-bearing — the reader font-scale control scales --moss-reading-size (scale-xlarge = 1.25x), and without the clamp a wide band at xlarge overruns --moss-site-max-width and stops aligning with the nav. data-width=\"page\" reuses --moss-site-max-width directly (it must stay identical to the .container width or the band stops aligning with nav/footer); there is deliberately no second token for it."
       }
     ],
     "spacing": [
@@ -675,7 +675,7 @@
       "example_markdown": "",
       "status": "confirmed",
       "since": "1",
-      "description": "Type-aware metadata slot (date for articles, count for folders, domain for links). Renders ABOVE the title in horizontal mode — filling the kicker position when the explicit `kicker` slot is unset, per `docs/reference/design/preview-cards.md:22-30`. To the right of the title in vertical CJK mode (the horizontal kicker position transposed). Meta IS the visual kicker, with the same uppercase overline treatment.",
+      "description": "Type-aware metadata slot (date for articles, count for folders, domain for links). Renders ABOVE the title in horizontal mode — filling the kicker position when the explicit `kicker` slot is unset. To the right of the title in vertical CJK mode (the horizontal kicker position transposed). Meta IS the visual kicker, with the same uppercase overline treatment.",
       "authorable": false
     },
     {
@@ -759,7 +759,7 @@
       "example_markdown": "",
       "status": "confirmed",
       "since": "1",
-      "description": "Trailing \"More →\" link on a truncated children listing (emitted when `children_limit` caps the embed); links to the folder's full index. Rendered as a sibling immediately after `.moss-cards-container`, so it sits outside the listing's flex `gap` and binds to the list via its own `margin-top` (see docs/reference/design/spacing.md).",
+      "description": "Trailing \"More →\" link on a truncated children listing (emitted when `children_limit` caps the embed); links to the folder's full index. Rendered as a sibling immediately after `.moss-cards-container`, so it sits outside the listing's flex `gap` and binds to the list via its own `margin-top`.",
       "authorable": false
     },
     {
@@ -998,18 +998,6 @@
       "authorable": false
     },
     {
-      "class": "moss-embed-video-download",
-      "kind": "instance",
-      "parent": "moss-embed",
-      "data_attrs": [],
-      "example_html": "<p class=\"moss-embed-video-download\"><a href=\"clip.mp4\" download>Download video</a></p>",
-      "example_markdown": "![[clip.mp4]]",
-      "status": "confirmed",
-      "since": "0.11",
-      "description": "Follows a video that ships an adaptive ladder. A player can fail for reasons the page cannot detect — a missing codec, a proxy that strips streaming — and on a slow link a file the viewer can start and leave running beats one that will not start. Absent when no ladder was built.",
-      "authorable": false
-    },
-    {
       "class": "moss-embed-ipynb",
       "kind": "instance",
       "parent": "moss-embed",
@@ -1059,7 +1047,7 @@
             "screen"
           ],
           "default": "body",
-          "description": "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9. Emitted from the authoring shortcode (e.g. `:::hero {full}` -> `data-width=\"screen\"`); on article children, site.css sizes the band via the content-width escape (ADR-021 Corollary 2). The hero itself escapes by DOM position (outside `<main>`), not by these rules."
+          "description": "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9. Emitted from the authoring shortcode (e.g. `:::hero {full}` -> `data-width=\"screen\"`); on article children, site.css sizes the band via the content-width escape. The hero itself escapes by DOM position (outside `<main>`), not by these rules."
         },
         {
           "name": "data-slides",
@@ -1130,7 +1118,7 @@
       "kind": "standalone",
       "parent": "",
       "data_attrs": [],
-      "example_html": "<p class=\"moss-hero-caption\">封面：基輔米迦勒修道院門口的陣亡將士紀念牆（拍攝：糜緒洋）</p>",
+      "example_html": "<p class=\"moss-hero-caption\">封面：山城舊教堂門口的無名將士紀念牆（拍攝：陳遠山）</p>",
       "example_markdown": ":::hero {image=cover.jpg caption=\"Cover: the memorial wall (photo: A. Photographer)\"}\n:::\n",
       "status": "confirmed",
       "since": "0",
@@ -2144,7 +2132,7 @@
       "example_markdown": "",
       "status": "emerging",
       "since": "0",
-      "description": "Runtime marker the preview bridge adds to `<html>` when the shell is in mobile device-preview mode. Since ADR-039 the shell owns chrome clearance by insetting the preview iframe, so no CSS keys off this class and it currently has no effect; it is retained as a revert path and may be removed.",
+      "description": "Runtime marker the preview bridge adds to `<html>` when the shell is in mobile device-preview mode. The shell owns chrome clearance by insetting the preview iframe, so no CSS keys off this class and it currently has no effect; it is retained as a revert path and may be removed.",
       "authorable": false
     },
     {
@@ -2188,7 +2176,7 @@
       "kind": "container",
       "parent": "",
       "data_attrs": [],
-      "example_html": "<div class=\"moss-byline\"><div class=\"moss-byline-row\">作者　糜緒洋</div><div class=\"moss-byline-row\">編輯　謝丁</div></div>",
+      "example_html": "<div class=\"moss-byline\"><div class=\"moss-byline-row\">作者　陳遠山</div><div class=\"moss-byline-row\">編輯　周一</div></div>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "1",
@@ -2200,7 +2188,7 @@
       "kind": "instance",
       "parent": "moss-byline",
       "data_attrs": [],
-      "example_html": "<div class=\"moss-byline-row\">首發媒體　<a href=\"https://theinitium.com/a\">端傳媒</a></div>",
+      "example_html": "<div class=\"moss-byline-row\">首發媒體　<a href=\"https://example.org/a\">遠聲媒體</a></div>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "1",
@@ -2212,7 +2200,7 @@
       "kind": "container",
       "parent": "",
       "data_attrs": [],
-      "example_html": "<div class=\"moss-article-colophon\"><div class=\"moss-article-colophon-row\">首發媒體　<a href=\"https://theinitium.com/a\">端傳媒</a></div></div>",
+      "example_html": "<div class=\"moss-article-colophon\"><div class=\"moss-article-colophon-row\">首發媒體　<a href=\"https://example.org/a\">遠聲媒體</a></div></div>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "1",
@@ -2224,7 +2212,7 @@
       "kind": "instance",
       "parent": "moss-article-colophon",
       "data_attrs": [],
-      "example_html": "<div class=\"moss-article-colophon-row\">封面　基輔米迦勒修道院門口的陣亡將士紀念牆（拍攝：糜緒洋）</div>",
+      "example_html": "<div class=\"moss-article-colophon-row\">封面　山城舊教堂門口的無名將士紀念牆（拍攝：陳遠山）</div>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "1",
@@ -2236,7 +2224,7 @@
       "kind": "instance",
       "parent": "main-nav",
       "data_attrs": [],
-      "example_html": "<a href=\"/\" class=\"site-name\">潮汐</a>",
+      "example_html": "<a href=\"/\" class=\"site-name\">河灣</a>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "0",
@@ -2248,7 +2236,7 @@
       "kind": "instance",
       "parent": "main-nav",
       "data_attrs": [],
-      "example_html": "<a href=\"/awards/\" class=\"breadcrumb-segment\">獎項</a>",
+      "example_html": "<a href=\"/awards/\" class=\"breadcrumb-segment\">評選</a>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "0",
@@ -2272,7 +2260,7 @@
       "kind": "chrome",
       "parent": "main-nav",
       "data_attrs": [],
-      "example_html": "<div class=\"nav-left\"><a href=\"/\" class=\"site-name\">潮汐</a></div>",
+      "example_html": "<div class=\"nav-left\"><a href=\"/\" class=\"site-name\">河灣</a></div>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "0",
@@ -2320,7 +2308,7 @@
       "kind": "instance",
       "parent": "nav-left",
       "data_attrs": [],
-      "example_html": "<span class=\"breadcrumb-label\">獎項</span>",
+      "example_html": "<span class=\"breadcrumb-label\">評選</span>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "0",
@@ -2454,7 +2442,7 @@
       "example_markdown": "",
       "status": "emerging",
       "since": "0",
-      "description": "Floating navigation island: a one-line bar, aligned to the text column, revealed on scroll-up once the masthead has left the screen. Opt-in — a site gets none until it sets `[site].floating_nav = true` (the Services-tab toggle writes that key). On a site that opted in, the markup is emitted on every page with a breadcrumb trail but only ever shows where the page has a contents table to offer: two or more section headings (ADR-049 §10). `--moss-nav-island-display: none` forces it off from CSS, media query included.",
+      "description": "Floating navigation island: a one-line bar, aligned to the text column, revealed on scroll-up once the masthead has left the screen. Opt-in — a site gets none until it sets `[site].floating_nav = true` (the Services-tab toggle writes that key). On a site that opted in, the markup is emitted on every page with a breadcrumb trail but only ever shows where the page has a contents table to offer: two or more section headings. `--moss-nav-island-display: none` forces it off from CSS, media query included.",
       "authorable": false
     },
     {
@@ -3395,7 +3383,7 @@
       "example_markdown": "",
       "status": "confirmed",
       "since": "0",
-      "description": "The top-level comment thread, rendered server-side at build time and then hydrated in place (ADR-025). New comments are appended here by the client rather than replacing the list, so server-rendered and live comments share one shape.",
+      "description": "The top-level comment thread, rendered server-side at build time and then hydrated in place. New comments are appended here by the client rather than replacing the list, so server-rendered and live comments share one shape.",
       "authorable": false
     },
     {
@@ -3816,7 +3804,7 @@
       "name": "--moss-nav-island-display",
       "owner": "moss-nav-island",
       "default": "block",
-      "description": "Forces the floating nav island off from CSS, media queries included — the page then behaves as it did before ADR-049: the masthead scrolls away and nothing replaces it. Not the main switch: the island is opt-in and ships off, so `[site].floating_nav = true` (the Settings → Services toggle) is what turns it on in the first place, and this property is for a theme that wants it off at some widths and not others. Appearance is otherwise tuned through the island's contract-registered classes; its measure already tracks `--moss-nav-width`/`--moss-content-width`, so widening the nav widens the island with it."
+      "description": "Forces the floating nav island off from CSS, media queries included — the page then behaves as it did before the floating nav existed: the masthead scrolls away and nothing replaces it. Not the main switch: the island is opt-in and ships off, so `[site].floating_nav = true` (the Settings → Services toggle) is what turns it on in the first place, and this property is for a theme that wants it off at some widths and not others. Appearance is otherwise tuned through the island's contract-registered classes; its measure already tracks `--moss-nav-width`/`--moss-content-width`, so widening the nav widens the island with it."
     },
     {
       "name": "--moss-sidenote-reserve",

@@ -7,8 +7,9 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::vault::import::scrape::run::{import_local_file, scrape_to_folder, ScrapeProgress};
-use crate::vault::import::scrape::service::ScrapeConfig;
+use crate::vault::import::scrape::import_local::import_local_file;
+use crate::vault::import::scrape::run::{scrape_to_folder, ScrapeProgress, ScrapeResult};
+use crate::vault::import::scrape::service::{ScrapeConfig, DEFAULT_MAX_PAGES};
 
 /// Top-level dispatcher for `moss import …`. Returns a process exit code.
 pub fn run(args: &[String]) -> i32 {
@@ -54,9 +55,7 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
-    let mut any_failed = false;
-    let mut total_pages = 0usize;
-    let mut total_failed_pages = 0usize;
+    let mut totals = ImportTotals::default();
 
     for url in &urls {
         eprintln!("→ {}", redact_query(url));
@@ -73,36 +72,180 @@ pub fn run(args: &[String]) -> i32 {
 
         match result {
             Ok(res) => {
-                total_pages += res.total_pages;
-                total_failed_pages += res.failed_pages;
                 eprintln!(
-                    "  ✓ {} page(s) imported, {} failed",
-                    res.total_pages, res.failed_pages
+                    "  ✓ {} page(s) imported, {} failed, {} skipped (non-HTML), {} duplicate(s) skipped",
+                    res.total_pages, res.failed_pages, res.skipped_pages, res.duplicate_pages
                 );
-                if res.failed_pages > 0 {
-                    any_failed = true;
+                // A failed fetch of a query-string variant of a page already
+                // imported is neither `failed_pages` (the content isn't
+                // missing) nor `duplicate_pages` (it was never confirmed a
+                // duplicate, just presumed one from its path) — said on its
+                // own line so it doesn't inflate either count silently.
+                if res.unreachable_variants > 0 {
+                    eprintln!(
+                        "  ↳ {} variant(s) of an already-imported page could not be \
+                         reached (not written as a page; the content is already imported)",
+                        res.unreachable_variants
+                    );
                 }
+                // A failed fetch of a linked PDF/image/archive/etc. is
+                // neither `failed_pages` (it was never a page) nor
+                // `skipped_pages` (that fetch never came back, so nothing
+                // was actually sniffed) — said on its own line for the same
+                // reason as the variant count above.
+                if res.unreachable_files > 0 {
+                    eprintln!(
+                        "  ↳ {} linked file(s) (PDF, image, archive, etc.) could not be \
+                         reached and were not written as pages",
+                        res.unreachable_files
+                    );
+                }
+                // Widgets a static site cannot run: say what was kept as a
+                // link and what had no static form (each of those also
+                // logged by page and kind).
+                if res.widgets_carried > 0 || res.widgets_dropped > 0 {
+                    eprintln!(
+                        "  ↳ {} widget(s) carried as links, {} with no static form",
+                        res.widgets_carried, res.widgets_dropped
+                    );
+                }
+                if let Some(line) = res.chrome.line() {
+                    eprintln!("  ↳ {line}");
+                }
+                // Silent when the site declared no sitemap at all — the
+                // ordinary case, and the one this line must not clutter.
+                if res.sitemap_urls > 0 {
+                    eprintln!(
+                        "  ↳ {} page(s) came from the site's own sitemap (imported regardless \
+                         of the page cap)",
+                        res.sitemap_urls
+                    );
+                }
+                if res.sitemap_truncated {
+                    eprintln!(
+                        "  ⚠ the sitemap itself declared more than {} URLs and was truncated — \
+                         some declared pages may be missing.",
+                        crate::vault::import::scrape::sitemap::MAX_SITEMAP_URLS
+                    );
+                }
+                // A capped crawl is incomplete even when every page it did
+                // reach succeeded — real pages were left out, and before
+                // this fix the only signal was the exit code below. Say so
+                // plainly, with how many were left and how to get them.
+                // `-r` is deliberately left off that follow-up command: with
+                // `--list`, `-r` makes every listed URL its own fresh,
+                // separately-capped crawl rather than just fetching it, so
+                // it does not pick up "the rest" — it can re-walk pages
+                // already imported and hit the cap again per URL.
+                if res.capped {
+                    eprintln!(
+                        "  ⚠ stopped at the {}-page cap — {} more in-scope page(s) were \
+                         found but not imported. Run `moss import --list <file> {}` (leave \
+                         off -r, which would re-crawl each listed URL instead of just \
+                         fetching it) with the missing URLs one per line to pick up the rest.",
+                        DEFAULT_MAX_PAGES,
+                        res.remaining_urls,
+                        folder.display(),
+                    );
+                }
+                // One line per host this crawl's own pacing had to slow
+                // down for after a 429/503 — silent, like every other line
+                // here, when nothing engaged it.
+                for host in &res.rate_limited_hosts {
+                    eprintln!(
+                        "  ⚠ slowed to 1 request/{:.1}s for {} after rate limiting",
+                        host.interval_ms as f64 / 1000.0,
+                        host.host
+                    );
+                }
+                totals.record(&res);
             }
             Err(e) => {
                 eprintln!("  ✗ {}", e);
-                any_failed = true;
+                totals.hard_errors += 1;
             }
         }
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed)",
-        total_pages,
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{})",
+        totals.pages,
         folder.display(),
-        total_failed_pages
+        totals.failed_pages,
+        totals.skipped_pages,
+        totals.duplicate_pages,
+        if totals.unreachable_variants > 0 {
+            format!(", {} variant(s) unreachable", totals.unreachable_variants)
+        } else {
+            String::new()
+        },
+        if totals.unreachable_files > 0 {
+            format!(", {} linked file(s) unreachable", totals.unreachable_files)
+        } else {
+            String::new()
+        },
+        if totals.widgets_carried > 0 || totals.widgets_dropped > 0 {
+            format!(
+                ", {} widget(s) carried as links, {} with no static form",
+                totals.widgets_carried, totals.widgets_dropped
+            )
+        } else {
+            String::new()
+        },
+        if totals.capped_leftovers > 0 {
+            format!(", {} left unimported by the page cap", totals.capped_leftovers)
+        } else {
+            String::new()
+        },
     );
 
-    if any_failed && total_pages == 0 {
-        1
-    } else if any_failed {
-        2
-    } else {
-        0
+    totals.exit_code()
+}
+
+/// Running counts across every URL passed to one `moss import` invocation.
+/// A recursive crawl can hit the page cap independently for each URL, and a
+/// URL can fail to fetch at all before any `ScrapeResult` exists — folding
+/// both into one struct is what lets the exit code below be a single
+/// derivation instead of an `any_failed` flag set from three different arms.
+#[derive(Debug, Default)]
+struct ImportTotals {
+    pages: usize,
+    failed_pages: usize,
+    skipped_pages: usize,
+    duplicate_pages: usize,
+    unreachable_variants: usize,
+    unreachable_files: usize,
+    widgets_carried: usize,
+    widgets_dropped: usize,
+    capped_leftovers: usize,
+    hard_errors: usize,
+}
+
+impl ImportTotals {
+    fn record(&mut self, res: &ScrapeResult) {
+        self.pages += res.total_pages;
+        self.failed_pages += res.failed_pages;
+        self.skipped_pages += res.skipped_pages;
+        self.duplicate_pages += res.duplicate_pages;
+        self.unreachable_variants += res.unreachable_variants;
+        self.unreachable_files += res.unreachable_files;
+        self.widgets_carried += res.widgets_carried;
+        self.widgets_dropped += res.widgets_dropped;
+        if res.capped {
+            self.capped_leftovers += res.remaining_urls;
+        }
+    }
+
+    fn any_failed(&self) -> bool {
+        self.failed_pages > 0 || self.capped_leftovers > 0 || self.hard_errors > 0
+    }
+
+    fn exit_code(&self) -> i32 {
+        match (self.any_failed(), self.pages) {
+            (true, 0) => 1,
+            (true, _) => 2,
+            (false, _) => 0,
+        }
     }
 }
 
@@ -180,6 +323,14 @@ fn resolve_folder(arg: Option<&str>) -> Result<PathBuf, String> {
         None => std::env::current_dir()
             .map_err(|e| format!("could not determine current directory: {}", e))?,
     };
+    // A target the caller named but that is not there yet is created, parents
+    // included: an agent running `moss import <url> <new-folder>` should not
+    // need a separate `mkdir`. Only an explicit argument is created; the
+    // current directory always exists.
+    if arg.is_some() && !folder.exists() {
+        std::fs::create_dir_all(&folder)
+            .map_err(|e| format!("could not create folder {}: {}", folder.display(), e))?;
+    }
     if !folder.exists() {
         return Err(format!("folder does not exist: {}", folder.display()));
     }
@@ -264,12 +415,40 @@ fn print_usage() {
     eprintln!("login-gated or JS-heavy pages a plain fetch can't reach.");
     eprintln!();
     eprintln!("By default imports only the URL given. Pass --recursive (-r) to walk");
-    eprintln!("every in-scope page (same host + path prefix). On filename collisions,");
+    eprintln!("every in-scope page (same host + path prefix), up to {} pages. Before", DEFAULT_MAX_PAGES);
+    eprintln!("walking links, -r also reads the site's own sitemap (from robots.txt's");
+    eprintln!("`Sitemap:` line, else /sitemap.xml): every page it declares is imported");
+    eprintln!("regardless of the page cap, which only limits link-discovered extras. If");
+    eprintln!("more link-discovered pages are found than the cap allows, the crawl stops");
+    eprintln!("there; the summary says how many were left, and you can pass the missing");
+    eprintln!("URLs to `--list` (without -r — each listed URL is fetched directly, not");
+    eprintln!("re-crawled) to pick up the rest.");
+    eprintln!("A non-HTML response found while crawling (a PDF, an image, a feed, a");
+    eprintln!("calendar file, ...) is skipped, never written as a page. A page whose own");
+    eprintln!("canonical URL (or, lacking one, its extracted body) already matches a page");
+    eprintln!("already imported — a lightbox, listing-filter, or calendar-export variant");
+    eprintln!("of the same page — is a duplicate: also never written, and does not count");
+    eprintln!("against the page cap. On filename collisions between two distinct pages,");
     eprintln!("the new file is renamed `name 2.md`, `name 3.md`, etc.");
     eprintln!();
-    eprintln!("The vault copy is canonical; the source URL is recorded in `syndicated`");
-    eprintln!("frontmatter (POSSE), the same field that lets a syndicated comment link");
-    eprintln!("back to its origin. Import is for content you have the right to republish.");
+    eprintln!("A `429 Too Many Requests` (or a `503` naming a Retry-After) is retried —");
+    eprintln!("honoring the host's own Retry-After wait when it sent one, else a short");
+    eprintln!("backoff — for a bounded number of attempts before giving up. If the URL");
+    eprintln!("that never came back is a variant of a page already imported (same path,");
+    eprintln!("different query string), it is counted as \"variant(s) unreachable\"");
+    eprintln!("instead of getting a failure stub; a genuinely new page that never came");
+    eprintln!("back still gets one — unless its own extension already names a non-HTML");
+    eprintln!("file (a PDF, an image, ...), in which case it is counted as \"linked");
+    eprintln!("file(s) unreachable\" instead, same as a non-HTML response that was");
+    eprintln!("actually fetched.");
+    eprintln!();
+    eprintln!("The vault copy is canonical; the source URL is recorded in `origin`");
+    eprintln!("frontmatter as provenance, not as a claim that the content also lives");
+    eprintln!("there. Import is for content you have the right to republish.");
+    eprintln!();
+    eprintln!("Exit codes: 0 every page imported cleanly; 1 nothing was imported at all;");
+    eprintln!("2 partial — some pages failed, or a recursive crawl was stopped early by");
+    eprintln!("the page cap (a skipped non-HTML response alone does not cause exit 2).");
 }
 
 #[cfg(test)]
@@ -373,5 +552,14 @@ mod tests {
         let args = ["--bogus".to_string(), "https://x.example/".to_string()];
         let err = parse_args(&args).expect_err("an unknown option must not parse");
         assert!(err.contains("--bogus"), "the message must name it: {err}");
+    }
+
+    #[test]
+    fn a_missing_target_folder_is_created_with_its_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("new").join("site");
+        let resolved = resolve_folder(target.to_str()).expect("a missing folder is created");
+        assert!(target.is_dir());
+        assert!(resolved.ends_with("site"));
     }
 }

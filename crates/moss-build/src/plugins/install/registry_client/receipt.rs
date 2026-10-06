@@ -20,7 +20,7 @@
 //! the user allowed them is recorded in app data ([`super::approval`]).
 //!
 //! A stack receipt is written only after bring-up is proven, beside the
-//! staged bundle — moss#1120's fix, so a re-pinned artifact reaches a
+//! staged bundle, so a re-pinned artifact reaches a
 //! machine that already has one staged. `receipt_on` records which of the
 //! two this was, truthfully, though nothing reads it back yet.
 
@@ -174,7 +174,7 @@ pub fn is_placeholder_sha256(sha: &str) -> bool {
 ///
 /// **No receipt counts as stale.** Every app staged before stamping existed
 /// has no receipt, and those are exactly the installs the pin never reached;
-/// treating "unknown" as current would preserve that forever (moss#1120). The
+/// treating "unknown" as current would preserve that forever. The
 /// exceptions are a placeholder pin (nothing installable to be behind) and an
 /// [`Origin::Local`] install (the dev override owns that machine's copy).
 pub fn stale_against_pin(receipt: Option<&Receipt>, version: &str, sha256: &str) -> bool {

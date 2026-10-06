@@ -1,12 +1,9 @@
 //! The file-watch driver: debouncer sessions, the event pump, and the
 //! per-folder rebuild worker — the long-running loop behind `--watch`.
 //!
-//! Crossed from `src-tauri/src/build_shell/watch.rs` at slice W1 of the
-//! 2026-08-28 preview-server relocation plan (NORTH-STAR charters exactly this
-//! home: "watch — loop in `ops/watch.rs` behind Spawner; the app-side task
-//! stays UiBound"). The *decisions* — whether a change should rebuild, the
-//! content-hash gate, rename pairing, the refresh diff — were already here in
-//! [`crate::build::watch`]; this module adds the driver that runs them.
+//! The *decisions* — whether a change should rebuild, the content-hash gate,
+//! rename pairing, the refresh diff — live in [`crate::build::watch`]; this
+//! module is the driver that runs them.
 //!
 //! ## The host seam, constructor-shaped
 //!
@@ -18,17 +15,17 @@
 //!   [`TokioSpawner`](crate::build::ports::spawner::TokioSpawner));
 //! * **where events go** — an [`EventRelay`]: the app's typed Tauri bus, or
 //!   the SSE carrier's bus ([`crate::ops::serve::events`]) when there is no
-//!   shell. There is no `Option<AppHandle>` mode flag any more; each host has
-//!   exactly one construction path (the same shape `ops/serve.rs` took at S1);
+//!   shell. There is no `Option<AppHandle>` mode flag; each host has exactly
+//!   one construction path;
 //! * **how a rebuild runs** — [`RebuildDispatch`]/[`RebuildAttempt`]: the
 //!   rebuild bodies stay host-side (they are managed-state glue — baseline
 //!   stashes, the publish freeze, progress channels), and the driver only
 //!   decides *when* to call them.
 //!
 //! The worker/supervision machinery (`ops/watch/worker.rs`,
-//! `ops/watch/supervision.rs`, `ops/watch/reconcile.rs`) rode along whole —
-//! it was host-free already, process-global by design so the headless path
-//! gets the same slots and strike rules.
+//! `ops/watch/supervision.rs`, `ops/watch/reconcile.rs`) is host-free and
+//! process-global by design, so the headless path gets the same slots and
+//! strike rules.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -45,9 +42,11 @@ use crate::build::watch::{
 };
 use crate::types::events::MossEvent;
 
+pub mod cadence;
 pub mod headless;
 pub mod reconcile;
 pub mod supervision;
+pub mod sweep;
 pub mod worker;
 
 /// Deliver one [`MossEvent`] to whatever frontend the host has — the typed
@@ -88,6 +87,12 @@ pub struct WatchConfig {
     pub emit: EventRelay,
     pub dispatch: RebuildDispatch,
     pub attempt: RebuildAttempt,
+    /// Live/Background — races the reconcile timer's sleep against a
+    /// change instead of ticking on a fixed `Duration`, and gates the
+    /// folder's derived work (`FolderSession::derived_work_gate`). A headless host
+    /// with no visibility signal passes a constant `Live` receiver (see
+    /// `headless::start`); the GUI passes the real, live-updating one.
+    pub cadence: tokio::sync::watch::Receiver<cadence::Cadence>,
 }
 
 /// Per-event delay passed to `notify-debouncer-full`. Lowered from 500ms to
@@ -99,8 +104,7 @@ pub struct WatchConfig {
 /// (tick = 250/4 = 62.5ms). It coalesces the sub-millisecond burst one write
 /// emits; it does NOT coalesce two events hundreds of milliseconds apart, and
 /// raising this value would not — it would only delay both. See the
-/// `build::watch` module doc and
-/// `docs/archive/2026-08-31-rebuild-pairs-per-save.md`.
+/// `build::watch` module doc.
 ///
 /// CROSS-LAYER CONTRACT: the frontend's `PreviewManager.REFRESH_COALESCE_MS`
 /// (preview-manager.ts, currently 200ms) merges the FileChanged + BuildComplete
@@ -141,12 +145,18 @@ pub fn register_worker(
     attempt: RebuildAttempt,
 ) -> Arc<worker::WorkerHandle> {
     // The folder's rebuild worker: drains the request slot one build at a
-    // time, so no producer ever awaits a build inline (phase 1a of
-    // docs/archive/2026-08-18-watcher-reliability-architecture.md). Spawned
+    // time, so no producer ever awaits a build inline. Spawned
     // even when the kill switch routes triggers to the inline body — the
     // publish thaw's catch-up rides the slot either way, and an idle worker
     // costs one parked task.
-    let worker_handle = worker::register(folder_path);
+    spawn_worker(worker::register(folder_path), spawner, attempt)
+}
+
+fn spawn_worker(
+    worker_handle: Arc<worker::WorkerHandle>,
+    spawner: &Arc<dyn Spawner>,
+    attempt: RebuildAttempt,
+) -> Arc<worker::WorkerHandle> {
     log::info!(
         "Rebuild path: {}",
         if worker::worker_enabled() {
@@ -166,7 +176,8 @@ pub fn register_worker(
     worker_handle
 }
 
-/// Ensure a rebuild worker is registered and running for `folder_path`,
+/// Ensure a rebuild worker is registered and running for `folder_path`, and
+/// count the calling watcher task onto it (released when the returned [`worker::WatcherSlot`] drops),
 /// reusing one that is already there instead of always minting a fresh
 /// handle via [`register_worker`].
 ///
@@ -187,17 +198,17 @@ pub fn register_worker(
 /// calling `register_worker` early, a trigger landing between folder-open and
 /// the watcher's own `start()` found no worker at all and fell back to
 /// building inline — a second, uncoordinated `run_pipeline` against the same
-/// `stage_dir` the open build was still writing. See
-/// `docs/archive/2026-09-15-open-double-build-race.md`.
+/// `stage_dir` the open build was still writing.
 pub fn ensure_worker(
     folder_path: &str,
     spawner: &Arc<dyn Spawner>,
     attempt: RebuildAttempt,
-) -> Arc<worker::WorkerHandle> {
-    match worker::get(folder_path) {
-        Some(existing) => existing,
-        None => register_worker(folder_path, spawner, attempt),
-    }
+) -> worker::WatcherSlot {
+    worker::attach(folder_path).unwrap_or_else(|| {
+        let slot = worker::register_counted(folder_path);
+        spawn_worker(slot.handle().clone(), spawner, attempt);
+        slot
+    })
 }
 
 /// Start file watching for live development mode.
@@ -214,16 +225,32 @@ pub async fn start(config: WatchConfig) {
         emit,
         dispatch,
         attempt,
+        cadence,
     } = config;
 
-    let worker_handle = ensure_worker(&folder_path, &spawner, attempt);
+    let worker_slot = ensure_worker(&folder_path, &spawner, attempt);
 
     // The folder's watcher-health ledger (phase 3 — supervision). The pump
     // records liveness into it, the sweep judges strikes against it, and the
     // session loop below executes its recreate verdicts.
     let health = supervision::register(&folder_path);
 
+    // Derived work (the debounced seal, search) waits on this cadence while
+    // nobody is looking. The host registers the session before its watch
+    // starts; without one the gate stays open, which is today's behavior.
+    if let Some(session) = crate::system::folder_session::registry().get(&folder_path) {
+        session.follow_cadence(cadence.clone());
+    }
+
     drop(spawner.spawn(Box::pin(async move {
+        // The task's claim on the folder's worker, released on every exit
+        // path (including a panic, or this future being dropped unpolled).
+        // The worker exits with its watcher TASK, not with any one watcher
+        // session: it finishes any in-flight build first (the build is
+        // spawn_blocking and unkillable — never aborted), then drops whatever
+        // is still queued, which is right at folder close.
+        let _worker_slot = worker_slot;
+
         /// Why one watcher session ended — decides whether the next begins.
         enum SessionEnd {
             /// Folder close. The only way the task exits.
@@ -242,7 +269,6 @@ pub async fn start(config: WatchConfig) {
         // fresh debouncer + subscription set; only Shutdown leaves the loop.
         'session: loop {
             // PATTERN 6 — INODE+FILE-ID PAIRING via notify-debouncer-full
-            // see docs/archive/2026-05-22-editor-state-architecture.md
             // Adopted from: notify-debouncer-full (canonical),
             // Spacedrive crates/fs-watcher/src/platform/macos.rs
             //
@@ -282,7 +308,7 @@ pub async fn start(config: WatchConfig) {
                 }
             };
 
-            // Subscribe to the project's content — NOT to the project root (#960).
+            // Subscribe to the project's content — NOT to the project root.
             //
             // Watching the root recursively subscribed moss to its own build
             // output. A build writes ~5700 files, which overflows the FSEvents
@@ -318,7 +344,7 @@ pub async fn start(config: WatchConfig) {
                 );
             }
 
-            // Success log (#572). Without this, "watcher started fine but no events"
+            // Success log. Without this, "watcher started fine but no events"
             // and "watcher silently never started" look identical in the log.
             log::info!(
                 "✅ File watcher active: {} ({} target(s))",
@@ -329,10 +355,14 @@ pub async fn start(config: WatchConfig) {
             // Because the root is not watched recursively, a NEW top-level entry
             // is not covered by any existing subscription. Reconcile the set on a
             // low-frequency tick: one `read_dir` over ~10 entries, which also
-            // unsubscribes entries that were removed.
-            let mut reconcile = tokio::time::interval(reconcile::INTERVAL);
-            reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            reconcile.tick().await; // the first tick completes immediately
+            // unsubscribes entries that were removed. The first pass runs
+            // unconditionally, same as the old fixed-interval timer's
+            // immediate-first-tick behavior — a folder opened while the app is
+            // already `Background` still gets its first reconcile promptly,
+            // rather than waiting out a 30s Background interval before it ever
+            // sees content that appeared after the watcher's initial scan.
+            let mut ticker = cadence::CadenceTicker::new(cadence.clone());
+            reconcile::targets(&mut debouncer, root, &mut watched);
 
             // Process debounced batches until shutdown, recreate, or channel death
             let end = loop {
@@ -350,8 +380,18 @@ pub async fn start(config: WatchConfig) {
                     _ = health.recreate_requested() => {
                         break SessionEnd::Recreate;
                     }
-                    _ = reconcile.tick() => {
-                        reconcile::targets(&mut debouncer, root, &mut watched);
+                    tick = ticker.next_tick() => {
+                        match tick {
+                            cadence::Tick::Elapsed
+                            | cadence::Tick::CadenceChanged(cadence::Cadence::Live) => {
+                                reconcile::targets(&mut debouncer, root, &mut watched);
+                            }
+                            cadence::Tick::CadenceChanged(cadence::Cadence::Background) => {
+                                // Just entered Background — let the freshly
+                                // armed 30s sleep govern; don't reconcile twice
+                                // for one open.
+                            }
+                        }
                     }
                     // Process file events (one batch per debounce window)
                     event_result = rx.recv() => {
@@ -361,6 +401,12 @@ pub async fn start(config: WatchConfig) {
                                 // batch proves the stream is alive, even one
                                 // the pump goes on to suppress entirely.
                                 health.note_batch();
+                                // Test seam: a watcher that delivers but never
+                                // acts, so a process-level test can prove the
+                                // sweep alone reconciles a missed event.
+                                if std::env::var_os("MOSS_TEST_WATCH_BLIND").is_some() {
+                                    continue;
+                                }
                                 handle_debounced_batch(events, &folder_path, &emit, &dispatch).await;
                             }
                             Some(Err(errors)) => {
@@ -408,12 +454,6 @@ pub async fn start(config: WatchConfig) {
             }
         }
 
-        // The worker exits with its watcher TASK (not with any one watcher
-        // session): it finishes any in-flight build first (the build is
-        // spawn_blocking and unkillable — never aborted), then drops whatever
-        // is still queued, which is right at folder close.
-        worker_handle.request_shutdown();
-        worker::deregister(&folder_path, &worker_handle);
         supervision::deregister(&folder_path, &health);
     })));
 }
@@ -457,9 +497,7 @@ async fn handle_debounced_batch(
     // image extension — previously nothing was emitted here, so the editor's
     // reference resolver revalidated only if a `FileChanged` happened to follow,
     // and stayed stale forever when the rebuild was gated out or its output
-    // diff came up empty. See `source_asset_request_paths` for the event policy
-    // and docs/archive/2026-08-14-site-settings-and-attachments.md (folded-in
-    // bug) for the observed failure.
+    // diff came up empty. See `source_asset_request_paths` for the event policy.
     let root_path = Path::new(folder_path);
     for ev in &events {
         for request_path in source_asset_request_paths(root_path, ev.kind, &ev.paths) {
@@ -514,19 +552,8 @@ async fn handle_debounced_batch(
         }
         // The root-relative question `path_is_watchable` cannot ask: is every
         // path in this event something moss wrote? A root `AGENTS.md` is, and
-        // the non-recursive root watch on Linux/Windows still hears it (#960).
+        // the non-recursive root watch on Linux/Windows still hears it.
         if scope::all_paths_moss_written(root_path, &ev.paths) {
-            continue;
-        }
-        // Nested-vault boundary: a subtree owning its own `.moss/` is a
-        // different site's territory — the outer vault never rebuilds on it.
-        if scope::all_paths_in_nested_vault(root_path, &ev.paths) {
-            log::debug!(
-                target: "moss::build::watch",
-                "Skipped {} path(s) inside a nested moss site: {:?}",
-                ev.paths.len(),
-                ev.paths
-            );
             continue;
         }
         if !should_recompile_for_event(ev.kind, &ev.paths) {
@@ -628,3 +655,7 @@ async fn handle_debounced_batch(
     })
     .await;
 }
+
+#[cfg(test)]
+#[path = "watch/rearm_tests.rs"]
+mod rearm_tests;

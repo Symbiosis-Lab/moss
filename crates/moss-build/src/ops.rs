@@ -2,7 +2,7 @@
 //! starts and owns, as opposed to the one-shot pipeline under [`crate::build`].
 //!
 //! NORTH-STAR charters this family: `ops/serve` (the preview server, crossed
-//! at S1 of the 2026-08-28 relocation plan, ADR-067) and `ops/watch` (the
+//! at S1 of the 2026-08-28 relocation plan) and `ops/watch` (the
 //! debouncer driver, crossed at slice W1 of the same plan).
 
 pub mod serve;
@@ -21,8 +21,13 @@ use crate::vault::paths::VaultRoot;
 /// (`build_shell/watch.rs::start_file_watching_headless`) layers the app-side
 /// sweep over [`watch::headless::start`]; moss-cli's is that construction
 /// alone. The mode is the driver's to decide, so neither host derives it.
+///
+/// `Fn`, not `FnOnce`: a `--watch` process that honors a `/__moss/yield`
+/// request and later resumes serving calls this a second time, same as it
+/// calls `HostPorts::launch_server` again — the one construction either
+/// binary supplies captures nothing that a second call would double-consume.
 pub type WatchStarter = Box<
-    dyn FnOnce(
+    dyn Fn(
             String,
             PluginMode,
         ) -> std::pin::Pin<
@@ -33,7 +38,8 @@ pub type WatchStarter = Box<
 impl HostPorts {
     /// The host with no shell — what `moss-cli build` and the app binary's
     /// headless `moss build` both run the pipeline with, so the two cannot
-    /// drift (#1154 folded the twin they used to be). It lives here, beside
+    /// drift — they used to be a twin implementation, since folded together.
+    /// It lives here, beside
     /// its consumer [`HeadlessBuildRun`], because `build/` must not reach
     /// into `ops/`; the struct itself is a port shape. Every `Option` is
     /// `None`; Tier-2 events, seal announcements, the services reporter and
@@ -73,7 +79,7 @@ impl HostPorts {
 /// app binary's `moss build` both call [`BuildArgs::parse`] on everything
 /// after the verb and hand the result to [`HeadlessBuildRun`]. Before this
 /// the two parsers were a six-line `contains` twin edited in step by hand
-/// (ADR-077 added `--allow-plugins` to both that way).
+/// (`--allow-plugins` was added to both that way).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct BuildFlags {
     /// `--serve`: start the preview server and block until ctrl-C.
@@ -97,19 +103,19 @@ pub struct BuildFlags {
     /// only safe if something later renders what it writes — under `--serve`
     /// alone no watcher will, so the site would serve pre-import content
     /// forever. A Config decision at the entry point, not a fork inside the
-    /// pipeline (ADR-010).
+    /// pipeline.
     pub wait_plugins: bool,
     /// `--no-plugins`: skip plugin hooks in the initial build and the watch
     /// rebuilds alike. Otherwise the initial build runs them (`NonBlocking`,
     /// or `Blocking` when waiting) and a watch rebuild replays cached slots
     /// without re-running them (`SlotsOnly`, the GUI rebuild rule). Derived
-    /// once, below, for both binaries — since the manager crossed (ADR-076)
-    /// neither has a plugin policy of its own.
+    /// once, below, for both binaries — since the manager crossed into this
+    /// crate, neither has a plugin policy of its own.
     pub no_plugins: bool,
     /// `--allow-plugins`: this command is the consent for the plugins the
     /// folder carries. Without it a plugin the app has never been told to
-    /// allow is refused, as it is in the app before the user clicks Allow
-    /// (ADR-077). Meaningless under `no_plugins`.
+    /// allow is refused, as it is in the app before the user clicks Allow.
+    /// Meaningless under `no_plugins`.
     pub allow_plugins: bool,
     /// `--site-url=<url>`: the URL baked into og:image, canonical links,
     /// sitemap and RSS, for one-off staging builds or a site not deployed via
@@ -170,7 +176,21 @@ impl BuildArgs {
             }
         }
         match folder {
-            Some(folder) => Ok(BuildArgs { folder: folder.to_string(), flags }),
+            Some(folder) => {
+                // Refresh events have nowhere to go without the SSE carrier
+                // `--serve` starts, so a watch with no serve used to build
+                // once and silently stop watching — caught only after the
+                // build ran, too late for an agent to react to. Caught here
+                // instead, before any build work starts.
+                if flags.watch && !flags.serve {
+                    return Err(format!(
+                        "error: --watch needs --serve: moss build {} --watch --serve\n{}",
+                        folder,
+                        usage()
+                    ));
+                }
+                Ok(BuildArgs { folder: folder.to_string(), flags })
+            }
             None => Err(usage()),
         }
     }
@@ -199,6 +219,10 @@ pub struct HeadlessBuildRun {
     pub host_ports: watch::headless::HostPortsFactory,
     /// See [`WatchStarter`].
     pub start_watch: WatchStarter,
+    /// Everything the host decides about the server this driver starts under
+    /// `--serve` — routes, bind address, sign-in landing, port. The driver
+    /// fills `standby_on_conflict` and `yield_notify` itself.
+    pub serve: serve::HeadlessServe,
 }
 
 /// Run a headless CLI build — the one driver behind both `moss-cli build`
@@ -213,8 +237,13 @@ pub struct HeadlessBuildRun {
 /// shutdown sender; the pipeline still owns the serve-dir cell handoff (it
 /// passes its own cell to the closure — the contract `ops/serve.rs`
 /// documents: the build must own the cell or `--serve` 404s forever).
-pub fn run_headless_build(run: HeadlessBuildRun) -> ! {
+pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
     install_headless_logger();
+    // Keep every process-global folder key in one coordinate system. Notify
+    // reports absolute paths, and watch rebuilds therefore use an absolute
+    // root; registering the initial build's session under a relative CLI
+    // argument would split its stage lock and task registries from rebuilds.
+    run.folder_path = watch::headless::absolute_watch_root(&run.folder_path);
     preflight_cli_build(&run.folder_path);
 
     // Register the session before any build work: the pipeline, the seal tail
@@ -249,25 +278,71 @@ pub fn run_headless_build(run: HeadlessBuildRun) -> ! {
         let server_shutdown: Arc<
             std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
         > = Arc::default();
+        // Captures `start_server_headless`'s own error text at the moment it
+        // fails, so the `Ok(msg)` arm below can report the exact reason the
+        // server never came up instead of re-probing for a live owner after
+        // the whole build has run — a re-probe can miss an owner that has
+        // since exited in that window and wrongly report success.
+        let launch_error: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+        // Fires when `POST /__moss/yield` is admitted on whichever server is
+        // live right now. One `Notify` for the whole process: every
+        // relaunch after honoring a yield passes this SAME `Arc` back into
+        // `start_server_headless`, so the ctrl-c `select!` below always waits
+        // on the one object any current or future server's yield route wakes.
+        let yield_requested: Arc<tokio::sync::Notify> = Arc::new(tokio::sync::Notify::new());
 
         let mut host = (run.host_ports)(&run.folder_path);
-        if run.flags.serve {
+        // Kept alongside `host.launch_server` (not just inside it) so a
+        // yielded `--watch` process can call it again to resume serving —
+        // `HostPorts::launch_server` is an `Arc<dyn Fn>`, not `FnOnce`, for
+        // exactly this reuse.
+        let launch_server_fn: Option<Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync>> =
+            if run.flags.serve {
             let slot = server_shutdown.clone();
+            let launch_error_slot = launch_error.clone();
             // The same registry this build fills, so the server can answer for
-            // a variant that is still encoding (ADR-013).
+            // a variant that is still encoding.
             let assets = host.services.assets.clone();
-            host.launch_server = Some(Arc::new(move |moss_dir, cell| {
+            // Standing by for an existing owner only makes sense for a
+            // long-lived watcher: a one-shot build would just exit right
+            // after anyway, so `--serve` alone keeps A2's plain refusal.
+            let standby_on_conflict = run.flags.watch;
+            let yield_notify = yield_requested.clone();
+            let host_serve = std::mem::take(&mut run.serve);
+            let launch: Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync> =
+                Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();
+                let launch_error_slot = launch_error_slot.clone();
                 let assets = assets.clone();
+                let yield_notify = yield_notify.clone();
+                let host_serve = host_serve.clone();
                 Box::pin(async move {
-                    let (port, shutdown_tx) =
-                        serve::start_server_headless(&moss_dir, cell, assets).await?;
-                    *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some(shutdown_tx);
-                    Ok(port)
+                    match serve::start_server_headless(
+                        &moss_dir,
+                        cell,
+                        assets,
+                        serve::HeadlessServe { standby_on_conflict, yield_notify, ..host_serve },
+                    )
+                    .await {
+                        Ok((port, shutdown_tx)) => {
+                            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                Some(shutdown_tx);
+                            Ok(port)
+                        }
+                        Err(e) => {
+                            *launch_error_slot
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e.clone());
+                            Err(e)
+                        }
+                    }
                 })
-            }));
-        }
+            });
+            host.launch_server = Some(launch.clone());
+            Some(launch)
+        } else {
+            None
+        };
 
         let result = run_pipeline(PipelineConfig {
             root: VaultRoot::resolve(std::path::Path::new(&run.folder_path)),
@@ -289,12 +364,35 @@ pub fn run_headless_build(run: HeadlessBuildRun) -> ! {
 
         match result {
             Ok(msg) => {
+                // `launch_server` failing is not itself a build failure (the
+                // pipeline logs a warning and carries on with no server —
+                // `build.rs`'s `PreviewServerFailed` handling), so a folder
+                // already owned by a live process would otherwise reach here
+                // as an otherwise-successful build whose server never came
+                // up. `launch_error` carries the exact reason captured at
+                // the moment `launch_server` failed — read here, not
+                // re-derived, so nothing can change between then and now.
+                if run.flags.serve
+                    && server_shutdown
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_none()
+                {
+                    if let Some(message) =
+                        launch_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+                    {
+                        cli_eprintln!("{}", message);
+                        return serve::ownership::ALREADY_SERVED_EXIT_CODE;
+                    }
+                }
+
                 let problems = finish_cli_build(&msg, &run.folder_path, run.flags.strict).await;
 
-                // Held until shutdown: dropping the sender stops the watch.
-                // Rebuild events reach an attached browser over the SSE
-                // carrier (`ops/serve/events.rs`).
-                let _watch_shutdown = if run.flags.serve && run.flags.watch {
+                // Held until a replacement is started (yield) or dropped for
+                // good (ctrl-c): dropping the sender stops the watch. Rebuild
+                // events reach an attached browser over the SSE carrier
+                // (`ops/serve/events.rs`).
+                let mut watch_shutdown = if run.flags.serve && run.flags.watch {
                     cli_eprintln!("Watching for file changes (Ctrl+C to stop)");
                     Some((run.start_watch)(run.folder_path.clone(), watch_plugins).await)
                 } else {
@@ -302,19 +400,71 @@ pub fn run_headless_build(run: HeadlessBuildRun) -> ! {
                 };
 
                 if run.flags.serve {
-                    cli_eprintln!("Press Ctrl+C to stop the server");
-                    let _ = tokio::signal::ctrl_c().await;
-                    cli_eprintln!("Stopping...");
-                    if let Some(tx) = server_shutdown
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .take()
-                    {
-                        let _ = tx.send(());
+                    // Shared by both arms below: stop the watch, then the
+                    // server, through the exact two senders either shutdown
+                    // path holds — `watch_shutdown` as a parameter (not a
+                    // capture) so reassigning it after a yield-triggered
+                    // relaunch is never fighting a closure's own borrow of it.
+                    let shut_down_current = |watch_shutdown: &mut Option<tokio::sync::oneshot::Sender<()>>| {
+                        if let Some(tx) = watch_shutdown.take() { let _ = tx.send(()); }
+                        if let Some(tx) = server_shutdown
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take()
+                        {
+                            let _ = tx.send(());
+                        }
+                    };
+                    // A yielded `--watch` process stands by this long for a
+                    // new owner before giving up and resuming service itself
+                    // — a yield is a courtesy, not a guarantee the requester
+                    // follows through.
+                    const YIELD_STANDBY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+                    loop {
+                        cli_eprintln!("Press Ctrl+C to stop the server");
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                cli_eprintln!("Stopping...");
+                                shut_down_current(&mut watch_shutdown);
+                                cli_eprintln!("Stopped");
+                                break;
+                            }
+                            // `POST /__moss/yield` was admitted on the live
+                            // server. Stop exactly as ctrl-c does above, then
+                            // either exit (no `--watch` — nothing would ever
+                            // restart serving) or stand by for whoever claims
+                            // the folder next and resume once they leave, the
+                            // same standby a fresh process already runs on a
+                            // startup conflict — falling back to serving the
+                            // folder itself if nobody claims it in time.
+                            _ = yield_requested.notified() => {
+                                cli_eprintln!("{}", serve::ownership::yielded_message(&run.folder_path));
+                                shut_down_current(&mut watch_shutdown);
+                                if !run.flags.watch {
+                                    break;
+                                }
+                                let folder = std::path::Path::new(&run.folder_path);
+                                match serve::ownership::wait_for_owner_to_appear(folder, YIELD_STANDBY_TIMEOUT).await {
+                                    Some(owner) => {
+                                        cli_eprintln!("{}", serve::ownership::preview_ready_line(&owner.url));
+                                        cli_eprintln!("{}", serve::ownership::standing_by_message(&owner));
+                                        serve::ownership::wait_for_owner_to_leave(folder).await;
+                                    }
+                                    None => {
+                                        cli_eprintln!("no other moss claimed the folder; serving again");
+                                    }
+                                }
+                                let Some(launch) = &launch_server_fn else { break };
+                                if let Err(e) = launch(run.folder_path.clone(), None).await {
+                                    cli_eprintln!("Could not resume serving after yielding: {}", e);
+                                    break;
+                                }
+                                cli_eprintln!("Watching for file changes (Ctrl+C to stop)");
+                                watch_shutdown = Some((run.start_watch)(run.folder_path.clone(), watch_plugins).await);
+                            }
+                        }
                     }
-                    cli_eprintln!("Stopped");
-                } else if run.flags.watch {
-                    cli_eprintln!("--watch was requested but --serve is required to receive refresh events; ignoring --watch");
                 }
 
                 if run.flags.strict && problems > 0 {
@@ -330,4 +480,36 @@ pub fn run_headless_build(run: HeadlessBuildRun) -> ! {
         }
     });
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod build_args_tests {
+    use super::BuildArgs;
+
+    fn args(strs: &[&str]) -> Vec<String> {
+        strs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn watch_without_serve_is_a_parse_error_naming_the_fix() {
+        let err = BuildArgs::parse(&args(&["site", "--watch"])).unwrap_err();
+        assert!(
+            err.contains("--watch needs --serve: moss build site --watch --serve"),
+            "error must name the exact corrected command, got: {err}"
+        );
+    }
+
+    #[test]
+    fn watch_with_serve_parses() {
+        let parsed = BuildArgs::parse(&args(&["site", "--watch", "--serve"])).unwrap();
+        assert!(parsed.flags.watch);
+        assert!(parsed.flags.serve);
+    }
+
+    #[test]
+    fn serve_without_watch_parses() {
+        let parsed = BuildArgs::parse(&args(&["site", "--serve"])).unwrap();
+        assert!(!parsed.flags.watch);
+        assert!(parsed.flags.serve);
+    }
 }

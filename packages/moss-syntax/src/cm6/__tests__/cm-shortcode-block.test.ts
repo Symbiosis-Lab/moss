@@ -1,15 +1,15 @@
 import { describe, test, expect } from 'vitest';
-import { EditorState, EditorSelection } from '@codemirror/state';
+import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { shortcodeBlockConfig } from '../../shortcode.js';
 import {
-  collectShortcodeBlocks, isBlockActive, tagParams, shortcodeBlockExtension,
+  collectShortcodeBlocks, shortcodeBlockExtension,
   flattenBlocks, isCellDividerLine, dividesCellsAt,
   isLegacyDividerLine, legacyDividesCellsAt, topLevelLegacyDividerCount,
-  classListLabel, shortcodeBodyRanges, type ShortcodeAsset,
+  shortcodeBodyRanges,
 } from '../cm-shortcode-block.js';
 
 /**
@@ -80,13 +80,40 @@ function inspectDecorations(state: EditorState): {
   return { lineClasses, replaces, marks };
 }
 
-function restingState(doc: string): EditorState {
-  // cursor at 0 (above the block) → block rests / renders
+function stateAt(doc: string, cursor: number): EditorState {
   return fullyParsed(EditorState.create({
-    doc, selection: { anchor: 0 },
+    doc, selection: { anchor: cursor },
     extensions: [markdown({ extensions: [shortcodeBlockConfig] }), shortcodeBlockExtension()],
   }));
 }
+
+describe('fences stay in the text column and are token-highlighted, regardless of caret', () => {
+  test('open and closing fence characters are muted, never hung, regardless of caret position', () => {
+    const doc = 'above\n\n:::hero {image=a.jpg}\nbody\n:::\n';
+    const above = inspectDecorations(stateAt(doc, 0));       // caret above the block
+    const inside = inspectDecorations(stateAt(doc, doc.indexOf('body')));
+    for (const { marks, lineClasses } of [above, inside]) {
+      expect(marks.some((m) => m.cls === 'cm-sc-delim' && m.from === doc.indexOf(':::') && m.to === doc.indexOf(':::') + 3)).toBe(true);
+      expect(marks.some((m) => m.cls.includes('cm-hang'))).toBe(false);
+      expect(lineClasses.some((c) => c.includes('cm-hung'))).toBe(false);
+      expect(marks.some((m) => m.cls === 'cm-sc-name')).toBe(true); // "hero" still visible
+    }
+  });
+
+  test('a `+++` cell divider is muted text, not hung, and never replaced', () => {
+    const doc = ':::grid 2\nleft\n+++\nright\n:::\n';
+    const { marks, replaces } = inspectDecorations(stateAt(doc, doc.indexOf('left')));
+    const plus = doc.indexOf('+++');
+    expect(marks.some((m) => m.cls === 'cm-sc-delim' && m.from === plus && m.to === plus + 3)).toBe(true);
+    expect(marks.some((m) => m.cls.includes('cm-hang'))).toBe(false);
+    expect(replaces).toBe(0);
+  });
+
+  test('no MicroTagWidget is ever built — the open fence is never replaced', () => {
+    const doc = 'above\n\n:::hero {image=a.jpg}\nbody\n:::\n';
+    expect(inspectDecorations(stateAt(doc, 0)).replaces).toBe(0);
+  });
+});
 
 describe('collectShortcodeBlocks (marker pairing)', () => {
   test('pairs two top-level blocks with names/attrs', () => {
@@ -144,187 +171,6 @@ describe('collectShortcodeBlocks (marker pairing)', () => {
   });
 });
 
-describe('classListLabel (nameless-block tag label)', () => {
-  test('single class', () => {
-    expect(classListLabel('{.tagline}')).toBe('tagline');
-  });
-  test('multiple classes, space-joined, dots stripped', () => {
-    expect(classListLabel('{.subscribe-card .wide}')).toBe('subscribe-card wide');
-  });
-  test('no class present → null (does not crash into a blank label)', () => {
-    expect(classListLabel('{}')).toBeNull();
-    expect(classListLabel('')).toBeNull();
-  });
-});
-
-describe('isBlockActive (selection-overlap activation — the reveal contract)', () => {
-  // The editor-wide reveal contract: any selection range TOUCHING a construct
-  // reveals its source. Tables and inline marks already use selection-overlap;
-  // shortcode blocks must match — head-only activation made Cmd+A reveal the
-  // whole document raw EXCEPT shortcode fences.
-  const doc = 'prose above\n:::grid\ncell\n:::\n';
-
-  function withSelection(anchor: number, head = anchor): EditorState {
-    return fullyParsed(EditorState.create({
-      doc,
-      selection: EditorSelection.single(anchor, head),
-      extensions: [markdown({ extensions: [shortcodeBlockConfig] })],
-    }));
-  }
-
-  test('caret within the paired range → active; caret above → resting', () => {
-    const s = withSelection(doc.indexOf('cell'));
-    const b = collectShortcodeBlocks(s)[0];
-    expect(isBlockActive(s, b)).toBe(true);
-    expect(isBlockActive(withSelection(0), b)).toBe(false);          // line above
-    expect(isBlockActive(withSelection(b.from - 1), b)).toBe(false); // just before block
-  });
-
-  test('Cmd+A (whole-document selection) activates the block', () => {
-    const s = withSelection(0, doc.length);
-    const b = collectShortcodeBlocks(s)[0];
-    expect(isBlockActive(s, b)).toBe(true);
-  });
-
-  test('range overlapping the block with the HEAD outside still activates', () => {
-    // anchor inside the body, head dragged up to position 0 — head-only
-    // activation missed this.
-    const s = withSelection(doc.indexOf('cell'), 0);
-    const b = collectShortcodeBlocks(s)[0];
-    expect(isBlockActive(s, b)).toBe(true);
-  });
-
-  test('Cmd+A leaves no replace decorations (fences revealed raw)', () => {
-    const state = fullyParsed(EditorState.create({
-      doc,
-      selection: EditorSelection.single(0, doc.length),
-      extensions: [
-        markdown({ extensions: [shortcodeBlockConfig] }),
-        shortcodeBlockExtension(),
-      ],
-    }));
-    let replaces = 0;
-    for (const provided of state.facet(EditorView.decorations)) {
-      if (typeof provided === 'function') continue;
-      const it = (provided as DecorationSet).iter();
-      while (it.value) {
-        // a replace decoration has from < to and no class (token-highlight
-        // MARKS also span, but they style raw source rather than hide it)
-        if (it.from < it.to && !(it.value.spec as { class?: string }).class) replaces++;
-        it.next();
-      }
-    }
-    expect(replaces).toBe(0);
-  });
-});
-
-describe('tagParams (micro-tag hint)', () => {
-  test('keyword cols attr → "cols N"', () => {
-    expect(tagParams('{cols=3}')).toBe('cols 3');
-  });
-  test('positional arg (`:::grid 3`) → echoes the bare token verbatim', () => {
-    // The real Yi-website grid; previously this returned "" (bare ▦grid).
-    expect(tagParams('3')).toBe('3');
-  });
-  test('positional word arg echoed as-is', () => {
-    expect(tagParams('masonry')).toBe('masonry');
-  });
-  test('keyword form takes precedence over positional echo', () => {
-    expect(tagParams('{cols=2}')).toBe('cols 2');
-  });
-  test('width keyword still surfaces', () => {
-    expect(tagParams('wide')).toBe('wide');
-  });
-  test('empty attrs → empty string', () => {
-    expect(tagParams('')).toBe('');
-  });
-  test('hero image= is hinted by filename, not by its folder', () => {
-    expect(tagParams('{image=assets/deep/cover.jpg}')).toBe('cover.jpg');
-  });
-  test('a quoted path keeps its spaces (the old regex cut it at the first one)', () => {
-    expect(tagParams('{image="my photo.jpg"}')).toBe('my photo.jpg');
-  });
-  test('a `|display attrs` suffix is not part of the filename', () => {
-    expect(tagParams('{image="cover.jpg|cover top"}')).toBe('cover.jpg');
-  });
-});
-
-describe('hero micro-tag asset slot', () => {
-  // Prose first, so the caret at 0 sits OUTSIDE the block and it rests —
-  // an active block reveals raw source and renders no tag at all.
-  const doc = 'prose\n\n:::hero {image=cover.jpg}\n# Title\n:::\n';
-
-  /** The resting `.cm-sc-tag` widget's leading element, rendered. */
-  function leadingEl(resolveAsset?: (t: string) => ShortcodeAsset): HTMLElement {
-    const state = fullyParsed(EditorState.create({
-      doc, selection: { anchor: 0 },
-      extensions: [
-        markdown({ extensions: [shortcodeBlockConfig] }),
-        shortcodeBlockExtension({ resolveAsset }),
-      ],
-    }));
-    for (const provided of state.facet(EditorView.decorations)) {
-      if (typeof provided === 'function') continue;
-      const it = (provided as DecorationSet).iter();
-      while (it.value) {
-        const w = (it.value.spec as { widget?: { toDOM(): HTMLElement } }).widget;
-        const dom = w?.toDOM();
-        if (dom?.classList.contains('cm-sc-tag')) return dom.firstElementChild as HTMLElement;
-        it.next();
-      }
-    }
-    throw new Error('no micro-tag widget found');
-  }
-
-  test('resolved image → the picture itself, in place of the glyph', () => {
-    const el = leadingEl(() => ({ url: 'moss-source://localhost/cover.jpg' }));
-    expect(el.tagName).toBe('IMG');
-    expect((el as HTMLImageElement).src).toBe('moss-source://localhost/cover.jpg');
-    // Decorative: the tag already says "hero", and the filename is the hint.
-    expect((el as HTMLImageElement).alt).toBe('');
-  });
-
-  test('missing file → a marked glyph that explains itself', () => {
-    // The whole point: a resting block replaces its source line, so the
-    // `.cm-asset-unresolved` underline is not on screen. The tag is the only
-    // place this can be said.
-    const el = leadingEl(() => 'missing');
-    expect(el.classList.contains('cm-sc-tag-ic--missing')).toBe(true);
-    expect(el.getAttribute('data-tooltip')).toBeTruthy();
-    expect(el.getAttribute('title')).toBeNull(); // portal tooltips only
-  });
-
-  test('not resolved yet, or no still frame, → the plain glyph', () => {
-    for (const resolve of [() => null, undefined]) {
-      const el = leadingEl(resolve as (t: string) => ShortcodeAsset);
-      expect(el.className).toBe('cm-sc-tag-ic');
-      expect(el.textContent).toBe('◉');
-    }
-  });
-
-  test('a shortcode that names no asset is unaffected by the resolver', () => {
-    const state = fullyParsed(EditorState.create({
-      doc: 'prose\n\n:::grid {cols=2}\na\n:::\n', selection: { anchor: 0 },
-      extensions: [
-        markdown({ extensions: [shortcodeBlockConfig] }),
-        // Would turn every tag into a thumbnail if it were ever consulted.
-        shortcodeBlockExtension({ resolveAsset: () => ({ url: 'x' }) }),
-      ],
-    }));
-    let tag: HTMLElement | null = null;
-    for (const provided of state.facet(EditorView.decorations)) {
-      if (typeof provided === 'function') continue;
-      const it = (provided as DecorationSet).iter();
-      while (it.value) {
-        const w = (it.value.spec as { widget?: { toDOM(): HTMLElement } }).widget;
-        const dom = w?.toDOM();
-        if (dom?.classList.contains('cm-sc-tag')) { tag = dom; break; }
-        it.next();
-      }
-    }
-    expect(tag!.firstElementChild!.textContent).toBe('▦');
-  });
-});
 
 describe('cell divider (+++) recognition', () => {
   test('isCellDividerLine: only a bare `+++` line', () => {
@@ -355,54 +201,48 @@ describe('cell divider (+++) recognition', () => {
   });
 
   test('dividesCellsAt: `+++` at grid level (after a nested buttons) divides the GRID', () => {
-    // The SoCiviC shape: buttons nested in cell 1, `+++` separates the grid cells.
+    // The homepage shape: buttons nested in cell 1, `+++` separates the grid cells.
     const doc = ':::grid 2\n::::buttons\n[a](#)\n::::\n+++\nright\n:::\n';
     const subtree = flattenBlocks(collectShortcodeBlocks(stateFor(doc)));
     expect(dividesCellsAt(doc.indexOf('+++'), subtree)).toBe(true);
   });
 });
 
-describe('resting render: nested fences + dividers (Bugs 1 & 2)', () => {
-  test('nested ::::buttons fences and `+++` are hidden, not leaked as text', () => {
-    // SoCiviC homepage shape. Resting (cursor above) must hide both inner `::::`
-    // fences and the `+++`, and draw a divider line — none of it leaks as raw text.
-    // Prose prefix so the cursor at 0 is genuinely ABOVE the block (resting).
-    const doc =
-      'above\n\n:::grid 2\nleft\n::::buttons {inverted}\n[a](#)\n::::\n+++\nright\n:::\n';
-    const { lineClasses, replaces } = inspectDecorations(restingState(doc));
-    // Two open fences (grid + buttons), two close fences, one divider → 5 hides.
-    expect(replaces).toBe(5);
-    // A divider line decoration is present (the `+++`).
-    expect(lineClasses.some((c) => c.includes('cm-sc-line-divider'))).toBe(true);
-    // Two open-fence (micro-tag) lines: the grid AND the nested buttons.
-    expect(lineClasses.filter((c) => c.includes('cm-sc-line-openrest')).length).toBe(2);
-    // Two close-fence rules.
-    expect(lineClasses.filter((c) => c.includes('cm-sc-line-closerest')).length).toBe(2);
+describe('nested fences + dividers render the same at every caret position', () => {
+  const doc = 'above\n\n:::grid 2\nleft\n::::buttons {inverted}\n[a](#)\n::::\n+++\nright\n:::\n';
+
+  test('no fence or divider is ever replaced', () => {
+    expect(inspectDecorations(stateAt(doc, 0)).replaces).toBe(0);
+    expect(inspectDecorations(stateAt(doc, doc.indexOf('[a]'))).replaces).toBe(0);
   });
 
-  test('active (cursor inside) reveals the whole nested subtree raw — no hides', () => {
-    const doc = ':::grid 2\n::::buttons\n[a](#)\n::::\n+++\nr\n:::\n';
-    const state = fullyParsed(EditorState.create({
-      doc, selection: { anchor: doc.indexOf('[a]') },
-      extensions: [markdown({ extensions: [shortcodeBlockConfig] }), shortcodeBlockExtension()],
-    }));
-    expect(inspectDecorations(state).replaces).toBe(0);
+  test('every fence line (grid and nested buttons, open and close) is a fence line, none hung', () => {
+    const { lineClasses } = inspectDecorations(stateAt(doc, 0));
+    expect(lineClasses.filter((c) => c.includes('cm-sc-line-fence')).length).toBe(4); // 2 open + 2 close
+    expect(lineClasses.some((c) => c.includes('cm-hung'))).toBe(false);
+  });
+
+  test('the `+++` divider is a divider line with its characters on screen, not hung', () => {
+    const { lineClasses } = inspectDecorations(stateAt(doc, 0));
+    expect(lineClasses.some((c) => c.includes('cm-sc-line-divider'))).toBe(true);
+    expect(lineClasses.some((c) => c.includes('cm-hung'))).toBe(false);
   });
 });
 
-describe('revealed-fence token highlighting (active block)', () => {
-  // The reveal contract shows an active block's fences as raw source; raw is
+describe('fence token highlighting (caret-invariant)', () => {
+  // Every fence renders as raw source, regardless of caret; raw is
   // token-highlighted, not plain: colons/braces muted (cm-sc-delim), the name
   // in keyword weight (cm-sc-name), attr keys secondary (cm-sc-attr-key),
-  // values plain. See docs/archive/2026-08-14-raw-markup-token-highlight.md.
+  // values plain.
+  // Token match, not exact-string match, so an extra class never fails it.
   const has = (
     marks: { cls: string; from: number; to: number }[],
     cls: string, from: number, to: number,
-  ) => marks.some((m) => m.cls === cls && m.from === from && m.to === to);
+  ) => marks.some((m) => m.cls.split(' ').includes(cls) && m.from === from && m.to === to);
 
   test('open fence `:::hero {image=a.jpg cols=2}`: delim/name/key spans', () => {
     const doc = ':::hero {image=a.jpg cols=2}\nbody\n:::\n';
-    const { marks } = inspectDecorations(activeState(doc, 'body'));
+    const { marks } = inspectDecorations(stateAt(doc, doc.indexOf('body')));
     expect(has(marks, 'cm-sc-delim', 0, 3)).toBe(true);                    // :::
     expect(has(marks, 'cm-sc-name', 3, 7)).toBe(true);                     // hero
     expect(has(marks, 'cm-sc-delim', 8, 9)).toBe(true);                    // {
@@ -418,7 +258,7 @@ describe('revealed-fence token highlighting (active block)', () => {
 
   test('nested fences: the inner :::: gets marks too', () => {
     const doc = ':::grid 2\n::::buttons\n[a](#)\n::::\n:::\n';
-    const { marks } = inspectDecorations(activeState(doc, '[a]'));
+    const { marks } = inspectDecorations(stateAt(doc, doc.indexOf('[a]')));
     const inner = doc.indexOf('::::buttons');
     expect(has(marks, 'cm-sc-delim', inner, inner + 4)).toBe(true);        // ::::
     expect(has(marks, 'cm-sc-name', inner + 4, inner + 11)).toBe(true);    // buttons
@@ -428,17 +268,18 @@ describe('revealed-fence token highlighting (active block)', () => {
 
   test('nameless `:::{.tagline}` block: colons and braces muted, no name mark', () => {
     const doc = ':::{.tagline}\nbody\n:::\n';
-    const { marks } = inspectDecorations(activeState(doc, 'body'));
+    const { marks } = inspectDecorations(stateAt(doc, doc.indexOf('body')));
     expect(has(marks, 'cm-sc-delim', 0, 3)).toBe(true);  // :::
     expect(has(marks, 'cm-sc-delim', 3, 4)).toBe(true);  // {
     expect(has(marks, 'cm-sc-delim', 12, 13)).toBe(true); // }
     expect(marks.some((m) => m.cls === 'cm-sc-name')).toBe(false);
   });
 
-  test('resting block carries NO token marks (fences are replaced, not raw)', () => {
+  test('fence marks are present with the caret above the block, same spans as inside it', () => {
     const doc = 'above\n\n:::hero {image=a.jpg}\nbody\n:::\n';
-    const { marks } = inspectDecorations(restingState(doc));
-    expect(marks).toEqual([]);
+    const { marks } = inspectDecorations(stateAt(doc, 0));
+    const open = doc.indexOf(':::');
+    expect(marks.some((m) => m.cls === 'cm-sc-delim' && m.from === open && m.to === open + 3)).toBe(true);
   });
 });
 
@@ -458,13 +299,6 @@ function legacyHints(state: EditorState): string[] {
     }
   }
   return out;
-}
-
-function activeState(doc: string, cursorAt: string): EditorState {
-  return fullyParsed(EditorState.create({
-    doc, selection: { anchor: doc.indexOf(cursorAt) },
-    extensions: [markdown({ extensions: [shortcodeBlockConfig] }), shortcodeBlockExtension()],
-  }));
 }
 
 describe('deprecated `---` cell divider', () => {
@@ -490,13 +324,12 @@ describe('deprecated `---` cell divider', () => {
 
   test('resting: the `---` line is marked and annotated, and stays visible', () => {
     const doc = 'above\n\n:::grid 2\nleft\n---\nright\n:::\n';
-    const state = restingState(doc);
+    const state = stateAt(doc, 0);
     const { lineClasses, replaces } = inspectDecorations(state);
 
     expect(lineClasses.some((c) => c.includes('cm-sc-line-legacy-divider'))).toBe(true);
-    // Only the two fences are hidden. The `---` itself is NOT replaced: the
-    // author has to be able to see and edit the text we're telling them to fix.
-    expect(replaces).toBe(2);
+    // Nothing is replaced any more — the fences are hung, not hidden.
+    expect(replaces).toBe(0);
     // The note names the replacement, not just the problem.
     expect(legacyHints(state)).toHaveLength(1);
     expect(legacyHints(state)[0]).toContain('+++');
@@ -504,20 +337,20 @@ describe('deprecated `---` cell divider', () => {
 
   test('active: the note follows the cursor into the block', () => {
     const doc = ':::grid 2\nleft\n---\nright\n:::\n';
-    expect(legacyHints(activeState(doc, 'left'))).toHaveLength(1);
+    expect(legacyHints(stateAt(doc, doc.indexOf('left')))).toHaveLength(1);
   });
 
   test('a `---` inside a nested buttons block is not annotated', () => {
     // The negative case the Rust scanner also guards: `---` is ordinary content
     // outside a grid, so hinting there would be wrong in both states.
     const doc = 'above\n\n:::grid 2\n::::buttons\n[a](#)\n---\n[b](#)\n::::\n:::\n';
-    expect(legacyHints(restingState(doc))).toHaveLength(0);
-    expect(legacyHints(activeState(doc, '[a]'))).toHaveLength(0);
+    expect(legacyHints(stateAt(doc, 0))).toHaveLength(0);
+    expect(legacyHints(stateAt(doc, doc.indexOf('[a]')))).toHaveLength(0);
   });
 
   test('a canonical `+++` divider gets no note', () => {
     const doc = 'above\n\n:::grid 2\nleft\n+++\nright\n:::\n';
-    expect(legacyHints(restingState(doc))).toHaveLength(0);
+    expect(legacyHints(stateAt(doc, 0))).toHaveLength(0);
   });
 
   test('topLevelLegacyDividerCount counts what the Rust scan counts', () => {

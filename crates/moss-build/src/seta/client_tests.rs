@@ -657,7 +657,7 @@ async fn test_request_reverify_sends_mode_and_site_id() {
     let url = format!("http://{}", addr);
     let client = MossSetaClient::with_url(&url);
     client
-        .request_reverify("user@example.com", "abcd1234", "sess-xyz", "socivic")
+        .request_reverify("user@example.com", "abcd1234", "sess-xyz", "my-site")
         .await
         .expect("reverify request should succeed");
     handle.await.unwrap();
@@ -669,7 +669,7 @@ async fn test_request_reverify_sends_mode_and_site_id() {
         .expect("server captured request");
     assert!(req.starts_with("POST /auth/request"), "path: {}", req);
     assert!(req.contains("\"mode\":\"re_verify\""), "payload: {}", req);
-    assert!(req.contains("\"site_id\":\"socivic\""), "payload: {}", req);
+    assert!(req.contains("\"site_id\":\"my-site\""), "payload: {}", req);
     assert!(
         req.contains("\"email\":\"user@example.com\""),
         "payload: {}",
@@ -1109,7 +1109,7 @@ async fn a_shared_budget_stops_retries_compounding_across_chunks() {
 ///
 /// The 600 s budget used to measure total time, so a file's own successful
 /// transfer consumed the allowance meant for its failures — a 50 MB video on a
-/// 50 KB/s uplink exhausted it while doing everything right (okagaki,
+/// 50 KB/s uplink exhausted it while doing everything right (a large live site,
 /// 2026-08-04). Success now restarts the stopwatch, so an arbitrarily large
 /// file that keeps landing chunks keeps its full retry allowance.
 #[tokio::test(start_paused = true)]
@@ -1276,4 +1276,107 @@ fn reachable_backoff_delays_are_bounded_by_the_attempt_count() {
         "the reachable backoff total is 500+1000+2000ms; a higher documented \
              cap would be dead code"
     );
+}
+
+
+#[test]
+fn transport_policy_rejects_remote_http_and_credentials() {
+    for address in [
+        "http://localhost.attacker.invalid",
+        "http://127.0.0.1.attacker.invalid",
+        "http://localhost@attacker.invalid",
+        "http://attacker.invalid/path?localhost",
+        "http://attacker.invalid/path?127.0.0.1",
+        "https://user:password@example.com",
+        "http://user:password@127.0.0.1:8787",
+        "ftp://localhost/file",
+        "not a url containing localhost",
+    ] {
+        assert!(!is_safe_base_url(address), "accepted unsafe address: {address}");
+        assert!(std::panic::catch_unwind(|| MossSetaClient::with_url(address)).is_err());
+        let identity = test_identity();
+        assert!(std::panic::catch_unwind(|| MossSetaClient::with_identity_and_url(&identity, address)).is_err());
+    }
+}
+
+#[test]
+fn transport_policy_preserves_https_paths_and_parsed_loopback() {
+    for address in [
+        "https://example.com:8443/api/v2/",
+        "https://localhost.attacker.invalid/api",
+        "http://localhost:8787/api/",
+        "http://127.0.0.2:8787/api",
+        "http://[::1]:8787/api",
+        "http://[::ffff:127.0.0.1]:8787/api",
+    ] {
+        assert!(is_safe_base_url(address), "rejected safe address: {address}");
+        assert_eq!(MossSetaClient::with_url(address).base_url, address.trim_end_matches('/'));
+    }
+}
+
+#[test]
+fn unsafe_runtime_override_falls_back_for_every_constructor() {
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var(SETA_URL_ENV_VAR);
+    let fallback = get_seta_url();
+    let identity = test_identity();
+    let environment = crate::config::environment::HostingEnvironment::Staging;
+    for address in ["http://localhost.attacker.invalid", "http://localhost@attacker.invalid", "http://attacker.invalid/?localhost"] {
+        std::env::set_var(SETA_URL_ENV_VAR, address);
+        let default = get_seta_url();
+        let anonymous = MossSetaClient::new_for_environment(&environment).base_url;
+        let authenticated = MossSetaClient::for_environment(&identity, &environment).base_url;
+        std::env::remove_var(SETA_URL_ENV_VAR);
+        assert_eq!(default, fallback);
+        assert_eq!(anonymous, environment.seta_url());
+        assert_eq!(authenticated, environment.seta_url());
+    }
+}
+
+#[tokio::test]
+async fn transport_policy_blocks_redirect_credentials_before_the_destination() {
+    let body = r#"{"status":"pending","email":null}"#;
+    let (destination, destination_server) = serve_once(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body
+    )).await;
+    let credential_destination = destination.replacen("http://", "http://user:password@", 1);
+    let (source, source_server) = serve_once(format!(
+        "HTTP/1.1 302 Found\r\nLocation: {credential_destination}/auth/status/test-session\r\nContent-Length: 0\r\n\r\n"
+    )).await;
+    let result = MossSetaClient::with_url(&source).check_auth_status("test-session").await;
+    source_server.await.unwrap();
+    destination_server.abort();
+    match result {
+        Err(SetaError::Http(error)) => assert!(error.is_redirect(), "{error}"),
+        result => panic!("unsafe redirect should fail before a second request: {result:?}"),
+    }
+}
+
+#[tokio::test]
+async fn transport_policy_preserves_local_redirects() {
+    let body = r#"{"status":"pending","email":null}"#;
+    let (destination, destination_server) = serve_once(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body
+    )).await;
+    let (source, source_server) = serve_once(format!(
+        "HTTP/1.1 302 Found\r\nLocation: {destination}/auth/status/test-session\r\nContent-Length: 0\r\n\r\n"
+    )).await;
+    let result = MossSetaClient::with_url(&source).check_auth_status("test-session").await.unwrap();
+    source_server.await.unwrap();
+    destination_server.await.unwrap();
+    assert_eq!(result.status, "pending");
+}
+
+
+#[tokio::test]
+async fn transport_policy_blocks_remote_http_redirects_before_connecting() {
+    let (source, source_server) = serve_once(
+        "HTTP/1.1 302 Found\r\nLocation: http://localhost.attacker.invalid/auth/status/test-session\r\nContent-Length: 0\r\n\r\n".to_string()
+    ).await;
+    let result = MossSetaClient::with_url(&source).check_auth_status("test-session").await;
+    source_server.await.unwrap();
+    match result {
+        Err(SetaError::Http(error)) => assert!(error.is_redirect(), "{error}"),
+        result => panic!("remote HTTP redirect should fail before connecting: {result:?}"),
+    }
 }

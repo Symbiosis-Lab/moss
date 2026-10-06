@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "serial": 39,
+  "entries": [
+    {
+      "type": "plugin",
+      "id": "github",
+      "display_name": "GitHub",
+      "version": "1.6.1",
+      "description": "Deploy to GitHub Pages via GitHub Actions",
+      "author": "moss team",
+      "capabilities": [],
+      "download_url": "https://example.invalid/github-v1.6.1/github-1.6.1.zip",
+      "sha256": "7d0ce012d238b63630da3943e469ae8592fbb7e845ac51a5ffa23ab27fa11cba",
+      "size_bytes": 1016,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "min_moss_version": "0.11.7",
+      "requires": [
+        "execute_binary:git",
+        "execute_binary:sh"
+      ],
+      "icon_url": "https://example.invalid/github-v1.6.1/github-1.6.1-icon.svg"
+    },
+    {
+      "type": "plugin",
+      "id": "ipfs",
+      "display_name": "IPFS",
+      "version": "0.1.0",
+      "description": "Publish your site to IPFS",
+      "author": "moss team",
+      "capabilities": [
+        "deploy"
+      ],
+      "download_url": "https://example.invalid/ipfs-v0.1.0/ipfs-0.1.0.zip",
+      "sha256": "741d5485fd95f80788e6dd72d00a8f90da1b1f05030027907fc81c9a6a19688a",
+      "size_bytes": 1014,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "min_moss_version": "0.7.23",
+      "requires": [
+        "execute_binary:ipfs"
+      ],
+      "icon_url": "https://example.invalid/ipfs-v0.1.0/ipfs-0.1.0-icon.svg"
+    },
+    {
+      "type": "plugin",
+      "id": "matters",
+      "display_name": "Matters",
+      "version": "1.5.5",
+      "description": "Syndicate your articles to Matters.town",
+      "author": "moss team",
+      "capabilities": [
+        "process"
+      ],
+      "download_url": "https://example.invalid/matters-v1.5.5/matters-1.5.5.zip",
+      "sha256": "71a47743ab251cee8514f8f5ea88f9ce2e485567935349c1f2f398923b368cbc",
+      "size_bytes": 1017,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "min_moss_version": "0.11.7",
+      "icon_url": "https://example.invalid/matters-v1.5.5/matters-1.5.5-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "onionpress",
+      "display_name": "onionpress",
+      "version": "0.4.1",
+      "description": "Publish moss sites to a self-hosted receiver",
+      "author": "moss team",
+      "capabilities": [
+        "deploy"
+      ],
+      "download_url": "https://example.invalid/onionpress-v0.4.1/onionpress-0.4.1.zip",
+      "sha256": "cd95d2c10fa293283693ec156e3920c9bf3fa7bd35ae17653b3a6e254bb77706",
+      "size_bytes": 1020,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "requires": [
+        "execute_binary:curl"
+      ],
+      "icon_url": "https://example.invalid/onionpress-v0.4.1/onionpress-0.4.1-icon.svg",
+      "requires_stack": true
+    },
+    {
+      "type": "starter",
+      "id": "essays",
+      "version": "1.1.0",
+      "display_name": "Essays",
+      "description": "An essay collection.",
+      "credit": "Filled with Virginia Woolf's essays and lectures, 1904–1929.",
+      "language": "en",
+      "order": 10,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "An essay with footnotes",
+          "path": "/essays/15-modern-fiction/"
+        },
+        {
+          "label": "An essay with a route map",
+          "path": "/essays/28-to-spain/"
+        },
+        {
+          "label": "A talk in chapters, with previous and next",
+          "path": "/talks/a-room-of-one-s-own/01-but-you-may-say/"
+        },
+        {
+          "label": "Every place on one map",
+          "path": "/places/"
+        }
+      ],
+      "download_url": "https://example.invalid/starter-essays-v1.1.0/essays-1.1.0.zip",
+      "sha256": "6218f01510e9c59b524f5ad76edbba055b595ed91c520faa1b0449e439563ad8",
+      "size_bytes": 350,
+      "demo_url": "https://virginia-woolf.mosspub.com/",
+      "preview_url": "https://example.invalid/starter-essays-v1.1.0/essays-1.1.0-preview.zip",
+      "preview_sha256": "745517cf0fe00a730b355c0c4756213c2c86697386b263f02e406fa24cb6a514",
+      "preview_size_bytes": 1720,
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://example.invalid/starter-essays-v1.1.0/essays-1.1.0-poster-light.jpg",
+      "poster_light_sha256": "aec4ceac16635d216bbc559f9757200bd86a829a9f899fde2fb54c4b31f500c4",
+      "poster_light_size_bytes": 480,
+      "poster_dark_url": "https://example.invalid/starter-essays-v1.1.0/essays-1.1.0-poster-dark.jpg",
+      "poster_dark_sha256": "3ffdcea1c98bf8a442f4d2cd7b0a21035428a56997211600d34bff371177a1f5",
+      "poster_dark_size_bytes": 470
+    },
+    {
+      "type": "starter",
+      "id": "organisation",
+      "version": "1.1.0",
+      "display_name": "Organisation",
+      "description": "An organisation's site.",
+      "credit": "Filled with the Chautauqua Literary and Scientific Circle's own pages, 1882–1885.",
+      "language": "en",
+      "order": 20,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "A course of reading, with previous and next",
+          "path": "/course-of-reading/01-october-1884/"
+        },
+        {
+          "label": "A calendar of days",
+          "path": "/calendar/"
+        },
+        {
+          "label": "A day with its own map",
+          "path": "/calendar/recognition-day-1882/"
+        },
+        {
+          "label": "Local circles across the country",
+          "path": "/places/"
+        }
+      ],
+      "download_url": "https://example.invalid/starter-organisation-v1.1.0/organisation-1.1.0.zip",
+      "sha256": "adf393c1b9951ce66b35626012b917a4dde3cc204839cdd51c9ea76ab5396b7f",
+      "size_bytes": 410,
+      "demo_url": "https://chautauqua-circle.mosspub.com/",
+      "preview_url": "https://example.invalid/starter-organisation-v1.1.0/organisation-1.1.0-preview.zip",
+      "preview_sha256": "1b56722879242b6fed835d410d534d6b190c7393e89372e72f03d2042e336606",
+      "preview_size_bytes": 1960,
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://example.invalid/starter-organisation-v1.1.0/organisation-1.1.0-poster-light.jpg",
+      "poster_light_sha256": "915e826a1831d9a46cbe5ef3de7d395e2f0786756325b062daf301c0d07af6b5",
+      "poster_light_size_bytes": 540,
+      "poster_dark_url": "https://example.invalid/starter-organisation-v1.1.0/organisation-1.1.0-poster-dark.jpg",
+      "poster_dark_sha256": "13658c5dece4e39eb9f54fd3f7fab84abf875f6a616a6509c8d2d1d75a68d3e0",
+      "poster_dark_size_bytes": 530
+    },
+    {
+      "type": "starter",
+      "id": "vertical",
+      "version": "1.1.0",
+      "display_name": "Vertical",
+      "description": "A vertical Chinese site.",
+      "credit": "Filled with the works and words of 八大山人 (Zhu Da, 1626–1705).",
+      "language": "zh-Hant",
+      "order": 30,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "Paintings",
+          "path": "/%E7%95%AB/"
+        },
+        {
+          "label": "A painting",
+          "path": "/%E7%95%AB/%E9%9B%99%E9%B7%B9%E5%9C%96/"
+        },
+        {
+          "label": "A letter in a series, with previous and next",
+          "path": "/%E6%96%87/%E8%87%B4%E6%96%B9%E5%A3%AB%E7%90%AF%E5%8D%81%E4%B8%89%E6%9C%AD/%E5%B0%88%E4%BD%BF%E4%BF%83%E9%A7%95/"
+        },
+        {
+          "label": "Chronology",
+          "path": "/%E5%B9%B4%E8%A1%A8/"
+        }
+      ],
+      "download_url": "https://example.invalid/starter-vertical-v1.1.0/vertical-1.1.0.zip",
+      "sha256": "e309ae95616bc079b294e0fc60dfbaa339fe677adff9e7c7a8d3b6457eb8fb08",
+      "size_bytes": 370,
+      "demo_url": "https://zhudasnotebook.com/",
+      "preview_url": "https://example.invalid/starter-vertical-v1.1.0/vertical-1.1.0-preview.zip",
+      "preview_sha256": "21dd0db64de5a72f31d4fdaf875a4764b1172307ff73f1d5d6b1caf3e3b2b729",
+      "preview_size_bytes": 1800,
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://example.invalid/starter-vertical-v1.1.0/vertical-1.1.0-poster-light.jpg",
+      "poster_light_sha256": "6f86dca6c0ea3062425134fc8af68effa262f42f7723e451210184155c8ba8a0",
+      "poster_light_size_bytes": 500,
+      "poster_dark_url": "https://example.invalid/starter-vertical-v1.1.0/vertical-1.1.0-poster-dark.jpg",
+      "poster_dark_sha256": "ae6fd789e0097bfcb2ec81637eaefb21450a3ec851e58a337d48257d96f4bf16",
+      "poster_dark_size_bytes": 490
+    }
+  ]
+}

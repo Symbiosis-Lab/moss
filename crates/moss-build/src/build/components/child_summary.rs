@@ -4,9 +4,10 @@
 //! The meta slot is sort-driven: it surfaces a date on Date-axis listings
 //! and is omitted entirely on Weight/Title axes (no empty div).
 
-use super::child_list::ChildItemProps;
+use super::child_list::{self, ChildItemProps};
 use super::date::extract_year;
 use crate::build::media::cover::{self, html_escape, CoverType};
+use crate::build::page::meta::render_description_html_in_link;
 
 /// Renders a child summary as HTML, with the meta slot resolved against the
 /// parent listing's resolved sort axis.
@@ -39,7 +40,7 @@ pub fn render_with_sort(
     // duplicating the date. Single-source cases fall back to the previous
     // behavior: meta carries the date if there's no kicker.
     let kicker_base = props.kicker.as_deref().filter(|s| !s.is_empty());
-    let date_year = if matches!(sort_axis, moss_core::sort::SortAxis::Date) {
+    let date_year = if sort_axis.shows_date() {
         props.date_raw.as_deref().and_then(extract_year)
             .or_else(|| props.date_display.as_deref().and_then(extract_year))
             .map(|y| y.to_string())
@@ -54,7 +55,7 @@ pub fn render_with_sort(
 
     // Linkblog cards (with `external_url:`) get a `★` inside the kicker
     // pointing to the local archive — the card title links to the
-    // outlet, the `★` to Yi's copy. The kicker stays inside the card
+    // outlet, the `★` to the author's copy. The kicker stays inside the card
     // head (matching the design for ordinary cards) so the visual
     // layout doesn't shift. Putting `<a>★</a>` inside the kicker is
     // valid IFF the card's outer element is NOT an anchor; the card
@@ -79,19 +80,36 @@ pub fn render_with_sort(
     // Meta slot — sort-driven; suppressed when the kicker absorbed the
     // date (kicker + extractable year). Falls back to the separate
     // meta when the kicker exists but the date could not be
-    // year-formatted (e.g. CJK-numeral dates).
+    // year-formatted (e.g. CJK-numeral dates). A folder's own date (its
+    // home page's `date:`, if any) and place lead the count the same way a
+    // page's date and place would read alone — one owner for every listing
+    // form's composition, `child_list::meta_text`.
     let date_merged_into_kicker = kicker_base.is_some() && date_year.is_some();
-    let meta_text = match (props.child_count, sort_axis) {
-        // Folder: the count IS the meta, on every sort axis — a folder's
-        // own date is not what a reader picks it by.
-        (Some(count), _) => Some(crate::i18n::article_count_label(lang, count, typesetting)),
-        (None, moss_core::sort::SortAxis::Date) if date_merged_into_kicker => None,
-        (None, moss_core::sort::SortAxis::Date) => props.date_display.clone(),
-        _ => None,
+    let meta_html = match (props.child_count, sort_axis) {
+        // Folder: the count is always shown, on every sort axis — a bare
+        // folder's own `location:` is not a date to sit beside, but its own
+        // `date:`, if any, is exactly that.
+        (Some(count), _) => {
+            let count_label = crate::i18n::article_count_label(lang, count, typesetting);
+            let text = child_list::meta_text(props.date_display.as_deref(), props.place.as_deref(), Some(&count_label));
+            format!(r#"<div class="moss-card-meta">{}</div>"#, text)
+        }
+        (None, axis) if axis.shows_date() && date_merged_into_kicker => {
+            // The kicker already carries the date; the meta slot's only
+            // remaining job is the place, if there is one — never an empty
+            // `.moss-card-meta`.
+            match props.place.as_deref() {
+                Some(place) => format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::with_place("", Some(place))),
+                None => String::new(),
+            }
+        }
+        (None, axis) if axis.shows_date() => props
+            .date_display
+            .as_deref()
+            .map(|date| format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::with_place(date, props.place.as_deref())))
+            .unwrap_or_default(),
+        _ => String::new(),
     };
-    let meta_html = meta_text
-        .map(|t| format!(r#"<div class="moss-card-meta">{}</div>"#, html_escape(&t)))
-        .unwrap_or_default();
 
     // Title: wrapped in an anchor for linkblog cards (so it stays
     // clickable now that the outer card is a `<div>`, not an `<a>`);
@@ -119,7 +137,7 @@ pub fn render_with_sort(
     // Description: wrapped in an anchor for linkblog cards so it
     // remains a click target now that the outer is `<div>`.
     if let Some(ref desc) = props.description {
-        let desc_inner = format!(r#"<p class="moss-card-description">{}</p>"#, html_escape(desc));
+        let desc_inner = format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(desc));
         if is_linkblog {
             body.push_str(&format!(
                 r#"<a class="moss-card-description-link" href="{}">{}</a>"#,

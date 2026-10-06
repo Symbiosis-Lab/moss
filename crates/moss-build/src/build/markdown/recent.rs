@@ -28,9 +28,9 @@ use crate::build::types::ParsedDocument;
 /// warns rather than vanishing. `moss describe --json` carries the same caveat
 /// on the `moss-recent` entry.
 ///
-/// moss#915: the fallback render must go through `render_markdown_to_html_with`.
+/// The fallback render must go through `render_markdown_to_html_with`.
 /// It was a bare `pulldown_cmark::Parser::new`, which silently mishandled
-/// footnotes, wikilinks and tables (ADR-036's "parse once" bug class).
+/// footnotes, wikilinks and tables (the "parse once" bug class).
 pub fn render_web(
     args: &RecentShortcode,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
@@ -207,7 +207,7 @@ pub fn render_html(posts: &[&ParsedDocument]) -> String {
             href = p.url_path.trim_start_matches('/'),
             title = html_escape(&p.title),
             date = date_str,
-            desc = html_escape(p.description.as_deref().unwrap_or("")),
+            desc = crate::build::page::meta::render_description_html(p.description.as_deref().unwrap_or("")),
         ));
     }
     out.push_str("</ul>\n");
@@ -229,7 +229,7 @@ pub fn render_plaintext(posts: &[&ParsedDocument]) -> String {
             title = p.title,
             date = date_str,
             href = p.url_path.trim_start_matches('/'),
-            desc = p.description.as_deref().unwrap_or(""),
+            desc = crate::build::page::meta::strip_markdown_inline(p.description.as_deref().unwrap_or("")),
         ));
     }
     out
@@ -367,6 +367,31 @@ mod tests {
     }
 
     #[test]
+    fn render_html_renders_description_markdown_as_safe_inline_html() {
+        // Same bug as the card/listing description: a bare `html_escape`
+        // left `_emphasis_` as literal underscores instead of `<em>`.
+        let d = doc("posts/a.html", "Hello", Some("2026-05-01"), Some("_The Common Reader, 1925._"));
+        let html = render_html(&[&d]);
+        assert!(
+            html.contains(r#"<div class="moss-recent__desc"><em>The Common Reader, 1925.</em></div>"#),
+            "description markdown should render as safe inline HTML: {html}"
+        );
+    }
+
+    #[test]
+    fn render_plaintext_reduces_description_markdown_to_plain_text() {
+        // The email body_text field: markdown has no meaning in plain text,
+        // and used to ship completely unstripped.
+        let d = doc("posts/a.html", "Hello", Some("2026-05-01"), Some("_The Common Reader, 1925._"));
+        let text = render_plaintext(&[&d]);
+        assert!(
+            text.contains("The Common Reader, 1925."),
+            "description markdown should reduce to plain text: {text}"
+        );
+        assert!(!text.contains('_'), "no raw markdown syntax should survive: {text}");
+    }
+
+    #[test]
     fn recent_excludes_drafts() {
         let mut draft = doc("p/wip/wip.html", "WIP Post", Some("2026-01-02"), None);
         draft.draft = Some(true);
@@ -396,7 +421,7 @@ mod tests {
 
     #[test]
     fn parse_doc_date_accepts_month_precision() {
-        // "1795-06" (blakesnotebook.com's dating precision) used to fail
+        // "1795-06" (a real site's dating precision) used to fail
         // every shape this function tries and come back None, which the
         // caller reads as dateless.
         let d = doc("posts/a.html", "A", Some("1795-06"), None);

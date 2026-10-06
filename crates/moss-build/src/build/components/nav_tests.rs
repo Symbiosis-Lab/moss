@@ -92,7 +92,7 @@ fn test_navigation_only_shows_nav_true_docs() {
     );
     // Note: nav-divider removed for cleaner design
 
-    // Hamburger ARIA state (WCAG 4.1.2, moss#1047): aria-expanded starts
+    // Hamburger ARIA state (WCAG 4.1.2): aria-expanded starts
     // false (theme.ts keeps it faithful to .mobile-open at runtime), and
     // aria-controls names the id nav-links actually carries.
     assert!(
@@ -188,6 +188,61 @@ fn test_navigation_weight_sorting() {
         contact_pos < faq_pos,
         "Contact (weight 3) should come before FAQ (no weight)"
     );
+}
+
+/// `nav_label` replaces the title in the nav bar only; a page without it, or
+/// with a blank one (stored as `None`), shows its title as before.
+#[test]
+fn nav_label_replaces_the_title_in_the_nav_bar_only() {
+    let mut long = make_doc("reading.html", "Course of Reading", Some(1), Some(true));
+    long.nav_label = Some("Reading".to_string());
+    let plain = make_doc("about.html", "About", Some(2), Some(true));
+    let blank = make_doc("contact.html", "Contact", Some(3), Some(true));
+    let documents = vec![long, plain, blank];
+
+    let nav_builder = NavigationBuilder::new(&documents, "Test Site", None, crate::i18n::Language::En, false);
+    let html = nav_builder.generate_navigation();
+
+    assert!(html.contains(r#"href="/reading">Reading</a>"#), "got: {html}");
+    assert!(!html.contains("Course of Reading"), "got: {html}");
+    assert!(html.contains(r#"href="/about">About</a>"#), "got: {html}");
+    assert!(html.contains(r#"href="/contact">Contact</a>"#), "got: {html}");
+    assert_eq!(documents[0].title, "Course of Reading");
+    assert_eq!(documents[0].label, "Course of Reading");
+}
+
+/// Labels are plain text, so markup characters in a title or a `nav_label`
+/// show as text rather than becoming elements.
+#[test]
+fn nav_and_footer_labels_are_escaped() {
+    let mut doc = make_doc("qa.html", "Q&A <i>", Some(1), Some(true));
+    doc.footer = Some(true);
+    let mut labelled = make_doc("faq.html", "Faq", Some(2), Some(true));
+    labelled.nav_label = Some("Q&A <b>".to_string());
+    let documents = vec![doc, labelled];
+
+    let nav_builder = NavigationBuilder::new(&documents, "Test Site", None, crate::i18n::Language::En, false);
+    let nav = nav_builder.generate_navigation();
+    assert!(nav.contains(">Q&amp;A &lt;i&gt;</a>"), "got: {nav}");
+    assert!(nav.contains(">Q&amp;A &lt;b&gt;</a>"), "got: {nav}");
+    assert!(!nav.contains("<b>") && !nav.contains("<i>"), "got: {nav}");
+    let footer = nav_builder.generate_footer(false);
+    assert!(footer.contains(">Q&amp;A &lt;i&gt;</a>"), "got: {footer}");
+}
+
+/// Footer links are navigation chrome too.
+#[test]
+fn nav_label_names_the_page_in_footer_links() {
+    let mut long = make_doc("reading.html", "Course of Reading", None, None);
+    long.footer = Some(true);
+    long.nav_label = Some("Reading".to_string());
+    let documents = vec![long];
+
+    let nav_builder = NavigationBuilder::new(&documents, "Test Site", None, crate::i18n::Language::En, false);
+    let html = nav_builder.generate_footer(false);
+
+    assert!(html.contains(">Reading</a>"), "got: {html}");
+    assert!(!html.contains("Course of Reading"), "got: {html}");
 }
 
 #[test]
@@ -415,7 +470,7 @@ fn test_auto_nav_opt_out_with_nav_false() {
 
 #[test]
 fn test_auto_nav_combined_scenario() {
-    // Comprehensive test matching yi-website structure (organized mode)
+    // Comprehensive test matching a real site's structure (organized mode)
     let documents = vec![
         make_doc_with_root_level("index.html", "Home", None, None, true), // Root index - excluded
         make_doc_with_root_level("research/index.html", "Research", None, None, true), // Root-level - auto
@@ -526,7 +581,7 @@ fn test_breadcrumb_renders_when_enabled_on_homepage() {
 
     let doc = &documents[2]; // posts/hello/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_some(),
         "Breadcrumbs should be computed when homepage has breadcrumb: true"
@@ -562,7 +617,7 @@ fn test_breadcrumb_renders_when_enabled_on_homepage() {
         crate::i18n::Language::En,
         false,
     )
-    .with_breadcrumb(segments);
+    .with_breadcrumb(segments, false);
 
     let nav_html = nav_builder.generate_navigation();
     assert!(
@@ -597,7 +652,7 @@ fn editor_preview_breadcrumb_and_logo_name_their_fields() {
     let doc = &documents[2];
 
     let build = |fm: bool, logo_fm: bool| {
-        let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true)
+        let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false)
             .expect("breadcrumbs enabled by homepage");
         NavigationBuilder::new(
             &documents,
@@ -607,7 +662,7 @@ fn editor_preview_breadcrumb_and_logo_name_their_fields() {
             false,
         )
         .with_logo("/assets/logo.svg".to_string())
-        .with_breadcrumb(segments)
+        .with_breadcrumb(segments, false)
         .with_source_fm(fm, logo_fm)
         .generate_navigation()
     };
@@ -643,7 +698,7 @@ fn test_breadcrumb_not_rendered_on_root_page() {
 
     let doc = &documents[0]; // index.html (homepage)
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_none(),
         "Root page (depth 0) should NOT get breadcrumbs"
@@ -651,7 +706,7 @@ fn test_breadcrumb_not_rendered_on_root_page() {
 
     // Also test non-index root page
     let doc = &documents[1]; // about.html
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_none(),
         "Root-level page (depth 0) should NOT get breadcrumbs"
@@ -669,7 +724,7 @@ fn test_breadcrumb_per_page_override_false() {
 
     let doc = &documents[2]; // posts/secret/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_none(),
         "Page with breadcrumb: false should not get breadcrumbs"
@@ -686,10 +741,44 @@ fn test_breadcrumb_not_rendered_when_explicitly_disabled() {
 
     let doc = &documents[1];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_none(),
         "No breadcrumbs when homepage has breadcrumb: false"
+    );
+}
+
+#[test]
+fn test_breadcrumb_force_names_an_explorer_root_even_when_the_site_disables_breadcrumbs() {
+    // Homepage has breadcrumb: false — the general nav.rs answer for every
+    // other page is "no trail" (pinned just above). An explorer root's own
+    // `<h1>` is `.visually-hidden` though, so with the site's breadcrumbs
+    // off it would otherwise name the section nowhere in the page at all.
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(false)),
+        make_doc_with_breadcrumb("places/index.html", "Places", None),
+    ];
+    let doc = &documents[1];
+
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
+    assert!(segments.is_none(), "without force, the site-wide breadcrumb: false still wins");
+
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, true)
+        .expect("force must draw a trail even when the site disables breadcrumbs");
+    assert_eq!(segments.len(), 2, "site name, then the root's own title as the current crumb");
+    assert_eq!(segments[0].title, "My Site");
+    assert!(!segments[0].is_current);
+    assert_eq!(segments[1].title, "Places");
+    assert!(segments[1].is_current, "the explorer root's own title is the trail's current, unlinked crumb");
+    assert_eq!(segments[1].url, "", "the current crumb links nowhere");
+
+    // A page-level `breadcrumb: false` still opts out even under force — the
+    // one override an author has, left intact.
+    let mut opted_out = documents[1].clone();
+    opted_out.breadcrumb = Some(false);
+    assert!(
+        compute_breadcrumb_segments(&opted_out, &documents, "My Site", true, true).is_none(),
+        "an explicit per-page opt-out still wins over force"
     );
 }
 
@@ -705,7 +794,7 @@ fn test_breadcrumb_auto_enable_flat_mode_with_keyword() {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", false);
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", false, false);
     assert!(
         segments.is_none(),
         "Flat mode with 'about' → nav item exists → no auto-breadcrumbs"
@@ -724,7 +813,7 @@ fn test_breadcrumb_auto_enable_flat_mode_no_keyword() {
         make_doc_with_breadcrumb("writing/article/index.html", "Article", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", false);
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", false, false);
     assert!(
         segments.is_some(),
         "Flat mode with no keyword files → no nav items → auto-breadcrumbs"
@@ -748,7 +837,7 @@ fn test_breadcrumb_segment_titles_from_label_vs_titlecase_fallback() {
 
     let doc = &documents[2]; // blog-posts/tech-tips/my-article/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(segments.is_some());
 
     let segments = segments.unwrap();
@@ -777,7 +866,7 @@ fn test_breadcrumb_current_page_is_absent() {
 
     let doc = &documents[1];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
 
     let nav_builder = NavigationBuilder::new(
         &documents,
@@ -786,7 +875,7 @@ fn test_breadcrumb_current_page_is_absent() {
         crate::i18n::Language::En,
         false,
     )
-    .with_breadcrumb(segments);
+    .with_breadcrumb(segments, false);
 
     let nav_html = nav_builder.generate_navigation();
 
@@ -809,7 +898,7 @@ fn test_breadcrumb_current_page_is_absent() {
 
 #[test]
 fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
-    // The masthead folds like the island (ADR-049 §5, amended 2026-08-09):
+    // The masthead folds like the island (as of 2026-08-09):
     // with three or more crumbs there is a middle to sacrifice, so nav.rs
     // ships the `…` button and the levels panel — hidden, because whether
     // anything actually folds is a measurement only masthead-fold.ts can
@@ -823,7 +912,7 @@ fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
     ];
 
     let deep = &documents[3];
-    let segments = compute_breadcrumb_segments(deep, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(deep, &documents, "My Site", true, false).unwrap();
     let deep_html = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -831,7 +920,7 @@ fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
         crate::i18n::Language::En,
         false,
     )
-    .with_breadcrumb(segments)
+    .with_breadcrumb(segments, false)
     .generate_navigation();
 
     assert!(
@@ -849,7 +938,7 @@ fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
     );
 
     let shallow = &documents[1];
-    let segments = compute_breadcrumb_segments(shallow, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(shallow, &documents, "My Site", true, false).unwrap();
     let shallow_html = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -857,7 +946,7 @@ fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
         crate::i18n::Language::En,
         false,
     )
-    .with_breadcrumb(segments)
+    .with_breadcrumb(segments, false)
     .generate_navigation();
 
     assert!(
@@ -888,7 +977,7 @@ fn test_breadcrumb_segment_carries_hint_label_and_label_span() {
     ];
 
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
 
     let nav_html = NavigationBuilder::new(
         &documents,
@@ -897,7 +986,7 @@ fn test_breadcrumb_segment_carries_hint_label_and_label_span() {
         crate::i18n::Language::En,
         false,
     )
-    .with_breadcrumb(segments)
+    .with_breadcrumb(segments, false)
     .generate_navigation();
 
     assert!(
@@ -932,7 +1021,7 @@ fn test_breadcrumb_hint_escapes_quotes_in_title() {
     ];
 
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
 
     let nav_html = NavigationBuilder::new(
         &documents,
@@ -941,7 +1030,7 @@ fn test_breadcrumb_hint_escapes_quotes_in_title() {
         crate::i18n::Language::En,
         false,
     )
-    .with_breadcrumb(segments)
+    .with_breadcrumb(segments, false)
     .generate_navigation();
 
     assert!(
@@ -967,7 +1056,7 @@ fn test_breadcrumb_single_depth_page() {
 
     let doc = &documents[1]; // about/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
 
     // Raw segments still have 2 entries (site + current)
     assert_eq!(segments.len(), 2);
@@ -983,7 +1072,7 @@ fn test_breadcrumb_single_depth_page() {
         crate::i18n::Language::En,
         false,
     )
-    .with_breadcrumb(segments);
+    .with_breadcrumb(segments, false);
 
     let nav_html = nav_builder.generate_navigation();
 
@@ -1020,7 +1109,7 @@ fn test_breadcrumb_empty_segments_fallback() {
         crate::i18n::Language::En,
         false,
     )
-    .with_breadcrumb(vec![]);
+    .with_breadcrumb(vec![], false);
 
     let nav_html = nav_builder.generate_navigation();
     // Should fall back to normal site name rendering
@@ -1082,7 +1171,7 @@ fn test_breadcrumb_translation_root_transparent() {
 
     let doc = &documents[3]; // zh-hans/docs/getting-started/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false);
     assert!(
         segments.is_some(),
         "Should compute breadcrumbs for translated page"
@@ -1142,7 +1231,7 @@ fn test_breadcrumb_translation_root_homepage_no_breadcrumbs() {
 
     let doc = &documents[1]; // zh-hans/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false);
     assert!(
         segments.is_none(),
         "Translation root homepage should NOT get breadcrumbs"
@@ -1184,7 +1273,7 @@ fn test_breadcrumb_translation_root_deep_nesting() {
 
     let doc = &documents[4]; // zh-hans/docs/guides/quickstart/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
     assert_eq!(
         segments.len(),
         4,
@@ -1230,7 +1319,7 @@ fn test_breadcrumb_translation_root_non_index_file() {
 
     let doc = &documents[3]; // zh-hans/about/page.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
     // home -> about (folder) -> page (current)
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].url, "/zh-hans/");
@@ -1272,7 +1361,7 @@ fn test_breadcrumb_translation_root_partial_translation() {
 
     let doc = &documents[2];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].url, "/zh-hans/");
     assert_eq!(
@@ -1313,7 +1402,7 @@ fn test_breadcrumb_arbitrary_folder_name_as_translation_root() {
 
     let doc = &documents[2]; // chinese/docs/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
     // "chinese" should be transparent even though it's not a language code
     assert_eq!(segments.len(), 2, "Should have 2 segments: home, current");
     assert_eq!(segments[0].title, "青苔");
@@ -1352,7 +1441,7 @@ fn test_breadcrumb_translation_root_direct_child_no_breadcrumbs() {
 
     let doc = &documents[2]; // zh-hans/page.html (effective depth 0 after stripping)
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true);
+    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false);
     assert!(segments.is_none(),
             "Non-index file directly under translation root (effective depth 0) should get no breadcrumbs");
 }
@@ -1368,7 +1457,7 @@ fn test_breadcrumb_non_translation_folder_unchanged() {
 
     let doc = &documents[2];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     // Normal breadcrumb: site -> docs -> current
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].title, "My Site");
@@ -1389,7 +1478,7 @@ fn test_breadcrumb_folder_with_no_index_not_transparent() {
 
     let doc = &documents[1];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     // Normal: site -> foo (titlecased) -> current
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].url, "/");
@@ -1442,7 +1531,7 @@ fn the_switcher_advertises_the_declared_tag_not_the_ui_variant() {
     // A `fr` page resolves to `Language::En` for the interface. The switcher
     // used to label its link `hreflang="en"` — from `code()`, whose own doc
     // says to use the BCP-47 form here — contradicting the `<html lang>` of the
-    // page it points at (moss#1177).
+    // page it points at.
     let documents = vec![make_doc("index.html", "Home", None, None)];
     let translations = vec![TranslationLink {
         lang_tag: "fr".to_string(),
@@ -1599,19 +1688,19 @@ fn test_navigation_lang_toggle_multiple_translations() {
 /// `awards/translation/s2/david-yang/` on a zh-hant site with no `en/` tree)
 /// must keep `/` as the site-name home link — `/en/` does not exist and 404s —
 /// and must still show the SITE language's nav items rather than an empty nav.
-/// Regression: harborweekly port, 2026-07-28.
+/// Regression: riverbend-review port, 2026-07-28.
 #[test]
 fn detected_lang_without_language_tree_keeps_root_home_and_site_nav() {
     use crate::i18n::Language;
     let mut awards =
-        make_doc_with_root_level("awards/index.html", "獎項", None, Some(true), false);
+        make_doc_with_root_level("awards/index.html", "評選", None, Some(true), false);
     awards.lang = Language::ZhHant;
 
     let documents = vec![awards];
     // Site language zh-hant; current page detected En, url NOT under a lang tree.
     let nav_html = NavigationBuilder::new(
         &documents,
-        "潮汐 · 週報",
+        "河灣 · 週刊",
         Some("awards/translation/s2/david-yang/index.html"),
         Language::ZhHant,
         true,
@@ -1630,7 +1719,7 @@ fn detected_lang_without_language_tree_keeps_root_home_and_site_nav() {
         nav_html
     );
     assert!(
-        nav_html.contains(">獎項<"),
+        nav_html.contains(">評選<"),
         "site-language nav items must still show. Got: {}",
         nav_html
     );
@@ -1663,7 +1752,7 @@ fn page_inside_language_tree_keeps_lang_prefixed_home() {
     );
 }
 
-/// #949's second symptom. `en-us/` is a language tree `lang_tree_prefix`
+/// The other symptom of the same regression: `en-us/` is a language tree `lang_tree_prefix`
 /// accepts and `Language::code()` cannot spell, so this link used to be
 /// `/en/` — which no build emits, and which 404s from inside the one tree
 /// whose readers most need the way out.
@@ -1781,22 +1870,11 @@ fn make_footer_doc(
     footer: Option<bool>,
     weight: Option<i32>,
 ) -> ParsedDocument {
-    make_footer_doc_with_align(title, url_path, footer, weight, None)
-}
-
-fn make_footer_doc_with_align(
-    title: &str,
-    url_path: &str,
-    footer: Option<bool>,
-    weight: Option<i32>,
-    footer_align: Option<String>,
-) -> ParsedDocument {
     ParsedDocument {
         title: title.to_string(),
         label: title.to_string(),
         url_path: url_path.to_string(),
         footer,
-        footer_align,
         weight,
         lang: crate::i18n::Language::En,
         kind: moss_core::PageKind::Article,
@@ -1828,7 +1906,7 @@ fn footer_page_appears_as_link() {
     );
     // Default link list lives in <p class="footer-default"> alongside the
     // footer.md slot marker (verbatim contract — no .footer-left/.footer-right
-    // chrome). See docs/archive/2026-04-30-footer-verbatim-design.md.
+    // chrome).
     assert!(
         html.contains(r#"<p class="footer-default">"#),
         "default link list missing: {html}"
@@ -1909,8 +1987,7 @@ fn footer_contains_both_slot_markers() {
     // Two slot markers: footer-left (author chrome / footer.md) and
     // footer-end (auto-injected subscribe form on moss-hosted sites
     // without footer.md). Both are always emitted; injection happens at
-    // post-processing time. See
-    // docs/archive/2026-05-06-footer-default-order.md.
+    // post-processing time.
     let docs = vec![make_footer_doc("About", "about.html", Some(true), None)];
     let html = footer_builder(&docs, None).generate_footer(true);
     assert!(
@@ -1963,30 +2040,6 @@ fn footer_left_marker_appears_before_default_links() {
 }
 
 #[test]
-fn footer_align_right_field_keeps_link() {
-    // Under the verbatim contract, `footer_align: right` no longer affects
-    // visual position (the .footer-left/.footer-right chrome is gone). The
-    // link still renders in the default link list — sites that want a
-    // multi-column footer author it via footer.md instead.
-    let docs = vec![
-        make_footer_doc("About", "about.html", Some(true), None),
-        make_footer_doc_with_align(
-            "Contact",
-            "contact.html",
-            Some(true),
-            None,
-            Some("right".into()),
-        ),
-    ];
-    let html = footer_builder(&docs, None).generate_footer(true);
-    assert!(
-        html.contains("Contact"),
-        "Contact must still render: {html}"
-    );
-    assert!(html.contains("About"), "About must still render: {html}");
-}
-
-#[test]
 fn footer_emits_flat_html_no_inner_wrapper() {
     // The footer is a single `<footer class="container" ...>` with the
     // authored content as direct children — no `.footer-content` /
@@ -1994,7 +2047,7 @@ fn footer_emits_flat_html_no_inner_wrapper() {
     // visual chrome (divider, padding, muted typography) lives on
     // `footer.container` directly via CSS. Flat HTML keeps the
     // `body > footer.container > selector` design space open for
-    // sites with custom footer designs (SoCiviC pattern).
+    // sites with custom footer designs.
     //
     // The opening tag is a plain `<footer class="container">` (no
     // `data-moss-shape` — retired; footer layout keys on the CSS
@@ -2152,29 +2205,6 @@ fn footer_link_no_active_when_current_url_none() {
     assert!(
         !html.contains("active"),
         "No active class when current_page_url is None: {html}"
-    );
-}
-
-#[test]
-fn footer_link_active_with_right_align() {
-    let docs = vec![
-        make_footer_doc("News", "news/index.html", Some(true), None),
-        make_footer_doc_with_align(
-            "Contact",
-            "contact.html",
-            Some(true),
-            None,
-            Some("right".into()),
-        ),
-    ];
-    let html = footer_builder(&docs, Some("contact.html")).generate_footer(false);
-    assert!(
-        html.contains(r#"class="footer-link active">Contact</a>"#),
-        "Right-aligned footer link should get active class: {html}"
-    );
-    assert!(
-        html.contains(r#"class="footer-link">News</a>"#),
-        "News should NOT have active class: {html}"
     );
 }
 
@@ -2458,8 +2488,7 @@ fn test_icon_cluster_order_is_search_language_theme() {
     // tapped toggle's hint stuck on screen (no un-hover). The nav's only
     // hints are truncation hints, JS-promoted onto breadcrumb elements.
     // Asserted here rather than left to the snapshot fixtures, which would
-    // report a regression as an opaque byte diff. See
-    // docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md.
+    // report a regression as an opaque byte diff.
     assert!(
         !html.contains("data-tooltip"),
         "nav toggles must not emit data-tooltip — hover hints are reserved \
@@ -2495,7 +2524,7 @@ fn test_search_button_label_is_localized() {
 }
 
 // =========================================================================
-// Floating nav island (ADR-049)
+// Floating nav island
 //
 // The island is a SECOND object, not the masthead re-pinned. These tests pin
 // the two properties that make that claim checkable from the emitted text:
@@ -2503,7 +2532,7 @@ fn test_search_button_label_is_localized() {
 // masthead stops — on the current page. Everything about how it behaves
 // (reveal, folding, panels) is measured, so it is tested in the render gate
 // (tests/render-gates/site/nav-island.spec.ts) and in
-// frontend/site/__tests__/nav-island.test.ts, not here.
+// crates/moss-build/src/js-src/site/__tests__/nav-island.test.ts, not here.
 // =========================================================================
 
 /// Build the island for a page at `posts/hello/index.html` on a 3-level site.
@@ -2514,7 +2543,7 @@ fn island_for_deep_page() -> String {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     NavigationBuilder::new(
         &documents,
         "My Site",
@@ -2522,13 +2551,13 @@ fn island_for_deep_page() -> String {
         crate::i18n::Language::En,
         true,
     )
-    .with_breadcrumb(segments)
+    .with_breadcrumb(segments, false)
     .generate_nav_island()
 }
 
 #[test]
 fn island_trail_reuses_the_mastheads_breadcrumb_classes() {
-    // ADR-049 §3: "looks the same as the nav bar" is a property someone has to
+    // "Looks the same as the nav bar" is a property someone has to
     // maintain by eye if the two are separate markup. Sharing the classes makes
     // it true by construction.
     let island = island_for_deep_page();
@@ -2540,7 +2569,7 @@ fn island_trail_reuses_the_mastheads_breadcrumb_classes() {
 
 #[test]
 fn island_appends_the_current_page_the_masthead_skips() {
-    // ADR-049 §4. In the masthead the page title is directly below, on screen;
+    // In the masthead the page title is directly below, on screen;
     // in the island it is not, so the island supplies it — as the last crumb,
     // not as a separate bold title field.
     let island = island_for_deep_page();
@@ -2570,7 +2599,7 @@ fn the_masthead_still_stops_before_the_current_page() {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     let nav_html = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -2578,7 +2607,7 @@ fn the_masthead_still_stops_before_the_current_page() {
         crate::i18n::Language::En,
         true,
     )
-    .with_breadcrumb(segments)
+    .with_breadcrumb(segments, false)
     .generate_navigation();
 
     assert!(!nav_html.contains("Hello World"), "got: {nav_html}");
@@ -2594,8 +2623,8 @@ fn island_folds_only_when_there_is_a_middle_to_sacrifice() {
     assert!(deep.contains(r#"aria-expanded="false""#), "got: {deep}");
 
     // A top-level page has two crumbs — site name and the page — and neither is
-    // ever droppable, so there is no "…" at all. This is the answer to the open
-    // question ADR-049 left about top-level pages: the island still ships,
+    // ever droppable, so there is no "…" at all. This is the answer to an open
+    // question about top-level pages: the island still ships,
     // because "back to the site root" is the one route a long page's reader
     // cannot otherwise take, and an affordance that vanishes at depth 1 reads
     // as a bug.
@@ -2604,7 +2633,7 @@ fn island_folds_only_when_there_is_a_middle_to_sacrifice() {
         make_doc_with_breadcrumb("about/index.html", "About Us", None),
     ];
     let doc = &documents[1];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     let shallow = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -2612,7 +2641,7 @@ fn island_folds_only_when_there_is_a_middle_to_sacrifice() {
         crate::i18n::Language::En,
         true,
     )
-    .with_breadcrumb(segments)
+    .with_breadcrumb(segments, false)
     .generate_nav_island();
 
     assert!(shallow.contains("My Site"), "got: {shallow}");
@@ -2647,15 +2676,15 @@ fn no_island_without_a_breadcrumb_trail() {
         crate::i18n::Language::En,
         true,
     )
-    .with_breadcrumb(vec![])
+    .with_breadcrumb(vec![], false)
     .generate_nav_island();
     assert_eq!(empty, "");
 }
 
 #[test]
 fn island_buttons_ship_inert_so_a_scriptless_page_shows_no_dead_chrome() {
-    // ADR-049's consequence: the base state must work with JavaScript off, and
-    // §8's rule that an inert icon in shipped chrome is worse than no icon.
+    // The base state must work with JavaScript off, and
+    // an inert icon in shipped chrome is worse than no icon.
     // The `…` is `hidden` in the emitted HTML because the trail may never need
     // to fold. The sections button is not: since 2026-08-30 an island only
     // ever shows on a page with a contents table, so its button always has
@@ -2673,13 +2702,13 @@ fn island_buttons_ship_inert_so_a_scriptless_page_shows_no_dead_chrome() {
         island.contains(r#"data-island-menu="sections" hidden></div>"#),
         "got: {island}"
     );
-    // And no search: the masthead has it (ADR-049 §8).
+    // And no search: the masthead has it.
     assert!(!island.contains("nav-search-btn"), "got: {island}");
 }
 
 #[test]
 fn island_claims_no_interaction_model_it_does_not_implement() {
-    // ADR-049 §9. `role="menu"` / `role="menuitem"` / `aria-haspopup` all
+    // `role="menu"` / `role="menuitem"` / `aria-haspopup` all
     // promise arrow-key roving focus. The panels are a popover of plain links
     // and have no such thing, and a screen-reader user told "menu" will press
     // ArrowDown and find that nothing moves — worse than never claiming it.
@@ -2696,10 +2725,10 @@ fn island_claims_no_interaction_model_it_does_not_implement() {
 
 #[test]
 fn island_current_crumb_can_say_what_it_truncated() {
-    // The current page is the ONE crumb the island lets ellipsise (§4), which
+    // The current page is the ONE crumb the island lets ellipsise, which
     // makes it the one that needs a way to reveal the rest. `data-hint-label`
-    // is what `frontend/site/nav/breadcrumb-hint.ts` promotes to a real tooltip
-    // while — and only while — the label is genuinely cut off (§6).
+    // is what `breadcrumb-hint.ts` promotes to a real tooltip
+    // while — and only while — the label is genuinely cut off.
     let island = island_for_deep_page();
     assert!(
         island.contains(r#"aria-current="page" data-island-crumb data-hint-label="Hello World""#),
@@ -2715,18 +2744,267 @@ fn island_labels_are_localized_and_attribute_safe() {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "潮汐", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "河灣", true, false).unwrap();
     let island = NavigationBuilder::new(
         &documents,
-        "潮汐",
+        "河灣",
         Some(doc.url_path.as_str()),
         crate::i18n::Language::ZhHant,
         true,
     )
-    .with_breadcrumb(segments)
+    .with_breadcrumb(segments, false)
     .generate_nav_island();
 
     assert!(island.contains(r#"aria-label="本頁章節""#), "got: {island}");
     assert!(island.contains(r#"aria-label="顯示省略的層級""#), "got: {island}");
     assert!(island.contains(r#"aria-label="路徑""#), "got: {island}");
+}
+
+// =========================================================================
+// [site].header = "nav" tests
+// =========================================================================
+
+fn nav_mode_documents() -> Vec<ParsedDocument> {
+    vec![
+        make_doc("index.html", "Home", None, None),
+        make_doc("about/index.html", "About", Some(2), Some(true)),
+        make_doc("blog/index.html", "Blog", Some(1), Some(true)),
+    ]
+}
+
+#[test]
+fn test_header_mode_from_config_default_and_recognized_values() {
+    assert_eq!(HeaderMode::from_config(None), HeaderMode::Brand);
+    assert_eq!(HeaderMode::from_config(Some("")), HeaderMode::Brand);
+    assert_eq!(HeaderMode::from_config(Some("brand")), HeaderMode::Brand);
+    assert_eq!(HeaderMode::from_config(Some("nav")), HeaderMode::Nav);
+}
+
+#[test]
+fn test_header_mode_from_config_unrecognized_falls_back_to_brand() {
+    assert_eq!(HeaderMode::from_config(Some("sidebar")), HeaderMode::Brand);
+}
+
+#[test]
+fn nav_mode_renders_no_site_name_on_home_or_inner_pages() {
+    let documents = nav_mode_documents();
+    for current in [Some("index.html"), Some("about/index.html")] {
+        let html = NavigationBuilder::new(&documents, "My Site", current, crate::i18n::Language::En, true)
+            .with_header_mode(HeaderMode::Nav)
+            .generate_navigation();
+        assert!(
+            !html.contains("nav-left"),
+            "nav mode must not emit .nav-left at all. got: {html}"
+        );
+        assert!(
+            !html.contains("My Site"),
+            "nav mode must not print the site name anywhere in the nav. got: {html}"
+        );
+    }
+}
+
+#[test]
+fn nav_mode_home_link_leads_with_aria_current_on_home() {
+    let documents = nav_mode_documents();
+    let html = NavigationBuilder::new(&documents, "My Site", Some("index.html"), crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(
+        html.contains(r#"<a href="/" class="active" aria-current="page">Home</a>"#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn nav_mode_home_link_has_no_aria_current_off_home() {
+    let documents = nav_mode_documents();
+    let html = NavigationBuilder::new(&documents, "My Site", Some("about/index.html"), crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    // Home itself carries no current-page marking off the home page...
+    assert!(html.contains(r#"<a href="/">Home</a>"#), "got: {html}");
+    // ...but the page actually being viewed is itself a nav item here, and
+    // correctly gets the exact-match marking (see
+    // nav_mode_exact_match_on_a_nav_item_gets_aria_current_page_not_true).
+    assert!(
+        html.contains(r#"<a href="/about/" class="active" aria-current="page">About</a>"#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn nav_mode_items_follow_weight_order_after_home() {
+    // Blog carries weight 1, About weight 2 — Home always leads regardless.
+    let documents = nav_mode_documents();
+    let html = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    let home_idx = html.find(">Home<").expect("Home link must render");
+    let blog_idx = html.find(">Blog<").expect("Blog link must render");
+    let about_idx = html.find(">About<").expect("About link must render");
+    assert!(home_idx < blog_idx && blog_idx < about_idx, "got: {html}");
+}
+
+#[test]
+fn nav_mode_keeps_the_theme_toggle() {
+    let documents = nav_mode_documents();
+    let html = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(html.contains("nav-theme-btn"), "got: {html}");
+}
+
+#[test]
+fn nav_mode_home_label_is_localized() {
+    let documents = nav_mode_documents();
+    let zh_hans = NavigationBuilder::new(&documents, "站点", None, crate::i18n::Language::ZhHans, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(zh_hans.contains(">首页<"), "got: {zh_hans}");
+
+    let zh_hant = NavigationBuilder::new(&documents, "網站", None, crate::i18n::Language::ZhHant, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(zh_hant.contains(">首頁<"), "got: {zh_hant}");
+}
+
+#[test]
+fn nav_mode_suppresses_the_floating_island() {
+    // The island would otherwise show a breadcrumb trail whose first crumb is
+    // the site name — exactly the brand text nav mode drops from the
+    // masthead. See `HeaderMode::Nav`'s doc.
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("posts/index.html", "Posts", None),
+        make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
+    ];
+    let doc = &documents[2];
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let island = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        Some(doc.url_path.as_str()),
+        crate::i18n::Language::En,
+        true,
+    )
+    .with_breadcrumb(segments, false)
+    .with_header_mode(HeaderMode::Nav)
+    .generate_nav_island();
+    assert_eq!(island, "", "got: {island}");
+}
+
+#[test]
+fn brand_mode_is_the_default_and_renders_no_home_link() {
+    let documents = nav_mode_documents();
+    let default_html = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, true)
+        .generate_navigation();
+    let explicit_brand_html = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Brand)
+        .generate_navigation();
+    assert_eq!(
+        default_html, explicit_brand_html,
+        "the default must be indistinguishable from an explicit [site] header = \"brand\""
+    );
+    assert!(
+        default_html.contains(r#"<div class="nav-left"><a href="/" class="site-name">My Site</a></div>"#),
+        "got: {default_html}"
+    );
+    assert!(
+        !default_html.contains(">Home<"),
+        "brand mode must not synthesize a Home link. got: {default_html}"
+    );
+}
+
+// =========================================================================
+// nav mode's current-section cue (stands in for the dropped breadcrumb)
+// =========================================================================
+
+fn make_folder_doc(url_path: &str, title: &str, weight: Option<i32>) -> ParsedDocument {
+    let mut doc = make_doc(url_path, title, weight, Some(true));
+    doc.kind = moss_core::PageKind::Folder;
+    doc
+}
+
+#[test]
+fn nav_mode_marks_the_containing_section_current_on_a_deep_page() {
+    // No breadcrumb in nav mode, so a reader three levels into "Essays" has
+    // no other cue for which top-level section they're under — the nav item
+    // itself has to carry it.
+    let documents = vec![
+        make_doc("index.html", "Home", None, None),
+        make_folder_doc("essays/index.html", "Essays", Some(1)),
+    ];
+    let html = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        Some("essays/2024/some-post/index.html"),
+        crate::i18n::Language::En,
+        true,
+    )
+    .with_header_mode(HeaderMode::Nav)
+    .generate_navigation();
+    assert!(
+        html.contains(r#"<a href="/essays/" class="active" aria-current="true">Essays</a>"#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn nav_mode_exact_match_on_a_nav_item_gets_aria_current_page_not_true() {
+    let documents = vec![
+        make_doc("index.html", "Home", None, None),
+        make_folder_doc("essays/index.html", "Essays", Some(1)),
+    ];
+    let html = NavigationBuilder::new(&documents, "My Site", Some("essays/index.html"), crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(
+        html.contains(r#"<a href="/essays/" class="active" aria-current="page">Essays</a>"#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn nav_mode_unrelated_section_is_not_marked_current() {
+    let documents = vec![
+        make_doc("index.html", "Home", None, None),
+        make_folder_doc("essays/index.html", "Essays", Some(1)),
+        make_folder_doc("recipes/index.html", "Recipes", Some(2)),
+    ];
+    let html = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        Some("essays/2024/some-post/index.html"),
+        crate::i18n::Language::En,
+        true,
+    )
+    .with_header_mode(HeaderMode::Nav)
+    .generate_navigation();
+    assert!(html.contains(r#"<a href="/recipes/">Recipes</a>"#), "got: {html}");
+}
+
+#[test]
+fn brand_mode_never_marks_a_containing_section_current() {
+    // The regression this guards: brand mode keeps its breadcrumb trail for
+    // this job and must render exactly as it always has — no aria-current
+    // anywhere in the nav-links list, exact-match or not.
+    let documents = vec![
+        make_doc("index.html", "Home", None, None),
+        make_folder_doc("essays/index.html", "Essays", Some(1)),
+    ];
+    let deep_page = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        Some("essays/2024/some-post/index.html"),
+        crate::i18n::Language::En,
+        true,
+    )
+    .generate_navigation();
+    assert!(!deep_page.contains("aria-current"), "got: {deep_page}");
+    assert!(!deep_page.contains(r#"class="active""#), "got: {deep_page}");
+
+    let exact_page = NavigationBuilder::new(&documents, "My Site", Some("essays/index.html"), crate::i18n::Language::En, true)
+        .generate_navigation();
+    assert!(!exact_page.contains("aria-current"), "brand mode's exact-match styling is plain class=\"active\" only: {exact_page}");
+    assert!(exact_page.contains(r#"<a href="/essays/" class="active">Essays</a>"#), "got: {exact_page}");
 }

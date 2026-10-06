@@ -1,5 +1,6 @@
 use super::super::hooks::DefaultHooks;
 use super::super::node::Inline;
+use super::super::shortcode::{GridShortcode, Shortcode};
 use super::super::url::{Url, UrlKind};
 use super::*;
 
@@ -29,6 +30,20 @@ fn renders_heading_with_id() {
     assert_eq!(html, "<h2 id=\"setup\">Setup<a class=\"moss-heading-anchor\" href=\"#setup\" aria-label=\"Permalink to this section\"></a></h2>\n");
 }
 
+/// A level-1 heading is a page's own title, not a section of it — it never
+/// gets the `.moss-heading-anchor` permalink, even though it keeps its `id`
+/// (so an existing `#title`-style inbound link still resolves). Contrast
+/// with `renders_heading_with_id` above, whose level-2 heading gets one.
+#[test]
+fn renders_level_one_heading_without_permalink_anchor() {
+    let html = render(vec![Block::Heading {
+        level: 1,
+        children: vec![Inline::Text("Title".into())],
+        id: Some("title".into()),
+    }]);
+    assert_eq!(html, "<h1 id=\"title\">Title</h1>\n");
+}
+
 #[test]
 fn renders_resolved_link_internal() {
     let html = render(vec![Block::Paragraph(vec![Inline::Link {
@@ -36,6 +51,7 @@ fn renders_resolved_link_internal() {
         title: None,
         children: vec![Inline::Text("Docs".into())],
         is_wikilink: false,
+        has_pothole: false,
     }])]);
     assert_eq!(html, "<p><a href=\"docs/\">Docs</a></p>\n");
 }
@@ -49,6 +65,7 @@ fn renders_resolved_link_wikilink_carries_class() {
         title: None,
         children: vec![Inline::Text("Docs".into())],
         is_wikilink: false,
+        has_pothole: false,
     }])]);
     assert!(html.contains(r#"class="wikilink""#), "got: {html}");
 }
@@ -63,6 +80,7 @@ fn renders_link_with_is_wikilink_flag_emits_class() {
         title: None,
         children: vec![Inline::Text("Docs".into())],
         is_wikilink: true,
+        has_pothole: false,
     }])]);
     assert!(
         html.contains(r#"class="wikilink""#),
@@ -529,7 +547,8 @@ fn round_trips_parse_to_render_for_canonical_doc() {
     // (mark every URL Internal) → render → check shape.
     //
     // Phase 4 PR2: the parser now populates Block::Heading.id with the
-    // Obsidian anchor slug, so the rendered <h1> carries id="title".
+    // Obsidian anchor slug, so the rendered <h1> carries id="title" — but,
+    // since a level-1 heading is never a permalink target, no `.moss-heading-anchor`.
     let md = "# Title\n\npara with [link](docs/) and *em*.\n";
     let mut doc = super::super::parser::parse(md);
     super::super::visit::visit_urls_mut(&mut doc, |u| match u {
@@ -537,7 +556,7 @@ fn round_trips_parse_to_render_for_canonical_doc() {
         _ => {}
     });
     let html = render_document(&doc, &DefaultHooks::new());
-    assert!(html.contains(r##"<h1 id="title">Title<a class="moss-heading-anchor" href="#title" aria-label="Permalink to this section"></a></h1>"##), "got: {html}");
+    assert!(html.contains(r##"<h1 id="title">Title</h1>"##), "got: {html}");
     assert!(html.contains(r#"<a href="docs/">link</a>"#));
     assert!(html.contains("<em>em</em>"));
 }
@@ -856,6 +875,7 @@ fn unresolved_url_in_link_panics_in_debug() {
         title: None,
         children: vec![],
         is_wikilink: false,
+        has_pothole: false,
     }])]);
 }
 
@@ -1166,8 +1186,8 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
     });
     let html = render_document(&doc, &DefaultHooks::new());
     assert!(
-            html.contains(r##"<h1 id="title" data-source-line="1">Title<a class="moss-heading-anchor" href="#title" aria-label="Permalink to this section"></a></h1>"##),
-            "H1 should carry data-source-line=1: {html}"
+            html.contains(r##"<h1 id="title" data-source-line="1">Title</h1>"##),
+            "H1 should carry data-source-line=1 and no permalink anchor: {html}"
         );
     assert!(
         html.contains(r#"<p data-source-line="3">first paragraph</p>"#),
@@ -1181,4 +1201,116 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
         html.contains(r#"<p data-source-line="7">second paragraph</p>"#),
         "second paragraph should carry data-source-line=7: {html}"
     );
+}
+
+// ── Grid `scroll` emission ───────────────────────────────────────
+
+/// Four cells against three columns, so `scroll: true` actually overflows
+/// the row and `GridShortcode::is_scroll_row()` (but not
+/// `fits_without_scrolling()`) reads true — the emission tests below need a
+/// grid that overflows at every width, not just one that asked to scroll.
+fn grid(scroll: bool, label: Option<&str>) -> Block {
+    grid_with_cells(scroll, label, 4)
+}
+
+fn grid_with_cells(scroll: bool, label: Option<&str>, cell_count: usize) -> Block {
+    Block::Shortcode(Shortcode::Grid(GridShortcode {
+        columns: 3,
+        scroll,
+        label: label.map(str::to_string),
+        cells: (0..cell_count)
+            .map(|_| vec![Block::Paragraph(vec![Inline::Text("A".into())])])
+            .collect(),
+        ..Default::default()
+    }))
+}
+
+#[test]
+fn grid_scroll_emits_data_scroll_and_tabindex() {
+    let html = render(vec![grid(true, None)]);
+    assert!(
+        html.contains(r#"<div class="moss-grid" data-columns="3" data-scroll tabindex="0">"#),
+        "got: {html}"
+    );
+    assert!(!html.contains("role="), "no label -> no role: {html}");
+    assert!(!html.contains("aria-label"), "no label -> no aria-label: {html}");
+}
+
+#[test]
+fn grid_scroll_with_label_emits_region_and_aria_label() {
+    let html = render(vec![grid(true, Some("Related articles"))]);
+    assert!(
+        html.contains(
+            r#"<div class="moss-grid" data-columns="3" data-scroll tabindex="0" role="region" aria-label="Related articles">"#
+        ),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn grid_scroll_label_is_html_escaped() {
+    let html = render(vec![grid(true, Some(r#"A & B <c>"#))]);
+    assert!(
+        html.contains(r#"aria-label="A &amp; B &lt;c&gt;""#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn grid_without_scroll_emits_no_scroll_attrs() {
+    let html = render(vec![grid(false, None)]);
+    assert!(!html.contains("data-scroll"), "got: {html}");
+    assert!(!html.contains("tabindex"), "got: {html}");
+}
+
+#[test]
+fn grid_label_without_scroll_emits_nothing_extra() {
+    // `label` only means something alongside `scroll`; on its own it must
+    // not leak an aria-label/role onto a grid that never becomes a scroll
+    // region.
+    let html = render(vec![grid(false, Some("Ignored"))]);
+    assert!(!html.contains("aria-label"), "got: {html}");
+    assert!(!html.contains("role="), "got: {html}");
+    assert!(!html.contains("data-scroll"), "got: {html}");
+}
+
+/// Owner's rule: a `{scroll}` row whose cards already fit its column count
+/// still IS a scroll row — it renders like the plain grid on a wide screen,
+/// but becomes a real scroller once the viewport narrows — so it still gets
+/// `data-scroll`/`tabindex`, plus `data-fits` marking the wide-screen
+/// plain-grid case for the stylesheet. Only a single cell has nothing to
+/// scroll at any width and opts all the way back out. Exact attribute
+/// strings, 1 through 4 cells against `columns=3`.
+#[test]
+fn grid_scroll_emission_by_cell_count_at_columns_3() {
+    let one = render(vec![grid_with_cells(true, None, 1)]);
+    assert!(
+        one.starts_with(r#"<div class="moss-grid" data-columns="3">"#),
+        "1 cell: nothing to scroll, plain grid: {one}"
+    );
+
+    let two = render(vec![grid_with_cells(true, None, 2)]);
+    assert!(
+        two.starts_with(r#"<div class="moss-grid" data-columns="3" data-scroll data-fits tabindex="0">"#),
+        "2 cells <= 3 columns: fits, still a scroll row: {two}"
+    );
+
+    let three = render(vec![grid_with_cells(true, None, 3)]);
+    assert!(
+        three.starts_with(r#"<div class="moss-grid" data-columns="3" data-scroll data-fits tabindex="0">"#),
+        "3 cells == 3 columns: fits, still a scroll row: {three}"
+    );
+
+    let four = render(vec![grid_with_cells(true, None, 4)]);
+    assert!(
+        four.starts_with(r#"<div class="moss-grid" data-columns="3" data-scroll tabindex="0">"#),
+        "4 cells > 3 columns: overflows, no data-fits: {four}"
+    );
+    assert!(!four.contains("data-fits"), "got: {four}");
+}
+
+#[test]
+fn grid_scroll_with_more_cells_than_columns_still_scrolls() {
+    let html = render(vec![grid_with_cells(true, None, 4)]);
+    assert!(html.contains("data-scroll"), "4 cells over 3 columns should scroll: {html}");
 }

@@ -6,8 +6,8 @@
 //!
 //! `[site].math` defaults ON, which means pulldown-cmark's `ENABLE_MATH` is
 //! live for every vault that never mentions math in its config. That is safe
-//! for the vaults we measured (zero `$` outside fenced code in any published
-//! vault — ADR-030 D4), but pulldown's open/close rule is an ASCII byte test:
+//! for a vault with no `$` outside fenced code, but pulldown's open/close rule
+//! is an ASCII byte test:
 //! **any non-whitespace byte before the closing `$` closes the span.** So
 //! prose that merely quotes two prices becomes an equation:
 //!
@@ -16,15 +16,14 @@
 //! 一个$5，两个$10            →  one inline-math span (no spaces in CJK prose)
 //! ```
 //!
-//! An author importing a corpus we never measured — a shop's price list, a
-//! translated finance post — has no way to know this before publishing. This
-//! command is that way: it reports every `$`-span that the real parser would
+//! An author importing a shop's price list or a translated finance post has no
+//! way to know this before publishing. This command is that way: it reports every `$`-span that the real parser would
 //! turn into math, with `path:line:` locations, so the author can audit the
 //! vault and choose a remedy: escape as `\$` (renders as a plain `$`, so the
 //! prose is untouched — the recommended fix), add a space after the `$`
 //! (changes what readers see), or set `math = false` for the whole site.
 //!
-//! Note the report says "parsed as math", not "typeset": P1 ships no
+//! Note the report says "parsed as math", not "typeset": there is no
 //! typesetting engine, so a reported span renders as its LaTeX source with
 //! the `$` delimiters consumed.
 //!
@@ -205,28 +204,19 @@ fn report_summary(total_spans: usize, files_with_math: usize) {
     println!("    math = false");
 }
 
-/// Every markdown file the build would read, using the build's own directory
-/// exclusions (`is_excluded_dir_name` prunes `.moss`, `.git`, dotfiles,
-/// `node_modules`) so the report covers exactly the files that get published.
+/// Every page the build would read, by the build's own rules for what
+/// belongs to the site (`left_out_of_site`) and what becomes a page
+/// (`is_page_source`), so the report covers exactly the files that get
+/// published.
 fn markdown_files(folder: &Path) -> Vec<PathBuf> {
+    use crate::build::scan::classify::{is_page_path, left_out_of_site};
     let mut files: Vec<PathBuf> = walkdir::WalkDir::new(folder)
         .into_iter()
-        .filter_entry(|e| {
-            if !e.file_type().is_dir() {
-                return true;
-            }
-            let name = e.file_name().to_string_lossy();
-            !crate::build::scan::classify::is_excluded_dir_name(&name)
-        })
+        .filter_entry(|e| left_out_of_site(e).is_none())
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
         .map(|e| e.into_path())
-        .filter(|p| {
-            matches!(
-                p.extension().and_then(|e| e.to_str()),
-                Some("md") | Some("markdown")
-            )
-        })
+        .filter(|p| is_page_path(p))
         .collect();
 
     // WalkDir order is filesystem order; sort so two runs over the same vault
@@ -290,7 +280,7 @@ mod tests {
         assert_eq!(spans[0].source, "$5，两个$");
     }
 
-    /// The ASCII sibling from ADR-030 §2. Same rule, same finding.
+    /// The ASCII sibling of the CJK case above. Same rule, same finding.
     #[test]
     fn parenthesized_prices_are_reported() {
         let spans = scan_markdown("(cost: $5) and ($10)\n");
@@ -352,5 +342,26 @@ mod tests {
     fn missing_math_flag_is_a_usage_error() {
         assert_eq!(run(&[]), 2);
         assert_eq!(run(&["--links".to_string()]), 2);
+    }
+
+    #[test]
+    fn a_dot_named_folder_is_listed_but_dot_folders_inside_it_are_not() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join(".dotsite");
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join("a.md"), "x").unwrap();
+        std::fs::write(root.join(".hidden/b.md"), "x").unwrap();
+        assert_eq!(markdown_files(&root), vec![root.join("a.md")]);
+    }
+
+    #[test]
+    fn the_report_covers_exactly_the_pages_the_build_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for f in ["a.md", "B.MD", "c.mdown", "AGENTS.md", "shop/.moss/x", "shop/d.md"] {
+            std::fs::create_dir_all(root.join(f).parent().unwrap()).unwrap();
+            std::fs::write(root.join(f), "x").unwrap();
+        }
+        assert_eq!(markdown_files(root), vec![root.join("B.MD"), root.join("a.md"), root.join("c.mdown")]);
     }
 }

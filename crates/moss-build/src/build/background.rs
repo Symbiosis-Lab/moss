@@ -7,8 +7,6 @@
 //! `await_completion` joins all workers, then awaits the coordinator. The
 //! returned `SealedManifest` is the only path to a deploy-ready manifest —
 //! callers that take `&SealedManifest` cannot run before this barrier resolves.
-//!
-//! See: moss#524 (single emit API), moss#552 (debug-assert blocking_keys ⊆ files).
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -250,6 +248,13 @@ pub struct BackgroundHandle {
     /// seals in `await_completion`; its `Drop` guard cancels a leaked `Running`
     /// parent on any non-await path.
     terminal_barrier: Option<BuildTerminalBarrier>,
+    /// The build's `lifecycle::CacheWriteLease`: while it is open, no other
+    /// build may unlink from staging or GC the cache. `await_completion`
+    /// hands it back to the caller instead of dropping it, so the seal tail
+    /// (`build::advertise_sealed`) can keep holding it across
+    /// `materialize_and_promote`/`ship_phase` — see that function for where
+    /// it finally drops.
+    cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
 }
 
 impl BackgroundHandle {
@@ -268,7 +273,7 @@ impl BackgroundHandle {
         F: FnOnce(mpsc::Sender<EmitMessage>, &mut JoinSet<Result<(), BuildError>>),
     {
         let (coordinator, tx) = ManifestCoordinator::new(carry_forward);
-        Self::spawn_inner(coordinator, tx, None, f)
+        Self::spawn_inner(coordinator, tx, None, None, f)
     }
 
     /// Like `spawn` but seeds the coordinator from an already-populated
@@ -286,7 +291,7 @@ impl BackgroundHandle {
         F: FnOnce(mpsc::Sender<EmitMessage>, &mut JoinSet<Result<(), BuildError>>),
     {
         let (coordinator, tx) = ManifestCoordinator::from_pending(pending);
-        Self::spawn_inner(coordinator, tx, None, f)
+        Self::spawn_inner(coordinator, tx, None, None, f)
     }
 
     /// Like `spawn_with_pending` but also attaches the build's terminal barrier
@@ -298,22 +303,24 @@ impl BackgroundHandle {
     /// **Every build path that can finish should use this variant**, including
     /// the zero-worker one: a text-only build still owes its listeners a
     /// "finished" receipt.
-    pub fn spawn_with_pending_and_terminal<F>(
+    pub(crate) fn spawn_with_pending_and_terminal<F>(
         pending: PendingManifest,
         terminal_barrier: Option<BuildTerminalBarrier>,
+        cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
         f: F,
     ) -> Self
     where
         F: FnOnce(mpsc::Sender<EmitMessage>, &mut JoinSet<Result<(), BuildError>>),
     {
         let (coordinator, tx) = ManifestCoordinator::from_pending(pending);
-        Self::spawn_inner(coordinator, tx, terminal_barrier, f)
+        Self::spawn_inner(coordinator, tx, terminal_barrier, cache_lease, f)
     }
 
     fn spawn_inner<F>(
         coordinator: ManifestCoordinator,
         tx: mpsc::Sender<EmitMessage>,
         terminal_barrier: Option<BuildTerminalBarrier>,
+        cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
         f: F,
     ) -> Self
     where
@@ -332,16 +339,28 @@ impl BackgroundHandle {
             coordinator_join,
             workers,
             terminal_barrier,
+            cache_lease,
         }
     }
 
     /// Materialization barrier: await all workers, then await coordinator, then
     /// emit the build's terminal receipts.
     ///
-    /// Returns the `SealedManifest` once every emit has been applied. Failure
-    /// of any worker is propagated; partial completions are NOT sealed (the
-    /// coordinator is aborted).
-    pub async fn await_completion(mut self) -> Result<SealedManifest, BuildError> {
+    /// Returns the `SealedManifest` once every emit has been applied, together
+    /// with the build's `CacheWriteLease` (if any) — taken out of `self`
+    /// rather than dropped, so the caller can carry it into the seal tail
+    /// (`build::advertise_sealed`), which still needs the cache to survive a
+    /// concurrent GC through `materialize_and_promote`. Failure of any worker
+    /// is propagated; partial completions are NOT sealed (the coordinator is
+    /// aborted), and on that path the lease is simply dropped with `self` —
+    /// a build that failed ships nothing, so nothing downstream still needs it.
+    // `pub(crate)`, not `pub`: the return type now carries `CacheWriteLease`,
+    // which is itself `pub(crate)` (rustc's private-interface lint is what
+    // caught the mismatch) — and every real caller is inside this crate
+    // anyway (`build.rs`'s seal+persist tasks).
+    pub(crate) async fn await_completion(
+        mut self,
+    ) -> Result<(SealedManifest, Option<crate::build::lifecycle::CacheWriteLease>), BuildError> {
         // Join workers first. If any returns Err or panics, propagate.
         //
         // On the error path we return WITHOUT calling `terminate_succeeded`, so
@@ -368,7 +387,10 @@ impl BackgroundHandle {
         if let Some(barrier) = self.terminal_barrier.as_mut() {
             barrier.terminate_succeeded();
         }
-        Ok(sealed)
+        // The same point says what the hash index saved: every user of it has
+        // finished, the image and video workers included.
+        crate::build::cache::report_hash_index_activity();
+        Ok((sealed, self.cache_lease.take()))
     }
 }
 
@@ -390,6 +412,7 @@ mod tests {
                     rel_path: "a.html".to_string(),
                     hash: "aaa".to_string(),
                     bucket: HashBucket::Files,
+                    oid: None,
                 })
                 .await
                 .unwrap();
@@ -397,6 +420,7 @@ mod tests {
                     rel_path: "b.html".to_string(),
                     hash: "bbb".to_string(),
                     bucket: HashBucket::Files,
+                    oid: None,
                 })
                 .await
                 .unwrap();
@@ -408,6 +432,7 @@ mod tests {
                     rel_path: "c.html".to_string(),
                     hash: "ccc".to_string(),
                     bucket: HashBucket::Files,
+                    oid: None,
                 })
                 .await
                 .unwrap();
@@ -416,12 +441,28 @@ mod tests {
             // Original tx dropped at end of closure
         });
 
-        let sealed = handle.await_completion().await.expect("await_completion failed");
+        let (sealed, _lease) = handle.await_completion().await.expect("await_completion failed");
 
         assert_eq!(sealed.files().len(), 3);
         assert!(sealed.files().contains_key("a.html"));
         assert!(sealed.files().contains_key("b.html"));
         assert!(sealed.files().contains_key("c.html"));
+    }
+
+    /// The post-join point is where a build says what its hash index did: every user of
+    /// it, the detached image and video workers included, has finished by then.
+    #[tokio::test]
+    async fn await_completion_reports_what_the_hash_index_did() {
+        crate::build::cache::LAST_LINE.with(|last| *last.borrow_mut() = None);
+        let handle = BackgroundHandle::spawn(SiteHashes::default(), |_tx, _workers| {});
+
+        handle.await_completion().await.expect("await_completion failed");
+
+        let line = crate::build::cache::LAST_LINE.with(|last| last.borrow().clone());
+        assert!(
+            line.as_deref().is_some_and(|l| l.starts_with("[cache] hash-index: ")),
+            "the build printed no hash-index line: {line:?}"
+        );
     }
 
     #[tokio::test]
@@ -442,11 +483,65 @@ mod tests {
             // No workers spawned; tx dropped immediately
         });
 
-        let sealed = handle
+        let (sealed, _lease) = handle
             .await_completion()
             .await
             .expect("await_completion failed");
         assert!(sealed.files().is_empty());
+    }
+
+    /// A portable tempdir under `target/test-tmp`, matching
+    /// `epoch_ordering_tests.rs`'s own fixture.
+    fn temp_moss_paths() -> (tempfile::TempDir, crate::moss_paths::MossPaths) {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("test-tmp");
+        std::fs::create_dir_all(&base).unwrap();
+        let tmp = tempfile::Builder::new()
+            .prefix("moss-cache-lease")
+            .tempdir_in(&base)
+            .unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        (tmp, mp)
+    }
+
+    /// The fix this pins: `await_completion` used to DROP the build's
+    /// `CacheWriteLease` as part of consuming `self`, which released it
+    /// before the seal tail (`build::advertise_sealed`) even started —
+    /// letting a concurrent cache GC collect a CAS blob the seal tail's
+    /// `materialize_and_promote`/`ship_phase` still needed to read. It must
+    /// instead hand the lease back to the caller so the seal tail can keep
+    /// holding it. A regression back to the old drop-on-return behavior
+    /// shows up here as the lease already being closed the instant
+    /// `await_completion` resolves.
+    #[tokio::test]
+    async fn await_completion_returns_the_cache_lease_instead_of_dropping_it() {
+        let (_tmp, mp) = temp_moss_paths();
+        let lease = crate::build::lifecycle::cache_write_lease(&mp);
+        assert_eq!(crate::build::lifecycle::snapshot(&mp).2, 1, "sanity: the lease is open");
+
+        let handle = BackgroundHandle::spawn_with_pending_and_terminal(
+            PendingManifest::new(SiteHashes::default()),
+            None,
+            Some(lease),
+            |_tx, _workers| {
+                // No workers — the point is the lease, not the manifest.
+            },
+        );
+
+        let (_sealed, returned_lease) =
+            handle.await_completion().await.expect("await_completion failed");
+
+        assert_eq!(
+            crate::build::lifecycle::snapshot(&mp).2, 1,
+            "await_completion must hand the lease back, not drop it — the count must \
+             still read 1 right after it resolves"
+        );
+        assert!(returned_lease.is_some(), "await_completion must return the lease, not consume it");
+
+        drop(returned_lease);
+        assert_eq!(
+            crate::build::lifecycle::snapshot(&mp).2, 0,
+            "and dropping the returned lease must still release it normally"
+        );
     }
 
     #[tokio::test]
@@ -580,6 +675,7 @@ mod tests {
         let handle = BackgroundHandle::spawn_with_pending_and_terminal(
             PendingManifest::new(SiteHashes::default()),
             Some(barrier),
+            None,
             |tx, workers| {
                 let svc_worker = svc_arc.clone();
                 workers.spawn(async move {
@@ -591,7 +687,7 @@ mod tests {
                 });
             },
         );
-        let _sealed = handle.await_completion().await.expect("await_completion");
+        let (_sealed, _lease) = handle.await_completion().await.expect("await_completion");
         let parent = build_parent_cell.lock().unwrap().expect("parent minted");
         assert!(
             matches!(build_parent_task(&registry, parent), TaskState::Succeeded { .. }),
@@ -645,6 +741,7 @@ mod tests {
         let handle = BackgroundHandle::spawn_with_pending_and_terminal(
             PendingManifest::new(SiteHashes::default()),
             Some(barrier),
+            None,
             |_tx, _workers| {
                 // Zero workers — the media-less build shape.
             },

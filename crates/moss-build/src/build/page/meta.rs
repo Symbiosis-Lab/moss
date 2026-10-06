@@ -438,16 +438,15 @@ pub fn build_schema_website(
 /// except where the first paragraph says nothing on its own and the excerpt
 /// reads on into the next — see [`reads_as_fragment`].
 ///
-/// **Deliberately not an `ast::plain_text` lowering.** ADR-036's "parse once, lower to many"
-/// unified email HTML/plain-text onto the typed AST, and this function was investigated for the
+/// **Deliberately not an `ast::plain_text` lowering.** An earlier "parse once, lower to many"
+/// design unified email HTML/plain-text onto the typed AST, and this function was investigated for the
 /// same move — the doc comments below on `first_paragraph_excerpt`/`non_prose_view` are what that
 /// investigation left in place: consult the parser (`FootnoteIndex`, `extract_shortcodes`)
 /// wherever block context genuinely disambiguates something, but keep the line/shape-based
 /// scanning everywhere the goal is excerpt SAFETY rather than render parity — an image's alt text
 /// and a paragraph the parser would still render (as literal text, if its markdown is malformed)
 /// are deliberately not description material, per `test_extract_description_strips_image_syntax`
-/// and `a_broken_image_paragraph_is_deliberately_not_the_description`. See ADR-036's
-/// "Investigated and excluded: meta.rs" note for the full reasoning.
+/// and `a_broken_image_paragraph_is_deliberately_not_the_description`.
 ///
 /// Shortcode handling matches the renderer exactly (the excerpt is computed
 /// on the output of moss-core's `extract_shortcodes` — see
@@ -457,25 +456,40 @@ pub fn build_schema_website(
 /// (`:::{.class}` — an empty shortcode name, just a styling wrapper) is NOT
 /// excluded: its surrounding prose is genuine, user-visible page content, so
 /// it stays excerpt-eligible while any nested typed shortcode inside it is
-/// still removed. See docs/reference/shortcode-grammar.md.
+/// still removed.
 /// (Shared with [`extract_preview`] via [`first_paragraph_excerpt`].)
-/// `math` is the site's `[site].math` setting (ADR-030, default ON) and must
+/// `math` is the site's `[site].math` setting (default ON) and must
 /// be the SAME value the page renders with: `$…$` swallows any footnote
 /// marker inside it, so a math-blind parse here reads `$[^a]$` as a marker
 /// and deletes characters the published page displays. Same rule, same
 /// reason as `newsletter::footnote_numbers`.
 pub fn extract_description(content: &str, math: bool) -> String {
-    truncate_at_word_boundary(&first_paragraph_excerpt(content, true, math), 160)
+    truncate_at_boundary(&first_paragraph_excerpt(content, true, math).plain, 160)
 }
 
-/// Extract a page's opening prose from markdown content, with inline markdown
-/// already stripped — usually the first real paragraph, and where that
-/// paragraph is only a fragment, it plus the one after it (see
-/// [`reads_as_fragment`]). Shared implementation behind
-/// [`extract_description`] and [`extract_preview`] — the only difference
-/// between the two public excerpt functions is the truncation length and
-/// whether Obsidian callout markers (`[!type]`) get stripped, so the actual
-/// line-scanning logic lives here once.
+/// Same selection as [`extract_description`] — the identical first-paragraph
+/// (or fragment-plus-next-paragraph) span, at the same 160-char budget — but
+/// with its markdown left in place instead of stripped, for a caller that
+/// will render it with [`render_description_html`] rather than read it as
+/// plain text. Truncating the raw span at a plain-text character budget can
+/// orphan an opening marker (`_word` with no closing `_`); that is the same
+/// "garbled markdown is not description material" territory
+/// `strip_markdown_inline`'s own doc comment already accepts, and
+/// `render_description_html`'s unmatched-delimiter handling shows it as
+/// literal text rather than breaking.
+pub fn extract_description_markdown(content: &str, math: bool) -> String {
+    truncate_at_boundary(&first_paragraph_excerpt(content, true, math).markdown, 160)
+}
+
+/// Extract a page's opening prose from markdown content, both plain (inline
+/// markdown stripped) and with its markdown intact — see [`ExcerptText`] —
+/// usually the first real paragraph, and where that paragraph is only a
+/// fragment, it plus the one after it (see [`reads_as_fragment`]). Shared
+/// implementation behind [`extract_description`]/[`extract_description_markdown`]
+/// and [`extract_preview`] — the only difference between the public excerpt
+/// functions is the truncation length and whether Obsidian callout markers
+/// (`[!type]`) get stripped, so the actual line-scanning logic lives here
+/// once.
 ///
 /// The raw markdown is first run through moss-core's `extract_shortcodes`
 /// (the renderer's own pre-parse pass) so shortcodes are handled with the
@@ -488,7 +502,7 @@ pub fn extract_description(content: &str, math: bool) -> String {
 ///   is a pre-existing, documented limitation, not changed here
 /// - any residual `:::` marker line (only unclosed openers / code-fence
 ///   examples survive the `extract_shortcodes` pass as literal `:::` lines)
-fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool) -> String {
+fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool) -> ExcerptText {
     // Route the raw markdown through the SAME pre-parse pass the renderer
     // uses (moss-core `shortcode_extract::extract_shortcodes`) so the excerpt
     // sees exactly the renderer's "what is real visible prose" view — rather
@@ -660,7 +674,14 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     // Footnote markers are already gone: `non_prose_view` redacted their exact
     // parser-reported spans above, so the stripper needs no label set and
     // cannot delete a `[^…]` the page renders as prose.
+    //
+    // Built in lockstep with the plain `excerpt`: `excerpt_markdown` is the
+    // SAME selected span with its markdown left intact (only the
+    // blockquote-prefix/callout-marker cleanup above applied), for a caller
+    // that wants to render inline markdown rather than read plain text — see
+    // [`ExcerptText`].
     let mut excerpt = String::new();
+    let mut excerpt_markdown = String::new();
     let mut lead: Option<usize> = None;
     for (index, paragraph) in paragraphs.iter().enumerate() {
         let stripped = strip_markdown_inline(paragraph);
@@ -671,6 +692,7 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
         match lead {
             None => {
                 excerpt.push_str(stripped);
+                excerpt_markdown.push_str(paragraph.trim());
                 if !reads_as_fragment(&excerpt) {
                     break;
                 }
@@ -682,11 +704,29 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
                 }
                 excerpt.push(' ');
                 excerpt.push_str(stripped);
+                excerpt_markdown.push(' ');
+                excerpt_markdown.push_str(paragraph.trim());
                 break;
             }
         }
     }
-    excerpt
+    ExcerptText {
+        plain: excerpt,
+        markdown: excerpt_markdown,
+    }
+}
+
+/// The two forms [`first_paragraph_excerpt`] produces from the SAME selected
+/// span — one paragraph-selection pass, read out twice, the same relationship
+/// [`render_description_html`]/[`strip_markdown_inline`] have to a resolved
+/// description string. `plain` is the pre-existing contract every current
+/// caller of `extract_description`/`extract_preview` uses; `markdown` is what
+/// a caller wanting safe inline HTML (`render_description_html`) should
+/// truncate and render instead of re-deriving the plain form back into markup
+/// it no longer contains.
+struct ExcerptText {
+    plain: String,
+    markdown: String,
 }
 
 /// Whether `paragraph` (pre-strip, so its markers survive) is a list rather
@@ -777,7 +817,7 @@ struct NonProseView {
 /// Only the doc-order-FIRST definition of a label is skipped — the one the
 /// renderer hoists (`footnotes::is_hoisted` decides by that same
 /// first-in-doc-order identity). A REPEAT definition renders its body in
-/// place per ADR-035, so its lines stay prose; only its `[^label]:` marker
+/// place, so its lines stay prose; only its `[^label]:` marker
 /// (which the page never shows) is redacted, span-exact from the parser:
 /// the marker runs from the definition's start to its first child's start.
 ///
@@ -1000,61 +1040,237 @@ pub fn strip_markdown_inline(text: &str) -> String {
     // alias text (when present) or the file part. Image embeds (`![[…]]`)
     // drop entirely — they're media references, not text — including the
     // case where pulldown-cmark would emit the file part as inner text.
-    while let Some(start) = result.find("[[") {
-        // Find matching `]]`.
-        let after = start + 2;
-        if let Some(end_rel) = result.get(after..).and_then(|s| s.find("]]")) {
-            let end = after + end_rel;
-            let inner = result.get(after..end).unwrap_or_default();
-            let is_image_embed = start > 0 && result.as_bytes()[start - 1] == b'!';
-            if is_image_embed {
-                // `![[file.ext]]` or `![[file.ext|alias]]` — drop entirely.
-                // Even when pulldown-cmark would put alias text in the
-                // event body, the description excerpt should treat the
-                // embed as a media block (like `![alt](url)` is dropped
-                // below), not as caption text.
-                result = splice(&result, start - 1, end + 2, "");
-                continue;
-            }
-            // Pothole: text after `|` becomes alias display text.
-            let display = match inner.split_once('|') {
-                Some((file, alias)) => {
-                    if alias.is_empty() {
-                        if let Some((f, s)) = file.split_once('#') {
-                            format!("{} > {}", f, s)
-                        } else {
-                            file.to_string()
-                        }
-                    } else {
-                        alias.to_string()
-                    }
-                }
-                None => {
-                    if let Some((f, s)) = inner.split_once('#') {
-                        format!("{} > {}", f, s)
-                    } else {
-                        inner.to_string()
-                    }
-                }
-            };
-            result = splice(&result, start, end + 2, &display);
-            continue;
-        }
-        break;
+    // Shared verbatim with `render_description_html` as `resolve_wikilinks`:
+    // neither renders a wikilink as a real link, so there is nothing for the
+    // HTML side to do differently here.
+    result = resolve_wikilinks(&result);
+
+    // Strip images: ![alt](url) -> "" and links: [text](url) -> text. Shared
+    // with `render_description_html` as `strip_or_render_links`, which the
+    // HTML side calls with a closure that wraps a link in `<a href>` instead
+    // of collapsing it to bare text.
+    result = strip_or_render_links(&result, true, |link_text, _href| link_text.to_string());
+
+    // Strip bold/italic: **text** -> text, *text* -> text
+    result = result.replace("**", "");
+    result = result.replace("*", "");
+
+    // Strip underscore emphasis: _text_ -> text, __text__ -> text. Kept apart
+    // from the `**`/`*` replace above rather than folded into it: a bare
+    // `.replace("_", "")` would also eat every underscore in prose that
+    // never meant emphasis — snake_case identifiers, filenames, `SOME_CONST`
+    // — so this looks for genuine open/close PAIRS bounded by a non-word
+    // byte on the outside (`transform_underscore_emphasis`'s doc has the
+    // exact rule) instead of deleting the character outright. `*` has no
+    // such exception in CommonMark (intraword `a*b*c` is real emphasis), so
+    // the naive replace above is correct for it as-is.
+    result = transform_underscore_emphasis(&result, |_run_len, inner| inner.to_string());
+
+    // Strip inline code: `code` -> code
+    result = result.replace("`", "");
+
+    // Collapse multiple spaces into one
+    while result.contains("  ") {
+        result = result.replace("  ", " ");
     }
 
-    // Strip images: ![alt](url) -> "" and links: [text](url) -> text.
-    //
-    // A `[` opens a link only when its MATCHING `]` is followed by `(`. Pairing
-    // it with the next `](` anywhere downstream deletes the wrong span the
-    // moment prose holds a bracket the author meant literally — a regex class,
-    // a kaomoji, an undefined footnote marker — and those now reach this loop
-    // by design. An unmatched `[` is prose too, and a later `[` may still open
-    // a real link, so the scan steps past it instead of giving up.
+    result.trim().to_string()
+}
+
+/// Whether `b` is a byte CommonMark's intraword-underscore rule would treat
+/// as "part of a word" on the outside of a `_`/`__` run. ASCII-only: this
+/// exists to keep `snake_case_identifiers` and a glued `prefix__word__suffix`
+/// from being misread as emphasis, both Latin-identifier conventions, so
+/// this is not trying to be a Unicode word-boundary test — a `_` sitting
+/// right against CJK prose is treated as a legitimate emphasis edge. It does
+/// NOT protect a dunder like `__init__` written with spaces on both sides
+/// (`call __init__ once`) — CommonMark's rule looks at the byte immediately
+/// outside the delimiter run, not at what the wrapped word looks like, and a
+/// space there is a legitimate emphasis edge; real Markdown renderers bold
+/// that too, which is why prose about Python dunders is conventionally
+/// written in backticks.
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+}
+
+/// Find the next `_..._` or `__..__` run in `text` that CommonMark would
+/// actually treat as emphasis, approximating its "underscore emphasis is
+/// never intraword" rule: the byte immediately outside each end of the
+/// delimiter run must be the start/end of the string or a non-word byte
+/// (see [`is_word_byte`]), and the wrapped content must not start or end
+/// with a space. A closing run's length has to equal the opening run's (one
+/// `_` closes one `_`; two close two) — this does not implement
+/// CommonMark's fuller multiple-of-3 rule for mixed run lengths, which
+/// bare description text is vanishingly unlikely to hit.
+///
+/// Returns `(open_start, run_len, close_start, after_close)` in byte
+/// offsets, all on char boundaries (every boundary here sits right after an
+/// ASCII byte). `None` when no qualifying run exists.
+fn find_underscore_emphasis(text: &str) -> Option<(usize, usize, usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'_' {
+            i += 1;
+            continue;
+        }
+        let run_len = if bytes.get(i + 1) == Some(&b'_') { 2 } else { 1 };
+        let left_ok = i == 0 || !is_word_byte(bytes[i - 1]);
+        let inner_start = i + run_len;
+        if !left_ok || text.get(inner_start..).is_none_or(|s| s.starts_with(' ') || s.is_empty())
+        {
+            i += run_len;
+            continue;
+        }
+        let mut j = inner_start;
+        let mut found = None;
+        while let Some(rel) = text.get(j..).and_then(|s| s.find('_')) {
+            let close_start = j + rel;
+            let close_run = if bytes.get(close_start + 1) == Some(&b'_') { 2 } else { 1 };
+            let after = close_start + close_run;
+            let content_ok = close_start > inner_start && bytes[close_start - 1] != b' ';
+            let right_ok = close_run == run_len
+                && content_ok
+                && (after >= bytes.len() || !is_word_byte(bytes[after]));
+            if right_ok {
+                found = Some((i, run_len, close_start, after));
+                break;
+            }
+            j = close_start + 1;
+        }
+        match found {
+            Some(span) => return Some(span),
+            None => i += run_len,
+        }
+    }
+    None
+}
+
+/// Apply [`find_underscore_emphasis`] left to right, replacing each qualifying
+/// run with `render(run_len, inner_text)`. Shared by [`strip_markdown_inline`]
+/// (`render` drops the markers, keeping `inner_text` bare) and
+/// [`render_description_html`] (`render` wraps it in `<strong>`/`<em>`
+/// depending on `run_len`) — one recognizer, two things to do with a match.
+fn transform_underscore_emphasis(text: &str, mut render: impl FnMut(usize, &str) -> String) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some((open_start, run_len, close_start, after)) = find_underscore_emphasis(rest) {
+        out.push_str(&rest[..open_start]);
+        out.push_str(&render(run_len, &rest[open_start + run_len..close_start]));
+        rest = &rest[after..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The wikilink-resolution phase shared by [`strip_markdown_inline`] and
+/// [`render_description_html`]: `[[file]]`/`[[file|alias]]` become their
+/// plain display text (alias, or the file part — `#section` joined with
+/// " > "), `![[file]]` embeds drop entirely. Identical in both callers
+/// because neither renders a wikilink as a real link — resolving one to an
+/// actual URL needs the page graph, which is not available at this
+/// text-only layer — so there is nothing for the HTML side to do
+/// differently here.
+fn resolve_wikilinks(text: &str) -> String {
+    let mut result = text.to_string();
+    while let Some(start) = result.find("[[") {
+        let after = start + 2;
+        let Some(end_rel) = result.get(after..).and_then(|s| s.find("]]")) else {
+            break;
+        };
+        let end = after + end_rel;
+        let inner = result.get(after..end).unwrap_or_default();
+        let is_image_embed = start > 0 && result.as_bytes()[start - 1] == b'!';
+        if is_image_embed {
+            result = splice(&result, start - 1, end + 2, "");
+            continue;
+        }
+        let display = match inner.split_once('|') {
+            Some((file, alias)) => {
+                if alias.is_empty() {
+                    match file.split_once('#') {
+                        Some((f, s)) => format!("{} > {}", f, s),
+                        None => file.to_string(),
+                    }
+                } else {
+                    alias.to_string()
+                }
+            }
+            None => match inner.split_once('#') {
+                Some((f, s)) => format!("{} > {}", f, s),
+                None => inner.to_string(),
+            },
+        };
+        result = splice(&result, start, end + 2, &display);
+    }
+    result
+}
+
+/// Wrap each `delim`...`delim` pair in `open`/`close`; an unmatched trailing
+/// delimiter (or an empty pair, `****`) rides through as literal text rather
+/// than being silently dropped, since [`render_description_html`] must
+/// never lose author content the way deletion-based stripping can. `*`/`**`
+/// have no CommonMark intraword exception (unlike `_`/`__` — see
+/// [`find_underscore_emphasis`]), so a plain left-to-right pairing is
+/// correct for them without a word-boundary guard.
+fn wrap_delimited(text: &str, delim: &str, open: &str, close: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(delim) {
+        let after_open = &rest[start + delim.len()..];
+        match after_open.find(delim) {
+            Some(end) if end > 0 => {
+                out.push_str(&rest[..start]);
+                out.push_str(open);
+                out.push_str(&after_open[..end]);
+                out.push_str(close);
+                rest = &after_open[end + delim.len()..];
+            }
+            _ => {
+                out.push_str(&rest[..start + delim.len()]);
+                rest = after_open;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The image/link phase shared by [`strip_markdown_inline`] and
+/// [`render_description_html`]: an image (`![alt](url)`) drops entirely in
+/// both — not description material — and a link (`[text](url)`) becomes
+/// whatever `render_link(link_text, href)` returns: bare text for the plain
+/// reducer, a real `<a href>` for the HTML renderer. One scanner (the
+/// bracket/paren matching is the fiddly, easy-to-get-wrong part), two things
+/// a link can become.
+///
+/// A `[` opens a link only when its MATCHING `]` is followed by `(`. Pairing
+/// it with the next `](` anywhere downstream deletes the wrong span the
+/// moment prose holds a bracket the author meant literally — a regex class,
+/// a kaomoji, an undefined footnote marker — and those now reach this loop
+/// by design. An unmatched `[` is prose too, and a later `[` may still open
+/// a real link, so the scan steps past it instead of giving up.
+///
+/// `rescan_replacement`: whether the scan continues from the START of a
+/// link's replacement (`true`) or steps past it (`false`). The plain reducer
+/// needs `true` — a linked image, `[![alt](src)](url)`, replaces its OUTER
+/// link with the image syntax that was its link text, and rescanning from
+/// there is what lets the NEXT pass find and drop that inner `![alt](src)`
+/// too. The HTML renderer needs `false`: its replacement is real markup
+/// (`<a href="…">…</a>`), and rescanning into a produced tag risks matching
+/// a `[` inside the href or text as a new link opener and splicing into the
+/// tag's own structure.
+fn strip_or_render_links(
+    text: &str,
+    rescan_replacement: bool,
+    mut render_link: impl FnMut(&str, &str) -> String,
+) -> String {
+    let mut result = text.to_string();
     let mut cursor = 0;
     while let Some(rel) = result.get(cursor..).and_then(|s| s.find('[')) {
         let start = cursor + rel;
-        let close = matching_delim(&result, start, '[', ']').filter(|&close| result.get(close..).is_some_and(|s| s.starts_with("](")));
+        let close = matching_delim(&result, start, '[', ']')
+            .filter(|&close| result.get(close..).is_some_and(|s| s.starts_with("](")));
         let Some(close) = close else {
             cursor = start + 1;
             continue;
@@ -1073,29 +1289,81 @@ pub fn strip_markdown_inline(text: &str) -> String {
             break;
         };
         if is_image {
-            // Strip entire ![alt](url) -> ""
             result = splice(&result, start - 1, end + 1, "");
             cursor = start - 1;
         } else {
-            // Strip [text](url) -> text
             let link_text = result.get(start + 1..close).unwrap_or_default().to_string();
-            result = splice(&result, start, end + 1, &link_text);
-            cursor = start;
+            let href = result.get(close + 2..end).unwrap_or_default().to_string();
+            let replacement = render_link(&link_text, &href);
+            cursor = if rescan_replacement { start } else { start + replacement.len() };
+            result = splice(&result, start, end + 1, &replacement);
         }
     }
+    result
+}
 
-    // Strip bold/italic: **text** -> text, *text* -> text
-    result = result.replace("**", "");
-    result = result.replace("*", "");
+/// Render a resolved description's markdown as safe inline HTML for a
+/// reader-facing surface (cards, listings, a hand-picked grid cell):
+/// `**bold**`/`__bold__` and `*italic*`/`_italic_` become `<strong>`/`<em>`,
+/// `` `code` `` becomes `<code>`, and `[text](url)` becomes a real
+/// `<a href>`. Everything else — raw HTML, images, a wikilink's own href —
+/// is either inert escaped text or dropped; there are no block elements
+/// because the input is already a single resolved description string, never
+/// a whole document.
+///
+/// Escaping the WHOLE string FIRST, before any markdown recognition, is
+/// what makes this safe against injection: `<script>`/`<img onerror=…>` in
+/// the source becomes inert `&lt;script&gt;` text before this function ever
+/// looks for a `*`, `_`, `` ` `` or `[`, so — unlike `strip_markdown_inline`,
+/// whose job is deletion and which must therefore tell a real HTML tag from
+/// TeX's `<`/`>` comparisons (`tag_span_end`) — there is no tag-detection
+/// heuristic to get wrong here at all.
+///
+/// Pairs with [`strip_markdown_inline`] as the other reader-facing form of
+/// the same resolved markdown string; the two share wikilink handling
+/// ([`resolve_wikilinks`]) and underscore-emphasis recognition
+/// ([`find_underscore_emphasis`]) and differ only in what a marker becomes.
+pub fn render_description_html(text: &str) -> String {
+    render_description(text, true)
+}
 
-    // Strip inline code: `code` -> code
-    result = result.replace("`", "");
+/// [`render_description_html`] for a description that sits INSIDE a link —
+/// every card whose whole body is an `<a href>` to the page. A nested `<a>`
+/// is invalid HTML (the parser closes the outer one early and splits the
+/// card), so a markdown link keeps its visible words and drops the
+/// destination; everything else renders exactly as in
+/// [`render_description_html`].
+pub fn render_description_html_in_link(text: &str) -> String {
+    render_description(text, false)
+}
 
-    // Collapse multiple spaces into one
+fn render_description(text: &str, keep_links: bool) -> String {
+    let escaped = moss_core::media::html_escape(text);
+    let mut result = resolve_wikilinks(&escaped);
+    // `href` is emitted as-is, with no scheme allowlist/blocklist — the same
+    // choice the body's own link renderer makes (moss-core's
+    // `ast::resolve_urls`/`ast::render`), so a description's links behave
+    // like any other link on the page.
+    result = strip_or_render_links(&result, false, |link_text, href| {
+        if keep_links {
+            format!(r#"<a href="{}">{}</a>"#, href, link_text)
+        } else {
+            link_text.to_string()
+        }
+    });
+    result = wrap_delimited(&result, "**", "<strong>", "</strong>");
+    result = wrap_delimited(&result, "*", "<em>", "</em>");
+    result = transform_underscore_emphasis(&result, |run_len, inner| {
+        if run_len == 2 {
+            format!("<strong>{}</strong>", inner)
+        } else {
+            format!("<em>{}</em>", inner)
+        }
+    });
+    result = wrap_delimited(&result, "`", "<code>", "</code>");
     while result.contains("  ") {
         result = result.replace("  ", " ");
     }
-
     result.trim().to_string()
 }
 
@@ -1109,55 +1377,117 @@ pub fn strip_markdown_inline(text: &str) -> String {
 /// block now yields an empty preview instead of leaking `+++`/`:::` into
 /// the `.moss-preview-popup` excerpt.
 pub fn extract_preview(content: &str, max_chars: usize, math: bool) -> String {
-    truncate_at_word_boundary(&first_paragraph_excerpt(content, false, math), max_chars)
+    truncate_at_boundary(&first_paragraph_excerpt(content, false, math).plain, max_chars)
 }
 
-/// Truncate text at word boundary (UTF-8 safe)
-fn truncate_at_word_boundary(text: &str, max_chars: usize) -> String {
-    // Find byte index at max_chars characters (not bytes)
+/// The byte offset right after each sentence-ending mark in `text`, in
+/// order: ASCII `.`/`!`/`?` count only when followed by whitespace or the
+/// end of the text (so "e.g." or "3.14" mid-sentence is not mistaken for a
+/// boundary); the CJK full-width marks `。`/`！`/`？` always count, since CJK
+/// prose does not put a space after them. [`truncate_at_boundary`]'s only
+/// caller for this.
+fn sentence_end_offsets(text: &str) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((byte_i, ch)) = chars.next() {
+        let is_boundary = match ch {
+            '。' | '！' | '？' => true,
+            '.' | '!' | '?' => chars.peek().is_none_or(|&(_, next)| next.is_whitespace()),
+            _ => false,
+        };
+        if is_boundary {
+            offsets.push(byte_i + ch.len_utf8());
+        }
+    }
+    offsets
+}
+
+/// Cut `text` — already established to be longer than `max_chars` — at the
+/// last word boundary within budget (a space, or, for CJK prose which has
+/// none, a comma-like pause: `，`/`、`/`,`) and mark the cut with a single
+/// "…". Falls back to a bare character cut when no such pause falls at or
+/// past HALF the budget: backing up to a much earlier pause would throw away
+/// most of the excerpt to avoid a mid-word/mid-clause cut, and a hard cut is
+/// the smaller wrong at that point.
+fn cut_with_ellipsis(text: &str, max_chars: usize) -> String {
     let truncate_byte_idx = text
         .char_indices()
         .nth(max_chars)
         .map(|(idx, _)| idx)
         .unwrap_or(text.len());
-
-    if truncate_byte_idx >= text.len() {
-        return text.to_string();
-    }
-
-    // Find last space before truncation point. `truncate_byte_idx` came from
-    // `char_indices`, so it is a char boundary; `get` says so to the compiler.
-    //
-    // Backing up to a space only avoids cutting a word in half — it must not
-    // cost most of the excerpt. Chinese and Japanese prose carries no spaces
-    // at all, so the nearest space can be the one word of Latin text near the
-    // start (or the join between an opening and the paragraph read on into
-    // above), and honouring it would throw away everything after it. Below
-    // half the budget, take the hard character cut instead: mid-word is a
-    // smaller wrong than mid-sentence.
     let truncated = text.get(..truncate_byte_idx).unwrap_or(text);
-    match truncated.rsplit_once(' ') {
-        Some((head, _)) if head.chars().count() * 2 >= max_chars => format!("{}...", head),
-        _ => format!("{}...", truncated),
+
+    let boundary_end = truncated
+        .rmatch_indices(|c: char| matches!(c, ' ' | '，' | '、' | ','))
+        .next()
+        .map(|(i, m)| i + m.len());
+
+    match boundary_end {
+        Some(i) if truncated[..i].chars().count() * 2 >= max_chars => {
+            format!("{}…", truncated[..i].trim_end())
+        }
+        _ => format!("{}…", truncated.trim_end()),
     }
 }
 
-/// Resolve the page description, preferring explicit frontmatter over auto-extraction.
+/// Truncate `text` at a SENTENCE boundary — the whole first sentence, and
+/// each one after it that still fits, taken verbatim with no added marker —
+/// falling back to [`cut_with_ellipsis`]'s word/pause-boundary hard cut only
+/// when even the first sentence alone is longer than `max_chars`.
 ///
-/// Strips inline markdown from explicit descriptions and falls back to extracting the
-/// first paragraph from content. Returns `None` only when both sources are empty.
+/// Every excerpt-truncating caller in this file shares this one budget-and-
+/// boundary policy: `extract_description`'s fixed 160 chars,
+/// `extract_description_markdown`'s same 160 read off the raw-markdown twin
+/// of the same excerpt, and `extract_preview`'s caller-chosen tooltip
+/// length. Before this, a fixed character cut took everything up to N chars
+/// regardless of where a sentence ended, so a description whose first
+/// sentence was itself well under budget still lost its second sentence
+/// mid-clause and always ended "..." — a real card once read "...as the
+/// city's" instead of quoting its short opening sentence whole.
+fn truncate_at_boundary(text: &str, max_chars: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut chosen_end = None;
+    for end in sentence_end_offsets(text) {
+        if text[..end].chars().count() <= max_chars {
+            chosen_end = Some(end);
+        } else {
+            break;
+        }
+    }
+    match chosen_end {
+        Some(end) => text[..end].trim().to_string(),
+        // No sentence fits whole — including the case where `text` has no
+        // recognized sentence boundary at all, so `chosen_end` never moves
+        // past `None`.
+        None => cut_with_ellipsis(text, max_chars),
+    }
+}
+
+/// Resolve the page description, preferring explicit frontmatter over
+/// auto-extraction. Returns `None` only when both sources are empty.
 ///
-/// Used by call sites that only need per-page resolution (child lists, grid cards).
-/// Meta-tag callers should use [`resolve_page_description_with_fallbacks`] so
-/// homepage-hero text and the homepage cascade can fill in share cards.
+/// Returns the description's MARKDOWN, not plain text — unlike
+/// [`resolve_page_description_with_fallbacks`], whose only consumer (share-
+/// card meta/OG/Twitter tags) is a plain-text surface. Every current caller
+/// of this function (child lists, grid cards, a hand-picked grid cell) feeds
+/// its own reader-facing HTML, so the caller is expected to render the
+/// result with [`render_description_html`] rather than print it as-is; the
+/// one caller that instead uses it as an incremental-rebuild change-diff key
+/// loses nothing by diffing markdown instead of plain text — a
+/// markdown-only edit (`_x_` to `**x**`) changes the rendered card too, so
+/// diffing the plain-stripped form would have UNDER-detected a real change.
 pub fn resolve_page_description(
     frontmatter_desc: Option<&str>,
     content: &str,
     math: bool,
 ) -> Option<String> {
     frontmatter_desc
-        .map(strip_markdown_inline)
-        .or_else(|| Some(extract_description(content, math)))
+        .map(|s| s.trim().to_string())
+        .filter(|d| !d.is_empty())
+        .or_else(|| Some(extract_description_markdown(content, math)))
         .filter(|d| !d.is_empty())
 }
 
@@ -1166,8 +1496,7 @@ pub fn resolve_page_description(
 /// Six rungs, two tiers. Within each tier the precedence is the same:
 /// explicit `description:` > hero overlay text > body first paragraph.
 /// Tiers run page-then-homepage so a page's own lede still beats the
-/// site-wide tagline — see the asymmetry rationale in
-/// docs/archive/2026-05-16-homepage-hero-og-fallback-design.md.
+/// site-wide tagline.
 pub struct DescriptionChainInputs<'a> {
     /// Current page's `description:` frontmatter (may carry inline markdown).
     pub page_description: Option<&'a str>,
@@ -1285,8 +1614,7 @@ pub fn escape_html_attr(s: &str) -> String {
 /// Every value here is a DECLARED BCP-47 tag — the same string the page emits
 /// as its own `<html lang>`. Taking them from `Language` instead made a `fr`
 /// page advertise `hreflang="en"` against its own `<html lang>: fr`, and
-/// collapsed two pages of one unshipped language into a single alternate
-/// (moss#1177).
+/// collapsed two pages of one unshipped language into a single alternate.
 pub fn build_hreflang_link_tags(
     current_lang_tag: &str,
     current_url_path: &str,

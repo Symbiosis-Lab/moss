@@ -50,20 +50,37 @@ fn version_ahead_is_rejected() {
 fn version_ahead_predicate_flags_only_a_newer_declared_version() {
     let ahead: toml::Table =
         toml::from_str(&format!("schema_version = {}", CURRENT_VERSION + 1)).unwrap();
-    assert_eq!(version_ahead(&ahead), Some(CURRENT_VERSION + 1));
+    assert_eq!(version_ahead(&ahead, CURRENT_VERSION), Some(CURRENT_VERSION + 1));
 
     let current: toml::Table =
         toml::from_str(&format!("schema_version = {}", CURRENT_VERSION)).unwrap();
-    assert_eq!(version_ahead(&current), None);
+    assert_eq!(version_ahead(&current, CURRENT_VERSION), None);
 
     let behind: toml::Table = toml::from_str("schema_version = 0").unwrap();
-    assert_eq!(version_ahead(&behind), None);
+    assert_eq!(version_ahead(&behind, CURRENT_VERSION), None);
 
-    // No key at all — e.g. `.moss/state.toml`, which shares the managed-TOML
-    // write primitive but carries no top-level `schema_version` of its own.
-    // `write_managed_toml`'s guard relies on this reading as "not ahead".
+    // No key at all — a fresh document, or a `.moss/state.toml` never
+    // touched by a binary new enough to stamp it — reads as v0 regardless of
+    // which schema's current version it is checked against.
     let untagged: toml::Table = toml::from_str("[deployment]\nsite_id = \"x\"").unwrap();
-    assert_eq!(version_ahead(&untagged), None);
+    assert_eq!(version_ahead(&untagged, CURRENT_VERSION), None);
+    assert_eq!(version_ahead(&untagged, STATE_CURRENT_VERSION), None);
+}
+
+#[test]
+fn version_ahead_is_parametrized_per_schema_not_hardcoded_to_config() {
+    // Same declared version, judged against each schema's own current
+    // version independently — this is what lets one predicate serve both
+    // `config.toml` and `state.toml` instead of a second copy for state.
+    let raw: toml::Table =
+        toml::from_str(&format!("schema_version = {}", STATE_CURRENT_VERSION + 1)).unwrap();
+    assert_eq!(
+        version_ahead(&raw, STATE_CURRENT_VERSION),
+        Some(STATE_CURRENT_VERSION + 1)
+    );
+    // The same document read as far behind config's own (much larger)
+    // current version — not ahead there.
+    assert_eq!(version_ahead(&raw, CURRENT_VERSION), None);
 }
 
 #[test]
@@ -201,7 +218,7 @@ fn v1_to_v2_promotes_analytics_section() {
         r#"
             schema_version = 1
             [analytics]
-            script = "https://guo.goatcounter.com/count"
+            script = "https://mysite.goatcounter.com/count"
         "#,
     )
     .unwrap();
@@ -214,7 +231,7 @@ fn v1_to_v2_promotes_analytics_section() {
         .expect("services.analytics");
     assert_eq!(
         analytics.get("script").and_then(|v| v.as_str()),
-        Some("https://guo.goatcounter.com/count")
+        Some("https://mysite.goatcounter.com/count")
     );
     assert_eq!(
         analytics.get("provider").and_then(|v| v.as_str()),
@@ -428,18 +445,18 @@ fn v1_to_v2_endpoint_scrub_coexists_with_comments_promotion() {
 }
 
 #[test]
-fn v1_to_v2_liu_guo_worked_example() {
-    // End-to-end: the 刘果 legacy config goes from pre-v1 through v2 in one call.
+fn v1_to_v2_legacy_worked_example() {
+    // End-to-end: a real site's legacy config goes from pre-v1 through v2 in one call.
     let mut raw: toml::Table = toml::from_str(
         r#"
             [analytics]
-            script = "https://guo.goatcounter.com/count"
+            script = "https://mysite.goatcounter.com/count"
 
             [comments]
             server_url = "https://api.moss.host/comments"
 
             [email]
-            api_key = "71a1403a-7c4f-4818-aa5a-1d75366684c2"
+            api_key = "00000000-0000-0000-0000-000000000000"
 
             [features]
             comments = true

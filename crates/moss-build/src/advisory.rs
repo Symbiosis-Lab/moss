@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[derive(specta::Type)]
 pub enum Scope {
-    /// A specific content/asset file (carries `item: Some(filename)`).
+    /// A specific content/asset file (carries `item: Some(site_relative_path)`).
     File,
     /// The project/site configuration.
     Config,
@@ -117,10 +117,10 @@ pub enum Action {
 /// pipeline encountered but did not fully process this build (e.g. a video
 /// that failed to transcode and was published unoptimized). Replaces the
 /// old free-form `warnings: Vec<String>`: structured (scope · severity ·
-/// item · what · action-as-data) so the frontend can render `item` (a
-/// filename) with `what` on hover, branch the build-wide case
-/// (`item: None`, e.g. "FFmpeg not available") into a distinct inline row,
-/// and offer a recovery affordance driven by `action`.
+/// item · what · action-as-data) so the frontend can render `item` with
+/// `what` on hover, branch the build-wide case (`item: None`, e.g. "FFmpeg
+/// not available") into a distinct inline row, and offer a recovery
+/// affordance driven by `action`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[derive(specta::Type)]
 pub struct Advisory {
@@ -128,8 +128,21 @@ pub struct Advisory {
     pub scope: Scope,
     /// How serious it is — drives the surface tier.
     pub severity: Severity,
-    /// The item this advisory is about — usually a filename. `None` for a
-    /// build-wide advisory that isn't tied to a single file.
+    /// The item this advisory is about: the SITE-ROOT-RELATIVE path of the
+    /// source file, exactly as it sits under the open folder on disk — never
+    /// a bare filename, and never a page-tree/URL path reshaped by a `url:`
+    /// override. `None` for a build-wide advisory that isn't tied to a single
+    /// file. The frontend's click-to-open resolves `item` by joining it onto
+    /// the open folder (`resolveAgainstFolder`), so a value that isn't the
+    /// real on-disk path opens nothing. Every moss-internal producer sets it
+    /// via [`Advisory::for_source`] (or [`Advisory::blocking_file`], which
+    /// delegates to it) — a producer that hand-writes `item: Some(...)`
+    /// without checking [`is_site_relative`] first has almost certainly
+    /// narrowed a site-relative path down to something that no longer
+    /// resolves. `clamp_plugin_advisory` is the one legitimate exception: it
+    /// starts from a plugin-supplied `Option<String>` rather than a bare
+    /// path, so it applies `is_site_relative` itself instead of going
+    /// through `for_source`.
     pub item: Option<String>,
     /// What happened, shown on hover (per-file) or inline (build-wide).
     pub what: String,
@@ -137,20 +150,207 @@ pub struct Advisory {
     pub action: Action,
 }
 
+/// Could `path` resolve under the site root when a caller joins it onto the
+/// open folder — a relative path with no `..` component? This is the whole
+/// contract [`Advisory::item`] must satisfy. Shared by `for_source` (a moss
+/// producer handing over the wrong shape is a bug, but these advisories are
+/// built in release too, so the wrong shape is dropped rather than trusted)
+/// and `clamp_plugin_advisory` (a plugin handing over the wrong shape is
+/// untrusted input to drop, in every build) — one predicate, not two.
+pub(crate) fn is_site_relative(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    !p.is_absolute() && !p.components().any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+/// One line describing a raised advisory, for the production log.
+///
+/// Pure and unit-tested directly — the `log::warn!` call site in
+/// [`Advisory::for_source`] routes through the global `tauri_plugin_log`
+/// logger, which a `cargo test` cannot construct (see this crate's advisory
+/// log line design note). `item` is the already-resolved, site-relative path
+/// (or `None` for a build-wide advisory); `<build>` names that case so the
+/// line always carries an `item=` token to grep on.
+pub(crate) fn advisory_log_line(
+    scope: &Scope,
+    severity: &Severity,
+    item: Option<&str>,
+    what: &str,
+) -> String {
+    format!(
+        "scope={:?} severity={:?} item={} : {}",
+        scope,
+        severity,
+        item.unwrap_or("<build>"),
+        what
+    )
+}
+
+/// `(source_path, what)` pairs already warned about, this process's
+/// lifetime — the advisory analogue of `moss_paths::warned_dirs`.
+///
+/// Several `for_source` callers are STAT-BASED and re-derive the identical
+/// advisory on every rebuild regardless of whether anything changed
+/// (`video_exceeds_size_target`'s own comment: "cache-hit rebuilds report it
+/// too"), so a persistent, author-facing condition — an oversized video
+/// nobody has fixed, a still-broken reference — would otherwise log one WARN
+/// line per rebuild for as long as it lasts. `Send Logs`' `LOG TAIL` is the
+/// literal last 768 KiB of the raw log FILE (`log_report.rs`'s
+/// `read_log_content`/`MAX_LOG_TAIL_BYTES`), a section the in-memory
+/// `DiagRing` dedup never touches (it only ever feeds Sentry breadcrumbs and
+/// the separate `RECENT ERRORS` section) — so unbounded repeats here crowd
+/// out real signal from that tail exactly the way raw ffmpeg progress output
+/// used to (`ffmpeg::strip_ffmpeg_progress`).
+fn warned_advisories() -> &'static std::sync::Mutex<std::collections::HashSet<(String, String)>> {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<(String, String)>>> =
+        std::sync::OnceLock::new();
+    WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Gate on the pair `(source_path, what)`, not the derived, possibly-`None`
+/// `item` — so two different rejected/malformed paths never collide under
+/// one shared `None` key — and on `what` alongside it so a change in the
+/// advisory's own content (a video that grew past a new cap, a different
+/// error) still logs once more. The composite key is this wrapper's own
+/// job; the gate itself is [`crate::infra::warn_once::should_warn_once`].
+pub(crate) fn should_warn_advisory_once(
+    source_path: &str,
+    what: &str,
+    seen: &std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+) -> bool {
+    crate::infra::warn_once::should_warn_once(
+        (source_path.to_string(), what.to_string()),
+        seen,
+    )
+}
+
 impl Advisory {
-    /// One file did not ship, and there is nothing the author can do from the
-    /// UI about it. `item` is a path; only its file name is shown.
-    pub(crate) fn blocking_file(item: &str, what: String) -> Self {
-        let name = std::path::Path::new(item)
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| item.to_string());
-        Self {
-            scope: Scope::File,
-            severity: Severity::Blocking,
-            item: Some(name),
-            what,
-            action: Action::None,
+    /// Build an advisory about one source file. `source_path` becomes `item`
+    /// when it is site-relative — see the field doc on [`Advisory::item`]. A
+    /// path that fails [`is_site_relative`] (stripped to a bare filename,
+    /// handed over absolute, or escaping the site root via `..`) drops to
+    /// `item: None` instead of being stored. That rejection is
+    /// unconditional, not a `debug_assert!`: these advisories are produced
+    /// in release builds on users' machines, so a check that only ran in
+    /// dev would be compiled out exactly where a malformed path does
+    /// damage — a build-wide advisory with no item is always a safe
+    /// fallback.
+    pub(crate) fn for_source(
+        scope: Scope,
+        severity: Severity,
+        source_path: &str,
+        what: String,
+        action: Action,
+    ) -> Self {
+        let item = is_site_relative(source_path).then(|| source_path.to_string());
+        // Every File-scoped, source-path-bearing advisory funnels through
+        // here, so one gate at the choke point covers all of them (including
+        // "shipped without optimizing") instead of a hand-written log::warn!
+        // at each of the dozen call sites in video.rs/image.rs. Gated by
+        // `should_warn_advisory_once` — see its doc for why: this is the
+        // same shape as `moss_paths::should_warn_once`, applied to the
+        // constructor that has far more call sites and fires far more often.
+        if should_warn_advisory_once(source_path, &what, warned_advisories()) {
+            log::warn!(
+                target: "advisory",
+                "{}",
+                advisory_log_line(&scope, &severity, item.as_deref(), &what)
+            );
         }
+        Self { scope, severity, item, what, action }
+    }
+
+    /// One file did not ship, and there is nothing the author can do from the
+    /// UI about it. `item` is the file's own site-relative path.
+    pub(crate) fn blocking_file(item: &str, what: String) -> Self {
+        Self::for_source(Scope::File, Severity::Blocking, item, what, Action::None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn for_source_keeps_a_site_relative_path() {
+        let advisory = Advisory::for_source(
+            Scope::File,
+            Severity::Blocking,
+            "posts/2026/photo.jpg",
+            "decode failed".into(),
+            Action::None,
+        );
+        assert_eq!(advisory.item.as_deref(), Some("posts/2026/photo.jpg"));
+    }
+
+    // The rejection must hold with no `debug_assert!` to strip: these
+    // advisories are built in release binaries on users' machines, which is
+    // exactly where the bug this guards against reached the frontend.
+    #[test]
+    fn for_source_drops_a_path_escaping_the_site_root() {
+        let advisory = Advisory::for_source(
+            Scope::File,
+            Severity::Blocking,
+            "../outside/photo.jpg",
+            "decode failed".into(),
+            Action::None,
+        );
+        assert_eq!(advisory.item, None);
+    }
+
+    #[test]
+    fn for_source_drops_an_absolute_path() {
+        let advisory = Advisory::for_source(
+            Scope::File,
+            Severity::Blocking,
+            "/etc/passwd",
+            "decode failed".into(),
+            Action::None,
+        );
+        assert_eq!(advisory.item, None);
+    }
+
+    #[test]
+    fn advisory_log_line_carries_item_and_what() {
+        let line = advisory_log_line(
+            &Scope::File,
+            &Severity::ShippedDegraded,
+            Some("videos/clip.mov"),
+            "shipped without optimizing",
+        );
+        assert!(line.contains("File"));
+        assert!(line.contains("ShippedDegraded"));
+        assert!(line.contains("videos/clip.mov"));
+        assert!(line.contains("shipped without optimizing"));
+    }
+
+    #[test]
+    fn advisory_log_line_names_a_build_wide_item() {
+        let line = advisory_log_line(
+            &Scope::Environment,
+            &Severity::NeedsAction,
+            None,
+            "FFmpeg not available",
+        );
+        assert!(line.contains("<build>"), "line was: {line}");
+        assert!(line.contains("FFmpeg not available"));
+    }
+
+    // ─── advisory warn-once gate (re-raise spam in a long `watch` session) ──
+    //
+    // The repeat/first-sighting behavior itself is
+    // `infra::warn_once::should_warn_once`'s own test; this pins only what
+    // this wrapper adds — that `what` is part of the key, so a changed
+    // advisory on the SAME path still warns instead of being swallowed by
+    // the path alone.
+
+    #[test]
+    fn should_warn_advisory_once_treats_a_changed_what_as_a_different_key() {
+        let seen = std::sync::Mutex::new(std::collections::HashSet::new());
+
+        assert!(should_warn_advisory_once("videos/clip.mov", "shipped without optimizing", &seen));
+        assert!(
+            should_warn_advisory_once("videos/clip.mov", "size grew past a new cap", &seen),
+            "a changed `what` on the same path must still warn"
+        );
     }
 }

@@ -1,5 +1,4 @@
-//! The `check_setup` verdict protocol (plugin setup contract,
-//! `docs/archive/2026-08-30-plugin-setup-contract.md`).
+//! The `check_setup` verdict protocol (plugin setup contract).
 //!
 //! Two verdicts, no third: `ready`, or `blocked` with blockers. A blocker may
 //! carry a form in the same [`Field`] vocabulary the settings page draws,

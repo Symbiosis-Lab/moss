@@ -298,6 +298,14 @@ pub fn extract_notebook_title(ipynb_json: &str) -> Option<String> {
     None
 }
 
+/// Where a notebook's viewer page is served: beside its `.ipynb`, as `.html`.
+pub(crate) fn viewer_path(
+    notebook_source_path: &str,
+) -> Result<crate::build::served_path::ServedPath, crate::build::served_path::ServedPathError> {
+    let raw = std::path::Path::new(notebook_source_path).with_extension("html");
+    crate::build::served_path::ServedPath::from_source(&raw.to_string_lossy())
+}
+
 /// Generates a viewer HTML page that embeds JupyterLite with a specific notebook.
 ///
 /// The generated page is a minimal HTML document with:

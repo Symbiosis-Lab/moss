@@ -19,7 +19,7 @@ fn write(dir: &Path, rel: &str, content: &str) {
 }
 
 #[test]
-fn orphaned_webp_with_no_reference_anywhere_is_removed() {
+fn orphaned_webp_with_no_reference_anywhere_is_condemned() {
     let tmp = tmp_dir();
     write(tmp.path(), "index.html", "<html><body>no images here</body></html>");
     write(tmp.path(), "assets/orphan.webp", "fake webp bytes");
@@ -28,11 +28,13 @@ fn orphaned_webp_with_no_reference_anywhere_is_removed() {
     let mut outputs = HashSet::new();
     outputs.insert("assets/orphan.webp".to_string());
 
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 1);
     assert!(removed.contains("assets/orphan.webp"));
-    assert!(!tmp.path().join("assets/orphan.webp").exists());
+    // Condemned, not unlinked: the staged tree is what the preview server is
+    // reading. `build::pipeline::sweep_staging` takes the bytes at the start
+    // of the next build.
+    assert!(tmp.path().join("assets/orphan.webp").exists());
 }
 
 /// A genuine orphan whose basename happens to collide with a variant *rung*
@@ -49,19 +51,16 @@ fn file_literally_named_after_a_rung_with_no_reference_is_still_pruned() {
     let mut outputs = HashSet::new();
     outputs.insert("w800.webp".to_string());
 
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 1);
     assert!(removed.contains("w800.webp"));
-    assert!(!tmp.path().join("w800.webp").exists());
 }
 
-/// Invariant 6 (moss#976): an image reference must survive pruning no
+/// Invariant 6: an image reference must survive pruning no
 /// matter which scannable text format carries it — `<source srcset>`,
 /// CSS `url()`, an RSS/Atom enclosure, or a plugin's bare `data-*`
-/// attribute all put the same shape of token in the output. Table-driven
-/// per docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
-/// P3 — collapses what were three near-identical tests into one.
+/// attribute all put the same shape of token in the output. Table-driven —
+/// collapses what were three near-identical tests into one.
 #[test]
 fn image_referenced_only_from_non_html_wrapper_survives() {
     struct Case {
@@ -113,9 +112,8 @@ fn image_referenced_only_from_non_html_wrapper_survives() {
         let mut outputs = HashSet::new();
         outputs.insert(asset_key.to_string());
 
-        let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+        let removed = orphaned_webp_keys(&outputs, &referenced);
 
-        assert_eq!(result.files_removed, 0, "case {:?} must survive pruning", case.name);
         assert!(removed.is_empty(), "case {:?} must survive pruning", case.name);
     }
 }
@@ -132,9 +130,8 @@ fn raster_fallback_tier_is_never_pruned_even_when_unreferenced() {
     outputs.insert("assets/orphan.png".to_string());
     outputs.insert("assets/orphan.jpg".to_string());
 
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 0);
     assert!(removed.is_empty());
     assert!(tmp.path().join("assets/orphan.png").exists());
     assert!(tmp.path().join("assets/orphan.jpg").exists());
@@ -156,9 +153,8 @@ fn reference_at_a_different_relative_depth_still_matches() {
     let mut outputs = HashSet::new();
     outputs.insert("assets/deep.webp".to_string());
 
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 0);
     assert!(removed.is_empty());
 }
 
@@ -179,9 +175,8 @@ fn absolute_and_data_uri_references_are_ignored_not_matched() {
     let mut outputs = HashSet::new();
     outputs.insert("assets/unrelated.webp".to_string());
 
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 1);
     assert!(removed.contains("assets/unrelated.webp"));
 }
 
@@ -212,7 +207,7 @@ fn decoding_strips_query_and_fragment_but_keeps_the_relative_prefix() {
 /// This is the ordinary shape for every non-HTML type in `SCAN_EXTENSIONS` —
 /// a stylesheet's `url()` is relative to the stylesheet. Before the token was
 /// also resolved against the file it was found in, this stylesheet's live
-/// reference read as an orphan and the variant was deleted; with moss#1085's
+/// reference read as an orphan and the variant was deleted; with that
 /// verdict persisted, `suppressed_variants` would then have kept it deleted,
 /// leaving a CSS rule pointing at nothing for good.
 #[test]
@@ -227,9 +222,9 @@ fn a_stylesheet_below_the_root_protects_the_asset_beside_it() {
     let outputs: HashSet<String> = ["gallery/assets/hero.webp".to_string()].into();
 
     let referenced = extract_referenced_tails(tmp.path()).tails;
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 0, "removed {removed:?}");
+    assert!(removed.is_empty(), "removed {removed:?}");
     assert!(
         suppressed_variants(tmp.path(), &outputs).is_empty(),
         "and a stale verdict for it must lift, or the producers stop re-making it"
@@ -254,14 +249,13 @@ fn a_data_file_below_the_root_listing_root_relative_keys_still_protects_them() {
     let outputs: HashSet<String> = ["assets/hero.webp".to_string()].into();
 
     let referenced = extract_referenced_tails(tmp.path()).tails;
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 0, "removed {removed:?}");
+    assert!(removed.is_empty(), "removed {removed:?}");
 }
 
-/// Explicit rows for the non-ASCII scripts and shapes named in
-/// docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
-/// P3/Part 3 — CJK, Cyrillic, Arabic, Devanagari, emoji, and a comma in the
+/// Explicit rows for the non-ASCII scripts and shapes covered above —
+/// CJK, Cyrillic, Arabic, Devanagari, emoji, and a comma in the
 /// filename — each using the REAL variant shape (`.wNNN.webp`, a rung under
 /// an `assets/` directory), since no fixture before this used a rung, which
 /// is part of why Bug A shipped.
@@ -289,9 +283,8 @@ fn non_ascii_and_comma_filenames_with_a_real_variant_rung_survive_pruning() {
         let mut outputs = HashSet::new();
         outputs.insert(key.clone());
 
-        let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+        let removed = orphaned_webp_keys(&outputs, &referenced);
 
-        assert_eq!(result.files_removed, 0, "row {:?} ({:?}) must survive pruning", label, key);
         assert!(removed.is_empty(), "row {:?} ({:?}) must survive pruning", label, key);
     }
 }
@@ -313,8 +306,8 @@ fn a_fully_percent_encoded_reference_survives_pruning() {
     let rows: &[(&str, &str, &str)] = &[
         (
             "encoded cjk dir and leaf",
-            "獎項/封面.w800.webp",
-            "/%E7%8D%8E%E9%A0%85/%E5%B0%81%E9%9D%A2.w800.webp",
+            "評選/封面.w800.webp",
+            "/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.w800.webp",
         ),
         (
             "encoded leaf only",
@@ -345,13 +338,8 @@ fn a_fully_percent_encoded_reference_survives_pruning() {
         let mut outputs = HashSet::new();
         outputs.insert(key.to_string());
 
-        let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+        let removed = orphaned_webp_keys(&outputs, &referenced);
 
-        assert_eq!(
-            result.files_removed, 0,
-            "row {:?}: {:?} emitted as {:?} must survive pruning",
-            label, key, emitted
-        );
         assert!(
             removed.is_empty(),
             "row {:?}: {:?} emitted as {:?} must survive pruning",
@@ -385,9 +373,8 @@ fn apostrophe_entity_and_uppercase_extension_are_still_recognized() {
     outputs.insert("assets/Grandma's-House.webp".to_string());
     outputs.insert("assets/Poster.WEBP".to_string());
 
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 0, "removed: {:?}", removed);
     assert!(removed.is_empty(), "removed: {:?}", removed);
 }
 
@@ -431,9 +418,8 @@ fn both_a_quoted_list_and_an_apostrophe_filename_survive_in_the_same_file() {
         outputs.insert(key.to_string());
     }
 
-    let (removed, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
+    let removed = orphaned_webp_keys(&outputs, &referenced);
 
-    assert_eq!(result.files_removed, 0, "removed: {:?}", removed);
     assert!(removed.is_empty(), "removed: {:?}", removed);
 }
 
@@ -536,8 +522,8 @@ fn every_byte_the_encoder_leaves_literal_survives_pruning() {
 
         let referenced = extract_referenced_tails(tmp.path()).tails;
         let outputs: HashSet<String> = std::iter::once(key.clone()).collect();
-        let (_, result) = prune_orphaned_webp(tmp.path(), &outputs, &referenced);
-        if result.files_removed != 0 {
+        let removed = orphaned_webp_keys(&outputs, &referenced);
+        if !removed.is_empty() {
             deleted.push(format!("{c:?} (emitted as {url})"));
         }
     }
@@ -549,7 +535,7 @@ fn every_byte_the_encoder_leaves_literal_survives_pruning() {
     );
     assert!(
         deleted.is_empty(),
-        "the pruner DELETED a live reference for {} byte(s) the URL encoder \
+        "the pruner CONDEMNED a live reference for {} byte(s) the URL encoder \
          leaves literal: {}\n\nEach one is a 404 on the live site. Either add \
          the byte to the token class in `extract_referenced_tails`, or stop \
          leaving it literal in `push_encoded_segment`.",
@@ -684,7 +670,7 @@ fn non_utf8_bytes_in_a_scannable_extension_are_skipped_not_reported() {
 }
 
 // ---------------------------------------------------------------------------
-// suppressed_variants — the carried verdict the producers read (moss#1085)
+// suppressed_variants — the carried verdict the producers read
 // ---------------------------------------------------------------------------
 
 /// The steady state the whole mechanism exists to reach: a variant a complete
@@ -724,7 +710,7 @@ fn a_variant_this_build_references_again_is_not_suppressed() {
 }
 
 /// A cold vault has no verdict to carry, so nothing is suppressed and the
-/// first build behaves exactly as it did before moss#1085 — encode everything,
+/// first build behaves exactly as it did before this fix — encode everything,
 /// let the ship-time prune decide with complete information. This is also the
 /// early return that keeps the staging scan off the first build's critical
 /// path.

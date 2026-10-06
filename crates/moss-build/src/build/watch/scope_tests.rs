@@ -1,4 +1,4 @@
-//! Unit tests for the watcher's subscription set (#960).
+//! Unit tests for the watcher's subscription set.
 //!
 //! The predicates moved here from `watch_tests.rs` keep their coverage there;
 //! what is new is `watch_targets`, whose whole job is to never name a path moss
@@ -61,7 +61,7 @@ fn watch_targets_never_name_a_moss_written_path() {
         assert!(
             crate::infra::moss_paths::is_watchable_rel(&rel),
             "watch_targets subscribed to {rel:?}, which the registry says moss owns — \
-             a build writing there re-triggers the build (#960)"
+             a build writing there re-triggers the build"
         );
     }
 }
@@ -87,7 +87,7 @@ fn watch_targets_exclude_build_output_dotdirs_and_node_modules() {
     let root = dir.path();
     let targets = targets_of(root);
 
-    for excluded in [".moss", ".moss/build", ".moss/identity", ".git", "node_modules", "AGENTS.md"]
+    for excluded in [".moss", ".moss/build.nosync", ".moss/identity", ".git", "node_modules", "AGENTS.md"]
     {
         assert!(
             !targets.contains(&root.join(excluded)),
@@ -124,8 +124,8 @@ fn root_level_files_are_covered_on_every_platform() {
 /// directory does not: the reconciler treats a newly appeared target as a
 /// content change and so bypasses every per-event filter. `Icon\r` is written
 /// into the project root by moss's own publish, so admitting it would make
-/// publishing rebuild the site it just published — instance 6 of the class
-/// #960 is about.
+/// publishing rebuild the site it just published — one more instance of the
+/// same class of bug as the rest of this file.
 #[test]
 fn root_level_files_moss_writes_are_never_targets() {
     let dir = fixture();
@@ -163,7 +163,7 @@ fn watch_targets_pick_up_a_new_top_level_folder() {
     );
 }
 
-/// Instance 3 of the class (#955), now caught at the event filter rather than
+/// Another instance of the same class, now caught at the event filter rather than
 /// by a hand-maintained second list: a root `AGENTS.md` is excluded from watch
 /// triggers regardless of who wrote it, and on Linux/Windows the non-recursive
 /// root watch would otherwise hear every write to it.
@@ -171,7 +171,7 @@ fn watch_targets_pick_up_a_new_top_level_folder() {
 fn root_agent_files_are_recognised_as_moss_written() {
     let root = Path::new("/site");
     assert!(all_paths_moss_written(root, &[root.join("AGENTS.md")]));
-    assert!(all_paths_moss_written(root, &[root.join(".moss/build/staging/i.html")]));
+    assert!(all_paths_moss_written(root, &[root.join(".moss/build.nosync/staging/i.html")]));
 
     // …but the same name one directory down is ordinary content, which is what
     // `editor::filesystem::a_nested_agents_md_is_an_ordinary_file` pins.
@@ -283,17 +283,18 @@ fn path_in_nested_vault_probes_every_level_between_root_and_path() {
     assert!(!path_in_nested_vault(root, std::path::Path::new("/elsewhere/x.md")));
 }
 
+/// The rebuild pump drops an event whose every path is inside a nested site,
+/// and keeps one that also touches the outer site.
 #[test]
-fn all_paths_in_nested_vault_requires_every_path_inside_and_a_nonempty_event() {
+fn an_event_only_inside_a_nested_site_is_dropped() {
     let dir = fixture();
     let root = dir.path();
     fs::create_dir_all(root.join("inner/.moss")).unwrap();
 
     let inside = root.join("inner/a.md");
     let outside = root.join("index.md");
-    assert!(all_paths_in_nested_vault(root, &[inside.clone()]));
-    assert!(!all_paths_in_nested_vault(root, &[inside, outside]));
-    assert!(!all_paths_in_nested_vault(root, &[]));
+    assert!(!any_path_watchable(root, &[inside.clone()]));
+    assert!(any_path_watchable(root, &[inside, outside]));
 }
 
 // ---------------------------------------------------------------------------
@@ -354,7 +355,7 @@ fn social_changes_are_exempt_both_ways() {
 // let every directory the user happens to keep the vault under cast a vote:
 // a Google shared-drive vault lives below `.shortcut-targets-by-id`, and the
 // whole vault was therefore condemned — the rebuild pump dropped every event,
-// and the sweep that backstops the pump saw nothing either (#1080, #1067).
+// and the sweep that backstops the pump saw nothing either.
 //
 // The invariant, stated so it outlives the five call sites that had the bug:
 // **a predicate's verdict on a file does not change when the vault is
@@ -380,11 +381,13 @@ const FILES: &[(&str, bool, bool)] = &[
     (".git/config", false, true),
     (".git/HEAD", false, true),
     ("node_modules/pkg/index.js", false, true),
-    ("posts/.secret.md", false, false),
+    ("posts/.secret.jpg", false, false),
+    // A dot-prefixed page is left out of the site: nothing builds it.
+    ("posts/.secret.md", false, true),
     (".DS_Store", false, false),
     // moss's own output: never an input, whatever it is named.
-    (".moss/build/staging/index.html", false, false),
-    (".moss/build/cache/objects/ab/cd1234", false, false),
+    (".moss/build.nosync/staging/index.html", false, false),
+    (".moss/cache/objects/ab/cd1234", false, false),
     // Watchable, but nothing consumes the extension.
     ("report.docx", true, false),
 ];
@@ -460,4 +463,78 @@ fn the_moss_allowlist_is_reached_from_the_vault_root() {
     let odd = std::path::Path::new("/home/u/.moss-backups/blog");
     assert!(path_is_watchable(odd, &odd.join("posts/hello.md")));
     assert!(path_passes_filter(odd, &odd.join("posts/hello.md")));
+}
+
+/// The watcher hears exactly the pages the scan reads: every page extension,
+/// and not a dot-prefixed page, which the scan leaves out.
+#[test]
+fn every_page_the_scan_reads_is_watched() {
+    let dir = fixture();
+    let root = dir.path();
+    for page in ["posts/a.mdown", "posts/b.mkd", "posts/c.markdown", "posts/.draft.md"] {
+        fs::write(root.join(page), "# p").unwrap();
+    }
+    let scanned = crate::build::scan::scan::scan_folder(&root.to_string_lossy()).unwrap();
+    for page in ["posts/a.mdown", "posts/b.mkd", "posts/c.markdown"] {
+        assert!(scanned.markdown_files.iter().any(|f| f.path == page), "the scan reads {page}");
+        let path = root.join(page);
+        assert!(path_is_watchable(root, &path) && path_passes_filter(root, &path), "{page} is watched");
+    }
+    // A dot-prefixed page is left out by the scan, so it is not watched either.
+    assert!(!scanned.markdown_files.iter().any(|f| f.path == "posts/.draft.md"));
+    assert!(!path_is_watchable(root, &root.join("posts/.draft.md")));
+    // A dot-prefixed file that is not a page is still not.
+    assert!(!path_is_watchable(root, &root.join("posts/.cover.jpg")));
+    assert!(!path_passes_filter(root, &root.join("posts/.cover.jpg")));
+}
+
+/// A nested site is not the outer site's: no edit inside it, its own `.moss/`
+/// included, is watchable, while the outer site's `.moss/` allowlist holds.
+#[test]
+fn nothing_inside_a_nested_site_is_watchable() {
+    let dir = fixture();
+    let root = dir.path();
+    fs::create_dir_all(root.join("posts/inner/.moss/theme")).unwrap();
+    fs::write(root.join("posts/inner/note.md"), "# n").unwrap();
+    assert!(!path_is_watchable(root, &root.join("posts/inner/note.md")));
+    assert!(!path_is_watchable(root, &root.join("posts/inner/.moss/config.toml")));
+    assert!(!path_is_watchable(root, &root.join("posts/inner/.moss/theme/style.css")));
+    assert!(path_is_watchable(root, &root.join(".moss/theme/style.css")));
+    assert!(path_is_watchable(root, &root.join("posts/other.md")));
+}
+
+/// A site held through a symbolic link (a linked cloud folder, `/var` for
+/// `/private/var`) gets events under the other spelling of its path. Judged
+/// against the root they still are inside it, and the site's own `.moss/`
+/// never reads as a nested site's.
+#[cfg(unix)]
+#[test]
+fn a_site_reached_through_a_symlink_hears_its_events() {
+    let dir = tempfile::Builder::new().prefix("moss_link").tempdir().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir_all(real.join(".moss")).unwrap();
+    fs::create_dir_all(real.join("posts")).unwrap();
+    fs::write(real.join("posts/a.md"), "# a").unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(path_is_watchable(&link, &real.join("posts/a.md")));
+    assert!(path_is_watchable(&real, &link.join("posts/a.md")));
+    assert!(path_is_watchable(&real, &link.join("posts/gone.md")), "a deleted page is still heard");
+    assert!(!path_is_watchable(&link, &real.join("node_modules/x.md")));
+}
+
+/// Subscription follows the scan's rule for the site root's entries: a
+/// dot-prefixed page there is published, so where root files are their own
+/// targets it is one; hidden folders, `node_modules` and nested sites are not.
+#[test]
+fn watch_targets_follow_what_the_scan_reads_at_the_root() {
+    let dir = fixture();
+    let root = dir.path();
+    fs::write(root.join(".draft.md"), "# d").unwrap();
+    fs::create_dir_all(root.join("shop/.moss")).unwrap();
+    let targets = targets_of(root);
+    assert!(!targets.contains(&root.join(".draft.md")), "a dot-prefixed page is not published");
+    for left_out in [".git", "node_modules", "shop", ".DS_Store"] {
+        assert!(!targets.contains(&root.join(left_out)), "{left_out}");
+    }
 }

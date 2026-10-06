@@ -1,8 +1,11 @@
-//! Page rendering. Split into submodules per docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 1.
+//! Page rendering. Split into submodules as part of an earlier codebase restructure.
 
 pub mod preflight;
+mod source_evidence;
+pub use source_evidence::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 pub mod config;
 pub mod blocking;
+pub mod build_shared;
 pub mod credits;
 pub mod empty_home;
 pub mod html;
@@ -15,6 +18,7 @@ pub mod uid_dedup;
 
 // From blocking — main generation entry point + site config
 pub use blocking::generate_blocking_content;
+pub use blocking::generate_blocking_content_for_build;
 pub use blocking::SiteConfig;
 pub use crate::build::incremental_gates::IncrementalGates;
 
@@ -23,7 +27,8 @@ pub use crate::build::incremental_gates::IncrementalGates;
 // section at all (not just the `data-comments` JS hint this module emits).
 pub(crate) use config::resolve_comments_pref;
 
-// From html — called directly by blocking and may be called by plugins
+// From html — renders one page outside a build, for tests
+#[cfg(test)]
 pub use html::generate_html;
 
 // From preflight — called by build.rs to surface compile-time warnings

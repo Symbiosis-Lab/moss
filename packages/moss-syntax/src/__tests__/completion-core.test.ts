@@ -9,8 +9,8 @@
  * provably what the build reads back.
  *
  * `parseCompletionContext` — the dispatcher over these helpers —
- * lives app-side (it consults the app's presentation catalog) and is tested in
- * frontend/app/editor/__tests__/cm-completion-context.test.ts.
+ * lives app-side (it consults the app's presentation catalog) and is tested
+ * on the app's own side.
  */
 
 import { readFileSync } from 'node:fs';
@@ -127,6 +127,16 @@ describe('parseWikilinkPhase', () => {
       .toEqual({ phase: 'heading', syntax: 'wikilink', page: 'Notes', query: 'Get', from: 8, to: 11 });
     expect(parseWikilinkPhase('[[#Get', 6)).toMatchObject({ phase: 'heading', page: null, query: 'Get', from: 3 });
     expect(parseWikilinkPhase('[[Notes#Getting Started', 23)).toMatchObject({ query: 'Getting Started' });
+  });
+});
+
+describe('width phase', () => {
+  test('a pipe inside an OPEN embed target offers the width phase', () => {
+    expect(parseWikilinkPhase('![[cover.png|5', 14)).toEqual({ phase: 'width', query: '5', from: 13, to: 14 });
+  });
+
+  test('a pipe inside a non-embed wikilink stays the wikilink phase (aliases are free text, not width)', () => {
+    expect(parseWikilinkPhase('[[Page|Lab', 10)?.phase).toBe('wikilink');
   });
 });
 

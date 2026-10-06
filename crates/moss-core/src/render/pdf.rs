@@ -2,11 +2,12 @@
 //!
 //! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
 //! source URL, and an [`AssetSnapshot`]. Emits the final `<object>`-based
-//! PDF embed HTML — preserving the exact byte shape moss-core's `PdfRenderer`
-//! used to emit before Phase 0's Stage 1 migration.
+//! PDF embed HTML — preserving the exact byte shape moss-core's pre-Phase-0
+//! PDF renderer used to emit before Phase 0's Stage 1 migration (that
+//! renderer's own `render()` was unreachable dead code by the time it was
+//! removed; the byte shape lives on here, which is the actual live path).
 //!
-//! Pre-Phase-0 byte shape (extracted from `crates/moss-core/src/resolve/
-//! embed_renderer.rs` at commit `689d975e9^`):
+//! Pre-Phase-0 byte shape:
 //!
 //! ```text
 //! <object class="moss-embed" data-type="pdf"{data-width?} type="application/pdf"
@@ -16,10 +17,12 @@
 //! ```
 //!
 //! The `<object>` element (rather than `<iframe>`) was chosen by the original
-//! `PdfRenderer` for keyboard-navigation parity and an inline download
-//! fallback in browsers that can't render PDFs natively.
+//! renderer for keyboard-navigation parity and an inline download fallback
+//! in browsers that can't render PDFs natively.
 
 use crate::asset_snapshot::AssetSnapshot;
+use crate::media::Placement;
+use crate::render::placement::placement_attrs;
 use crate::resolve::embed_renderer::{file_stem, html_escape_attr};
 use crate::resolve::title_params::TitleParams;
 
@@ -40,6 +43,7 @@ use crate::resolve::title_params::TitleParams;
 #[allow(unused_variables)]
 pub fn synthesize_pdf_html(
     params: &TitleParams,
+    placement: &Placement,
     src: &str,
     assets: &AssetSnapshot,
 ) -> String {
@@ -55,10 +59,8 @@ pub fn synthesize_pdf_html(
         data_url.push_str(f);
     }
 
-    let data_width_attr = match params.get("data-width") {
-        Some(w) => format!(r#" data-width="{}""#, html_escape_attr(w)),
-        None => String::new(),
-    };
+    let place = placement_attrs(placement);
+    let class_value = place.class_value("moss-embed");
 
     let html_width_attr = match params.get("width") {
         Some(w) => format!(r#" width="{}""#, html_escape_attr(w)),
@@ -73,13 +75,16 @@ pub fn synthesize_pdf_html(
     let name = file_stem(src);
 
     // <object> with inline download fallback for browsers that can't render PDFs.
-    // Attribute order matches the pre-Phase-0 PdfRenderer byte shape exactly.
+    // Attribute order matches the pre-Phase-0 PDF renderer's byte shape exactly.
     format!(
-        "<object class=\"moss-embed\" data-type=\"pdf\"{} type=\"application/pdf\" data=\"{}\"{}{}><a href=\"{}\">Download {}</a></object>",
-        data_width_attr,
+        "<object class=\"{}\" data-type=\"pdf\"{}{} type=\"application/pdf\" data=\"{}\"{}{}{}><a href=\"{}\">Download {}</a></object>",
+        class_value,
+        place.data_width_attr,
+        params.label_attr("aria-label"),
         html_escape_attr(&data_url),
         html_width_attr,
         html_height_attr,
+        place.size_style_attr,
         html_escape_attr(src),
         html_escape_attr(&name),
     )
@@ -104,7 +109,7 @@ mod tests {
     #[test]
     fn pdf_basic_shape() {
         let p = params_with(&[("kind", "pdf")]);
-        let out = synthesize_pdf_html(&p, "doc.pdf", &empty_snapshot());
+        let out = synthesize_pdf_html(&p, &Placement::default(), "doc.pdf", &empty_snapshot());
         // Pre-Phase-0 byte shape: <object class="moss-embed" data-type="pdf" ...>
         assert!(
             out.contains(r#"<object class="moss-embed" data-type="pdf""#),
@@ -129,7 +134,7 @@ mod tests {
     #[test]
     fn pdf_with_height_param() {
         let p = params_with(&[("kind", "pdf"), ("width", "400px"), ("height", "800px")]);
-        let out = synthesize_pdf_html(&p, "doc.pdf", &empty_snapshot());
+        let out = synthesize_pdf_html(&p, &Placement::default(), "doc.pdf", &empty_snapshot());
         assert!(out.contains(r#"width="400px""#), "got: {}", out);
         assert!(out.contains(r#"height="800px""#), "got: {}", out);
     }
@@ -139,6 +144,7 @@ mod tests {
         let p = params_with(&[("kind", "pdf")]);
         let out = synthesize_pdf_html(
             &p,
+            &Placement::default(),
             r#"file with "quotes".pdf"#,
             &empty_snapshot(),
         );
@@ -168,7 +174,7 @@ mod tests {
     fn pdf_query_and_fragment_appended_to_url() {
         // Standard PDF.js viewer convention: #page=5 jumps to page 5.
         let p = params_with(&[("kind", "pdf"), ("fragment", "page=5")]);
-        let out = synthesize_pdf_html(&p, "report.pdf", &empty_snapshot());
+        let out = synthesize_pdf_html(&p, &Placement::default(), "report.pdf", &empty_snapshot());
         assert!(out.contains(r#"data="report.pdf#page=5""#), "got: {}", out);
         // The download fallback link points at the bare URL (no #page) so
         // it's a download, not a viewer-navigation request.
@@ -182,7 +188,7 @@ mod tests {
             ("query", "version=2"),
             ("fragment", "page=5"),
         ]);
-        let out = synthesize_pdf_html(&p, "report.pdf", &empty_snapshot());
+        let out = synthesize_pdf_html(&p, &Placement::default(), "report.pdf", &empty_snapshot());
         // URL-canonical order: path?query#fragment.
         assert!(
             out.contains(r#"data="report.pdf?version=2#page=5""#),
@@ -192,16 +198,27 @@ mod tests {
     }
 
     #[test]
-    fn pdf_data_width_attr_when_present() {
-        let p = params_with(&[("kind", "pdf"), ("data-width", "wide")]);
-        let out = synthesize_pdf_html(&p, "doc.pdf", &empty_snapshot());
+    fn pdf_carries_the_whole_placement() {
+        let p = params_with(&[("kind", "pdf")]);
+        let place = Placement {
+            width: Some("wide"),
+            align: Some(crate::media::AlignSide::Right),
+            size: None,
+        };
+        let out = synthesize_pdf_html(&p, &place, "doc.pdf", &empty_snapshot());
         assert!(out.contains(r#"data-width="wide""#), "got: {}", out);
+        assert!(out.contains(r#"class="moss-embed moss-align-right""#), "got: {}", out);
+        // A size replaces the width token (render/placement.rs).
+        let sized = Placement { size: Some("40%".to_string()), ..place };
+        let out = synthesize_pdf_html(&p, &sized, "doc.pdf", &empty_snapshot());
+        assert!(out.contains(r#"style="width:40%""#), "got: {}", out);
+        assert!(!out.contains("data-width"), "got: {}", out);
     }
 
     #[test]
     fn pdf_no_data_width_when_absent() {
         let p = params_with(&[("kind", "pdf")]);
-        let out = synthesize_pdf_html(&p, "doc.pdf", &empty_snapshot());
+        let out = synthesize_pdf_html(&p, &Placement::default(), "doc.pdf", &empty_snapshot());
         // Themes target `:not([data-width])`; the attr must be absent by default.
         assert!(!out.contains("data-width"), "got: {}", out);
     }
@@ -209,7 +226,7 @@ mod tests {
     #[test]
     fn pdf_stem_strips_directory_and_extension() {
         let p = params_with(&[("kind", "pdf")]);
-        let out = synthesize_pdf_html(&p, "papers/2024/big-report.pdf", &empty_snapshot());
+        let out = synthesize_pdf_html(&p, &Placement::default(), "papers/2024/big-report.pdf", &empty_snapshot());
         // Download fallback uses the file stem, not the full path.
         assert!(out.contains("Download big-report</a>"), "got: {}", out);
     }

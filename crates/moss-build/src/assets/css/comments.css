@@ -330,21 +330,9 @@ a.comment-author:hover {
   cursor: not-allowed;
 }
 
-/* ==========================================================================
-   Accessible Visually Hidden
-   ========================================================================== */
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
+/* `.visually-hidden` moved to site.css's Base & Reset section (2026-10): this
+   sheet loads only when the site has synced comments, and the rule has
+   nothing to do with comments. */
 
 /* ==========================================================================
    Status Messages

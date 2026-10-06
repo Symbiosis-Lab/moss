@@ -15,7 +15,7 @@
 //! window that can call every Tauri command.
 //!
 //! Two rules follow, both applied before the bytes are stored (sanitize at
-//! ingest, ADR-025 §11 — the same posture as the comment sanitizer in
+//! ingest — the same posture as the comment sanitizer in
 //! `moss-build`, for the same reason):
 //!
 //! 1. The icon must come from the same origin as the artifact whose hash was

@@ -10,24 +10,25 @@
 //! What this path intentionally does NOT do (vs. `push_site_inner`):
 //! - No redirect-stub generation (moss tracks renames via its own article-map;
 //!   external SSGs handle redirects themselves)
-//! - No article-map snapshot (no moss build → no article-map)
+//! - No article-map snapshot (no moss build → no article-map), so the
+//!   publish record it writes names no pages — see `landed::record_prebuilt_landed`
 //! - No subscriber/analytics post-deploy sync (no moss-managed channels)
 //! - No domain orchestrator (callers wire this up if they want a custom
 //!   domain — orthogonal to the prebuilt question)
 //!
 //! Everything that IS still done: identity load, manifest hash, sync diff,
-//! HTTP/2 parallel upload (20 concurrent), commit, save deployment URL.
+//! HTTP/2 parallel upload (20 concurrent), commit, save deployment URL, and
+//! the publish record `moss deploy`'s stale-copy check reads.
 
 use crate::build::assets::paths::compute_manifest_generation_id;
 use crate::deploy::{progress, PushResult};
 use crate::deploy::progress::DeploySink;
 use std::sync::Arc;
 use crate::identity::Identity;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Walk `dir` and build a moss-seta manifest (`path → "100644:<sha256>"`).
+/// Walk `dir` and build a moss-seta manifest (`path → "100644:<xxh3_64>"`).
 ///
 /// Paths are forward-slash separated and relative to `dir`. Symlinks within
 /// the tree are followed transparently — the upload path uses the file's
@@ -62,18 +63,18 @@ pub fn build_manifest_from_dir(dir: &Path) -> Result<HashMap<String, String>, St
         // Forward-slash-only on the wire; Windows-style backslashes break
         // server-side path joins.
         let rel_str = rel.to_string_lossy().replace('\\', "/");
-        // allow:raw_read built output being uploaded — regenerable, dataless is absent (ADR-043)
-        let bytes = std::fs::read(path)
-            .map_err(|e| format!("read {}: {}", path.display(), e))?;
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let hash = hex::encode(hasher.finalize());
-        manifest.insert(rel_str, format!("{}:{}", crate::types::content::MODE_FILE, hash));
-        // Hashing is pure local work that happens BEFORE the first request, and
-        // it scales with the site. Without a bump per file the stall watchdog
-        // wrapping `push_prebuilt` would cancel a big prebuilt tree during a
-        // phase where nothing is wrong at all.
-        crate::infra::liveness::bump();
+        // The same streaming xxh3_64 the normal build seals into its manifest,
+        // so a prebuilt deploy and a normal publish of identical bytes agree
+        // on every entry and on the generation id; the server compares entries
+        // as opaque strings. Hashing is pure local work that happens BEFORE
+        // the first request and scales with the site, so each buffer bumps the
+        // stall clock: without it the watchdog wrapping `push_prebuilt` would
+        // cancel a big prebuilt tree during a phase where nothing is wrong.
+        let hash = crate::build::assets::paths::compute_binary_hash_file_with_heartbeat(
+            path,
+            &|| crate::infra::liveness::bump(),
+        )?;
+        manifest.insert(rel_str, crate::types::content::file_entry(&hash));
     }
 
     if manifest.is_empty() {
@@ -171,7 +172,7 @@ async fn push_prebuilt_inner(
     );
 
     // 1. Hash the directory into a manifest.
-    let manifest = build_manifest_from_dir(prebuilt_dir)?;
+    let mut manifest = build_manifest_from_dir(prebuilt_dir)?;
     log::info!(
         "deploy(prebuilt): hashed {} files from {}",
         manifest.len(),
@@ -247,10 +248,8 @@ async fn push_prebuilt_inner(
     //    PUT and got a 524 from Cloudflare. Sharing the routing is the point —
     //    a fix in one loop was not a fix.
     //
-    //    The one thing that cannot be shared is the digest: manifests built
-    //    here are Sha256 (see build_prebuilt_manifest), while deploy.rs seals
-    //    xxh3_64. Hence HashAlgo as a parameter. Passing Sha256 here also means
-    //    prebuilt deploys now verify integrity at all, which they never did.
+    //    Manifest entries are xxh3_64 here and in deploy.rs, so the upload
+    //    verifies each file against the hash the manifest carries.
     let total = diff.need.len() as u32;
     let uploaded = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let canonical_base = prebuilt_dir
@@ -258,6 +257,15 @@ async fn push_prebuilt_inner(
         .map_err(|e| format!("Failed to resolve prebuilt dir: {}", e))?;
 
     let mut window = crate::deploy::upload::UploadWindow::new();
+    // Same self-heal accounting as `push_site_inner_impl`: `commit_sync`
+    // below sends `manifest` verbatim as the server's new source of truth,
+    // so a file that self-heals during upload needs its manifest entry
+    // corrected before that call, and this deploy needs the same cap on how
+    // many files may do so before the pattern itself fails the publish.
+    let self_heal_cap = crate::deploy::upload::self_heal_cap(diff.need.len());
+    let self_heal_corrections: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, String>>,
+    > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     for file_path in &diff.need {
         // Size drives window admission, so it must be known before the task
         // starts. A path that cannot be stat'd is admitted as 0 and fails
@@ -279,6 +287,7 @@ async fn push_prebuilt_inner(
             let generation_id = generation_id.clone();
             // Shared per-deploy link estimate; see moss_build::seta::upload_policy.
             let throughput = window.throughput();
+            let self_heal_corrections = std::sync::Arc::clone(&self_heal_corrections);
 
             window.spawn(admit_size, async move {
                 let full_path = prebuilt_dir.join(&file_path);
@@ -295,7 +304,7 @@ async fn push_prebuilt_inner(
                 let file_size = std::fs::metadata(&canonical)
                     .map_err(|e| format!("Failed to stat {}: {}", file_path, e))?
                     .len();
-                crate::deploy::upload::upload_regular_file(
+                let healed_hash = crate::deploy::upload::upload_regular_file(
                     &client,
                     &site_id,
                     &file_path,
@@ -303,8 +312,8 @@ async fn push_prebuilt_inner(
                     file_size,
                     &generation_id,
                     expected_hash,
-                    crate::deploy::upload::HashAlgo::Sha256,
                     &throughput,
+                    self_heal_cap,
                     // This path reports FILE-count progress, so it passes no
                     // byte sink — but the stall watchdog needs the byte credit
                     // even when the UI doesn't. Without it a single large file
@@ -313,12 +322,18 @@ async fn push_prebuilt_inner(
                     Some(&|_n: u64| crate::infra::liveness::bump()),
                 )
                 .await?;
+                if let Some(actual_hash) = healed_hash {
+                    self_heal_corrections.lock().unwrap().insert(
+                        file_path.clone(),
+                        crate::types::content::file_entry(&actual_hash),
+                    );
+                }
                 crate::infra::liveness::bump();
                 // follow-up: this prebuilt (CLI build+deploy) path still emits
                 // FILE-COUNT progress; the interactive publish (deploy.rs) emits
-                // byte-based progress via a ticker (docs/archive/2026-06-11-deploy-
-                // upload-progress.md). The frontend falls back to file-count when
-                // byte fields are absent, so the hairline still moves here — just
+                // byte-based progress via a ticker. The frontend falls back to
+                // file-count when byte fields are absent, so the hairline still
+                // moves here — just
                 // by file count. C4b unifies the two loops, when the prebuilt path
                 // crosses with the state.toml publish writer it needs.
                 let done = uploaded.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -340,6 +355,25 @@ async fn push_prebuilt_inner(
         }
     }
     window.drain().await?;
+
+    // Fold in any self-heals discovered during upload — see the comment
+    // where `self_heal_corrections` is created. `generation_id` was already
+    // computed from the pre-correction manifest above and stays fixed: it
+    // names the server-side directory this upload actually went into, not a
+    // hash of the manifest's final content.
+    {
+        let corrections = self_heal_corrections.lock().unwrap();
+        if !corrections.is_empty() {
+            log::info!(
+                "deploy(prebuilt): correcting {} manifest {} to actually-shipped hashes before commit",
+                corrections.len(),
+                if corrections.len() == 1 { "entry" } else { "entries" }
+            );
+        }
+        for (path, entry) in corrections.iter() {
+            manifest.insert(path.clone(), entry.clone());
+        }
+    }
 
     // 4. Commit — activates the new manifest server-side.
     sink.stage(
@@ -376,6 +410,12 @@ async fn push_prebuilt_inner(
     let deployed_at = chrono::DateTime::from_timestamp(commit_result.timestamp as i64, 0)
         .unwrap_or_else(chrono::Utc::now)
         .to_rfc3339();
+    // The record a later `moss deploy` compares the live site against, from
+    // either route: without it, a folder that alternates the two routes reads
+    // its own prebuilt publish as someone else's and is refused.
+    if let Some(target) = crate::config::deployment::slot_for("moss", Some(site_id)) {
+        crate::deploy::landed::record_prebuilt_landed(project_folder, &generation_id, &target, &manifest);
+    }
     if let Err(e) = crate::vault::deployment_state::record_publish(
         &folder_path_str,
         crate::vault::deployment_state::PublishOutcome {
@@ -399,7 +439,7 @@ async fn push_prebuilt_inner(
     // paths, the custom domain wins once DNS is verified.
     Ok(PushResult::Success {
         url: crate::deploy::view_site_url(&folder_path_str, site_id, env),
-        files_uploaded: commit_result.files_updated,
+        files_uploaded: total,
         files_removed: commit_result.files_removed,
     })
 }
@@ -426,10 +466,11 @@ pub async fn run_prebuilt_deploy(
     folder: &Path,
     dir: &Path,
     requested_site_id: Option<&str>,
+    overwrite_newer: bool,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<PushResult, String> {
     let Some((site_id, identity)) =
-        crate::deploy::resolve_publish_inputs(folder, requested_site_id, sink).await?
+        crate::deploy::resolve_publish_inputs(folder, requested_site_id, overwrite_newer, sink).await?
     else {
         return Ok(PushResult::NeedsSetup);
     };

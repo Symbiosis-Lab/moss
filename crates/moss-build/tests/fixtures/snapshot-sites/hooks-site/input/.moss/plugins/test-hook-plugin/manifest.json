@@ -1,0 +1,8 @@
+{
+  "name": "test-hook-plugin",
+  "version": "1.0.0",
+  "description": "Test plugin that creates marker files when hooks are called",
+  "capabilities": ["process"],
+  "entry": "main.js",
+  "global_name": "TestHookPlugin"
+}

@@ -8,6 +8,8 @@ fn test_render_basic_article() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
+        url_path: String::new(),
+        place: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -17,6 +19,43 @@ fn test_render_basic_article() {
     assert!(html.contains(r#"<span class="moss-prefix-link-title title">My Post</span>"#));
 }
 
+/// A chronology of located, dated pages (the motivating case: "Cambridge
+/// 1924", "Hayes Court 1926") must show the place next to the compact date,
+/// not just the date.
+#[test]
+fn render_shows_the_resolved_place_next_to_the_date() {
+    let props = ArticleListItemProps {
+        date_display: "2025 · 11".to_string(),
+        date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
+        url: "post.html".to_string(),
+        title: "My Post".to_string(),
+        url_path: String::new(),
+        place: Some("Cambridge".to_string()),
+    };
+    let html = render(&props, false, false, Language::En, None);
+
+    assert!(
+        html.contains(r#"<span class="moss-prefix-link-prefix date">2025 · 11 · Cambridge</span>"#),
+        "place must appear next to the date: {html}"
+    );
+}
+
+/// No `no_date` run gets a place either — there is no date for it to sit
+/// next to.
+#[test]
+fn render_omits_the_place_when_no_date_is_shown() {
+    let props = ArticleListItemProps {
+        date_display: "2025 · 11".to_string(),
+        date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
+        url: "post.html".to_string(),
+        title: "Series Item".to_string(),
+        url_path: String::new(),
+        place: Some("Cambridge".to_string()),
+    };
+    let html = render(&props, false, true, Language::En, None);
+    assert!(!html.contains("Cambridge"));
+}
+
 #[test]
 fn test_render_escapes_html_in_title() {
     let props = ArticleListItemProps {
@@ -24,6 +63,8 @@ fn test_render_escapes_html_in_title() {
         date_raw: None,
         url: "post.html".to_string(),
         title: "<script>alert('xss')</script>".to_string(),
+        url_path: String::new(),
+        place: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -38,6 +79,8 @@ fn test_render_escapes_html_in_url() {
         date_raw: None,
         url: "post.html?a=1&b=2".to_string(),
         title: "Test".to_string(),
+        url_path: String::new(),
+        place: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -51,6 +94,8 @@ fn test_render_minimal_shows_month_only() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
+        url_path: String::new(),
+        place: None,
     };
     let html = render(&props, true, false, Language::En, None);
 
@@ -66,6 +111,8 @@ fn test_render_minimal_fallback_without_raw_date() {
         date_raw: None,
         url: "post.html".to_string(),
         title: "Test".to_string(),
+        url_path: String::new(),
+        place: None,
     };
     let html = render(&props, true, false, Language::En, None);
 
@@ -82,6 +129,8 @@ fn test_render_uses_prefix_link_classes() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
+        url_path: String::new(),
+        place: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -111,6 +160,8 @@ fn test_render_no_date_omits_date_span() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Series Item".to_string(),
+        url_path: String::new(),
+        place: None,
     };
     let html = render(&props, false, true, Language::En, None);
 
@@ -148,6 +199,8 @@ fn test_render_child_article() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -158,7 +211,57 @@ fn test_render_child_article() {
     assert!(html.contains(r#"href="/blog/my-article/""#));
 }
 
-/// The bug this exists for: blakesnotebook.com's flat `writings/the-notebook`
+/// A dated, located leaf (a lecture: "Cambridge 1924") shows its place next
+/// to its date in the flat listing row, not just the date.
+#[test]
+fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
+    let props = ChildItemProps {
+        title: "Lecture".to_string(),
+        url: "/lectures/1924.html".to_string(),
+        date_display: None,
+        date_raw: Some("1924-10-01".to_string()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: Some("Cambridge".to_string()),
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(
+        html.contains(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge</span>"#),
+        "{html}"
+    );
+}
+
+/// A folder's count is not a date — its own `location:` (e.g. a self-named
+/// work folder) must never leak into the count slot.
+#[test]
+fn render_child_never_shows_a_place_beside_a_folders_count() {
+    let props = ChildItemProps {
+        title: "Kyoto Walk".to_string(),
+        url: "/works/kyoto-walk/".to_string(),
+        date_display: None,
+        date_raw: None,
+        child_count: Some(2),
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: Some("Kyoto".to_string()),
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(
+        html.contains(r#"<span class="moss-prefix-link-prefix">2 articles</span>"#),
+        "the count slot must be the count alone, not the count plus the place: {html}"
+    );
+}
+
+/// The bug this exists for: a site's flat `writings/journal`
 /// listing printed a bare "06" for a "1793-06" date, with no year anywhere on
 /// the page. `render_child` has no year heading above it (unlike the
 /// year-grouped rows), so it must never truncate to month-only.
@@ -166,7 +269,7 @@ fn test_render_child_article() {
 fn flat_row_shows_year_for_month_precision_date() {
     let props = ChildItemProps {
         title: "June Entry".to_string(),
-        url: "/writings/the-notebook/june.html".to_string(),
+        url: "/writings/journal/june.html".to_string(),
         date_display: None,
         date_raw: Some("1793-06".to_string()),
         child_count: None,
@@ -175,6 +278,8 @@ fn flat_row_shows_year_for_month_precision_date() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -199,6 +304,8 @@ fn flat_row_passes_through_display_only_date_as_is() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -212,7 +319,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
 fn flat_row_shows_bare_year_for_year_precision_date() {
     let props = ChildItemProps {
         title: "1793 Entry".to_string(),
-        url: "/writings/the-notebook/year.html".to_string(),
+        url: "/writings/journal/year.html".to_string(),
         date_display: None,
         date_raw: Some("1793".to_string()),
         child_count: None,
@@ -221,6 +328,8 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -245,6 +354,8 @@ fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let vertical = render_child(&props, crate::i18n::Language::ZhHant, Some("vertical"));
     assert!(vertical.contains("三十八篇"), "{vertical}");
@@ -266,6 +377,8 @@ fn test_render_child_folder_without_description() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -291,6 +404,8 @@ fn test_render_child_folder_with_description() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card moss-folder-item">"#));
@@ -317,6 +432,8 @@ fn test_render_child_folder_escapes_html() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains("&lt;b&gt;Bold&lt;/b&gt; &amp; &quot;Quoted&quot;"));
@@ -337,6 +454,8 @@ fn test_render_child_article_no_date() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
+        place: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -354,6 +473,8 @@ fn test_render_no_date_ignores_minimal_flag() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Series Item".to_string(),
+        url_path: String::new(),
+        place: None,
     };
     let html_minimal = render(&props, true, true, Language::En, None);
     let html_normal = render(&props, false, true, Language::En, None);
@@ -488,4 +609,86 @@ fn frontmatter_description_only_and_blank_is_none() {
     ];
     assert_eq!(props(&docs[0], &docs).description, None);
     assert_eq!(props(&docs[1], &docs).description.as_deref(), Some("Real."));
+}
+
+/// `props_for_document` reads the page's resolved place straight off
+/// `ParsedDocument::place_names` — the same field `build::terms::set_place_lines`
+/// fills — rather than re-deriving it.
+#[test]
+fn props_for_document_carries_the_resolved_place() {
+    let docs = vec![ParsedDocument {
+        place_names: Some("Kyoto, Osaka".to_string()),
+        ..doc("posts/a/index.html", "A")
+    }];
+    assert_eq!(props(&docs[0], &docs).place.as_deref(), Some("Kyoto, Osaka"));
+}
+
+#[test]
+fn props_for_document_has_no_place_when_the_page_names_none() {
+    let docs = vec![doc("posts/a/index.html", "A")];
+    assert_eq!(props(&docs[0], &docs).place, None);
+}
+
+// ── `meta_text`: the one owner `grid_card`/`child_summary`/`render_child` all call ─
+
+#[test]
+fn meta_text_is_a_leafs_date_and_place() {
+    assert_eq!(meta_text(Some("1924 · 05"), Some("Cambridge"), None), "1924 · 05 · Cambridge");
+}
+
+#[test]
+fn meta_text_is_a_bare_folders_count_alone_even_with_a_place() {
+    // A folder with no date of its own: its `location:` (if any) is not a
+    // date to sit beside — only the count shows.
+    assert_eq!(meta_text(None, Some("Kyoto"), Some("2 articles")), "2 articles");
+}
+
+#[test]
+fn meta_text_is_a_dated_folders_date_and_place_then_its_count() {
+    assert_eq!(
+        meta_text(Some("1928 · 10"), Some("Cambridge"), Some("6 articles")),
+        "1928 · 10 · Cambridge · 6 articles"
+    );
+}
+
+#[test]
+fn meta_text_is_a_dated_folders_date_then_count_with_no_place() {
+    assert_eq!(meta_text(Some("1928 · 10"), None, Some("6 articles")), "1928 · 10 · 6 articles");
+}
+
+// ── `with_place`: the one owner of "date text plus resolved place" ────────
+
+#[test]
+fn with_place_appends_the_place_after_a_middot() {
+    assert_eq!(with_place("2025 · 11", Some("Kyoto")), "2025 · 11 · Kyoto");
+}
+
+#[test]
+fn with_place_returns_the_text_unchanged_when_there_is_no_place() {
+    assert_eq!(with_place("2025 · 11", None), "2025 · 11");
+}
+
+#[test]
+fn with_place_returns_the_place_alone_when_the_text_is_empty() {
+    assert_eq!(with_place("", Some("Hayes Court")), "Hayes Court");
+}
+
+#[test]
+fn with_place_returns_empty_when_both_are_empty() {
+    assert_eq!(with_place("", None), "");
+}
+
+/// A place name is author-supplied text, not machine-generated — it must be
+/// escaped like any other frontmatter value reaching the page.
+#[test]
+fn with_place_escapes_an_unsafe_place_name() {
+    let out = with_place("2025", Some("<script>"));
+    assert!(!out.contains("<script>"), "place name must be escaped: {out}");
+    assert!(out.contains("&lt;script&gt;"));
+}
+
+/// A blank (whitespace-only) place is treated the same as no place at all.
+#[test]
+fn with_place_ignores_a_blank_place() {
+    assert_eq!(with_place("2025", Some("   ")), "2025");
 }

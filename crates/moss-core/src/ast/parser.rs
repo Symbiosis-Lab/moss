@@ -11,12 +11,12 @@
 //! Heading IDs ARE assigned by this parser. Phase 4 PR2: each
 //! `Tag::Heading` arm computes the Obsidian-compatible anchor slug from
 //! the heading's text content (only `Event::Text` / `Event::Code`,
-//! matching production's `transform_events` behavior in
-//! `src-tauri/src/build/markdown/pipeline.rs` lines 1776-1845); a
+//! matching the retired `transform_events` pass in moss-build's
+//! markdown pipeline); a
 //! post-parse pass ([`assign_heading_id_suffixes`]) walks all headings in
 //! document order (recursively into BlockQuotes, lists, callouts) and
 //! applies duplicate-suffix numbering (`{slug}-1`, `-2`, …) matching the
-//! `id_counts` HashMap behavior at `pipeline.rs:1798`.
+//! `id_counts` HashMap behavior in that same pipeline.
 
 use std::collections::{HashMap, HashSet};
 
@@ -77,8 +77,8 @@ pub struct ParseConfig {
     /// frontmatter line count, so editor→preview scroll-sync maps to the wrong
     /// element (the home page's grid scrolled the preview to the bottom). Set
     /// to the number of lines the frontmatter consumes (0 when there is none).
-    /// See `process_markdown_file` and docs/reference/editor-preview-sync.md
-    /// "Known defect — source-line coordinate-system mismatch".
+    /// See `process_markdown_file` for this known source-line
+    /// coordinate-system mismatch.
     pub source_line_offset: usize,
 
     /// When true, `$…$` / `$$…$$` parse as math ([`Options::ENABLE_MATH`])
@@ -129,17 +129,12 @@ impl Default for ParseConfig {
 /// **The** pulldown-cmark option set moss parses markdown with.
 ///
 /// Every parser construction site in the repo must call this rather than
-/// hand-assembling its own `Options` — moss previously had five independent
-/// `Options` blocks (typed AST, newsletter ×2, `llms_txt`, the markdown
-/// pipeline), and each one that drifted became a surface where the same
-/// document parsed differently depending on which output it was headed for.
-/// A site that legitimately needs a different set calls this and then adjusts
-/// the one option, so the divergence reads as an explicit delta at the call
-/// site instead of being invisibly re-hand-rolled. There is no such delta
-/// today: this comment used to cite the newsletter walker omitting
-/// `ENABLE_FOOTNOTES`, which stopped being true when email gained footnote
-/// arms — with the bit off, CommonMark reads `[^x]: <url>` as a link reference
-/// definition and deletes the note outright.
+/// hand-assembling its own `Options`: a site that drifts parses the same
+/// document differently depending on which output it is headed for. A site
+/// that legitimately needs a different set calls this and then adjusts the
+/// one option, so the divergence reads as an explicit delta at the call
+/// site. Dropping `ENABLE_FOOTNOTES`, for example, makes CommonMark read
+/// `[^x]: <url>` as a link reference definition and delete the note outright.
 ///
 /// `math` gates `ENABLE_MATH` (`$…$` / `$$…$$` → [`Event::InlineMath`] /
 /// [`Event::DisplayMath`]). It is a parameter rather than part of the base
@@ -151,7 +146,7 @@ impl Default for ParseConfig {
 /// events.** pulldown emits them as leaf inline events; a walker that
 /// pattern-matches known events and ignores the rest will *silently delete*
 /// every equation in the document (measured: `Energy $E = mc^2$.` →
-/// `<p>Energy .</p>`). See `src-tauri/tests/math_wiring_invariant_test.rs`,
+/// `<p>Energy .</p>`). See this crate's math-wiring invariant test,
 /// which fails any site that turns math on without arms in the same walker.
 ///
 /// `ENABLE_TASKLISTS` carries the same obligation, and it is met by
@@ -160,7 +155,7 @@ impl Default for ParseConfig {
 /// the leaf arm in `parse_inline` and the whitelist in `parse_inline_event`
 /// model it. Turning the flag on WITHOUT those arms silently deletes the
 /// checkbox — measured on `- [ ] todo\n- [x] done`, which rendered
-/// `<ul><li>todo</li><li>done</li></ul>`. See ADR-035 § Task lists.
+/// `<ul><li>todo</li><li>done</li></ul>`.
 pub fn parser_options(math: bool) -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -179,7 +174,7 @@ pub fn parser_options(math: bool) -> Options {
     // amendment to CommonMark 0.31.2; backward-compatible on every existing
     // CommonMark example. Feature-gated because the flag exists only in the
     // `[patch]` fork until pulldown releases it, keeping the published crate
-    // buildable against crates.io. Pinned by `src-tauri/tests/cjk_emphasis.rs`.
+    // buildable against crates.io. Pinned by the desktop app's cjk_emphasis test.
     #[cfg(feature = "cjk-friendly-emphasis")]
     options.insert(Options::ENABLE_CJK_FRIENDLY_EMPHASIS);
     if math {
@@ -914,7 +909,7 @@ fn parse_block_with_tag(
         // `[^label]: body`. pulldown emits this wherever the author wrote it,
         // including nested inside a blockquote or list item, so this arm is
         // reached from every block collector. Hoisting to the endnote section
-        // is the renderer's job (ADR-035).
+        // is the renderer's job.
         Tag::FootnoteDefinition(label) => {
             let (children, end) = collect_blocks_until(events, start + 1, line_ctx, |e| {
                 matches!(e, Event::End(TagEnd::FootnoteDefinition))
@@ -940,13 +935,9 @@ fn parse_block_with_tag(
 /// paragraph and it stays as [`Block::Paragraph`].
 ///
 /// **Empty-alt guard:** if the matched image has an empty alt (decorative
-/// image), the paragraph is NOT promoted. This mirrors production's
-/// `transform_events` implicit-figure pass which gates on non-empty alt
-/// (a `<figure>` whose caption duplicates a missing alt would be useless
-/// for assistive tech and adds visual noise). The empty-alt image stays
-/// as `<p><img></p>`, matching the production byte shape for the same
-/// input — verified via the parity probe's `other` category on 刘果 CJK
-/// fixtures (image-only paragraphs with empty alt).
+/// image), the paragraph is NOT promoted: a `<figure>` whose caption
+/// duplicates a missing alt would be useless for assistive tech and adds
+/// visual noise. The empty-alt image stays as `<p><img></p>`.
 ///
 /// On qualification, returns `Ok(Block::Figure { image, caption })`. For a
 /// standard-markdown image the caption renders the alt as INLINE MARKDOWN
@@ -954,8 +945,7 @@ fn parse_block_with_tag(
 /// `` `code` `` and typeset math survive, built from the image's parsed
 /// inline children (`events`/`para_start` re-parse the alt event span). The
 /// `alt=` attribute stays the flat plain-text source. A plain-text alt (no
-/// inline markup) keeps the flat single-[`Inline::Text`] caption, byte-
-/// identical to before, so only captions that actually carry markup change.
+/// inline markup) keeps the flat single-[`Inline::Text`] caption.
 ///
 /// On disqualification, returns `Err(original_inlines)` so the caller
 /// can fall back to constructing the standard `Block::Paragraph` without
@@ -978,9 +968,9 @@ fn try_promote_to_figure(
         return Err(inlines);
     }
 
-    // Non-image wikilink embeds never promote. pulldown-cmark parses every
-    // `![[…]]` as an Image event, but Figure is an image concept: a video /
-    // pdf / audio wikilink promoted here bypasses `dispatch_wikilink_embeds`
+    // Non-image embeds never promote. pulldown-cmark parses every `![[…]]`
+    // as an Image event, but Figure is an image concept: a video / pdf /
+    // audio wikilink promoted here bypasses `dispatch_wikilink_embeds`
     // (which only dispatches Paragraph-shaped lone embeds), so its typed
     // synthesizer never runs and the page ships `<figure><img src="clip.mov">`
     // — a broken image. The gate keys off the same classifier the dispatcher
@@ -988,22 +978,18 @@ fn try_promote_to_figure(
     // synthesis cannot disagree about who owns the block. Extension-less
     // wikilinks (`![[draft|55%]]`) also stay Paragraph: only the with-graph
     // dispatcher can resolve their kind, and committing them to an image
-    // Figure here would be a guess.
-    if let Some(Inline::Image {
-        src,
-        is_wikilink: true,
-        ..
-    }) = inlines.iter().find(|i| matches!(i, Inline::Image { .. }))
+    // Figure here would be a guess. A standard `![](clip.mp4)` stays
+    // Paragraph only for a typed site file. The rule is
+    // `ext_kind::embed_stays_paragraph`, shared with the dispatcher's own
+    // `dispatcher_takes_embed`.
+    if let Some(Inline::Image { src, is_wikilink, .. }) =
+        inlines.iter().find(|i| matches!(i, Inline::Image { .. }))
     {
         let dest = match src {
             Url::Unresolved(s) => s.as_str(),
             Url::Resolved(r) => r.href.as_str(),
         };
-        let ext = crate::path_ext::path_extension_lower(dest);
-        if !matches!(
-            crate::resolve::ext_kind::reference_kind_for_ext(&ext),
-            crate::resolve::ext_kind::ExtKind::Image
-        ) {
+        if crate::resolve::ext_kind::embed_stays_paragraph(*is_wikilink, dest) {
             return Err(inlines);
         }
     }
@@ -1023,7 +1009,7 @@ fn try_promote_to_figure(
     // Recover the percent from `wikilink_pothole` directly so the figure
     // carries the width on both the with-graph path (wikilink_dispatch) and
     // the no-graph path (fragment/test render with no ContentGraph).
-    let mut figure_width: Option<String> = None;
+    let mut placement = crate::media::Placement::default();
     let mut rewritten_alt: Option<String> = None;
     match inlines.iter().find(|i| matches!(i, Inline::Image { .. })) {
         Some(Inline::Image {
@@ -1031,9 +1017,9 @@ fn try_promote_to_figure(
             is_wikilink: false,
             ..
         }) => {
-            let (rest_alt, w) = crate::media::split_alt_width(alt);
-            if w.is_some() {
-                figure_width = w;
+            let (found, rest_alt) = crate::media::extract_placement_from_alias(alt);
+            if !found.is_empty() {
+                placement = found;
                 rewritten_alt = Some(rest_alt);
             }
         }
@@ -1042,26 +1028,32 @@ fn try_promote_to_figure(
             wikilink_pothole,
             ..
         }) => {
-            // Recover a content-relative percent from the raw pothole.
-            // Named tokens are already absent from `alt` (WidthToken arm in
-            // parse_pothole_params clears them); only the percent case falls
-            // through as `Alias` and still needs extracting.
+            // Recover the placement from the raw pothole. The parser's own
+            // Alias arm has already stripped it out of `alt`, so the pothole
+            // is the only place it survives on this path.
             // Sync: the with-graph twin lives in resolve/wikilink_dispatch.rs
-            // (image branch, ~line 565) — both split width via media::split_alt_width.
+            // (image branch) — both read the pipe via
+            // media::extract_placement_from_alias.
             if let Some(pothole) = wikilink_pothole {
-                let (remaining, w) = crate::media::split_alt_width(pothole);
-                if w.is_some() {
-                    figure_width = w;
-                    // The remaining pothole (caption after stripping the %) is
-                    // the intended caption; propagate it as the rewritten alt if
-                    // the current alt is empty (percent-only pothole) or already
-                    // stripped to the same value.
+                let (found, remaining) = crate::media::extract_placement_from_alias(pothole);
+                if !found.is_empty() {
+                    placement = found;
+                    // The remainder is the intended caption; propagate it as
+                    // the rewritten alt, which may be empty when the whole
+                    // pothole was placement.
                     rewritten_alt = Some(remaining);
                 }
             }
         }
         _ => {}
     }
+    // `Block::Figure.width` carries both width vocabularies: a named token
+    // emits `data-width=`, a percent emits an inline `style="width:NN%"`.
+    // A percent wins when both are written (see `placement_attrs`).
+    let figure_width: Option<String> = placement
+        .size
+        .clone()
+        .or_else(|| placement.width.map(str::to_string));
 
     // The figure's caption text is the effective alt (width-stripped if a
     // width was present, else the raw alt), trimmed.
@@ -1079,7 +1071,7 @@ fn try_promote_to_figure(
     // original `<p><img></p>` shape with its whitespace siblings) — UNLESS it
     // carries a width, which needs a figure to hold the inline
     // `style="width:NN%"` / `data-width=`.
-    if alt_text.is_empty() && figure_width.is_none() {
+    if alt_text.is_empty() && placement.is_empty() {
         return Err(inlines);
     }
 
@@ -1111,7 +1103,7 @@ fn try_promote_to_figure(
             events,
             para_start,
             alt_text,
-            figure_width.is_some(),
+            !placement.is_empty(),
         ))
     };
 
@@ -1119,7 +1111,7 @@ fn try_promote_to_figure(
         image,
         caption,
         width: figure_width,
-        align: None,
+        align: placement.align.map(|side| side.css_class().to_string()),
         class_names: Vec::new(),
         img_style: None,
     })
@@ -1270,14 +1262,14 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
         // byte shape — SoftBreak emits `\n` between inline siblings, not a
         // space. The space form was a long-standing AST quirk surfaced
         // by Grid cells now flowing through the AST renderer; production
-        // baselines (chps-site, SoCiviC, snapshot fixtures) preserve the
-        // newline (e.g. `Flamboyan Theater · The Clemente\n107 Suffolk
+        // baselines (real sites and snapshot fixtures) preserve the
+        // newline (e.g. `Main Hall · Riverside Center\n12 Example
         // Street`). Aligning here closes one row of the parity probe's
         // `whitespace_attribute_order` category.
         Event::SoftBreak => (Some(Inline::Text("\n".to_string())), 1),
         Event::HardBreak => (Some(Inline::LineBreak), 1),
         Event::Html(s) | Event::InlineHtml(s) => (Some(Inline::Other(s.to_string())), 1),
-        // Math (ADR-030). Both are LEAF inline events carrying the raw TeX.
+        // Math. Both are LEAF inline events carrying the raw TeX.
         // These arms are load-bearing: without them the two catch-alls below
         // return `(None, 1)` and every equation is silently deleted from the
         // document (`Energy $E = mc^2$.` → `<p>Energy .</p>`).
@@ -1286,7 +1278,7 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
         // source — honest, never blank. `Inline::Other` is a RAW passthrough
         // at render time (render.rs), which is exactly why the escaping has
         // to happen HERE, at construction: the TeX is author input and is
-        // full of `<`, `>` and `&`. ADR-030 §4 records why this rides
+        // full of `<`, `>` and `&`. This rides
         // `Inline::Other` instead of a new `Inline::Math` variant (the enum
         // is published, serialized and not `#[non_exhaustive]`, so a variant
         // is a semver one-way door).
@@ -1340,12 +1332,21 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                 // the renderer can emit `class="wikilink"` and graph
                 // builders can identify wikilink targets.
                 let is_wikilink = matches!(*link_type, pulldown_cmark::LinkType::WikiLink { .. });
+                // `has_pothole` is pulldown-cmark's own name for "the author
+                // wrote `|alias`" — false for a bare `[[target]]`, where the
+                // text a consumer sees is a synthesized copy of the target,
+                // not an authored choice.
+                let has_pothole = matches!(
+                    *link_type,
+                    pulldown_cmark::LinkType::WikiLink { has_pothole: true }
+                );
                 (
                     Some(Inline::Link {
                         url: Url::unresolved(dest_url.to_string()),
                         title: title_opt,
                         children,
                         is_wikilink,
+                        has_pothole,
                     }),
                     end - start + 1,
                 )
@@ -1405,37 +1406,33 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                     }
                     i += 1;
                 }
-                // PR3.5 (2026-05-28): for wikilink images (`![[file]]` /
-                // `![[file|pothole]]`), pulldown-cmark synthesizes text
-                // events that aren't always author-intended alt:
+                // For wikilink images (`![[file]]` / `![[file|pothole]]`),
+                // pulldown-cmark synthesizes text events that aren't always
+                // author-intended alt:
                 //   - `![[logo.png]]` → text "logo.png" (synthesized from
-                //     dest); production treats as empty alt.
+                //     dest); treated as empty alt.
                 //   - `![[logo.png|contain center]]` → text "contain center"
-                //     (display-attrs); production classifies as styling,
-                //     NOT alt.
+                //     (display-attrs); classified as styling, NOT alt.
                 //   - `![[logo.png|width=400]]` → text "width=400" (typed
-                //     params); production classifies as params, NOT alt.
+                //     params); classified as params, NOT alt.
                 //   - `![[logo.png|My caption]]` → text "My caption";
                 //     genuine alt.
                 //
-                // Without this classification, PR3's Block::Figure
-                // detection (Wave 1) promotes wikilink-image paragraphs
-                // with synth-derived "alt" to Figure with bogus
-                // figcaptions ("logo.png", "contain center"). Match
-                // production's transform_events wikilink-dispatch by
-                // running the same classifiers (`is_all_display_keywords`
-                // + `parse_pothole_params`) here.
+                // Without this classification, `Block::Figure` detection
+                // would promote wikilink-image paragraphs with synth-derived
+                // "alt" to Figure with bogus figcaptions. The same
+                // classifiers (`is_all_display_keywords` +
+                // `parse_pothole_params`) run here.
                 //
-                // PR7a-flip-core-B (2026-05-28): preserve the ORIGINAL
-                // pothole text on `Inline::Image.wikilink_pothole`
-                // BEFORE alt-classification consumes it.
-                // `dispatch_wikilink_embeds` needs the raw pothole to
-                // route `![[v.mp4|width=400]]` → typed video synth with
-                // the `width=400` param intact (alt-classification would
-                // erase it). The pothole is the substring after `|`;
-                // pulldown-cmark gives us the synthesized text, so we
-                // strip the dest synth case (text == dest_url ⇒ no
-                // pothole) and otherwise carry the trimmed alt.
+                // The ORIGINAL pothole text is preserved on
+                // `Inline::Image.wikilink_pothole` BEFORE alt-classification
+                // consumes it: `dispatch_wikilink_embeds` needs the raw
+                // pothole to route `![[v.mp4|width=400]]` → typed video synth
+                // with the `width=400` param intact. The pothole is the
+                // substring after `|`; pulldown-cmark gives us the
+                // synthesized text, so we strip the dest synth case
+                // (text == dest_url ⇒ no pothole) and otherwise carry the
+                // trimmed alt.
                 let is_wikilink_image =
                     matches!(link_type, pulldown_cmark::LinkType::WikiLink { .. });
                 let wikilink_pothole: Option<String> = if is_wikilink_image {
@@ -1456,37 +1453,35 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                         // Empty pothole OR pulldown-cmark synthesized
                         // dest_url as text → no author alt.
                         alt.clear();
-                    } else if crate::media::is_all_display_keywords(&trimmed) {
-                        // `contain center`, `left top`, etc. → display
-                        // attrs (production maps to style), not alt.
-                        alt.clear();
                     } else {
-                        use crate::resolve::wikilink_dispatch::{
-                            parse_pothole_params, PotholeContent,
-                        };
-                        match parse_pothole_params(&trimmed) {
-                            PotholeContent::Empty | PotholeContent::Params(_) => {
-                                alt.clear();
-                            }
-                            PotholeContent::WidthToken { rest_alias, .. } => {
-                                alt = rest_alias;
-                            }
-                            PotholeContent::Alias(text) => {
-                                // `parse_pothole_params` classifies a content-relative
-                                // percent (e.g. `55%`) as `Alias` because it is not a
-                                // named width token. Intercept it here: a bare percent
-                                // is NOT a caption — strip it from the alt so it does
-                                // not leak to `<figcaption>`. The actual width is
-                                // recovered from `wikilink_pothole` by
-                                // `dispatch_wikilink_embeds` (with-graph path) or
-                                // directly from `split_alt_width` in the parser's
-                                // `try_promote_to_figure` (no-graph path via `alt`).
-                                //
-                                // `split_alt_width` returns the remaining caption and
-                                // the width token. If the whole alias was a width
-                                // (nothing remaining), clear alt.
-                                let (remaining, _w) = crate::media::split_alt_width(&text);
-                                alt = remaining;
+                        // Width, float side and float size are display data,
+                        // never caption text — strip them first so none of
+                        // them can leak into `<figcaption>`. The values
+                        // themselves are recovered from `wikilink_pothole` by
+                        // `dispatch_wikilink_embeds` (with-graph path) or by
+                        // `try_promote_to_figure` (no-graph path).
+                        let (_placement, rest) =
+                            crate::media::extract_placement_from_alias(&trimmed);
+                        let rest = rest.trim().to_string();
+                        if rest.is_empty() || crate::media::is_all_display_keywords(&rest) {
+                            // Nothing left, or `contain center` / `left top`
+                            // → display attrs (production maps to style),
+                            // not alt.
+                            alt.clear();
+                        } else {
+                            use crate::resolve::wikilink_dispatch::{
+                                parse_pothole_params, PotholeContent,
+                            };
+                            match parse_pothole_params(&rest) {
+                                PotholeContent::Empty | PotholeContent::Params(_) => {
+                                    alt.clear();
+                                }
+                                PotholeContent::WidthToken { rest_alias, .. } => {
+                                    alt = rest_alias;
+                                }
+                                PotholeContent::Alias(text) => {
+                                    alt = text;
+                                }
                             }
                         }
                     }
@@ -1592,8 +1587,8 @@ fn collect_item_blocks(
     (out, i)
 }
 
-/// Phase 4 PR4: detect a callout marker inside a blockquote and, if
-/// found, assemble the entire `Block::Callout` (with body blocks).
+/// Detect a callout marker inside a blockquote and, if found, assemble the
+/// entire `Block::Callout` (with body blocks).
 ///
 /// `start` is the event index AFTER `Start(BlockQuote)`. Returns
 /// `Some((Block::Callout, end_index))` where `end_index` is the event
@@ -1601,22 +1596,19 @@ fn collect_item_blocks(
 /// caller can compute the advance. Returns `None` for plain
 /// blockquotes (no `[!type]` marker on the first paragraph).
 ///
-/// Detection rule (shape-spec § 1):
+/// Detection rule:
 /// - The first event must be `Start(Tag::Paragraph)`.
 /// - The leading `Event::Text` run (before the first `SoftBreak` or
 ///   any non-Text inline event) must match `[!<kind>]`, optionally
 ///   followed by `+` or `-` for foldable callouts, optionally followed
 ///   by space + inline title.
 /// - The kind is canonicalized via [`CalloutKind::from_raw`]; unknown
-///   kinds fall back to [`CalloutKind::Note`]. (Diagnostic threading
-///   is a Phase 4 followup — `validation::Diagnostic` is scoped to
-///   frontmatter validation today.)
+///   kinds fall back to [`CalloutKind::Note`] with no diagnostic.
 ///
 /// Why detection runs on events (not parsed children): the inline
-/// parser collapses `SoftBreak` events into `Inline::Text` (in PR4.5,
-/// emitting `"\n"` to match pulldown-cmark's `push_html`), which makes
-/// the marker-line vs body-line boundary an embedded `\n` rather than a
-/// distinct AST node. Working at the event layer preserves the
+/// parser collapses `SoftBreak` events into `Inline::Text("\n")`, which
+/// makes the marker-line vs body-line boundary an embedded `\n` rather
+/// than a distinct AST node. Working at the event layer preserves the
 /// SoftBreak boundary so we can split "title" (before SoftBreak) from
 /// "body" (after SoftBreak) correctly.
 fn detect_and_assemble_callout(
@@ -1866,8 +1858,8 @@ fn flush_pending_paragraph(out: &mut Vec<Block>, pending_inlines: &mut Vec<Inlin
 /// Post-parse pass: disambiguate duplicate heading IDs by appending `-1`,
 /// `-2`, … to the slug, in the order the headings will appear ON THE PAGE.
 ///
-/// Mirrors the `id_counts: HashMap<String, usize>` behavior at
-/// `src-tauri/src/build/markdown/pipeline.rs:1798-1805`:
+/// Mirrors the `id_counts: HashMap<String, usize>` behavior in moss-build's
+/// markdown pipeline:
 ///
 /// - First occurrence of slug `foo` keeps id `foo`; counter starts at 1.
 /// - Second occurrence becomes `foo-1`; counter becomes 2.
@@ -1961,8 +1953,8 @@ fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<Stri
 /// 2. The walk is inside a shortcode body. `footnotes::collect_definitions`
 ///    stops at shortcode bodies, so a `[^x]: …` written inside a `:::grid`
 ///    cell is never collected, never numbered, and never hoisted — it renders
-///    in the cell. Bucketing it as an endnote numbered a grid heading after
-///    the body even though it renders before it.
+///    in the cell. Bucketing it as an endnote would number a grid heading
+///    after the body even though it renders before it.
 #[derive(Clone, Copy)]
 struct HoistScope<'a> {
     /// Labels the document's `FootnoteIndex` owns, in endnote order.

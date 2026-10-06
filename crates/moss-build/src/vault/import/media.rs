@@ -4,6 +4,30 @@
 
 use url::Url;
 
+/// `Accept` header for a media/asset download — asks for the file as
+/// uploaded, not a format the server might substitute for it.
+///
+/// ureq's own default is `Accept: */*` (sent whenever a request sets no
+/// `Accept` of its own), and on at least one real CDN that default is enough
+/// on its own to trigger auto-transcoding: a Squarespace image request with
+/// `Accept: */*` comes back `image/webp` even with `?format=original` on the
+/// URL (see `original_media_url`'s doc comment — the query never controlled
+/// this), while the same request with no `Accept` header, or one that
+/// doesn't mention WebP/AVIF, gets the real uploaded JPEG back. Verified
+/// against the live CDN that `;q=0` does NOT suppress this — `image/webp;q=0`
+/// alone still comes back as WebP, so the fix is to never name `image/webp`
+/// or `image/avif` in the header at all, not to down-rank them.
+///
+/// `image/*` asks for any image format by name (satisfying that CDN's
+/// negotiation without mentioning the two it auto-converts to), and the
+/// trailing low-priority `*/*` is the same permissive fallback a real
+/// browser sends, so a non-negotiating host (plain file server, a CDN that
+/// ignores `Accept` entirely) serves exactly what it already serves any
+/// other client — verified byte-identical against a Wikimedia upload URL, a
+/// WordPress-hosted upload, and a Jetpack Photon URL with and without this
+/// header.
+pub(crate) const MEDIA_ACCEPT: &str = "image/*,*/*;q=0.1";
+
 /// Query keys that are image-transform hints (resize/crop/quality), shared
 /// by rmcdn, imgix, wsrv and countless custom CDNs.
 const TRANSFORM_KEYS: &[&str] = &[
@@ -27,6 +51,58 @@ pub(crate) fn strip_query_transform(url: &str) -> Option<String> {
     let mut stripped = parsed;
     stripped.set_query(None);
     Some(stripped.to_string())
+}
+
+/// One row of the "original media" family: a platform CDN whose bare (or
+/// size-hinted) URLs cap resolution, and the query that asks it for the
+/// largest rendition it serves. Keyed on the CDN host, not a site — the
+/// same host backs unrelated sites on this platform.
+struct OriginalMediaRule {
+    host: &'static str,
+    query: &'static str,
+}
+
+/// Squarespace's image CDN (current host `images.squarespace-cdn.com`;
+/// `static1.squarespace.com` for older assets) doesn't take free-form
+/// transform queries — its own `format` key accepts only `100w`…`2500w` or
+/// `original`, and its docs list no bucket past 2500px: a bare URL and
+/// `format=2500w` both return the same 2500px-capped rendition, and
+/// `format=original` is not documented as exceeding that cap either.
+/// Verified against a live corpus image, it doesn't: same 2500px width.
+///
+/// It does NOT, on its own, avoid the CDN's WebP transcoding — that is
+/// decided by the request's `Accept` header, not the query (see
+/// [`MEDIA_ACCEPT`]; a prior version of this comment claimed otherwise and
+/// was wrong, because it was tested only with the download path's actual
+/// `Accept` header, which was the real cause). This rule's real, verified
+/// payoff is collapsing every query variant of one photo (bare,
+/// `?format=750w`, `?format=2500w`, …) onto a single canonical URL, which is
+/// what lets the asset pass dedupe by URL and download once instead of once
+/// per variant referenced on the page.
+const ORIGINAL_MEDIA_RULES: &[OriginalMediaRule] = &[
+    OriginalMediaRule {
+        host: "images.squarespace-cdn.com",
+        query: "format=original",
+    },
+    OriginalMediaRule {
+        host: "static1.squarespace.com",
+        query: "format=original",
+    },
+];
+
+/// Rewrite a URL through the original-media table. `None` when the host has
+/// no row (leave the URL alone) or it is already in the row's canonical
+/// form (nothing to rewrite).
+pub(crate) fn original_media_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let rule = ORIGINAL_MEDIA_RULES.iter().find(|r| r.host == host)?;
+    if parsed.query() == Some(rule.query) {
+        return None;
+    }
+    let mut rewritten = parsed;
+    rewritten.set_query(Some(rule.query));
+    Some(rewritten.to_string())
 }
 
 /// Recover a YouTube watch URL from a lightbox thumbnail
@@ -66,6 +142,16 @@ pub(crate) fn drive_download_from_preview(url: &str) -> Option<String> {
     }
 }
 
+/// PDF file extensions — named so [`is_localizable_file_url`] and the
+/// crawl's own pre-fetch non-page check (`scrape::crawler::is_non_page_file_url`)
+/// share one list instead of each carrying its own copy of `"pdf"`.
+pub(crate) const PDF_EXTENSIONS: &[&str] = &["pdf"];
+
+/// Audio file extensions — same reasoning as [`PDF_EXTENSIONS`]. Kept to the
+/// four this module already recognized rather than grown with this split, so
+/// [`is_localizable_file_url`]'s behavior is unchanged.
+pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["mp3", "m4a", "wav", "ogg"];
+
 /// Whether a remote URL names a downloadable FILE that the import should
 /// localize into the vault (as opposed to a provider embed, which stays
 /// remote). Drive direct-downloads and bare file-extension URLs qualify.
@@ -82,8 +168,9 @@ pub(crate) fn is_localizable_file_url(url: &str) -> bool {
         return true;
     }
     let path = parsed.path().to_ascii_lowercase();
-    ["mp3", "m4a", "wav", "ogg", "pdf"]
+    PDF_EXTENSIONS
         .iter()
+        .chain(AUDIO_EXTENSIONS)
         .any(|ext| path.ends_with(&format!(".{ext}")))
 }
 
@@ -111,6 +198,49 @@ mod tests {
             None
         );
         assert_eq!(strip_query_transform("https://cdn.example.com/i.jpg"), None);
+    }
+
+    #[test]
+    fn squarespace_bare_and_sized_urls_both_rewrite_to_original() {
+        assert_eq!(
+            original_media_url(
+                "https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg"
+            )
+            .as_deref(),
+            Some("https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=original")
+        );
+        assert_eq!(
+            original_media_url(
+                "https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=2500w"
+            )
+            .as_deref(),
+            Some("https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=original")
+        );
+        // Already canonical → nothing to rewrite.
+        assert_eq!(
+            original_media_url(
+                "https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=original"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn squarespace_static1_host_also_rewrites() {
+        assert_eq!(
+            original_media_url("https://static1.squarespace.com/static/abc/t/def/1234/photo.jpg?format=750w")
+                .as_deref(),
+            Some("https://static1.squarespace.com/static/abc/t/def/1234/photo.jpg?format=original")
+        );
+    }
+
+    #[test]
+    fn original_media_leaves_other_hosts_alone() {
+        assert_eq!(
+            original_media_url("https://cdn.example.com/photo.jpg?format=2500w"),
+            None
+        );
+        assert_eq!(original_media_url("https://cdn.example.com/photo.jpg"), None);
     }
 
     #[test]

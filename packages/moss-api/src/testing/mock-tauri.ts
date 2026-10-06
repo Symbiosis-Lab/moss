@@ -1048,7 +1048,7 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
       // Scoping is modelled; THE KEY GATE IS NOT. The host refuses
       // `set_plugin_secret` for a key the manifest declared as user-supplied —
       // a `setup.credentials` entry or a `config_schema` field typed `secret`
-      // (ADR-072 §3) — and this mock seeds unconditionally, so a green test
+      // — and this mock seeds unconditionally, so a green test
       // here is never a verdict that the host would have allowed the call. The
       // gate is proved in Rust, at the seam that reads the manifest.
       // ======================================================================

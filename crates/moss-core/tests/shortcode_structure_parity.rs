@@ -5,11 +5,11 @@
 //! the extracted block structure — names + nesting + grid cell counts — matches
 //! the corpus.
 //!
-//! Its TS twin, `frontend/app/editor/__tests__/cm-shortcode-corpus.test.ts`,
+//! Its TS twin, in the frontend editor's `cm-shortcode-corpus.test.ts`,
 //! asserts the EDITOR parser (`collectShortcodeBlocks`) matches the SAME corpus.
 //! Two gates, one source of truth: the editor live-view parse cannot silently
 //! drift from the build (the `+++` divider / nested `::::buttons` rendering bugs)
-//! without turning one of these red. See docs/reference/shortcode-grammar.md.
+//! without turning one of these red.
 
 use moss_core::ast::{parse, Block, Shortcode};
 use serde::Deserialize;

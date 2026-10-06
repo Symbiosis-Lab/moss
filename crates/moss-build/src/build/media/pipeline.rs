@@ -15,13 +15,17 @@
 //!
 //! ## Stale Cleanup
 //!
-//! After all assets are placed, `copy_deferred_assets()` runs stale cleanup:
-//! 1. Remove files not in `site_hashes` (preserving video outputs tracked in `video_outputs`)
-//! 2. Remove empty directories not expected by the current build
-//! 3. Write the final `hashes.json`
+//! `copy_deferred_assets()` does NOT delete anything from disk. It prunes its
+//! own in-memory bookkeeping — stale `site_hashes.files`/`sources` entries for
+//! keys the walk did not (re)claim — and sends the survivors to the
+//! coordinator, which seals them into the manifest. Removing files and empty
+//! directories that the sealed manifest no longer names, and writing the
+//! final `hashes.json`, both happen later, only through the build's permitted
+//! sweep (`pipeline::sweep_staging`), never from this worker.
 
 use crate::moss_paths::MossPaths;
 use crate::types::{content::SiteHashes, services::BackgroundContext};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use tokio::sync::mpsc;
@@ -58,8 +62,8 @@ pub(crate) struct AssetPipelineRunStats {
 /// is an unusual layout, and it is the first thing worth knowing when that
 /// site reports missing images. The per-item lines are DEBUG (they were a
 /// flood on a large tree), so if this line does not carry the counts, an
-/// uploaded log has no trace of the symlink at all — the state issue #1005
-/// was filed about. Preserved counts appear only when non-zero: on the ordinary
+/// uploaded log has no trace of the symlink at all. Preserved counts appear
+/// only when non-zero: on the ordinary
 /// site they are always 0 and would be two dead clauses on every build.
 pub(crate) fn format_asset_run_summary(stats: &AssetPipelineRunStats) -> String {
     let mut line = format!(
@@ -152,7 +156,7 @@ fn check_source_cache(
 /// would record for the bytes written.
 ///
 /// The hash is taken from `source`, never from the destination. Reading back
-/// what moss just wrote under `.moss/build/` is the failure this whole design
+/// what moss just wrote under `.moss/build.nosync/` is the failure this whole design
 /// exists to delete: the destination can be a cloud-evicted placeholder, and a
 /// read of one returns `EDEADLK` under the dataless fail-fast policy. The
 /// source is an input, so waiting on it is meaningful; the destination is not.
@@ -209,7 +213,7 @@ fn copy_tree(
     prefix: &str,
     receipts: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| format!("Failed to create {}: {}", dst.display(), e))?;
+    crate::build::io_utils::create_output_dir_all(dst).map_err(|e| format!("Failed to create {}: {}", dst.display(), e))?;
 
     for entry in fs::read_dir(src)
         .map_err(|e| format!("Failed to read {}: {}", src.display(), e))?
@@ -376,7 +380,7 @@ fn write_spa_inject_record(
             return;
         }
     };
-    let record_oid = match object_store.store_bytes(&json_bytes) {
+    let record_oid = match object_store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
             log::warn!("Failed to store spa/inject record blob: {}", e);
@@ -388,15 +392,10 @@ fn write_spa_inject_record(
         size: json_bytes.len() as u64,
         params: params.clone(),
     };
-    let mut rec = transform_cache
-        .get(source_oid)
-        .unwrap_or_else(|| crate::build::cache::TransformRecord {
-            source_oid: source_oid.to_string(),
-            source_size,
-            transforms: std::collections::HashMap::new(),
-        });
-    rec.transforms.insert(SPA_INJECT_TRANSFORM.to_string(), entry);
-    if let Err(e) = transform_cache.put(&rec) {
+    let merged = transform_cache.merge(source_oid, source_size, crate::build::cache::RecordMode::Request, |rec| {
+        rec.transforms.insert(SPA_INJECT_TRANSFORM.to_string(), entry);
+    });
+    if let Err(e) = merged {
         log::warn!("Failed to write spa/inject transform record: {}", e);
     }
 }
@@ -408,7 +407,7 @@ fn write_spa_inject_record(
 /// before this runs, so a source-unchanged cache hit alone does NOT imply
 /// `target` already holds injected content; the cache below stores the
 /// INJECTED OUTPUT, not just an "unchanged" bit, precisely to avoid that
-/// trap — see moss#919).
+/// trap).
 ///
 /// On a `TransformCache` hit, `link_to`s the previously-computed injected
 /// blob straight into `target` (or, if the record says injection was a
@@ -418,6 +417,15 @@ fn write_spa_inject_record(
 /// `defaults` hit the fast path — including a second call for the
 /// canonical-dir mirror in the same build, which becomes a cache hit
 /// instead of a second independent read+inject+write.
+///
+/// Returns the injected content's `(xxh3, content_oid)` together. The caller
+/// used to receive only the hash and reuse the PRE-injection `link_oid` it
+/// already had for the manifest's `staged_oid` — the two silently diverged the
+/// moment injection actually changed the bytes, since `link_to` above places
+/// the pre-injection blob and this function then REPLACES `target`'s bytes
+/// with a freshly-minted post-injection object. Returning the pair is what
+/// lets the caller thread the object that's actually on disk into the
+/// manifest instead of the one that used to be there.
 fn maybe_inject_spa_cached(
     target: &Path,
     defaults: &crate::build::site_meta::spa_inject::SpaDefaults<'_>,
@@ -425,17 +433,24 @@ fn maybe_inject_spa_cached(
     source_size: u64,
     object_store: &crate::build::cache::ObjectStore,
     transform_cache: &crate::build::cache::TransformCache,
-) -> Result<Option<String>, String> {
+) -> Result<Option<(String, String)>, String> {
     let params = spa_inject_params(defaults);
 
     if let Some(record_oid) =
-        transform_cache.find_cached_output(source_oid, SPA_INJECT_TRANSFORM, &params)
+        transform_cache.find_cached_output(source_oid, SPA_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
     {
         if let Some(record) = read_spa_inject_record(object_store, &record_oid) {
             match record.content_oid {
                 Some(content_oid) if object_store.get_path(&content_oid).is_some() => {
                     object_store.link_to(&content_oid, target)?;
-                    return Ok(record.xxh3);
+                    // Constructed as both-Some or both-None (see below and the
+                    // miss arm) — a `None` here means the record was corrupted
+                    // by something other than this function, which no amount
+                    // of a silent fallback would make correct to ship under.
+                    let xxh3 = record.xxh3.expect(
+                        "SpaInjectRecord invariant: content_oid and xxh3 are both Some or both None",
+                    );
+                    return Ok(Some((xxh3, content_oid)));
                 }
                 None => return Ok(None),
                 Some(_) => {} // inner blob GC'd — fall through to a live re-run
@@ -445,37 +460,44 @@ fn maybe_inject_spa_cached(
     }
 
     let result = maybe_inject_spa(target, defaults)?;
-    let record = match &result {
+    let (returned, record) = match &result {
         Some(new_hash) => {
             let injected_bytes = std::fs::read(target)
                 .map_err(|e| format!("read back {} after inject: {}", target.display(), e))?;
-            let content_oid = object_store.store_bytes(&injected_bytes)?;
-            SpaInjectRecord {
-                content_oid: Some(content_oid),
-                xxh3: Some(new_hash.clone()),
-            }
+            let content_oid = object_store.store_bytes(&injected_bytes, crate::build::cache::RecordMode::Request)?;
+            (
+                Some((new_hash.clone(), content_oid.clone())),
+                SpaInjectRecord {
+                    content_oid: Some(content_oid),
+                    xxh3: Some(new_hash.clone()),
+                },
+            )
         }
-        None => SpaInjectRecord {
-            content_oid: None,
-            xxh3: None,
-        },
+        None => (
+            None,
+            SpaInjectRecord {
+                content_oid: None,
+                xxh3: None,
+            },
+        ),
     };
     write_spa_inject_record(object_store, transform_cache, source_oid, source_size, &params, &record);
 
-    Ok(result)
+    Ok(returned)
 }
 
 /// Remove generated HTML pages (index*.html) not produced by the current build.
 ///
-/// Runs in the blocking phase before `ship_phase` mirrors stage → site, so stale
-/// pages are gone before enhance slot injection. Source HTML assets (interactive embeds
+/// Runs on staging in the blocking phase, just before the preview is pointed at this render,
+/// so it stops serving pages whose source was deleted. Source HTML assets (interactive embeds
 /// like `sketch.html`) are preserved — generated pages always use `index*.html`.
 ///
-/// Asset and directory cleanup is handled by background `copy_deferred_assets`.
+/// Staging is served, so this needs a `lifecycle::SweepPermit`.
 pub(crate) fn remove_stale_html(
     dir: &Path,
     blocking_keys: &std::collections::HashSet<String>,
     notebook_outputs: &std::collections::HashSet<String>,
+    _permit: &crate::build::lifecycle::SweepPermit,
 ) {
     use walkdir::WalkDir;
     let mut removed = 0u32;
@@ -513,17 +535,74 @@ pub(crate) fn remove_stale_html(
     }
 }
 
-/// Remove files from `dir` that are not in `site_hashes` (and not derived
-/// video/image outputs).
-pub(crate) fn remove_stale_files(dir: &Path, site_hashes: &SiteHashes, label: &str) {
+/// What one stale-file pass removed, counted by kind for the one INFO line a
+/// sweep writes — never one line per file, so it stays readable in a storm.
+#[derive(Debug, Default)]
+pub(crate) struct SweepReport {
+    pub html: usize,
+    pub webp: usize,
+    pub video: usize,
+    pub symlink: usize,
+    pub other: usize,
+    /// The first few keys removed, so a log names what went, not just how many.
+    pub sample: Vec<String>,
+}
+
+impl SweepReport {
+    fn record(&mut self, key: &str, is_symlink: bool) {
+        let ext = key.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+        match ext.as_str() {
+            _ if is_symlink => self.symlink += 1,
+            "html" => self.html += 1,
+            "webp" => self.webp += 1,
+            "mp4" | "m3u8" | "ts" | "m4s" => self.video += 1,
+            _ if key.ends_with(".thumb.jpg") => self.video += 1,
+            _ => self.other += 1,
+        }
+        if self.sample.len() < 3 {
+            self.sample.push(key.to_string());
+        }
+    }
+
+    pub fn removed(&self) -> usize {
+        self.html + self.webp + self.video + self.symlink + self.other
+    }
+
+    /// `removed <n> file(s) (<h> html, <w> webp, <v> video, <l> symlink, <o> other; e.g. <keys>)`
+    pub fn describe(&self) -> String {
+        format!(
+            "removed {} file(s) ({} html, {} webp, {} video, {} symlink, {} other; e.g. {})",
+            self.removed(),
+            self.html,
+            self.webp,
+            self.video,
+            self.symlink,
+            self.other,
+            self.sample.join(", ")
+        )
+    }
+}
+
+/// Remove files and symlinks from `dir` that `site_hashes` does not name.
+///
+/// Staging is served, so this needs a `lifecycle::SweepPermit`. A symlink is
+/// unlinked as a link and never descended into (`WalkDir` does not follow
+/// links), so an alias to a kept directory cannot take its contents with it.
+pub(crate) fn remove_stale_files(
+    dir: &Path,
+    site_hashes: &SiteHashes,
+    label: &str,
+    permit: &crate::build::lifecycle::SweepPermit,
+) -> SweepReport {
     use walkdir::WalkDir;
-    let mut removed = 0u32;
+    let mut report = SweepReport::default();
     for entry in WalkDir::new(dir).into_iter() {
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
         };
-        if !entry.file_type().is_file() {
+        let is_symlink = entry.path_is_symlink();
+        if !entry.file_type().is_file() && !is_symlink {
             continue;
         }
         if let Ok(rel) = entry.path().strip_prefix(dir) {
@@ -531,9 +610,15 @@ pub(crate) fn remove_stale_files(dir: &Path, site_hashes: &SiteHashes, label: &s
             // `site_hashes` maps/sets (video/image/notebook outputs + files).
             let key = moss_core::slug::normalize_separators(&rel.to_string_lossy());
 
-            // Always unlink orphan *.placeholder.svg. PR #615 removed Pattern
-            // E (per-video .placeholder.svg generation), but pre-#615 vaults
-            // have these files on disk AND entries in hashes.json#files for
+            // A running or finished encode's output, or a temp it is writing
+            // through, until a build registers it.
+            if permit.keeps(&key) {
+                continue;
+            }
+
+            // Always unlink orphan *.placeholder.svg. An earlier change removed
+            // Pattern E (per-video .placeholder.svg generation), but vaults built
+            // before that change have these files on disk AND entries in hashes.json#files for
             // them — so the standard "not in files → remove" check below
             // would preserve them indefinitely. Current code never produces
             // .placeholder.svg, so they are always orphans.
@@ -547,15 +632,20 @@ pub(crate) fn remove_stale_files(dir: &Path, site_hashes: &SiteHashes, label: &s
                     "[background-assets] Removed orphan placeholder svg from {}: {}",
                     label, key
                 );
-                removed += 1;
+                report.record(&key, false);
                 continue;
             }
 
-            // Email/RSS math PNGs are APPEND-ONLY (ADR-030 §3.4): their URLs
+            // Email/RSS math PNGs are APPEND-ONLY: their URLs
             // are baked into already-sent emails and cached forever by
             // Gmail's proxy / Apple MPP, so a PNG whose equation was edited
             // or deleted must keep serving its original bytes. Never stale.
+            // Only the `.pending.` temp a crashed write left there is.
             if key.starts_with(crate::build::emit::math_png::MATH_PNG_PREFIX) {
+                if key.contains(".pending.") {
+                    let _ = fs::remove_file(entry.path());
+                    report.record(&key, false);
+                }
                 continue;
             }
             if site_hashes.video_outputs.contains(&key) {
@@ -575,18 +665,23 @@ pub(crate) fn remove_stale_files(dir: &Path, site_hashes: &SiteHashes, label: &s
             if !site_hashes.files.contains_key(&key) {
                 let _ = fs::remove_file(entry.path());
                 log::trace!("[background-assets] Removed stale from {}: {}", label, key);
-                removed += 1;
+                report.record(&key, is_symlink);
             }
         }
     }
-    if removed > 0 {
-        log::debug!("[background-assets] Stale cleanup {}: {} total removed", label, removed);
-    }
+    report
 }
 
 /// Remove directories from `dir` not in `expected_dirs`, deepest-first.
-pub(crate) fn remove_stale_dirs(dir: &Path, expected_dirs: &std::collections::HashSet<std::path::PathBuf>) {
+/// Returns how many it removed. Staging is served, so this needs a
+/// `lifecycle::SweepPermit`.
+pub(crate) fn remove_stale_dirs(
+    dir: &Path,
+    expected_dirs: &std::collections::HashSet<std::path::PathBuf>,
+    permit: &crate::build::lifecycle::SweepPermit,
+) -> usize {
     use walkdir::WalkDir;
+    let mut removed = 0usize;
     let mut actual_dirs: Vec<std::path::PathBuf> = Vec::new();
     for entry in WalkDir::new(dir).into_iter() {
         let entry = match entry {
@@ -605,20 +700,23 @@ pub(crate) fn remove_stale_dirs(dir: &Path, expected_dirs: &std::collections::Ha
     }
     actual_dirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
     for d in &actual_dirs {
-        // `_moss/math/` is append-only (ADR-030 §3.4) — a build whose pages
+        // `_moss/math/` is append-only — a build whose pages
         // no longer carry math computes no expected entry for it, but the
         // PNGs inside are referenced by already-sent emails.
         if d.starts_with("_moss/math") {
             continue;
         }
-        if !expected_dirs.contains(d) {
+        if !expected_dirs.contains(d) && !permit.keeps_dir(d) {
             let abs = dir.join(d);
-            match fs::remove_dir_all(&abs) {
-                Ok(_) => log::debug!(
-                    "[stale-cleanup] Removed stale directory from {}: {}",
-                    dir.display(),
-                    d.display()
-                ),
+            match crate::build::io_utils::remove_output_dir_all(&abs) {
+                Ok(_) => {
+                    removed += 1;
+                    log::debug!(
+                        "[stale-cleanup] Removed stale directory from {}: {}",
+                        dir.display(),
+                        d.display()
+                    )
+                }
                 Err(e) => log::debug!(
                     "[stale-cleanup] Could not remove {} from {}: {}",
                     d.display(),
@@ -628,6 +726,7 @@ pub(crate) fn remove_stale_dirs(dir: &Path, expected_dirs: &std::collections::Ha
             }
         }
     }
+    removed
 }
 
 /// Compute expected directories from site_hashes keys (file parents + video_output parents + image_output parents).
@@ -672,8 +771,7 @@ pub(crate) fn compute_expected_dirs(site_hashes: &SiteHashes) -> std::collection
 /// `source_oid` is the caller's cheap stat-match resolution (empty string on a
 /// miss) — passed through so this call and `collect_images_for_conversion`'s
 /// call consult the SAME `should_skip` format-probe cache entry instead of
-/// each recomputing the expensive probes independently. See
-/// docs/archive/2026-07-31-image-format-probe-cache-design.md.
+/// each recomputing the expensive probes independently.
 fn webp_converter_owns_base(
     source_path: &Path,
     ext: &str,
@@ -695,7 +793,7 @@ fn webp_converter_owns_base(
             // NOT own this base — `SourceInTheCloud` makes `is_none()` false,
             // which is the answer that lets the loop below copy the verbatim
             // blob it already has. Answering "the converter owns it" would
-            // leave the base with no writer at all and 404 it (ADR-013).
+            // leave the base with no writer at all and 404 it.
             crate::build::icloud::is_evicted(source_path),
         )
         .is_none(),
@@ -722,13 +820,30 @@ fn recall_or_hash_output(
     target: &Path,
     fallback: &str,
     log_context: &str,
+    transform: crate::build::served_path::ShipTransform,
 ) -> String {
-    if let Some(hash) = memo.get(memo_key) {
+    use crate::build::served_path::ShipTransform;
+    // A transformed entry's hash describes the bytes ship writes, not the
+    // blob's, so it is memoized under its own key, which also carries the
+    // transform revision: bumping it must not recall a hash of old output.
+    let key = match transform {
+        ShipTransform::CopyAsIs => memo_key.to_string(),
+        ShipTransform::StripPreviewAttrs => {
+            format!("{memo_key}+ship{}", crate::build::ship::SHIP_TRANSFORM_REV)
+        }
+    };
+    if let Some(hash) = memo.get(&key) {
         return hash;
     }
-    match crate::build::assets::paths::compute_binary_hash_file(target) {
+    let hashed = match transform {
+        ShipTransform::CopyAsIs => crate::build::assets::paths::compute_binary_hash_file(target),
+        ShipTransform::StripPreviewAttrs => std::fs::read(target).map_err(|e| e.to_string()).map(|bytes| {
+            crate::build::assets::paths::compute_binary_hash(&crate::build::ship::apply_transform(transform, &bytes))
+        }),
+    };
+    match hashed {
         Ok(hash) => {
-            memo.record(memo_key, hash.clone());
+            memo.record(&key, hash.clone());
             hash
         }
         Err(e) => {
@@ -743,6 +858,118 @@ fn recall_or_hash_output(
     }
 }
 
+/// Register a `Preserved` symlink/alias outcome in `live_symlinks` and the
+/// manifest; any other outcome is already logged by `handle_symlink_entry` /
+/// `handle_alias_entry`. Returns whether it was `Preserved`, so the caller
+/// can credit its own counter — a real symlink and a resolved Finder alias
+/// count separately even though they register identically. `kind` names the
+/// entry in an invalid-path warning ("symlink" or "alias").
+fn preserve_link(
+    outcome: &crate::build::media::symlink::SymlinkOutcome,
+    site_hashes: &mut SiteHashes,
+    live_symlinks: &mut std::collections::HashSet<String>,
+    kind: &str,
+) -> bool {
+    use crate::build::media::symlink::SymlinkOutcome;
+    let SymlinkOutcome::Preserved { rel_path, target } = outcome else {
+        return false;
+    };
+    live_symlinks.insert(rel_path.clone());
+    // Register in the manifest so deploy uploads the symlink.
+    let target_str = target.to_string_lossy();
+    match crate::build::served_path::ServedPath::from_source(rel_path) {
+        Ok(out_path) => {
+            site_hashes.insert_file_hash(&out_path, crate::types::content::symlink_entry(&target_str));
+        }
+        Err(e) => {
+            log::warn!("[background-assets] Skipping {kind} with invalid path '{}': {}", rel_path, e);
+        }
+    }
+    true
+}
+
+/// `place_blob`'s inputs, grouped so both call sites below name each field
+/// instead of relying on position — the main-walk call repeats one
+/// expression for both `log_label` and `report_path`.
+struct BlobPlacement<'a> {
+    link_oid: &'a str,
+    target: &'a Path,
+    log_label: &'a str,
+    report_path: &'a str,
+    ext: &'a str,
+    local: Option<&'a Path>,
+}
+
+/// Link the blob into output — unless `staged` vouches the file there is
+/// already that blob — and, for an image extension, report `AssetReady`;
+/// shared by the main asset walk and the `.moss/theme` mirror below. `false`
+/// (already logged) on a link failure.
+fn place_blob(
+    object_store: &crate::build::cache::ObjectStore,
+    staged: &mut crate::build::lifecycle::cas_heal::StagedLinks,
+    placement: BlobPlacement,
+    reporter: &dyn crate::build::ports::reporter::BuildReporter,
+) -> bool {
+    use crate::build::lifecycle::cas_heal::Placement;
+    match staged.link(object_store, placement.link_oid, placement.target, placement.local) {
+        Placement::Held | Placement::Linked => {}
+        Placement::Unverified(e) => {
+            log::warn!("[background-assets] Not linking over unverifiable {}: {}", placement.log_label, e);
+            return false;
+        }
+        Placement::Failed(e) => {
+            log::warn!("[background-assets] Failed to link {}: {}", placement.log_label, e);
+            return false;
+        }
+    }
+    if is_image_extension(placement.ext) {
+        reporter.report(&PipelineEvent::AssetReady {
+            path: placement.report_path.to_string(),
+            asset_type: "image".to_string(),
+        });
+    }
+    true
+}
+
+/// The inputs `record_blob` resolves a manifest hash from via
+/// `recall_or_hash_output`. A struct, not four positional `&str`s: at the
+/// theme call site three of them are copies of the same `oid`, with nothing to
+/// catch a swap.
+struct OutputHash<'a> {
+    memo_key: &'a str,
+    target: &'a Path,
+    fallback_oid: &'a str,
+    log_context: &'a str,
+}
+
+/// Resolve `hash` and register it, plus the staged CAS object id, for a blob
+/// `place_blob` already linked into `out_path`'s target.
+///
+/// The sealed hash is of the bytes ship writes: for an HTML entry that is the
+/// staged blob AFTER `apply_transform`, not the blob. Sealing the blob's own
+/// hash would mismatch whenever the transform changes something (a hand-written
+/// page carrying `data-moss-preview`), skewing the generation id and the
+/// server diff, and leaving every such upload to the integrity self-heal.
+///
+/// A hash failure registers `fallback_oid` rather than panicking (this runs
+/// inside a `spawn_blocking` worker, where a panic is swallowed) and rather
+/// than skipping, which would leave a linked-but-unregistered blob for
+/// `remove_stale_files` to delete as stale.
+fn record_blob(
+    manifest_hash_memo: &crate::build::media::manifest_hash_memo::ManifestHashMemo,
+    site_hashes: &mut SiteHashes,
+    staged_oids: &mut HashMap<String, String>,
+    hash: OutputHash,
+    out_path: &crate::build::served_path::ServedPath,
+    staged_oid: &str,
+) {
+    let OutputHash { memo_key, target, fallback_oid, log_context } = hash;
+    let transform = crate::build::served_path::transform_for(out_path.as_str());
+    let hash = recall_or_hash_output(manifest_hash_memo, memo_key, target, fallback_oid, log_context, transform);
+    site_hashes.insert_file_hash(out_path, crate::types::content::file_entry(&hash));
+    staged_oids.insert(out_path.as_str().to_string(), staged_oid.to_string());
+}
+
 /// After all assets are placed, stale cleanup runs to remove output files that
 /// no longer have a corresponding source.
 ///
@@ -751,7 +978,7 @@ fn recall_or_hash_output(
 /// It reads `ctx.previous_hashes` for the entries it may carry forward and
 /// `ctx.blocking_keys` to know which `.html` paths a rendered page already
 /// claims — it does NOT hold a copy of this build's manifest.
-/// Issue #697: AssetRegistry passed in so audio/PDF/static assets are registered
+/// AssetRegistry passed in so audio/PDF/static assets are registered
 /// as Ready once they are copied to the output. The registry key is the mapped
 /// output-relative path (e.g. `audio/talk.mp3`, `docs/paper.pdf`), matching the
 /// URL the preview server normalises from the browser's request.
@@ -763,17 +990,17 @@ pub(crate) fn copy_deferred_assets(
     asset_registry: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
 ) -> AssetPipelineRunStats {
     use crate::build::cache::ObjectStore;
-    use crate::build::scan::classify::is_excluded_dir_name;
     use crate::build::render::resolve_path_with_overrides;
     use walkdir::WalkDir;
 
     let deferred_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
-    let object_store = ObjectStore::new(deferred_paths.cache_objects());
+    let object_store = ObjectStore::for_site(&deferred_paths);
     // See TODO(perf) at both call sites below: a CAS blob's bytes are a pure
     // function of its oid, so the xxh3 manifest hash of a just-linked output
     // file needs no staleness rule — only a cache keyed by oid.
     let manifest_hash_memo =
         crate::build::media::manifest_hash_memo::ManifestHashMemo::load(&deferred_paths.cache_manifest_hash_memo());
+    let mut staged = crate::build::lifecycle::cas_heal::StagedLinks::load(&deferred_paths, "assets", &ctx.staging_dir);
     // Sized-raster-original support (plan 2026-07-06): raster originals
     // (jpg/jpeg/png) are deployed as a sized/optimized raster at the SAME output
     // path instead of the full-resolution source, so no full-res original is
@@ -781,10 +1008,7 @@ pub(crate) fn copy_deferred_assets(
     // stays a transparency-preserving PNG). It is content-addressed and cached
     // (keyed by source hash + config) via this TransformCache, mirroring the
     // WebP pass.
-    let transforms = crate::build::cache::TransformCache::new(
-        deferred_paths.cache_transforms(),
-        ObjectStore::new(deferred_paths.cache_objects()),
-    );
+    let transforms = crate::build::cache::TransformCache::for_site(&deferred_paths);
     let image_config = crate::build::media::image::ImageCompressionConfig::default();
     // Seeded from the PREVIOUS build's manifest, not from this build's.
     //
@@ -797,7 +1021,7 @@ pub(crate) fn copy_deferred_assets(
     // already has this build's entries. Re-emitting those from a snapshot taken
     // at the end of the render phase is what forced three hand-written syncs to
     // keep the snapshot current, and would now overwrite a live entry with a
-    // stale hash (moss#618).
+    // stale hash.
     let mut site_hashes = ctx.previous_hashes.clone();
     let source_root = Path::new(&ctx.source_path);
     let output_dir = &ctx.staging_dir;
@@ -823,7 +1047,7 @@ pub(crate) fn copy_deferred_assets(
     let mut cache_misses: u32 = 0;
 
     // Markdown extensions that were handled in the blocking phase
-    let markdown_exts = ["md", "markdown", "mdown", "mkd"];
+    let markdown_exts = moss_core::page_kind::PAGE_EXTENSIONS;
     // Video extensions — large files (≥100MB) handled by FFmpeg pipeline,
     // small files copied as regular assets (see size check below)
     let video_exts = ["mov", "mp4", "webm", "avi", "mkv", "m4v"];
@@ -836,7 +1060,7 @@ pub(crate) fn copy_deferred_assets(
     let mut skipped = 0u32;
     let mut skipped_symlinks = 0u32;
     // Preserved symlinks / resolved aliases. Counted because the per-item log
-    // line is DEBUG (issue #1005): without these the summary reports nothing.
+    // line is DEBUG: without these the summary reports nothing.
     let mut preserved_symlinks = 0u32;
     // Only the macOS alias branch writes this; elsewhere it stays 0.
     #[allow(unused_mut)]
@@ -850,6 +1074,14 @@ pub(crate) fn copy_deferred_assets(
     // / renamed source files leave entries in the metadata cache forever
     // and `hashes.json` grows unbounded over the project's lifetime.
     let mut live_source_keys = std::collections::HashSet::<String>::new();
+    // Output path → the CAS object id already backing those exact staged
+    // bytes, for every entry this walk registers via the `Ok(oid)` arm below
+    // (assets) or the `.moss/theme` mirror. Threaded onto the re-emitted
+    // `EmitMessage::File` at the end of this function so `ship_phase` can
+    // copy straight from the CAS instead of the mutable stage path — see
+    // `PendingManifest::ship_sources` (`ShipSource::Cas`). A symlink entry or
+    // a direct-copy fallback never gets one, and ships exactly as before.
+    let mut staged_oids: HashMap<String, String> = HashMap::new();
 
     // Symlinks preserved from source to output (also: Finder Aliases
     // resolved to symlinks on macOS). Tracked separately so
@@ -878,15 +1110,9 @@ pub(crate) fn copy_deferred_assets(
 
     for entry in WalkDir::new(source_root)
         .into_iter()
-        .filter_entry(|e| {
-            // Only directories may be excluded by name; file entries (e.g.
-            // `_43A2045.jpg`) must always pass through.
-            if !e.file_type().is_dir() {
-                return true;
-            }
-            let name = e.file_name().to_string_lossy();
-            !is_excluded_dir_name(&name)
-        })
+        // What the scan reads: never a nested site, an excluded folder or the
+        // root agent instructions.
+        .filter_entry(|e| crate::build::scan::classify::left_out_of_site(e).is_none())
     {
         let entry = match entry {
             Ok(e) => e,
@@ -901,33 +1127,14 @@ pub(crate) fn copy_deferred_assets(
         // (whether to dirs or files) report `is_file() == false` under the
         // walker's default `follow_links(false)`.
         if entry.file_type().is_symlink() {
-            use crate::build::media::symlink::{handle_symlink_entry, SymlinkOutcome};
+            use crate::build::media::symlink::handle_symlink_entry;
             let outcome = handle_symlink_entry(
                 entry.path(),
                 source_root,
                 &canonical_source_root,
                 output_dir,
             );
-            if let SymlinkOutcome::Preserved { ref rel_path, ref target } = outcome {
-                live_symlinks.insert(rel_path.clone());
-                // Register in the manifest so deploy uploads the symlink.
-                // Wire format: see docs/reference/deploy-upload-contract.md.
-                let target_str = target.to_string_lossy();
-                match crate::build::served_path::ServedPath::from_source(rel_path) {
-                    Ok(out_path) => {
-                        site_hashes.insert_file_hash(
-                            &out_path,
-                            crate::types::content::symlink_entry(&target_str),
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!("[background-assets] Skipping symlink with invalid path '{}': {}", rel_path, e);
-                    }
-                }
-            }
-            // Other outcomes (escape/broken/processable/absolute/unsupported)
-            // are already logged inside handle_symlink_entry; count the skip.
-            if matches!(outcome, SymlinkOutcome::Preserved { .. }) {
+            if preserve_link(&outcome, &mut site_hashes, &mut live_symlinks, "symlink") {
                 preserved_symlinks += 1;
             } else {
                 skipped_symlinks += 1;
@@ -942,31 +1149,16 @@ pub(crate) fn copy_deferred_assets(
         // handles it via its own symlink branch — no alias branch needed there.
         #[cfg(target_os = "macos")]
         if entry.file_type().is_file() {
-            use crate::build::media::symlink::{handle_alias_entry, SymlinkOutcome};
+            use crate::build::media::symlink::handle_alias_entry;
             if let Some(outcome) = handle_alias_entry(
                 entry.path(),
                 source_root,
                 &canonical_source_root,
                 output_dir,
             ) {
-                if let SymlinkOutcome::Preserved { ref rel_path, ref target } = outcome {
-                    live_symlinks.insert(rel_path.clone());
-                    let target_str = target.to_string_lossy();
-                    match crate::build::served_path::ServedPath::from_source(rel_path) {
-                        Ok(out_path) => {
-                            site_hashes.insert_file_hash(
-                                &out_path,
-                                crate::types::content::symlink_entry(&target_str),
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!("[background-assets] Skipping alias with invalid path '{}': {}", rel_path, e);
-                        }
-                    }
-                }
                 // Count any non-Preserved alias outcome (escape/broken/
                 // processable/absolute/unresolvable) as a skipped symlink.
-                if matches!(outcome, SymlinkOutcome::Preserved { .. }) {
+                if preserve_link(&outcome, &mut site_hashes, &mut live_symlinks, "alias") {
                     preserved_aliases += 1;
                 } else {
                     skipped_symlinks += 1;
@@ -1035,14 +1227,20 @@ pub(crate) fn copy_deferred_assets(
             continue;
         }
 
-        // Videos are the video worker's alone — every one of them, whether it
-        // is re-encoded or passed through unchanged. This used to be a size
+        // Videos outside passthrough roots are the video worker's alone. A
+        // passthrough subtree deliberately opts out of that worker, so this
+        // loop must copy its video verbatim or the asset disappears. This used
+        // to be a size
         // test that had to agree with a differently-spelled size test in
         // `collect_videos_for_conversion`, and on a sub-threshold .mov the two
         // disagreed: the worker transcoded it AND this loop copied the
         // original, so the site shipped both. One owner cannot disagree with
         // itself.
-        if video_exts.contains(&ext.as_str()) {
+        let configured_passthrough = crate::build::scan::classify::is_in_passthrough(
+            &relative_path,
+            &ctx.passthrough_roots,
+        );
+        if video_exts.contains(&ext.as_str()) && !configured_passthrough {
             continue;
         }
 
@@ -1056,7 +1254,7 @@ pub(crate) fn copy_deferred_assets(
         // files will be incorrectly skipped here, causing 404s on iframe covers.
         // See render/blocking.rs blocking_keys declaration for the full explanation.
         if html_exts.contains(&ext.as_str()) {
-            if ctx.blocking_keys.contains(&relative_path) {
+            if ctx.blocking_keys.contains(&relative_path) && !ctx.passthrough_roots.contains(&relative_path) {
                 continue;
             }
             // Fall through — copy as asset
@@ -1067,7 +1265,7 @@ pub(crate) fn copy_deferred_assets(
         // check_misplaced_theme_files() warns authors about the misplacement.
         // This must be the same predicate the sweep's drift walk uses
         // (`drift_eligible` in build_shell::watch::sweep) — see
-        // is_ignored_root_theme_file's doc comment (moss#1087).
+        // is_ignored_root_theme_file's doc comment.
         if crate::build::render::is_ignored_root_theme_file(&relative_path) {
             continue;
         }
@@ -1082,22 +1280,13 @@ pub(crate) fn copy_deferred_assets(
         // `file_size` below — a stat failure must NOT be confused with a
         // genuine 0-byte file by the WebP-ownership check (see its comment).
         let file_size_opt = file_stat.as_ref().ok().map(|m| m.len());
-        let (file_size, file_mtime_secs, file_mtime_nanos) = match &file_stat {
-            Ok(m) => {
-                let mtime = m
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-                (
-                    m.len(),
-                    mtime.map(|d| d.as_secs()).unwrap_or(0),
-                    // None ⇔ no readable mtime; the watcher gate then always
-                    // hashes instead of trusting a size-only match.
-                    mtime.map(|d| d.subsec_nanos()),
-                )
-            }
-            Err(_) => (0, 0, None),
-        };
+        // A failed stat records as size 0, mtime 0 and no sub-second mtime, which
+        // the watcher gate never trusts: it always hashes (fail open).
+        let src_stat = file_stat
+            .as_ref()
+            .map(crate::build::stat::FileStat::of)
+            .unwrap_or(crate::build::stat::FileStat::whole_second(0, 0));
+        let (file_size, file_mtime_secs) = (src_stat.size, src_stat.mtime);
 
         // Cache fast-path: if we already hashed this exact (size, mtime)
         // last build AND the blob is still in the object store AND we
@@ -1130,13 +1319,12 @@ pub(crate) fn copy_deferred_assets(
         // `source_oid` is `cached_oid` resolved via the SAME cheap stat-match
         // fast path `collect_images_for_conversion` uses (falls back to ""
         // on a miss, exactly like that call site) — this lets both callers
-        // consult the same `should_skip` format-probe cache (see
-        // docs/archive/2026-07-31-image-format-probe-cache-design.md) instead
+        // consult the same `should_skip` format-probe cache instead
         // of one of them recomputing the expensive probes on every build:
         //   • None    → webp is converted → converter owns the base → skip here.
         //   • Some(_) → AlreadySmall / AnimatedWebp / NotAnImage / … → the
         //     converter never writes it → fall through and copy verbatim, else
-        //     the base 404s (ADR-013). Small + animated webp rely on this.
+        //     the base 404s. Small + animated webp rely on this.
         //
         // A read failure fails SAFE (converter owns the base) rather than the
         // old `.unwrap_or(0)` — see `webp_converter_owns_base` (follow-up #6).
@@ -1185,7 +1373,7 @@ pub(crate) fn copy_deferred_assets(
             Ok(oid)
         } else {
             cache_misses += 1;
-            object_store.store_file(file_path)
+            object_store.store_file(file_path, crate::build::cache::RecordMode::Wait)
         };
 
         match oid_result {
@@ -1205,32 +1393,13 @@ pub(crate) fn copy_deferred_assets(
                 // cached by source hash, so unchanged images are not re-encoded
                 // on incremental builds. The manifest hash below is computed from
                 // the OUTPUT file, so it correctly reflects the sized bytes.
-                // See docs/archive/2026-07-06-exclude-original-images-from-deploy.md.
-                // A source still in the cloud never reaches the sized-raster
-                // encode (moss#982).
-                //
-                // The deferral above is guarded on `cached_oid.is_none()`,
-                // correctly: with a warm OID the bytes are already in the CAS
-                // and the output can be linked without touching the source. But
-                // `sized_raster_oid_for_original` takes the SOURCE PATH and, on
-                // a transform-cache miss, reads it — so a warm OID walked
-                // straight past the deferral into a full source read that fails
-                // `EDEADLK`. That is the 6,967 `[sized-raster] encode failed …
-                // keeping verbatim original` lines in the moss#982 incident
-                // log, once per image per build for the whole download window,
-                // and a large part of the 7-10 cores it burned.
-                //
-                // Linking the verbatim CAS blob is the honest fallback: it is
-                // the full-resolution original rather than the sized one, which
-                // is heavier than we would like but correct and available now.
-                // The next build after the file lands re-encodes it properly.
-                let source_in_the_cloud = crate::build::icloud::is_evicted(file_path);
-                if source_in_the_cloud {
-                    crate::build::cloud_ledger::note_unavailable(file_path);
-                }
-                let link_oid = if source_in_the_cloud {
-                    oid.clone()
-                } else if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+                // A source still in the cloud is safe to hand over: a warm OID
+                // means the bytes are already in the CAS, and
+                // `sized_raster_oid_for_original` answers from its cache before
+                // it touches the source. On a miss it checks for eviction
+                // itself, records the absence, and returns `None`, so the
+                // verbatim CAS blob is linked until the file lands.
+                let link_oid = if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
                     crate::build::media::fallback_raster::sized_raster_oid_for_original(
                         file_path,
                         &oid,
@@ -1245,19 +1414,13 @@ pub(crate) fn copy_deferred_assets(
                 };
 
                 let target = output_dir.join(&mapped_path);
-                if let Err(e) = object_store.link_to(&link_oid, &target) {
-                    log::warn!("[background-assets] Failed to link {}: {}", mapped_path, e);
+                let placement =
+                    BlobPlacement { link_oid: &link_oid, target: &target, log_label: &mapped_path, report_path: &mapped_path, ext: &ext, local: (link_oid == oid).then_some(file_path) };
+                if !place_blob(&object_store, &mut staged, placement, reporter) {
                     continue;
                 }
-                // Emit AssetReady for images so the preview can swap placeholders
-                if is_image_extension(&ext) {
-                    reporter.report(&PipelineEvent::AssetReady {
-                        path: mapped_path.clone(),
-                        asset_type: "image".to_string(),
-                    });
-                }
 
-                // Issue #697: register audio/PDF/static assets as Ready so the
+                // Register audio/PDF/static assets as Ready so the
                 // editor hover-preview can resolve them. Only register non-image,
                 // non-video assets here — images are registered in the blocking
                 // phase via set_pending (and set_ready'd by run_image_conversion).
@@ -1289,7 +1452,14 @@ pub(crate) fn copy_deferred_assets(
                     &relative_path,
                     &ctx.passthrough_roots,
                 );
-                let mut spa_post_hash: Option<String> = None;
+                // The CAS object actually backing `target`'s bytes AFTER SPA
+                // injection, when injection changed them. `link_oid` (below)
+                // names the PRE-injection object `link_to` placed at `target`
+                // moments ago; injection then overwrites those bytes in place
+                // with a freshly-minted object, so `link_oid` alone would name
+                // the wrong blob for `staged_oids` — see
+                // `maybe_inject_spa_cached`'s doc comment.
+                let mut spa_post_oid: Option<String> = None;
                 if !in_passthrough
                     && html_exts.contains(&ext.as_str())
                     && is_bundled_spa_index_path(&mapped_path)
@@ -1305,8 +1475,8 @@ pub(crate) fn copy_deferred_assets(
                             &object_store,
                             &transforms,
                         ) {
-                            Ok(Some(new_hash)) => {
-                                spa_post_hash = Some(new_hash);
+                            Ok(Some((_, new_oid))) => {
+                                spa_post_oid = Some(new_oid);
                             }
                             Ok(None) => {} // no-op (nothing to inject)
                             Err(e) => {
@@ -1324,79 +1494,26 @@ pub(crate) fn copy_deferred_assets(
                 // path, not output path) so the next build's check_source_cache
                 // can short-circuit. Always write — even on cache hit — so
                 // the entry stays present after every build.
-                let (src_ctime, src_inode) = file_stat
-                    .as_ref()
-                    .map(crate::build::types::stat_identity)
-                    .unwrap_or((None, None));
                 site_hashes.sources.insert(
                     relative_path.clone(),
-                    crate::build::types::SourceMetadata {
-                        hash: oid.clone(),
-                        size: file_size,
-                        mtime: file_mtime_secs,
-                        mtime_nanos: file_mtime_nanos,
-                        ctime: src_ctime,
-                        inode: src_inode,
-                    },
+                    crate::build::types::SourceMetadata::from_stat(oid.clone(), src_stat),
                 );
-                // Use post-injection hash when SPA injection rewrote the file,
-                // so deploy diffing reflects the on-disk content.
-                // For the non-SPA path, compute the xxh3 manifest hash from the
-                // OUTPUT file (`target`, just written by link_to above), NOT the
-                // SOURCE file (`file_path`).
-                //
-                // Why output, not source?
-                //   • `target` is a freshly-COW-copied local file — no iCloud
-                //     eviction risk (eviction only affects user-visible source
-                //     files, not .moss/build output).
-                //   • On a cache hit the source is NOT read this build; opening
-                //     it here is a new I/O hazard that can fail independently
-                //     (iCloud dataless race, permission change, delete race).
-                //   • Critically: a failure here with `continue` skips
-                //     `insert_file_hash`, leaving the just-linked `target` with
-                //     NO manifest entry.  `remove_stale_files` (called post-seal)
-                //     then deletes any on-disk staged file whose key is absent
-                //     from `site_hashes.files` — silently dropping the asset from
-                //     the deploy.  This is the confirmed broken-cover / dropped-
-                //     asset incident class.  The old `unwrap_or(oid)` path was
-                //     safe because it could never fail; reading the source can.
-                //   • Hashing the OUTPUT (not the source oid) is REQUIRED now
-                //     that raster originals are re-encoded to a sized output
-                //     (`image::sized_raster_oid_for_original`): output bytes no
-                //     longer equal source bytes, so the manifest must carry the
-                //     xxh3 of the actual deployed file or `verify_file_bytes` in
-                //     deploy.rs would mismatch. For verbatim assets (non-raster,
-                //     or a keep-smaller source) output == source, so it is also
-                //     correct there.
-                //
-                // Cache hits used to re-read and re-hash the just-linked output
-                // on every incremental build (the old oid path was a free
-                // metadata-stat fast-path). `recall_or_hash_output` fixes that
-                // with an oid-keyed memo (see its doc comment) instead of the
-                // (size, mtime) staleness heuristic a first draft of this fix
-                // considered — see `ManifestHashMemo`'s module doc for why a
-                // heuristic was rejected in favor of an exact key.
-                //
-                // On hashing failure, the fallback below is the CAS oid, not
-                // the memo — see `recall_or_hash_output`'s doc comment. The
-                // long-standing reasons for that fallback (rather than
-                // `continue` or a panic) are unchanged: the .moss/build path
-                // can live inside an iCloud vault (Obsidian), so the freshly-
-                // linked file CAN be evicted in a narrow window; dropping the
-                // asset lets `remove_stale_files` delete the just-deployed
-                // file (the broken-cover hazard), and this runs in a
-                // spawn_blocking worker where a panic aborts the entire asset
-                // copy and may be swallowed. If this (sha256, wrong-format)
-                // hash is ever actually used, the deploy's verify_file_bytes
-                // surfaces it loudly per-asset rather than silently dropping a
-                // published file.
-                let recorded_hash = match spa_post_hash {
-                    Some(h) => h,
-                    None => recall_or_hash_output(&manifest_hash_memo, &link_oid, &target, &oid, "output"),
-                };
                 match crate::build::served_path::ServedPath::from_source(&mapped_path) {
                     Ok(out_path) => {
-                        site_hashes.insert_file_hash(&out_path, crate::types::content::file_entry(&recorded_hash));
+                        // The CAS object actually backing `target`'s bytes: the
+                        // post-injection object when SPA injection changed
+                        // them, otherwise the object `link_to` placed there
+                        // (`link_oid`) — `apply_transform`/`transform_for` are
+                        // pure and path-only, so a later CAS read reproduces
+                        // exactly what reading `target` now would.
+                        let staged_oid = spa_post_oid.clone().unwrap_or_else(|| link_oid.clone());
+                        let hash = OutputHash {
+                            memo_key: &staged_oid,
+                            target: &target,
+                            fallback_oid: &oid,
+                            log_context: "output",
+                        };
+                        record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &staged_oid);
                         copied += 1;
                     }
                     Err(e) => {
@@ -1450,8 +1567,7 @@ pub(crate) fn copy_deferred_assets(
             if relative_path == "style.css" || relative_path == "script.js" {
                 // Every build, unconditionally, for exactly these two files —
                 // not actionable by anyone reading the log, so DEBUG not WARN
-                // (2026-09-15, docs/archive/2026-09-15-open-feedback-design.md:
-                // measured ~170 lines/session in a real upload).
+                // (measured ~170 lines/session in a real upload, 2026-09-15).
                 log::debug!(
                     "[background-assets] Skipping .moss/theme/{} — handled by blocking phase",
                     relative_path
@@ -1484,50 +1600,23 @@ pub(crate) fn copy_deferred_assets(
                 continue;
             }
 
-            match object_store.store_file(file_path) {
+            match object_store.store_file(file_path, crate::build::cache::RecordMode::Wait) {
                 Ok(oid) => {
                     let target = out_path.to_disk(output_dir);
-                    if let Err(e) = object_store.link_to(&oid, &target) {
-                        log::warn!("[background-assets] Failed to link .moss/theme/{}: {}", relative_path, e);
-                        continue;
-                    }
                     let moss_ext = file_path
                         .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("")
                         .to_lowercase();
-                    if is_image_extension(&moss_ext) {
-                        reporter.report(&PipelineEvent::AssetReady {
-                            path: out_path.as_str().to_string(),
-                            asset_type: "image".to_string(),
-                        });
+                    let log_label = format!(".moss/theme/{}", relative_path);
+                    let placement =
+                        BlobPlacement { link_oid: &oid, target: &target, log_label: &log_label, report_path: out_path.as_str(), ext: &moss_ext, local: Some(file_path) };
+                    if !place_blob(&object_store, &mut staged, placement, reporter) {
+                        continue;
                     }
-                    // Compute xxh3 manifest hash (not the CAS oid which is SHA-256)
-                    // so deploy.rs::verify_file_bytes can round-trip successfully.
-                    //
-                    // Hash the OUTPUT file (`target`, just written by link_to
-                    // above), NOT the SOURCE `file_path`.  Rationale mirrors the
-                    // source-asset walk above: hashing the source opens a new I/O
-                    // hazard (iCloud eviction, permission race) that did not exist
-                    // before the manifest-hash fix.  On failure the old `continue`
-                    // path skipped `insert_file_hash`, leaving `target` without a
-                    // manifest entry and causing stale-cleanup to delete the
-                    // just-linked file — the same confirmed drop-hazard.  `target`
-                    // is a freshly-COW-copied local .moss/build file; its bytes
-                    // equal the source bytes, so the xxh3 is identical.
-                    //
-                    // Same fix as the source-asset walk above: consult the
-                    // oid-keyed memo before re-reading `target`. `target` is
-                    // the blob named `oid`, freshly COW-copied by `link_to`,
-                    // so its bytes are a pure function of `oid` and the memo
-                    // needs no staleness rule. On failure the fallback is the
-                    // CAS oid (never memoized — see `recall_or_hash_output`),
-                    // and `insert_file_hash` still always runs: skipping it
-                    // drops the asset and `remove_stale_files` deletes the
-                    // just-linked file — the confirmed drop-hazard.
-                    let manifest_hash =
-                        recall_or_hash_output(&manifest_hash_memo, &oid, &target, &oid, ".moss/theme output");
-                    site_hashes.insert_file_hash(&out_path, crate::types::content::file_entry(&manifest_hash));
+                    let hash =
+                        OutputHash { memo_key: &oid, target: &target, fallback_oid: &oid, log_context: ".moss/theme output" };
+                    record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &oid);
                     copied += 1;
                 }
                 Err(e) => {
@@ -1583,7 +1672,7 @@ pub(crate) fn copy_deferred_assets(
     // One line for the whole prune, not one per entry — a rename/restructure
     // or a first full-cache build could otherwise log ~1300 lines in a
     // single "Send Logs" upload for information no individual key adds over
-    // the count (2026-09-15, docs/archive/2026-09-15-open-feedback-design.md).
+    // the count (2026-09-15).
     if !stale_sources.is_empty() {
         log::debug!(
             "[background-assets] Removed {} stale source-cache entr{}",
@@ -1595,21 +1684,11 @@ pub(crate) fn copy_deferred_assets(
     // All background workers (image, video, assets) send their
     // registrations via the coordinator channel, so `video_outputs`,
     // `image_outputs`, and `notebook_outputs` accumulate in the
-    // coordinator's PendingManifest — not on disk. The pre-#620 Item 2
-    // `tx.is_none()` legacy on-disk merge has been removed.
+    // coordinator's PendingManifest — not on disk. The legacy on-disk merge
+    // that ran through `tx.is_none()` has been removed.
 
-    // Stale-file + stale-dir cleanup moved to the seal+persist side task in
-    // build.rs to fix #621 (deferred-phase race). Calling `remove_stale_files`
-    // here against a snapshot clone of `site_hashes` could delete an in-flight
-    // `.webp` written by a background image worker before the coordinator
-    // observed its `EmitMessage`. Cleanup now runs AFTER the seal so it sees
-    // the merged manifest view.
-    //
-    // Symlink stale-cleanup stays here because `live_symlinks` is local to
-    // this walk (not in the manifest) and is not subject to the deferred-phase
-    // race — symlinks are produced inline during the walk, not by concurrent
-    // workers.
-    crate::build::media::symlink::remove_stale_symlinks(output_dir, &live_symlinks);
+    // Stale files, dirs and symlinks leave staging only through the build's
+    // permitted sweep (`pipeline::sweep_staging`), never from this worker.
 
     // Send all accumulated file entries to the coordinator (or write to disk
     // in legacy mode). The coordinator merges these with image/video/notebook
@@ -1630,7 +1709,6 @@ pub(crate) fn copy_deferred_assets(
     // images, source HTML) from the deploy manifest — they would no longer
     // be `touched` at seal time, would be pruned from the output buckets,
     // and stale-file cleanup would then delete them from the sealed generation dir.
-    // See `docs/archive/2026-05-18-manifest-integrity.md`.
     //
     // We send ALL entries (not just newly added ones) so the coordinator's
     // PendingManifest has the full picture including carry-forwards. The
@@ -1643,6 +1721,7 @@ pub(crate) fn copy_deferred_assets(
             rel_path: rel_path.clone(),
             hash: hash_entry.strip_prefix("100644:").unwrap_or(hash_entry).to_string(),
             bucket: HashBucket::Files,
+            oid: staged_oids.get(rel_path).cloned(),
         };
         if let Err(e) = tx.blocking_send(msg) {
             log::warn!("[background-assets] Failed to send {} to coordinator: {}", rel_path, e);
@@ -1658,8 +1737,7 @@ pub(crate) fn copy_deferred_assets(
     // `PendingManifest::inner.sources` would remain the previous build's
     // carry-forward and the next build's `prev_sources` (loaded from the
     // sealed `hashes.json`) would be two builds stale, defeating the
-    // change-detection cache. See `docs/archive/2026-05-18-manifest-integrity.md`
-    // followup #2 (filed as GitHub issue prior to this fix).
+    // change-detection cache.
     //
     // `mem::take` (vs. `clone`) moves the ~40KB sources map into the message
     // — `site_hashes` is dropped at the end of this function and has no
@@ -1669,6 +1747,7 @@ pub(crate) fn copy_deferred_assets(
         log::warn!("[background-assets] Failed to send sources to coordinator: {}", e);
     }
 
+    staged.save();
     // Persist the oid→xxh3 memo once per build (not once per asset — see
     // `ManifestHashMemo`'s doc comment). Best-effort: a failed save just
     // means the next build starts cold, same as today.

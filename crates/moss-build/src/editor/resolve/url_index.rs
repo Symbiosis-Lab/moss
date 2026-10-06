@@ -15,6 +15,13 @@ pub struct ArticleMapIndex {
     normalized: HashMap<String, Option<String>>,    // norm_key -> Some(/canonical/)|None(ambiguous)
     by_stem: HashMap<String, Option<String>>,       // lowercased filename stem -> Some(/url/)|None
     moved: HashMap<String, String>,                 // norm_key of a gone URL -> /canonical/ it lives at
+    // Folder-index pages, keyed by their normalized SOURCE directory (not a
+    // stem — a full path, so a bare leaf never matches a nested folder) ->
+    // canonical /url/. A separate tier from `by_stem`, consulted only after
+    // it misses, so a same-name page (which IS in `by_stem`) always wins and
+    // `by_stem`'s own ambiguity-collapsing construction is never touched by
+    // this. See `ArticleMap::folder_indexes`.
+    folder_indexes: HashMap<String, String>,
 }
 
 fn norm(u: &str) -> String { u.trim_matches('/').to_lowercase() }
@@ -56,7 +63,24 @@ impl ArticleMapIndex {
                 .map(|(k, mut v)| { v.sort(); v.dedup(); (k, if v.len() == 1 { Some(v.remove(0)) } else { None }) })
                 .collect()
         };
-        ArticleMapIndex { exact, normalized: collapse(normalized), by_stem: collapse(stems), moved }
+        // Folder-index pages, from the typed field the build populates
+        // directly (never by eliminating `generated`/`terms`/`kinds` — see
+        // the field doc). Keyed by the normalized full source directory, so
+        // an exact match is required; there is no leaf/stem search over this
+        // map, which is what keeps a bare `[[notes]]` from matching a nested
+        // `obsidian/notes/` (out of scope in this version, on both sides).
+        let folder_indexes = m
+            .folder_indexes
+            .iter()
+            .map(|(dir, url)| (norm(dir), format!("/{}/", url.trim_matches('/'))))
+            .collect();
+        ArticleMapIndex {
+            exact,
+            normalized: collapse(normalized),
+            by_stem: collapse(stems),
+            moved,
+            folder_indexes,
+        }
     }
 }
 
@@ -65,8 +89,16 @@ impl UrlIndex for ArticleMapIndex {
     fn lookup_normalized(&self, url_path: &str) -> Option<String> { self.normalized.get(&norm(url_path)).cloned().flatten() }
     fn lookup_moved(&self, url_path: &str) -> Option<String> { self.moved.get(&norm(url_path)).cloned() }
     // from_source ignored in v1 — stem lookup is global; relative-path refs are a future pass.
+    //
+    // A page always wins: `by_stem` is tried first and `folder_indexes` is
+    // only ever consulted on a miss, so a same-named page and its folder can
+    // never race — if the page exists, `by_stem`'s bucket for that stem is a
+    // singleton and this returns at the first check.
     fn resolve_reference_to_url(&self, reference: &str, _from: &str) -> Option<String> {
-        self.by_stem.get(&stem(reference)).cloned().flatten()
+        if let Some(found) = self.by_stem.get(&stem(reference)).cloned().flatten() {
+            return Some(found);
+        }
+        self.folder_indexes.get(&reference.trim_matches('/').to_lowercase()).cloned()
     }
 }
 
@@ -107,8 +139,8 @@ pub struct FolderFacts {
     index_source: HashMap<String, String>,
     /// on-disk source PARENT dir (project-relative, no trailing slash) → folder
     /// key, plus a lowercased twin. This is the slug-override bridge: a folder
-    /// whose index is `獎項/獎項.md` but which publishes at `awards/` can only
-    /// be found from the author-typed `獎項` this way.
+    /// whose index is `評選/評選.md` but which publishes at `awards/` can only
+    /// be found from the author-typed `評選` this way.
     by_source_dir: HashMap<String, String>,
     by_source_dir_ci: HashMap<String, String>,
     /// folder key → the index page's title, as the scan recorded it.
@@ -135,7 +167,7 @@ fn fm_also_in(fm: &HashMap<String, serde_json::Value>) -> Vec<String> {
 }
 
 /// Project-relative parent directory of a source path, no trailing slash.
-/// `"獎項/獎項.md"` → `"獎項"`; `"index.md"` → `""`.
+/// `"評選/評選.md"` → `"評選"`; `"index.md"` → `""`.
 fn parent_dir(source_path: &str) -> String {
     match source_path.rsplit_once('/') {
         Some((dir, _)) => dir.to_string(),
@@ -147,7 +179,7 @@ fn parent_dir(source_path: &str) -> String {
 /// the doc's own key: `"awards/2024/x"` → `["", "awards/", "awards/2024/"]`.
 ///
 /// Deliberately built by `split('/')` + `push_str` and never by byte-slicing a
-/// URL. A folder key can be multibyte (`獎項/` — the case this whole feature
+/// URL. A folder key can be multibyte (`評選/` — the case this whole feature
 /// exists for) and `&url[key.len()..]` panics when that byte offset lands
 /// mid-UTF-8-sequence in an unrelated URL.
 fn strict_ancestors(url: &str) -> Vec<String> {
@@ -222,8 +254,8 @@ impl FolderFacts {
         if let Some(k) = known(format!("{}/", slugged)) {
             return Some(k);
         }
-        // 3. Reverse by on-disk source dir: `pages["awards/"] == "獎項/獎項.md"`
-        //    → parent `獎項` → key `awards/`. The slug-override case.
+        // 3. Reverse by on-disk source dir: `pages["awards/"] == "評選/評選.md"`
+        //    → parent `評選` → key `awards/`. The slug-override case.
         if let Some(k) = self.by_source_dir.get(t) {
             return Some(k.clone());
         }
@@ -249,7 +281,7 @@ impl FolderFacts {
     /// This is what "following" a folder embed opens, and it is deliberately a
     /// FILE: the author-typed target is a URL, not a path, so joining it to the
     /// project root is wrong the moment a slug override is in play — a folder
-    /// whose index is `獎項/獎項.md` publishes at `awards/`, and `<root>/awards`
+    /// whose index is `評選/評選.md` publishes at `awards/`, and `<root>/awards`
     /// names nothing on disk. `key_for` already crosses that bridge for the
     /// counts; this reuses it so the card and the click agree by construction.
     ///

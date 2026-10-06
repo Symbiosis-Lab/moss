@@ -254,6 +254,7 @@ fn test_generate_children_empty() {
         None,
         true,
         false,
+        &Default::default(),
     );
     assert_eq!(result, "");
 }
@@ -283,6 +284,7 @@ fn test_generate_children_list_no_group() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     assert!(result.contains("Article A"));
@@ -316,6 +318,7 @@ fn test_generate_children_summary_no_group() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     assert!(result.contains("Article A"));
@@ -364,6 +367,7 @@ fn test_generate_children_folders_before_articles() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     let folder_pos = result.find("Tutorials").expect("Should contain Tutorials");
@@ -406,6 +410,7 @@ fn test_generate_children_folder_sorted_by_latest_date() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     let pos_a = result.find("Folder A").unwrap();
@@ -471,6 +476,7 @@ fn test_generate_children_pre_sorted_card_style() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should use summary rendering — identified by `data-layout="list"`
@@ -523,6 +529,7 @@ fn test_generate_children_pre_sorted_preserves_order() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     let pos_older = result
@@ -574,6 +581,7 @@ fn test_generate_children_summary_has_divider_between_folders_and_articles() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should have a divider between folder and article sections
@@ -617,6 +625,7 @@ fn test_generate_children_summary_no_divider_when_only_articles() {
         None,
         true,
         false,
+        &Default::default(),
     );
     assert!(
         !result.contains("moss-child-section-divider"),
@@ -657,6 +666,7 @@ fn test_year_group_triggered_by_multi_year() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should contain moss-cards-minimal-year-group sections
@@ -713,6 +723,7 @@ fn test_no_year_group_for_single_year() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should NOT contain moss-cards-minimal-year-group
@@ -753,6 +764,7 @@ fn test_year_group_with_summary_style() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should contain moss-cards-minimal-year-group--summary sections for ALL year groups (2025 and 2016)
@@ -807,7 +819,7 @@ fn resolve_children_config_covers_the_two_by_two() {
     // all is an index of bare labels, not an archive, and "summary" laid it
     // out one-per-row (56 author names, ~2,400px of scroll on the reference
     // vault). It now selects "grid", whose coverless state site.css styles
-    // as a roster. docs/archive/2026-09-06-authors-index-design-decision.md
+    // as a roster.
     let bare_a = make_test_doc("Topic A", "topics/a/index.html");
     let bare_b = make_test_doc("Topic B", "topics/b/index.html");
 
@@ -857,7 +869,7 @@ fn test_resolve_children_config_mixed_date_presence_uses_list() {
 }
 
 #[test]
-fn test_generate_children_strips_markdown_from_frontmatter_description() {
+fn test_generate_children_renders_frontmatter_description_as_safe_inline_html() {
     let mut doc = make_test_doc("Article", "blog/article/index.html");
     doc.date = Some("2025-01-15".to_string());
     doc.description = Some("A **bold** claim about [something](https://example.com)".to_string());
@@ -879,29 +891,33 @@ fn test_generate_children_strips_markdown_from_frontmatter_description() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
-    // Markdown syntax should be stripped from the description
+    // A card is a reader-facing HTML surface: markdown renders as real markup
+    // (`render_description_html_in_link`), not plain text with the syntax
+    // deleted — the raw `**`/`[...](...)` source syntax itself must not
+    // survive either way. The summary card is itself an `<a>`, so the link
+    // keeps its words and loses its `<a>` (no nested anchors).
     assert!(
         !result.contains("**"),
-        "Should strip bold markdown: {}",
+        "Should not leak raw bold markdown syntax: {}",
         result
     );
     assert!(
         !result.contains("[something]"),
-        "Should strip link markdown: {}",
+        "Should not leak raw link markdown syntax: {}",
         result
     );
-    assert!(!result.contains("]("), "Should strip link URL: {}", result);
     assert!(
-        result.contains("A bold claim about something"),
-        "Should contain plain text description: {}",
+        result.contains("A <strong>bold</strong> claim about something"),
+        "Should render as safe inline HTML: {}",
         result
     );
 }
 
 #[test]
-fn test_generate_children_strips_markdown_from_content_extracted_description() {
+fn test_generate_children_renders_content_extracted_description_as_safe_inline_html() {
     let mut doc = make_test_doc("Article", "blog/article/index.html");
     doc.date = Some("2025-01-15".to_string());
     // No frontmatter description — will be extracted from content
@@ -924,18 +940,58 @@ fn test_generate_children_strips_markdown_from_content_extracted_description() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
-    // Content-extracted descriptions should also be stripped (already works)
+    // Content-extracted descriptions get the same safe-HTML rendering as an
+    // explicit `description:` (same card, same `render_description_html_in_link`).
     assert!(
         !result.contains("**"),
-        "Should strip bold markdown: {}",
+        "Should not leak raw bold markdown syntax: {}",
         result
     );
     assert!(
-        result.contains("This has bold and a link in it"),
-        "Should contain plain text description: {}",
+        result.contains("This has <strong>bold</strong> and a link in it."),
+        "Should render as safe inline HTML: {}",
         result
+    );
+}
+
+#[test]
+fn card_description_renders_markdown_and_never_nests_an_anchor_while_meta_stays_plain() {
+    let src = "*emph* **bold** `code` [a link](https://example.com)";
+    let mut doc = make_test_doc("Article", "blog/article/index.html");
+    doc.date = Some("2025-01-15".to_string());
+    doc.description = Some(src.to_string());
+    let docs = vec![&doc];
+    let project = make_project();
+
+    for style in ["summary", "grid"] {
+        let html = generate_children(
+            &docs, &docs, &project, style, "none", Language::En, false,
+            &std::collections::HashMap::new(), None, None, None, true, false, &Default::default(),
+        );
+        assert!(
+            html.contains("<em>emph</em> <strong>bold</strong> <code>code</code> a link"),
+            "{style}: card must render the markdown: {html}"
+        );
+        assert!(!html.contains("example.com"), "{style}: link href must not reach a card: {html}");
+        assert!(!html.contains('*') && !html.contains('`'), "{style}: raw markdown leaked: {html}");
+    }
+
+    let inputs = crate::build::page::meta::DescriptionChainInputs {
+        page_description: Some(src),
+        page_hero_overlay_text: None,
+        page_content: "",
+        homepage_description: None,
+        homepage_hero_overlay_text: None,
+        homepage_content: None,
+        math: false,
+    };
+    assert_eq!(
+        crate::build::page::meta::resolve_page_description_with_fallbacks(&inputs).as_deref(),
+        Some("emph bold code a link"),
+        "meta/og description stays plain text"
     );
 }
 
@@ -966,6 +1022,7 @@ fn test_generate_children_grid_style_renders_collection_grid() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should render as data-layout="grid", not data-layout="list"
@@ -1033,6 +1090,7 @@ fn test_generate_children_grid_leaf_description_renders_below_title() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Description renders as a paragraph below the title...
@@ -1085,6 +1143,7 @@ fn test_generate_children_grid_folder_shows_count_not_description() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     assert!(
@@ -1125,6 +1184,7 @@ fn test_generate_children_grid_childless_folder_renders_description() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     assert!(
@@ -1136,7 +1196,7 @@ fn test_generate_children_grid_childless_folder_renders_description() {
 
 #[test]
 fn test_generate_children_grid_sorts_date_descending() {
-    // Regression test for #636: grid style was sorting by url_path (alphabetically)
+    // Regression test: grid style was sorting by url_path (alphabetically)
     // instead of by publication date descending, causing older articles to appear
     // first when their URL paths sorted earlier alphabetically.
 
@@ -1174,6 +1234,7 @@ fn test_generate_children_grid_sorts_date_descending() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Find the positions of each title in the output — date-desc = Gamma, Beta, Alpha

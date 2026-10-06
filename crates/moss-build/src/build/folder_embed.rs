@@ -28,16 +28,14 @@
 //! use the slugified form of `folder_id` because `ParsedDocument.url_path` is
 //! slugified. Source-side lookups (e.g. `project.html_files`) use the raw
 //! `folder_id` because those carry on-disk paths.
-//!
-//! See Task 16 in `docs/archive/2026-05-17-listing-sort-and-embeds-design.md`
-//! for the listing pipeline and
-//! `docs/archive/2026-05-18-folder-webapp-autoiframe.md` for the static-index
-//! branch.
+
+mod maps;
+use maps::place_map_with_placement;
 
 use std::path::Path;
 
 use moss_core::asset_snapshot::AssetSnapshot;
-use moss_core::resolve::embed_renderer::folder_list::{MARKER_END, MARKER_FOLDER_LIST};
+use moss_core::resolve::embed_renderer::folder_list::{marker_decode, MARKER_END, MARKER_FOLDER_LIST};
 use moss_core::resolve::embed_renderer::Sizing;
 use moss_core::resolve::title_params::TitleParams;
 use moss_core::sort::{ResolvedSort, SortAxis};
@@ -83,7 +81,25 @@ struct ParsedMarker<'a> {
     /// `children_more`) or directly by a body `![[/|more:Archive]]` embed —
     /// both flow through `FolderEmbedParams::more` (moss-core) into this one
     /// marker field, so the render side doesn't need to know which named it.
-    more: Option<&'a str>,
+    more: Option<String>,
+    /// The listing's own width / float / size, read off the embed pothole.
+    placement: moss_core::media::Placement,
+    /// Caption for the listing, rendered on the figure that wraps it.
+    caption: Option<String>,
+}
+
+fn warn_map_fallback_once(path: &str, reason: &str) {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let key = format!("{path}\0{reason}");
+    if crate::infra::warn_once::should_warn_once(
+        key,
+        WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new())),
+    ) {
+        crate::build::cli_output::log_warn_problem!(
+            "map embed '{path}' {reason}; rendering its ordinary listing"
+        );
+    }
 }
 
 /// Parse the pipe-encoded body of a marker. Returns None if `path` is missing.
@@ -102,6 +118,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "sort" => {
                     out.sort = match v.trim() {
                         "date" => Some(SortAxis::Date),
+                        "date-asc" => Some(SortAxis::DateAsc),
                         "weight" => Some(SortAxis::Weight),
                         "title" => Some(SortAxis::Title),
                         _ => None,
@@ -111,8 +128,18 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "depth" => out.depth = Some(v.trim().to_string()),
                 "group" => out.group = Some(v.trim().to_string()),
                 "size" => out.size = Some(v.trim().to_string()),
-                "more" => out.more = Some(v.trim()),
+                "more" => out.more = Some(marker_decode(v.trim())),
                 "covers" => out.covers = Some(v.trim()),
+                "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
+                "align" => {
+                    out.placement.align = match v.trim() {
+                        "left" => Some(moss_core::media::AlignSide::Left),
+                        "right" => Some(moss_core::media::AlignSide::Right),
+                        _ => None,
+                    }
+                }
+                "pct" => out.placement.size = Some(v.trim().to_string()),
+                "caption" => out.caption = Some(marker_decode(v.trim())),
                 _ => {}
             }
         } else if tok == "scope_default_tree" {
@@ -199,14 +226,14 @@ pub(crate) fn resolve_children_config(
             // into empty archive rows. Mostly-rich is an archive at any size, and
             // so is a rich page beside at most 3 bare ones; what summary cannot
             // survive is a screenful of them. Boundary pinned by
-            // bulk_style_tests. docs/archive/2026-09-07-listing-style-bulk-test.md
+            // bulk_style_tests.
             let rich = docs.iter().filter(|d| d.cover.is_some()
                 || crate::build::page::meta::resolve_page_description(
                     d.description.as_deref(), &d.content, math).is_some()).count();
             let has_rich = rich > 0 && (rich * 2 > docs.len() || docs.len() - rich <= 3);
             let any_has_date = docs.iter().any(|d| d.date.is_some());
             // Nothing at all is an INDEX of bare labels, not an archive, and "summary" lays
-            // those out one per row. docs/archive/2026-09-06-authors-index-design-decision.md
+            // those out one per row.
             let auto_value = match (has_rich, any_has_date) {
                 (false, false) => "grid".to_string(),
                 (true, _) => "summary".to_string(),
@@ -246,7 +273,7 @@ pub(crate) fn effective_group_for_axis(
     group_resolved: &moss_core::Resolved<String>,
     axis: moss_core::sort::SortAxis,
 ) -> String {
-    let axis_suppresses_auto_year = !matches!(axis, moss_core::sort::SortAxis::Date);
+    let axis_suppresses_auto_year = !axis.shows_date();
     if axis_suppresses_auto_year && !group_resolved.is_explicit() {
         "none".to_string()
     } else {
@@ -316,7 +343,7 @@ pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
 /// * `is_embed` - true only for a body `![[folder/|…]]` embed; stamps
 ///   `data-embed` on the `.moss-cards-container` built here so CSS can give
 ///   an embedded listing block rhythm distinct from the trailing automatic
-///   listing. §6 of docs/archive/2026-09-11-home-feed-cards-and-archive-link.md.
+///   listing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_children(
     folder_docs: &[&ParsedDocument],
@@ -332,6 +359,7 @@ pub(crate) fn generate_children(
     parent_sort_axis: Option<moss_core::sort::SortAxis>,
     math: bool,
     is_embed: bool,
+    placement: &moss_core::media::Placement,
 ) -> String {
     if folder_docs.is_empty() {
         return String::new();
@@ -399,80 +427,65 @@ pub(crate) fn generate_children(
     // preserves legacy test behavior.
     let parent_axis = parent_sort_axis.unwrap_or(moss_core::sort::SortAxis::Date);
 
+    // Unless the caller already ordered them (a non-Date axis or an explicit
+    // order), every style lists by date through the same comparator as the
+    // folder's series chain. It re-sorts here because a card's date can come
+    // from somewhere the chain doesn't look: a folder's newest article, a
+    // date in the filename, or the file's creation time.
+    let mut sorted: Vec<&ChildItemProps> = items.iter().collect();
+    if !skip_resort {
+        let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
+        sorted.sort_by(|a, b| {
+            // Undated children list first here on purpose: in practice they are
+            // the folder's subfolders, which lead its page. The series chain
+            // puts undated pages last, but it never contains subfolders, so the
+            // two disagree only over an undated article inside a series.
+            a.date_raw.is_some().cmp(&b.date_raw.is_some())
+                .then_with(|| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending))
+        });
+    }
+
     // Grid style: render as collection cards.
     // Bypasses folder/article separation and year grouping — card grids are flat.
     if style == "grid" {
         use crate::build::components::grid_card::render_list_with_typesetting;
 
-        // When the caller did not pre-sort (no explicit series order or
-        // weight ordering), sort cards by date descending — same policy as
-        // the list/summary branch (lines below). Use url_path as tiebreaker
-        // so siblings with equal dates produce deterministic output across
-        // platforms (scan_folder() walk order is not contractually stable).
-        let sorted_pairs: Vec<(&ChildItemProps, &&ParsedDocument)> = if skip_resort {
-            items.iter().zip(folder_docs.iter()).collect()
-        } else {
-            let mut pairs: Vec<(&ChildItemProps, &&ParsedDocument)> =
-                items.iter().zip(folder_docs.iter()).collect();
-            pairs.sort_by(|a, b| {
-                let (item_a, doc_a) = a;
-                let (item_b, doc_b) = b;
-                match (&item_b.date_raw, &item_a.date_raw) {
-                    (Some(bd), Some(ad)) => bd.cmp(ad).then_with(|| doc_a.url_path.cmp(&doc_b.url_path)),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    // Folders first (`child_count` is Some only for folders), then one label comparator.
-                    (None, None) => item_b.child_count.is_some().cmp(&item_a.child_count.is_some())
-                        .then_with(|| moss_core::sort::cmp_labels(&item_a.title, &item_b.title).then_with(|| doc_a.url_path.cmp(&doc_b.url_path))),
-                }
-            });
-            pairs
-        };
-        let cards: Vec<&ChildItemProps> = sorted_pairs.into_iter().map(|(item, _)| item).collect();
-
         return render_list_with_typesetting(
-            &cards,
+            &sorted,
             Some(std::path::Path::new(&project.root_path)),
             lang,
             typesetting,
             Some(media_lookup_ref),
             parent_axis,
             is_embed,
+            placement,
         );
     }
 
     // Render
     let mut html = String::new();
 
-    // Partition once, unconditionally: folders always render above articles.
-    // That is a layout decision independent of which axis sorted the
-    // children — `skip_resort` only decides the order WITHIN each partition
-    // (preserve the caller's order for a non-Date axis; date-desc otherwise).
+    // Partition once: folders render above articles. That is a layout
+    // decision independent of which axis sorted the children, with one
+    // exception — a folder whose own home page has a date, on a date-sorted
+    // (either direction), non-year-grouped listing, sorts by that date like
+    // any page instead of being hoisted above one that came before it; a
+    // chronology (a sequence of lectures, say) would otherwise read out of
+    // order the moment one of its entries was a folder. Year-grouped
+    // listings keep every folder above the year sections regardless — a
+    // dated folder landing inside a year bucket is a shape this fix doesn't
+    // reach, since bucketing assumes a leaf (`ArticleListItemProps` has no
+    // count slot to carry it with).
+    //
     // Previously this filter was written out three times, once per branch,
     // and skipped entirely for a plain skip_resort (Weight/Title/explicit
     // order) listing — so a manually-ordered folder lost its folder/article
-    // split, which is what a `weight:`-sorted `children_style: summary`
-    // folder (blakesnotebook.com's `Writings/`) hit.
-    let mut folders: Vec<&ChildItemProps> = items.iter().filter(|i| i.child_count.is_some()).collect();
-    let mut articles: Vec<&ChildItemProps> = items.iter().filter(|i| i.child_count.is_none()).collect();
-
-    if !skip_resort {
-        // Sort by date_raw descending, None last. Tiebreaker (url ascending)
-        // keeps order stable when multiple items share a date — without it,
-        // siblings with equal dates inherit the upstream iteration order of
-        // `all_docs`, which is not contractually deterministic and caused
-        // snapshot flakes (#542).
-        let sort_by_date_desc = |a: &&ChildItemProps, b: &&ChildItemProps| -> std::cmp::Ordering {
-            match (&b.date_raw, &a.date_raw) {
-                (Some(bd), Some(ad)) => bd.cmp(ad).then_with(|| a.url.cmp(&b.url)),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => moss_core::sort::cmp_labels(&a.title, &b.title).then_with(|| a.url.cmp(&b.url)),
-            }
-        };
-        folders.sort_by(sort_by_date_desc);
-        articles.sort_by(sort_by_date_desc);
-    }
+    // split, which is what a `children_style: summary` folder of writings,
+    // ordered by `weight:` and holding a subfolder or two, hit.
+    let interleave_dated_folders = group != "year" && parent_axis.shows_date();
+    let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) = sorted
+        .into_iter()
+        .partition(|i| i.child_count.is_some() && !(interleave_dated_folders && i.date_display.is_some()));
 
     // Folders always render flat, regardless of group setting.
     for folder in &folders {
@@ -534,8 +547,9 @@ pub(crate) fn generate_children(
                 .collect();
             html.push_str(&sections.join("\n"));
         } else {
-            // Date axis: `render_year_grouped_list` re-sorts (title
-            // tiebreak on equal dates) and buckets in one pass.
+            // Date axis: `render_year_grouped_list` re-sorts (url-path
+            // tiebreak on equal dates, as the series chain) and buckets in
+            // one pass.
             let article_props: Vec<ArticleListItemProps> = articles
                 .iter()
                 .map(|item| ArticleListItemProps {
@@ -543,9 +557,12 @@ pub(crate) fn generate_children(
                     date_raw: item.date_raw.clone(),
                     url: item.url.clone(),
                     title: item.title.clone(),
+                    url_path: item.url_path.clone(),
+                    place: item.place.clone(),
                 })
                 .collect();
-            html.push_str(&components::render_year_grouped_list(&article_props, true, lang, typesetting));
+            let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
+            html.push_str(&components::render_year_grouped_list(&article_props, true, lang, typesetting, ascending));
         }
     } else {
         for article in &articles {
@@ -563,9 +580,9 @@ pub(crate) fn generate_children(
     // the default CSS doesn't style it (summary styling rides on
     // `.moss-cards[data-layout="list"]` and `.moss-card-description`
     // visibility, both of which are still emitted), and its presence
-    // breaks themes that inherited the pre-v1 vocabulary (e.g. SoCiviC's
-    // `.moss/theme/style.css:214` hides anything tagged with the class,
-    // erasing the entire listing).
+    // breaks themes that inherited the pre-v1 vocabulary (one site theme's
+    // `.moss/theme/style.css` hid anything tagged with the class, erasing the
+    // entire listing).
     //
     // `list` is the compact date+title index: one-line `[date] [title]` rows
     // (year-grouped when dated) styled by the item CSS keyed off
@@ -576,7 +593,7 @@ pub(crate) fn generate_children(
     // render through `child_summary` and don't depend on the minimal item CSS.
     // (Grid returns earlier with its own data-layout="grid".)
     let data_layout = if style != "summary" { "minimal" } else { "list" };
-    components::cards_container(data_layout, is_embed, html.trim())
+    components::cards_container(data_layout, is_embed, placement, html.trim())
 }
 
 /// Bucket articles by year using find-or-append: one section per year, in
@@ -631,6 +648,8 @@ fn render_minimal_year_section(
                 date_raw: a.date_raw.clone(),
                 url: a.url.clone(),
                 title: a.title.clone(),
+                url_path: a.url_path.clone(),
+                place: a.place.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
         })
@@ -660,7 +679,7 @@ fn render_minimal_year_section(
 /// markers reads `&documents` to find the target folder and its children, so
 /// the body being rewritten is taken OUT of the vec for the duration and put
 /// back after. Both shapes of that body move together — `html_content` is
-/// `body_plan` flattened (ADR-034), and the render phase reads the plan, so
+/// `body_plan` flattened, and the render phase reads the plan, so
 /// leaving either one behind would silently drop the expansion.
 ///
 /// `media_lookup` is the caller's already-built `MediaDimensionLookup` — the
@@ -670,13 +689,26 @@ fn render_minimal_year_section(
 /// every image and video's dimensions/color/LQIP on EVERY build this
 /// function ran at all, regardless of whether any listing actually changed —
 /// corpus-scaled work identical in shape to `page_map`/`external_url_map`'s.
-/// See docs/archive/2026-08-20-rebuild-loop-incrementality.md.
 pub fn expand_markers_in_documents(
     documents: &mut [ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &std::collections::HashMap<String, String>,
     math: bool,
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+    site_typesetting: Option<&str>,
+) {
+    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn expand_markers_in_documents_with_place_maps(
+    documents: &mut [ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &std::collections::HashMap<String, String>,
+    math: bool,
+    media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+    site_typesetting: Option<&str>,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
 ) {
     let has_marker = |d: &ParsedDocument| d.html_content.contains(MARKER_FOLDER_LIST);
     if !documents.iter().any(has_marker) {
@@ -690,13 +722,20 @@ pub fn expand_markers_in_documents(
             .source_path
             .clone()
             .unwrap_or_else(|| documents[i].url_path.clone());
+        documents[i].has_own_map_embed = maps::has_own_embed(&documents[i].html_content, &from);
         let lang = documents[i].lang; // hosting page's language, not site default
-        let typesetting = documents[i].typesetting.clone();
+        let typesetting = crate::build::render::config::effective_typesetting(
+            documents[i].typesetting.as_deref(),
+            site_typesetting,
+        )
+        .map(str::to_owned);
         let mut plan = documents[i].body_plan.take();
         // `tag_embed: true` — every marker this scan finds came from a
         // literal body `![[folder/|…]]`, never from `synthesize_children_marker`
         // (that path calls `resolve_markers` directly on a lone marker, before
         // this pass ever runs; see `resolve_markers_impl`'s doc comment).
+        // Body segments and grid cells share one SVG identity sequence per page.
+        let ordinal = std::cell::Cell::new(0);
         let expand = |html: &str| {
             resolve_markers_impl(
                 html,
@@ -709,6 +748,8 @@ pub fn expand_markers_in_documents(
                 Some(media_lookup),
                 math,
                 true,
+                place_maps,
+                &ordinal,
             )
         };
         let resolved = match &mut plan {
@@ -743,6 +784,25 @@ pub fn resolve_markers(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
 ) -> String {
+    resolve_markers_with_place_maps(
+        html, from_md_path, all_docs, project, dir_overrides, site_lang,
+        typesetting, media_lookup, math, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_markers_with_place_maps(
+    html: &str,
+    from_md_path: &str,
+    all_docs: &[ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &std::collections::HashMap<String, String>,
+    site_lang: crate::i18n::Language,
+    typesetting: Option<&str>,
+    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+    math: bool,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+) -> String {
     resolve_markers_impl(
         html,
         from_md_path,
@@ -754,18 +814,19 @@ pub fn resolve_markers(
         media_lookup,
         math,
         false,
+        place_maps,
+        &std::cell::Cell::new(0),
     )
 }
 
 /// Shared implementation behind [`resolve_markers`]. `is_embed` threads to
 /// [`render_one`]/[`generate_children`], which stamp `data-embed` at the
 /// point the container is first built (never by re-scanning emitted HTML —
-/// ratchet row `(p)`/ADR-034), distinguishing a body `![[folder/|…]]` embed
+/// ratchet row `(p)`), distinguishing a body `![[folder/|…]]` embed
 /// from the frontmatter listing `synthesize_children_marker` produces, since
 /// both share this same marker format and `render_one`. Only
 /// [`expand_markers_in_documents`] passes `true`; `resolve_markers` always
-/// passes `false`, so its own callers are unaffected. §6 of
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md.
+/// passes `false`, so its own callers are unaffected.
 #[allow(clippy::too_many_arguments)]
 fn resolve_markers_impl(
     html: &str,
@@ -778,6 +839,8 @@ fn resolve_markers_impl(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     is_embed: bool,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    ordinal: &std::cell::Cell<usize>,
 ) -> String {
     if !html.contains(MARKER_FOLDER_LIST) {
         return html.to_string();
@@ -799,9 +862,12 @@ fn resolve_markers_impl(
             break;
         };
 
+        let embed_ordinal = ordinal.get();
+        ordinal.set(embed_ordinal + 1);
         let rendered = match parse_marker_body(body) {
             Some(parsed) => render_one(
                 &parsed,
+                embed_ordinal,
                 from_md_path,
                 all_docs,
                 project,
@@ -811,6 +877,7 @@ fn resolve_markers_impl(
                 media_lookup,
                 math,
                 is_embed,
+                place_maps,
             ),
             None => format!(
                 r#"<div class="moss-embed-missing">Invalid folder-embed marker: {}</div>"#,
@@ -884,7 +951,7 @@ fn try_render_folder_index_iframe(
     } else {
         format!("{}/{}", folder_id, index_name)
     };
-    // Folder-as-iframe runs in src-tauri's build pipeline outside the
+    // Folder-as-iframe runs in the desktop app's build pipeline outside the
     // markdown emission path (no pulldown-cmark, no Stage-2 dispatcher).
     // Call the canonical Stage 2 synthesizer directly. Folder embeds carry
     // a `|size` token (e.g. `![[/app/|80%]]`) which we translate into the
@@ -909,7 +976,12 @@ fn try_render_folder_index_iframe(
         }
     }
     let assets = AssetSnapshot::new();
-    let html = moss_core::render::iframe::synthesize_iframe_html(&params, &url, &assets);
+    let html = moss_core::render::iframe::synthesize_iframe_html(
+        &params,
+        &moss_core::media::Placement::default(),
+        &url,
+        &assets,
+    );
 
     // Apply the pretty-URL `../` adjustment if the embedding page is
     // pretty-URL-wrapped (non-index). See doc-comment above.
@@ -960,10 +1032,10 @@ fn is_index_source(from_path: &str, all_docs: &[ParsedDocument]) -> bool {
 ///
 /// Three consumers: `render_one` (the marker path), the synthetic
 /// folder-index loop in `render/blocking.rs`, and the listing-group digest in
-/// `render/incremental/listing.rs`. Before moss#968 Stage 1b the blocking loop
-/// carried an inlined second copy — so "one selector, therefore no drift" was
-/// false, and ADR-044 rule 3 (the digest honours every rule the renderer
-/// honours, structurally) could not hold.
+/// `render/incremental/listing.rs`. The blocking loop used to
+/// carry an inlined second copy — so "one selector, therefore no drift" was
+/// false, and the rule that the digest honours every rule the renderer
+/// honours, structurally, could not hold.
 pub(crate) fn select_children_by_slug<'a>(
     folder_id_slug: &str,
     is_flatten: bool,
@@ -995,7 +1067,7 @@ pub(crate) fn select_children_by_slug<'a>(
             }
             // Folder embeds publish a list of articles — `is_listable`
             // covers draft/slot_only in one shot
-            // (PR7b/moss#599 routed slot files through this path).
+            // (PR7b routed slot files through this path).
             if !d.is_listable() {
                 return false;
             }
@@ -1003,8 +1075,7 @@ pub(crate) fn select_children_by_slug<'a>(
             // tree. On a multilingual site (gated by `has_language_trees`), drop docs
             // under any language-prefix folder (`en/`, …) so the default-language home
             // never lists other-language articles. Single-language sites: gate is off,
-            // so this is a no-op. Location model — see
-            // docs/archive/2026-06-06-multilingual-children-scoping-design.md.
+            // so this is a no-op.
             // Set by synthesize_children_marker for homepage default-mode only.
             if scope_default_tree
                 && project.has_language_trees
@@ -1047,6 +1118,12 @@ pub(crate) fn select_children_by_slug<'a>(
         .collect()
 }
 
+/// A home's listing folder (`""` root, `en` for `en/index.html`) and whether
+/// the root-home defaults apply; shared by render and incremental group keys.
+pub(crate) fn home_scope(url_path: &str) -> (&str, bool) {
+    (moss_core::home::lang_tree_prefix(url_path).unwrap_or(""), url_path == "index.html")
+}
+
 /// Render a single resolved marker. Falls back to a `moss-embed-missing` div
 /// on lookup failure. `is_embed` — see [`resolve_markers_impl`] — passes
 /// straight through to [`generate_children`], which is where it actually
@@ -1054,6 +1131,7 @@ pub(crate) fn select_children_by_slug<'a>(
 #[allow(clippy::too_many_arguments)]
 fn render_one(
     parsed: &ParsedMarker<'_>,
+    ordinal: usize,
     from_md_path: &str,
     all_docs: &[ParsedDocument],
     project: &ProjectStructure,
@@ -1063,6 +1141,7 @@ fn render_one(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     is_embed: bool,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
 ) -> String {
     // Prefer the marker's `from=` (the original markdown source); the
     // page-level `from_md_path` is a safe fallback when older markers omit it.
@@ -1071,6 +1150,9 @@ fn render_one(
     } else {
         parsed.from
     };
+    if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
+        return maps::render(parsed, ordinal, all_docs, place_maps);
+    }
     let folder_id = resolve_folder_id(parsed.path, from);
     // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
     // while `ParsedDocument.url_path` is slugified — lowercased and
@@ -1091,7 +1173,7 @@ fn render_one(
         docs: all_docs,
         html_files: &project.html_files,
     };
-    let no_assets = crate::build::folder_index::NoAssetIndex;
+    let no_assets = moss_core::content_graph::ContentGraph::from_paths(&[]);
     let no_urls = crate::build::folder_index::NoUrlIndex;
     let ctx = moss_core::resolve::reference::ReferenceContext {
         assets: &no_assets,
@@ -1215,6 +1297,20 @@ fn render_one(
         return String::new();
     }
 
+    if parsed.style.as_deref() == Some("map") {
+        if let Some(map) = place_maps.filter(|map| map.is_place_key(&folder_id_slug)) {
+            // A `style:map` embed is a listing card — always `route: false`,
+            // same as any other aggregate/listing surface (rule: listing
+            // cards never draw a route).
+            if let Some(svg) = map.render_term_map(&folder_id_slug, folder_docs.iter().copied(), from, ordinal, false, true) {
+                return place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref());
+            }
+            warn_map_fallback_once(parsed.path, "has no coordinate-bearing places");
+        } else {
+            warn_map_fallback_once(parsed.path, "is not a place term");
+        }
+    }
+
     // Resolve sort: flatten uses resolve_for_flatten; direct uses resolve_for_direct_children.
     // Per-embed sort= override wins over both. A pseudo-folder has no target
     // doc to carry sort intent, so it gets the same default a folder with no
@@ -1242,6 +1338,7 @@ fn render_one(
     let style_override: Option<moss_core::Resolved<String>> = parsed
         .style
         .as_ref()
+        .filter(|style| style.as_str() != "map")
         .map(|s| moss_core::Resolved::frontmatter(s.clone()));
     let group_override: Option<moss_core::Resolved<String>> = parsed
         .group
@@ -1259,8 +1356,7 @@ fn render_one(
     // re-sort the children date-descending below and discard the order). The
     // upstream `sort_by_resolved` already placed listed children in the explicit
     // order, so render that order verbatim — no date re-sort, no year grouping.
-    let skip_resort = !matches!(resolved.axis, moss_core::sort::SortAxis::Date)
-        || resolved.explicit_order.is_some();
+    let skip_resort = !resolved.axis.shows_date() || resolved.explicit_order.is_some();
     let effective_group = effective_group_for_axis(&group_resolved, resolved.axis);
 
     let sorted = moss_core::sort::sort_by_resolved(&folder_docs, &resolved);
@@ -1272,22 +1368,60 @@ fn render_one(
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
 
+    // With a caption, the whole placement — width, float AND size — moves
+    // out to the figure wrapping the listing (the width escape is a
+    // direct-child selector, and the figure has no width of its own to size
+    // itself by otherwise); without one the container wears it itself.
+    let container_placement = match parsed.caption {
+        Some(_) => moss_core::media::Placement::default(),
+        None => parsed.placement.clone(),
+    };
+
     // Dispatch rendering based on style.
-    let listing = generate_children(
-        &limited,
-        &all_docs_refs,
-        project,
-        &children_style,
-        &effective_group,
-        site_lang,
-        skip_resort,
-        dir_overrides,
-        typesetting,
-        media_lookup,
-        Some(resolved.presentation_axis()),
-        math,
-        is_embed,
-    );
+    let render_group = |docs: &[&ParsedDocument]| {
+        generate_children(
+            docs,
+            &all_docs_refs,
+            project,
+            &children_style,
+            &effective_group,
+            site_lang,
+            skip_resort,
+            dir_overrides,
+            typesetting,
+            media_lookup,
+            Some(resolved.presentation_axis()),
+            math,
+            is_embed,
+            &container_placement,
+        )
+    };
+    // A page that won a term claim splits its listing by the field each
+    // member was named through — one group under "Author", another under
+    // "Editor". The split is read off the claiming page, where
+    // `build::terms::derive_terms` resolved it; this file has no `TermIndex`
+    // and re-deriving it here is exactly the drift that would let the
+    // claimed and generated pages of one term disagree. `folder_id_slug` is
+    // the term key on this path, so the claimant is the one document whose
+    // `term_listing` names it. Every other listing — and a term whose
+    // members all came through one field — gets `None` and renders as one
+    // unlabelled listing, byte for byte as before.
+    let claiming_doc =
+        all_docs.iter().find(|d| d.term_listing.as_deref() == Some(folder_id_slug.as_str()));
+    let term_sections = claiming_doc.and_then(|d| d.term_sections.as_deref());
+    let listing =
+        crate::build::terms::render_term_sections(term_sections, &limited, site_lang, render_group)
+            .unwrap_or_else(|| render_group(&limited));
+    // The claimed half of the same children chrome the generated
+    // page gets in `render/blocking.rs`, read off the claiming document
+    // beside `term_sections` above — `None` (rendered empty) for every
+    // non-place term, since `derive_terms` only ever sets this field
+    // from a place-typed kind's resolved data.
+    let place_children_html = claiming_doc
+        .and_then(|d| d.place_children.as_deref())
+        .and_then(crate::build::components::place_hierarchy::render_children)
+        .unwrap_or_default();
+    let listing = format!("{}{}", listing, place_children_html);
 
     // Suppress the More link when the embed is on the folder's own index page
     // (self-referential listing). A "More →" link pointing to the page the
@@ -1321,7 +1455,7 @@ fn render_one(
         .with_dir_overrides(dir_overrides.clone());
     let more_link: Option<(String, String)> = if !truncated {
         None
-    } else if let Some(more_ref) = parsed.more {
+    } else if let Some(more_ref) = parsed.more.as_deref() {
         match resolve_more_link_target(more_ref, all_docs) {
             Some(doc) => {
                 let stem = doc.url_path.trim_end_matches("index.html").trim_end_matches('/');
@@ -1353,12 +1487,20 @@ fn render_one(
         None
     };
 
-    match more_link {
+    let listing = match more_link {
         Some((href, text)) => format!(
             "{}\n<p class=\"moss-embed-more\"><a href=\"{}\">{}</a></p>",
             listing,
             html_escape(&href),
             text,
+        ),
+        None => listing,
+    };
+    match parsed.caption.as_deref() {
+        Some(caption) => moss_core::render::placement::wrap_embed_with_caption(
+            &listing,
+            &parsed.placement,
+            caption,
         ),
         None => listing,
     }
@@ -1403,34 +1545,22 @@ fn resolve_more_link_target<'a>(
 ///
 /// `from_md_path` — source markdown path for relative path resolution in render_one.
 ///
-/// `is_homepage` — true for the homepage path: applies depth="all" default and
-/// enables the lang-tree + nav-item filters. False for folder-index pages.
+/// Only the root home lists the whole default-language tree (depth "all"),
+/// so it alone drops other languages' folders and top-level nav-item folders
+/// (the nav bar already shows those), unless `children_source` names another folder on purpose.
+/// Any other host, a language home included, lists its own `folder_path` at
+/// depth "direct", unfiltered: scoping by the root's rules would list the wrong tree.
 pub fn synthesize_children_marker(
     doc: &crate::build::types::ParsedDocument,
     folder_path: &str,
     from_md_path: &str,
-    is_homepage: bool,
 ) -> String {
     use moss_core::resolve::embed_renderer::folder_list::{FolderEmbedParams, emit_marker};
 
-    // Homepage defaults depth to "all" when unset; folder index defaults to "direct".
-    let depth = doc.children_depth.clone().or_else(|| {
-        if is_homepage {
-            Some("all".to_string())
-        } else {
-            None // render_one defaults to "direct" when absent
-        }
-    });
+    let is_root_home = home_scope(&doc.url_path).1;
+    let depth = doc.children_depth.clone().or_else(|| is_root_home.then(|| "all".to_string()));
 
-    // Homepage default-mode (the root home listing its own tree): scope to the
-    // default language tree and exclude top-level nav-item folders. Only the root
-    // home is `is_homepage` (other folder homes go through the folder-index path and
-    // are scoped by their folder prefix), so its tree is always the default tree.
-    // Cross-folder mode (children_source set) explicitly targets another folder —
-    // user intent overrides these filters.
-    let has_children_source = doc.children_source.is_some();
-    let homepage_default_mode = is_homepage && !has_children_source;
-
+    let root_default_mode = is_root_home && doc.children_source.is_none();
     let params = FolderEmbedParams {
         limit: doc.children_limit.map(|n| n as usize),
         sort: None,  // sort comes from target doc's direct_children_sort cache
@@ -1444,8 +1574,12 @@ pub fn synthesize_children_marker(
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
-        scope_default_tree: homepage_default_mode,
-        exclude_nav: homepage_default_mode,
+        scope_default_tree: root_default_mode,
+        exclude_nav: root_default_mode,
+        // A frontmatter listing has no pothole to read placement or a
+        // caption out of; both are body-embed vocabulary.
+        placement: Default::default(),
+        caption: None,
     };
     // Always emit an absolute path (leading /) so resolve_folder_id doesn't
     // interpret the path as relative to from_md_path's parent directory.

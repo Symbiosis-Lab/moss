@@ -260,7 +260,7 @@ fn extracts_quadruple_colon_buttons() {
 
 #[test]
 fn extracts_grid_with_nested_buttons_via_arity() {
-    // SoCiviC pattern: `::::buttons` (4-colon) nested inside `:::grid`
+    // A common site pattern: `::::buttons` (4-colon) nested inside `:::grid`
     // (3-colon). Phase 4 PR4.5 (2026-05-28) promoted cells from raw
     // markdown strings to `Vec<Vec<Block>>`. The inner `::::buttons`
     // now extracts into a typed `Block::Shortcode(Buttons)` inside the
@@ -268,7 +268,7 @@ fn extracts_grid_with_nested_buttons_via_arity() {
     // in `parse_cell_to_blocks`), not at render time.
     let md = ":::grid 2\n::::buttons\n[Tickets](go/)\n::::\n+++\nfooter cell\n:::\n";
     let result = extract_shortcodes(md);
-    // A HIGHER-arity inner is supported nesting — the #1014 warning
+    // A HIGHER-arity inner is supported nesting — the warning
     // must stay silent here.
     assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     assert_eq!(result.extracted.len(), 1);
@@ -556,6 +556,50 @@ fn extracts_gallery_with_columns_arg() {
         Shortcode::Gallery(args) => assert_eq!(args.columns, Some(4)),
         _ => panic!("expected Gallery"),
     }
+    assert!(result.warnings.is_empty(), "positional form should not warn: {:?}", result.warnings);
+}
+
+// ---- Gallery `per-line` (renamed from `cols`) ----
+
+#[test]
+fn gallery_per_line_attr_sets_columns() {
+    let md = ":::gallery {per-line=3}\na.jpg\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(g) => assert_eq!(g.columns, Some(3)),
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(result.warnings.is_empty(), "per-line= should not warn: {:?}", result.warnings);
+}
+
+#[test]
+fn gallery_cols_alias_still_sets_columns_and_warns() {
+    let md = ":::gallery {cols=3}\na.jpg\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(g) => assert_eq!(g.columns, Some(3)),
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        "expected a cols= deprecation warning, got {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn gallery_per_line_wins_over_cols_but_cols_still_warns() {
+    let md = ":::gallery {cols=2 per-line=5}\na.jpg\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(g) => assert_eq!(g.columns, Some(5), "per-line wins"),
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        "cols= was still written, so it should still warn: {:?}",
+        result.warnings
+    );
 }
 
 #[test]
@@ -966,7 +1010,7 @@ fn nested_grid_via_arity_keeps_the_inner_grids_cells_inside_it() {
     // outer body on any `+++` it saw, so a one-cell outer grid came out
     // with two cells, each holding half of the inner block's source.
     // Nothing warned — the page built and looked plausible. Unlike the
-    // same-arity case (#1014) there is no ambiguity here about what the
+    // same-arity case there is no ambiguity here about what the
     // author meant, so the fix is to parse it, not to warn about it.
     let md = "::::grid 1\nOuter cell content\n\n:::grid 2\ninner a\n+++\ninner b\n:::\n::::\n";
     let result = extract_shortcodes(md);
@@ -1009,7 +1053,7 @@ fn nested_non_grid_block_keeps_its_own_dividers() {
     // `:::buttons` splits on `+++` too. Inside a wider grid, those
     // dividers are the buttons block's, not the grid's.
     //
-    // Also covers the SoCiviC nesting shape end to end: a cell whose
+    // Also covers that nesting shape end to end: a cell whose
     // content is a nested block comes back as a typed
     // `Block::Shortcode(Buttons)`, parsed by the recursive
     // `parse_cell_to_blocks` call, not left as literal text.
@@ -1059,7 +1103,7 @@ fn divider_inside_a_code_fence_does_not_split_a_grid_cell() {
 
 #[test]
 fn extracts_grid_with_compound_link_cell_typed_as_link_card() {
-    // SoCiviC pattern: a cell whose entire body is a single markdown
+    // Poster-card pattern: a cell whose entire body is a single markdown
     // link wrapping multiple block children. Phase 4 PR4.5
     // (2026-05-28) detects this at the cell-string level (before
     // pulldown-cmark, which can't represent `[heading](url)`) and
@@ -1100,7 +1144,7 @@ fn extracts_grid_with_compound_link_cell_typed_as_link_card() {
 
 #[test]
 fn compound_link_image_cell_with_caption_paragraphs_becomes_card_plus_siblings() {
-    // Real-world shape from harbor's "翻譯 · 得獎作品" grid: an
+    // Real-world shape from riverbend's "翻譯 · 得獎作品" grid: an
     // image wrapped in a link, followed (after a blank line) by caption
     // paragraphs. Before this fix, `detect_compound_link` required the
     // cell to literally END in `)`, so this cell fell through to the
@@ -1151,7 +1195,7 @@ fn compound_link_wikilink_image_cell_with_linked_caption_still_becomes_card_plus
     // A caption that itself contains a link (e.g. a translator credit)
     // must NOT fall back to the plain parser — the cell would render as an
     // ordinary paragraph and lose its card chrome (see the doc comment on
-    // `detect_compound_link` and moss#928-adjacent).
+    // `detect_compound_link`).
     let md = ":::grid 1\n\
               [![[poster.png]]](/awards/one/)\n\n\
               Translated by [Yo-Ling Chen](/people/yo-ling-chen/).\n\
@@ -1235,7 +1279,7 @@ fn compound_link_text_cell_with_trailing_caption_stays_uncarded() {
 
 #[test]
 fn compound_link_markdown_image_cell_with_caption_stays_uncarded() {
-    // moss#928-adjacent review finding: an ORDINARY markdown image link
+    // A related review finding: an ORDINARY markdown image link
     // (not a wikilink embed) followed by a caption must NOT become a
     // LinkCard — pulldown-cmark already parses `![alt](src)` fine on its
     // own, so this cell reaches the plain block parser as
@@ -1285,13 +1329,13 @@ fn toc_now_renders_as_unknown_shortcode() {
 
 #[test]
 fn extracts_hero_block_with_no_image() {
-    let md = ":::hero\n# A House of Daowu\n:::\n";
+    let md = ":::hero\n# A House of Paper\n:::\n";
     let result = extract_shortcodes(md);
     assert_eq!(result.extracted.len(), 1, "hero should be extracted");
     match &result.extracted[0].shortcode {
         Shortcode::Hero(args) => {
             assert!(args.image.is_none());
-            assert_eq!(args.overlay_text, "# A House of Daowu");
+            assert_eq!(args.overlay_text, "# A House of Paper");
         }
         other => panic!("expected Hero, got {other:?}"),
     }
@@ -1366,7 +1410,7 @@ fn extracts_hero_block_with_classes() {
 
 #[test]
 fn extracts_hero_block_with_directive_line_path() {
-    // Legacy syntax used by Yi-website and chps-site:
+    // Legacy syntax used by existing sites:
     // `:::hero ./path.jpg` (image path on the directive line, empty body).
     // Step 3 rewrites these blocks to `:::hero {image=./path.jpg}`,
     // but the typed extractor must keep producing the same Hero AST
@@ -1429,7 +1473,7 @@ fn nested_css_region_outer_closes_at_first_inner_close() {
     // (`::::{.outer}` containing `:::{.inner}`).
     //
     // This test pins the current behavior so a future regression
-    // surfaces. Since #1014 the author is also warned (the warning's
+    // surfaces. The author is also warned (the warning's
     // own wording is pinned below in the same-arity section).
     let md = ":::{.outer}\n:::{.inner}\nbody\n:::\n:::\n";
     let result = extract_shortcodes(md);
@@ -1492,7 +1536,7 @@ fn higher_arity_wrapper_recursively_extracts_typed_subscribe() {
 
 #[test]
 fn lower_arity_outer_wraps_higher_arity_typed_inner() {
-    // SoCiviC pattern: `:::{.support-band}` (arity 3) wraps
+    // A common site pattern: `:::{.support-band}` (arity 3) wraps
     // `::::buttons` (arity 4). The outer arity-3 closer at the end
     // closes the outer, so the inner arity-4 buttons block lives
     // intact inside the outer's body. Recursive extraction picks
@@ -1517,7 +1561,7 @@ fn lower_arity_outer_wraps_higher_arity_typed_inner() {
 
 #[test]
 fn lower_arity_outer_wraps_grid_with_buttons_in_cell() {
-    // SoCiviC index pattern: 3-colon `:::{.hero-split}` outer,
+    // A home-page pattern: 3-colon `:::{.hero-split}` outer,
     // 4-colon `::::grid 2 {.no-cards}` middle, 5-colon
     // `:::::buttons {.inverted}` innermost. The middle grid block
     // is the recursive-extraction target — its body in turn
@@ -1616,18 +1660,73 @@ fn grid_legacy_dash_emits_deprecation_warning() {
     assert!(result.warnings[0].contains("+++"));
 }
 
-// ---- Same-arity nesting warns (#1014) ----
+// ---- `per-line` (renamed from `cols`) ----
+
+#[test]
+fn grid_per_line_attr_sets_columns() {
+    let md = ":::grid {per-line=3}\ncell A\n+++\ncell B\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Grid(g) => assert_eq!(g.columns, 3),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+    assert!(result.warnings.is_empty(), "per-line= should not warn: {:?}", result.warnings);
+}
+
+#[test]
+fn grid_ratio_still_works_through_per_line() {
+    let md = ":::grid {per-line=1:2}\ncell A\n+++\ncell B\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => {
+            assert_eq!(g.columns, 2);
+            assert_eq!(g.ratio.as_deref(), Some("1:2"));
+        }
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_cols_alias_still_sets_columns_and_warns() {
+    let md = ":::grid {cols=3}\ncell A\n+++\ncell B\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Grid(g) => assert_eq!(g.columns, 3),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        "expected a cols= deprecation warning, got {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn grid_per_line_wins_over_cols_but_cols_still_warns() {
+    let md = ":::grid {cols=2 per-line=4}\ncell A\n+++\ncell B\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Grid(g) => assert_eq!(g.columns, 4, "per-line wins"),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        "cols= was still written, so it should still warn: {:?}",
+        result.warnings
+    );
+}
+
+// ---- Same-arity nesting warns ----
 //
 // A `:::` fence nested inside another `:::` fence steals the outer
 // block's closer: the outer ends early and the rest of it — dividers
 // included — spills into the prose as literal text. The page still
-// builds, so before #1014 nothing said a word. The parse is unchanged;
+// builds, so before this fix nothing said a word. The parse is unchanged;
 // these tests pin the diagnostic and, just as importantly, its silence
 // on documents that are fine.
 
 #[test]
 fn same_arity_nesting_inside_grid_warns_and_names_the_higher_arity_fix() {
-    // The #1014 reproduction. `:::grid 2` is closed by the nested
+    // The reproduction that motivated this fix. `:::grid 2` is closed by the nested
     // `::: {.some-class}` block's fence, so `+++` and `Cell two` land
     // outside the grid.
     let md = ":::grid 2\nCell one\n\n::: {.some-class}\nquiet text\n:::\n+++\nCell two\n:::\n";
@@ -1873,6 +1972,45 @@ fn hero_unknown_mobile_value_emits_warning() {
 }
 
 #[test]
+fn hero_align_end_attr_is_parsed() {
+    let md = ":::hero {image=hero.jpg align=end}\n# Title\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Hero(args) => {
+            assert_eq!(args.align.as_deref(), Some("end"));
+        }
+        other => panic!("expected Hero, got {other:?}"),
+    }
+}
+
+#[test]
+fn hero_without_align_attr_has_none() {
+    let md = ":::hero {image=hero.jpg}\n# Title\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Hero(args) => {
+            assert!(args.align.is_none());
+        }
+        other => panic!("expected Hero, got {other:?}"),
+    }
+}
+
+#[test]
+fn hero_unknown_align_value_emits_warning() {
+    let md = ":::hero {image=hero.jpg align=center}\n# Title\n:::\n";
+    let result = extract_shortcodes(md);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.contains("unrecognized") && w.contains("center")),
+        "expected warning for unknown align value, got: {:?}",
+        result.warnings,
+    );
+    assert_eq!(result.extracted.len(), 1);
+}
+
+#[test]
 fn placeholder_preserves_block_line_count_for_source_line_accuracy() {
     // A multi-line shortcode must collapse to a placeholder occupying the
     // SAME number of lines, so the post-extraction LineLookup stays line-
@@ -1939,6 +2077,85 @@ fn grid_without_width_flag_leaves_width_none() {
     match first_extracted(md) {
         Shortcode::Grid(g) => assert!(g.width.is_none()),
         other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+// ---- Grid `scroll` (horizontally scrolling row) ----
+
+#[test]
+fn grid_with_scroll_flag_sets_scroll_true() {
+    let md = ":::grid 3 {scroll}\ncell A\n+++\ncell B\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => assert!(g.scroll),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_without_scroll_flag_leaves_scroll_false() {
+    let md = ":::grid 3\ncell A\n+++\ncell B\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => assert!(!g.scroll),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_scroll_with_label_sets_both() {
+    let md = ":::grid 3 {scroll label=\"Related articles\"}\ncell A\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => {
+            assert!(g.scroll);
+            assert_eq!(g.label.as_deref(), Some("Related articles"));
+        }
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_label_without_scroll_still_parses() {
+    // `label` is an ordinary kv attr independent of `scroll`'s bare flag —
+    // parsing sets it either way. It is emission (grid_parts.rs) that only
+    // acts on it when `scroll` is also set.
+    let md = ":::grid 3 {label=\"Ignored\"}\ncell A\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => {
+            assert!(!g.scroll);
+            assert_eq!(g.label.as_deref(), Some("Ignored"));
+        }
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_with_summary_class_and_scroll_flag_parses_both() {
+    // Parsing keeps both facts; it is the BUILD-side `.summary` container
+    // swap (`apply_summary_grids`) that discards `scroll` by replacing the
+    // whole container. See `scroll_does_not_survive_the_summary_variant`
+    // in moss-build's grid_cells_tests.rs.
+    let md = ":::grid 3 {.summary scroll}\ncell\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => {
+            assert!(g.scroll);
+            assert_eq!(g.classes, "summary");
+        }
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn scroll_flag_on_gallery_is_recognized_but_inert() {
+    // `scroll` is a generic bare flag (attrs.rs), not grid-specific — any
+    // shortcode may write it without an `AttrError`. Gallery has no field
+    // to read it into, so parsing succeeds and nothing else about the
+    // parse changes.
+    let md = ":::gallery 3 {scroll}\nphoto.jpg\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Gallery(g) => {
+            assert_eq!(g.columns, Some(3));
+            assert!(g.classes.is_empty());
+        }
+        other => panic!("expected Gallery, got {other:?}"),
     }
 }
 
@@ -2116,7 +2333,7 @@ fn extracts_recent_end_to_end_with_sentinel() {
         .contains(&placeholder_for(&result.nonce, 0)));
 }
 
-// ── Inert regions: `:::` that is not live syntax (moss#903 bug 2) ──────
+// ── Inert regions: `:::` that is not live syntax ──────
 
 /// Parse + render the way the build does, so these tests pin the OUTPUT,
 /// not just the extraction bookkeeping.
@@ -2127,7 +2344,7 @@ fn render_markdown(md: &str) -> String {
 
 #[test]
 fn shortcode_inside_an_html_comment_is_not_extracted() {
-    // moss#903 bug 2, verbatim from the report: a harborweekly page
+    // Verbatim from a real regression report: a site
     // parked a gallery inside a TODO comment. The extractor knew about code
     // fences and nothing else, so it extracted the `:::gallery`, replaced
     // lines 2-4 of the comment with a sentinel, and left the comment's own
@@ -2375,16 +2592,16 @@ fn url_raw(u: &crate::ast::url::Url) -> &str {
 
 #[test]
 fn gallery_bare_paths_span_exactly() {
-    // The harbor shape: CJK directory-relative bare paths.
-    let src = ":::gallery 8 {.profiles}\n關於/頭像-李柏萱.png\n關於/頭像-李年.png\n:::\n";
+    // The riverbend shape: CJK directory-relative bare paths.
+    let src = ":::gallery 8 {.profiles}\n關於/頭像-李知安.png\n關於/頭像-李年.png\n:::\n";
     let s = spans(src);
     assert_eq!(s.len(), 2, "{s:?}");
-    assert_eq!(&src[s[0].value.clone()], "關於/頭像-李柏萱.png");
+    assert_eq!(&src[s[0].value.clone()], "關於/頭像-李知安.png");
     assert_eq!(&src[s[1].value.clone()], "關於/頭像-李年.png");
-    assert_eq!(s[0].path, "關於/頭像-李柏萱.png");
+    assert_eq!(s[0].path, "關於/頭像-李知安.png");
     assert_eq!(s[0].container, PathContainer::GalleryBody);
     // `outer` is the whole physical line including its terminator.
-    assert_eq!(&src[s[0].outer.clone()], "關於/頭像-李柏萱.png\n");
+    assert_eq!(&src[s[0].outer.clone()], "關於/頭像-李知安.png\n");
 }
 
 #[test]
@@ -2418,7 +2635,7 @@ fn gallery_prose_line_emits_no_span() {
     let s = spans(src);
     assert_eq!(s.len(), 1, "only the media line, got {s:?}");
     assert_eq!(s[0].path, "photo.jpg");
-    let g = parse_gallery_body("", "Just some prose here\nphoto.jpg");
+    let (g, _) = parse_gallery_body("", "Just some prose here\nphoto.jpg");
     assert_eq!(g.items.len(), 2, "the parser still yields both items");
 }
 
@@ -2591,7 +2808,7 @@ fn spans_agree_with_parsers() {
     ];
     for src in gallery_cases {
         let body: Vec<&str> = src.lines().skip(1).take_while(|l| l.trim() != ":::").collect();
-        let parsed = parse_gallery_body("", &body.join("\n"));
+        let (parsed, _) = parse_gallery_body("", &body.join("\n"));
         let want: Vec<String> = parsed
             .items
             .iter()

@@ -1,24 +1,35 @@
 //! Ship: turn a sealed manifest into a generation directory.
 //!
-//! See the module-level architecture section in `src-tauri/src/build.rs` for
-//! the stage/site model. This file owns everything between "the manifest is
+//! See the module-level architecture section in `build.rs` for the staging /
+//! generations model. This file owns everything between "the manifest is
 //! sealed" and "`current` points at a new generation":
 //!
 //! - the two post-seal passes that make the manifest and the disk agree —
-//!   `prune_orphaned_webp_before_ship` and `drop_absent_outputs`;
-//! - [`ship_phase`], which walks the sealed entries and derives each site/
-//!   file from its stage/ file (apply transform, or recreate a symlink);
+//!   `prune_orphaned_webp_before_ship` and `drop_absent_outputs`. Both act on
+//!   the MANIFEST only: staging is what the preview server is reading while
+//!   this runs, so nothing here unlinks from it (see `build::pipeline`'s
+//!   pre-render sweep);
+//! - [`ship_phase`], which walks the sealed entries and derives each generation
+//!   file from its staged bytes (apply transform, or recreate a symlink);
 //! - [`materialize_and_promote`], which runs the above into a fresh
-//!   generation dir and repoints `current`, and [`gc_old_generations`].
+//!   generation dir — seeded, where the platform can clone a directory, from
+//!   the last whole one, so only the entries that differ are written — or
+//!   finds it already whole on disk, and repoints `current`. Generation GC is
+//!   `store_gc`'s.
 //!
 //! The manifest is the input, not the directory: a file in staging that no
 //! entry names — a sync client's conflicted copy, a stale output from an
 //! earlier build — is not shipped and cannot reach the published site.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::build::manifest::SealedManifest;
+
+// Defined in `served_path` so `manifest` can ask them without depending on this
+// module, which depends on `manifest`; re-exported so callers keep saying
+// `ship::transform_for`.
+pub use crate::build::served_path::{transform_for, ShipTransform};
 
 // ---------------------------------------------------------------------------
 // Regex constants — the one definition. A second copy lived in
@@ -35,7 +46,7 @@ use crate::build::manifest::SealedManifest;
 /// longer produces, and deploy, which byte-verifies each upload against the
 /// manifest hash, refuses the whole publish. This constant is part of the cache
 /// key, so bumping it invalidates those records instead.
-pub const SHIP_TRANSFORM_REV: u32 = 1;
+pub const SHIP_TRANSFORM_REV: u32 = 3;
 
 /// Strips preview-only `data-source-*` attributes from HTML.
 /// Matches: data-source-line="N", data-source-range="N-M", data-source-fm="field", data-source-none.
@@ -45,54 +56,9 @@ static STRIP_SOURCE_LINE: LazyLock<regex::Regex> = LazyLock::new(|| {
 
 /// Strips the preview-only `data-moss-preview` attribute from `<body>`.
 static STRIP_PREVIEW_ATTR: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"\s+data-moss-preview"#).unwrap()
+    regex::Regex::new(r#"\s+data-moss-preview(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?(\s|>)"#)
+        .unwrap()
 });
-
-/// Strips `<!--moss:no-preview-->` and `<!--/moss:no-preview-->` comment
-/// markers from the shipped artifact. Content between the markers is kept
-/// (e.g. the analytics `<script>`) — only the marker comments are removed.
-/// The preview server strips both markers AND content via
-/// `strip_preview_only_scripts`; the ship path strips only the markers so
-/// the deployed artifact fires the analytics script normally.
-static STRIP_NO_PREVIEW_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"<!--/?moss:no-preview-->").unwrap()
-});
-
-// ---------------------------------------------------------------------------
-// ShipTransform
-// ---------------------------------------------------------------------------
-
-/// How a file should be transformed during the stage→site ship pass.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ShipTransform {
-    /// Copy the file byte-for-byte. Used for all non-HTML artifacts.
-    CopyAsIs,
-    /// Strip preview-only source-annotation attributes before writing to site.
-    /// Used for `.html` / `.htm` files.
-    StripPreviewAttrs,
-}
-
-// ---------------------------------------------------------------------------
-// Extension-based dispatch
-// ---------------------------------------------------------------------------
-
-/// Classify a relative path into the transform that the ship pass should apply.
-///
-/// It used to take an `annotations_present` flag, for a publish build that
-/// emitted no `data-source-*` attributes and could skip the regex. No such
-/// build exists: `emit_source_lines` (`pipeline.rs:1251`) is a literal `true`,
-/// so every caller passed `true` and the other arm was a no-op waiting to be
-/// wrong — it also skipped `STRIP_NO_PREVIEW_MARKER`, which is not
-/// annotation-dependent at all.
-///
-/// Public so tests can verify classification without running a full ship.
-pub fn transform_for(rel_path: &str) -> ShipTransform {
-    if rel_path.ends_with(".html") || rel_path.ends_with(".htm") {
-        ShipTransform::StripPreviewAttrs
-    } else {
-        ShipTransform::CopyAsIs
-    }
-}
 
 // ---------------------------------------------------------------------------
 // apply_transform
@@ -118,6 +84,12 @@ pub fn strip_source_annotations(html: &str) -> std::borrow::Cow<'_, str> {
 /// The enum survives the deletion of its payload because it still names the
 /// two *I/O paths* ship takes: `CopyAsIs` never reads the file (`fs::copy` is
 /// COW on APFS/Btrfs and the assets are large), `StripPreviewAttrs` must.
+///
+/// Deliberately does NOT strip `data-moss-deploy-only`: that attribute marks
+/// a `<script>` a deployed site must still execute (the pageview beacon, the
+/// site-wide analytics tag), and it is what lets the preview server strip
+/// that same script from a page it serves out of a generation THIS transform
+/// already ran on — see `ops::serve::iframe_bridge::strip_preview_only_scripts`.
 pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
     match transform {
         ShipTransform::CopyAsIs => bytes.to_vec(),
@@ -128,25 +100,119 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
                 return bytes.to_vec();
             };
             let after_source = STRIP_SOURCE_LINE.replace_all(s, "");
-            let after_preview = STRIP_PREVIEW_ATTR.replace_all(&after_source, "");
-            let after_markers = STRIP_NO_PREVIEW_MARKER.replace_all(&after_preview, "");
-            after_markers.into_owned().into_bytes()
+            let after_preview = STRIP_PREVIEW_ATTR.replace_all(&after_source, "$1");
+            after_preview.into_owned().into_bytes()
         }
     }
 }
 
-// `unlink_if_hardlinked_to` used to live here: it removed a `site_path` that
-// shared an inode with `stage_path`, so that `fs::copy`'s `O_TRUNC` open could
-// not zero the source out from under the read. `io_utils::copy_output` and
-// `io_utils::write_output` never open the destination at all — they populate a
-// temp sibling and `rename(2)` it into place — so the hazard is closed by
-// construction and the helper had no callers left. See ADR-043.
+// ---------------------------------------------------------------------------
+// Ship-by-OID: read from an immutable CAS blob instead of the mutable stage
+// path, when one is known to back this entry's exact bytes.
+// ---------------------------------------------------------------------------
+
+/// Where [`ship_phase`] and [`drop_absent_outputs`] read one entry's bytes from.
+enum ShipRead<'a> {
+    /// A file: the CAS blob backing a live `staged_oid`, or `stage_path` itself
+    /// when there is none (or its CAS blob has since been collected).
+    Path(PathBuf),
+    /// The bytes the build kept on the manifest. Present by construction, and
+    /// nothing on disk to probe, audit or copy.
+    Held(&'a [u8]),
+}
+
+/// The one place [`ship_phase`] and [`drop_absent_outputs`] read `rel_path`'s
+/// bytes from: held bytes, else the CAS blob backing a live `staged_oid`, else
+/// `stage_path` itself.
+///
+/// Both callers MUST route every presence check and every subsequent read
+/// through this SAME resolved value, and neither may recompute it separately.
+/// A presence check that asks the CAS while the read that follows targets the
+/// stage path (or vice versa) can answer "present" from one and then read the
+/// other, genuinely-absent, one — moving the failure a few lines down instead
+/// of preventing it, which is exactly the bug a bolted-on presence-only
+/// helper would reintroduce. See the module docs for the race this exists to
+/// close: between a build sealing a path's hash and shipping its bytes, a
+/// second concurrent build can rewrite the mutable stage copy.
+fn resolve_ship_source<'a>(
+    rel_path: &str,
+    stage_path: &Path,
+    sealed: &'a SealedManifest,
+    object_store: Option<&crate::build::cache::ObjectStore>,
+) -> ShipRead<'a> {
+    if let Some(bytes) = sealed.held_bytes(rel_path) {
+        return ShipRead::Held(bytes);
+    }
+    if let Some(store) = object_store {
+        if let Some(oid) = sealed.staged_oid(rel_path) {
+            if let Some(cas_path) = store.get_path(oid) {
+                return ShipRead::Path(cas_path);
+            }
+        }
+    }
+    ShipRead::Path(stage_path.to_path_buf())
+}
+
+/// Compare `rel_path`'s CURRENT stage bytes against what this manifest sealed,
+/// for an entry [`ship_phase`] is about to read from the mutable stage path
+/// (i.e. one with no live `staged_oid` — [`resolve_ship_source`] fell back).
+///
+/// A cheap stat match is the common case: no read, no hash, `None`. A stat
+/// disagreement demotes to a real hash — computed against the file's current
+/// bytes, same discipline `SourceMetadata`'s racy-mtime fast path uses
+/// (`build/types.rs`) — because a stat change since seal is exactly what a
+/// concurrent build's overwrite produces. Returns the real hash ONLY when it
+/// genuinely disagrees with the sealed entry; a stat change that still hashes
+/// to the same content (a touch, a benign re-save) is not a race and returns
+/// `None` too. The caller never withholds on this — it only logs — so a
+/// routine, non-concurrent rewrite (`degrade::apply_to_staging`) re-stamps the
+/// fingerprint at write time and never reaches this branch at all.
+fn verify_ship_integrity(
+    rel_path: &str,
+    stage_path: &Path,
+    sealed_entry: &str,
+    sealed: &SealedManifest,
+) -> Option<String> {
+    let expected_fp = sealed.ship_fingerprint(rel_path)?;
+    let meta = std::fs::metadata(stage_path).ok()?;
+    let actual_fp = crate::build::stat::FileStat::of(&meta);
+    if actual_fp == *expected_fp {
+        return None;
+    }
+    let bytes = std::fs::read(stage_path).ok()?;
+    // Hash what `ship_phase` would actually SHIP, not the raw stage bytes:
+    // the manifest's registered hash is of the bytes after `apply_transform`
+    // (staging keeps preview annotations an HTML page's shipped copy does
+    // not — same reason `apply_post_seal_rewrites`'s callers hash the
+    // transformed bytes, never the staged ones). Comparing raw stage bytes
+    // here would report a "mismatch" for every ordinary annotated page.
+    let shipped = apply_transform(transform_for(rel_path), &bytes);
+    let real_hash = crate::build::assets::paths::compute_binary_hash(&shipped);
+    let expected_hash = crate::types::content::parse_entry(sealed_entry).1;
+    if real_hash == expected_hash {
+        None
+    } else {
+        Some(real_hash)
+    }
+}
 
 // ---------------------------------------------------------------------------
-// ship_phase  (batched, end-of-blocking)
+// ship_phase  (batched, once per build, after the seal)
 // ---------------------------------------------------------------------------
 
 /// Ship one generation: copy exactly what the sealed manifest lists.
+///
+/// Each entry ships from the bytes the manifest holds (`sealed.held_bytes`) or
+/// from its immutable CAS blob when the manifest recorded one
+/// (`sealed.staged_oid`, still live) — see [`resolve_ship_source`] — and
+/// from the mutable `stage_dir` copy otherwise, exactly as before. The
+/// immutable sources are what close a real race: `stage_dir` is shared and mutable across
+/// concurrent builds of the same folder, so a second build can rewrite a path
+/// between this build sealing its hash and this call reading its bytes, and
+/// the generation would then receive the wrong bytes under a frozen hash. An
+/// entry with no live `staged_oid` still gets a best-effort audit —
+/// [`verify_ship_integrity`] — that can only log the disagreement, never
+/// withhold on it.
 ///
 /// The manifest is the single owner of what a generation contains. This used
 /// to walk `stage_dir` and ship whatever was there, which made the disk a
@@ -171,7 +237,7 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
 /// - `100644:` — [`ShipTransform`], as before: strip preview attributes from
 ///   HTML, `fs::copy` everything else. The copy is COW on APFS/Btrfs and
 ///   gives independent inodes: a hardlink-based ship let one iCloud eviction
-///   zero both stage and site, leaving permanent 0-byte stubs.
+///   zero both stage and generation, leaving permanent 0-byte stubs.
 ///
 /// An entry whose stage file is not present is skipped, not counted: the
 /// presence pass leaves exactly one such class behind (`_moss/math/`, kept on
@@ -181,35 +247,55 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
 /// does not hide the rest, and a non-zero count returns `Err` so the
 /// generation is never promoted.
 ///
-/// `cancel` is checked between entries. When fired (folder switch / window
-/// close) this returns `Ok(())`, matching the cancellation semantics of the
-/// `copy_dir_all` it replaced (see #506).
+/// `seeded` is the whole generation `site_dir` was cloned from, if any: an
+/// entry it still holds unchanged is not written again — see
+/// [`crate::build::store_gc::WholeGeneration::still_holds`].
+///
+/// `Ok` carries how many entries shipped bytes other than the ones their
+/// manifest hash names — see [`verify_ship_integrity`].
 pub fn ship_phase(
     stage_dir: &Path,
     site_dir: &Path,
     sealed: &SealedManifest,
-    cancel: Option<&tokio_util::sync::CancellationToken>,
-) -> std::io::Result<()> {
+    object_store: Option<&crate::build::cache::ObjectStore>,
+    seeded: Option<&crate::build::store_gc::WholeGeneration>,
+) -> std::io::Result<usize> {
     // Count per-file faults so a PARTIAL materialize reports failure (Err),
     // not success. Fix B's mat_ok gate relies on this: a partial generation
     // must fall back to last-known-good, never be promoted or advertised.
     let mut failures = 0u32;
+    let mut drifted = 0;
 
     for (rel_path, entry) in sealed.files() {
-        if let Some(c) = cancel {
-            if c.is_cancelled() {
-                log::info!("ship_phase cancelled (folder closed)");
-                return Ok(());
-            }
-        }
-
         let stage_path = stage_dir.join(rel_path);
         let site_path = site_dir.join(rel_path);
+        if seeded.is_some_and(|base| base.still_holds(rel_path, entry, &site_path)) {
+            continue;
+        }
+        // The ONE source every check and read below uses. Held bytes are
+        // themselves; a live `staged_oid` resolves to its immutable CAS blob;
+        // everything else resolves to `stage_path` unchanged. See
+        // `resolve_ship_source`'s doc comment for why a second,
+        // independently-computed path here would reopen the exact race this
+        // function exists to close.
+        let source_path = match resolve_ship_source(rel_path, &stage_path, sealed, object_store) {
+            ShipRead::Path(path) => path,
+            // Already in memory, and always a plain file (`register_held` takes
+            // nothing else): write it and skip the presence probe and audit,
+            // both of which are about a stage file this entry does not read.
+            ShipRead::Held(bytes) => {
+                if let Err(e) = crate::build::io_utils::write_output(&site_path, bytes) {
+                    log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
+                    failures += 1;
+                }
+                continue;
+            }
+        };
         let (mode, _) = crate::types::content::parse_entry(entry);
 
         // `drop_absent_outputs` has already removed every entry with no output
-        // — except the `_moss/math/` exemption it keeps deliberately
-        // (ADR-030), whose bytes may be evicted. Reading one here is the
+        // — except the `_moss/math/` exemption it keeps deliberately,
+        // whose bytes may be evicted. Reading one here is the
         // EDEADLK that failed the whole generation and left `current` where it
         // was, so the exemption is skipped rather than copied.
         //
@@ -217,39 +303,49 @@ pub fn ship_phase(
         // verdict: anything else that is absent vanished between them, and
         // promoting a generation short of a file its own manifest names only
         // moves the failure to the next publish. That stays a counted failure.
-        if !crate::build::io_utils::entry_output_present(&stage_path, mode) {
+        if !crate::build::io_utils::entry_output_present(&source_path, mode) {
             if rel_path.starts_with(crate::build::served_path::MATH_PNG_PREFIX) {
                 continue;
             }
             log::warn!(
                 "[ship_phase] {:?} is named by the manifest but is not an output; \
                  it went absent after the presence pass",
-                stage_path
+                source_path
             );
             failures += 1;
             continue;
         }
 
+        // Only meaningful when `source_path` fell back to the mutable stage
+        // copy: a CAS-backed entry is immutable by construction and a
+        // symlink/no-fingerprint entry returns `None` immediately — see
+        // `verify_ship_integrity`. Never gates shipping; it only makes a
+        // seal-to-ship race audible.
+        if source_path == stage_path {
+            if let Some(real_hash) = verify_ship_integrity(rel_path, &stage_path, entry, sealed) {
+                drifted += 1;
+                log::warn!(
+                    "[ship_phase] {:?} changed after this manifest sealed (now hashes to {}, \
+                     manifest says {}) — shipping the current bytes rather than withholding the \
+                     page; a concurrent build most likely rewrote this path",
+                    stage_path, real_hash, entry
+                );
+            }
+        }
+
         if let Some(parent) = site_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
                 log::warn!("[ship_phase] create_dir_all for parent {:?}: {}", parent, e);
                 failures += 1;
                 continue;
             }
         }
         if mode == crate::types::content::MODE_SYMLINK {
-            match std::fs::read_link(&stage_path) {
+            match std::fs::read_link(&source_path) {
                 Ok(target) => {
                     #[cfg(unix)]
                     {
-                        // remove_existing is unix-only (clears a file/symlink).
-                        use crate::build::media::symlink::remove_existing;
-                        if let Err(e) = remove_existing(&site_path) {
-                            log::warn!("[ship_phase] Could not clear {:?} before recreating symlink: {}", site_path, e);
-                            failures += 1;
-                            continue;
-                        }
-                        if let Err(e) = std::os::unix::fs::symlink(&target, &site_path) {
+                        if let Err(e) = crate::build::io_utils::replace_with_symlink(&target, &site_path) {
                             log::warn!("[ship_phase] Failed to recreate symlink at {:?}: {}", site_path, e);
                             failures += 1;
                         }
@@ -257,14 +353,16 @@ pub fn ship_phase(
                     #[cfg(windows)]
                     {
                         let _ = if site_path.is_dir() {
-                            std::fs::remove_dir_all(&site_path)
+                            // allow:unlink the generation being materialized, which nothing serves before promote
+                            crate::build::io_utils::remove_output_dir_all(&site_path)
                         } else {
+                            // allow:unlink the generation being materialized, which nothing serves before promote
                             std::fs::remove_file(&site_path)
                         };
                         let target_abs = if target.is_absolute() {
                             target.clone()
                         } else {
-                            stage_path.parent().map(|p| p.join(&target)).unwrap_or(target.clone())
+                            source_path.parent().map(|p| p.join(&target)).unwrap_or(target.clone())
                         };
                         // Unlike unix, this arm READS the target, so presence
                         // has to be asked of the object being read.
@@ -290,7 +388,7 @@ pub fn ship_phase(
                     }
                 }
                 Err(e) => {
-                    log::warn!("[ship_phase] read_link failed for {:?}: {}", stage_path, e);
+                    log::warn!("[ship_phase] read_link failed for {:?}: {}", source_path, e);
                     failures += 1;
                 }
             }
@@ -299,19 +397,19 @@ pub fn ship_phase(
 
         match transform_for(rel_path) {
             ShipTransform::StripPreviewAttrs => {
-                match std::fs::read(&stage_path) {
+                match std::fs::read(&source_path) {
                     Ok(bytes) => {
                         let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &bytes);
                         // `write_output` renames a fresh inode into place, so it
-                        // can neither truncate an inode shared with `stage_path`
-                        // nor materialize a dataless destination (ADR-043).
+                        // can neither truncate an inode shared with `source_path`
+                        // nor materialize a dataless destination.
                         if let Err(e) = crate::build::io_utils::write_output(&site_path, &stripped) {
                             log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
                             failures += 1;
                         }
                     }
                     Err(e) => {
-                        log::warn!("[ship_phase] read failed for {:?}: {}", stage_path, e);
+                        log::warn!("[ship_phase] read failed for {:?}: {}", source_path, e);
                         failures += 1;
                     }
                 }
@@ -320,13 +418,12 @@ pub fn ship_phase(
                 // `fs::copy` (COW on APFS via `fclonefileat(2)`,
                 // `copy_file_range(2)` on Linux Btrfs/XFS) rather than
                 // `fs::hard_link`: hardlinks share an inode, and a cloud
-                // provider evicting that inode turns BOTH stage and site into
-                // 0-byte stubs. `copy_output` copies into a temp sibling and
+                // provider evicting that inode turns BOTH stage and generation
+                // into 0-byte stubs. `copy_output` copies into a temp sibling and
                 // renames, so the destination is never opened with `O_TRUNC`
-                // and a cloud-evicted `site_path` cannot force materialization
-                // (ADR-043).
-                if let Err(e) = crate::build::io_utils::copy_output(&stage_path, &site_path) {
-                    log::warn!("[ship_phase] copy failed for {:?}: {}", stage_path, e);
+                // and a cloud-evicted `site_path` cannot force materialization.
+                if let Err(e) = crate::build::io_utils::copy_output(&source_path, &site_path) {
+                    log::warn!("[ship_phase] copy failed for {:?}: {}", source_path, e);
                     failures += 1;
                 }
             }
@@ -339,7 +436,7 @@ pub fn ship_phase(
             failures, site_dir
         )));
     }
-    Ok(())
+    Ok(drifted)
 }
 
 // ---------------------------------------------------------------------------
@@ -349,56 +446,8 @@ pub fn ship_phase(
 /// Monotonic source of promotion epochs (see [`next_promotion_epoch`]).
 static PROMOTION_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Highest promotion epoch that has reached `current`, per `.moss` directory.
-static PROMOTED: LazyLock<std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, u64>>> =
-    LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-
-/// Mint the next promotion epoch. **Call in build order**, at a point still
-/// serialized against other builds of the same folder — but "still
-/// serialized" is caller-specific, and callers now mint at three different
-/// such points, each sound for a different reason: `build.rs`'s own
-/// post-build fallback mints just before spawning the detached seal task,
-/// the last moment IT is still ordered against its successor; the rebuild
-/// worker mints at admission, before the build runs
-/// (`ops/watch.rs::attempt_admitted_rebuild`); `build_shell::build_folder`
-/// mints immediately, before the pipeline starts at all, because a worker
-/// can exist from folder-open onward and would otherwise be free to mint
-/// first (`docs/archive/2026-09-15-open-double-build-race.md`). See each
-/// call site for why its own point is still ordered against what it must be.
-///
-/// A plain process-global counter: the comparison in `try_promote` is
-/// per-folder, so sharing the sequence across folders costs a few skipped
-/// integers and nothing else.
 pub fn next_promotion_epoch() -> u64 {
     PROMOTION_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
-}
-
-/// Repoint `current` at `gen_id` unless a **newer** build already has.
-/// `Ok(false)` means refused-as-stale, which is not an error.
-///
-/// moss#968 §5d: `generation_id` is a *content* hash, so it carries no order,
-/// and seal tails run detached — build N's can outlive build N+1's whenever N
-/// had the slower background phase. `MossPaths::set_current_ptr` is an
-/// unconditional swap, so N's late tail silently rolled `current` back and the
-/// preview served stale pages until the next save. Only the accidental FIFO of
-/// the stage-write lock hid it, and that queue is ordered by worker completion,
-/// not by build.
-fn try_promote(
-    mp: &crate::moss_paths::MossPaths,
-    epoch: u64,
-    gen_id: &str,
-) -> std::io::Result<bool> {
-    // Held across the symlink swap so two tails cannot both pass the
-    // comparison and then race on `rename(2)`.
-    let mut promoted = PROMOTED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if promoted.get(mp.root()).is_some_and(|latest| *latest >= epoch) {
-        return Ok(false);
-    }
-    mp.set_current_ptr(gen_id)?;
-    promoted.insert(mp.root().to_path_buf(), epoch);
-    Ok(true)
 }
 
 /// What [`materialize_and_promote`] did with the generation it was handed.
@@ -406,17 +455,20 @@ fn try_promote(
 /// The question every caller downstream is really asking is whether `current`
 /// points at this generation, because advertising a manifest whose generation is
 /// not the served one is a rollback in a different guise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Promotion {
     /// Frozen on disk, and `current` was repointed at it.
     Promoted,
     /// Frozen on disk, but a newer build had already promoted, so this tail's
-    /// swap was refused (moss#968 §5d). Not an error — the newer generation is
+    /// swap was refused. Not an error — the newer generation is
     /// the right one.
     Superseded,
-    /// Not frozen at all: the build could not read its own structural sources,
-    /// so its output is a rendering of what happened to be local rather than of
-    /// the site (moss#1042, `pipeline::should_publish`).
+    /// Not frozen at all: either the folder closed before this build finished
+    /// (`PipelineRunOutput::publishable` was already `false` —
+    /// structural-source incompleteness stopped being a reason as of a
+    /// 2026-09-17 revision) or the presence pass could not stand
+    /// behind what it registered (`WithholdReason::Unverified` /
+    /// `ImplausibleLoss`).
     ///
     /// Nothing is copied and `current` is untouched, which keeps `current` and
     /// `hashes.json` describing the same, last-complete build. Freezing the
@@ -424,7 +476,79 @@ pub enum Promotion {
     /// mismatch `tail_owns_shared_state` exists to prevent — and there is
     /// nothing to keep anyway: the rebuild that the missing sources' arrival
     /// triggers renders the site properly from scratch.
-    Withheld,
+    ///
+    /// The reason says which input failed — see [`WithholdReason`].
+    Withheld(WithholdReason),
+}
+
+/// Whether a sealed generation may replace what `current` serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShipVerdict {
+    Ship,
+    Withhold(WithholdReason),
+}
+
+/// Why a generation was not promoted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WithholdReason {
+    /// The folder closed before this build finished
+    /// (`PipelineRunOutput::publishable == false`). Named for its original
+    /// cause (a build whose structural sources were still
+    /// downloading) — structural incompleteness stopped constructing this
+    /// variant in a 2026-09-17 revision, and cancellation is now
+    /// the only path that does.
+    SourcesDownloading,
+    /// The presence pass or a producer met an I/O error that was not a positive
+    /// `NotFound` on `entries` outputs. An unreadable output is not a missing
+    /// one, so nothing was dropped for them — and a generation that could not
+    /// read what it checked is not one to ship. `sample` names up to three,
+    /// each with its error.
+    Unverified { entries: usize, sample: Vec<String> },
+    /// The presence pass dropped more of the manifest than a healthy build ever
+    /// loses between registration and seal — see [`PRESENCE_LOSS_FLOOR`].
+    ImplausibleLoss { lost: usize, of: usize },
+}
+
+/// The presence pass may drop up to `max(PRESENCE_LOSS_FLOOR, entries / 20)`
+/// entries before the generation is withheld. Policy, not physics: a healthy
+/// pass drops only what vanished between registration and seal, which the
+/// field log put at zero, and the incident pass that could read nothing dropped
+/// 822 of 822.
+pub const PRESENCE_LOSS_FLOOR: usize = 16;
+
+impl ShipVerdict {
+    /// The verdict a presence pass over a manifest of `entries` reaches, having
+    /// dropped `lost` of them and left `sealed.unverified()` behind.
+    pub fn after_presence_pass(
+        sealed: &crate::build::manifest::SealedManifest,
+        entries: usize,
+        lost: usize,
+    ) -> Self {
+        if !sealed.unverified().is_empty() {
+            return ShipVerdict::Withhold(WithholdReason::Unverified {
+                entries: sealed.unverified().len(),
+                sample: sealed
+                    .unverified()
+                    .iter()
+                    .take(3)
+                    .map(|(key, err)| format!("{key} ({err})"))
+                    .collect(),
+            });
+        }
+        if lost > PRESENCE_LOSS_FLOOR.max(entries / 20) {
+            return ShipVerdict::Withhold(WithholdReason::ImplausibleLoss { lost, of: entries });
+        }
+        ShipVerdict::Ship
+    }
+
+    /// Whether the served HTML may still be repaired in place: not when the
+    /// generation is about to be withheld for reading its own tree badly.
+    pub fn repairs_staging(&self) -> bool {
+        !matches!(
+            self,
+            ShipVerdict::Withhold(WithholdReason::Unverified { .. } | WithholdReason::ImplausibleLoss { .. })
+        )
+    }
 }
 
 /// Whether a seal tail with this outcome still owns the folder's **shared**
@@ -451,65 +575,126 @@ pub enum Promotion {
 /// contain — the same disagreement, reached by declining rather than by losing a
 /// race.
 pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
-    !matches!(promotion, Ok(Promotion::Superseded) | Ok(Promotion::Withheld))
+    !matches!(promotion, Ok(Promotion::Superseded) | Ok(Promotion::Withheld(_)))
 }
 
 /// Copy `staging/` → `generations/<gen-id>/` (stripping dev annotations) and
-/// atomically swap `.moss/build/current` → the new generation.
+/// atomically swap `.moss/build.nosync/current` → the new generation.
 ///
 /// Caller must ensure `staging/` is fully populated (post-barrier). The
 /// generation dir is created inside this function via `create_dir_all`.
 ///
-/// `epoch` orders this build against every other build of the same folder; the
-/// swap goes through [`try_promote`], which refuses it when a newer build has
-/// already promoted.
+/// A generation already whole on disk is promoted without a copy — see
+/// [`crate::build::store_gc::GenerationWriteLock::holds`].
 ///
-/// `publishable` is `pipeline::should_publish`'s verdict, carried through
-/// `PipelineRunOutput`. `false` returns [`Promotion::Withheld`] before anything
-/// is copied.
+/// `epoch` orders this build against every other build of the same folder; the
+/// swap goes through `lifecycle::promote`, which refuses it when a newer build
+/// has already promoted.
+///
+/// `verdict` combines `PipelineRunOutput::publishable` (`false` only for a
+/// folder-closed cancellation) with the presence pass's own
+/// ([`ShipVerdict::after_presence_pass`]). A `Withhold` returns
+/// [`Promotion::Withheld`] before anything is copied.
 pub fn materialize_and_promote(
     sealed: &crate::build::manifest::SealedManifest,
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &std::path::Path,
-    cancel: Option<&tokio_util::sync::CancellationToken>,
     epoch: u64,
-    publishable: bool,
+    render: Option<u64>,
+    verdict: ShipVerdict,
 ) -> Result<Promotion, String> {
-    if !publishable {
-        log::info!(
-            "[cloud] withholding generation {} — the build could not read every structural \
-             source, so `current` stays on the last complete one",
-            sealed.generation_id()
-        );
-        return Ok(Promotion::Withheld);
+    if let ShipVerdict::Withhold(reason) = verdict {
+        match &reason {
+            WithholdReason::SourcesDownloading => log::info!(
+                "[cloud] withholding generation {} — the build could not read every structural \
+                 source, so `current` stays on the last complete one",
+                sealed.generation_id()
+            ),
+            WithholdReason::Unverified { entries, sample } => log::warn!(
+                "generation {} withheld: {} of {} entries unverifiable ({})",
+                sealed.generation_id(),
+                entries,
+                sealed.files().len(),
+                sample.join(", ")
+            ),
+            WithholdReason::ImplausibleLoss { lost, of } => log::warn!(
+                "generation {} withheld: presence pass lost {} of {} entries (limit {})",
+                sealed.generation_id(),
+                lost,
+                of,
+                PRESENCE_LOSS_FLOOR.max(of / 20)
+            ),
+        }
+        if reason != WithholdReason::SourcesDownloading {
+            // The tree on screen is the one that could not be read.
+            crate::build::lifecycle::withdraw_render(mp, render);
+        }
+        return Ok(Promotion::Withheld(reason));
     }
     let gen_dir = mp.generation_dir(sealed.generation_id());
-    std::fs::create_dir_all(&gen_dir)
-        .map_err(|e| format!("Failed to create generation dir: {}", e))?;
-    ship_phase(stage_dir, &gen_dir, sealed, cancel)
-        .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
-    let promoted = try_promote(mp, epoch, sealed.generation_id())
+    // Held across the copy and the promote, so no process's generation GC
+    // removes `gen_dir` under the copy or between the copy and `current`
+    // naming it. Finished only on success: a copy that fails or is cut off
+    // leaves its lock file behind, and GC removes the directory later.
+    let write_lock =
+        crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), sealed.generation_id())
+            .map_err(|e| format!("Failed to lock generation {}: {}", sealed.generation_id(), e))?;
+    let mut drifted = 0;
+    let copied = !write_lock.holds(&gen_dir, sealed.files());
+    if copied {
+        // Seeded from the last whole generation by one copy-on-write clone
+        // where the platform has one, so only the entries that differ are
+        // written; otherwise every entry is copied.
+        let base = crate::build::lifecycle::whole_generation(mp).filter(|base| write_lock.seed_from(&gen_dir, base));
+        crate::build::io_utils::create_output_dir_all(&gen_dir)
+            .and_then(|()| crate::build::store_gc::prune_to_manifest(&gen_dir, sealed.files()))
+            .map_err(|e| format!("Failed to prepare generation dir: {}", e))?;
+        // Ship-by-OID: read a `staged_oid` entry from its
+        // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
+        // the entry's CAS blob surviving a concurrent build's GC across this
+        // whole call — see `CacheWriteLease` at this function's own call sites.
+        let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
+        drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref())
+            .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
+    } else {
+        log::info!("generation {} is already on disk — promoting it without a copy", sealed.generation_id());
+    }
+    let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
+    // A generation holding bytes its id does not describe keeps its lock file,
+    // so the next seal of this id copies it again instead of reusing it.
+    if drifted == 0 {
+        write_lock.finish();
+        crate::build::lifecycle::remember_whole(mp, &gen_dir, sealed);
+    }
     Ok(if promoted { Promotion::Promoted } else { Promotion::Superseded })
 }
 
-/// Delete unreferenced `.webp` variants from `stage_dir` and drop them from
-/// `sealed`, before anything persists or ships this generation (moss#976
-/// B2). Called from [`crate::build::degrade::repair_staged_html`], the tail of
-/// `advertise_sealed`, which since #1097 is the one seal tail on every path —
+/// Drop unreferenced `.webp` variants from `sealed`, before anything persists
+/// or ships this generation. Called from
+/// [`crate::build::degrade::repair_staged_html`], the tail of
+/// `advertise_sealed`, which is the one seal tail on every path —
 /// it writes `hashes.json` and materializes from `stage_dir` right after.
 ///
+/// **It does not touch `stage_dir`.** `ship_phase` copies `sealed.files()` and
+/// nothing else, so an entry dropped here cannot reach the generation whatever
+/// staging holds; unlinking the staged bytes as well bought nothing but local
+/// disk, and bought it out of the directory the preview server is reading at
+/// that instant. `build::pipeline`'s pre-render sweep unlinks them at the next
+/// build's start, after the server has moved to `current` — and
+/// [`reclaim_staging_now`] unlinks them right after this call returns, on the
+/// one path that proves there is no next build to wait for.
+///
 /// Opt-out via `[build].prune_orphaned_images = false`. Default on: the win
-/// is upload bytes and seta quota (moss-seta#297 S1), NOT local disk — the
+/// is upload bytes and seta quota, NOT local disk — the
 /// pruned blob stays in `cache/objects`, kept reachable by its transform
 /// record for as long as the source image is in the vault, so `cache::gc`
 /// will not collect it. See `build::site_config` for why the off switch exists.
 ///
-/// Returns what it did. Nothing in production reads the count — the value is
-/// there so a test can assert a converged build removes NOTHING. That
-/// assertion is not cosmetic: heal-then-prune leaves the same bytes on disk
-/// either way, so the end state is identical whether the two agree or fight,
-/// and only the counter distinguishes them (moss#1085).
+/// Returns the condemned keys. A converged build must return NONE: heal-then-
+/// prune leaves the same bytes on disk either way, so the end state is
+/// identical whether the two agree or fight, and only this set distinguishes
+/// them.
 ///
 /// `scan` is passed in rather than taken here because
 /// [`unregistered_referenced_variants`] reads the same one: the two passes
@@ -518,23 +703,19 @@ pub fn materialize_and_promote(
 /// also what keeps that pass alive when `prune_orphaned_images` is off.
 pub(crate) fn prune_orphaned_webp_before_ship(
     mp: &crate::moss_paths::MossPaths,
-    stage_dir: &std::path::Path,
     sealed: &mut crate::build::manifest::SealedManifest,
     scan: &crate::build::media::orphan_prune::ReferenceScan,
-) -> (std::collections::HashSet<String>, crate::build::media::orphan_prune::PruneResult) {
+) -> std::collections::HashSet<String> {
     let project_path = mp.project_root().to_string_lossy().to_string();
     if !crate::build::site_config::get_build_prune_orphaned_images(&project_path).unwrap_or(true) {
         log::info!("orphan prune: disabled via [build].prune_orphaned_images");
-        return (
-            std::collections::HashSet::new(),
-            crate::build::media::orphan_prune::PruneResult::default(),
-        );
+        return std::collections::HashSet::new();
     }
     if !scan.unreadable.is_empty() {
         // Fail closed. An unreadable page shrinks the reference set, and a
         // smaller reference set authorizes MORE deletion — so a single
         // eviction or mid-flight write could delete every variant only that
-        // page referenced (moss#976: 525 files deleted, 207 images 404-ing).
+        // page referenced (an earlier incident: 525 files deleted, 207 images 404-ing).
         // Skipping costs this generation some upload bytes; deleting wrongly
         // costs the site. The verdict is deliberately left untouched: a prune
         // that did not run has judged nothing, and writing an empty or partial
@@ -552,25 +733,22 @@ pub(crate) fn prune_orphaned_webp_before_ship(
             scan.unreadable.len(),
             sample.join(", ")
         );
-        return (
-            std::collections::HashSet::new(),
-            crate::build::media::orphan_prune::PruneResult::default(),
-        );
+        return std::collections::HashSet::new();
     }
     let referenced = &scan.tails;
     let outputs = sealed.image_outputs().clone();
-    let (removed_keys, result) =
-        crate::build::media::orphan_prune::prune_orphaned_webp(stage_dir, &outputs, referenced);
-    if result.files_removed > 0 {
+    let removed_keys =
+        crate::build::media::orphan_prune::orphaned_webp_keys(&outputs, referenced);
+    if !removed_keys.is_empty() {
         log::info!(
-            "orphan prune: removed {} unreferenced .webp file(s), {} bytes freed",
-            result.files_removed,
-            result.bytes_freed
+            "orphan prune: {} unreferenced .webp variant(s) dropped from the generation; \
+             staging keeps the bytes until the next build sweeps it",
+            removed_keys.len()
         );
     }
     sealed.remove_entries(&removed_keys);
 
-    // Carry the verdict forward for the next build's producers (moss#1085).
+    // Carry the verdict forward for the next build's producers.
     // `removed_keys` alone is NOT the verdict: a converged build removes
     // nothing — precisely because the producers honored the last answer — so
     // storing only this build's removals empties the set and restarts the
@@ -590,13 +768,47 @@ pub(crate) fn prune_orphaned_webp_before_ship(
     verdict.extend(removed_keys.iter().cloned());
     sealed.set_pruned_image_outputs(verdict);
     // The keys travel out so `degrade` can strip the `<source>` elements that
-    // pointed at them. A deleted file whose reference survives in HTML is a
+    // pointed at them. An unshipped file whose reference survives in HTML is a
     // live 404, and `<picture>` renders it blank rather than falling back.
-    (removed_keys, result)
+    removed_keys
 }
 
-/// Drop manifest entries whose output is not on disk, and unlink what is
-/// there but unusable.
+/// Reclaim `stage_dir` bytes this build orphaned, for the ONE build shape
+/// where nothing will ever sweep them: a one-shot invocation (`moss build`,
+/// `build_sync`, every snapshot-test fixture) whose caller drops the tokio
+/// runtime as soon as the seal tail returns.
+///
+/// `prune_orphaned_webp_before_ship` and `drop_absent_outputs` only ever drop
+/// entries from `sealed` — see their docs — because the preview server may
+/// still be reading `stage_dir` while the seal tail runs
+/// (see `build::pipeline::sweep_staging`'s doc for the 404 this avoids).
+/// `sweep_staging` is how those bytes are normally reclaimed, but it runs at
+/// the START of a FUTURE build in the same folder, using the manifest that
+/// build inherits. A build that is the last one in its process never gets a
+/// future build to do that, so without this call its orphaned `.webp` bytes
+/// sit in `stage_dir` forever and ship in anything that reads that tree
+/// directly — a raw copy of staging, a snapshot test comparing it
+/// byte-for-byte. Measured exactly that shape on a real site.
+///
+/// `sealed` must be the FINAL manifest — call this after every pass that can
+/// drop an entry (`degrade::repair_staged_html`), never before. The permit is
+/// `lifecycle::final_build_permit`, minted where the caller proves nothing
+/// reads `stage_dir` again.
+pub(crate) fn reclaim_staging_now(
+    stage_dir: &std::path::Path,
+    sealed: &crate::build::manifest::SealedManifest,
+    permit: &crate::build::lifecycle::SweepPermit,
+) {
+    let hashes = sealed.site_hashes_view();
+    crate::build::media::pipeline::remove_stale_files(stage_dir, hashes, "staging (final build)", permit);
+    crate::build::media::pipeline::remove_stale_dirs(
+        stage_dir,
+        &crate::build::media::pipeline::compute_expected_dirs(hashes),
+        permit,
+    );
+}
+
+/// Drop manifest entries whose output is not on disk.
 ///
 /// The last owner of "the manifest and the generation agree". Registration
 /// happens from receipts, so an entry is normally exactly what this build
@@ -606,7 +818,14 @@ pub(crate) fn prune_orphaned_webp_before_ship(
 /// entry and no read, so this costs a stat per manifest entry and cannot
 /// itself hit the eviction fault it exists to find.
 ///
-/// `_moss/math/` is the exception and keeps its entry (ADR-030): those PNGs
+/// Read-only against `stage_dir`. It used to unlink the unusable file — a
+/// 0-byte stub or a dataless placeholder — so the next build would regenerate
+/// rather than trust it. `build::pipeline`'s pre-render sweep does that
+/// instead, keyed off the same dropped entry and still before any producer
+/// looks, but at a moment when the preview server is no longer reading
+/// staging.
+///
+/// `_moss/math/` is the exception and keeps its entry: those PNGs
 /// are append-only and the published site still serves them, so un-promising
 /// one deletes it from a live site. A download is requested instead —
 /// fire-and-forget, the same pattern the Wait arm and theme assets use — and
@@ -616,24 +835,42 @@ pub(crate) fn prune_orphaned_webp_before_ship(
 pub(crate) fn drop_absent_outputs(
     stage_dir: &std::path::Path,
     sealed: &mut crate::build::manifest::SealedManifest,
+    object_store: Option<&crate::build::cache::ObjectStore>,
 ) -> std::collections::HashSet<String> {
+    use crate::build::io_utils::Presence;
     use crate::build::served_path::MATH_PNG_PREFIX;
     let mut absent: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut unverified: Vec<(String, String)> = Vec::new();
     for (rel, entry) in sealed.files() {
-        let path = stage_dir.join(rel);
+        let stage_path = stage_dir.join(rel);
+        // Same resolution `ship_phase` uses (`resolve_ship_source`): a
+        // CAS-backed entry's presence is asked of its CAS blob, never of the
+        // mutable stage copy — otherwise this pass can answer "present" from
+        // one path while `ship_phase` reads the other, genuinely-absent, one,
+        // moving the failure a few lines down instead of preventing it.
+        let ShipRead::Path(path) = resolve_ship_source(rel, &stage_path, sealed, object_store) else {
+            continue; // held bytes are present by construction
+        };
         let (mode, _) = crate::types::content::parse_entry(entry);
-        if crate::build::io_utils::entry_output_present(&path, mode) {
+        let presence = crate::build::io_utils::probe_output(&path, mode);
+        if presence.is_present() {
             continue;
         }
         if rel.starts_with(MATH_PNG_PREFIX) {
             crate::build::cloud_readiness::request_download(&path);
             continue;
         }
-        // Unlink whatever is standing in the way — a 0-byte stub or a
-        // dataless placeholder — so the next build regenerates rather than
-        // trusting it. A missing file makes this a no-op.
-        let _ = std::fs::remove_file(&path);
-        absent.insert(rel.clone());
+        match presence {
+            // An error that is not a positive `NotFound` is no answer: the
+            // entry stays, and the generation that carries it is withheld.
+            Presence::Unverified(err) => unverified.push((rel.clone(), err.to_string())),
+            _ => {
+                absent.insert(rel.clone());
+            }
+        }
+    }
+    for (rel, err) in unverified {
+        sealed.mark_unverified(rel, err);
     }
     if !absent.is_empty() {
         log::info!(
@@ -645,7 +882,7 @@ pub(crate) fn drop_absent_outputs(
     // Returned for the same reason the prune returns its keys: dropping a
     // manifest entry removes the file from the live site at the generation
     // swap, so its `<source>` must go too. `_moss/math/` never reaches this
-    // set — the ADR-030 carve-out above keeps those entries, so a math PNG
+    // set — the carve-out above keeps those entries, so a math PNG
     // awaiting download is never stripped from a published page.
     absent
 }
@@ -676,7 +913,7 @@ pub(crate) fn drop_absent_outputs(
 /// vault, which is why this pass needs no eviction carve-out of its own.
 ///
 /// Scope is `.webp` only, which keeps `.png` (including the `_moss/math/`
-/// tier ADR-030 carves out), OG cards and video keys out. `<video>` must not
+/// tier the carve-out above covers), OG cards and video keys out. `<video>` must not
 /// ride along: video has no `set_failed` path, and an emptied `<video>` falls
 /// through to nothing where a `<picture>` falls through to its `<img>`.
 ///
@@ -696,12 +933,24 @@ pub(crate) fn unregistered_referenced_variants(
             scan.unreadable.len()
         );
     }
+    // `resolved`, not `tails`: the suffix widening that keeps the prune
+    // conservative turns every nested reference into a handful of keys that
+    // exist nowhere, and here each one reads as a missing variant. They could
+    // never strip a live `<source>` — `degrade` matches exact resolved URLs —
+    // but on a real site they numbered in the thousands on every build, so the
+    // HTML repair re-read every page and the log reported a breakage that was
+    // not there.
     let unregistered: std::collections::HashSet<String> = scan
-        .tails
+        .resolved
         .iter()
         .filter(|key| key.ends_with(".webp"))
         .filter(|key| !sealed.files().contains_key(key.as_str()))
-        .filter(|key| std::fs::symlink_metadata(stage_dir.join(key.as_str())).is_err())
+        .filter(|key| {
+            // Positively gone only: an unreadable path strips nothing.
+            let path = stage_dir.join(key.as_str());
+            std::fs::symlink_metadata(&path)
+                .is_err_and(|e| crate::build::icloud::is_definitely_absent(&path, &e))
+        })
         .cloned()
         .collect();
     if !unregistered.is_empty() {
@@ -715,55 +964,6 @@ pub(crate) fn unregistered_referenced_variants(
 }
 
 // ---------------------------------------------------------------------------
-// Generation GC
-// ---------------------------------------------------------------------------
-
-/// Remove old generation dirs, keeping the `n` most-recently-modified plus
-/// pinning `current_gen_id` regardless of mtime.
-///
-/// Errors are logged but non-fatal — the caller (seal+persist arm) logs them
-/// as warnings so a GC failure never aborts a successful build.
-pub fn gc_old_generations(
-    mp: &crate::moss_paths::MossPaths,
-    current_gen_id: &str,
-    n: usize,
-    is_pinned: impl Fn(&str) -> bool,
-) -> std::io::Result<()> {
-    let gen_root = mp.generations_dir();
-    let mut entries: Vec<(std::time::SystemTime, std::path::PathBuf)> =
-        std::fs::read_dir(&gen_root)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
-            .filter_map(|e| {
-                let mtime = e.metadata().ok()?.modified().ok()?;
-                Some((mtime, e.path()))
-            })
-            .collect();
-
-    // Sort newest first.
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
-
-    // Evict everything past position n, except the pinned current gen and any
-    // generation that is currently being uploaded by an in-flight deploy.
-    for (_, path) in entries.iter().skip(n) {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name == current_gen_id {
-            continue; // pin current even if it somehow falls outside the top-n
-        }
-        if is_pinned(name) {
-            continue; // a deploy is reading this dir — do not remove it
-        }
-        if crate::build::feeds::search_lane::is_indexing(mp, name) {
-            continue; // the search lane was handed this dir and is not done
-        }
-        if let Err(e) = std::fs::remove_dir_all(path) {
-            log::warn!("generation GC: failed to remove {:?}: {}", path, e);
-        }
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -771,33 +971,9 @@ pub fn gc_old_generations(
 mod tests {
     use super::*;
     use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::store_gc::{GenerationWriteLock, WholeGeneration};
     use crate::types::content::SiteHashes;
     use tempfile::tempdir;
-
-    #[test]
-    fn transform_for_html_returns_strip() {
-        assert_eq!(
-            transform_for("index.html"),
-            ShipTransform::StripPreviewAttrs
-        );
-        assert_eq!(
-            transform_for("articles/foo/index.html"),
-            ShipTransform::StripPreviewAttrs
-        );
-        assert_eq!(
-            transform_for("legacy.htm"),
-            ShipTransform::StripPreviewAttrs
-        );
-    }
-
-    #[test]
-    fn transform_for_non_html_returns_copy() {
-        assert_eq!(transform_for("style.css"), ShipTransform::CopyAsIs);
-        assert_eq!(transform_for("og/home.png"), ShipTransform::CopyAsIs);
-        assert_eq!(transform_for("rss.xml"), ShipTransform::CopyAsIs);
-        assert_eq!(transform_for("data.json"), ShipTransform::CopyAsIs);
-        assert_eq!(transform_for("video.mp4"), ShipTransform::CopyAsIs);
-    }
 
     #[test]
     fn apply_strip_removes_data_source_line() {
@@ -826,13 +1002,30 @@ mod tests {
 
     #[test]
     fn apply_strip_removes_data_moss_preview() {
-        // data-moss-preview is used as a bare attribute (no ="..."); the regex
-        // matches the leading whitespace + the attribute name.
-        let html = r#"<body data-moss-preview>content</body>"#;
+        for attr in [
+            "data-moss-preview",
+            "data-moss-preview=\"\"",
+            "data-moss-preview='yes'",
+            "data-moss-preview=true",
+            "data-moss-preview = \"true\"",
+        ] {
+            let html = format!("<body {attr} data-page=\"home\">content</body>");
+            let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
+            assert_eq!(
+                std::str::from_utf8(&stripped).unwrap(),
+                r#"<body data-page="home">content</body>"#,
+                "{attr}"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_strip_preserves_preview_attribute_prefixes() {
+        let html = r#"<body data-moss-preview-extra="keep" data-moss-preview="x">content</body>"#;
         let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
         assert_eq!(
             std::str::from_utf8(&stripped).unwrap(),
-            r#"<body>content</body>"#
+            r#"<body data-moss-preview-extra="keep">content</body>"#
         );
     }
 
@@ -907,41 +1100,17 @@ mod tests {
         assert_eq!(result, b"<p>text</p>".to_vec());
     }
 
-    /// A folder switch mid-ship must copy nothing, not a partial generation.
-    /// `ship_phase` inherited the cancellation contract from the `sync_dir` it
-    /// replaced, and it is the one behaviour of that helper the other ship tests
-    /// do not cover.
-    #[test]
-    fn ship_phase_respects_a_pre_set_cancel() {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("src");
-        let dst = tmp.path().join("dst");
-        std::fs::create_dir_all(&src).unwrap();
-        for i in 0..5 {
-            std::fs::write(src.join(format!("f{}.txt", i)), b"x").unwrap();
-        }
-        let cancel = tokio_util::sync::CancellationToken::new();
-        cancel.cancel();
-        let names: Vec<String> = (0..5).map(|i| format!("f{}.txt", i)).collect();
-        let sealed = manifest_of(&names.iter().map(|n| (n.as_str(), &b"x"[..])).collect::<Vec<_>>());
-        ship_phase(&src, &dst, &sealed, Some(&cancel)).unwrap();
-        assert!(
-            !dst.exists() || std::fs::read_dir(&dst).unwrap().next().is_none(),
-            "no files should be copied when cancel is pre-set"
-        );
-    }
-
-    /// Fail closed, end to end: one unreadable page and the prune deletes
+    /// Fail closed, end to end: one unreadable page and the prune condemns
     /// NOTHING, keeps the manifest whole, and records no verdict.
     ///
     /// The scan's token matching errs wide, but its I/O used to err into an
     /// irreversible delete: an unreadable page silently shrank the reference
-    /// set, and a smaller reference set authorizes more deletion (moss#976).
-    /// The control arm runs first so "removed nothing" cannot pass because the
-    /// orphan was unprunable to begin with.
+    /// set, and a smaller reference set authorizes more deletion.
+    /// The control arm runs first so "condemned nothing" cannot pass because
+    /// the orphan was unprunable to begin with.
     #[cfg(unix)]
     #[test]
-    fn prune_deletes_nothing_when_a_staged_page_cannot_be_read() {
+    fn prune_condemns_nothing_when_a_staged_page_cannot_be_read() {
         use std::os::unix::fs::PermissionsExt;
 
         let staged = |vault: &std::path::Path| {
@@ -962,8 +1131,11 @@ mod tests {
         let control_vault = tempdir().unwrap();
         let (mp, stage, mut sealed) = staged(control_vault.path());
         let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage);
-        let (_, control) = prune_orphaned_webp_before_ship(&mp, &stage, &mut sealed, &scan);
-        assert_eq!(control.files_removed, 1, "control: this orphan IS prunable");
+        let control = prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
+        assert!(
+            control.contains("assets/orphan.webp"),
+            "control: this orphan IS prunable"
+        );
 
         let vault = tempdir().unwrap();
         let (mp, stage, mut sealed) = staged(vault.path());
@@ -976,9 +1148,8 @@ mod tests {
         );
 
         let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage);
-        let (removed, result) = prune_orphaned_webp_before_ship(&mp, &stage, &mut sealed, &scan);
+        let removed = prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
 
-        assert_eq!(result.files_removed, 0, "removed: {removed:?}");
         assert!(removed.is_empty(), "removed: {removed:?}");
         assert!(
             stage.join("assets/orphan.webp").exists(),
@@ -1019,7 +1190,7 @@ mod tests {
         std::fs::write(stage.path().join("page (Conflicted Copy).html"), b"<h1>twin</h1>").unwrap();
 
         let sealed = manifest_of(&[("registered.css", b"x")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         assert!(site.path().join("registered.css").exists());
         assert!(!site.path().join("orphan.txt").exists());
@@ -1056,7 +1227,7 @@ mod tests {
         );
         let sealed = pending.seal();
 
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         let meta = std::fs::symlink_metadata(site.path().join("myapp")).unwrap();
         assert!(meta.file_type().is_symlink(), "the entry says symlink; the generation must hold one");
@@ -1083,7 +1254,7 @@ mod tests {
         std::fs::write(site.path().join("sub"), b"blocker").unwrap();
 
         let sealed = manifest_of(&[("sub/page.html", b"<html/>")]);
-        let result = ship_phase(stage.path(), site.path(), &sealed, None);
+        let result = ship_phase(stage.path(), site.path(), &sealed, None, None);
         assert!(
             result.is_err(),
             "ship_phase must return Err when a file fails to materialize"
@@ -1091,7 +1262,7 @@ mod tests {
     }
 
     /// One absent condition, two fates. Skipping the math exemption is what
-    /// keeps an evicted PNG from failing the whole generation (ADR-030);
+    /// keeps an evicted PNG from failing the whole generation;
     /// skipping anything else would promote a generation short of a file its
     /// own manifest names, which only moves the failure to the next publish.
     #[test]
@@ -1103,12 +1274,12 @@ mod tests {
         let mut pending = PendingManifest::new(SiteHashes::default());
         pending.register_hashed(&math, &crate::types::content::file_entry("cccc"), HashBucket::Files);
         // Neither file is written: both are absent for the same reason.
-        ship_phase(stage.path(), site.path(), &pending.seal(), None)
+        ship_phase(stage.path(), site.path(), &pending.seal(), None, None)
             .expect("an absent math PNG is skipped, not counted");
 
         let sealed = manifest_of(&[("page/index.html", b"<h1>hi</h1>")]);
         assert!(
-            ship_phase(stage.path(), site.path(), &sealed, None).is_err(),
+            ship_phase(stage.path(), site.path(), &sealed, None, None).is_err(),
             "an ordinary entry that has no output must not be promoted away quietly"
         );
     }
@@ -1129,7 +1300,7 @@ mod tests {
             ("index.html", preview_html.as_bytes()),
             ("style.css", css),
         ]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         // HTML in site/ must have annotations stripped
         let shipped_html = std::fs::read_to_string(site.path().join("index.html")).unwrap();
@@ -1153,7 +1324,7 @@ mod tests {
         std::fs::write(stage.path().join("articles/foo/bar.html"), b"<x/>").unwrap();
 
         let sealed = manifest_of(&[("articles/foo/bar.html", b"<x/>")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         assert!(site.path().join("articles/foo/bar.html").exists());
     }
@@ -1174,7 +1345,7 @@ mod tests {
         std::fs::write(stage.path().join("clip.mp4"), b"video bytes").unwrap();
 
         let sealed = manifest_of(&[("clip.mp4", b"video bytes")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         let stage_meta = std::fs::metadata(stage.path().join("clip.mp4")).unwrap();
         let site_meta = std::fs::metadata(site.path().join("clip.mp4")).unwrap();
@@ -1209,7 +1380,7 @@ mod tests {
         //
         // The fix: `io_utils::copy_output` never opens site_path at all — it
         // copies into a temp sibling and rename(2)s it into place, so the
-        // shared inode is replaced rather than truncated (ADR-043).
+        // shared inode is replaced rather than truncated.
         use std::os::unix::fs::MetadataExt;
 
         let stage = tempdir().unwrap();
@@ -1227,7 +1398,7 @@ mod tests {
         );
 
         let sealed = manifest_of(&[("clip.mp4", b"video bytes")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         // Stage must STILL have the bytes (the bug zeroed it during fs::copy).
         let stage_bytes = std::fs::read(stage.path().join("clip.mp4")).unwrap();
@@ -1260,7 +1431,7 @@ mod tests {
         std::fs::write(site.path().join("clip.mp4"), b"").unwrap();
 
         let sealed = manifest_of(&[("clip.mp4", b"recovered bytes")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         assert_eq!(
             std::fs::read(site.path().join("clip.mp4")).unwrap(),
@@ -1270,105 +1441,19 @@ mod tests {
     }
 
     #[test]
-    fn apply_strip_removes_no_preview_markers_keeps_content() {
-        let html = r#"<body data-moss-preview><!--moss:no-preview--><script src="a.js"></script><!--/moss:no-preview-->x</body>"#;
+    fn apply_strip_keeps_deploy_only_script_and_its_attribute() {
+        // The deployed artifact must keep running the beacon/analytics
+        // script AND the attribute the preview server keys its strip on —
+        // ship must not repeat the old markers' mistake of leaving that
+        // script unmarked for a later, generation-blind server-side strip.
+        let html = r#"<body data-moss-preview><script src="a.js" data-moss-deploy-only></script>x</body>"#;
         let out = std::str::from_utf8(
             &apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes())
         ).unwrap().to_string();
-        assert!(out.contains("a.js"), "analytics content must survive into the artifact");
-        assert!(!out.contains("moss:no-preview"), "marker comments must be stripped on ship");
+        assert_eq!(out, r#"<body><script src="a.js" data-moss-deploy-only></script>x</body>"#);
     }
 
-    #[test]
-    fn generation_gc_keeps_last_n_plus_current() {
-        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
-            .parent()
-            .unwrap()
-            .join("target")
-            .join("test-tmp");
-        std::fs::create_dir_all(&test_tmp).unwrap();
-        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
-        let mp = crate::moss_paths::MossPaths::new(tmp.path());
-        mp.ensure_dirs().unwrap();
-
-        // Create 7 generation dirs with distinct mtimes.
-        for i in 0..7u32 {
-            let dir = mp.generation_dir(&format!("gen{:03}", i));
-            std::fs::create_dir_all(&dir).unwrap();
-            // Sleep to ensure distinct mtime ordering (APFS has ns resolution but
-            // rapid create_dir_all calls can share the same ns on a loaded machine).
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-
-        // "current" points to gen006 (the newest).
-        mp.set_current_ptr("gen006").unwrap();
-
-        // Run GC with N=5 — keep gen002..gen006, remove gen000 and gen001.
-        gc_old_generations(&mp, "gen006", 5, |_| false).unwrap();
-
-        let remaining: Vec<_> = std::fs::read_dir(mp.generations_dir())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .collect();
-
-        // Keep 5 newest (gen002..gen006); gen006 is current (already in top-5).
-        // gen000 and gen001 should be gone.
-        assert_eq!(
-            remaining.len(),
-            5,
-            "expected 5 remaining, got {}",
-            remaining.len()
-        );
-        assert!(!mp.generation_dir("gen000").exists());
-        assert!(!mp.generation_dir("gen001").exists());
-        assert!(mp.generation_dir("gen006").exists());
-    }
-
-    /// A deploy-pinned generation must survive GC even when it falls outside the
-    /// top-N newest. Simulates a GC storm that would otherwise evict the dir
-    /// that a concurrent deploy is reading.
-    #[test]
-    fn generation_gc_keeps_pinned_generation() {
-        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
-            .parent()
-            .unwrap()
-            .join("target")
-            .join("test-tmp");
-        std::fs::create_dir_all(&test_tmp).unwrap();
-        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
-        let mp = crate::moss_paths::MossPaths::new(tmp.path());
-        mp.ensure_dirs().unwrap();
-
-        // Create 7 generation dirs with distinct mtimes.
-        for i in 0..7u32 {
-            let dir = mp.generation_dir(&format!("gen{:03}", i));
-            std::fs::create_dir_all(&dir).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-
-        // "current" points to gen006 (newest).
-        mp.set_current_ptr("gen006").unwrap();
-
-        // Run GC with N=5 keeping gen001 pinned.
-        // Without pin: gen000 and gen001 would be evicted.
-        // With pin:    gen001 must survive; gen000 is still removed.
-        gc_old_generations(&mp, "gen006", 5, |g| g == "gen001").unwrap();
-
-        assert!(
-            mp.generation_dir("gen001").exists(),
-            "gen001 was pinned and must survive GC"
-        );
-        assert!(
-            !mp.generation_dir("gen000").exists(),
-            "gen000 was not pinned and must be removed"
-        );
-        assert!(
-            mp.generation_dir("gen006").exists(),
-            "current gen006 must always survive"
-        );
-    }
-
-    // ─── Promotion ordering (#968 §5d) ──────────────────────────────────────
+    // ─── Promotion ordering ──────────────────────────────────────
 
     fn promo_paths(tmp: &tempfile::TempDir, gens: &[&str]) -> crate::moss_paths::MossPaths {
         let mp = crate::moss_paths::MossPaths::new(tmp.path());
@@ -1383,61 +1468,6 @@ mod tests {
     /// `which.txt` planted in each generation dir just for this test.
     fn served_generation(mp: &crate::moss_paths::MossPaths) -> String {
         mp.current_generation_id().unwrap()
-    }
-
-    /// Seal tails are detached and finish in *worker-completion* order, so build
-    /// N's tail can land after build N+1's. `set_current_ptr` is an unconditional
-    /// swap, and `generation_id` is a content hash carrying no order, so the late
-    /// tail silently rolled `current` back to an older generation — the preview
-    /// served stale pages until the next save.
-    ///
-    /// The first half reproduces that rollback against the raw primitive; the
-    /// second proves `try_promote` refuses it.
-    #[test]
-    fn a_late_seal_tail_cannot_roll_current_back_to_an_older_generation() {
-        let tmp = tempdir().unwrap();
-        let mp = promo_paths(&tmp, &["genN", "genN1"]);
-
-        // Epochs are minted in build order even though the tails complete in
-        // the other one.
-        let epoch_n = next_promotion_epoch();
-        let epoch_n1 = next_promotion_epoch();
-
-        // N+1's tail wins the race (N's background phase was slower).
-        assert!(try_promote(&mp, epoch_n1, "genN1").unwrap());
-        assert_eq!(served_generation(&mp), "genN1");
-
-        // The bug, reproduced: the un-guarded primitive happily rolls back.
-        mp.set_current_ptr("genN").unwrap();
-        assert_eq!(
-            served_generation(&mp),
-            "genN",
-            "precondition: the raw swap is what rolls current back"
-        );
-
-        // The guard: N's late tail is refused, and `current` stays on the newest
-        // generation.
-        mp.set_current_ptr("genN1").unwrap();
-        assert!(
-            !try_promote(&mp, epoch_n, "genN").unwrap(),
-            "a tail from an older build must not promote"
-        );
-        assert_eq!(
-            served_generation(&mp),
-            "genN1",
-            "current regressed to the older generation"
-        );
-    }
-
-    /// The same epoch twice — a retried tail — is also refused, so a duplicate
-    /// promotion cannot undo a newer one that slipped in between.
-    #[test]
-    fn try_promote_refuses_a_repeat_of_the_epoch_already_on_current() {
-        let tmp = tempdir().unwrap();
-        let mp = promo_paths(&tmp, &["gen001"]);
-        let epoch = next_promotion_epoch();
-        assert!(try_promote(&mp, epoch, "gen001").unwrap());
-        assert!(!try_promote(&mp, epoch, "gen001").unwrap());
     }
 
     /// `hashes.json` and `staging/` are shared across a folder's builds, unlike
@@ -1456,7 +1486,7 @@ mod tests {
             "a failed materialize still leaves staging as THIS build's to persist and sweep"
         );
         assert!(
-            !tail_owns_shared_state(&Ok(Promotion::Withheld)),
+            !tail_owns_shared_state(&Ok(Promotion::Withheld(WithholdReason::SourcesDownloading))),
             "a withheld tail leaves `current` on an older generation on purpose, so writing \
              its manifest would produce the same lying pair by a different route"
         );
@@ -1481,10 +1511,16 @@ mod tests {
             HashBucket::Files,
         );
         let sealed = pending.seal();
-        let outcome =
-            materialize_and_promote(&sealed, &mp, &stage, None, next_promotion_epoch(), false);
+        let outcome = materialize_and_promote(
+            &sealed,
+            &mp,
+            &stage,
+            next_promotion_epoch(),
+            None,
+            ShipVerdict::Withhold(WithholdReason::SourcesDownloading),
+        );
 
-        assert_eq!(outcome.unwrap(), Promotion::Withheld);
+        assert_eq!(outcome.unwrap(), Promotion::Withheld(WithholdReason::SourcesDownloading));
         assert!(
             !mp.generation_dir(sealed.generation_id()).exists(),
             "nothing was frozen"
@@ -1492,22 +1528,397 @@ mod tests {
         assert!(!mp.current_ptr().exists(), "and `current` was never created");
     }
 
-    /// Epochs are per-folder in effect: two folders promoting from one process
-    /// must not starve each other just because the counter is shared.
-    #[test]
-    fn promotion_epochs_do_not_leak_between_folders() {
-        let a_tmp = tempdir().unwrap();
-        let b_tmp = tempdir().unwrap();
-        let a = promo_paths(&a_tmp, &["ga"]);
-        let b = promo_paths(&b_tmp, &["gb"]);
-
-        let ea = next_promotion_epoch();
-        let eb = next_promotion_epoch();
-        assert!(try_promote(&b, eb, "gb").unwrap());
-        assert!(
-            try_promote(&a, ea, "ga").unwrap(),
-            "folder A's promotion must not be refused by folder B's newer epoch"
+    /// The presence pass over a manifest of `names`, with only `on_disk` of them
+    /// staged, then the promotion the seal tail would attempt with its verdict.
+    fn presence_then_promote(
+        tmp: &tempfile::TempDir,
+        names: &[String],
+        on_disk: &[String],
+    ) -> (crate::moss_paths::MossPaths, SealedManifest, Promotion) {
+        let mp = promo_paths(tmp, &["g1"]);
+        mp.set_current_ptr("g1").unwrap();
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(stage.join("assets")).unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for name in names {
+            let bytes = format!("bytes of {name}");
+            if on_disk.contains(name) {
+                std::fs::write(stage.join(name), &bytes).unwrap();
+            }
+            pending.register(
+                &crate::build::served_path::ServedPath::from_source(name).unwrap(),
+                bytes.as_bytes(),
+                HashBucket::Files,
+            );
+        }
+        let mut sealed = pending.seal();
+        let verdict = crate::build::degrade::repair_staged_html(
+            &mp,
+            &stage,
+            &mut sealed,
+            std::collections::HashSet::new(),
         );
+        let promotion =
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, verdict)
+                .unwrap();
+        (mp, sealed, promotion)
+    }
+
+    /// A presence pass that finds nothing it was told exists has not found a
+    /// site with no files; it has failed to look. 404c promoted exactly that —
+    /// 822 of 822 entries dropped and an empty generation served.
+    #[test]
+    fn a_presence_pass_that_loses_the_whole_manifest_withholds_the_generation() {
+        let tmp = tempdir().unwrap();
+        let names: Vec<String> = (0..20).map(|i| format!("assets/f{i}.css")).collect();
+
+        let (mp, _, promotion) = presence_then_promote(&tmp, &names, &[]);
+
+        assert_eq!(
+            promotion,
+            Promotion::Withheld(WithholdReason::ImplausibleLoss { lost: 20, of: 20 })
+        );
+        assert_eq!(served_generation(&mp), "g1", "`current` stays on the last good generation");
+    }
+
+    /// The other side of the line: what vanishes between registration and seal
+    /// in a healthy build is dropped as always, and the generation ships.
+    #[test]
+    fn a_presence_pass_that_loses_one_entry_still_promotes() {
+        let tmp = tempdir().unwrap();
+        let names: Vec<String> = (0..40).map(|i| format!("assets/f{i}.css")).collect();
+
+        let (mp, sealed, promotion) = presence_then_promote(&tmp, &names, &names[1..]);
+
+        assert_eq!(promotion, Promotion::Promoted);
+        assert_eq!(sealed.files().len(), 39);
+        assert_eq!(served_generation(&mp), sealed.generation_id());
+    }
+
+    /// A marker that outlived its pointer — `retire_legacy_roots` removes a
+    /// legacy `current` and leaves the marker — must not let a re-seal of the
+    /// same generation skip the repoint and leave the site unserved.
+    #[test]
+    fn resealing_the_marked_generation_repoints_a_missing_current() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("index.html"), b"<h1>home</h1>").unwrap();
+        let sealed = manifest_of(&[("index.html", b"<h1>home</h1>")]);
+        let promote = || {
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
+        };
+        assert_eq!(promote(), Promotion::Promoted);
+
+        let current = mp.current_ptr();
+        std::fs::remove_file(&current).or_else(|_| std::fs::remove_dir_all(&current)).unwrap();
+        assert_eq!(served_generation(&mp), sealed.generation_id(), "sanity: the marker survives");
+        assert_eq!(promote(), Promotion::Promoted);
+
+        assert!(current.join("index.html").is_file(), "`current` must serve the generation again");
+    }
+
+    /// A generation that shipped bytes other than its manifest's — a concurrent
+    /// build rewrote a stage file after the seal — does not hold what its id
+    /// describes, so the next seal of that id must copy it again, not reuse it.
+    #[test]
+    fn a_generation_that_shipped_drifted_bytes_is_copied_again() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("page.html"), b"<h1>original</h1>").unwrap();
+        let mut sealed = manifest_of(&[("page.html", b"<h1>original</h1>")]);
+        sealed.stamp_all_ship_fingerprints(&stage);
+        let shipped = mp.generation_dir(sealed.generation_id()).join("page.html");
+        let promote = |sealed: &SealedManifest| {
+            materialize_and_promote(sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
+        };
+
+        std::fs::write(stage.join("page.html"), b"<h1>RACED</h1>").unwrap();
+        assert_eq!(promote(&sealed), Promotion::Promoted);
+        assert_eq!(std::fs::read(&shipped).unwrap(), b"<h1>RACED</h1>", "sanity: the drifted bytes shipped");
+
+        std::fs::write(stage.join("page.html"), b"<h1>original</h1>").unwrap();
+        sealed.stamp_all_ship_fingerprints(&stage);
+        #[cfg(unix)]
+        let pointer = || std::os::unix::fs::MetadataExt::ino(&std::fs::symlink_metadata(mp.current_ptr()).unwrap());
+        #[cfg(unix)]
+        let pointer_before = pointer();
+        assert_eq!(promote(&sealed), Promotion::Promoted);
+        assert_eq!(std::fs::read(&shipped).unwrap(), b"<h1>original</h1>", "the generation must be copied again");
+        // Windows `current` is a copy of the generation, so the fixed bytes
+        // reach it only if the re-copy repoints `current` even though the
+        // marker already names this generation.
+        assert_eq!(std::fs::read(mp.current_ptr().join("page.html")).unwrap(), b"<h1>original</h1>");
+        #[cfg(unix)]
+        assert_ne!(pointer(), pointer_before, "a re-copied generation must be repointed");
+    }
+
+    // ─── Seeding a generation from the last whole one ────────────
+
+    /// A generation, and the edit after it: a changed page, an unchanged
+    /// stylesheet, a removed file and a removed directory, and a file that
+    /// becomes a directory and a directory that becomes a file.
+    const SEED_BASE: &[(&str, &[u8])] = &[
+        ("index.html", b"<h1>home v1</h1>"),
+        ("kept.css", b"body{}"),
+        ("gone.txt", b"bye"),
+        ("old/page.html", b"<p>old</p>"),
+        ("flip", b"a file, then a directory"),
+        ("dir2/x.txt", b"a directory, then a file"),
+    ];
+    const SEED_NEXT: &[(&str, &[u8])] = &[
+        ("index.html", b"<h1>home v2</h1>"),
+        ("kept.css", b"body{}"),
+        ("new/added.html", b"<p>new</p>"),
+        ("flip/index.html", b"<p>now a directory</p>"),
+        ("dir2", b"now a file"),
+    ];
+
+    /// Stage `entries` and seal a manifest naming exactly them.
+    fn stage_and_seal(mp: &crate::moss_paths::MossPaths, entries: &[(&str, &[u8])]) -> SealedManifest {
+        for (rel, bytes) in entries {
+            let path = mp.staging_dir().join(rel);
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).unwrap();
+            }
+            if path.parent().unwrap().is_file() {
+                std::fs::remove_file(path.parent().unwrap()).unwrap();
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        manifest_of(entries)
+    }
+
+    fn promote_sealed(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) {
+        let promotion =
+            materialize_and_promote(sealed, mp, &mp.staging_dir(), next_promotion_epoch(), None, ShipVerdict::Ship);
+        assert_eq!(promotion, Ok(Promotion::Promoted));
+    }
+
+    /// Every path under `root`, directories included, with each file's bytes.
+    fn tree(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut dirs = vec![root.to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                if path.is_dir() {
+                    dirs.push(path);
+                    out.insert(rel, None);
+                } else {
+                    out.insert(rel, Some(std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        out
+    }
+
+    /// The tree a full copy of `sealed` produces from the current staging.
+    fn full_copy(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+        let reference = tempdir().unwrap();
+        ship_phase(&mp.staging_dir(), reference.path(), sealed, None, None).unwrap();
+        tree(reference.path())
+    }
+
+    fn lock_file(mp: &crate::moss_paths::MossPaths, gen_id: &str) -> PathBuf {
+        mp.generations_dir().join(format!(".{gen_id}.writing"))
+    }
+
+    /// Seeding writes only what differs, and the tree it leaves is the one a
+    /// full copy would: what the edit removed is gone, including directories
+    /// it emptied and a path that changed between file and directory.
+    #[test]
+    fn a_generation_seeded_from_the_last_whole_one_is_the_tree_a_full_copy_makes() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        // Held so a parallel test's folder lookup cannot evict this folder's record.
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        // A seeded copy keeps the base's file, mtime and all; a full copy
+        // writes it anew from staging, whose copy is marked with another mtime.
+        let marked = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        let staged = mp.staging_dir().join("kept.css");
+        std::fs::File::options().write(true).open(&staged).unwrap().set_modified(marked).unwrap();
+        let base_mtime = |p: &Path| std::fs::metadata(p.join("kept.css")).unwrap().modified().unwrap();
+        let in_base = base_mtime(&mp.generation_dir(base.generation_id()));
+
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        promote_sealed(&mp, &next);
+
+        let gen_dir = mp.generation_dir(next.generation_id());
+        assert_eq!(tree(&gen_dir), full_copy(&mp, &next));
+        assert!(!lock_file(&mp, next.generation_id()).exists(), "the seeded copy finished");
+        let seeded = base_mtime(&gen_dir) == in_base;
+        assert_eq!(seeded, crate::build::io_utils::CLONES_DIRS, "seeded exactly where a directory can be cloned");
+    }
+
+    /// A copy cut off right after its seed leaves the base's outputs under the
+    /// new id. Its lock file stays, so `current` never moves to it and the
+    /// next seal of the id copies it again, to the exact tree.
+    #[test]
+    fn a_copy_cut_off_after_its_seed_is_never_promoted_and_is_copied_again() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        let gen_dir = mp.generation_dir(next.generation_id());
+
+        let lock = crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), next.generation_id())
+            .unwrap();
+        assert_eq!(whole(&mp, &base).is_some_and(|whole| lock.seed_from(&gen_dir, &whole)), crate::build::io_utils::CLONES_DIRS);
+        drop(lock); // the process exits mid-copy
+        assert!(lock_file(&mp, next.generation_id()).exists());
+        assert_eq!(served_generation(&mp), base.generation_id());
+
+        promote_sealed(&mp, &next);
+        assert_eq!(tree(&gen_dir), full_copy(&mp, &next));
+        assert!(!lock_file(&mp, next.generation_id()).exists());
+    }
+
+    /// Seed `generation`, on disk, as it would be recorded for the next copy.
+    fn whole(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) -> Option<WholeGeneration> {
+        WholeGeneration::record(&mp.generation_dir(sealed.generation_id()), sealed.generation_id(), sealed.files())
+    }
+
+    /// A file edited inside the seed after it finished — by a person, or by
+    /// another process — is carried by the clone, and must be written again.
+    #[test]
+    fn a_file_edited_in_the_seed_is_shipped_again() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        std::fs::write(mp.generation_dir(base.generation_id()).join("kept.css"), b"BODY{}").unwrap();
+
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        promote_sealed(&mp, &next);
+        assert_eq!(tree(&mp.generation_dir(next.generation_id())), full_copy(&mp, &next));
+    }
+
+    /// A seed another process removed and copied again under the same id is
+    /// not the one recorded, even where a file's size and mtime still match.
+    #[test]
+    fn a_seed_copied_again_under_its_id_is_not_seeded_from() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        let base_dir = mp.generation_dir(base.generation_id());
+        let moved = tmp.path().join("moved");
+        std::fs::rename(&base_dir, &moved).unwrap();
+        for (rel, _) in SEED_BASE {
+            let (from, to) = (moved.join(rel), base_dir.join(rel));
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(&from, &to).unwrap();
+            let mtime = std::fs::metadata(&from).unwrap().modified().unwrap();
+            if *rel == "kept.css" {
+                std::fs::write(&to, b"BODY{}").unwrap();
+            }
+            std::fs::File::options().write(true).open(&to).unwrap().set_modified(mtime).unwrap();
+        }
+
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        promote_sealed(&mp, &next);
+        assert_eq!(tree(&mp.generation_dir(next.generation_id())), full_copy(&mp, &next));
+    }
+
+    /// A seed file the cloud provider has evicted keeps its size and mtime,
+    /// but its bytes are not there to clone: it is not held.
+    #[test]
+    fn an_evicted_seed_file_is_not_held() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        let Some(whole) = whole(&mp, &base) else { return };
+        let kept = mp.generation_dir(base.generation_id()).join("kept.css");
+        let entry = &base.files()["kept.css"];
+        assert!(whole.still_holds("kept.css", entry, &kept), "sanity: held while on disk");
+        let _cloud = crate::build::icloud::pretend::evicted(&kept);
+        assert!(!whole.still_holds("kept.css", entry, &kept));
+    }
+
+    /// A seed whose lock another writer holds is not waited for.
+    #[test]
+    fn a_seed_whose_lock_is_held_is_not_seeded_from() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        let Some(whole) = whole(&mp, &base) else { return };
+        let _held = GenerationWriteLock::acquire(&mp.generations_dir(), base.generation_id()).unwrap();
+        let lock = GenerationWriteLock::acquire(&mp.generations_dir(), next.generation_id()).unwrap();
+        assert!(!lock.seed_from(&mp.generation_dir(next.generation_id()), &whole));
+        assert!(!mp.generation_dir(next.generation_id()).exists());
+    }
+
+    /// A math PNG the seed lacks — its bytes were evicted when the seed
+    /// shipped — is shipped once they are back, though its entry is unchanged.
+    #[test]
+    fn a_seeded_copy_ships_an_unchanged_entry_its_seed_lacks() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let math = crate::build::served_path::ServedPath::for_math_png("87ba30f2b3c09ca9").unwrap();
+        let with_math = |page: &[u8]| {
+            let mut pending = PendingManifest::new(SiteHashes::default());
+            let sp = crate::build::served_path::ServedPath::from_source("index.html").unwrap();
+            pending.register(&sp, page, HashBucket::Files);
+            pending.register_hashed(&math, &crate::types::content::file_entry("cccc"), HashBucket::Files);
+            std::fs::write(mp.staging_dir().join("index.html"), page).unwrap();
+            pending.seal()
+        };
+        std::fs::create_dir_all(mp.staging_dir()).unwrap();
+        let base = with_math(b"<h1>v1</h1>");
+        promote_sealed(&mp, &base);
+        let shipped = |sealed: &SealedManifest| mp.generation_dir(sealed.generation_id()).join(math.as_str());
+        assert!(!shipped(&base).exists(), "sanity: the evicted PNG was skipped");
+
+        let staged = mp.staging_dir().join(math.as_str());
+        std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        std::fs::write(&staged, b"png").unwrap();
+        let next = with_math(b"<h1>v2</h1>");
+        promote_sealed(&mp, &next);
+        assert_eq!(std::fs::read(shipped(&next)).unwrap(), b"png");
+    }
+
+    /// The last whole generation is no seed once a copy of it was cut off or
+    /// drifted (its lock file is back) or once it is gone: every entry is
+    /// copied, and none of its bytes reach the new generation.
+    #[test]
+    fn a_copy_without_a_usable_seed_copies_every_entry() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        // Same size and mtime, so only the lock file tells.
+        let kept = mp.generation_dir(base.generation_id()).join("kept.css");
+        let mtime = std::fs::metadata(&kept).unwrap().modified().unwrap();
+        std::fs::write(&kept, b"BODY{}").unwrap();
+        std::fs::File::options().write(true).open(&kept).unwrap().set_modified(mtime).unwrap();
+        std::fs::write(lock_file(&mp, base.generation_id()), b"").unwrap();
+
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        promote_sealed(&mp, &next);
+        assert_eq!(tree(&mp.generation_dir(next.generation_id())), full_copy(&mp, &next));
+
+        std::fs::remove_dir_all(mp.generation_dir(next.generation_id())).unwrap();
+        let mut last = SEED_NEXT.to_vec();
+        last.push(("later.html", b"<p>later</p>"));
+        let last = stage_and_seal(&mp, &last);
+        promote_sealed(&mp, &last);
+        assert_eq!(tree(&mp.generation_dir(last.generation_id())), full_copy(&mp, &last));
     }
 
     /// One row per way a referenced `.webp` can fail to be gone, over a single
@@ -1544,9 +1955,9 @@ mod tests {
         let sealed = pending.seal();
 
         let scan = crate::build::media::orphan_prune::ReferenceScan {
-            tails: [
+            tails: std::collections::HashSet::new(),
+            resolved: [
                 "assets/gone.webp",
-                "gone.webp",
                 "myapp/logo.webp",
                 "assets/stub.webp",
                 "assets/real.webp",
@@ -1562,13 +1973,6 @@ mod tests {
         let strip = unregistered_referenced_variants(&scan, &sealed, stage);
 
         assert!(strip.contains("assets/gone.webp"), "{strip:?}");
-        // `path_suffixes` emits every shorter tail of a token, so the scan
-        // reports `gone.webp` beside `assets/gone.webp`. It is inert rather
-        // than wrong: `degrade` resolves each srcset URL against its own page
-        // before testing membership, so a tail no page resolves to strips
-        // nothing — and one that does resolve names a root-level file that
-        // this same predicate has already found unregistered and absent.
-        assert!(strip.contains("gone.webp"), "{strip:?}");
         assert!(
             !strip.contains("myapp/logo.webp"),
             "a file inside a passthrough subtree ships through the subtree's own \
@@ -1583,13 +1987,299 @@ mod tests {
         assert!(!strip.contains("assets/real.webp"), "{strip:?}");
         assert!(
             !strip.contains("_moss/math/eq1.png"),
-            "ADR-030 math PNGs are append-only and served from the live site; the \
+            "math PNGs are append-only and served from the live site; the \
              `.webp` scope is what keeps them (and OG cards) out: {strip:?}"
         );
         assert!(
             !strip.contains("videos/talk.mp4"),
             "video has no `set_failed` path and an emptied <video> falls through to \
              nothing — widening this scope must be a visible edit: {strip:?}"
+        );
+    }
+
+    /// A page below the site root that references its own, present,
+    /// registered variant: nothing is missing, so nothing may be reported.
+    /// The prune's suffix widening turns that one reference into
+    /// `b/assets/x.webp`, `assets/x.webp` and `x.webp`, none of which exist,
+    /// and reading `tails` here reported each as a variant to strip — on
+    /// every build, for every nested reference on the site.
+    #[test]
+    fn a_nested_page_with_every_variant_present_has_nothing_to_strip() {
+        let tmp = tempdir().unwrap();
+        let stage = tmp.path();
+        std::fs::create_dir_all(stage.join("a/b/assets")).unwrap();
+        std::fs::write(
+            stage.join("a/b/index.html"),
+            r#"<picture><source srcset="/a/b/assets/x.webp" type="image/webp"><img src="assets/x.png"></picture>"#,
+        )
+        .unwrap();
+        std::fs::write(stage.join("a/b/assets/x.webp"), b"x").unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.register(
+            &crate::build::served_path::ServedPath::from_source("a/b/assets/x.webp").unwrap(),
+            b"x",
+            HashBucket::ImageVariants,
+        );
+        let sealed = pending.seal();
+
+        let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage);
+        let strip = unregistered_referenced_variants(&scan, &sealed, stage);
+
+        assert!(strip.is_empty(), "{strip:?}");
+    }
+
+    /// The same, for a `../` reference: the prefix the token pattern cannot
+    /// start on has to be taken back, or `../assets/x.webp` on a page in
+    /// `a/b/` resolves beside the page, to a key that does not exist.
+    #[test]
+    fn a_parent_relative_reference_to_a_present_variant_has_nothing_to_strip() {
+        let tmp = tempdir().unwrap();
+        let stage = tmp.path();
+        std::fs::create_dir_all(stage.join("a/b")).unwrap();
+        std::fs::create_dir_all(stage.join("a/assets")).unwrap();
+        std::fs::write(
+            stage.join("a/b/index.html"),
+            r#"<picture><source srcset="../assets/x.webp" type="image/webp"><img src="../assets/x.png"></picture>"#,
+        )
+        .unwrap();
+        std::fs::write(stage.join("a/assets/x.webp"), b"x").unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.register(
+            &crate::build::served_path::ServedPath::from_source("a/assets/x.webp").unwrap(),
+            b"x",
+            HashBucket::ImageVariants,
+        );
+        let sealed = pending.seal();
+
+        let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage);
+        let strip = unregistered_referenced_variants(&scan, &sealed, stage);
+
+        assert!(strip.is_empty(), "{strip:?}");
+    }
+
+    // ─── Ship-by-OID ────────────────────────────────────
+
+    /// The property ship-by-OID exists for: between this build sealing a
+    /// path's hash and shipping its bytes, a second concurrent build can
+    /// rewrite the mutable stage copy. An entry with a live `staged_oid` must
+    /// ship the immutable CAS bytes it was sealed against, not whatever the
+    /// stage path happens to hold by the time `ship_phase` gets to it.
+    #[test]
+    fn ship_phase_ships_correct_bytes_from_cas_despite_stage_dir_being_overwritten() {
+        let stage = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+
+        let object_store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
+        let oid = object_store.store_bytes(b"X", crate::build::cache::RecordMode::Request).unwrap();
+
+        std::fs::write(stage.path().join("style.css"), b"placeholder").unwrap();
+
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("style.css").unwrap();
+        pending.apply_message(sp.as_str().to_string(), "deadbeefdeadbeef", HashBucket::Files, Some(oid));
+        let sealed = pending.seal();
+
+        // A concurrent build rewrites the mutable stage copy after this
+        // manifest's hash was sealed against "X".
+        std::fs::write(stage.path().join("style.css"), b"Y").unwrap();
+
+        ship_phase(stage.path(), site.path(), &sealed, Some(&object_store), None).unwrap();
+
+        assert_eq!(
+            std::fs::read(site.path().join("style.css")).unwrap(),
+            b"X",
+            "the generation must get the bytes the CAS blob was sealed against, not \
+             whatever a concurrent build left in the mutable stage path"
+        );
+    }
+
+    /// Today a false absence here calls `sealed.remove_entries` and the file
+    /// silently vanishes from the promoted generation — a real 404 on the
+    /// live site. An entry with a live `staged_oid` must be judged present by
+    /// its CAS blob, not by a stage copy this generation was never going to
+    /// read from anyway.
+    #[test]
+    fn drop_absent_outputs_keeps_a_cas_backed_entry_whose_stage_copy_is_transiently_absent() {
+        let stage = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+
+        let object_store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
+        let oid = object_store.store_bytes(b"stable bytes", crate::build::cache::RecordMode::Request).unwrap();
+
+        // The stage copy existed once but is transiently gone — an eviction,
+        // a mid-write, anything short of moss deciding the file is gone.
+        std::fs::write(stage.path().join("asset.bin"), b"placeholder").unwrap();
+        std::fs::remove_file(stage.path().join("asset.bin")).unwrap();
+
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("asset.bin").unwrap();
+        pending.apply_message(sp.as_str().to_string(), "cafefacecafeface", HashBucket::Files, Some(oid));
+        let mut sealed = pending.seal();
+
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&object_store));
+
+        assert!(dropped.is_empty(), "nothing should be dropped: {dropped:?}");
+        assert!(
+            sealed.files().contains_key("asset.bin"),
+            "a CAS-backed entry must survive a transiently-absent stage copy"
+        );
+    }
+
+    /// The property `Held` exists for: a derived output has no CAS blob, so
+    /// before it existed a rewrite of its stage path by a later build reached
+    /// this generation under this manifest's frozen hash.
+    #[test]
+    fn ship_phase_ships_held_bytes_despite_stage_dir_being_overwritten() {
+        let stage = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("sitemap.xml").unwrap();
+        pending.register_held(&sp, b"<urlset>A</urlset>".to_vec(), HashBucket::Files).unwrap();
+        let sealed = pending.seal();
+
+        // A concurrent build rewrites the mutable stage copy after this
+        // manifest's hash was sealed.
+        std::fs::write(stage.path().join("sitemap.xml"), b"<urlset>B</urlset>").unwrap();
+
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
+
+        assert_eq!(
+            std::fs::read(site.path().join("sitemap.xml")).unwrap(),
+            b"<urlset>A</urlset>",
+            "the generation must get the bytes this manifest hashed, not the stage's"
+        );
+    }
+
+    /// A held entry has no stage file to read, so its absence is neither a
+    /// dropped entry nor a failed ship.
+    #[test]
+    fn a_held_entry_ships_and_survives_the_presence_pass_with_no_stage_file() {
+        let stage = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("llms.txt").unwrap();
+        pending.register_held(&sp, b"everything".to_vec(), HashBucket::Files).unwrap();
+        let mut sealed = pending.seal();
+
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, None);
+        assert!(dropped.is_empty(), "held bytes are present by construction: {dropped:?}");
+        assert!(sealed.files().contains_key("llms.txt"));
+
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
+        assert_eq!(std::fs::read(site.path().join("llms.txt")).unwrap(), b"everything");
+    }
+
+    /// A failed write of held bytes must fail the ship. Otherwise the
+    /// generation is promoted one file short of what its own manifest names, and
+    /// the gap surfaces at the next publish instead of here. Only that entry
+    /// fails: the rest of the generation is still written, as for any per-file
+    /// fault (`ship_phase`'s doc). Entries are visited in hash-map order, so
+    /// several healthy ones make it likely that some come after the bad one.
+    #[test]
+    fn a_held_output_that_cannot_be_written_fails_the_ship_and_spares_the_rest() {
+        let stage = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        let healthy = ["sitemap.xml", "rss.xml", "a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "f.txt"];
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for rel in healthy.iter().chain(&["llms.txt"]) {
+            let sp = crate::build::served_path::ServedPath::from_source(rel).unwrap();
+            pending.register_held(&sp, format!("bytes of {rel}").into_bytes(), HashBucket::Files).unwrap();
+        }
+        let sealed = pending.seal();
+        // A directory where `llms.txt` must land: the write cannot replace it.
+        std::fs::create_dir(site.path().join("llms.txt")).unwrap();
+
+        let err = ship_phase(stage.path(), site.path(), &sealed, None, None)
+            .expect_err("a generation missing a file its manifest names must not ship");
+
+        assert!(err.to_string().contains("1 file(s) failed"), "{err}");
+        for rel in healthy {
+            assert_eq!(std::fs::read(site.path().join(rel)).unwrap(), format!("bytes of {rel}").into_bytes(), "{rel}");
+        }
+    }
+
+    /// One test that a genuine post-seal byte change is caught...
+    #[test]
+    fn ship_phase_integrity_check_catches_a_genuine_post_seal_byte_change() {
+        let stage = tempdir().unwrap();
+        std::fs::write(stage.path().join("page.html"), b"<h1>original</h1>").unwrap();
+
+        let mut sealed = manifest_of(&[("page.html", b"<h1>original</h1>")]);
+        sealed.stamp_all_ship_fingerprints(stage.path());
+
+        // A concurrent build rewrites the path after the fingerprint was
+        // taken — the exact race this whole change exists to make audible.
+        std::fs::write(stage.path().join("page.html"), b"<h1>RACED</h1>").unwrap();
+
+        let entry = sealed.files().get("page.html").unwrap().clone();
+        let detected =
+            verify_ship_integrity("page.html", &stage.path().join("page.html"), &entry, &sealed);
+        assert!(
+            detected.is_some(),
+            "a genuine post-seal byte change must be caught, not silently shipped unexamined"
+        );
+    }
+
+    /// ...and one that isolates `verify_ship_integrity`'s hash-fallback branch
+    /// on its own: a stale, un-re-stamped fingerprint must not be reported as
+    /// a race once the real hash comparison agrees. (The post-seal repair
+    /// path that keeps a fingerprint fresh in practice —
+    /// `degrade::apply_to_staging`'s rewrite-then-re-stamp discipline — is a
+    /// different scenario, owned by
+    /// `ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry`
+    /// (`media/pipeline_tests.rs`); after c0a7d05 that path can never leave a
+    /// stale fingerprint, so it is not reachable via repair and this test
+    /// exercises the fallback directly instead.)
+    #[test]
+    fn verify_ship_integrity_hash_fallback_ignores_a_stale_fingerprint() {
+        // A real page carries preview annotations in staging that its shipped
+        // copy does not (`apply_transform`/`StripPreviewAttrs`). The manifest
+        // hash is always of the SHIPPED (transformed) bytes, never the staged
+        // ones verbatim — comparing the current bytes' RAW hash against it
+        // would flag every ordinary rewrite of an annotated page as a race.
+        // That is the specific wrong turn a previous revision took.
+        //
+        // The fingerprint is deliberately left STALE (never re-stamped) here:
+        // this test is about `verify_ship_integrity`'s own fail-open
+        // discipline resolving a stat mismatch correctly on its own, not
+        // about `degrade::apply_to_staging`'s separate re-stamp call (which
+        // `ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry`
+        // exercises for real). Re-stamping here would make the stat check
+        // return `None` before ever reaching the hash comparison this test
+        // means to exercise.
+        let stage = tempdir().unwrap();
+        let original = r#"<body data-moss-preview><h1>original</h1></body>"#;
+        std::fs::write(stage.path().join("page.html"), original).unwrap();
+
+        let shipped_original = apply_transform(transform_for("page.html"), original.as_bytes());
+        let hash_original = crate::build::assets::paths::compute_binary_hash(&shipped_original);
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("page.html").unwrap();
+        pending.register_hashed(&sp, &hash_original, HashBucket::Files);
+        let mut sealed = pending.seal();
+        sealed.stamp_all_ship_fingerprints(stage.path());
+
+        // A routine, non-concurrent rewrite — what `degrade::apply_to_staging`
+        // does: new (still-annotated) bytes written straight to stage, and
+        // the manifest hash updated to match the new SHIPPED bytes. A
+        // deliberately different length so the fingerprint's `size` field
+        // disagrees regardless of filesystem timestamp resolution.
+        let repaired = r#"<body data-moss-preview><h1>this page was repaired</h1></body>"#;
+        std::fs::write(stage.path().join("page.html"), repaired).unwrap();
+        let shipped_repaired = apply_transform(transform_for("page.html"), repaired.as_bytes());
+        let new_hash = crate::build::assets::paths::compute_binary_hash(&shipped_repaired);
+        let mut rewrites = std::collections::HashMap::new();
+        rewrites.insert("page.html".to_string(), new_hash);
+        sealed.apply_post_seal_rewrites(rewrites);
+
+        let entry = sealed.files().get("page.html").unwrap().clone();
+        let detected =
+            verify_ship_integrity("page.html", &stage.path().join("page.html"), &entry, &sealed);
+        assert!(
+            detected.is_none(),
+            "a routine, annotated-HTML rewrite whose registered hash was kept in sync must \
+             not be flagged as a race, even with a stale (un-re-stamped) fingerprint"
         );
     }
 }

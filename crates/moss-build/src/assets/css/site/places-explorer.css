@@ -1,0 +1,1361 @@
+/* ============================================================================
+   Places explorer — the interactive pan/zoom layer `places-explorer.js`
+   builds in place of a place-typed namespace root's static map figure.
+
+   Gated partial: ships only when `places-explorer.js` does too, both behind
+   `SiteAssets.places_explorer`. Registered in `build/emit/stylesheet.rs`'s
+   CSS_PARTIALS.
+
+   The runtime creates every selector below (`js-src/site/places-explorer/`);
+   none of it is emitted by Rust, so there is nothing here for the snapshot
+   suite to check beyond this file's own bytes. Every class is registered in
+   moss-core's component contract (`contract/components.rs`), which is what
+   `css_selectors_match_components_table` actually enforces.
+
+   No [data-theme="dark"] branch anywhere in this file on purpose: every
+   colour below is a `--moss-color-*`/`--moss-place-*` token, and both
+   already carry their own light/dark values — this file only has to read
+   them once.
+   ========================================================================= */
+
+@layer shortcodes {
+
+[data-moss-places-explorer] {
+  --moss-places-explorer: 1;
+}
+
+/* `?embed=1`: this is still the full places-root page, just loaded into a
+   small hydrated iframe (embed.ts's own lazy iframe, always kept at
+   opacity 0 until its content posts ready — so hiding chrome here, rather
+   than earlier, causes no visible flash; nothing outside this iframe's own
+   document is ever shown with its chrome on). Without this, the site's own
+   header/nav/footer/colophon render crammed into whatever small box the
+   poster gave the iframe, instead of just the map the embed exists to
+   show. `data-moss-embed` is set by embed.ts's own `attachEmbedModeIfRequested`,
+   never by Rust — this partial ships only on the places root anyway (same
+   gate as the explorer itself), so it is the right place for the rule to
+   live rather than site.css, which every page would otherwise carry it on
+   for a flag that only this one page ever sets. */
+html[data-moss-embed] header,
+html[data-moss-embed] footer,
+html[data-moss-embed] .moss-colophon,
+html[data-moss-embed] .moss-nav-island,
+html[data-moss-embed] .moss-skip-link {
+  display: none;
+}
+/* The places root's own `<h1>`/intro content (if any) sits in the same
+   `article.container` as the explorer figure, ABOVE it — fine on the full
+   page, where there is a whole viewport's height to share, but inside a
+   small embed it just pushes the figure (already sized to its own
+   `100svh` by design decision 7 below) down past the iframe's own box.
+   The explorer figure is the ENTIRE embed; everything else in the
+   article is the full page's own framing, not the embed's. */
+html[data-moss-embed] main article.container > :not(figure[data-moss-places-explorer]) {
+  display: none;
+}
+/* The article's own block margin (64px on a typical theme) would push the
+   figure's 100svh past the iframe's height, and the overflow shows up as a
+   vertical scrollbar that costs a classic-scrollbar engine its width. */
+html[data-moss-embed] main article.container {
+  margin-block: 0;
+}
+/* Design decision 7 below floors the full page's own figure at 480px tall
+   so a short viewport still gets a usable map — exactly wrong for a small
+   collapsed embed, which wants to fill whatever (possibly much shorter)
+   box the poster gave its iframe, not overflow past it. `100svh` alone,
+   with no floor, is the iframe's own full height either way: collapsed,
+   that IS the small box; expanded (fullscreen), it is the screen, already
+   well past 480px, so this is a no-op there. The extra `main` ancestor in
+   this selector (vs. the plain rule below) only exists to outrank it on
+   specificity, not to reach further. */
+html[data-moss-embed] main article.container > figure[data-moss-places-explorer] {
+  block-size: 100svh;
+}
+
+/* The map is a horizontal widget. Under `typesetting = "vertical"`,
+   site/vertical.css turns `body` into a fixed-height vertical-rl column, and
+   a figure sized with `100cqi` inside it paints half outside the column.
+   The explorer page and its embed page therefore set the body back to
+   horizontal flow: nothing about the map is typeset text, and the site's own
+   header keeps its chrome. The embed also drops the column's head margin and
+   fixed height, which would otherwise crop the iframe's map. Chosen over
+   leaving `data-typesetting` off the page because the embed is only known
+   from the URL at runtime, never at render time. */
+body[data-typesetting="vertical"]:has(main article.container > figure[data-moss-places-explorer]),
+html[data-moss-embed] body[data-typesetting="vertical"] {
+  writing-mode: horizontal-tb;
+  margin-top: 0;
+  height: auto;
+  overflow: visible;
+}
+
+/* ---------------------------------------------------------------------------
+   Design decision 7: "the map is the page". `[data-moss-places-explorer]`
+   is set ONLY on the places namespace root's own figure
+   (`context.rs`'s `with_explorer_handshake`, spliced in only for
+   `key == self.namespace`), so every rule below is already scoped to that
+   one figure and needs no further `:root`/page-type qualifier — a site
+   with the explorer off never emits the attribute at all, and every OTHER
+   place page's own static figure keeps the fixed 3:2 box this replaces.
+
+   Width: the same content-width escape site.css's own
+   `article.container > [data-width="screen"]` gives a hand-authored
+   full-width embed — `100cqi` (`main`'s own container-query inline size,
+   set by site.css's `main { container-type: inline-size; }`), centred with
+   equal negative inline margins — but applied unconditionally at every
+   width, never collapsed back to the text column the way that rule's own
+   `@media (max-width: 48rem)` branch collapses a hand-authored one. This
+   file owns the figure's layout outright, so it reimplements the same two
+   declarations directly (`100cqi`, not the `--moss-escape` indirection
+   site.css's rule uses to pick between `wide`/`page`/`screen` — this
+   figure is never anything but the widest of the three) rather than
+   requiring the renderer to also emit `data-width="screen"` on a figure
+   that already carries its own handshake attributes.
+
+   Height: `100svh` minus this figure's own current top offset, floored at
+   480px — the map fills the viewport BELOW the header, not a header's
+   worth past its bottom. CSS alone cannot subtract one flex sibling's
+   height from another's (no fixed constant survives a site's nav wrapping
+   to a second or third row, which this gate's own fixture does), so
+   `map.ts`'s `syncFigureOffset` writes the one number it needs —
+   `--moss-place-figure-top`, this figure's own `getBoundingClientRect().top`
+   — at mount and on every resize. A collapsed heading/no-script build (the
+   custom property unset) falls back to the OLD behaviour: a full `100svh`,
+   its bottom a header's height past the viewport's own — worse than
+   subtracting, never worse than before this fix. */
+article.container > figure[data-moss-places-explorer] {
+  /* Plus body's sidenote inset, so the map reaches the window's edge on a
+     site with footnotes (see site.css's `[data-width="screen"]`). The
+     margins are physical because the inset is a physical padding-right:
+     an over-constrained box drops its end-side margin, so left-to-right
+     pages position from the left and right-to-left pages from the right,
+     and both reach the window's right edge. */
+  inline-size: calc(100cqi + var(--moss-sidenote-inset, 0px));
+  max-inline-size: none;
+  margin-left: calc((100% - 100cqi) / 2);
+  margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));
+  /* A bare `<figure>`'s own UA margin-block-start used to open a gap here
+     the header's own border-removal rule above can't see — the explorer
+     root's no-heading composition (`render/html.rs`'s `is_explorer_root`)
+     made the figure the article's first child for the first time, where
+     nothing had zeroed this before. The header's bottom edge and the map's
+     top edge must coincide exactly. */
+  margin-block-start: 0;
+  /* Same UA default on the trailing edge: unzeroed, it collapses through
+     `article.container`'s own empty bottom edge (no border/padding stops
+     it) and reopens the gap the rules below work to close. Safe to zero
+     unconditionally — on a root WITH an authored intro paragraph, sibling
+     margin collapse with that paragraph's own margin-block-start still
+     gives it the normal breathing room (collapse takes the larger of the
+     two, not zero plus the paragraph's). */
+  margin-block-end: 0;
+  block-size: max(480px, calc(100svh - var(--moss-place-figure-top, 0px)));
+}
+
+/* The header rule a hand-authored full-width hero already removes when it
+   sits directly after `<header>` (`header:has(+ .moss-hero) .nav-content`,
+   site.css) — this figure sits deeper, inside `<main>`, so the `:has()`
+   argument reaches through that extra descendant combinator instead of a
+   plain `+`. */
+header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-content {
+  border-block-end: none;
+}
+
+/* The explorer root hosts no children/term listing below the map (fixed
+   alongside `render/html.rs`'s `show_folder_children`/`render_explorer_folder_lead`
+   gates), so the figure's own hidden `<h1>` — out of flow via
+   `.visually-hidden`'s `position: absolute` — is the map's only sibling,
+   and nothing visible follows it inside `article.container`. The footer's
+   own divider (`footer.container::before` in site.css) must not draw a
+   second line a few rem below a map that already fills the viewport; the
+   map's bottom edge meets the footer's top with no gap instead. A root
+   with an authored intro paragraph keeps the divider — that visible text
+   is the footer's actual preceding sibling, not the map. */
+main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) + footer.container {
+  margin-block-start: 0;
+}
+main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) + footer.container::before {
+  border-block-start: none;
+  margin-block-end: 0;
+}
+/* The generic `article { margin-block-end: var(--moss-space-2xl) }` body-copy
+   rule (site.css) reaches this `<article>` too — it is one, `.container`
+   besides — and alone still leaves the footer's own removed margin nothing
+   to close: this is the other half of the gap, scoped to the same
+   no-authored-body condition as the footer rules above. */
+main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) > article.container {
+  margin-block-end: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   The map as background, filling the figure's box
+   --------------------------------------------------------------------------- */
+
+/* The viewport fills its figure's own box — design decision 7 above sets
+   that figure's height, and `mountPlacesMap` only ever mounts this element
+   inside the explorer root figure, so there is no other context to size
+   for. The water colour is the SAME token the inlined world SVG's own
+   `<rect>` paints, so the box reads correctly even for the one frame before
+   that SVG's layout settles — first paint, in both themes, from the
+   token. */
+.moss-places-viewport {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  border-radius: 8px;
+  background: var(--moss-place-water, #dbe7ea);
+  block-size: 100%;
+}
+.moss-places-viewport[data-dragging] {
+  cursor: grabbing;
+}
+/* The collapsed embed's cooperative-gesture mode (embed.ts's own
+   `setCooperativeGestures`): a lone touch is left for the PAGE's own
+   vertical scroll instead of panning the map, so the viewport's own
+   touch-action must allow it — `gestures.ts` only ever claims a second
+   touch (wheel zoom and pinch/two-finger pan still work, neither of
+   which `pan-y` disables). */
+.moss-places-viewport[data-gesture-mode="cooperative"] {
+  touch-action: pan-y;
+}
+.moss-places-viewport:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: -2px;
+}
+
+/* ---------------------------------------------------------------------------
+   World + tiles: the layer the camera's CSS transform actually moves.
+   --------------------------------------------------------------------------- */
+
+/* Sized and transformed from JS (map.ts's applyCamera): width/height are the
+   cover-scale box in CSS px, transform is translate+scale from the live
+   camera. will-change is permanent now, not scoped to an active gesture
+   (data-gesture, still set/cleared for the label-hiding rule further down):
+   the world layer's own content is a decoded raster plus a thin, unfiltered
+   rivers overlay (map.ts's module doc), neither of which has a live filter
+   left for a permanent compositor layer to force a soft re-rasterisation
+   of — the old comment's own concern (a zoomed-out-then-back-in map reading
+   blurry) applied to a live, filtered `<svg>` promoted only for a gesture's
+   span, not to a raster map.ts itself re-decodes at a sharper size on
+   settle. A measured win for Chromium specifically (see that file's doc):
+   without it, a filtered live SVG's own paint invalidation on every
+   transform change cost whole frames even before WebKit's own, larger cost
+   entered the picture. */
+.moss-places-world {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center;
+  will-change: transform;
+}
+
+/* Opacity is the cross-fade `tiles.ts`'s `TileLayer.render` drives through
+   this one custom property (`tileFadeOpacity`) — 0 below the fade band
+   short of the world layer's own detail ceiling, where `render` also
+   removes every tile element outright, so the property reaching 0 and the
+   layer having nothing in it to fade happen together. The transition only
+   has to smooth the RISE through the band (the fall is already silent: by
+   the time `render` clears the DOM, opacity has already ramped to 0), but
+   guarding it is still correct for the reduced-motion reader regardless of
+   direction. */
+.moss-places-tiles {
+  position: absolute;
+  inset: 0;
+  opacity: var(--moss-place-tile-opacity, 0);
+  /* Tiles carry a z-index for their draw order; at opacity 1 this element
+     is no stacking context of its own, so without this they would compete
+     with the markers and cards above the layer. */
+  isolation: isolate;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-tiles {
+    transition: opacity 150ms ease-out;
+  }
+}
+
+/* Each regional tile is now a plain positioned wrapper (map.ts's module
+   doc): `tiles.ts`'s own `position()` sets left/top/transform-origin/
+   transform exactly as it always did, and sets this element's own
+   width/height directly from the tile's native SVG canvas size (a
+   different aspect ratio per cell, shorter toward the poles) — the same
+   intrinsic size a bare `<svg width height>` used to carry on its own, now
+   carried as an explicit style instead since a `<div>` has no viewBox of
+   its own to infer one from. */
+.moss-places-tile {
+  position: absolute;
+}
+
+/* The world surface and every tile raster are cut from one continuous map, so
+   a rounded corner on any of them leaves a four-pointed gap where four tiles
+   meet. The explorer sits inside `article`, whose `article img` rule rounds
+   every image by 6px (scaled up with the tile's own transform), so the
+   reset has to out-rank it. */
+.moss-places-viewport img {
+  border-radius: 0;
+}
+
+/* The tile's own raster (an `<img>`, or the live, unrasterised SVG on the
+   progressive-enhancement fallback path — see raster.ts's
+   `rasterizeOrFallback`) fills that wrapper exactly; `display: block` drops
+   the inline-replaced baseline gap a bare `<img>` would otherwise leave
+   beneath it. Its rivers overlay (if any) fills the same box but stacks
+   OVER it by `position: absolute` instead of normal flow, so the pair
+   paints as one image rather than the overlay pushing a second row below. */
+.moss-places-tile > img {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+.moss-places-tile > .moss-places-rivers {
+  position: absolute;
+  inset: 0;
+}
+
+/* The world layer's own surface: site.css's `.moss-place-map svg {
+   inline-size: 100%; block-size: auto; aspect-ratio: 3 / 2; }` is right for
+   every per-page static figure (the fixed 720x480, 3:2 canvas
+   `geometry.rs`'s `VIEWBOX_WIDTH`/`VIEWBOX_HEIGHT` draw every one of those
+   at) but wrong here: the shared world SVG (`explorer::emit_world_svg`) is
+   wider than that — `geometry.rs`'s `world_viewbox_width()` is the full,
+   uncropped Patterson extent (about 842 x 480, not 720 x 480), because this
+   one copy is panned and zoomed across the whole globe at runtime rather
+   than cropped once like a per-page map. Forcing the generic 3:2
+   `aspect-ratio` onto it narrowed the content `map.ts`'s own `applyCamera`
+   already sized exactly via `worldEl.style.width`/`height`. `100%` in both
+   axes fills exactly the box `applyCamera` computed, no second aspect-ratio
+   opinion layered on top; keyed on `[data-moss-places-explorer]` so it
+   always wins regardless of source order, the same specificity trick the
+   generic rule itself uses. `img` and `svg` share one selector: the surface
+   is whichever one `rasterizeOrFallback` actually produced. */
+[data-moss-places-explorer] .moss-places-world > img,
+[data-moss-places-explorer] .moss-places-world > svg {
+  inline-size: 100%;
+  block-size: 100%;
+  aspect-ratio: auto;
+}
+
+/* The world's own rivers overlay sits directly in `.moss-places-world`
+   (not inside a `.moss-places-tile` wrapper), so it needs the same
+   specificity guard against the generic `.moss-place-map svg` rule the
+   world surface rule above does. */
+[data-moss-places-explorer] .moss-places-world > .moss-places-rivers {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  aspect-ratio: auto;
+}
+
+/* Rivers keep a constant ON-SCREEN width as the camera zooms the world
+   layer, via the one custom property applyCamera still writes on every
+   settle: `--river-w` (copied once per path from its own baked
+   stroke-width, raster.ts's `splitMapSvg`) is what lets this scale without
+   flattening each river's own rank taper. `[data-map-layer="rivers"]` is
+   the emitter's own contract (`place_map/svg.rs`), not a class this
+   stylesheet owns — see that module's doc for the group shape this
+   selector reads. The relief/lighting fade this file used to drive the
+   same way is gone: see map.ts's own module doc for why dropping it is
+   safe, and raster.ts's `WORLD_RELIEF_STRENGTH`/`TILE_RELIEF_STRENGTH` for
+   where its old job landed instead. */
+[data-moss-places-explorer] [data-map-layer="rivers"] path {
+  stroke-width: calc(var(--river-w, 1) * var(--moss-place-river-scale, 1));
+}
+
+/* ---------------------------------------------------------------------------
+   Place-name labels: above the map, below the markers. DOM order alone
+   gives that stacking (no z-index on this layer, matching the markers
+   layer's own default z-index: auto base) — `labels.ts` appends
+   `.moss-places-labels` right after `.moss-places-world` and before
+   `.moss-places-markers`.
+   --------------------------------------------------------------------------- */
+
+/* Every `.moss-places-label`/`.moss-places-label-dot` is built once and
+   lives in the DOM for the whole session (`labels.ts`'s own "measure once,
+   reposition every settle" split) — `[hidden]` (the UA default, not a rule
+   this file adds) is what keeps an unplaced one out of layout and
+   hit-testing between settles. */
+.moss-places-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Hidden for the SAME window `.moss-places-world[data-gesture]` promotes
+   the map to its own compositing layer — a label's screen position is only
+   ever recomputed on settle (`map.ts`'s own `applyCamera`), so showing one
+   mid-gesture would read as floating free of the geography it names. The
+   sibling selector reaches across `.moss-places-labels`' own position in
+   the DOM (between `.moss-places-world` and `.moss-places-markers`)
+   without this file needing a second attribute JS has to set and clear in
+   step with the world layer's own. */
+.moss-places-world[data-gesture] ~ .moss-places-labels {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-labels {
+    transition: opacity 150ms ease-out;
+  }
+}
+
+.moss-places-label {
+  position: absolute;
+  white-space: nowrap;
+  font-family: var(--moss-font-body);
+  font-size: 0.8125rem;
+  color: var(--moss-color-text);
+  text-shadow:
+    0 1px 2px var(--moss-color-bg),
+    0 -1px 2px var(--moss-color-bg),
+    1px 0 2px var(--moss-color-bg),
+    -1px 0 2px var(--moss-color-bg);
+}
+
+/* Ranges: letter-spaced small caps read as a region name rather than a
+   point, the quiet cartographic distinction the design asks for — no
+   colour change of its own, so it still reads as "the same map" as a city
+   name beside it. */
+.moss-places-label[data-kind="range"] {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Peaks: the "▲ " prefix is baked into the text at build time
+   (`labels.ts`'s own `buildPoint`), so no CSS content/pseudo-element is
+   needed here — this rule only has to mute it slightly against a plain
+   city name. */
+.moss-places-label[data-kind="peak"] {
+  font-size: 0.75rem;
+  color: var(--moss-color-text-secondary);
+}
+
+/* Rivers: italic, and tinted toward the SAME water blue
+   `.moss-places-viewport`'s own `--moss-place-water` already paints —
+   mixed mostly with the ordinary text colour (not read directly) so it
+   stays legible against land, water and relief alike in both themes
+   without a dedicated token of its own. */
+.moss-places-label[data-kind="river"] {
+  font-style: italic;
+  font-size: 0.75rem;
+  color: color-mix(in oklch, var(--moss-color-text-secondary) 70%, var(--moss-place-water, #dbe7ea) 30%);
+}
+
+.moss-places-label-dot {
+  position: absolute;
+  inline-size: 4px;
+  block-size: 4px;
+  margin-inline-start: -2px;
+  margin-block-start: -2px;
+  border-radius: 50%;
+  background: var(--moss-color-text);
+  box-shadow: 0 0 0 1px var(--moss-color-bg);
+}
+
+/* ---------------------------------------------------------------------------
+   Markers + the coincident-cluster ring.
+   --------------------------------------------------------------------------- */
+
+/* Positioned (not transformed) by JS on every settle — markers stay a
+   constant on-screen size regardless of the world layer's own zoom, so this
+   layer is never itself scaled; `pointer-events: none` lets a drag that
+   starts over empty water still pan the map, and each marker/dot opts back
+   into `auto` below. */
+.moss-places-markers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.moss-places-marker {
+  position: absolute;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+/* The visible mark: a small casing+dot for exact/city precision (the same
+   fixed on-screen size the static map's own `marker_radius()` uses), a
+   softer, larger fade for region/country — privacy carried by the mark's
+   own shape, never by how far the map happens to be zoomed. */
+.moss-places-marker::before {
+  content: "";
+  position: absolute;
+  inset: 17px;
+  border-radius: 50%;
+  background: var(--moss-place-marker, #2d5a2d);
+  border: 2px solid var(--moss-place-marker-casing, #fff);
+}
+/* A region or country keeps the dot — a bare fade alone was nearly
+   invisible on the map — and adds the soft area around it. */
+.moss-places-marker[data-precision="region"]::before,
+.moss-places-marker[data-precision="country"]::before {
+  box-shadow: 0 0 0 9px color-mix(in srgb, var(--moss-place-marker, #2d5a2d) 22%, transparent);
+}
+/* The current article's marker (or the cluster holding it) while every
+   article is shown: a ring, distinct from the selected marker's heavier dot. */
+.moss-places-marker[data-current="true"]:not([data-selected="true"]) {
+  box-shadow: inset 0 0 0 2px var(--moss-place-marker-casing, #fff), inset 0 0 0 4px var(--moss-place-marker, #2d5a2d);
+}
+.moss-places-marker[data-selected="true"]::before {
+  inset: 14px;
+  border-width: 3px;
+}
+/* The ring's own anchor: shrinks to a small place dot once every member has
+   its own ring-dot button — no halo (redundant with the ring) and no count
+   (the N dots already say that). */
+.moss-places-marker[data-ring-anchor]::before {
+  inset: 19px;
+  border-width: 1px;
+}
+/* Count badge: `::after` reads `data-count` directly, so a single-work
+   marker (no attribute) never generates the pseudo-element at all — never
+   an empty circle sitting on top of the dot. */
+.moss-places-marker[data-count]::after {
+  content: attr(data-count);
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-width: 20px;
+  min-height: 20px;
+  padding-inline: 4px;
+  border-radius: 999px;
+  background: var(--moss-place-marker, #2d5a2d);
+  color: var(--moss-place-marker-casing, #fff);
+  border: 2px solid var(--moss-place-marker-casing, #fff);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* Every marker not part of the open ring steps back — full opacity
+   underneath, so a pan/zoom that re-clusters them away from the ring (and
+   so clears it) never has to fade anything back in from a different state. */
+.moss-places-marker[data-dimmed] {
+  opacity: 0.35;
+  z-index: 0;
+}
+.moss-places-marker:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-marker {
+    transition: opacity 200ms ease-out;
+  }
+}
+
+/* Hairline from the ring's anchor to each of its own dots — left/top/width
+   set by JS at the anchor point, rotated to the dot's own angle;
+   transform-origin at the LEFT edge is what makes that rotation pivot on
+   the anchor rather than the leg's own centre. */
+.moss-places-ring-leg {
+  position: absolute;
+  z-index: 1;
+  height: 1px;
+  background: var(--moss-place-marker, #2d5a2d);
+  opacity: 0.5;
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+
+.moss-places-ring-dot {
+  position: absolute;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+.moss-places-ring-dot::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: var(--moss-place-marker, #2d5a2d);
+  border: 2px solid var(--moss-place-marker-casing, #fff);
+}
+.moss-places-ring-dot[data-selected="true"]::before {
+  inset: 5px;
+  border-width: 3px;
+}
+.moss-places-ring-dot:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+/* ---------------------------------------------------------------------------
+   Controls: the glass zoom capsule and the reset circle.
+
+   Material is a translucent surface tint plus a blur+saturate filter (never
+   applied under prefers-reduced-transparency, which a reduced-transparency
+   reader has already opted into for exactly this reason) and a 0.5px
+   top/bottom rim that reads as a specular highlight/shadow pair, the same
+   recipe a prototype of this map settled on. Each control's own 36px
+   visible circle carries a 44px hit area through an inset `::after`
+   pseudo-element wider than the paint, so the hit area never changes the
+   capsule's own rhythm.
+   --------------------------------------------------------------------------- */
+
+.moss-places-controls {
+  position: absolute;
+  z-index: 4;
+  inset-block-start: 12px;
+  inset-inline-end: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.moss-places-control,
+.moss-places-capsule,
+.moss-places-chip,
+.moss-places-chip-menu {
+  position: relative;
+  margin: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--moss-color-surface) 72%, transparent);
+  box-shadow:
+    var(--moss-elevation-1),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -0.5px 0 rgba(0, 0, 0, 0.08);
+  color: var(--moss-color-text);
+}
+@media not (prefers-reduced-transparency: reduce) {
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .moss-places-control,
+    .moss-places-capsule,
+    .moss-places-chip,
+    .moss-places-chip-menu {
+      backdrop-filter: blur(16px) saturate(180%);
+      -webkit-backdrop-filter: blur(16px) saturate(180%);
+    }
+  }
+}
+
+.moss-places-control {
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  font: inherit;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.moss-places-control::before {
+  content: "";
+  font-size: 20px;
+  line-height: 1;
+}
+.moss-places-control[data-control="zoom-in"]::before {
+  content: "+";
+}
+.moss-places-control[data-control="zoom-out"]::before {
+  content: "\2212"; /* minus sign, not a hyphen */
+}
+.moss-places-control[data-control="reset"]::before {
+  width: 13px;
+  height: 13px;
+  border: 1.75px solid currentColor;
+  border-radius: 50%;
+}
+/* The invisible hit area: grows past the painted circle's own edge without
+   changing the capsule's rhythm, and the capsule group below never clips
+   with overflow, so this can safely extend past the visible cell. */
+.moss-places-control::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.moss-places-control:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* The capsule carries the material/radius/shadow; its own two cells are
+   transparent so that background shows through, divided by one hairline.
+   Each cell's own corners inherit the capsule's radius at its two OUTER
+   logical corners only — `border-radius: 0` on a flat cell would paint a
+   square hover/pressed fill poking past the capsule's own rounded ends. */
+.moss-places-capsule {
+  display: flex;
+  flex-direction: column;
+  width: 36px;
+  border-radius: 18px;
+}
+.moss-places-capsule .moss-places-control {
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-radius: 0;
+}
+.moss-places-capsule .moss-places-control:first-child {
+  border-start-start-radius: inherit;
+  border-start-end-radius: inherit;
+}
+.moss-places-capsule .moss-places-control:last-child {
+  border-end-start-radius: inherit;
+  border-end-end-radius: inherit;
+}
+.moss-places-capsule .moss-places-control + .moss-places-control {
+  border-block-start: 1px solid color-mix(in srgb, var(--moss-color-text) 14%, transparent);
+}
+
+@media (hover: hover) {
+  .moss-places-control:hover {
+    background: color-mix(in srgb, var(--moss-color-surface) 90%, transparent);
+  }
+}
+.moss-places-control:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-control {
+    transition: background 150ms ease-out, transform 150ms ease-out;
+  }
+  .moss-places-control:active {
+    transform: scale(0.94);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   The breadcrumb scope chip: the map's one hierarchy control, top left —
+   the same glass material (above) as the zoom capsule opposite it. Replaces
+   a bloomed ring's own former standalone "close" affordance: every crumb
+   before the ring's own trailing "N here" one already closes the ring on
+   click, because widening (or re-choosing the SAME scope) always does
+   (`map.ts`'s `setScope`, `chip.ts`'s own module doc).
+   --------------------------------------------------------------------------- */
+
+/* A collapsed embed (`embed.ts`'s own `data-moss-places-embed-mode`) has no
+   room for the chip and nothing to widen from before the reader expands it
+   — hidden there, and shown again the moment the expand control flips this
+   attribute to "expanded". */
+[data-moss-places-embed-mode="collapsed"] .moss-places-chip {
+  display: none;
+}
+
+.moss-places-chip {
+  position: absolute;
+  z-index: 4;
+  inset-block-start: 12px;
+  inset-inline-start: 12px;
+  /* Clears the 36px control column plus its own inset and a gap, at any
+     viewport — see chip.ts's module doc for why the menu anchors to this
+     same left edge rather than to whichever crumb opened it. */
+  max-inline-size: calc(100% - 84px);
+  padding-inline: 10px;
+  padding-block: 7px;
+  border-radius: 18px;
+  font-size: var(--moss-size-xs);
+  line-height: 1.2;
+  /* No `overflow: hidden` here — it would clip the dropped-down menu, which
+     is an absolutely-positioned CHILD of this box. The trail itself stays
+     inside `max-inline-size` without it: every crumb carries its own
+     `min-inline-size: 0` plus `text-overflow: ellipsis`, so flex shrinking
+     (not a clip on the container) is what keeps the row from overflowing. */
+}
+
+/* The host page's exit control sits at the top left of a fullscreen embed in
+   some engines (embed.ts measures it and sets the attribute). Where the chip
+   also starts at the left (LTR) it starts after the control, beside it; where
+   the page is too narrow for that, below it, at the ordinary start and cap. */
+[data-moss-places-embed-mode="expanded"][data-moss-places-host-control-top-left] .moss-places-chip:dir(ltr) {
+  inset-inline-start: 72px;
+  max-inline-size: calc(100% - 144px);
+}
+
+@media (max-width: 450px) {
+  [data-moss-places-embed-mode="expanded"][data-moss-places-host-control-top-left] .moss-places-chip:dir(ltr) {
+    inset-block-start: 72px;
+    inset-inline-start: 12px;
+    max-inline-size: calc(100% - 84px);
+  }
+}
+
+.moss-places-chip-trail {
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+}
+
+/* Flex, not the button UA default (which centres a multi-line label
+   vertically only once its own box is taller than its content) — the same
+   fix `.moss-places-card-select` already needed, so every crumb and
+   separator shares one vertical centre regardless of which element is a
+   real `<button>`. */
+.moss-places-chip-crumb,
+.moss-places-chip-sep,
+.moss-places-chip-chevron {
+  display: flex;
+  align-items: center;
+}
+.moss-places-chip-crumb {
+  gap: 3px;
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.moss-places-chip-crumb {
+  cursor: pointer;
+  border-radius: 4px;
+}
+@media (hover: hover) {
+  button.moss-places-chip-crumb:hover {
+    color: var(--moss-color-accent);
+  }
+}
+.moss-places-chip-crumb:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+}
+.moss-places-chip-crumb[data-terminal] {
+  font-weight: 600;
+}
+
+/* The "This article | All articles" switch: a segmented pair standing in
+   for the root crumb. The selected segment differs in weight and fill, not
+   colour alone, and casts no shadow: it sits inside a chip that already
+   carries the resting elevation, and every elevation level casts further
+   than the 2px track around it. */
+.moss-places-chip-scope {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-block: -4px;
+  margin-inline-start: -6px;
+  padding: 2px;
+  border-radius: 14px; /* concentric with the chip's 18px at a 4px inset */
+  background: color-mix(in srgb, var(--moss-color-text) 7%, transparent);
+}
+.moss-places-chip-scope-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  font: inherit;
+  color: var(--moss-color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.moss-places-chip-scope-option[aria-current="true"] {
+  color: var(--moss-color-text);
+  font-weight: 600;
+  background: var(--moss-color-surface);
+}
+/* 44px touch target without growing the chip */
+.moss-places-chip-scope-option::after {
+  content: "";
+  position: absolute;
+  inset: -11px 0;
+}
+@media (hover: hover) {
+  .moss-places-chip-scope-option:not([aria-current="true"]):hover {
+    color: var(--moss-color-accent);
+  }
+}
+.moss-places-chip-scope-option:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+}
+.moss-places-chip-scope + .moss-places-chip-sep,
+.moss-places-chip-scope + .moss-places-chip-collapsible,
+.moss-places-chip-scope + .moss-places-chip-ellipsis {
+  margin-inline-start: 2px;
+}
+.moss-places-chip-scope-option[aria-expanded="true"] .moss-places-chip-chevron {
+  transform: rotate(180deg);
+}
+
+.moss-places-chip-sep {
+  flex: 0 0 auto;
+  padding-inline: 4px;
+  color: var(--moss-color-text-secondary);
+}
+
+.moss-places-chip-chevron {
+  flex: 0 0 auto;
+}
+.moss-places-chip-crumb[aria-expanded="true"] .moss-places-chip-chevron {
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-chip-chevron {
+    transition: transform 150ms ease-out;
+  }
+}
+
+/* The phone collapse: both halves always render (so there is nothing for
+   JS to toggle on resize), CSS alone decides which one is visible — except
+   `[data-expanded]`, which `chip.ts`'s ellipsis button toggles itself to
+   reveal the collapsed crumbs in place, keyboard/touch-reachable again,
+   without waiting for a wider viewport. */
+.moss-places-chip-collapsible {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: 0;
+}
+.moss-places-chip-ellipsis {
+  display: none;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--moss-color-text-secondary);
+  cursor: pointer;
+}
+@media (max-width: 48rem) {
+  .moss-places-chip-collapsible {
+    display: none;
+  }
+  .moss-places-chip-collapsible[data-expanded] {
+    display: inline-flex;
+  }
+  .moss-places-chip-ellipsis {
+    display: flex;
+  }
+}
+.moss-places-chip-ellipsis:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+}
+
+.moss-places-chip-menu {
+  position: absolute;
+  z-index: 5;
+  inset-block-start: calc(100% + 6px);
+  inset-inline-start: 12px;
+  min-inline-size: 160px;
+  max-inline-size: 260px;
+  max-block-size: 50vh;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.moss-places-chip-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  inline-size: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.moss-places-chip-menu-count {
+  color: var(--moss-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+@media (hover: hover) {
+  .moss-places-chip-menu-item:hover {
+    background: color-mix(in srgb, var(--moss-color-surface) 90%, transparent);
+  }
+}
+.moss-places-chip-menu-item:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: -2px;
+}
+
+/* ---------------------------------------------------------------------------
+   Cards: the works row, floating along the bottom.
+   --------------------------------------------------------------------------- */
+
+.moss-places-cards {
+  position: absolute;
+  z-index: 3;
+  /* Edge to edge: the first card rests 12px in, and cards scroll out under
+     the map's own edge rather than stopping 12px short of it. */
+  inset-inline: 0;
+  padding-inline: 12px;
+  scroll-padding-inline: 12px;
+  inset-block-end: 12px;
+  /* The row is a fixed, tall band along the bottom and its cards sit on its
+     floor: an opened card grows UP inside the band, so nothing else (the
+     other cards, the map) moves or resizes when one opens. The band itself
+     lets pointer input through to the map; only the cards take it. */
+  block-size: min(36rem, calc(100% - 24px));
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  pointer-events: none;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  padding-block-end: 2px;
+  scrollbar-width: thin;
+}
+.moss-places-cards:empty {
+  display: none;
+}
+
+/* Each card is a two-row grid: the always-visible select row, then the
+   detail region collapsed to a `0fr` track. Expanding to `1fr` (on
+   `aria-current`, the selected card) is the whole animation — no height
+   measured or set from JS. `overflow: hidden` on both the card and the
+   detail element itself keeps the collapsed track's content from ever
+   painting outside a zero-height row. A card keeps its width when opened,
+   so the cards after it do not slide sideways either. */
+.moss-places-cards .moss-card {
+  flex: 0 0 auto;
+  inline-size: 15rem;
+  max-inline-size: 80vw;
+  max-block-size: 100%;
+  /* site.css gives every `.moss-card` a 64px bottom margin; here it only
+     lifted the cards off the bottom edge and inflated the row. */
+  margin: 0;
+  pointer-events: auto;
+  scroll-snap-align: start;
+  display: grid;
+  /* `minmax(0, 1fr)`: a bare `auto` column grows to the widest unwrapped
+     line inside (the one-line meta), pushing the card's real content past
+     its own edge where `overflow: hidden` then clips it. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 0fr;
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--moss-color-surface) 94%, transparent);
+  box-shadow: var(--moss-elevation-1);
+}
+.moss-places-cards .moss-card[aria-current="true"] {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-cards .moss-card {
+    transition: grid-template-rows 220ms ease-out;
+  }
+}
+
+/* `display: flex; flex-direction: column` (not `block`) is load-bearing: a
+   `<button>`'s content is centred vertically by the browser's own internal
+   button layout even when the author sets `display: block`, which this
+   stylesheet cannot reach past with an author-level override on any OTHER
+   property. Taking the button's layout mode over explicitly (column flex,
+   one child) replaces that centring with ordinary top alignment. A
+   collapsed card is one fixed height, so every card in the row matches
+   whatever its title or byline holds; an opened card is as tall as its
+   content needs. */
+.moss-places-card-select {
+  display: flex;
+  flex-direction: column;
+  inline-size: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.moss-places-cards .moss-card:not([aria-current="true"]) .moss-places-card-select {
+  block-size: 5.75rem;
+  overflow: hidden;
+}
+/* This card is not a list-layout card, so nothing resets the `h3` margin
+   that site.css gives the title (48px on top, which would push it out of the
+   card under the clip); the row's own gap and padding are set here instead. */
+.moss-places-card-select .moss-card-row {
+  gap: 10px;
+  padding: 10px;
+}
+.moss-places-card-select .moss-card-cover {
+  inline-size: 4.5rem;
+  block-size: auto;
+  aspect-ratio: 4 / 3;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  border-radius: 8px;
+  overflow: hidden;
+}
+/* The box above is one fixed size, but `article figure:not(.video-figure) img`
+   (site.css) out-ranks the generic cover rule and gives the image
+   `block-size: auto`, so each image kept its own natural height inside the
+   box. Out-rank it back: the image fills the box and is cropped. */
+.moss-places-cards .moss-card-cover > img,
+.moss-places-cards .moss-card-cover > picture > img {
+  inline-size: 100%;
+  block-size: calc(100% + 1px);
+  object-fit: cover;
+}
+.moss-places-card-select:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: -2px;
+}
+
+/* Collapsed card content, clamped: a two-line title and a ONE-line meta
+   line (date and/or the first byline entry only — `cards.ts`'s own
+   `buildCard` never puts the full byline here), so the fixed collapsed
+   height above always holds them. */
+.moss-places-cards .moss-card-title {
+  margin: 0;
+  font-family: var(--moss-font-body);
+  font-size: var(--moss-size-sm);
+  font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* The expanded card is the one place this title is reused unclamped: same
+   element (`cards.ts` never builds a second title node for the detail
+   region), so a long title that the collapsed clamp above cuts off still
+   reads in full once the reader opens the card — `cards.ts` also carries
+   the full title into the select button's own accessible name for the
+   collapsed state, since this is the only place a reader who can't expand
+   (or hasn't yet) could otherwise see it. `display: block` drops the
+   `-webkit-box` layout mode the clamp above needs; `line-clamp`/
+   `-webkit-line-clamp` alone do nothing once that mode is gone, but
+   resetting both keeps this rule legible as the clamp's own mirror. */
+.moss-places-cards .moss-card[aria-current="true"] .moss-card-title {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
+}
+.moss-places-cards .moss-card-meta {
+  display: block;
+  margin: 0.25em 0 0;
+  font-size: var(--moss-size-xs);
+  line-height: 1.4;
+  color: var(--moss-color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The collapsed meta line is author then date on one line, always both: the
+   author takes what room is left and is ellipsised when it is too long, the
+   date (which carries its own " · " separator as text) never shrinks or wraps. */
+.moss-places-card-select .moss-card-meta {
+  display: flex;
+  gap: 0;
+}
+.moss-card-meta-author {
+  /* Shrinks to ellipsise but never grows: a growing author box pushed the
+     date, and the dot it carries, to the far end of the card. */
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.moss-card-meta-date {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* Everything the collapsed card hides, in full: the description is
+   un-clamped here (site.css clamps `.moss-card-description` to two lines for
+   a list card), and the region scrolls rather than clip if the band is too
+   short for it. */
+.moss-places-card-detail {
+  min-block-size: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.moss-places-card-detail .moss-card-description {
+  display: block;
+  max-block-size: none;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
+}
+.moss-places-card-detail .moss-card-meta {
+  margin: 0 0 0.5em;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.moss-places-card-detail > * {
+  padding-inline: 10px;
+  margin: 0 0 0.5em;
+}
+.moss-places-card-detail > :first-child {
+  margin-block-start: 0;
+}
+.moss-places-card-detail > :last-child {
+  margin-block-end: 0;
+  padding-block-end: 10px;
+}
+.moss-places-card-detail p {
+  font-size: var(--moss-size-xs);
+  color: var(--moss-color-text-secondary);
+}
+/* The card's own rhythm: a theme's body line-height on `li`/`a` made wrapped
+   chapter links stand a line and a half apart. */
+.moss-places-card-detail :is(p, li, a) {
+  line-height: 1.4;
+}
+.moss-places-card-detail p a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.moss-places-card-detail p a:hover {
+  color: var(--moss-color-accent);
+}
+.moss-places-card-detail ul {
+  list-style: none;
+  padding-inline-start: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em 0.8em;
+}
+.moss-places-card-detail ul a {
+  font-size: var(--moss-size-xs);
+  color: var(--moss-color-text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.moss-places-card-detail ul a:hover {
+  color: var(--moss-color-accent);
+}
+.moss-places-card-read {
+  display: inline-block;
+  font-size: var(--moss-size-xs);
+  font-weight: 600;
+  color: var(--moss-color-accent);
+  text-decoration: none;
+}
+.moss-places-card-read:hover {
+  text-decoration: underline;
+}
+.moss-places-card-read:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   The live region: announces scope/selection changes, never pan or zoom,
+   and is never itself visible.
+   --------------------------------------------------------------------------- */
+
+.moss-places-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Embeds: a style:map card or an article's own locator, hydrated to a live
+   map behind its static poster (embed.ts). `[data-moss-place-embed]` and
+   `[data-hydrate-url]` are the one exception to this file's own module
+   doc — they are Rust-emitted attributes (`folder_embed.rs`'s `style:map`
+   dispatch, `place_map/context.rs`'s `render_locator`), not runtime-created
+   selectors. The poster itself stays exactly the plain `.moss-place-map`
+   figure it always was: the no-JS floor, and the loading state, in one.
+   --------------------------------------------------------------------------- */
+
+/* `aspect-ratio` (not a height read off either child) is what makes the
+   poster and the live frame cover the EXACT same box: every map canvas this
+   crate ever draws, locator or listing, is the fixed 720x480 (3:2) SVG_WIDTH
+   x SVG_HEIGHT, the same ratio site.css's own generic `.moss-place-map svg`
+   rule already assumes for the no-JS case. Giving the FIGURE itself that
+   ratio (rather than letting the static svg's own `block-size: auto`
+   establish the figure's height, with the frame then reading that same
+   computed height back via `block-size: 100%`) removes the indirection
+   entirely: both children size against one definite box the figure sets up
+   on its own, so neither can end up a pixel off from the other. `overflow:
+   hidden` is what makes the one `border-radius` below ALSO apply to the
+   static poster, which carries none of its own — needed as soon as the
+   frame is sized exactly to the figure (unlike before, nothing left the
+   poster peeking past a frame that was a few pixels smaller). */
+.moss-place-map[data-moss-place-embed] {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.moss-place-map[data-moss-place-embed] > svg {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+}
+.moss-places-embed-frame {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms ease;
+}
+.moss-places-embed-frame--settled {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-places-embed-frame {
+    transition: none;
+  }
+}
+
+
+}

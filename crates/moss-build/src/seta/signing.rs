@@ -47,7 +47,7 @@ impl SignedRequest {
 /// and TypeScript @noble/curves library implement BIP-340 with internal tagged
 /// hashing, so we sign the raw message bytes and the server verifies the same.
 ///
-/// REFACTOR-LATER (ADR-031 keystore): this signs with the identity key directly.
+/// REFACTOR-LATER (keystore): this signs with the identity key directly.
 /// The identity key is now one entry in the keystore at the `System` scope
 /// (`identity::keystore`), so this should become a keystore caller —
 /// `keystore.sign(&System, "identity", ...)` — unifying every signing path. Left

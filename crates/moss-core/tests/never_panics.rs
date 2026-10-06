@@ -271,40 +271,6 @@ proptest! {
     }
 }
 
-// ── shortcode tokens ────────────────────────────────────────────────────────
-//
-// The tokenize family walks a line byte-by-byte against an ASCII grammar
-// (`:`, `{`, `}`, `.`, identifier chars). Exactly the byte-vs-char territory
-// the original `date.rs` panic lived in, so it deserves explicit fuzz coverage.
-
-proptest! {
-    #![proptest_config(cfg())]
-
-    #[test]
-    fn tokenize_opening_line_never_panics(line in any_str()) {
-        let _ = moss_core::shortcode_tokens::tokenize_opening_line(&line);
-    }
-
-    #[test]
-    fn tokenize_closing_line_never_panics(line in any_str()) {
-        let _ = moss_core::shortcode_tokens::tokenize_closing_line(&line);
-    }
-
-    #[test]
-    fn tokenize_divider_line_never_panics(line in any_str()) {
-        let _ = moss_core::shortcode_tokens::tokenize_divider_line(&line);
-    }
-
-    #[test]
-    fn tokens_to_html_never_panics(line in any_str()) {
-        // Tokens are derived from the same line; pair the two so the HTML
-        // renderer sees realistically-shaped offsets rather than random ones
-        // that could violate a precondition the public API doesn't promise.
-        let tokens = moss_core::shortcode_tokens::tokenize_opening_line(&line);
-        let _ = moss_core::shortcode_tokens::tokens_to_html(&line, &tokens);
-    }
-}
-
 // ── fuzzy path / URL encoding ───────────────────────────────────────────────
 //
 // fuzzy_path manipulates URL/path strings with byte offsets pulled from

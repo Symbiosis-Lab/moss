@@ -50,7 +50,7 @@ fn resolves_standard_markdown_link_to_internal() {
 
     // Phase 4 PR7a-stage1b (2026-05-28): the visitor emits a
     // `moss-resolved:` sentinel for internal links (Url::Unresolved)
-    // so src-tauri's host classifier can decode it via page_map.
+    // so moss-build's host classifier can decode it via page_map.
     // The renderer doesn't see this state — the host's
     // `classify_url_prod` pass replaces Unresolved before render.
     match &doc.blocks[0] {
@@ -66,6 +66,33 @@ fn resolves_standard_markdown_link_to_internal() {
         },
         _ => panic!("expected Paragraph"),
     }
+}
+
+// Obsidian (wikilinks off) writes a percent-encoded destination for a path
+// with a space or non-ASCII character: `[x](my%20note.md)` for a file
+// literally named "my note.md". Verifies whether the real render path
+// resolves it — an audit claimed it doesn't decode before the graph lookup.
+#[test]
+fn percent_encoded_link_destination_resolves() {
+    let mut doc = parse("[x](my%20note.md)");
+    let graph = graph_with(&["index.md", "my note.md"]);
+    let outgoing = resolve_urls(&mut doc, &graph, "index.md").outgoing;
+
+    assert_eq!(outgoing.len(), 1, "percent-encoded destination should resolve like the real file");
+    assert_eq!(outgoing[0].target_path, "my note.md");
+}
+
+// A filename that literally contains a `%` must keep resolving by its raw
+// name — decoding must be a fallback tried only after the raw form misses,
+// never applied unconditionally.
+#[test]
+fn literal_percent_in_filename_still_resolves() {
+    let mut doc = parse("[x](100%.png)");
+    let graph = graph_with(&["index.md", "100%.png"]);
+    let outgoing = resolve_urls(&mut doc, &graph, "index.md").outgoing;
+
+    assert_eq!(outgoing.len(), 1, "a literal % filename should resolve by its raw name");
+    assert_eq!(outgoing[0].target_path, "100%.png");
 }
 
 #[test]
@@ -313,7 +340,7 @@ fn standard_markdown_link_emits_sentinel() {
     assert_eq!(visitor[0].target_path, "文字/文字.md");
     assert_eq!(visitor[0].display_text, "文字");
     assert_eq!(visitor[0].link_type, LinkType::Standard);
-    // The sentinel shape is what `classify_url_prod` in src-tauri
+    // The sentinel shape is what `classify_url_prod` in moss-build
     // expects to decode via `page_map` / `external_url_map`.
     match &doc.blocks[0] {
         Block::Paragraph(children) => match &children[0] {
@@ -327,6 +354,27 @@ fn standard_markdown_link_emits_sentinel() {
         },
         _ => panic!("expected Paragraph"),
     }
+}
+
+#[test]
+fn root_address_of_a_page_source_resolves_to_exactly_that_file() {
+    // From a zh-hans page, `/notes/a.md` still means the root file, not the
+    // language copy a bare `notes/a.md` would be scoped to.
+    let graph = graph_with(&["zh-hans/index.md", "notes/a.md", "zh-hans/notes/a.md", "notes/b.csv", "notes/d.mdown"]);
+    let mut doc = parse("[a](/notes/a.md#top) [b](/notes/b.csv) [c](/notes/missing.md) [d](/notes/d.mdown)");
+    let found = resolve_urls(&mut doc, &graph, "zh-hans/index.md");
+    let targets: Vec<_> = found.outgoing.iter().map(|o| o.target_path.as_str()).collect();
+    assert_eq!(targets, ["notes/a.md", "notes/d.mdown"]);
+    let Block::Paragraph(children) = &doc.blocks[0] else { panic!("expected Paragraph") };
+    let urls: Vec<_> = children
+        .iter()
+        .filter_map(|i| match i {
+            Inline::Link { url: Url::Unresolved(s), .. } => Some(s.clone()),
+            Inline::Link { url: Url::Resolved(r), .. } => Some(r.href.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(urls, ["moss-resolved:notes/a.md#top", "/notes/b.csv", "/notes/missing.md", "moss-resolved:notes/d.mdown"]);
 }
 
 #[test]
@@ -546,7 +594,7 @@ fn absolute_path_passes_through() {
 // Hero / Gallery shortcode image resolution
 // -----------------------------------------------------------------
 //
-// Regression coverage for the chps-site home hero regression
+// Regression coverage for a real site's home hero regression
 // (2026-05-29): `:::hero` with a body-image fallback `![[hero.jpg]]`
 // (or `image=hero.jpg` attribute) stores the wikilink target as a
 // `Url::Unresolved("hero.jpg")` on `HeroShortcode::image`. Before the
@@ -572,7 +620,7 @@ fn extract_hero_image_href(doc: &Document) -> Option<String> {
 
 #[test]
 fn hero_body_wikilink_resolves_against_graph_at_depth_0() {
-    // chps-site home page shape: `:::hero` with `![[hero.jpg]]`
+    // The home page shape: `:::hero` with `![[hero.jpg]]`
     // wikilink as the body-image fallback. The asset lives at
     // `assets/hero.jpg` on disk, so the emitted href is that file's pinned
     // URL — not the bare wikilink target.
@@ -599,7 +647,7 @@ fn hero_body_wikilink_resolves_against_graph_at_depth_0() {
 fn hero_extra_images_resolve_against_graph_like_the_primary() {
     // Multi-image hero: every extra slide resolves through the content
     // graph exactly like the primary and registers a dependency edge —
-    // review finding on 06585a7cd (the chps-site regression class,
+    // review finding on 06585a7cd (the home-hero regression class,
     // re-introduced per slide).
     let mut doc = parse(":::hero\n![[hero.jpg]]\n![[second.jpg]]\n# Welcome\n:::\n");
     let mut b = ContentGraphBuilder::new();
@@ -642,7 +690,7 @@ fn hero_body_wikilink_href_does_not_depend_on_referencing_depth() {
     // string pass had to patch again (the referencing page is served at
     // `/articles/post/`, one level deeper than `articles/post.md`, so `../`
     // pointed at `/articles/assets/`). Depth is now structurally out of the
-    // answer instead of being compensated for. moss#903 bug 3.
+    // answer instead of being compensated for.
     let mut doc = parse(":::hero\n![[hero.jpg]]\n:::\n");
     let mut b = ContentGraphBuilder::new();
     b.add_file("articles/post.md", "post");
@@ -785,16 +833,16 @@ fn slug_wikilink_suffix_preserves_query() {
 }
 
 // -----------------------------------------------------------------
-// Task 6: engine routing tests for resolve_asset_url
+// Routing tests for resolve_asset_url
 //
-// These tests exercise the unified asset engine (resolve_asset_ref)
-// through the resolve_asset_url path. They cover:
-//   - Separator-bearing paths that the old code passed through verbatim
-//     (the 404 bug), now rebased via SeparatorFallback.
-//   - Absolute `/`-prefixed paths that must stay absolute (R3).
-//   - Case-mismatched paths that the engine canonicalises.
-//   - Bare filenames that must behave identically to the old
-//     resolve_reference path (the `image_bare_unchanged_from_today` gate).
+// resolve_asset_url asks the one resolver (resolve_file_target over
+// ContentGraph::resolve_path) which file an image names and emits that file's
+// pinned, root-absolute URL, whatever the spelling. These tests cover:
+//   - a path with no file where it is written, found by partial-path search;
+//   - a `/`-rooted path, which names the file at that path from the site
+//     root, and is otherwise searched for like any other path;
+//   - a path in other letter case, emitted in the file's real case;
+//   - a bare file name, found by name search.
 // -----------------------------------------------------------------
 
 /// Test seam: build a `Url::Unresolved(raw)`, run it through `resolve_asset_url`,
@@ -816,61 +864,65 @@ fn resolve_image_src(
 
 #[test]
 fn image_separator_fallback_rebases_to_root() {
-    // The 404 bug: `./assets/AGU2025.jpg` authored in `News/post.md` is
+    // The 404 bug: `./assets/Summit2099.jpg` authored in `News/post.md` is
     // not adjacent (no `News/assets/` dir). Old code passed it verbatim →
     // 404. The engine rebases to the real file (SeparatorFallback → root
-    // `assets/AGU2025.jpg`) and that file's pinned URL is emitted. The two
+    // `assets/Summit2099.jpg`) and that file's pinned URL is emitted. The two
     // downstream `../` compensations this used to need — one from the source
     // directory, one more for pretty-URL nesting, added by a later string pass
     // — have nothing left to compensate for.
-    let graph = graph_with(&["assets/AGU2025.jpg", "News/post.md"]);
+    let graph = graph_with(&["assets/Summit2099.jpg", "News/post.md"]);
     assert_eq!(
-        resolve_image_src("./assets/AGU2025.jpg", "News/post.md", &graph),
-        "/assets/AGU2025.jpg"
+        resolve_image_src("./assets/Summit2099.jpg", "News/post.md", &graph),
+        "/assets/Summit2099.jpg"
     );
 }
 
 #[test]
 fn image_absolute_stays_absolute() {
-    // R3: an absolute `/`-prefixed asset reference keeps its leading `/`.
-    // Now the general case rather than a special one — every resolved asset
-    // reference is emitted root-absolute.
+    // Every resolved asset reference is emitted root-absolute, a `/`-rooted
+    // one included. A rooted path with no file there is searched for like any
+    // other, and the file found is emitted at its own address.
     let graph = graph_with(&["assets/x.jpg"]);
     assert_eq!(
         resolve_image_src("/assets/x.jpg", "News/post.md", &graph),
+        "/assets/x.jpg"
+    );
+    assert_eq!(
+        resolve_image_src("/img/x.jpg", "News/post.md", &graph),
         "/assets/x.jpg"
     );
 }
 
 #[test]
 fn image_case_mismatch_emits_canonical() {
-    // `./assets/Hoon.jpg` authored in `Team.md`; disk is `Hoon.JPG`. The
-    // engine finds the real file (CaseMismatch → `assets/Hoon.JPG`) and the
+    // `./assets/Fern.jpg` authored in `Team.md`; disk is `Fern.JPG`. The
+    // engine finds the real file (CaseMismatch → `assets/Fern.JPG`) and the
     // emitted URL is that file's pinned URL: the LEAF keeps the disk's case
     // (the bytes are served under it) while directory segments take the slug
     // the output tree uses.
-    let graph = graph_with(&["assets/Hoon.JPG"]);
+    let graph = graph_with(&["assets/Fern.JPG"]);
     assert_eq!(
-        resolve_image_src("./assets/Hoon.jpg", "Team.md", &graph),
-        "/assets/Hoon.JPG"
+        resolve_image_src("./assets/Fern.jpg", "Team.md", &graph),
+        "/assets/Fern.JPG"
     );
 }
 
 #[test]
 fn image_href_is_identical_from_root_and_from_a_nested_note() {
-    // moss#903 bug 3, at the unit level: one asset under a MIXED-CASE folder,
+    // The same regression, at the unit level: one asset under a MIXED-CASE folder,
     // referenced from the vault root and from a note two folders deep. Both
     // emit the same pinned URL, and its directory segment is the slug the
     // asset copier writes (`MIRROR/` → `/mirror/`) — not the source spelling,
     // and not a case-folded guess.
     let graph = graph_with(&[
-        "MIRROR/潮汐/cover-IMG.png",
+        "MIRROR/河灣/cover-IMG.png",
         "index.md",
-        "MIRROR/潮汐/note.md",
+        "MIRROR/河灣/note.md",
     ]);
     let from_root = resolve_image_src("cover-IMG.png", "index.md", &graph);
-    let from_deep = resolve_image_src("cover-IMG.png", "MIRROR/潮汐/note.md", &graph);
-    assert_eq!(from_root, "/mirror/%E6%BD%AE%E6%B1%90/cover-IMG.png");
+    let from_deep = resolve_image_src("cover-IMG.png", "MIRROR/河灣/note.md", &graph);
+    assert_eq!(from_root, "/mirror/%E6%B2%B3%E7%81%A3/cover-IMG.png");
     assert_eq!(
         from_root, from_deep,
         "the referencing note's depth must not change the emitted URL"
@@ -889,6 +941,39 @@ fn unresolvable_image_ref_reports_instead_of_guessing() {
     assert_eq!(found.diagnostics.len(), 1, "{:?}", found.diagnostics);
     assert_eq!(found.diagnostics[0].reference, "nope.jpg");
     assert_eq!(found.diagnostics[0].source_path, "post.md");
+}
+
+#[test]
+fn nested_embed_target_gets_a_specific_message_but_still_blocks() {
+    // A paste landing inside an already-open `![[ ]]` (image paste with the
+    // caret between the brackets) produces a target that is itself embed
+    // syntax: `![[![[pasted-20260920-193056.png]]\n]]`. The inner `![[...]]`
+    // parses as an `Inline::Image` whose `src` is the nested target
+    // (wrapper and trailing newline intact) — the node stays an image, so
+    // this still reaches `resolve_asset_url`'s `NotFound` arm and is still
+    // `DiagnosticKind::MissingAsset`, "the one blocking kind": a page
+    // carrying this corruption must not publish silently. Only the
+    // message changes, to name the cause instead of the generic wording.
+    let graph = graph_with(&["post.md"]);
+    let mut doc = parse("Text.\n\n![[![[pasted-20260920-193056.png]]\n]]\n");
+    let found = resolve_urls(&mut doc, &graph, "post.md");
+    assert_eq!(found.diagnostics.len(), 1, "{:?}", found.diagnostics);
+    let d = &found.diagnostics[0];
+    assert_eq!(
+        d.kind,
+        DiagnosticKind::MissingAsset,
+        "blocking behavior must be preserved regardless of message wording"
+    );
+    assert!(
+        d.message.contains("Nested embed target"),
+        "message should name the cause: {:?}",
+        d.message
+    );
+    assert!(
+        !d.message.starts_with("Unresolved asset reference: ![["),
+        "the old, confusing generic wording must be gone for this shape: {:?}",
+        d.message
+    );
 }
 
 #[test]

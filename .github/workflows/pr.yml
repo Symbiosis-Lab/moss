@@ -1,19 +1,15 @@
-# The open repo's PR gate. Written under open/.github/workflows/ in the
-# desktop repo per docs/archive/2026-09-13-f3-open-repo-ci-plan.md (F3); GitHub
-# does not execute a nested .github/, so this file is inert until open/
-# becomes a repo root at F6. Once the flip lands, every `open/crates/…` /
-# `open/packages/…` path the lifted steps below read becomes `crates/…` /
-# `packages/…` — this file already reflects that rewrite.
+# The pull request gate. It runs on a pull request to `develop`, the default
+# branch and the one a contribution targets, and on a pull request to `main`.
+# A push to `develop` runs none of it.
 #
-# Unlike the desktop's pr.yml, there is no detect-changes job here: this
-# repo's PR gate has no plugins/frontend filters to route around (plan §1,
-# detect-changes row) — every job below runs on every PR.
+# There is no change-detection job: every job below runs on every pull
+# request.
 
 name: PR
 
 on:
   pull_request:
-    branches: [main]
+    branches: [develop, main]
   workflow_dispatch:
 
 concurrency:
@@ -26,9 +22,7 @@ permissions:
 jobs:
   # ==========================================================================
   # Gate: a moss-api or moss-core code change must land with a CHANGELOG
-  # entry. Lifted from the desktop repo's `changelogs` job (pr.yml, as of
-  # b05637b9c), dropping the open/ prefix and the plugins/ blocks (this repo
-  # has no plugins/ directory).
+  # entry describing the change, including finalized release entries.
   # ==========================================================================
   changelogs:
     name: Sub-package changelogs up to date
@@ -59,7 +53,7 @@ jobs:
           # [Unreleased] and under a `## [0.5.1] - 2026-08-07` heading. So the
           # better a release was prepared, the more certainly this failed, and
           # the only way to go green was to leave the changelog unfinalized on
-          # main. It blocked the v0.9.1 cut (PR #1000) for exactly that reason.
+          # main. A finalized version section must therefore be accepted.
           #
           # So: documented means the changelog gained populated content that the
           # base branch does not have — whether under [Unreleased] or under a new
@@ -73,7 +67,7 @@ jobs:
           # grep -q exits on the first match and, for sections larger than awk's
           # stdio buffer (~4 KB), awk's next write hits the closed pipe →
           # SIGPIPE → pipefail reports the pipeline as failed → a false "empty"
-          # verdict (this bit the 4.7 KB matters [Unreleased]).
+          # verdict for a large changelog section.
           populated_headings() {
             awk '
               /^## / { if (h != "" && n > 0) print h; h = $0; n = 0; next }
@@ -140,14 +134,14 @@ jobs:
   # ==========================================================================
   # Rust tests for the three crates. Authored fresh, not lifted: the desktop's
   # own `rust-tests` (pr.yml:862-1055) runs `cargo test --tests --all-features`
-  # from `working-directory: src-tauri`, without `--workspace`, so it is not a
+  # from the app's own working directory, without `--workspace`, so it is not a
   # template for a workspace-wide pass. Modeled instead on maint.yml's
   # `rust-tests-windows` "Run Rust tests (workspace)" step (maint.yml:750-752,
   # `cargo test --workspace --all-features --no-fail-fast`), scoped to the
   # three open crates. Surrounding scaffolding (checkout, toolchain, cache,
   # apt install, pnpm install) is lifted from `rust-tests` (pr.yml:862-981);
   # the "Build frontend", "Check for duplicate dependencies", and "Verify
-  # generated artifacts" steps are dropped — none apply without src-tauri.
+  # generated artifacts" steps are dropped — none apply without the desktop app.
   rust-tests:
     name: Rust Tests
     runs-on: ubuntu-latest
@@ -178,7 +172,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xvfb ffmpeg
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -289,7 +283,7 @@ jobs:
 
   # ==========================================================================
   # NEW, not lifted — no existing desktop job runs an end-to-end check against
-  # moss-cli alone. `src-tauri/tests/cli_binary_parity_test.rs`'s non-parity
+  # moss-cli alone. The app's own CLI-parity test's non-parity
   # assertions cannot run here (there is no app binary in this repo to compare
   # against), so that half of CLI coverage stays desktop-only. The shape below
   # follows pr.yml's `render-gates` job, which already drives `moss-cli`
@@ -324,11 +318,11 @@ jobs:
       # has no --output flag (real surface:
       # `moss build <folder> [--serve|--watch|--no-plugins|--allow-plugins|
       # --wait-plugins|--strict|--site-url=<url>]`, crates/moss-build/src/
-      # cli/commands.rs). A build writes into `<folder>/.moss/build/current`
+      # cli/commands.rs). A build writes into `<folder>/.moss/build.nosync/current`
       # (a symlink to the generation directory), not to a path the caller
-      # names — verified locally (2026-09-13): `moss-cli build /tmp/vault
+      # names — verified locally (2026-10-06): `moss-cli build /tmp/vault
       # --no-plugins --strict` against a two-line index.md produced
-      # `/tmp/vault/.moss/build/current/index.html` and exited 0.
+      # `/tmp/vault/.moss/build.nosync/current/index.html` and exited 0.
       - name: Build a fixture vault (headless)
         run: |
           mkdir -p /tmp/moss-cli-e2e-vault
@@ -340,7 +334,7 @@ jobs:
           index body
           EOF
           xvfb-run --auto-servernum ./target/release/moss-cli build /tmp/moss-cli-e2e-vault --no-plugins --strict
-          test -f /tmp/moss-cli-e2e-vault/.moss/build/current/index.html || { echo "::error::moss-cli build produced no .moss/build/current/index.html"; exit 1; }
+          test -f /tmp/moss-cli-e2e-vault/.moss/build.nosync/current/index.html || { echo "::error::moss-cli build produced no .moss/build.nosync/current/index.html"; exit 1; }
 
   # ==========================================================================
   # Lifted wholesale from pr.yml:709-776 ("Packages Tests"), dropping the
@@ -354,6 +348,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          # verify-accepts --range below walks the PR's own commit range
+          # (base.sha..head.sha) one commit at a time; a shallow (default)
+          # checkout has only the merge commit GitHub synthesizes and
+          # neither SHA is reachable from it as a real commit.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v5
 
@@ -367,6 +367,30 @@ jobs:
         env:
           SKIP_RUST_INSTALL: 1
 
+      - name: Backend JS bundles are up to date
+        run: pnpm run check:backend-scripts
+
+      # This tree's own copy of the desktop repo's architecture ratchet (rows
+      # a/b/e — prod-lines-per-file, children-per-dir, mirror-comment
+      # markers).
+      # Once the desktop side can no longer scan `open/crates`/`open/packages`,
+      # this repo has to ratchet its own tree.
+      - name: Ratchet (architecture size/marker budget)
+        run: node scripts/ratchet.mjs check
+
+      - name: Ratchet tool tests (accept/tighten --path)
+        run: node --test scripts/__tests__/ratchet.test.mjs
+
+      # `check` goes green precisely BECAUSE a ceiling rose, so a raise with
+      # no reason is otherwise invisible in review — this audits every
+      # commit the PR actually adds (not just its final diff) for a
+      # Ratchet-Accept trailer covering each one, the retroactive
+      # counterpart to the commit-msg hook that only runs on the
+      # contributor's own machine.
+      - name: Ratchet accept-trailer audit (PR commit range)
+        if: github.event_name == 'pull_request'
+        run: node scripts/ratchet.mjs verify-accepts --range ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+
       - name: Typecheck moss-api (source + tests)
         run: cd packages/moss-api && pnpm run typecheck
 
@@ -376,14 +400,50 @@ jobs:
       - name: Typecheck moss-syntax (source + tests)
         run: cd packages/moss-syntax && pnpm run typecheck
 
-      - name: Build moss-syntax
-        run: cd packages/moss-syntax && pnpm run build
+      - name: Typecheck moss-watercolor (source + tests)
+        run: cd packages/moss-watercolor && pnpm run typecheck
+
+      - name: Package artifacts are up to date
+        run: |
+          pnpm --filter @symbiosis-lab/moss-api run build
+          pnpm --filter @symbiosis-lab/moss-syntax run build
+          pnpm --filter @symbiosis-lab/moss-watercolor run build
+          if ! git diff --exit-code -- packages/moss-api/dist packages/moss-syntax/dist packages/moss-watercolor/dist; then
+            echo "::error::Package artifacts are stale. Run the moss-api, moss-syntax and moss-watercolor builds and commit dist/."
+            exit 1
+          fi
+
+      - name: Landing's vendored moss-watercolor build is up to date
+        run: |
+          node scripts/build-site-watercolor.mjs
+          if ! git diff --exit-code -- site/vendor/moss-watercolor; then
+            echo "::error::site/vendor/moss-watercolor/moss-watercolor.js is stale. Run scripts/build-site-watercolor.mjs and commit it."
+            exit 1
+          fi
 
       - name: Test moss-syntax
         run: cd packages/moss-syntax && npx vitest run
 
+      - name: Test moss-watercolor
+        run: cd packages/moss-watercolor && npx vitest run
+
       - name: Test moss npm wrapper
         run: cd packages/moss && npm test
+
+      - name: Test moss-build site/bridge JS (js-src)
+        run: cd crates/moss-build && npx vitest run
+
+      - name: Typecheck obsidian-moss (source + tests)
+        run: cd packages/obsidian-moss && pnpm run typecheck
+
+      - name: Test obsidian-moss
+        run: cd packages/obsidian-moss && npx vitest run
+
+      # main.js is gitignored here and never committed, unlike moss-api's
+      # and moss-syntax's dist/, so there is no freshness diff to check —
+      # this only proves the esbuild bundle still succeeds.
+      - name: Build obsidian-moss
+        run: cd packages/obsidian-moss && npm run build
 
       - name: Verify moss-api API reference is up-to-date
         run: |

@@ -152,7 +152,7 @@ fn seal_with_empty_manifest_succeeds() {
 fn apply_message_routes_to_correct_bucket() {
     // Files bucket: files + blocking_keys
     let mut m = empty_manifest();
-    m.apply_message("a.html".to_string(), "aaa", HashBucket::Files);
+    m.apply_message("a.html".to_string(), "aaa", HashBucket::Files, None);
     assert!(
         m.inner.files.contains_key("a.html"),
         "Files: must be in files"
@@ -167,7 +167,7 @@ fn apply_message_routes_to_correct_bucket() {
     // ImageOutputs bucket: image_outputs + blocking_keys + files
     // (2026-05-15: added files — see register_with_hash comment for why)
     let mut m = empty_manifest();
-    m.apply_message("og/card.png".to_string(), "bbb", HashBucket::ImageOutputs);
+    m.apply_message("og/card.png".to_string(), "bbb", HashBucket::ImageOutputs, None);
     assert!(
         m.inner.image_outputs.contains("og/card.png"),
         "ImageOutputs: must be in image_outputs"
@@ -188,6 +188,7 @@ fn apply_message_routes_to_correct_bucket() {
         "videos/talk.mp4".to_string(),
         "ccc",
         HashBucket::VideoOutputs,
+        None,
     );
     assert!(
         m.inner.video_outputs.contains("videos/talk.mp4"),
@@ -206,6 +207,7 @@ fn apply_message_routes_to_correct_bucket() {
         "notebooks/chart.html".to_string(),
         &hash,
         HashBucket::NotebookOutputs,
+        None,
     );
     assert!(
         m.inner.files.contains_key("notebooks/chart.html"),
@@ -233,7 +235,7 @@ fn apply_message_routes_to_correct_bucket() {
 fn register_with_hash_preserves_mode_prefix() {
     // Case 1: bare hash — `register_with_hash` must prepend `100644:`.
     let mut m = empty_manifest();
-    m.apply_message("page.html".to_string(), "abc123", HashBucket::Files);
+    m.apply_message("page.html".to_string(), "abc123", HashBucket::Files, None);
     assert_eq!(
         m.inner.files.get("page.html").unwrap(),
         "100644:abc123",
@@ -242,7 +244,7 @@ fn register_with_hash_preserves_mode_prefix() {
 
     // Case 2: already-prefixed `100644:` — must NOT double-prefix.
     let mut m = empty_manifest();
-    m.apply_message("style.css".to_string(), "100644:def456", HashBucket::Files);
+    m.apply_message("style.css".to_string(), "100644:def456", HashBucket::Files, None);
     assert_eq!(
         m.inner.files.get("style.css").unwrap(),
         "100644:def456",
@@ -255,6 +257,7 @@ fn register_with_hash_preserves_mode_prefix() {
         "link-target".to_string(),
         "120000:ghi789",
         HashBucket::Files,
+        None,
     );
     assert_eq!(
         m.inner.files.get("link-target").unwrap(),
@@ -318,20 +321,22 @@ fn carry_forward_entries_are_preserved_mid_build() {
         HashBucket::Files,
     );
 
-    // Mid-build, the carry-forward entry is still visible so consumers like
-    // sitemap generation (which reads `pending.files()` before seal) see a
-    // coherent working set. Seal-time mark-and-sweep prunes it — see
+    // Mid-build, the carry-forward entry is still visible, so a page this
+    // build could not read can re-register it (`carry_forward_deferred_page`).
+    // Seal-time mark-and-sweep prunes it — see
     // `seal_prunes_untouched_carry_forward_entries` below.
     assert!(
         m.inner.files.contains_key("old.html"),
         "carry-forward must be visible mid-build"
     );
     assert!(m.inner.files.contains_key("new.html"));
+    // ...but it is not a page of this build: it may belong to a deleted source.
+    assert_eq!(m.pages_registered().collect::<Vec<_>>(), vec!["new.html"]);
 }
 
 /// Regression: when a page's slug changes, the previous build's output
-/// path must not survive into the sealed manifest. The CPHS deploy
-/// failure on 2026-05-18 (`projects/biogeochemical-processes/index.html`
+/// path must not survive into the sealed manifest. The large-vault deploy
+/// failure on 2026-05-18 (`projects/long-baseline-observations/index.html`
 /// listed in `hashes.json` while only the new long slug existed on disk)
 /// landed because `PendingManifest::new` carried the old key forward and
 /// nothing pruned it. Mark-and-sweep at `seal()` is the fix.
@@ -433,7 +438,7 @@ fn seal_succeeds_when_image_served_path_is_in_blocking_keys() {
 
 
 // -----------------------------------------------------------------------
-// site_hashes_view (#621 — deferred stale-cleanup borrow)
+// site_hashes_view (deferred stale-cleanup borrow)
 // -----------------------------------------------------------------------
 
 #[test]
@@ -570,7 +575,7 @@ fn register_source_mapping_populates_after_clear() {
 /// Regression guard. Three separate bugs (ImageOutputs/ImageVariants 2026-05-15,
 /// VideoOutputs 2026-06-11) all had the same root cause: a HashBucket variant
 /// that forgot to call `inner.files.insert()`, so the path existed locally in
-/// `.moss/build/current/` but the deploy wire manifest never included it, and seta
+/// `.moss/build.nosync/current/` but the deploy wire manifest never included it, and seta
 /// never uploaded it.  This test catches any future bucket with the same omission.
 #[test]
 fn every_bucket_variant_produces_files_membership() {
@@ -810,9 +815,9 @@ fn generation_id_determinism_across_bucket_types_and_orders() {
 #[test]
 fn site_url_flows_from_pending_through_seal() {
     let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
-    pending.set_site_url("https://liuguo.mosspub.com");
+    pending.set_site_url("https://my-site.mosspub.com");
     let sealed = pending.seal();
-    assert_eq!(sealed.site_url(), Some("https://liuguo.mosspub.com"));
+    assert_eq!(sealed.site_url(), Some("https://my-site.mosspub.com"));
 }
 
 #[test]
@@ -829,14 +834,14 @@ fn hashes_json_without_site_url_deserializes_to_none() {
 #[test]
 fn site_url_round_trips_through_serde() {
     let mut hashes = crate::types::content::SiteHashes::default();
-    hashes.site_url = Some("https://www.liu-guo.com".to_string());
+    hashes.site_url = Some("https://www.example.com".to_string());
     let json = serde_json::to_string(&hashes).unwrap();
     let back: crate::types::content::SiteHashes = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.site_url.as_deref(), Some("https://www.liu-guo.com"));
+    assert_eq!(back.site_url.as_deref(), Some("https://www.example.com"));
 }
 
 // -----------------------------------------------------------------------
-// apply_post_seal_rewrites (moss#867)
+// apply_post_seal_rewrites (honest degradation)
 // -----------------------------------------------------------------------
 
 #[test]
@@ -914,7 +919,7 @@ fn carry_forward_page_source_preserves_hash_for_skipped_page() {
 /// absent from that map — could be registered once and never carried. It then
 /// fell out of `sources` on the very next build, and the sweep's disk walk
 /// read a file with no baseline entry as a CREATE, dispatching a full rebuild
-/// every pass for the life of the session (harbor, 2026-08-20).
+/// every pass for the life of the session (riverbend, 2026-08-20).
 #[test]
 fn a_slot_only_source_carries_forward_without_an_output_mapping() {
     let mut carry = SiteHashes::default();
@@ -1034,7 +1039,7 @@ fn replace_sources_preserves_page_hashes() {
 }
 
 // -----------------------------------------------------------------------
-// Cancelled notebook run (moss#618)
+// Cancelled notebook run
 // -----------------------------------------------------------------------
 
 /// The previous build's JupyterLite bundle is carried forward but never
@@ -1071,4 +1076,277 @@ fn cancelled_notebook_run_keeps_the_previous_bundle_byte_identical() {
         // Verbatim, not re-prefixed: `100644:100644:…` would be a corrupt entry.
         assert_eq!(sealed.files().get(key), prev.files.get(key), "{key} entry must be byte-identical");
     }
+}
+
+// -----------------------------------------------------------------------
+// A CAS object id belongs to the (path, hash) it was registered with
+// -----------------------------------------------------------------------
+
+/// Notebook viewer pages are written AFTER the slot pass, so on a second build
+/// the pass can see the previous viewer and hand it an oid; the notebook step
+/// then rewrites the page and registers the new hash without one. If the old
+/// oid survived, `ship_phase` would read the old blob under the new hash and
+/// deploy would refuse the generation.
+#[test]
+fn a_later_registration_without_an_oid_drops_the_earlier_cas_source() {
+    use crate::build::served_path::ServedPath;
+    let sp = ServedPath::from_source("notebooks/analysis.html").unwrap();
+    let mut m = empty_manifest();
+
+    m.apply_message(sp.as_str().to_string(), "aaaaaaaaaaaaaaaa", HashBucket::Files, Some("old-blob".to_string()));
+    m.register_hashed(&sp, "bbbbbbbbbbbbbbbb", HashBucket::NotebookOutputs);
+
+    let sealed = m.seal();
+    assert_eq!(
+        sealed.staged_oid("notebooks/analysis.html"),
+        None,
+        "an oid registered for the OLD hash must not outlive a re-registration under a new one"
+    );
+}
+
+#[test]
+fn a_later_registration_with_an_oid_replaces_the_earlier_one() {
+    use crate::build::served_path::ServedPath;
+    let sp = ServedPath::from_source("a.html").unwrap();
+    let mut m = empty_manifest();
+
+    m.apply_message(sp.as_str().to_string(), "aaaaaaaaaaaaaaaa", HashBucket::Files, Some("first".to_string()));
+    m.apply_message(sp.as_str().to_string(), "bbbbbbbbbbbbbbbb", HashBucket::Files, Some("second".to_string()));
+
+    assert_eq!(m.seal().staged_oid("a.html"), Some("second"));
+}
+
+// -----------------------------------------------------------------------
+// SYNCHRONOUS_CONFIG_SOURCE_KEYS: a checked subset, not a second list
+// -----------------------------------------------------------------------
+
+/// `SYNCHRONOUS_CONFIG_SOURCE_KEYS` must never name a key the editor's own
+/// `.moss/` allowlist does not also admit — that allowlist is the one place
+/// "is this the user's to edit" is decided, and a key here that fell off it
+/// would be tracked for reload without ever being visible to edit. This pins
+/// containment in that one direction (every key here has SOME covering
+/// allowlist entry); it does not — and cannot — assert the reverse, because
+/// `.moss/theme` covers files (fonts, textures) that are deliberately absent
+/// from this list. See the const's own doc comment for why a directory-shaped
+/// allowlist entry can't be used to derive this list outright.
+#[test]
+fn synchronous_config_source_keys_are_covered_by_the_moss_internal_allowlist() {
+    use crate::build::scan::classify::MOSS_INTERNAL_ALLOWLIST;
+    for key in SYNCHRONOUS_CONFIG_SOURCE_KEYS {
+        let covered = MOSS_INTERNAL_ALLOWLIST
+            .iter()
+            .any(|allowed| key == allowed || key.starts_with(&format!("{allowed}/")));
+        assert!(covered, "{key} has no covering MOSS_INTERNAL_ALLOWLIST entry — drifted");
+    }
+}
+
+// -----------------------------------------------------------------------
+// Held bytes: a derived output that ships from memory
+// -----------------------------------------------------------------------
+
+mod held {
+    use super::*;
+    use crate::build::served_path::ServedPath;
+    use super::super::ship_source::HELD_BYTES_BUDGET;
+
+    fn served(rel: &str) -> ServedPath {
+        ServedPath::from_source(rel).unwrap()
+    }
+
+    #[test]
+    fn a_held_output_keeps_its_bytes_and_registers_their_hash() {
+        let mut m = empty_manifest();
+        m.register_held(&served("sitemap.xml"), b"<urlset/>".to_vec(), HashBucket::Files).unwrap();
+
+        let sealed = m.seal();
+        // Also the proof that `register` ran BEFORE the pin was inserted: a
+        // registration with no oid removes whatever source is on record, so the
+        // reverse order would leave this entry with none.
+        assert_eq!(sealed.held_bytes("sitemap.xml"), Some(&b"<urlset/>"[..]));
+        assert_eq!(
+            sealed.files().get("sitemap.xml"),
+            Some(&file_entry(&compute_binary_hash(b"<urlset/>"))),
+            "the hash must be of exactly the bytes that are held"
+        );
+    }
+
+    #[test]
+    fn a_later_registration_replaces_the_held_bytes_with_its_own_hash() {
+        let mut m = empty_manifest();
+        m.register_held(&served("rss.xml"), b"old feed".to_vec(), HashBucket::Files).unwrap();
+        // The deferred asset walk re-registering a vault's own `rss.xml`, or any
+        // producer that later learns better: last registration wins, source included.
+        m.register(&served("rss.xml"), b"new feed", HashBucket::Files);
+
+        let sealed = m.seal();
+        assert_eq!(sealed.held_bytes("rss.xml"), None, "held bytes for the OLD hash must not outlive a re-registration");
+        assert_eq!(sealed.files().get("rss.xml"), Some(&file_entry(&compute_binary_hash(b"new feed"))));
+    }
+
+    #[test]
+    fn held_bytes_replace_an_earlier_cas_source() {
+        let mut m = empty_manifest();
+        m.apply_message("llms.txt".to_string(), "aaaaaaaaaaaaaaaa", HashBucket::Files, Some("blob".to_string()));
+        m.register_held(&served("llms.txt"), b"llms".to_vec(), HashBucket::Files).unwrap();
+
+        let sealed = m.seal();
+        assert_eq!(sealed.staged_oid("llms.txt"), None);
+        assert_eq!(sealed.held_bytes("llms.txt"), Some(&b"llms"[..]));
+    }
+
+    /// `.html` is stripped of preview attributes on the way to the generation, so
+    /// its manifest hash is of bytes that differ from the registered ones. Held
+    /// bytes are shipped as they are: the pair would agree with each other and
+    /// publish `data-source-*` annotations. Refused loudly, in release too.
+    #[test]
+    fn an_output_ship_transforms_cannot_be_held() {
+        for rel in ["index.html", "legacy.htm"] {
+            let mut m = empty_manifest();
+            let err = m
+                .register_held(&served(rel), b"<p data-source-line=\"1\">x</p>".to_vec(), HashBucket::Files)
+                .unwrap_err();
+
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{rel}");
+            assert!(m.seal().files().is_empty(), "{rel}: a refused registration must record nothing");
+        }
+    }
+
+    #[test]
+    fn stamping_fingerprints_leaves_a_held_entry_alone() {
+        let stage = tempdir().unwrap();
+        // Both files exist, so a stamp COULD succeed on either.
+        std::fs::write(stage.path().join("sitemap.xml"), b"<urlset/>").unwrap();
+        std::fs::write(stage.path().join("plain.css"), b"a{}").unwrap();
+        let mut m = empty_manifest();
+        m.register_held(&served("sitemap.xml"), b"<urlset/>".to_vec(), HashBucket::Files).unwrap();
+        m.register(&served("plain.css"), b"a{}", HashBucket::Files);
+        let mut sealed = m.seal();
+
+        sealed.stamp_all_ship_fingerprints(stage.path());
+
+        assert_eq!(sealed.held_bytes("sitemap.xml"), Some(&b"<urlset/>"[..]), "a pin must not be replaced by a fingerprint");
+        assert!(sealed.ship_fingerprint("sitemap.xml").is_none());
+        assert!(sealed.ship_fingerprint("plain.css").is_some(), "an entry with no source still gets one");
+    }
+
+    #[test]
+    fn release_drops_the_bytes_and_nothing_else() {
+        let mut m = empty_manifest();
+        m.register_held(&served("sitemap.xml"), b"<urlset/>".to_vec(), HashBucket::Files).unwrap();
+        m.apply_message("img.webp".to_string(), "bbbbbbbbbbbbbbbb", HashBucket::ImageVariants, Some("blob".to_string()));
+        let mut sealed = m.seal();
+        let hash_before = sealed.files().get("sitemap.xml").cloned();
+
+        sealed.release_held();
+
+        assert_eq!(sealed.held_bytes("sitemap.xml"), None);
+        assert_eq!(sealed.files().get("sitemap.xml"), hash_before.as_ref(), "the entry keeps its place and its hash");
+        assert_eq!(sealed.staged_oid("img.webp"), Some("blob"), "only held bytes are released");
+    }
+
+    /// The whole point of the byte budget: a manifest never pins more than
+    /// `HELD_BYTES_BUDGET`, and what does not fit is registered as an ordinary
+    /// stage-read entry rather than refused.
+    #[test]
+    fn bytes_past_the_budget_ship_from_the_stage_instead_of_being_held() {
+        let half_and_a_bit = vec![b'a'; HELD_BYTES_BUDGET / 2 + 1];
+        let mut m = empty_manifest();
+        m.register_held(&served("rss.xml"), half_and_a_bit.clone(), HashBucket::Files).unwrap();
+        m.register_held(&served("llms.txt"), half_and_a_bit.clone(), HashBucket::Files).unwrap();
+
+        let sealed = m.seal();
+        assert!(sealed.held_bytes("rss.xml").is_some(), "the first fits");
+        assert_eq!(sealed.held_bytes("llms.txt"), None, "the second would take the manifest past the budget");
+        assert_eq!(
+            sealed.files().get("llms.txt"),
+            Some(&file_entry(&compute_binary_hash(&half_and_a_bit))),
+            "not holding it must not un-register it"
+        );
+    }
+
+    /// The largest real vault measured (246 pages) has a 4.1 MB `llms.txt` and a
+    /// 4.8 MB `rss.xml`. Every other fixture here is a few KB, so lowering
+    /// `HELD_BYTES_BUDGET` to "save memory" would keep them all green while every
+    /// real vault silently lost the protection `Held` exists for.
+    #[test]
+    fn a_real_vaults_llms_txt_and_feed_are_both_held_not_demoted() {
+        let llms = vec![b'l'; 4_100_000];
+        let rss = vec![b'r'; 4_800_000];
+        let mut m = empty_manifest();
+        m.register_held(&served("llms.txt"), llms.clone(), HashBucket::Files).unwrap();
+        m.register_held(&served("rss.xml"), rss.clone(), HashBucket::Files).unwrap();
+
+        let sealed = m.seal();
+        // `==` on the slices, not `assert_eq!`: a failure would print megabytes.
+        assert!(sealed.held_bytes("llms.txt") == Some(llms.as_slice()), "llms.txt was not held");
+        assert!(sealed.held_bytes("rss.xml") == Some(rss.as_slice()), "rss.xml was not held");
+    }
+
+    /// A sealed manifest is cloned freely (the seal tail hands deploy one), and a
+    /// real vault holds megabytes. Cloning has to share what is held; a deep copy
+    /// would multiply the budget by the number of live clones. The payload is
+    /// small on purpose: the property is the shared buffer, not the size, and it
+    /// should not also depend on the budget.
+    #[test]
+    fn cloning_a_manifest_shares_the_held_bytes_instead_of_copying_them() {
+        let mut m = empty_manifest();
+        m.register_held(&served("llms.txt"), vec![b'l'; 4096], HashBucket::Files).unwrap();
+        let sealed = m.seal();
+
+        let clone = sealed.clone();
+
+        let (original, cloned) = (sealed.held_bytes("llms.txt").unwrap(), clone.held_bytes("llms.txt").unwrap());
+        assert!(std::ptr::eq(original.as_ptr(), cloned.as_ptr()), "the clone holds its own copy of the bytes");
+    }
+
+    /// Replacing a held payload frees it first: re-registering one path with a
+    /// payload that alone fits must not be judged against the payload it replaces.
+    #[test]
+    fn re_holding_one_path_does_not_count_the_payload_it_replaces() {
+        let three_fifths = vec![b'a'; HELD_BYTES_BUDGET / 5 * 3];
+        let mut m = empty_manifest();
+        m.register_held(&served("llms.txt"), three_fifths.clone(), HashBucket::Files).unwrap();
+        m.register_held(&served("llms.txt"), three_fifths, HashBucket::Files).unwrap();
+
+        assert!(m.seal().held_bytes("llms.txt").is_some());
+    }
+}
+
+/// A carried source entry is judged under the NEW build's later clock, which would
+/// vouch for an exact-zero sub-second mtime the old clock could not — a same-tick
+/// rewrite after the old read would then pass for unchanged. So `new` drops that
+/// reading (the entry fails open to the hash tier) and leaves every entry the old
+/// clock could vouch for, and every real sub-second reading, as it was.
+#[test]
+fn a_carried_zero_subsecond_mtime_its_own_clock_cannot_vouch_for_is_dropped() {
+    let entry = |mtime: u64, nanos: u32| SourceMetadata { hash: "h".into(), size: 1, mtime, mtime_nanos: Some(nanos), ctime: None, inode: None };
+    let mut carry = SiteHashes::default();
+    carry.captured_at = Some(10_000);
+    carry.sources.insert("racy.png".into(), entry(9_000, 0));
+    carry.sources.insert("settled.png".into(), entry(1_000, 0));
+    carry.sources.insert("precise.png".into(), entry(9_999, 5));
+
+    let m = PendingManifest::new(carry);
+    let nanos = |k: &str| m.inner.sources[k].mtime_nanos;
+    assert_eq!(nanos("racy.png"), None, "read inside the margin: no longer proof under a later clock");
+    assert_eq!(nanos("settled.png"), Some(0));
+    assert_eq!(nanos("precise.png"), Some(5));
+    assert!(m.inner.captured_at > Some(10_000), "premise: the new build's clock replaced the old one");
+}
+
+/// A page registered unwritten is the slot pass's to write only until something
+/// else registers that path: that writer has put its own bytes in the stage,
+/// and the slot pass writing the earlier render over them would undo it.
+#[test]
+fn a_later_registration_drops_the_unwritten_copy_of_its_path() {
+    let sp = |p: &str| crate::build::served_path::ServedPath::from_source(p).unwrap();
+    let mut m = empty_manifest();
+    m.register_unwritten_page(&sp("photography/index.html"), "<p>from the render</p>".to_string());
+    m.register_unwritten_page(&sp("essay/index.html"), "<p>essay</p>".to_string());
+
+    m.register(&sp("photography/index.html"), b"<p>from a later emit</p>", HashBucket::Files);
+
+    let unwritten = m.take_unwritten_pages();
+    assert_eq!(unwritten.keys().collect::<Vec<_>>(), ["essay/index.html"]);
+    assert!(m.take_unwritten_pages().is_empty(), "taking them leaves none behind");
 }

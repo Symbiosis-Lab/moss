@@ -1,29 +1,13 @@
 //! In-process typed-params struct for moss embed synthesizers.
 //!
-//! Phase 3 PR4 (2026-05-27): the `moss:` title-attribute channel
-//! retired. Stage 1 no longer encodes typed params into markdown image
-//! titles; Stage 2 wikilink dispatch reads typed params directly from
-//! pulldown-cmark's `LinkType::WikiLink` pothole text (parsed by
-//! [`super::wikilink_dispatch::parse_pothole_params`]).
-//!
-//! What survives in this module:
-//!
-//! - [`TitleParams`] — the typed-param key/value bag. Every per-kind
-//!   synthesizer (`render/iframe.rs`, `audio.rs`, `pdf.rs`, `video.rs`,
-//!   `model.rs`, image via `render/image.rs`) takes `&TitleParams` as
-//!   its first argument. The dispatcher constructs an instance from the
-//!   wikilink pothole and hands it to the synth function.
-//!
-//! What retired:
-//!
-//! - `parse_title` (deserialized `moss:K=V K=V` from a markdown title) —
-//!   no consumer remains. Wikilink potholes are parsed by
-//!   [`super::wikilink_dispatch::parse_pothole_params`] instead.
-//! - `emit_title` — Phase 3 PR4.5 (2026-05-27): retired with no
-//!   surviving caller. PR3 removed `format_img_tag` (the last producer);
-//!   PR4 dropped `parse_title` (the last consumer); PR4.5 routes
-//!   non-image wikilink embeds directly to synth, removing the final
-//!   transitional hold on the `moss:` markdown round-trip.
+//! [`TitleParams`] is the typed-param key/value bag, parsed from a
+//! wikilink embed's pothole text by
+//! [`super::wikilink_dispatch::parse_pothole_params`] rather than from a
+//! markdown image title. Every per-kind synthesizer (`render/iframe.rs`,
+//! `audio.rs`, `pdf.rs`, `video.rs`, `model.rs`, image via
+//! `render/image.rs`) takes `&TitleParams` as its first argument; the
+//! dispatcher constructs an instance from the wikilink pothole and hands
+//! it to the synth function.
 
 use std::collections::BTreeMap;
 
@@ -39,6 +23,18 @@ impl TitleParams {
 
     pub fn is_empty(&self) -> bool {
         self.params.is_empty()
+    }
+
+    /// The author's plain-text label as a leading-space HTML attribute named
+    /// `attr` (`aria-label`, `alt`), escaped; empty when there is none.
+    pub fn label_attr(&self, attr: &str) -> String {
+        match self.get("label") {
+            Some(l) => format!(
+                " {attr}=\"{}\"",
+                crate::resolve::embed_renderer::html_escape_attr(l)
+            ),
+            None => String::new(),
+        }
     }
 
     pub fn insert(&mut self, k: impl Into<String>, v: impl Into<String>) {

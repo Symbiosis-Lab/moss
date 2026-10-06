@@ -1,0 +1,8 @@
+schema_version = 6
+
+[site]
+lang = "en"
+
+[terms.people]
+fields = ["author", "editor", "jury"]
+title = "People"

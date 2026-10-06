@@ -65,30 +65,59 @@ pub const ROOT_AGENT_CONFIG_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md", "GEMINI
 /// matching case-insensitively would silently unpublish an author's
 /// `Agents.md` essay, which is a worse failure than publishing a stray config
 /// file. Root-ness is the caller's half of the test — see
-/// [`skip_root_agent_config`].
+/// [`left_out_of_site`].
 pub fn is_agent_config_name(name: &str) -> bool {
     ROOT_AGENT_CONFIG_FILES.contains(&name)
 }
 
-/// Scan-time decision for a *file* entry: is this a root-level agent-instruction
-/// file that must not become a page?
-///
-/// `depth` is `WalkDir`'s — the walk root is 0, so a file directly in the site
-/// folder is 1. Root only, because `posts/agents.md` is an ordinary article
-/// about agents and must keep publishing; only the source root is a location
-/// tooling claims.
-///
-/// Logs on a match. The file is sitting in plain sight in the author's folder,
-/// so its absence from the built site has to be explainable from the log.
-pub fn skip_root_agent_config(name: &str, depth: usize) -> bool {
-    if depth == 1 && is_agent_config_name(name) {
-        log::info!("Skipping {name}: agent instructions are tooling, not a page");
-        return true;
-    }
-    false
+/// Why a walk of the site folder leaves an entry out of the site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftOut {
+    /// A directory below the root whose name [`is_excluded_dir_name`] rejects.
+    /// The root is never left out: its name is the author's choice, and a site
+    /// living in `.mysite` would otherwise have its whole walk emptied.
+    ExcludedDir,
+    /// A directory below the root with its own `.moss/`: a different site,
+    /// which the build goes around rather than absorbing its pages.
+    NestedSite,
+    /// An agent-instruction file directly in the site folder. Root only,
+    /// because `posts/agents.md` is an ordinary article about agents; only the
+    /// source root is a location tooling claims.
+    AgentInstructions,
+    /// A page whose name starts with a dot, at any depth: `posts/.draft.md`
+    /// is the author's own marker that it is not for publishing, the same
+    /// reading the file tree and the asset copy already give a dotfile. Only
+    /// pages: a dot-prefixed placeholder such as `.keeper.md.icloud` stands
+    /// for a page still in the cloud and must reach the scan.
+    HiddenFile,
 }
 
-/// Watch-time counterpart to [`skip_root_agent_config`]: is `abs` a root-level
+/// The one rule for which files belong to the site: `Some` for an entry a walk
+/// of the site folder must not read, saying why. The build's scan and every
+/// editor walk that must see the files the build sees ask this, so a file the
+/// build cannot link is never offered or found by the editor either.
+pub fn left_out_of_site(entry: &walkdir::DirEntry) -> Option<LeftOut> {
+    left_out(entry.path(), entry.file_type().is_dir(), entry.depth())
+}
+
+/// [`left_out_of_site`] for an entry at `path`, `depth` levels below the site
+/// folder (a file directly in it is at depth 1), for a reader that lists
+/// folders itself instead of walking with `walkdir`.
+pub fn left_out(path: &Path, is_dir: bool, depth: usize) -> Option<LeftOut> {
+    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    if !is_dir {
+        if name.starts_with('.') && is_page_path(path) {
+            return Some(LeftOut::HiddenFile);
+        }
+        return (depth == 1 && is_agent_config_name(&name)).then_some(LeftOut::AgentInstructions);
+    }
+    if depth > 0 && is_excluded_dir_name(&name) {
+        return Some(LeftOut::ExcludedDir);
+    }
+    (depth > 0 && path.join(".moss").is_dir()).then_some(LeftOut::NestedSite)
+}
+
+/// Watch-time counterpart to [`left_out_of_site`]: is `abs` a root-level
 /// agent-instruction file of the site at `root`?
 ///
 /// A file the scan skips cannot change one byte of the built site, so a change
@@ -154,9 +183,9 @@ pub fn is_os_junk_file(name: &str) -> bool {
 /// Compute the set of source-relative passthrough subtree roots.
 ///
 /// A root is any non-root directory containing an `index.html` or `index.htm`.
-/// Config entries (from `[build].passthrough`) can add roots (plain path) or
-/// remove auto-detected ones (`!path` with `!` prefix). All roots are stored
-/// with a trailing `/` so `starts_with` comparisons are separator-exact.
+/// Config entries (from `[build].passthrough`) can add directory roots or exact
+/// scanned HTML files, and remove auto-detected roots (`!path` with `!` prefix).
+/// Directory roots carry a trailing `/`; exact HTML files do not.
 pub fn compute_passthrough_roots(html_files: &[FileInfo], config_entries: &[String]) -> HashSet<String> {
     let mut roots = HashSet::new();
 
@@ -205,7 +234,12 @@ pub fn compute_passthrough_roots(html_files: &[FileInfo], config_entries: &[Stri
             // Empty or slash-only entry ("" / "/" / "!"): no meaningful root.
             continue;
         }
-        let key = format!("{}/", normalized);
+        let is_scanned_html_file = html_files.iter().any(|file| file.path == normalized);
+        let key = if is_scanned_html_file {
+            normalized.to_string()
+        } else {
+            format!("{}/", normalized)
+        };
         if is_negation {
             roots.remove(&key);
         } else {
@@ -222,7 +256,13 @@ pub fn compute_passthrough_roots(html_files: &[FileInfo], config_entries: &[Stri
 /// that cannot accidentally match a sibling directory with a longer name
 /// (e.g. root `app/` does not match `application/file.js`).
 pub fn is_in_passthrough(relative_path: &str, passthrough_roots: &HashSet<String>) -> bool {
-    passthrough_roots.iter().any(|root| relative_path.starts_with(root.as_str()))
+    passthrough_roots.iter().any(|root| {
+        if root.ends_with('/') {
+            relative_path.starts_with(root.as_str())
+        } else {
+            relative_path == root
+        }
+    })
 }
 
 /// Whether the scanned directory `relative_path` is a section of the site, and
@@ -256,6 +296,69 @@ pub fn gets_index_page(
         && !moss_core::attachment::is_attachment_dir(attachment_folder, relative_path)
 }
 
+/// Each scanned directory that gets a folder-index page, paired with the
+/// page-tree key that index lives at.
+///
+/// Appending `/index.html` runs every directory segment through the same
+/// slug/override resolver the page-tree keys use and then drops the leaf,
+/// which is what makes these keys comparable with the doc-derived prefixes.
+/// A directory mapping to the empty key is skipped — the site's homepage is
+/// not a folder index. A directory under a language-prefix root (bare, or
+/// nested — `zh-hans/`, `zh-hans/docs/`) is skipped too, by the same
+/// `resolve_language_from_folder` predicate the render's own auto-index loop
+/// applies to its combined folder set (`render/blocking.rs`): a folder under
+/// a language tree never gets an auto-generated index there, so admitting it
+/// here would hand a caller a key the render never emits a page for.
+///
+/// `dirs` is already narrowed by the scan to the directories that should have
+/// a page at all (`gets_index_page`, above); the reserved-device-name filter
+/// lives in `slug.rs`. This is the one place the source-directory-to-key
+/// mapping is written — its callers (the render's two folder-index synthesis
+/// blocks, plus `build_article_map`'s `folder_indexes` field and the content
+/// graph's auto-index registration) all read it from here so they can never
+/// drift from each other or from what the renderer actually emits.
+pub(crate) fn folder_index_keys<'a>(
+    dirs: &'a [String],
+    dir_overrides: &'a std::collections::HashMap<String, String>,
+) -> impl Iterator<Item = (&'a String, String)> + 'a {
+    dirs.iter().filter_map(move |dir| {
+        let top_segment = dir.split('/').next().unwrap_or(dir);
+        if crate::i18n::path::resolve_language_from_folder(top_segment).is_some() {
+            return None;
+        }
+        let mapped = crate::build::scan::page_map::resolve_path_with_overrides(
+            &format!("{dir}/index.html"),
+            dir_overrides,
+        );
+        let key = mapped
+            .strip_suffix("/index.html")
+            .filter(|_| !crate::build::scan::slug::warn_reserved_folder(dir, &mapped))?;
+        (!key.is_empty()).then(|| (dir, key.to_string()))
+    })
+}
+
+/// Register every directory that gets an auto-generated folder-index page on
+/// a [`moss_core::content_graph::ContentGraphBuilder`], so `resolve_path`'s
+/// folder-note fallback can answer a bare top-level `[[Folder]]` wikilink.
+/// Reuses [`folder_index_keys`] — the same function the render loop calls to
+/// decide which folders actually get a synthetic index — so this can never
+/// register a folder the renderer does not generate a page for.
+///
+/// An empty override map is safe here: overrides only rename a folder's URL,
+/// which `pinned_url` applies later once the real `dir_overrides` is
+/// installed (`with_output_overrides`); they never add or remove which
+/// directories are eligible. Only the computed URL half of each pair is
+/// discarded — `resolve_path` recomputes it via `pinned_url` at lookup time,
+/// so a stale unoverridden URL is never cached into the graph.
+pub(crate) fn register_auto_index_dirs(
+    builder: &mut moss_core::content_graph::ContentGraphBuilder,
+    dirs: &[String],
+) {
+    for (dir, _url_key) in folder_index_keys(dirs, &std::collections::HashMap::new()) {
+        builder.register_auto_index_dir(dir);
+    }
+}
+
 // ── Not the site's content: the shared tree/watch filter ───────────────────
 //
 // `is_hidden` answers "is this entry the author's material, or moss's own?"
@@ -281,10 +384,13 @@ pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
 /// — it is build-managed media and not surfaced in the editor tree.
 ///
 /// `data/` is listed for NOTHING. The 2026-09-04 writer audit asked of every
-/// `.moss/` path who writes it and whether a hand edit survives, and only these
-/// two answered "the user": `config.toml`, whose every in-app writer goes
-/// through the format-preserving `infra::toml_rewrite` precisely because the
-/// file is hand-written, and `theme/`, which nothing but the user ever writes.
+/// `.moss/` path who writes it and whether a hand edit survives, and only
+/// `config.toml` and `theme/` answered "the user" then: `config.toml`, whose
+/// every in-app writer goes through the format-preserving
+/// `infra::toml_rewrite` precisely because the file is hand-written, and
+/// `theme/`, which nothing but the user ever writes. `places.toml` (the
+/// gazetteer, places build slice) joined them the same way — the app has no
+/// writer for it yet, so every byte in it is the user's own.
 /// `data/social/` was listed here until that audit and is not user-writable:
 /// the background comment sync and the matters plugin re-serialize those files
 /// wholesale, so an edit made in the editor survives only until the next sync,
@@ -293,31 +399,60 @@ pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
 /// siblings were never listed for the same reason: `subscribers.csv` is a PII
 /// list Settings edits with a real UI, `events*.json*` is the analytics stream,
 /// and `email/drafts/` is auto-saved newsletter scratch.
-/// See `docs/archive/2026-09-03-moss-folder-in-the-file-tree-audit-and-design.md`.
-pub const MOSS_INTERNAL_ALLOWLIST: &[&str] = &[".moss/config.toml", ".moss/theme"];
+pub const MOSS_INTERNAL_ALLOWLIST: &[&str] = &[".moss/config.toml", ".moss/theme", ".moss/places.toml"];
+
+/// Why `is_hidden_reason` filtered an entry out of the file tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenReason {
+    /// OS/VCS/tooling noise nobody authored: junk files, `HIDDEN_ENTRIES`,
+    /// the root `.moss`/dotfile gate.
+    OsOrVcsNoise,
+    /// A root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`-shaped file.
+    AgentConfig,
+    /// An entry inside `.moss/` not on `MOSS_INTERNAL_ALLOWLIST`.
+    MossInternal,
+}
+
+impl HiddenReason {
+    /// True for a reason that means "moss's curated view chose not to show
+    /// real content", as opposed to OS/VCS noise. The one place a caller
+    /// decides what counts toward a "something is filtered here" total —
+    /// see `TreeNode::hidden`.
+    pub fn is_curated(self) -> bool {
+        matches!(self, HiddenReason::AgentConfig | HiddenReason::MossInternal)
+    }
+}
 
 /// Return true when an entry should be filtered out of the file tree.
 ///
 /// `parent_relative` is the path of the containing directory relative to the
 /// project root ("" for root, ".moss" when filtering children of `.moss/`).
 pub fn is_hidden(name: &str, parent_relative: &str, show_internal: bool) -> bool {
+    is_hidden_reason(name, parent_relative, show_internal).is_some()
+}
+
+/// Same predicate as [`is_hidden`], naming *which* rule fired instead of a
+/// bare bool — same branches, same order, no second list. Lets a caller (the
+/// tree listing's hidden-count) tell "moss's own curated filter" apart from
+/// OS/VCS noise, instead of merging every filtered entry into one number.
+pub fn is_hidden_reason(name: &str, parent_relative: &str, show_internal: bool) -> Option<HiddenReason> {
     // Always hide these regardless of show_internal
     if HIDDEN_ENTRIES.contains(&name) || is_os_junk_file(name) {
-        return true;
+        return Some(HiddenReason::OsOrVcsNoise);
     }
 
     // At the project root, .moss is surfaced only when show_internal is on
     if parent_relative.is_empty() {
         if name == ".moss" {
-            return !show_internal;
+            return if show_internal { None } else { Some(HiddenReason::OsOrVcsNoise) };
         }
         // All other dotfiles are hidden at the project root
         if name.starts_with('.') {
-            return true;
+            return Some(HiddenReason::OsOrVcsNoise);
         }
         // Agent-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md) are the one
         // category that reads as prose and isn't. The scan already refuses to
-        // publish them (`skip_root_agent_config`, above) — whoever wrote it,
+        // publish them (`left_out_of_site`, above) — whoever wrote it,
         // it isn't the site's content, so it would otherwise sit in the tree
         // between `index.md` and `about.md`. Same standing as `.moss/`: present,
         // one toggle away.
@@ -327,23 +462,24 @@ pub fn is_hidden(name: &str, parent_relative: &str, show_internal: bool) -> bool
         // an author takes it over — sealing it would leave no way to do that
         // from inside moss.
         if is_agent_config_name(name) {
-            return !show_internal;
+            return if show_internal { None } else { Some(HiddenReason::AgentConfig) };
         }
-        return false;
+        return None;
     }
 
     // Inside .moss/ (only reached with show_internal on, since `.moss` itself
     // is hidden otherwise): listed, below a listed path, or an ancestor of one.
     if parent_relative == ".moss" || parent_relative.starts_with(".moss/") {
         let full = format!("{parent_relative}/{name}");
-        return !MOSS_INTERNAL_ALLOWLIST.iter().any(|allowed| {
+        let allowed = MOSS_INTERNAL_ALLOWLIST.iter().any(|allowed| {
             full == *allowed
                 || full.starts_with(&format!("{allowed}/"))
                 || allowed.starts_with(&format!("{full}/"))
         });
+        return if allowed { None } else { Some(HiddenReason::MossInternal) };
     }
 
-    false
+    None
 }
 
 
@@ -354,7 +490,58 @@ pub fn is_hidden(name: &str, parent_relative: &str, show_internal: bool) -> bool
 /// never restates this list. A copy of it in TypeScript is the Rust↔TS parity
 /// trap the preview follower's slot check already avoids.
 pub fn is_page_source(extension: &str) -> bool {
-    matches!(extension, "md" | "markdown" | "mdown" | "mkd")
+    moss_core::page_kind::PAGE_EXTENSIONS.contains(&extension)
+}
+
+/// [`is_page_source`] for a path, whatever the letter case of its extension:
+/// `Post.MD` is a page like `post.md`.
+pub fn is_page_path(path: &Path) -> bool {
+    path.extension().is_some_and(|e| is_page_source(&e.to_string_lossy().to_lowercase()))
+}
+
+/// Which bucket of `ProjectStructure` a file extension belongs to — the pure,
+/// I/O-free half of `scan_folder`'s per-file classification (`scan.rs`).
+/// Frontmatter parsing, ffprobe dimensions, and cache lookups all happen
+/// *after* a file has already been placed in a bucket; none of that decides
+/// which bucket it goes in, and none of it belongs here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanBucket {
+    /// Markdown-family page sources — see [`is_page_source`].
+    Page,
+    Html,
+    /// Raster images the scan extracts placeholder metadata for.
+    Image,
+    /// Video files the scan probes via ffmpeg for dimensions.
+    Video,
+    /// Jupyter notebooks.
+    Notebook,
+    /// Word-processor documents (`.pages`, `.docx`, `.doc`).
+    Document,
+    /// Everything else. Still scanned — the build copies it through as an
+    /// asset — just not one of the categories above.
+    Other,
+}
+
+/// Classify a lowercased file extension the way `scan_folder` does.
+///
+/// `scan.rs` calls this directly, so the scan cannot drift from its own
+/// classifier. It is `pub` for the same reason [`is_page_source`] is: a
+/// caller outside this crate that needs to know whether a path is one the
+/// scan would treat as site content — rather than re-deriving its own
+/// extension list and drifting from the scan the way the file-watch sweep's
+/// hand-maintained mirror once did — calls this one instead.
+pub fn classify_extension(extension: &str) -> ScanBucket {
+    if is_page_source(extension) {
+        return ScanBucket::Page;
+    }
+    match extension {
+        "html" | "htm" => ScanBucket::Html,
+        "jpg" | "jpeg" | "png" | "gif" | "svg" | "webp" | "avif" => ScanBucket::Image,
+        "mov" | "mp4" | "webm" | "avi" | "mkv" | "m4v" => ScanBucket::Video,
+        "ipynb" => ScanBucket::Notebook,
+        "pages" | "docx" | "doc" => ScanBucket::Document,
+        _ => ScanBucket::Other,
+    }
 }
 
 #[cfg(test)]
@@ -383,10 +570,10 @@ mod tests {
 
     #[test]
     fn moss_lists_only_what_the_user_writes() {
-        for name in ["config.toml", "theme"] {
+        for name in ["config.toml", "theme", "places.toml"] {
             assert!(!is_hidden(name, ".moss", true), "{name} is the user's to edit");
         }
-        for name in ["state.toml", "build", "identity", "plugins", "hashes.json", "data", "assets"] {
+        for name in ["state.toml", "build.nosync", "cache", "identity", "plugins", "hashes.json", "data", "assets"] {
             assert!(is_hidden(name, ".moss", true), "{name} is moss's own, not the author's");
         }
         // `data/` is gone as a row, so nothing below it can be reached either.
@@ -400,7 +587,7 @@ mod tests {
     #[test]
     fn a_nested_agents_md_is_an_ordinary_file() {
         // `posts/AGENTS.md` is an article about agents. The scan publishes it
-        // (`skip_root_agent_config` is root-only) and so the tree
+        // (`left_out_of_site` is root-only for these) and so the tree
         // shows it, in both modes.
         assert!(!is_hidden("AGENTS.md", "posts", false));
         assert!(!is_hidden("AGENTS.md", "posts", true));
@@ -479,6 +666,46 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_passthrough_roots_config_adds_exact_file() {
+        use super::*;
+        use crate::types::content::FileInfo;
+        let html_files = vec![FileInfo {
+            path: "index.html".to_string(),
+            file_type: "html".to_string(),
+            size: 0,
+            modified: None,
+        }];
+        let roots = compute_passthrough_roots(&html_files, &["index.html".to_string()]);
+        assert!(roots.contains("index.html"));
+        assert!(is_in_passthrough("index.html", &roots));
+        assert!(!is_in_passthrough("index.html/child", &roots));
+        assert!(!is_in_passthrough("index.html.bak", &roots));
+    }
+
+    #[test]
+    fn test_compute_passthrough_roots_exact_file_negation() {
+        use crate::types::content::FileInfo;
+        let html_files = vec![FileInfo {
+            path: "index.html".to_string(),
+            file_type: "html".to_string(),
+            size: 0,
+            modified: None,
+        }];
+        let roots = compute_passthrough_roots(
+            &html_files,
+            &["index.html".to_string(), "!index.html".to_string()],
+        );
+        assert!(!is_in_passthrough("index.html", &roots));
+    }
+
+    #[test]
+    fn test_compute_passthrough_roots_dotted_directory_stays_directory() {
+        let roots = compute_passthrough_roots(&[], &["app.v2".to_string()]);
+        assert!(roots.contains("app.v2/"));
+        assert!(is_in_passthrough("app.v2/index.html", &roots));
+    }
+
+    #[test]
     fn test_compute_passthrough_roots_config_negation() {
         use super::*;
         use crate::types::content::FileInfo;
@@ -538,5 +765,35 @@ mod tests {
         assert!(!is_page_source("mdx"));
         assert!(!is_page_source("html"));
         assert!(!is_page_source("txt"));
+    }
+
+    /// Pins `classify_extension` against every extension `scan.rs`'s own
+    /// match block recognizes, so a bucket added there and forgotten here (or
+    /// the reverse) fails immediately rather than silently drifting the way
+    /// the sweep's hand-maintained mirror once did. An extension
+    /// outside all of these is `Other` — the scan still consumes it, just
+    /// uncategorized — which is why the fallback cases below assert `Other`
+    /// rather than being left unchecked.
+    #[test]
+    fn classify_extension_pins_every_bucket_the_scan_recognizes() {
+        for ext in ["md", "markdown", "mdown", "mkd"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Page, "{ext}");
+        }
+        for ext in ["html", "htm"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Html, "{ext}");
+        }
+        for ext in ["jpg", "jpeg", "png", "gif", "svg", "webp", "avif"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Image, "{ext}");
+        }
+        for ext in ["mov", "mp4", "webm", "avi", "mkv", "m4v"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Video, "{ext}");
+        }
+        assert_eq!(classify_extension("ipynb"), ScanBucket::Notebook);
+        for ext in ["pages", "docx", "doc"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Document, "{ext}");
+        }
+        for ext in ["css", "js", "woff2", "pdf", "mp3", "unknownext", ""] {
+            assert_eq!(classify_extension(ext), ScanBucket::Other, "{ext}");
+        }
     }
 }

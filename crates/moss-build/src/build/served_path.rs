@@ -8,7 +8,7 @@
 //! There is no other way to write a file inside the build output, and no
 //! other way to emit a URL into HTML, RSS, sitemap, manifest, or JSON-LD.
 //! Reviewers: any format!() or string concat producing a "/..." path in
-//! src-tauri/src/build/ outside this module is a blocker.
+//! the build pipeline outside this module is a blocker.
 //!
 //! Construction is fallible via `from_source` (returns
 //! `Result<Self, ServedPathError>`); the type rejects `.moss/`,
@@ -24,28 +24,57 @@
 //! register APIs. Constructing one runs `slugify_path_segments` on the input,
 //! making it impossible to write or register an un-normalized path.
 //!
-//! Why this exists: a source `Resources/habitable-zone.ipynb` used to produce
-//! a notebook viewer at `Resources/habitable-zone.html` (capital R preserved).
+//! Why this exists: a source `Resources/orbit-model.ipynb` used to produce
+//! a notebook viewer at `Resources/orbit-model.html` (capital R preserved).
 //! On case-insensitive APFS this worked; on Dropbox CloudStorage (case-sensitive
 //! FUSE) and Linux servers, the on-disk file landed at lowercase while the
 //! manifest registered the capital path, causing deploy ENOENT on canonicalize.
-//!
-//! See `docs/archive/2026-05-07-output-path-normalization.md` for the full design.
 
 use crate::build::scan::slug::slugify_dir_path;
 use std::fmt;
 
 /// Directory every auto-generated OG card is written under, shared by
 /// [`ServedPath::for_og_card`] and the incremental render skip's card
-/// carry-forward (`build/render/blocking.rs`, moss#922 Stage 5b), which
-/// recognizes cards by this prefix alone.
+/// carry-forward (`build/render/blocking.rs`) and the media-settle re-render
+/// trigger (`build.rs`), both of which recognize cards by this prefix alone.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
 
-/// Reserved prefix for the email-fallback math PNGs. Append-only by design
-/// (ADR-030): an entry here is never dropped for being unreadable, because
+/// Is this output path an address a visitor can have stored — anything outside
+/// the content-addressed, rotating `_moss/` namespace?
+pub fn is_public_address(path: &str) -> bool {
+    !path.starts_with("_moss/")
+}
+
+/// The URL an output path is served at. Only an `index.html` is served at its
+/// directory (`a/index.html` is `/a/`); every other output, a hand-made
+/// `x.html` included, is served at its full path, which is also the form the
+/// `[redirects]` table matches.
+pub fn served_address(output: &str) -> String {
+    match output.strip_suffix("index.html") {
+        Some(dir) if dir.is_empty() || dir.ends_with('/') => format!("/{dir}"),
+        _ => format!("/{output}"),
+    }
+}
+
+/// Reserved prefix for the email-fallback math PNGs. Append-only by design:
+/// an entry here is never dropped for being unreadable, because
 /// the published site still serves it and un-promising it would delete it
 /// from a live site.
 pub const MATH_PNG_PREFIX: &str = "_moss/math/";
+
+/// Directory every downloaded external-link cover image is written under.
+/// See [`ServedPath::for_remote_cover`].
+pub const REMOTE_COVER_PREFIX: &str = "_moss/link/";
+
+/// Prefix of the content-addressed directory the place-map explorer's
+/// world/tile SVGs are written under: `_moss/map.<hash>/`, where `hash`
+/// covers the embedded place-map pack plus the emitter's generator version
+/// (never site config or page content — see
+/// `build::emit::place_map_assets::assets_hash`). Unlike every other
+/// `*_PREFIX` above, the hash names the DIRECTORY, not the filename: every
+/// page's copy of the set shares one directory, so the world map and every
+/// tile it references stay one content-addressed unit.
+pub const PLACE_MAP_ASSET_PREFIX: &str = "_moss/map.";
 
 /// A normalized served path. Directory segments are slugged; the basename
 /// is preserved verbatim.
@@ -54,7 +83,7 @@ pub const MATH_PNG_PREFIX: &str = "_moss/math/";
 /// p5.js) load asset files by their exact filenames. Slug-rewriting
 /// `MathJax_Main-Bold.woff` to `mathjax-main-bold.woff` produces a 404 at
 /// runtime. Directory segments, however, leak into URL routing on
-/// case-sensitive servers (the chps-site bug) so they must be normalized.
+/// case-sensitive servers (a real site's bug) so they must be normalized.
 ///
 /// For *pretty URLs* of articles, the filename slug is applied separately
 /// inside `compute_url_path` via `generate_slug(stem)` — that's intentional.
@@ -124,15 +153,37 @@ impl ServedPath {
         Ok(ServedPath(slugify_dir_path(s)))
     }
 
+    /// Rehydrate a path previously stored by the build in a metadata cache.
+    /// Cached paths are already generated and normalized, so unlike source
+    /// paths they may use moss's reserved `_moss/` namespace.
+    pub(crate) fn from_cached(s: &str) -> Result<Self, ServedPathError> {
+        let normalized = Self::normalize_relative(s)?;
+        if normalized.split('/').any(|segment| segment == ".") {
+            return Err(ServedPathError::InvalidInput("cached path contains '.' segment"));
+        }
+        if normalized.split('/').any(|segment| segment == ".moss") {
+            return Err(ServedPathError::ReservedMossPrefix);
+        }
+        Ok(ServedPath(normalized))
+    }
+
     /// Run all parse-time invariants for user-source paths. Rejects both
     /// `.moss/` (moss internal workdir) and `_moss/` (moss framework
     /// namespace, reserved for build-emitted artifacts). The `for_*`
     /// constructors that legitimately produce `_moss/...` paths bypass
     /// this validator by constructing their inner String directly.
     fn validate_source(s: &str) -> Result<(), ServedPathError> {
-        // Normalize `\`→`/` first so the .moss/_moss/.. segment guards see real
-        // segments — a Windows `..\secret` would otherwise be a single segment
-        // and bypass the parent-escape guard.
+        let trimmed = Self::normalize_relative(s)?;
+        if trimmed.split('/').any(|seg| seg == ".moss" || seg == "_moss") {
+            return Err(ServedPathError::ReservedMossPrefix);
+        }
+        Ok(())
+    }
+
+    /// Normalize separators and validate the invariants shared by source and
+    /// cached relative paths. Keeping this at the boundary prevents a Windows
+    /// `..\\secret` from crossing into filesystem or HTML path handling.
+    fn normalize_relative(s: &str) -> Result<String, ServedPathError> {
         let trimmed = moss_core::slug::normalize_separators(s.trim());
         if trimmed.is_empty() {
             return Err(ServedPathError::Empty);
@@ -140,13 +191,10 @@ impl ServedPath {
         if trimmed.starts_with('/') {
             return Err(ServedPathError::AbsolutePath);
         }
-        if trimmed.split('/').any(|seg| seg == ".moss" || seg == "_moss") {
-            return Err(ServedPathError::ReservedMossPrefix);
-        }
-        if trimmed.split('/').any(|seg| seg == "..") {
+        if trimmed.split('/').any(|segment| segment == "..") {
             return Err(ServedPathError::ParentEscape);
         }
-        Ok(())
+        Ok(trimmed)
     }
 
     /// The single legitimate third-party asset bypass: JupyterLite ships
@@ -178,7 +226,7 @@ impl ServedPath {
         Ok(ServedPath(format!("{}{}.png", OG_CARD_PREFIX, content_hash)))
     }
 
-    /// Email/RSS math PNG (ADR-030 §3.4/§3.5). Hash is 16 lowercase hex chars
+    /// Email/RSS math PNG. Hash is 16 lowercase hex chars
     /// (validated), produced by `emit::math_png::content_hash` — SHA-256 over
     /// the full render input tuple, truncated to 8 bytes. Passthrough
     /// constructor on purpose: `from_source` slug-lowercases directory
@@ -196,6 +244,55 @@ impl ServedPath {
             return Err(ServedPathError::InvalidInput("math png hash must be lowercase hex"));
         }
         Ok(ServedPath(format!("{}{}.png", MATH_PNG_PREFIX, content_hash)))
+    }
+
+    /// A downloaded external-link cover image (an external `:::grid` card's
+    /// `og:image`/`twitter:image`), named by the content hash of the
+    /// downloaded IMAGE BYTES (16 hex chars of the object-store oid) —
+    /// never by the linked page's URL or the remote image URL, and never
+    /// under a source-derived path (`from_source` rejects `_moss/`
+    /// entirely). Two pages whose og:image resolves to identical bytes
+    /// share one cover. See `build::media::remote_cover`. `ext` is the
+    /// format the download was sniffed as (never trusted from the URL or a
+    /// `Content-Type` header alone) — one of the raster extensions the
+    /// synthesizer's `<picture>` gate recognizes.
+    pub fn for_remote_cover(content_hash: &str, ext: &str) -> Result<Self, ServedPathError> {
+        if content_hash.is_empty() {
+            return Err(ServedPathError::InvalidInput("remote cover hash is empty"));
+        }
+        if content_hash.len() != 16 {
+            return Err(ServedPathError::InvalidInput("remote cover hash must be 16 hex chars"));
+        }
+        if !content_hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+            return Err(ServedPathError::InvalidInput("remote cover hash must be lowercase hex"));
+        }
+        if !matches!(ext, "jpg" | "jpeg" | "png" | "webp") {
+            return Err(ServedPathError::InvalidInput("remote cover extension must be jpg, jpeg, png, or webp"));
+        }
+        Ok(ServedPath(format!("{}{}.{}", REMOTE_COVER_PREFIX, content_hash, ext)))
+    }
+
+    /// One asset (the world map, a tile, or the `tiles.json` index) inside
+    /// a place-map assets directory `_moss/map.<assets_hash>/`.
+    /// `assets_hash` is lowercase hex (the xxHash3 digest
+    /// `compute_binary_hash` produces, 16 chars, though any non-empty
+    /// lowercase-hex string is accepted so a future longer digest does not
+    /// need a new constructor); `filename` is a bare basename — no `/`, no
+    /// `..` — ending `.svg` or `.json`.
+    pub fn for_place_map_asset(assets_hash: &str, filename: &str) -> Result<Self, ServedPathError> {
+        if assets_hash.is_empty() {
+            return Err(ServedPathError::InvalidInput("place-map assets hash is empty"));
+        }
+        if !assets_hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+            return Err(ServedPathError::InvalidInput("place-map assets hash must be lowercase hex"));
+        }
+        if filename.is_empty() || filename.contains('/') || filename.contains("..") {
+            return Err(ServedPathError::InvalidInput("place-map asset filename must be a bare basename"));
+        }
+        if !(filename.ends_with(".svg") || filename.ends_with(".json")) {
+            return Err(ServedPathError::InvalidInput("place-map asset filename must end .svg or .json"));
+        }
+        Ok(ServedPath(format!("{PLACE_MAP_ASSET_PREFIX}{assets_hash}/{filename}")))
     }
 
     /// Site favicon. `ext` is a bare extension (no dot, no slash).
@@ -232,6 +329,11 @@ impl ServedPath {
         Ok(ServedPath(inner))
     }
 
+    /// The redirect table a host that can answer a real 301 reads.
+    pub fn for_redirects_manifest() -> Self {
+        ServedPath("_moss/redirects.json".to_string())
+    }
+
     /// LLMs.txt. Path is fixed.
     pub fn for_llms_txt() -> Self {
         ServedPath("llms.txt".to_string())
@@ -249,8 +351,8 @@ impl ServedPath {
         ServedPath("_moss/default-icon.png".to_string())
     }
 
-    /// Default theme CSS, emitted from the binary-embedded
-    /// `src-tauri/src/assets/default.css`.
+    /// Default theme CSS, emitted from the binary-embedded default stylesheet
+    /// asset.
     pub fn for_default_stylesheet() -> Self {
         ServedPath("_moss/style.css".to_string())
     }
@@ -335,6 +437,15 @@ impl ServedPath {
         ServedPath(format!("{}/script.{}.js", THEME_MOUNT, hash))
     }
 
+    /// Places-explorer data file, content-hashed. Output:
+    /// `_moss/places.{hash}.json`. Same shape as
+    /// [`Self::for_default_stylesheet_hashed`]: the hash names the file, so
+    /// no fixed URL exists for callers to guess — the page that links it
+    /// reads the hash off the same build that produced it.
+    pub fn for_places_data_hashed(hash: &str) -> Self {
+        ServedPath(format!("_moss/places.{}.json", hash))
+    }
+
     /// A single file inside the Pagefind search-index bundle.
     ///
     /// `rel` is the path *within* the bundle as Pagefind reports it from
@@ -347,8 +458,7 @@ impl ServedPath {
     /// directory segment here would 404 at query time.
     ///
     /// Path-traversal-safe: rejects empty input, absolute paths, and `..`.
-    /// Planned as `for_search_index()` in
-    /// `docs/archive/2026-05-13-served-path-consolidation.md`; named
+    /// Originally planned as `for_search_index()`; named
     /// `for_search_asset` because it addresses one file in a tree, not a
     /// single index blob.
     pub fn for_search_asset(rel: &str) -> Result<Self, ServedPathError> {
@@ -467,15 +577,77 @@ impl AsRef<std::path::Path> for ServedPath {
     }
 }
 
+// ---------------------------------------------------------------------------
+// How ship treats a served path
+// ---------------------------------------------------------------------------
+//
+// Here rather than in `ship` because `manifest` has to ask it (`register_held`
+// refuses a path ship would rewrite) and `ship` depends on `manifest`. This
+// module depends on neither. `ship` re-exports both names, and keeps
+// `apply_transform`, the byte rewrite the enum selects.
+
+/// How a file should be transformed when the ship pass writes it into a generation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShipTransform {
+    /// Copy the file byte-for-byte. Used for all non-HTML artifacts.
+    CopyAsIs,
+    /// Strip preview-only source-annotation attributes before writing to the generation.
+    /// Used for `.html` / `.htm` files.
+    StripPreviewAttrs,
+}
+
+/// Classify a relative path into the transform that the ship pass should apply.
+///
+/// It used to take an `annotations_present` flag, for a publish build that
+/// emitted no `data-source-*` attributes and could skip the regex. No such
+/// build exists: `emit_source_lines` (`pipeline.rs:1251`) is a literal `true`,
+/// so every caller passed `true` and the other arm was a no-op waiting to be
+/// wrong — it also skipped `ship`'s `STRIP_NO_PREVIEW_MARKER`, which is not
+/// annotation-dependent at all.
+///
+/// Public so tests can verify classification without running a full ship.
+pub fn transform_for(rel_path: &str) -> ShipTransform {
+    if rel_path.ends_with(".html") || rel_path.ends_with(".htm") {
+        ShipTransform::StripPreviewAttrs
+    } else {
+        ShipTransform::CopyAsIs
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn transform_for_html_returns_strip() {
+        assert_eq!(
+            transform_for("index.html"),
+            ShipTransform::StripPreviewAttrs
+        );
+        assert_eq!(
+            transform_for("articles/foo/index.html"),
+            ShipTransform::StripPreviewAttrs
+        );
+        assert_eq!(
+            transform_for("legacy.htm"),
+            ShipTransform::StripPreviewAttrs
+        );
+    }
+
+    #[test]
+    fn transform_for_non_html_returns_copy() {
+        assert_eq!(transform_for("style.css"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("og/home.png"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("rss.xml"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("data.json"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("video.mp4"), ShipTransform::CopyAsIs);
+    }
+
+    #[test]
     fn lowercases_directory_segments() {
         assert_eq!(
-            ServedPath::from_source("Resources/habitable-zone.html").unwrap().as_str(),
-            "resources/habitable-zone.html"
+            ServedPath::from_source("Resources/orbit-model.html").unwrap().as_str(),
+            "resources/orbit-model.html"
         );
     }
 
@@ -653,6 +825,30 @@ mod tests {
         assert!(matches!(ServedPath::validate_source("   "), Err(ServedPathError::Empty)));
     }
 
+    #[test]
+    fn cached_paths_use_relative_separator_and_segment_guards() {
+        assert!(matches!(
+            ServedPath::from_cached(".."),
+            Err(ServedPathError::ParentEscape)
+        ));
+        assert!(matches!(
+            ServedPath::from_cached(r"..\secret"),
+            Err(ServedPathError::ParentEscape)
+        ));
+        assert!(matches!(
+            ServedPath::from_cached("."),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::from_cached("/_moss/link/cover.png"),
+            Err(ServedPathError::AbsolutePath)
+        ));
+        assert_eq!(
+            ServedPath::from_cached("_moss/link/cover.png").unwrap().as_str(),
+            "_moss/link/cover.png"
+        );
+    }
+
     // --- for_* constructor tests ---
 
     #[test]
@@ -660,6 +856,63 @@ mod tests {
         let sp = ServedPath::for_og_card("87ba30f2b3c09ca9").unwrap();
         assert_eq!(sp.as_str(), "_moss/og/87ba30f2b3c09ca9.png");
         assert_eq!(sp.to_relative_url(), "/_moss/og/87ba30f2b3c09ca9.png");
+    }
+
+    #[test]
+    fn for_remote_cover_lives_under_underscore_moss_link() {
+        let sp = ServedPath::for_remote_cover("87ba30f2b3c09ca9", "jpg").unwrap();
+        assert_eq!(sp.as_str(), "_moss/link/87ba30f2b3c09ca9.jpg");
+        assert_eq!(sp.to_relative_url(), "/_moss/link/87ba30f2b3c09ca9.jpg");
+    }
+
+    #[test]
+    fn for_place_map_asset_names_the_directory_by_hash_not_the_file() {
+        let world = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "world.svg").unwrap();
+        assert_eq!(world.as_str(), "_moss/map.87ba30f2b3c09ca9/world.svg");
+        let tile = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "tile-20-12.svg").unwrap();
+        assert_eq!(tile.as_str(), "_moss/map.87ba30f2b3c09ca9/tile-20-12.svg");
+        let index = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "tiles.json").unwrap();
+        assert_eq!(index.as_str(), "_moss/map.87ba30f2b3c09ca9/tiles.json");
+    }
+
+    #[test]
+    fn for_place_map_asset_rejects_non_hex_hash_and_a_non_basename_filename() {
+        assert!(matches!(
+            ServedPath::for_place_map_asset("not-hex!", "world.svg"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "../world.svg"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "sub/world.svg"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "world.png"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn for_remote_cover_rejects_non_hex_hash() {
+        assert!(matches!(
+            ServedPath::for_remote_cover("not-hex!", "png"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn for_remote_cover_rejects_a_disallowed_extension() {
+        assert!(matches!(
+            ServedPath::for_remote_cover("87ba30f2b3c09ca9", "svg"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::for_remote_cover("87ba30f2b3c09ca9", "gif"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
     }
 
     #[test]
@@ -897,6 +1150,12 @@ mod tests {
     fn for_custom_script_hashed_embeds_hash() {
         let sp = ServedPath::for_custom_script_hashed("abcd1234ef567890");
         assert_eq!(sp.as_str(), "_moss/theme/script.abcd1234ef567890.js");
+    }
+
+    #[test]
+    fn for_places_data_hashed_embeds_hash() {
+        let sp = ServedPath::for_places_data_hashed("abcd1234ef567890");
+        assert_eq!(sp.as_str(), "_moss/places.abcd1234ef567890.json");
     }
 
     #[test]

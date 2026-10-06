@@ -110,7 +110,7 @@ type PluginHook = "import" | "publish" | "deploy" | "syndicate" | "process";
 ```
 
 `PluginHook` mirrors the closed Rust enum in
-`src-tauri/src/plugins/types.rs`. The router (T1) cross-products
+the app's plugin types module. The router (T1) cross-products
 `PluginHook × TriggerContext` to pick a UI surface for the task.
 Plugin authors pick the hook that matches what they're doing; they
 do NOT pick the surface (the router owns that).
@@ -242,8 +242,7 @@ UI renderer (Ambient hairline / Inline badge / Narrated titlebar /
 Awaiting pulse) surfaces the task. Plugin authors do NOT pick the
 surface; they just describe what they're doing and why.
 
-Preferred over `reportProgress()` for new code. The legacy API stays
-supported until ADR-015 Phase 3 sweeps all 151 call sites.
+Preferred over `reportProgress()` for new code.
 
 #### Parameters
 
@@ -1128,11 +1127,8 @@ const unlisten = await listen<LoginData>("my-plugin:submit", (event) => {
 // <button onclick="window.mossApi.close()">Cancel</button>
 ```
 
-**Why migrate:**
-- Explicit browser lifecycle control (no magic auto-close)
-- No hidden event listeners (`moss:browser-form-submit`, `moss:browser-form-cancel`)
-- Simpler mental model: open, use, close
-- Matches modern plugin patterns (see Matters plugin)
+The replacement has an explicit lifecycle (open, use, close) and no hidden
+event listeners.
 
 Note: This deprecated function still listens for `moss:browser-form-submit` and
 `moss:browser-form-cancel` events for backward compatibility. New code should use
@@ -1639,7 +1635,7 @@ Messages that plugins can send to moss
 | Interface | Description |
 | ------ | ------ |
 | [SocialArticleData](interfaces/SocialArticleData.md) | The social data for a single article — currently its comments. |
-| [SocialComment](interfaces/SocialComment.md) | One comment in the .moss/data/social/*.json shared standard. See moss/docs/reference/social-data-standard.md. |
+| [SocialComment](interfaces/SocialComment.md) | One comment in the .moss/data/social/*.json shared standard. |
 | [SocialDataFile](interfaces/SocialDataFile.md) | A `.moss/data/social/*.json` file: the schema version plus every article's social data, keyed by article path. |
 
 ## Keys
@@ -1816,8 +1812,7 @@ your scope is yours to write. The key is scoped to your plugin automatically
 — you cannot write another plugin's secret, the same way you cannot read one.
 
 An empty `value` erases the key — that is how you sign a user out, and moss
-then reports nothing stored for the slot. Earlier releases stored the empty
-string literally, so a signed-out account went on showing as connected.
+then reports nothing stored for the slot.
 
 Why here and not in your own plugin folder: `.moss/plugins/` is inside the
 user's repo and is not gitignored, so a token you keep yourself is a token

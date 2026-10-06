@@ -19,7 +19,7 @@ use super::{Diagnostic, DiagnosticKind};
 /// the same depth the resolver itself stopped at — notably
 /// [`crate::dep_graph::DepGraph::embed_closure`], which bounds its traversal by
 /// this constant rather than inventing a second limit that could disagree
-/// (moss#922 Stage 7).
+/// (Stage 7).
 pub const MAX_EMBED_DEPTH: usize = 10;
 
 /// Prefix for resolved embed markers.
@@ -249,7 +249,7 @@ fn split_target(target: &str) -> (&str, Option<&str>) {
 ///
 /// A transcluded page whose frontmatter is simplified used to have its field
 /// lines rendered as prose inside the embedding page — this saw a YAML block or
-/// nothing (moss#937).
+/// nothing.
 fn strip_frontmatter(content: &str) -> &str {
     match crate::frontmatter::frontmatter_span(content) {
         // Char-aligned: `body` is a line-boundary offset from the splitter.
@@ -368,8 +368,9 @@ fn parse_heading(line: &str) -> Option<(usize, &str)> {
 pub type MarkerHandler<'a> = Box<dyn Fn(&str, &mut Vec<Diagnostic>) -> String + Send + Sync + 'a>;
 
 /// Registry of marker-prefix → handler, used by
-/// [`resolve_deferred_markers`] to dispatch Deferred embeds
-/// ([`crate::resolve::embed_renderer::RenderedEmbed::Deferred`]) in a post-pass.
+/// [`resolve_deferred_markers`] to dispatch the marker comments that
+/// `resolve.rs`'s pre-pass emits for extensions that need file I/O
+/// (notebook, table), in a post-pass.
 ///
 /// The built-in `moss-embed:` (markdown transclusion) is **not** dispatched
 /// here — it's resolved by [`resolve_embeds`] in an earlier pass. This

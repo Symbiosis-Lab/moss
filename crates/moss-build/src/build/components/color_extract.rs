@@ -81,7 +81,10 @@ pub fn resolve_color_source_path(
 /// * `Some(String)` - HSLA color string like "hsla(200, 45%, 25%, 1)"
 /// * `None` - If the image cannot be loaded or processed
 pub fn extract_dominant_color(image_path: &Path) -> Option<String> {
-    let img = image::open(image_path).ok()?;
+    // Content-sniffed, not extension-only: a file whose extension lies about
+    // its format (a PNG saved as `x.jpg`) still decodes, instead of silently
+    // returning `None` here and losing the card's background color.
+    let img = crate::build::media::decode::sniff_decode(image_path).ok()?;
 
     let img = img.resize(50, 50, image::imageops::FilterType::Nearest);
     let rgb = img.to_rgb8();
@@ -286,55 +289,60 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
     )
 }
 
-/// Reduce HSL lightness until WCAG AA contrast ≥ 4.5:1 against white.
+/// Binary-search core shared by `darken_for_contrast` and
+/// `panel_lightness_for_contrast`: given a `passes(l)` predicate that is
+/// monotonic over `[0, 1]` on each side of `start_l`, finds the boundary.
 ///
-/// Keeps hue and saturation, only reduces lightness. Binary search for
-/// the highest lightness that still meets the contrast threshold.
-fn darken_for_contrast(h: f32, s: f32, l: f32) -> f32 {
-    let white_lum = 1.0; // relative luminance of white
-
-    // Check if the color already passes
-    let (r, g, b) = hsl_to_rgb(h, s, l);
-    let lum = relative_luminance(r, g, b);
-    if contrast_ratio(white_lum, lum) >= 4.5 {
-        // Apply the same integer-percent rounding guard as the binary-search
-        // path: `{:.0}%` formatting could round l up by 1%, which may push a
-        // borderline-passing color across the 4.5:1 boundary after a parse
-        // round-trip. Floor instead of round when that happens.
-        let rounded_l = (l * 100.0).round() / 100.0;
-        let (rr, gg, bb) = hsl_to_rgb(h, s, rounded_l);
-        return if contrast_ratio(white_lum, relative_luminance(rr, gg, bb)) < 4.5 {
-            ((l * 100.0).floor() / 100.0).max(0.0)
-        } else {
-            l
-        };
+/// `search_upward`: `true` finds the HIGHEST `l` in `[0, start_l]` that
+/// still passes (the darkening case — stay as light/true-to-the-source-colour
+/// as the contrast budget allows); `false` finds the LOWEST `l` in
+/// `[start_l, 1]` that passes (the lightening case). Both callers' own
+/// hand-rolled loops shared exactly this shape; only what `passes` checks
+/// (and, for the lightening side, which direction "closest to the source"
+/// means) differs between them.
+fn lightness_boundary(start_l: f32, search_upward: bool, passes: impl Fn(f32) -> bool) -> f32 {
+    if passes(start_l) {
+        return start_l;
     }
-
-    // Binary search: find the highest L that gives ≥ 4.5:1 contrast
-    let mut lo = 0.0_f32;
-    let mut hi = l;
+    let (mut lo, mut hi) = if search_upward { (0.0, start_l) } else { (start_l, 1.0) };
     for _ in 0..20 {
         let mid = (lo + hi) / 2.0;
-        let (r, g, b) = hsl_to_rgb(h, s, mid);
-        let lum = relative_luminance(r, g, b);
-        if contrast_ratio(white_lum, lum) >= 4.5 {
-            lo = mid; // Can go lighter
+        if search_upward == passes(mid) {
+            lo = mid;
         } else {
-            hi = mid; // Too light, go darker
+            hi = mid;
         }
     }
+    if search_upward { lo } else { hi }
+}
+
+/// Reduce HSL lightness until WCAG AA contrast ≥ 4.5:1 against white.
+///
+/// Keeps hue and saturation, only reduces lightness. Thin wrapper around
+/// `lightness_boundary`: the contrast check is opaque white-text-only
+/// (`alpha` 1.0, no backdrop to blend against), and the rounding guard
+/// below is specific to this caller's own output shape — `darkened_hsla`
+/// formats the result as an HSL PERCENT (`{:.0}%`), not the RGB bytes
+/// `panel_background` ships, so it needs its own post-hoc check in that
+/// domain rather than `panel_lightness_for_contrast`'s per-channel one.
+fn darken_for_contrast(h: f32, s: f32, l: f32) -> f32 {
+    let passes = |l: f32| {
+        let (r, g, b) = hsl_to_rgb(h, s, l);
+        contrast_ratio(1.0, relative_luminance(r, g, b)) >= 4.5
+    };
+    let found = lightness_boundary(l, true, passes);
 
     // Guard against the nearest-integer-percent rounding crossing the WCAG
-    // boundary. `{:.0}%` formatting rounds `lo * 100` to the nearest integer;
-    // if that integer is 1 higher than `lo * 100` (e.g. 46.53 → 47), the
-    // formatted value can become slightly too light after a round-trip parse.
-    // Back off by 1% if the rounded form would fail 4.5:1.
-    let rounded_l = (lo * 100.0).round() / 100.0;
+    // boundary. `{:.0}%` formatting rounds `found * 100` to the nearest
+    // integer; if that integer is 1 higher (e.g. 46.53 → 47), the formatted
+    // value can become slightly too light after a round-trip parse. Back
+    // off by 1% if the rounded form would fail 4.5:1.
+    let rounded_l = (found * 100.0).round() / 100.0;
     let (rr, gg, bb) = hsl_to_rgb(h, s, rounded_l);
-    if contrast_ratio(white_lum, relative_luminance(rr, gg, bb)) < 4.5 {
-        ((lo * 100.0).floor() / 100.0).max(0.0)
+    if contrast_ratio(1.0, relative_luminance(rr, gg, bb)) < 4.5 {
+        ((found * 100.0).floor() / 100.0).max(0.0)
     } else {
-        lo
+        found
     }
 }
 
@@ -382,6 +390,106 @@ fn darkened_hsla(r: u8, g: u8, b: u8) -> String {
     format!("hsla({}, {:.0}%, {:.0}%, 1)", h as i32, s * 100.0, l * 100.0)
 }
 
+/// Opacity of the hero overlay's backing panel. Fixed rather than tuned per
+/// image: `panel_lightness_for_contrast` below already proves the contrast
+/// guarantee holds at this alpha for any hue/saturation, so there is nothing
+/// left for a per-image search to buy. Translucent enough to read as sitting
+/// ON the photo rather than a flat card; opaque enough that the guarantee
+/// below has room to work with.
+const PANEL_ALPHA: f32 = 0.8;
+
+/// Relative luminance of `--moss-hero-tone-color`'s default, `#2c2825` (see
+/// `custom_props.rs`) — the fixed dark-text colour used over a pale
+/// ('light'-toned) hero image. Hard-coded rather than threaded through as a
+/// parameter: a theme that sets the token to something else only ever needs
+/// LESS panel contrast than this (any other colour a theme would plausibly
+/// choose for "dark text over a pale photo" sits further from mid-grey), so
+/// solving for the shipped default is the binding case.
+fn hero_tone_color_luminance() -> f32 {
+    relative_luminance(0x2c as f32 / 255.0, 0x28 as f32 / 255.0, 0x25 as f32 / 255.0)
+}
+
+/// Panel colour for the translucent backing panel moss draws behind hero
+/// overlay text — tinted from the image's own dominant colour (so it reads
+/// as part of the picture, not a grey box) and engineered so that even its
+/// worst-case blend with the photo beneath still clears WCAG AA (>= 4.5:1)
+/// against the overlay text colour.
+///
+/// `raw_dominant_color` is the scan-cached value exactly as `is_light_cover`
+/// reads it (`#RRGGBB` from an image scan). `text_is_white` selects moss's
+/// two overlay text colours: `true` for the default white type, `false` for
+/// the dark type `data-hero-tone="light"` sets over a pale image.
+///
+/// Returns `None` for an unparseable or already-processed (video-scan
+/// `hsla(...)`) input — the caller falls back to the CSS custom property's
+/// own flat default rather than guessing a tint.
+pub fn panel_background(raw_dominant_color: &str, text_is_white: bool) -> Option<String> {
+    let hex = raw_dominant_color.trim().strip_prefix('#')?;
+    let (r, g, b) = parse_hex_rgb(hex)?;
+    let (h, s, l) = rgb_to_hsl(r, g, b);
+    let text_lum = if text_is_white { 1.0 } else { hero_tone_color_luminance() };
+    let panel_l = panel_lightness_for_contrast(h, s, l, PANEL_ALPHA, text_lum, text_is_white);
+    let (pr, pg, pb) = hsl_to_rgb(h, s, panel_l);
+    Some(format!(
+        "rgba({}, {}, {}, {})",
+        (pr * 255.0).round() as u8,
+        (pg * 255.0).round() as u8,
+        (pb * 255.0).round() as u8,
+        PANEL_ALPHA
+    ))
+}
+
+/// Find the HSL lightness (same hue/saturation as the source colour) whose
+/// `alpha`-translucent panel clears WCAG AA against `text_lum` in the WORST
+/// case — not just "over black" and "over white", but over ANY backdrop
+/// pixel, which those two bound: alpha compositing is monotonic in each
+/// channel independently, so for any backdrop colour `c` in the sRGB cube,
+/// the composite's luminance falls between the all-black and all-white
+/// composites' luminances. One of those two extremes is therefore always the
+/// binding case, and which one depends on which side of the text's own
+/// luminance the panel sits:
+///
+/// - White text (`text_is_white`): contrast shrinks as the panel's EFFECTIVE
+///   colour lightens, and compositing over a white backdrop is what lightens
+///   it most — that is the binding case, and darkening the source lightness
+///   is the fix.
+/// - Dark text (over a pale/`data-hero-tone="light"` image): contrast
+///   shrinks as the panel darkens, and compositing over a BLACK backdrop is
+///   what darkens it most — the binding case flips, and the fix is to
+///   lighten instead.
+///
+/// Thin wrapper around `lightness_boundary`: white text (`search_upward` =
+/// `text_is_white`) wants the darkest-boundary shape `darken_for_contrast`
+/// uses too — "a LOWER l always composites to a lower (safer) luminance, so
+/// keep the darkest answer that still passes" — dark text flips both the
+/// backdrop and the search direction. The `passes` check here differs from
+/// `darken_for_contrast`'s in the two ways documented above `panel_background`:
+/// translucent (`alpha`, blended against `backdrop`) rather than opaque, and
+/// checked against the RGB BYTES `panel_background` actually ships
+/// (`(c * 255.0).round()`), not the float `l` the search walks — otherwise
+/// the boundary this finds can land half a code unit on the wrong side
+/// after that rounding, the same failure mode `darken_for_contrast`'s own
+/// (differently-shaped) rounding guard exists for.
+fn panel_lightness_for_contrast(
+    h: f32,
+    s: f32,
+    start_l: f32,
+    alpha: f32,
+    text_lum: f32,
+    text_is_white: bool,
+) -> f32 {
+    let backdrop = if text_is_white { 1.0 } else { 0.0 };
+    let passes = |l: f32| -> bool {
+        let (r, g, b) = hsl_to_rgb(h, s, l);
+        let quantize = |c: f32| (c * 255.0).round() / 255.0;
+        let (r, g, b) = (quantize(r), quantize(g), quantize(b));
+        let composite = |c: f32| alpha * c + (1.0 - alpha) * backdrop;
+        let panel_lum = relative_luminance(composite(r), composite(g), composite(b));
+        contrast_ratio(panel_lum, text_lum) >= 4.5
+    };
+    lightness_boundary(start_l, text_is_white, passes)
+}
+
 /// Extract a card color from a local webpage cover (rungs 2–3 of the
 /// cover-color ladder): `<meta name="theme-color">` first, then a tightly
 /// scoped static `html`/`body` background scan. Returns the WCAG-darkened
@@ -397,7 +505,7 @@ pub(crate) fn extract_webpage_color(html_path: &Path) -> Option<String> {
 /// page is NEVER rendered (a JS-painted canvas is statically invisible by
 /// design; see the spec's rejected-approaches section).
 ///
-/// Precedence (spec: docs/archive/2026-06-11-iframe-cover-card-color-design.md):
+/// Precedence:
 /// theme-color meta (media-less preferred, else first) → `body` → `html`;
 /// within an element a `style=` attr beats `<style>` rules; among `<style>`
 /// declarations for the same element the last one wins (cascade order).
@@ -652,7 +760,7 @@ pub const IFRAME_COVER_FALLBACK: &str = "hsla(0, 0%, 18%, 1)";
 /// `folder_embed`) MUST call, for the same reason they must share
 /// `resolve_color_source_path`: per-renderer copies of this ladder drift.
 ///
-/// Ladder (spec: docs/archive/2026-06-11-iframe-cover-card-color-design.md):
+/// Ladder:
 /// 1. `color=` pipe-attr override — wins for every cover type.
 /// 2. By cover type:
 ///    - Image/Video: scan-cached dominant color, else runtime extraction
@@ -688,12 +796,23 @@ pub fn resolve_card_color(
             // Rungs 2–3: static page scan; rung 4: dark default. External
             // URLs and missing files land on the default — an iframe
             // cover always produces a color.
+            //
+            // `staging_dir()`, not `current_ptr()`: this call runs during
+            // THIS build's render, every build, and the render's own output
+            // for this exact build is what has to be there — `staging/` is
+            // written fresh on every build regardless of whether its
+            // generation is ever promoted (`build::seal_phase` debounces
+            // materialize, not the render). `current_ptr()` can now lag
+            // behind by many builds, and a color resolved from it here would
+            // bake a stale — or, for a page this build just added, entirely
+            // missing — result permanently into rendered HTML, with no later
+            // event that ever re-triggers this render to fix it.
             let scanned = root
                 .and_then(|root| {
                     resolve_color_source_path(
                         path_part,
                         root,
-                        &crate::moss_paths::MossPaths::new(root).current_ptr(),
+                        &crate::moss_paths::MossPaths::new(root).staging_dir(),
                     )
                 })
                 .and_then(|p| extract_webpage_color(&p));
@@ -710,10 +829,16 @@ pub fn resolve_card_color(
                 }
             }
             let root = root?;
+            // `staging_dir()`, not `current_ptr()` — see the iframe branch's
+            // comment above; it applies here even more directly, since a
+            // video's thumbnail (`resolve_color_source_path`'s
+            // `to_thumb_if_video` arm) is output-only and NEVER falls back to
+            // a source file, so this path is the only place its bytes are
+            // ever read from.
             let resolved = resolve_color_source_path(
                 path_part,
                 root,
-                &crate::moss_paths::MossPaths::new(root).current_ptr(),
+                &crate::moss_paths::MossPaths::new(root).staging_dir(),
             )?;
             extract_dominant_color(&resolved)
         }
@@ -727,3 +852,7 @@ mod tests;
 #[cfg(test)]
 #[path = "color_extract_tone_tests.rs"]
 mod tone_tests;
+
+#[cfg(test)]
+#[path = "color_extract_panel_tests.rs"]
+mod panel_tests;

@@ -2,25 +2,21 @@
 //!
 //! Four kinds of page exist on a built site with no source file behind them:
 //! the root of a vault that has articles but no home note, an index-less
-//! folder, an unclaimed author or tag page (and the namespace root that lists
-//! them), and the home of a language tree that only filename-suffix
+//! folder, an unclaimed term page in any namespace (and the namespace root
+//! that lists them), and the home of a language tree that only filename-suffix
 //! translations populate. Each is one operation from the editor's point of
 //! view — write these files, then open this one — and this module computes
 //! that recipe from the build's own record so the pane that shows the button
 //! carries no per-kind branch and guesses nothing about the site.
 //!
-//! The record is the article-map (ADR-019): `terms` says which term URLs are
+//! The record is the article-map: `terms` says which term URLs are
 //! unclaimed, `generated` says which indexes the build synthesized,
 //! `dir_overrides` says which real directory already serves a URL. Disk is
 //! consulted only where the map cannot answer — [`derive_folder_identity`]'s
 //! contract, which this module keeps: a directory it names either exists or
 //! is stated as one to create, never invented as if it existed.
-//!
-//! Design: `docs/archive/2026-09-05-term-page-takeover-from-the-editor.md`.
 
 use std::path::Path;
-
-use moss_core::terms::{AUTHOR_NS, TAGS_NS};
 
 use crate::build::scan::article_map::ArticleMap;
 use crate::i18n::Language;
@@ -36,10 +32,12 @@ pub enum TakeoverKind {
     RootHome,
     /// An index-less folder, including a term namespace root (`/authors/`).
     FolderHome,
-    /// An unclaimed author's generated page.
-    AuthorPage,
-    /// An unclaimed tag's generated page.
-    TagPage,
+    /// An unclaimed term's generated page, whatever namespace it is in.
+    /// Which frontmatter field the claim is written through is
+    /// [`Takeover::field`], not a variant of its own: a site can declare any
+    /// number of kinds, and an enum that grew a variant per field would have
+    /// to be regenerated every time one was added.
+    TermPage,
     /// A language tree's synthesized home.
     LangHome,
 }
@@ -54,6 +52,11 @@ pub use crate::vault::fs::NewFile;
 pub struct Takeover {
     pub kind: TakeoverKind,
     pub display: String,
+    /// For a [`TakeoverKind::TermPage`], the name-list field the claim is
+    /// written through — `"editor"`, not `"editor_page"`. `None` for every
+    /// other kind. The pane shows it, so a person offered a claim can see
+    /// they are about to be recorded as an editor rather than an author.
+    pub field: Option<String>,
     pub files: Vec<NewFile>,
 }
 
@@ -77,28 +80,43 @@ pub fn takeover_for(
         return Some(Takeover {
             kind: TakeoverKind::RootHome,
             display: root_name.to_string(),
+            field: None,
             files: vec![home_note(project_root, root_name)],
         });
     }
     if let Some(site) = map.terms.get(key).filter(|site| site.claimed_by.is_none()) {
-        let (ns, kind, field) = match key.split_once('/') {
-            Some((ns, _)) if ns == AUTHOR_NS => (ns, TakeoverKind::AuthorPage, "author_page"),
-            Some((ns, _)) if ns == TAGS_NS => (ns, TakeoverKind::TagPage, "tag_page"),
-            _ => return None,
-        };
-        let folder = namespace_folder(map, project_root, ns, site_lang);
+        let (ns, _) = key.split_once('/')?;
+        let kind = namespace_kind(map, ns, site_lang)?;
+        // The claim goes through the field this person is actually reached
+        // by: someone who only ever appears in `jury:` is offered
+        // `jury_page:`, not `author_page:`. Ties go to the kind's own field
+        // order, and a term with no members at all — a claim is its only
+        // occurrence — to its first field.
+        let field = map
+            .fields_with_members
+            .get(key)
+            .and_then(|with_members| kind.fields.iter().find(|f| with_members.contains(f)))
+            .or_else(|| kind.fields.first())?
+            .clone();
+        let claim_key = crate::build::terms::claim_field_key(&field)?;
+        let folder = namespace_folder(map, project_root, ns, &kind.title);
         let mut files = folder.url_note(ns).into_iter().collect::<Vec<_>>();
         files.push(NewFile {
             dir: folder.dir,
             name: format!("{}.md", filename_for(&site.display)),
-            frontmatter: fields(serde_json::json!({ field: site.display })),
+            frontmatter: fields(serde_json::json!({ claim_key: site.display })),
         });
-        return Some(Takeover { kind, display: site.display.clone(), files });
+        return Some(Takeover {
+            kind: TakeoverKind::TermPage,
+            display: site.display.clone(),
+            field: Some(field),
+            files,
+        });
     }
     let generated = map.generated.iter().any(|g| g.trim_matches('/') == key);
-    if generated && (key == AUTHOR_NS || key == TAGS_NS) {
-        let folder = namespace_folder(map, project_root, key, site_lang);
-        let title = crate::i18n::term_root_title(site_lang, key).to_string();
+    if let Some(kind) = generated.then(|| namespace_kind(map, key, site_lang)).flatten() {
+        let folder = namespace_folder(map, project_root, key, &kind.title);
+        let title = kind.title;
         // The root's own page is the folder's home note: the `url:` note when
         // the folder does not serve the namespace yet, a plain unlisted home
         // when it does. Either way the root stays as unlisted as the
@@ -111,7 +129,7 @@ pub fn takeover_for(
         let home = folder.url_note(key).unwrap_or_else(|| {
             home_note_in(&folder.dir, &folder.name, serde_json::json!({ "home": true, "listed": false }))
         });
-        return Some(Takeover { kind: TakeoverKind::FolderHome, display: title, files: vec![home] });
+        return Some(Takeover { kind: TakeoverKind::FolderHome, display: title, field: None, files: vec![home] });
     }
     if generated
         && !key.contains('/')
@@ -119,13 +137,14 @@ pub fn takeover_for(
         && !project_root.join(key).is_dir()
     {
         // A language home is a translation of the root home, named after it:
-        // `index.zh-hans.md` beside `index.md`, `刘果.zh-hans.md` beside
-        // `刘果.md`. No root home means nothing to translate yet.
+        // `index.zh-hans.md` beside `index.md`, `山居.zh-hans.md` beside
+        // `山居.md`. No root home means nothing to translate yet.
         let root_home = map.pages.get("")?;
         let stem = Path::new(root_home).file_stem()?.to_str()?;
         return Some(Takeover {
             kind: TakeoverKind::LangHome,
             display: moss_core::home::endonym(key).unwrap_or(key).to_string(),
+            field: None,
             files: vec![NewFile {
                 dir: project_root.to_string_lossy().to_string(),
                 name: format!("{stem}.{}.md", key.to_lowercase()),
@@ -141,6 +160,7 @@ pub fn takeover_for(
     Some(Takeover {
         kind: TakeoverKind::FolderHome,
         display: name.clone(),
+        field: None,
         files: vec![home_note(Path::new(&dir), &name)],
     })
 }
@@ -183,7 +203,7 @@ fn translated_folder_home(map: &ArticleMap, project_root: &Path, folder_url: &st
         Some(Some(stem)) if moss_core::home::is_index_stem(stem) => vec![translation],
         Some(_) => return None,
     };
-    Some(Takeover { kind: TakeoverKind::FolderHome, display: name, files })
+    Some(Takeover { kind: TakeoverKind::FolderHome, display: name, field: None, files })
 }
 
 /// The top-level directory a namespace's files live in, and whether it
@@ -214,6 +234,37 @@ impl NamespaceFolder {
     }
 }
 
+/// The kind that owns this namespace, as the build recorded it — the one
+/// place a namespace's title and its claim fields come from, so the editor
+/// never re-reads config or assumes a field name from a URL prefix.
+///
+/// `None` when nothing in the map is in that namespace: a kind outlives its
+/// dimension being switched off, and a real `authors/` directory on a site
+/// with `[terms] author = false` is an ordinary folder that must not be
+/// offered a term-page recipe.
+///
+/// A map written before kinds existed has none at all. Its two built-in
+/// namespaces are reconstructed from their defaults, titled in the site
+/// language, so an editor opened against a stale map still offers the right
+/// recipe; the next build replaces the reconstruction with the record.
+fn namespace_kind(map: &ArticleMap, ns: &str, site_lang: Language) -> Option<crate::build::terms::TermKind> {
+    if !map.terms.keys().any(|k| k.split_once('/').is_some_and(|(n, _)| n == ns)) {
+        return None;
+    }
+    if let Some(kind) = map.kinds.iter().find(|k| k.key == ns) {
+        return Some(kind.clone());
+    }
+    crate::build::terms::BUILTIN_DEFAULT_FIELDS
+        .iter()
+        .find(|(key, _)| *key == ns)
+        .map(|(key, field)| crate::build::terms::TermKind {
+            key: key.to_string(),
+            fields: vec![field.to_string()],
+            title: crate::i18n::term_root_title(site_lang, key).to_string(),
+            is_place: false, parents: Default::default(), explorer: None, line: None,
+        })
+}
+
 /// The real directory already serving the namespace wins — the one the
 /// editor resolves for any folder URL (`derive_folder_identity`: a child
 /// article's source, else the disk walk that reverses the slug and honors
@@ -227,12 +278,11 @@ fn namespace_folder(
     map: &ArticleMap,
     project_root: &Path,
     ns: &str,
-    site_lang: Language,
+    title: &str,
 ) -> NamespaceFolder {
     if let (Some(dir), Some(name)) = derive_folder_identity(map, project_root, ns) {
         return NamespaceFolder { dir, has_home: map.pages.contains_key(&format!("{ns}/")), name, serves_url: true };
     }
-    let title = crate::i18n::term_root_title(site_lang, ns);
     let name = if moss_core::slug::generate_slug(title) == ns { ns } else { title };
     // A localized folder that exists but serves elsewhere (`作者/作者.md`
     // with `url: people`) has its home recorded under that other URL.
@@ -282,15 +332,15 @@ mod tests {
     fn map() -> ArticleMap {
         let mut m = ArticleMap::default();
         m.terms.insert(
-            "authors/馬欣宜".into(),
-            TermSite { display: "馬欣宜".into(), claimed_by: None },
+            "authors/林小滿".into(),
+            TermSite { display: "林小滿".into(), claimed_by: None, parent: None },
         );
         m.terms.insert(
             "authors/scarly".into(),
-            TermSite { display: "Scarly".into(), claimed_by: Some("about/ma/".into()) },
+            TermSite { display: "Scarly".into(), claimed_by: Some("about/ma/".into()), parent: None },
         );
-        m.terms.insert("tags/城市".into(), TermSite { display: "城市".into(), claimed_by: None });
-        m.generated = vec!["authors/".into(), "authors/馬欣宜/".into(), "tags/".into(), "zh-hans/".into()];
+        m.terms.insert("tags/城市".into(), TermSite { display: "城市".into(), claimed_by: None, parent: None });
+        m.generated = vec!["authors/".into(), "authors/林小滿/".into(), "tags/".into(), "zh-hans/".into()];
         m.pages.insert("".into(), "index.md".into());
         m
     }
@@ -324,24 +374,25 @@ mod tests {
     #[test]
     fn unclaimed_author_on_an_english_site_is_one_file_in_authors() {
         let dir = root();
-        let t = takeover_for(&map(), dir.path(), "s", "authors/馬欣宜/", Language::En).unwrap();
-        assert_eq!((t.kind, t.display.as_str()), (TakeoverKind::AuthorPage, "馬欣宜"));
+        let t = takeover_for(&map(), dir.path(), "s", "authors/林小滿/", Language::En).unwrap();
+        assert_eq!((t.kind, t.display.as_str()), (TakeoverKind::TermPage, "林小滿"));
+        assert_eq!(t.field.as_deref(), Some("author"));
         let f = only(&t);
         assert_eq!(f.dir, dir.path().join("authors").to_string_lossy(), "the English title slugs to the namespace, so the folder IS the namespace");
-        assert_eq!(f.name, "馬欣宜.md");
-        assert_eq!(serde_json::Value::Object(f.frontmatter.clone()), serde_json::json!({ "author_page": "馬欣宜" }));
+        assert_eq!(f.name, "林小滿.md");
+        assert_eq!(serde_json::Value::Object(f.frontmatter.clone()), serde_json::json!({ "author_page": "林小滿" }));
     }
 
     #[test]
     fn unclaimed_author_on_a_chinese_site_adds_the_unlisted_root_home_that_serves_authors() {
         let dir = root();
-        let t = takeover_for(&map(), dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&map(), dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(t.files.len(), 2);
         let home = &t.files[0];
         assert_eq!((home.dir.as_str(), home.name.as_str()), (dir.path().join("作者").to_string_lossy().as_ref(), "作者.md"));
         assert_eq!(serde_json::Value::Object(home.frontmatter.clone()), serde_json::json!({ "url": "authors", "listed": false }));
         let claim = &t.files[1];
-        assert_eq!((claim.dir.as_str(), claim.name.as_str()), (home.dir.as_str(), "馬欣宜.md"));
+        assert_eq!((claim.dir.as_str(), claim.name.as_str()), (home.dir.as_str(), "林小滿.md"));
     }
 
     #[test]
@@ -351,12 +402,12 @@ mod tests {
         let mut m = map();
         m.dir_overrides.insert("作者群".into(), "authors".into());
         m.pages.insert("authors/".into(), "作者群/作者群.md".into());
-        let t = takeover_for(&m, dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&m, dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(only(&t).dir, dir.path().join("作者群").to_string_lossy());
         // …and so does a plain on-disk `authors/`.
         let m = map();
         std::fs::create_dir(dir.path().join("authors")).unwrap();
-        let t = takeover_for(&m, dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&m, dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(only(&t).dir, dir.path().join("authors").to_string_lossy());
     }
 
@@ -368,7 +419,7 @@ mod tests {
         let dir = root();
         let mut m = map();
         m.dir_overrides.insert("關於/作者群".into(), "authors".into());
-        let t = takeover_for(&m, dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&m, dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(t.files.len(), 2);
         assert_eq!(t.files[0].name, "作者.md");
         assert!(t.files[1].dir.ends_with("作者"));
@@ -382,32 +433,32 @@ mod tests {
         // its own, no second home is written and the root offers nothing.
         let dir = root();
         std::fs::create_dir(dir.path().join("作者")).unwrap();
-        let t = takeover_for(&map(), dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&map(), dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(t.files.len(), 2);
-        assert_eq!((t.files[0].name.as_str(), t.files[1].name.as_str()), ("作者.md", "馬欣宜.md"));
+        assert_eq!((t.files[0].name.as_str(), t.files[1].name.as_str()), ("作者.md", "林小滿.md"));
 
         let mut m = map();
         m.pages.insert("people/".into(), "作者/作者.md".into());
         m.dir_overrides.insert("作者".into(), "people".into());
-        let t = takeover_for(&m, dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&m, dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(t.files.len(), 1, "the claim still lands, by field; no second home note");
         assert!(takeover_for(&m, dir.path(), "s", "authors/", Language::ZhHant).is_none());
     }
 
     #[test]
-    fn the_harbor_layout_claims_the_next_author_beside_the_first() {
-        // `作者/作者.md` (`url: authors`) and a claimed `作者/馬欣宜.md` exist;
+    fn the_riverbend_layout_claims_the_next_author_beside_the_first() {
+        // `作者/作者.md` (`url: authors`) and a claimed `作者/林小滿.md` exist;
         // the next unclaimed author lands in `作者/` with no second home note,
         // found through the claim's source path even before any disk walk.
         let mut m = map();
-        m.terms.insert("authors/王五".into(), TermSite { display: "王五".into(), claimed_by: None });
-        m.terms.get_mut("authors/馬欣宜").unwrap().claimed_by = Some("authors/馬欣宜/".into());
+        m.terms.insert("authors/王五".into(), TermSite { display: "王五".into(), claimed_by: None, parent: None });
+        m.terms.get_mut("authors/林小滿").unwrap().claimed_by = Some("authors/林小滿/".into());
         m.dir_overrides.insert("作者".into(), "authors".into());
         m.pages.insert("authors/".into(), "作者/作者.md".into());
         m.articles.insert(
-            "authors/馬欣宜/".into(),
+            "authors/林小滿/".into(),
             serde_json::from_value::<ArticleInfo>(serde_json::json!({
-                "source_path": "作者/馬欣宜.md", "title": "馬欣宜", "content": "", "url_path": "authors/馬欣宜/", "date": null
+                "source_path": "作者/林小滿.md", "title": "林小滿", "content": "", "url_path": "authors/林小滿/", "date": null
             })).unwrap(),
         );
         let dir = root();
@@ -422,7 +473,7 @@ mod tests {
         // claim lands in it rather than in a second `authors/` beside it.
         let dir = root();
         std::fs::create_dir(dir.path().join("Authors")).unwrap();
-        let t = takeover_for(&map(), dir.path(), "s", "authors/馬欣宜/", Language::En).unwrap();
+        let t = takeover_for(&map(), dir.path(), "s", "authors/林小滿/", Language::En).unwrap();
         assert_eq!(only(&t).dir, dir.path().join("Authors").to_string_lossy());
     }
 
@@ -450,10 +501,75 @@ mod tests {
     fn tag_page_claims_with_tag_page() {
         let dir = root();
         let t = takeover_for(&map(), dir.path(), "s", "tags/城市/", Language::ZhHans).unwrap();
-        assert_eq!(t.kind, TakeoverKind::TagPage);
+        assert_eq!((t.kind, t.field.as_deref()), (TakeoverKind::TermPage, Some("tags")));
         let claim = t.files.last().unwrap();
         assert_eq!(serde_json::Value::Object(claim.frontmatter.clone()), serde_json::json!({ "tag_page": "城市" }));
         assert!(claim.dir.ends_with("标签"), "{}", claim.dir);
+    }
+
+    /// A site that declared `[terms.people] fields = ["author", "editor",
+    /// "jury"]`, with one person reached only through `jury:`.
+    fn declared_people_map() -> ArticleMap {
+        let mut m = ArticleMap::default();
+        m.kinds = vec![crate::build::terms::TermKind {
+            key: "people".into(),
+            fields: vec!["author".into(), "editor".into(), "jury".into()],
+            title: "People".into(),
+            is_place: false, parents: Default::default(), explorer: None, line: None,
+        }];
+        m.terms.insert("people/kane".into(), TermSite { display: "Kane".into(), claimed_by: None, parent: None });
+        m.generated = vec!["people/".into(), "people/kane/".into()];
+        m
+    }
+
+    #[test]
+    fn unclaimed_declared_kind_term_offers_a_term_page_takeover_through_its_actual_field() {
+        let dir = root();
+        let mut m = declared_people_map();
+        m.fields_with_members.insert("people/kane".into(), vec!["jury".into()]);
+        let t = takeover_for(&m, dir.path(), "s", "people/kane/", Language::En).unwrap();
+        assert_eq!((t.kind, t.field.as_deref()), (TakeoverKind::TermPage, Some("jury")));
+        let claim = t.files.last().unwrap();
+        assert_eq!(
+            serde_json::Value::Object(claim.frontmatter.clone()),
+            serde_json::json!({ "jury_page": "Kane" }),
+            "a person who only ever sits on a jury is not offered authorship"
+        );
+    }
+
+    #[test]
+    fn no_members_falls_back_to_the_first_declared_field() {
+        let dir = root();
+        let t = takeover_for(&declared_people_map(), dir.path(), "s", "people/kane/", Language::En).unwrap();
+        assert_eq!(t.field.as_deref(), Some("author"));
+    }
+
+    #[test]
+    fn a_declared_namespace_root_is_titled_by_its_kind_not_the_site_language() {
+        let dir = root();
+        let t = takeover_for(&declared_people_map(), dir.path(), "s", "people/", Language::ZhHant).unwrap();
+        assert_eq!((t.kind, t.display.as_str()), (TakeoverKind::FolderHome, "People"));
+        assert!(t.field.is_none());
+    }
+
+    #[test]
+    fn a_real_folder_in_an_unused_namespace_is_an_ordinary_folder() {
+        // `[terms] author = false` leaves the kind in the map with no fields
+        // and no terms under it. An `authors/` folder there is the author's
+        // own, and gets the ordinary folder-home recipe, not a namespace one.
+        let dir = root();
+        std::fs::create_dir(dir.path().join("authors")).unwrap();
+        let mut m = ArticleMap::default();
+        m.kinds = vec![crate::build::terms::TermKind {
+            key: "authors".into(),
+            fields: Vec::new(),
+            title: "作者".into(),
+            is_place: false, parents: Default::default(), explorer: None, line: None,
+        }];
+        m.generated = vec!["authors/".into()];
+        let t = takeover_for(&m, dir.path(), "s", "authors/", Language::ZhHant).unwrap();
+        assert_eq!((t.kind, t.display.as_str()), (TakeoverKind::FolderHome, "authors"));
+        assert_eq!(only(&t).name, "authors.md", "its own name, not the namespace title");
     }
 
     #[test]
@@ -475,8 +591,8 @@ mod tests {
         assert_eq!((t.kind, t.display.as_str()), (TakeoverKind::LangHome, "简体中文"));
         assert_eq!(only(&t).name, "index.zh-hans.md");
         let mut m = map();
-        m.pages.insert("".into(), "刘果.md".into());
-        assert_eq!(only(&takeover_for(&m, dir.path(), "s", "zh-hans/", Language::En).unwrap()).name, "刘果.zh-hans.md");
+        m.pages.insert("".into(), "山居.md".into());
+        assert_eq!(only(&takeover_for(&m, dir.path(), "s", "zh-hans/", Language::En).unwrap()).name, "山居.zh-hans.md");
         m.pages.clear();
         assert!(takeover_for(&m, dir.path(), "s", "zh-hans/", Language::En).is_none());
     }
@@ -547,7 +663,7 @@ mod tests {
     fn a_name_that_cannot_be_a_filename_slugs_but_still_claims_the_real_name() {
         let dir = root();
         let mut m = map();
-        m.terms.insert("authors/a-b".into(), TermSite { display: "A/B".into(), claimed_by: None });
+        m.terms.insert("authors/a-b".into(), TermSite { display: "A/B".into(), claimed_by: None, parent: None });
         let t = takeover_for(&m, dir.path(), "s", "authors/a-b/", Language::En).unwrap();
         let f = only(&t);
         assert_eq!(f.name, "a-b.md");

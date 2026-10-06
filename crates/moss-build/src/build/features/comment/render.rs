@@ -117,7 +117,7 @@ fn source_reply_label(source: &str, lang: Language) -> String {
 /// One comment in the dehydrated store embedded in the baked HTML. This is the
 /// canonical wire shape shared with the client (camelCase for JS): the client
 /// hydrates its store from these and normalizes live-fetched comments into the
-/// same shape, so reconcile-by-id works across baked + fresh. ADR-025.
+/// same shape, so reconcile-by-id works across baked + fresh.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DehydratedComment<'a> {
@@ -294,7 +294,7 @@ pub fn render_comment_section(
 
     // Dehydrated store: the exact comments the SSR list was rendered from, so the
     // client hydrates its in-memory store instantly (no fetch wait) and then
-    // stale-while-revalidates against the live server. ADR-025. Live only.
+    // stale-while-revalidates against the live server. Live only.
     if active {
         html.push_str(&render_dehydrated_store(
             comments, site_name, page_key, lang, artalk_high_water_id,
@@ -388,7 +388,6 @@ fn render_comment_item(
     // Comment body — `content` is sanitized at ingest (sync_remote) AND at
     // render-load (normalize_social_comment) via the allowlist sanitizer, so it is
     // safe HTML here. Do NOT html_escape() — that double-escapes sanitized HTML.
-    // (ADR-025 §11.)
     html.push_str(&format!(
         "{}  <div class=\"comment-body\">{}</div>\n",
         pad, comment.content
@@ -416,11 +415,11 @@ mod tests {
             NormalizedComment {
                 id: "8".into(),
                 source: "artalk".into(),
-                content: "orz你们全家都手太巧了。".into(),
+                content: "第一条评论。".into(),
                 created_at: "2026-03-24 11:36:57".into(),
                 author: CommentAuthor {
-                    display_name: Some("Marcus".into()),
-                    name: Some("Marcus".into()),
+                    display_name: Some("Alex".into()),
+                    name: Some("Alex".into()),
                     url: None,
                 },
                 reply_to_id: None,
@@ -429,11 +428,11 @@ mod tests {
             NormalizedComment {
                 id: "9".into(),
                 source: "artalk".into(),
-                content: "自己设计装修确实会很增加幸福感。".into(),
+                content: "第二条评论。".into(),
                 created_at: "2026-03-25 08:00:00".into(),
                 author: CommentAuthor {
-                    display_name: Some("刘果".into()),
-                    name: Some("刘果".into()),
+                    display_name: Some("小明".into()),
+                    name: Some("小明".into()),
                     url: None,
                 },
                 reply_to_id: Some("8".into()),
@@ -597,8 +596,8 @@ mod tests {
             &[],
             0,
         );
-        assert!(html.contains("Marcus"));
-        assert!(html.contains("orz你们全家都手太巧了。"));
+        assert!(html.contains("Alex"));
+        assert!(html.contains("第一条评论。"));
     }
 
     #[test]
@@ -615,7 +614,7 @@ mod tests {
             0,
         );
         assert!(html.contains("comment-replies"));
-        assert!(html.contains("刘果"));
+        assert!(html.contains("小明"));
     }
 
     #[test]
@@ -784,7 +783,7 @@ mod tests {
         assert!(html.contains("data-page-key=\"abc12345\""));
     }
 
-    /// Canonical-key contract (ADR-025): the baked `data-page-key` is the article
+    /// Canonical-key contract: the baked `data-page-key` is the article
     /// uid verbatim — never a pathname, never a transformed value. This pins the
     /// bake side of the bake == submit == sync three-way agreement that the
     /// key-drift thrash kept violating. If this fails, the bake path regressed to
@@ -812,7 +811,7 @@ mod tests {
         );
     }
 
-    /// The baked HTML embeds a dehydrated store the client hydrates from (ADR-025).
+    /// The baked HTML embeds a dehydrated store the client hydrates from.
     #[test]
     fn test_render_embeds_dehydrated_store() {
         let comments = sample_comments();

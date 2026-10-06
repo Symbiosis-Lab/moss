@@ -92,25 +92,27 @@ impl std::fmt::Debug for ServerState {
 ///
 /// ## Zero-Flicker Preview Pattern
 ///
-/// The problem: During rebuilds, we need to swap the site directory. The naive
+/// The problem: During rebuilds, we need to swap the served directory. The naive
 /// approach of renaming directories has a gap where the directory doesn't exist:
 /// ```text
-/// fs::rename(site, site-old)  // site/ is GONE
-/// fs::rename(site-new, site)  // site/ is back
+/// fs::rename(dir, dir-old)  // dir/ is GONE
+/// fs::rename(dir-new, dir)  // dir/ is back
 /// // ^ During this gap, incoming requests get 404 → preview flickers
 /// ```
 ///
-/// The solution: Use a staging directory and dynamically switch the server's pointer:
+/// The solution: build into a persistent staging directory and switch the
+/// server's pointer between directories that always exist:
 /// ```text
-/// 1. Build to site-stage/           (server still serves site/)
-/// 2. Switch pointer to site-stage/  (instant, atomic - preview shows new content)
-/// 3. Copy site-stage/ → site/       (canonical directory updated for deployment)
-/// 4. Switch pointer back to site/   (instant, atomic)
-/// 5. Delete site-stage/             (cleanup)
+/// 1. Build to staging/              (the server keeps serving what it served)
+/// 2. Switch pointer to staging/     (instant, atomic - preview shows new content)
+/// 3. Seal, then materialize generations/<id>/ from the sealed manifest
+/// 4. Swap the `current` symlink     (deploy reads it; the pointer stays on staging/)
 /// ```
 ///
-/// This keeps `/site` as the single source of truth for deployment (git-tracked)
-/// while ensuring the preview never shows 404s or blank pages.
+/// Deploy reads `current`, an immutable generation, so it never sees a half-built
+/// tree, and the preview never shows 404s or blank pages. There is no `site/`
+/// directory. See the `build::pipeline` module doc for the full sequence and
+/// `build::lifecycle` for when the pointer returns to `current`.
 ///
 /// ## Why RwLock?
 ///
@@ -121,7 +123,7 @@ impl std::fmt::Debug for ServerState {
 #[derive(Debug)]
 pub struct SiteDirectoryState {
     /// Current directory the server should serve files from.
-    /// Updated atomically during rebuilds to switch between staging and site.
+    /// Updated atomically during rebuilds to switch between staging and `current`.
     pub current_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
 }
 
@@ -138,7 +140,7 @@ impl SiteDirectoryState {
     /// Returns whether the directory actually changed. Callers log the switch,
     /// and the `initial-build-complete` listener that drives it fires on every
     /// rebuild rather than only the first — so without this it announced 63
-    /// switches in one session's log, none of which moved anything (moss#1174).
+    /// switches in one session's log, none of which moved anything.
     pub fn switch_to(&self, new_dir: std::path::PathBuf) -> bool {
         let mut current = self.current_dir.write().unwrap();
         if *current == new_dir {
@@ -366,12 +368,12 @@ impl Default for ChildProcessRegistry {
 ///
 /// # Architecture: cancellation moved to `FolderSession`
 ///
-/// As of #614 G4 (Track A), cancellation is driven exclusively by
+/// As of a later refactor (Track A), cancellation is driven exclusively by
 /// `FolderSession::cancel`. This state retains:
 /// - `conversion_id`: monotonically increasing epoch for filtering stale
 ///   progress events and for inter-task epoch checks
-/// - `last_video_fingerprint`: short-circuits re-dispatch when the video set
-///   hasn't changed
+/// - `last_video_fingerprints`: short-circuits re-dispatch, per video, when
+///   that one video hasn't changed
 ///
 /// The legacy `cancel()` / `is_cancelled()` methods remain as deprecated
 /// no-ops to keep API churn local; callers that need to read cancellation
@@ -380,12 +382,45 @@ impl Default for ChildProcessRegistry {
 pub struct VideoConversionState {
     /// Monotonically increasing ID for the current conversion
     conversion_id: AtomicU64,
-    /// Fingerprint of the last dispatched video set (SHA-256 of sorted video
-    /// paths + sizes + mtimes + compression params). When a rebuild triggers
-    /// dispatch and the fingerprint matches, we skip cancellation and let the
-    /// in-progress conversion continue — the video set hasn't changed, so there's
-    /// no reason to restart.
-    last_video_fingerprint: std::sync::Mutex<Option<String>>,
+    /// Fingerprint of the source a run last delivered for each video, keyed by
+    /// the video's relative source path. Per-item (not a single whole-set
+    /// fingerprint) so that one added/changed/removed video no longer
+    /// invalidates every other, untouched video's skip decision — see
+    /// `compute_video_item_fingerprint` and
+    /// `dispatch_video_conversions` in `build/media/video.rs`.
+    last_video_fingerprints: std::sync::Mutex<HashMap<String, String>>,
+    /// The advisories a run's own delivery produced for each video, recorded
+    /// alongside its fingerprint in `last_video_fingerprints` above.
+    /// `dispatch_video_conversions` re-emits these for a video it carries
+    /// forward without ever re-entering `run_video_conversion`, mirroring
+    /// `image::ImageLedger`'s twin field on the image side.
+    item_advisories: std::sync::Mutex<HashMap<String, Vec<crate::advisory::Advisory>>>,
+    /// What detached runs are converting and what they delivered, under one
+    /// lock so every output key is in one set or the other at each instant.
+    runs: std::sync::Mutex<RunLedger>,
+}
+
+#[derive(Debug, Default)]
+struct RunLedger {
+    /// Videos a spawned run has not finished, keyed by source path. A rebuild
+    /// that finds a video here with the same fingerprint joins that run
+    /// instead of superseding it — see `dispatch_video_conversions`.
+    running: HashMap<String, RunningItem>,
+    /// Output keys a detached run put in staging that no build has registered
+    /// yet. The staging sweep keeps them until a dispatch registers them.
+    landed: HashSet<String>,
+}
+
+/// One video a spawned conversion run still owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningItem {
+    /// `compute_video_item_fingerprint` of the source when it was dispatched.
+    pub fingerprint: String,
+    /// The run that owns it. Only that run may take the entry out, so a
+    /// superseded run winding down cannot clear its successor's items.
+    pub epoch: u64,
+    /// Every staging key the run may write for it: mp4, poster, HLS ladder.
+    pub outputs: Vec<String>,
 }
 
 impl VideoConversionState {
@@ -394,7 +429,9 @@ impl VideoConversionState {
     pub fn new() -> Self {
         Self {
             conversion_id: AtomicU64::new(0),
-            last_video_fingerprint: std::sync::Mutex::new(None),
+            last_video_fingerprints: std::sync::Mutex::new(HashMap::new()),
+            item_advisories: std::sync::Mutex::new(HashMap::new()),
+            runs: std::sync::Mutex::new(RunLedger::default()),
         }
     }
 
@@ -424,22 +461,130 @@ impl VideoConversionState {
         self.conversion_id.load(Ordering::SeqCst)
     }
 
-    /// Check if the video set fingerprint matches the last dispatched conversion.
-    /// Returns true if the fingerprint matches (no change), false otherwise.
-    /// Updates the stored fingerprint to the new value.
-    pub fn check_and_update_fingerprint(&self, new_fingerprint: &str) -> bool {
-        let mut last = self.last_video_fingerprint.lock().unwrap();
-        let matches = last.as_deref() == Some(new_fingerprint);
-        if !matches {
-            *last = Some(new_fingerprint.to_string());
+    /// Whether `path`'s fingerprint is the one recorded when a run last delivered
+    /// it (`end_item`): this one video is unchanged since. Read only — a dispatch
+    /// that finds a change must not vouch for it, because the run it spawns may
+    /// leave (the user cancelled, a newer dispatch superseded it) without
+    /// delivering, and the previous version's mp4 and poster it leaves in staging
+    /// are exactly what the next dispatch's skip check finds present. Independent
+    /// per path.
+    pub fn item_fingerprint_matches(&self, path: &str, fingerprint: &str) -> bool {
+        self.last_video_fingerprints.lock().unwrap().get(path).map(String::as_str) == Some(fingerprint)
+    }
+
+    /// Record that `path` was delivered for the source this fingerprint describes.
+    pub fn record_item_fingerprint(&self, path: &str, fingerprint: &str) {
+        self.last_video_fingerprints.lock().unwrap().insert(path.to_string(), fingerprint.to_string());
+    }
+
+    /// Whether a fingerprint has ever been recorded for `path` in this process —
+    /// the difference between a video dispatched because it is new and one
+    /// dispatched because it changed, which only the dispatch log line needs.
+    pub fn has_item_fingerprint(&self, path: &str) -> bool {
+        self.last_video_fingerprints.lock().unwrap().contains_key(path)
+    }
+
+    /// The advisories recorded for `path` alongside its last delivered
+    /// fingerprint — what a skip-carried video still has to say, re-emitted
+    /// by `dispatch_video_conversions` in that video's stead when it carries
+    /// the video forward without re-running it.
+    pub fn item_advisories(&self, path: &str) -> Vec<crate::advisory::Advisory> {
+        self.item_advisories.lock().unwrap().get(path).cloned().unwrap_or_default()
+    }
+
+    /// Drop stored fingerprints for paths not in `keep` — called once per
+    /// dispatch with the current video set, so a removed video's entry
+    /// doesn't linger forever, and a removed-then-re-added video is treated
+    /// as new rather than replaying a stale match against bytes that may
+    /// since have changed.
+    ///
+    /// Returns whether any dropped path still had a non-empty advisory
+    /// recorded — a deleted video whose problem the author never saw
+    /// cleared must not silently leave its advisory stranded in the app; the
+    /// caller uses this to fire a terminal tick even when nothing was
+    /// dispatched, so the app-side sweep can drop it.
+    pub fn retain_item_fingerprints(&self, keep: &HashSet<String>) -> bool {
+        let mut map = self.last_video_fingerprints.lock().unwrap();
+        map.retain(|k, _| keep.contains(k));
+        let mut advisories = self.item_advisories.lock().unwrap();
+        let mut dropped_advisory = false;
+        advisories.retain(|k, v| {
+            if keep.contains(k) {
+                true
+            } else {
+                dropped_advisory |= !v.is_empty();
+                false
+            }
+        });
+        dropped_advisory
+    }
+
+    /// Whether a spawned run is still converting `path` from a source with
+    /// this `fingerprint`.
+    pub fn is_running(&self, path: &str, fingerprint: &str) -> bool {
+        self.runs.lock().unwrap().running.get(path).is_some_and(|r| r.fingerprint == fingerprint)
+    }
+
+    /// Hand `items` (path, fingerprint, output keys) to the run `epoch`. It
+    /// supersedes every earlier run, so their entries go.
+    pub fn begin_run(&self, epoch: u64, items: impl IntoIterator<Item = (String, String, Vec<String>)>) {
+        let mut runs = self.runs.lock().unwrap();
+        runs.running.clear();
+        runs.running.extend(
+            items
+                .into_iter()
+                .map(|(path, fingerprint, outputs)| (path, RunningItem { fingerprint, epoch, outputs })),
+        );
+    }
+
+    /// `path` ended in run `epoch`; `landed` names what it put in staging that
+    /// no build has registered (empty when the run registers its own). When the run
+    /// `delivered` bytes for it, the fingerprint it was dispatched under is recorded
+    /// as the one those bytes are for, alongside `advisories` — what this delivery
+    /// has to say about `path`, possibly empty (which correctly overwrites a stale
+    /// prior advisory since fixed) — only by the run that owns the item, so a
+    /// superseded run winding down cannot vouch for what its successor is encoding.
+    pub fn end_item(
+        &self,
+        path: &str,
+        epoch: u64,
+        landed: impl IntoIterator<Item = String>,
+        delivered: bool,
+        advisories: &[crate::advisory::Advisory],
+    ) {
+        let mut runs = self.runs.lock().unwrap();
+        runs.landed.extend(landed);
+        if runs.running.get(path).is_some_and(|r| r.epoch == epoch) {
+            if let Some(item) = runs.running.remove(path).filter(|_| delivered) {
+                self.record_item_fingerprint(path, &item.fingerprint);
+                self.item_advisories.lock().unwrap().insert(path.to_string(), advisories.to_vec());
+            }
         }
-        matches
+    }
+
+    /// Run `epoch` returned: whatever it still owned is no longer running.
+    pub fn end_run(&self, epoch: u64) {
+        self.runs.lock().unwrap().running.retain(|_, r| r.epoch != epoch);
+    }
+
+    /// A build registered these keys, so they need no protection any more.
+    pub fn forget_landed<'a>(&self, keys: impl IntoIterator<Item = &'a String>) {
+        let mut runs = self.runs.lock().unwrap();
+        for key in keys {
+            runs.landed.remove(key);
+        }
+    }
+
+    /// Every staging key a running or finished-but-unregistered encode owns.
+    pub fn protected_outputs(&self) -> HashSet<String> {
+        let runs = self.runs.lock().unwrap();
+        runs.running.values().flat_map(|r| r.outputs.iter().cloned()).chain(runs.landed.iter().cloned()).collect()
     }
 }
 
 /// Field-less placeholder for image conversion lifecycle.
 ///
-/// As of #614 G4 (Track A), image cancellation flows through
+/// As of a later refactor (Track A), image cancellation flows through
 /// `FolderSession::cancel`. This type stays in managed state to preserve
 /// `BuildServices.image_cancellation` plumbing; the legacy methods remain
 /// as deprecated no-ops to keep API churn local.
@@ -473,7 +618,7 @@ impl ImageConversionState {
 
 /// Field-less placeholder for notebook (JupyterLite) processing lifecycle.
 ///
-/// As of #614 G4 (Track A), notebook cancellation flows through
+/// As of a later refactor (Track A), notebook cancellation flows through
 /// `FolderSession::cancel`. This type stays in managed state to preserve
 /// `BuildServices.notebook_cancellation` plumbing; the legacy methods remain
 /// as deprecated no-ops to keep API churn local.
@@ -512,7 +657,7 @@ impl NotebookConversionState {
 /// Replace the user's home directory prefix with `~` for privacy in logs.
 ///
 /// Production logs are sent to our server when users click "Send Logs".
-/// Full absolute paths like `/Users/liuguo/Library/Mobile Documents/...`
+/// Full absolute paths like `/Users/alice/Library/Mobile Documents/...`
 /// reveal the macOS username, iCloud usage, and vault locations.
 /// This function strips that information before logging.
 pub fn redact_home_dir(path: &str) -> String {
@@ -692,9 +837,9 @@ mod tests {
 
     #[test]
     fn test_site_directory_state_new() {
-        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build/current"));
+        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
         let current = state.current_dir.read().unwrap();
-        assert_eq!(*current, std::path::PathBuf::from("/folder_a/.moss/build/current"));
+        assert_eq!(*current, std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
     }
 
     #[test]
@@ -702,20 +847,20 @@ mod tests {
         // Behavior: When switching from folder A to folder B, the server should
         // continue running but serve content from folder B's active generation.
         // This is used for zero-flicker folder switching without restarting servers.
-        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build/current"));
+        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
 
         // Switch to folder B
-        assert!(state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build/current")));
+        assert!(state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build.nosync/current")));
         // Re-switching to the same directory is not a switch. The caller logs
         // off this, and its `initial-build-complete` listener fires on every
         // rebuild — 63 announced switches in one session's log, none of which
-        // moved anything (moss#1174).
-        assert!(!state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build/current")));
+        // moved anything.
+        assert!(!state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build.nosync/current")));
 
         let current = state.current_dir.read().unwrap();
         assert_eq!(
             *current,
-            std::path::PathBuf::from("/folder_b/.moss/build/current"),
+            std::path::PathBuf::from("/folder_b/.moss/build.nosync/current"),
             "After switch_to, server should serve folder_b content"
         );
     }
@@ -842,6 +987,23 @@ mod tests {
         assert!(pids.is_empty(), "Registry should be empty after kill_all");
     }
 
+    /// A superseded run winds down after its successor took its videos over;
+    /// its exit must not take the successor's items out of `running`, or the
+    /// next rebuild supersedes a run it should have joined.
+    #[test]
+    fn a_superseded_run_ending_leaves_its_successors_items_running() {
+        let state = VideoConversionState::default();
+        state.begin_run(1, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+        state.begin_run(2, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+
+        state.end_item("a.mov", 1, [], false, &[]);
+        state.end_run(1);
+        assert!(state.is_running("a.mov", "fp"));
+
+        state.end_item("a.mov", 2, [], false, &[]);
+        assert!(!state.is_running("a.mov", "fp"));
+    }
+
     /// Test that VideoConversionState's `start_new_conversion` increments
     /// the conversion ID monotonically.
     ///
@@ -908,27 +1070,141 @@ mod tests {
     }
 
     #[test]
-    fn test_video_conversion_fingerprint_first_call_returns_false() {
+    fn test_video_item_fingerprint_first_call_returns_false() {
         let state = VideoConversionState::new();
-        // First call with any fingerprint should return false (no previous)
-        assert!(!state.check_and_update_fingerprint("abc123"));
+        // Nothing recorded for this path yet: not unchanged.
+        assert!(!state.item_fingerprint_matches("a.mov", "abc123"));
     }
 
     #[test]
-    fn test_video_conversion_fingerprint_same_returns_true() {
+    fn test_video_item_fingerprint_same_returns_true() {
         let state = VideoConversionState::new();
-        state.check_and_update_fingerprint("abc123");
-        // Second call with same fingerprint should return true (match)
-        assert!(state.check_and_update_fingerprint("abc123"));
+        state.record_item_fingerprint("a.mov", "abc123");
+        assert!(state.item_fingerprint_matches("a.mov", "abc123"));
+    }
+
+    /// Asking about a changed video records nothing: the dispatch that asks has not yet
+    /// had its run deliver the change.
+    #[test]
+    fn test_video_item_fingerprint_different_returns_false_and_records_nothing() {
+        let state = VideoConversionState::new();
+        state.record_item_fingerprint("a.mov", "abc123");
+        assert!(!state.item_fingerprint_matches("a.mov", "def456"));
+        assert!(state.item_fingerprint_matches("a.mov", "abc123"), "a check must not overwrite what a run recorded");
+    }
+
+    /// The fingerprint a run was dispatched under is recorded when that run delivers the
+    /// item, and not when it leaves without: a run that delivered nothing has vouched for
+    /// nothing. Only the run that owns the item records it, so a superseded run winding
+    /// down cannot vouch for what its successor is encoding.
+    #[test]
+    fn an_item_is_recorded_only_by_the_run_that_owns_it_and_delivered_it() {
+        let state = VideoConversionState::new();
+        let dispatched = |epoch: u64, path: &str| state.begin_run(epoch, [(path.to_string(), "fp".to_string(), vec![])]);
+
+        dispatched(1, "leaves.mov");
+        state.end_item("leaves.mov", 1, [], false, &[]);
+        assert!(!state.item_fingerprint_matches("leaves.mov", "fp"), "recorded for a run that delivered nothing");
+
+        dispatched(1, "superseded.mov");
+        dispatched(2, "superseded.mov");
+        state.end_item("superseded.mov", 1, [], true, &[]);
+        assert!(!state.item_fingerprint_matches("superseded.mov", "fp"), "recorded by a run that no longer owns the item");
+        assert!(state.is_running("superseded.mov", "fp"), "and the successor still owns it");
+
+        dispatched(3, "done.mov");
+        state.end_item("done.mov", 3, [], true, &[]);
+        assert!(state.item_fingerprint_matches("done.mov", "fp"));
+    }
+
+    /// The core per-item property: one path's fingerprint is independent of
+    /// another's. Before this change a single `Option<String>` fingerprint
+    /// covered the whole video set, so checking path B always invalidated
+    /// whatever path A had just recorded.
+    #[test]
+    fn test_video_item_fingerprint_is_independent_per_path() {
+        let state = VideoConversionState::new();
+        state.record_item_fingerprint("a.mov", "fp-a");
+        state.record_item_fingerprint("b.mov", "fp-b");
+        // Both still match their own last-recorded fingerprint.
+        assert!(state.item_fingerprint_matches("a.mov", "fp-a"));
+        assert!(state.item_fingerprint_matches("b.mov", "fp-b"));
     }
 
     #[test]
-    fn test_video_conversion_fingerprint_different_returns_false() {
+    fn test_retain_item_fingerprints_drops_removed_paths() {
         let state = VideoConversionState::new();
-        state.check_and_update_fingerprint("abc123");
-        // Different fingerprint should return false and update
-        assert!(!state.check_and_update_fingerprint("def456"));
-        // Now the new fingerprint should match
-        assert!(state.check_and_update_fingerprint("def456"));
+        state.record_item_fingerprint("a.mov", "fp-a");
+        state.record_item_fingerprint("b.mov", "fp-b");
+        state.retain_item_fingerprints(&HashSet::from(["a.mov".to_string()]));
+        // "a.mov" is still known...
+        assert!(state.item_fingerprint_matches("a.mov", "fp-a"));
+        // ...but "b.mov" was dropped, so the same fingerprint now reads as new.
+        assert!(!state.item_fingerprint_matches("b.mov", "fp-b"));
+    }
+
+    fn test_advisory(what: &str) -> crate::advisory::Advisory {
+        crate::advisory::Advisory {
+            scope: crate::advisory::Scope::File,
+            severity: crate::advisory::Severity::ShippedDegraded,
+            item: Some("a.mov".to_string()),
+            what: what.to_string(),
+            action: crate::advisory::Action::None,
+        }
+    }
+
+    /// `end_item` records advisories only alongside a delivered fingerprint —
+    /// mirrors `record_item_fingerprint`'s own delivered-only gate, since an
+    /// item that never delivers is always redispatched and never needs a
+    /// carried-forward advisory.
+    #[test]
+    fn end_item_records_advisories_only_when_delivered() {
+        let state = VideoConversionState::new();
+        state.begin_run(1, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+        state.end_item("a.mov", 1, [], false, std::slice::from_ref(&test_advisory("broken")));
+        assert!(state.item_advisories("a.mov").is_empty(), "a run that delivered nothing must not vouch for its advisory either");
+
+        state.begin_run(2, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+        state.end_item("a.mov", 2, [], true, std::slice::from_ref(&test_advisory("broken")));
+        assert_eq!(state.item_advisories("a.mov"), vec![test_advisory("broken")]);
+    }
+
+    /// A later delivery with no advisories overwrites the earlier one — the
+    /// fixed case must not leave a stale advisory behind for a skip-carried
+    /// item to keep re-raising.
+    #[test]
+    fn end_item_with_no_advisories_clears_a_previously_recorded_one() {
+        let state = VideoConversionState::new();
+        state.begin_run(1, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+        state.end_item("a.mov", 1, [], true, std::slice::from_ref(&test_advisory("broken")));
+        assert_eq!(state.item_advisories("a.mov").len(), 1);
+
+        state.begin_run(2, [("a.mov".to_string(), "fp2".to_string(), vec![])]);
+        state.end_item("a.mov", 2, [], true, &[]);
+        assert!(state.item_advisories("a.mov").is_empty());
+    }
+
+    /// `retain_item_fingerprints` drops an advisory alongside its fingerprint
+    /// when the path leaves the current set, and reports back only when a
+    /// DROPPED path actually had something to say — a path with no advisory
+    /// must not spuriously ask the caller to fire a tick.
+    #[test]
+    fn retain_item_fingerprints_drops_advisories_and_reports_only_a_real_drop() {
+        let state = VideoConversionState::new();
+        state.begin_run(1, [
+            ("a.mov".to_string(), "fp-a".to_string(), vec![]),
+            ("b.mov".to_string(), "fp-b".to_string(), vec![]),
+        ]);
+        state.end_item("a.mov", 1, [], true, std::slice::from_ref(&test_advisory("broken")));
+        state.end_item("b.mov", 1, [], true, &[]);
+
+        // Dropping "b.mov" (no advisory) must not report a drop.
+        assert!(!state.retain_item_fingerprints(&HashSet::from(["a.mov".to_string()])));
+
+        // Dropping "a.mov" (has an advisory) must report one, and the
+        // advisory itself must be gone — never carried forward for a video
+        // that no longer exists.
+        assert!(state.retain_item_fingerprints(&HashSet::new()));
+        assert!(state.item_advisories("a.mov").is_empty());
     }
 }

@@ -1,8 +1,8 @@
 ---
 children: false
-logo: assets/logo.svg
+logo: assets/brand/logo.svg
 title: moss
-description: A desktop app that turns folders into websites.
+description: The simplest way to publish and own your website.
 lang: en
 translationKey: homepage
 uid: a48746ca
@@ -15,7 +15,7 @@ Right-click → your site is live.
 
 :::buttons
 [Request beta access](#moss-is-in-closed-beta)
-[Get started](get-started/)
+[[Get Started|Get started]]
 :::
 
 :::grid 3

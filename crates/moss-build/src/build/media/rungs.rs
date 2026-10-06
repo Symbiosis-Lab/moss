@@ -1,9 +1,7 @@
 //! Responsive-ladder rung encode unit.
 //!
-//! Extracted from `build/media/image.rs` per
-//! `docs/reference/target/MIGRATION-STATE.md` (the `build/media/image.rs`
-//! debt row) / the responsive-image-variants plan, Task 10.5 — a pure code
-//! move, zero behavior change. Owns the rung-specific encode path
+//! Extracted from `build/media/image.rs` as part of the responsive-image-variants
+//! plan — a pure code move, zero behavior change. Owns the rung-specific encode path
 //! (`encode_rungs`), the shared EXIF-aware decode front half
 //! (`decode_oriented`), the per-rung result carrier (`RungOutcome`), and the
 //! user-file collision map (`rung_collision_map`). The dispatch-side rung loop
@@ -15,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::image::{
-    apply_exif_orientation, encode_webp, flatten_alpha_to_white, read_exif_orientation,
+    apply_exif_orientation, encode_webp, read_exif_orientation,
     validate_webp_output, ImageCompressionConfig,
 };
 
@@ -55,7 +53,7 @@ pub struct RungOutcome {
 /// (`BackgroundContext` → `ImageRunContext`) — don't recompute it there:
 /// the worker has no `ProjectStructure`, and a divergent set means a
 /// registered-but-never-encoded rung, i.e. a sealed deploy with a 404ing
-/// `<picture>` candidate (ADR-013).
+/// `<picture>` candidate.
 pub(crate) fn rung_collision_map(
     project_structure: &crate::types::content::ProjectStructure,
     dir_overrides: &HashMap<String, String>,
@@ -75,29 +73,12 @@ pub(crate) fn rung_collision_map(
         .collect()
 }
 
-/// Decode `source_file` (format sniffed by magic bytes, allocation-capped)
-/// and apply its EXIF orientation. The shared decode front half of the base
-/// webp pass and the rung encodes.
-///
-/// The 1 GiB `max_alloc` cap is defense-in-depth against decompression bombs
-/// / wrong-dimension headers: the MegapixelBudget bounds *concurrent* decoded
-/// pixels, but nothing else caps a *single* decode's allocation — a tiny file
-/// declaring enormous dimensions would decode to multiple GB and OOM-kill the
-/// process regardless of the budget. 1 GiB ≈ 250 MP of RGBA, orders of
-/// magnitude above any real photo, so legitimate images are never rejected.
+/// Decode `source_file` (format sniffed by magic bytes, allocation-capped —
+/// see `media::decode::sniff_decode`) and apply its EXIF orientation. The
+/// shared decode front half of the base webp pass and the rung encodes.
 pub(crate) fn decode_oriented(source_file: &Path) -> Result<image::DynamicImage, String> {
-    use image::io::Reader as ImageReader;
-    const DECODE_ALLOC_CEILING: u64 = 1024 * 1024 * 1024;
     let orientation = read_exif_orientation(source_file);
-    let img = ImageReader::open(source_file)
-        .and_then(|r| r.with_guessed_format())
-        .map_err(image::ImageError::IoError)
-        .and_then(|mut r| {
-            let mut limits = image::io::Limits::default();
-            limits.max_alloc = Some(DECODE_ALLOC_CEILING);
-            r.limits(limits);
-            r.decode()
-        })
+    let img = super::decode::sniff_decode(source_file)
         .map_err(|e| format!("Failed to open image: {}", e))?;
     Ok(apply_exif_orientation(img, orientation))
 }
@@ -125,7 +106,7 @@ pub(crate) fn decode_oriented(source_file: &Path) -> Result<image::DynamicImage,
 /// and cached but NEVER written: the user's file wins there (registration
 /// skipped its promise too — it warned; we only debug-log). The encode still
 /// runs so a singleflight WAITER — duplicate content at a non-colliding path
-/// — can link the shared blob; skipping would strand its REGISTERED rung (ADR-013).
+/// — can link the shared blob; skipping would strand its REGISTERED rung.
 ///
 /// Failures are per-rung (`RungOutcome::error`): one bad rung neither rolls
 /// back the base nor stops the rest. NO outcome-based skipping (keep-smaller,
@@ -146,7 +127,7 @@ pub(crate) fn decode_oriented(source_file: &Path) -> Result<image::DynamicImage,
 /// the warm base path, fresh encode length on the cold path — both already in
 /// hand at the call sites, no extra I/O). A rung whose bytes are >= the base's
 /// is logged at info (design doc § Guards): it is EXPECTED near the ladder cap
-/// (e.g. a w1600 rung of a 1603w source) and still served per ADR-013, so this
+/// (e.g. a w1600 rung of a 1603w source) and still served, so this
 /// is observability only — never a skip.
 ///
 /// [`convert_single_image`]: super::image::convert_single_image
@@ -163,7 +144,7 @@ pub(crate) fn encode_rungs(
     decoded: Option<&image::DynamicImage>,
     base_webp_len: u64,
 ) -> Vec<RungOutcome> {
-    use crate::build::cache::{TransformEntry, TransformRecord};
+    use crate::build::cache::TransformEntry;
     use moss_core::asset_paths;
 
     // Oriented dims: from the decoded image when we have it (post-EXIF by
@@ -175,7 +156,7 @@ pub(crate) fn encode_rungs(
     let mut lazy: Option<image::DynamicImage> = None;
     let dims = match decoded {
         Some(img) => Some((img.width(), img.height())),
-        None => match image::image_dimensions(source_file) {
+        None => match super::decode::sniff_dimensions(source_file) {
             Ok((w, h)) => {
                 if crate::build::scan::scan::should_swap_dimensions(read_exif_orientation(
                     source_file,
@@ -236,7 +217,7 @@ pub(crate) fn encode_rungs(
         // Design doc § Guards: a rung at least as heavy as the base webp is
         // an anomaly worth one log line — debug, not warn, because it is
         // expected near the ladder cap (e.g. w1600 with a 1603w base). The
-        // rung is still cached/linked per ADR-013 (a registered rung must
+        // rung is still cached/linked (a registered rung must
         // exist), so this is observability only. DEBUG rather than INFO
         // because it fires per image PER RUNG: an expected outcome multiplied
         // by the ladder size is a flood, not a signal.
@@ -244,14 +225,14 @@ pub(crate) fn encode_rungs(
             if base_webp_len > 0 && rung_len >= base_webp_len {
                 log::debug!(
                     "[image] rung {} is {} bytes, not smaller than the base webp's {} \
-                     bytes — expected near the ladder cap; serving it anyway (ADR-013)",
+                     bytes — expected near the ladder cap; serving it anyway",
                     rung_rel, rung_len, base_webp_len
                 );
             }
         };
 
         // ---- Warm path: reuse the cached rung blob. ----
-        if let Some(cached) = transforms.find_cached_output(source_oid, &kind, &params) {
+        if let Some(cached) = transforms.find_cached_output(source_oid, &kind, &params, crate::build::cache::RecordMode::Wait) {
             // Cheap 0-byte guard (iCloud-eviction class); a bad blob falls
             // through to re-encode, self-healing the cache entry. The stat's
             // length doubles as the anomaly-log input — no extra I/O.
@@ -303,7 +284,11 @@ pub(crate) fn encode_rungs(
         // mul, truncating div, floor at 1).
         let target_h = ((h as u64 * rung as u64 / w as u64) as u32).max(1);
         let resized = img.resize_exact(rung, target_h, image::imageops::FilterType::Lanczos3);
-        let resized = flatten_alpha_to_white(resized);
+        // No alpha flatten: `encode_webp` encodes alpha directly (`from_rgba`);
+        // see `image.rs::flatten_alpha_to_white`'s doc comment for why this
+        // rung pass never needed it. `params` above is `config.to_params()`,
+        // whose cache-key rename (`alpha_preserved`) also forces a cached
+        // pre-fix (flattened) rung blob to re-encode rather than be reused.
         let webp_bytes = match encode_webp(&resized, config.quality, None) {
             Ok(b) => b,
             Err(e) => {
@@ -316,7 +301,7 @@ pub(crate) fn encode_rungs(
             continue;
         }
         log_rung_anomaly(webp_bytes.len() as u64);
-        let oid = match objects.store_bytes(&webp_bytes) {
+        let oid = match objects.store_bytes(&webp_bytes, crate::build::cache::RecordMode::Wait) {
             Ok(o) => o,
             Err(e) => {
                 outcomes.push(RungOutcome {
@@ -342,25 +327,92 @@ pub(crate) fn encode_rungs(
         }
         // Merge-preserve transform record (same read-modify-write idiom as
         // the base and the sized-raster pass).
-        let mut record = transforms.get(source_oid).unwrap_or(TransformRecord {
-            source_oid: source_oid.to_string(),
-            source_size: fs::metadata(source_file).map(|m| m.len()).unwrap_or(0),
-            transforms: std::collections::HashMap::new(),
+        let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
+        let merged = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, |record| {
+            record.transforms.insert(
+                kind,
+                TransformEntry {
+                    oid: oid.clone(),
+                    size: webp_bytes.len() as u64,
+                    params: params.clone(),
+                },
+            );
         });
-        record.transforms.insert(
-            kind,
-            TransformEntry {
-                oid: oid.clone(),
-                size: webp_bytes.len() as u64,
-                params: params.clone(),
-            },
-        );
-        if let Err(e) = transforms.put(&record) {
+        if let Err(e) = merged {
             log::warn!("[image] failed to write rung transform record: {}", e);
         }
         outcomes.push(RungOutcome { width: rung, oid: Some(oid), error: None });
     }
     outcomes
+}
+
+/// A short memory of responsive sizes a re-dispatch failed to produce.
+///
+/// An unchanged image whose responsive size is missing from the cache is sent
+/// back to the conversion worker to encode it. When the cause persists (the
+/// store refuses the blob, the link into the output fails, the encoder declines
+/// the size) that would repeat on every build, so a re-dispatch that did not
+/// produce its size is noted here, and the skip decision leaves that size alone
+/// for [`WINDOW`]. The note lives in memory only: a new process tries again.
+pub(crate) mod redispatch_note {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, LazyLock, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// How long a size that was not produced is left alone.
+    pub(crate) const WINDOW: Duration = Duration::from_secs(10 * 60);
+
+    /// The clock, injected so tests move it instead of sleeping.
+    pub(crate) type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
+    pub(crate) fn system_clock() -> Clock {
+        Arc::new(Instant::now)
+    }
+
+    /// (cache root, source oid, output path of the size) -> when it was not produced.
+    static NOTES: LazyLock<Mutex<HashMap<(PathBuf, String, String), Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    fn key(root: &Path, oid: &str, rung_rel: &str) -> (PathBuf, String, String) {
+        (root.to_path_buf(), oid.to_string(), rung_rel.to_string())
+    }
+
+    fn is_fresh(root: &Path, oid: &str, rung_rel: &str, now: Instant) -> bool {
+        let Ok(notes) = NOTES.lock() else { return false };
+        notes.get(&key(root, oid, rung_rel)).is_some_and(|at| now.saturating_duration_since(*at) < WINDOW)
+    }
+
+    /// The first of the missing sizes whose last re-dispatch is not recent: the reason to send the image back.
+    pub(crate) fn to_retry<'a>(root: &Path, oid: &str, missing: &[&'a str], now: Instant) -> Option<&'a str> {
+        missing.iter().copied().find(|rel| {
+            let held = is_fresh(root, oid, rel, now);
+            if held {
+                log::debug!("{rel} was not produced by the last re-dispatch; not retrying yet");
+            }
+            !held
+        })
+    }
+
+    /// After a re-dispatch has run: a size now in staging is forgotten, one still
+    /// missing is noted, and notes past their window are dropped. A cancelled run
+    /// never reached some images, so it forgets what is present but notes nothing.
+    /// Presence is probed before the lock is taken: the staging directory may be
+    /// slow, and the lock is shared by every site's dispatch decision.
+    pub(crate) fn settle(root: &Path, staging_dir: &Path, redispatched: &[(String, String)], now: Instant, cancelled: bool) {
+        let probed: Vec<_> = redispatched
+            .iter()
+            .map(|(oid, rung_rel)| (key(root, oid, rung_rel), crate::build::io_utils::output_present(&staging_dir.join(rung_rel))))
+            .collect();
+        let Ok(mut notes) = NOTES.lock() else { return };
+        notes.retain(|_, at| now.saturating_duration_since(*at) < WINDOW);
+        for (k, present) in probed {
+            if present {
+                notes.remove(&k);
+            } else if !cancelled {
+                notes.insert(k, now);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

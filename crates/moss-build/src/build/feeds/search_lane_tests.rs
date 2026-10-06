@@ -1,5 +1,7 @@
 use super::*;
 
+use std::time::Duration;
+
 use crate::build::manifest::PendingManifest;
 use crate::moss_paths::MossPaths;
 
@@ -50,7 +52,7 @@ fn disabled_search_registers_nothing_and_indexes_nothing() {
     assert!(!mp.staging_dir().join("_moss/pagefind").exists());
 }
 
-// ── Nothing to adopt (ADR-045's first hole) ─────────────────────────────────
+// ── Nothing to adopt (the rule's first hole) ─────────────────────────────────
 
 /// The first build after search is enabled has no receipt to adopt. Registering
 /// nothing would be a silent bug rather than a slow path: mark-and-sweep would
@@ -182,7 +184,7 @@ fn a_build_with_no_lane_reindexes_rather_than_adopting_its_own_stale_receipt() {
     );
 }
 
-// ── Receipt/disk divergence (ADR-045's second hole) ─────────────────────────
+// ── Receipt/disk divergence (the rule's second hole) ─────────────────────────
 
 /// An external delete or a cloud eviction of the holding area leaves a receipt
 /// naming files that are gone. Registering them would put a path in the
@@ -483,10 +485,26 @@ fn settle_is_inert_when_search_is_disabled() {
 
 // ── The lane ────────────────────────────────────────────────────────────────
 
+/// Poll `condition` on real time until it is true or `timeout` elapses.
+/// `request`'s worker does real (if small) work on the blocking pool, so
+/// these tests wait on that outcome rather than sleeping a fixed guess —
+/// unlike the debounce timing itself, which moved to the seal
+/// (`build::debounce`) and is tested there on a paused clock.
+async fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !condition() {
+        assert!(start.elapsed() < timeout, "condition did not become true within {:?}", timeout);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// A burst of saves must collapse to one index, and a request for a page set
 /// that is already published must run none at all — the no-op save case the
-/// whole of Finding 3 is about.
-#[tokio::test(flavor = "multi_thread")]
+/// whole of Finding 3 is about. No debounce wait is needed here any more: the
+/// eight `request` calls run back-to-back, synchronously, before the tokio
+/// scheduler ever gets to run the lane's freshly spawned task, so they still
+/// collapse to the one value its watch channel holds by the time it looks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_burst_of_requests_indexes_once_and_a_no_op_save_indexes_not_at_all() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
@@ -501,10 +519,7 @@ async fn a_burst_of_requests_indexes_once_and_a_no_op_save_indexes_not_at_all() 
     }
     assert!(is_indexing(&mp, "g1"), "the lane's generation must be pinned against GC");
 
-    // IDLE + one index + margin. The lane is level-triggered, so the eight
-    // requests are one value, not a queue of eight.
-    tokio::time::sleep(IDLE + Duration::from_secs(8)).await;
-
+    wait_for(Duration::from_secs(5), || mp.index_receipt().exists()).await;
     assert_eq!(
         search::index_build_count() - before,
         1,
@@ -518,7 +533,7 @@ async fn a_burst_of_requests_indexes_once_and_a_no_op_save_indexes_not_at_all() 
     // The no-op save: same page set, already published.
     let before = search::index_build_count();
     request(&mp, "g1", want);
-    tokio::time::sleep(IDLE + Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(
         search::index_build_count(),
         before,
@@ -531,19 +546,17 @@ async fn a_burst_of_requests_indexes_once_and_a_no_op_save_indexes_not_at_all() 
     std::fs::create_dir_all(&gen2).unwrap();
     std::fs::write(gen2.join("index.html"), PAGE).unwrap();
     request(&mp, "g2", PageSet { fp: PageSetFp(0xf00d), pages: 1 });
-    tokio::time::sleep(IDLE + Duration::from_secs(8)).await;
-    assert!(!is_indexing(&mp, "g1"), "a superseded generation must be released");
-    assert!(is_indexing(&mp, "g2"), "the outstanding request stays pinned");
+    wait_for(Duration::from_secs(5), || is_indexing(&mp, "g2") && !is_indexing(&mp, "g1")).await;
 }
 
 /// The lane must **park** between requests. An earlier shape always broke out
-/// of its debounce on the `IDLE` timer and re-read the same request, which on a
+/// of its debounce on a timer and re-read the same request, which on a
 /// healthy folder was a wakeup plus a ~440-entry JSON parse every 2 s for the
 /// life of the app — and on a folder whose index kept failing, a whole-corpus
 /// pagefind run every ~7 s forever. Both are invisible to a test that counts
 /// index builds, so this counts passes; the failing-index half is covered by
 /// the request below, whose generation does not exist.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_lane_whose_index_cannot_be_published_retries_once_per_request_not_forever() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
@@ -553,7 +566,7 @@ async fn a_lane_whose_index_cannot_be_published_retries_once_per_request_not_for
 
     let builds = search::index_build_count();
     request(&mp, "gone", want);
-    tokio::time::sleep(IDLE + Duration::from_secs(3)).await;
+    wait_for(Duration::from_secs(5), || search::index_build_count() > builds).await;
 
     assert_eq!(
         search::index_build_count() - builds,
@@ -566,7 +579,7 @@ async fn a_lane_whose_index_cannot_be_published_retries_once_per_request_not_for
     );
 
     let passes = lane_passes();
-    tokio::time::sleep(IDLE * 3).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
         lane_passes(),
         passes,

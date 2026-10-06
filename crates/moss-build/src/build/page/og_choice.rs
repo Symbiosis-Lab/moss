@@ -95,6 +95,15 @@ pub fn resolve(
         .and_then(|sp| std::path::Path::new(sp).parent())
         .map(|rel| source_root.join(rel));
     let bundle_dir_ref: Option<&std::path::Path> = bundle_dir.as_deref();
+    // A render with no sink is a single page outside a build: nothing to share.
+    let unshared_covers;
+    let filename_covers = match og_outputs.as_deref() {
+        Some(sink) => sink.filename_covers(),
+        None => {
+            unshared_covers = crate::build::page::cover::FilenameCovers::default();
+            &unshared_covers
+        }
+    };
 
     // Try the cheap chain: the page's own picture.
     let cheap_choice = crate::build::page::cover::resolve_cover_chain(
@@ -104,6 +113,7 @@ pub fn resolve(
             body_cover_path: body_cover_for_chain,
             bundle_dir: bundle_dir_ref,
             source_root,
+            filename_covers,
         },
     );
 

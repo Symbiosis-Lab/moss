@@ -1,0 +1,100 @@
+# Places Site
+
+---
+
+## evening
+
+# Evening
+
+Declares its own `location:` — keeps it, never the work's.
+
+---
+
+## morning
+
+# Morning
+
+No `location:` of its own — inherits the work's place.
+
+---
+
+## nara diary
+
+# Nara Diary
+
+Two places in one field, one of them with an invalid `precision`.
+
+---
+
+## osaka notes
+
+# Osaka Notes
+
+A place whose gazetteer entry has no `lng`.
+
+---
+
+## kyoto report
+
+# Kyoto Report
+
+A single place, named through `location:`.
+
+---
+
+## Japan
+
+---
+
+## Kyoto
+
+# Kyoto
+
+Claims the `places/kyoto` page, so its breadcrumb and children list render here rather than on a generated one.
+
+---
+
+## Kyoto Walk
+
+# Kyoto Walk
+
+A self-named work. Its companions in this folder inherit this place unless they declare their own.
+
+---
+
+## Nara
+
+---
+
+## Osaka
+
+---
+
+## Places
+
+Every place this site names, gathered on one map.
+
+---
+
+## Places Site
+
+# Places Site
+
+One namespace, geography.
+
+A city, reached only through its generated term page:
+
+<!--MOSS_MARKER_FOLDER_LIST:path=/places/osaka/|from=index.md-->
+
+A roll-up-only ancestor, reached only through the gazetteer's parent chain:
+
+<!--MOSS_MARKER_FOLDER_LIST:path=/places/japan/|from=index.md-->
+
+---
+
+## posts
+
+---
+
+## works
+

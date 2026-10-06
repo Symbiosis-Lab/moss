@@ -4,7 +4,7 @@
 //! The pipeline reports what happened; the caller decides what that means.
 //! The desktop app forwards to the loading screen and the typed event bus, the
 //! CLI prints to stderr, tests discard. Nothing here names tauri, which is the
-//! point: `build/` is scheduled to become the open `moss-build` crate (ADR-050),
+//! point: `build/` is scheduled to become the open `moss-build` crate,
 //! and `check-crate-dag.mjs` rule 2 forbids a path to tauri from it.
 //!
 //! The tauri-backed implementation lives app-side in `crate::events`.
@@ -35,7 +35,7 @@ pub struct CloudSync<'a> {
     /// emits (`home_waiting`/`home_ready`) already answers the same question,
     /// and a listener that sees no count falls back to `remaining`, which is
     /// what every producer meant before this field existed. The supervisor's
-    /// sweep always fills it in (moss#1077).
+    /// sweep always fills it in.
     pub blocking: Option<usize>,
     /// Named files the provider will not hand over, base names only. Empty for
     /// every phase but `unavailable`.
@@ -54,7 +54,7 @@ pub struct CloudSync<'a> {
 /// — they are untyped, separately-listened-to signals, and the first is a
 /// *control* call that sets the root the preview server serves rather than a
 /// description of anything. That argues for a second trait, and a second trait
-/// is what this was until NORTH-STAR was re-read: the moss-build seam is
+/// is what this was until the target-architecture note was re-read: the moss-build seam is
 /// **five ports**, `BuildReporter` is specified as "progress + `stage_ready`",
 /// and a **fourth channel-shaped port trips the pre-approved abort threshold**
 /// — the signal that the crate line is drawn too low. Splitting them would have
@@ -66,7 +66,7 @@ pub struct CloudSync<'a> {
 /// shell signal could arrive as one more default method and the detector would
 /// never fire. Four channel-shaped concerns cross this seam (progress,
 /// `stage_ready`, `cloud_sync`, `download_progress`) and all four are methods on
-/// this one trait, so the fold was not hypothetical. ADR-058 (accepted
+/// this one trait, so the fold was not hypothetical. The abort-threshold rule (adopted
 /// 2026-08-18) replaces the trait count with a width count — ratchet row (o)
 /// `seam_surface` — which a fold moves exactly as much as a new port does. Add a
 /// method here and the tripwire goes red.
@@ -195,12 +195,11 @@ impl BuildReporter for StdoutReporter {
                 current,
                 total,
                 completed,
+                advisories,
                 ..
             } => {
-                if *completed {
-                    cli_eprintln!("[done] {} complete ({}/{})", task, current, total);
-                } else {
-                    cli_eprintln!("[bg] {} ({}/{})", task, current, total);
+                for line in background_progress_lines(task, *current, *total, *completed, advisories) {
+                    cli_eprintln!("{}", line);
                 }
             }
             PipelineEvent::VideoProgress {
@@ -266,5 +265,99 @@ impl BuildReporter for StdoutReporter {
                 );
             }
         }
+    }
+}
+
+/// What [`StdoutReporter`] prints for one `BackgroundProgress` tick — zero,
+/// one or several lines. Pure so the rendering choice is unit-testable
+/// without capturing real stderr (mirrors [`problem_summary_line`] in
+/// `cli_output.rs`).
+///
+/// `current == 0 && total == 0` is the shape a build-wide check's own tick
+/// takes (`advisory_event` / `clear_tick` in `build/progress.rs` — symlink-
+/// skip, config-version-ahead, duplicate-uid): the task never did any
+/// "progress" on this tick, so "complete (0/0)" would be a routing artifact,
+/// not a fact about the build. Silent when there is nothing to say — the
+/// clear tick, which a build-wide check now emits every time it runs clean,
+/// where before it emitted nothing at all — and one `[advisory]` line per
+/// advisory otherwise, naming what the check actually found instead of a
+/// fake completion count.
+fn background_progress_lines(
+    task: &str,
+    current: u32,
+    total: u32,
+    completed: bool,
+    advisories: &[crate::advisory::Advisory],
+) -> Vec<String> {
+    if current == 0 && total == 0 {
+        return advisories
+            .iter()
+            .map(|a| format!("[advisory] {task}: {}", a.what))
+            .collect();
+    }
+    vec![if completed {
+        format!("[done] {task} complete ({current}/{total})")
+    } else {
+        format!("[bg] {task} ({current}/{total})")
+    }]
+}
+
+#[cfg(test)]
+mod background_progress_lines_tests {
+    use super::background_progress_lines;
+    use crate::advisory::{Action, Advisory, Scope, Severity};
+
+    fn advisory(what: &str) -> Advisory {
+        Advisory {
+            scope: Scope::Config,
+            severity: Severity::NeedsAction,
+            item: None,
+            what: what.into(),
+            action: Action::None,
+        }
+    }
+
+    #[test]
+    fn a_clear_tick_zero_zero_no_advisories_prints_nothing() {
+        // The new shape a clean build-wide check emits every build — must
+        // NOT print a fake "complete (0/0)" line.
+        assert!(background_progress_lines("assets", 0, 0, true, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_zero_zero_tick_with_one_advisory_prints_it_not_a_completion_count() {
+        let lines = background_progress_lines("config", 0, 0, true, &[advisory("schema is 2 versions ahead")]);
+        assert_eq!(lines, vec!["[advisory] config: schema is 2 versions ahead".to_string()]);
+    }
+
+    #[test]
+    fn a_zero_zero_tick_with_several_advisories_prints_one_line_each() {
+        let lines = background_progress_lines(
+            "markdown",
+            0,
+            0,
+            true,
+            &[advisory("dup 1"), advisory("dup 2")],
+        );
+        assert_eq!(
+            lines,
+            vec!["[advisory] markdown: dup 1".to_string(), "[advisory] markdown: dup 2".to_string()]
+        );
+    }
+
+    #[test]
+    fn real_progress_at_completion_still_prints_the_done_line() {
+        assert_eq!(
+            background_progress_lines("images", 12, 12, true, &[]),
+            vec!["[done] images complete (12/12)".to_string()]
+        );
+    }
+
+    #[test]
+    fn real_progress_in_flight_prints_the_bg_line() {
+        assert_eq!(
+            background_progress_lines("videos", 3, 6, false, &[]),
+            vec!["[bg] videos (3/6)".to_string()]
+        );
     }
 }

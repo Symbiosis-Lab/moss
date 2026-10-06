@@ -204,6 +204,9 @@ export default class MossPlugin extends Plugin {
           this.setStatus(`serving :${addr.port}`);
           view?.setUrl(addr.url);
         },
+        onStandby: () => {
+          new Notice("Preview is served by the moss app; this window follows it");
+        },
         onError: (message) => {
           new Notice(`moss preview failed: ${message}`, 10000);
           view?.showMessage(`moss failed: ${message}`);

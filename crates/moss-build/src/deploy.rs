@@ -8,18 +8,20 @@
 //! mass-removal safety gate, the record a landed publish writes ([`landed`]),
 //! and the progress vocabulary they report through. What the app adds is a
 //! *sink* ([`progress::DeploySink`]) and four answers ([`crate::build::ports::deploy`]);
-//! `src-tauri/src/deploy/app_seam.rs` is both, in one file, deliberately.
+//! the app's own deploy seam module is both, in one file, deliberately.
 //!
-//! What stays in `src-tauri/src/deploy.rs` is everything *before* a publish
+//! What stays in the app's own deploy module is everything *before* a publish
 //! body, and it is app-shaped for one reason: a long-lived process with a file
 //! watcher has in-flight build work to drain and a sealed manifest sitting in
 //! session state. A terminal publish has neither. So the Tauri commands, that
 //! resolution, and the build-liveness listener stayed.
 
+pub mod dry_run;
+pub(crate) mod removal_gate;
 pub mod freeze;
 pub mod mass_remove;
 pub mod landed;
-// The bytes and one record behind every landed publish (ADR-083), read from
+// The bytes and one record behind every landed publish, read from
 // the same sealed-manifest pass `landed::record_landed` already makes. No CLI
 // verb yet — `moss history` and restore are later slices.
 pub mod history;
@@ -39,7 +41,7 @@ pub mod plugin_push;
 pub mod prebuilt;
 // The gate that reads the deploy target's declared `setup` block against this
 // user's settings and credential store: what is still missing, and the refusal
-// a publish gets when something is (ADR-072). It sits beside the other publish
+// a publish gets when something is. It sits beside the other publish
 // refusal, `refuse_publish` below, rather than under `plugins/contributions`:
 // it reads the manifest but depends on discovery, the registry and the
 // credential store, and the two refusals are asked by the same call sites.
@@ -48,7 +50,7 @@ pub mod push;
 // Cross-process exclusion for the machine-scoped OnionPress stack: the install
 // lock the app takes, and the publish lease a terminal publish writes. Here
 // rather than app-side because `moss deploy` is the second process the
-// exclusion exists for, and it cannot see `src-tauri`.
+// exclusion exists for, and it cannot see the desktop app.
 pub mod stack_activity;
 pub mod progress;
 pub mod route;
@@ -76,6 +78,8 @@ pub enum PushResult {
     /// Push succeeded, site is live.
     Success {
         url: String,
+        /// Files this publish transferred: the client's own count of what the
+        /// hosting server asked for, not the size of the site.
         files_uploaded: u32,
         files_removed: u32,
     },
@@ -121,6 +125,8 @@ pub enum DeployReport {
         url: String,
         message: Option<String>,
     },
+    /// `--dry-run`: the build ran, nothing was sent.
+    DryRun(Box<dry_run::DryRun>),
 }
 
 impl DeployReport {
@@ -132,6 +138,7 @@ impl DeployReport {
         match self {
             DeployReport::Push(result) => result.landed(),
             DeployReport::Plugin { .. } => true,
+            DeployReport::DryRun(_) => false,
         }
     }
 }
@@ -275,8 +282,8 @@ mod view_site_url_tests {
 /// vault, so a plain read of an evicted one returns `EDEADLK` under the
 /// dataless fail-fast policy. `resolve_sealed_manifest_for_deploy` loads the
 /// identity in its LAST step, after draining the whole media queue, so on the
-/// reported site (moss#986) the user waited minutes at "Preparing to publish…"
-/// to be told `Resource deadlock avoided (os error 11)`.
+/// reported site (the EDEADLK identity-file bug) the user waited minutes at
+/// "Preparing to publish…" to be told `Resource deadlock avoided (os error 11)`.
 ///
 /// Here, the failure arrives in seconds — and usually stops being a failure at
 /// all, because asking is what makes a file arrive.
@@ -285,12 +292,12 @@ mod view_site_url_tests {
 /// mint an identity on first use, and `materialize_input` answers only the
 /// cloud question. Only "present, but the bytes are elsewhere" stops here.
 ///
-/// Crossed here at C4f, from `src-tauri/src/deploy.rs`, because it had become
+/// Crossed here at C4f, from the app's own deploy module, because it had become
 /// the app's private answer to a question every publish asks. `moss deploy
 /// --prebuilt` had never asked it — that path loads the same key with a plain
-/// read and would have reported the raw `EDEADLK` moss#986 was closed for. It
-/// now calls this, as does the hosted route the terminal gained in the same
-/// slice.
+/// read and would have reported the raw `EDEADLK` the identity-file bug was
+/// closed for. It now calls this, as does the hosted route the terminal
+/// gained in the same slice.
 pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(), String> {
     use crate::build::cloud_readiness::{materialize_input, INTERACTIVE_DEADLINE};
 
@@ -320,9 +327,9 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
     ))
 }
 
-/// Refuse the publish if this site points at media that does not exist.
+/// Refuse the publish if this site points at a file that does not exist.
 ///
-/// A published site cannot contain a broken image. moss will not paper over one
+/// A published site cannot contain a broken file. moss will not paper over one
 /// either — the blueprint grid the author sees locally is a preview affordance
 /// and ships nowhere — so the only honest options are to fix the reference or
 /// not to publish. This is the second one.
@@ -332,34 +339,69 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// stranger's screen, and the person who chose it can never see the result,
 /// because their own preview looks the same either way.
 ///
-/// THE GATE, NOT THE MESSAGE. The app calls `list_missing_media` before it ever
-/// calls publish, so a user should never read this string — they get a list of
-/// files they can click. This exists so the guarantee holds for every other
-/// caller too: the CLI, a plugin deploy, a second call site added later.
+/// THE GATE, NOT THE MESSAGE. The app reads the same completed preflight
+/// projection before it calls publish, so a user normally gets its clickable
+/// occurrence list instead. This exists so the guarantee holds for every
+/// other caller too: the CLI, a plugin deploy, a second call site added later.
 ///
 /// The verdict comes from the last build's own resolver
 /// (`BuildRecords`), never from a fresh scan. A second scan
 /// would be a second opinion about the same question, free to disagree with the
 /// site that was actually built.
 ///
-/// Absent means "no build in this session", not "clean" — and since 2026-08-29
-/// a headless build records its verdict here too, so the CLI is refused on the
-/// same evidence the app is.
+/// Absent means "no build in this session", not "clean"; a headless build
+/// records its verdict here too, so the CLI is refused on the same evidence
+/// the app is.
 ///
-/// Crossed here at C4f. It had sat in `src-tauri/src/missing_media.rs` with a
-/// doc promising the guarantee held "for every other caller too: the CLI, a
-/// plugin deploy, a second call site added later" — which the CLI could not
-/// honour, because it could not name the function. The evidence it reads
-/// (`build_records`) crossed in 2026-08-29; the verdict followed here.
+/// Also refused: a generation can seal before a video it dispatched (or that
+/// video's poster) has finished encoding, and a publish landing in that
+/// window would otherwise ship a page referencing bytes this build never
+/// wrote. `build::manifest::link_audit::dead_links_among_promises` — run on
+/// every seal via `build.rs`'s `record_promise_gate` — is what tells that
+/// case apart from an ordinary missing file: it is this build's OWN
+/// still-pending promise, not something broken. Distinct wording,
+/// `in_flight_refusal_text`: "fix this" would be the wrong thing to tell an
+/// author about a video moss itself hasn't finished encoding yet.
+///
+/// Also refused: a structural source (a page, `config.toml`, the user
+/// stylesheet) this build could not read falls back to last-known content
+/// instead of refusing the SCREEN outright — see
+/// `PipelineRunOutput::stale_sources`. The publish it might go on to make is
+/// still built on that carried-forward content, and that is what THIS rule
+/// refuses: not because the site is wrong, but because shipping it without
+/// saying so would let a source stay stale indefinitely with no signal that
+/// anything needed attention.
+///
+/// Also refused: the build would stop serving an address the last publish
+/// served, and not because the author deleted its source —
+/// `removal_gate`. An address is a promise to every link and subscription
+/// stored elsewhere; the author keeps it working or accepts losing it
+/// (`moss deploy --accept-removals`), and the same set never asks twice.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
-    match crate::system::build_records::records().missing_media(folder_path) {
-        Some(missing) if !missing.is_empty() => Err(refusal_text(missing.len())),
-        _ => Ok(()),
+    let records = crate::system::build_records::records();
+    if let Some(projection) = records.publish_preflight(folder_path) {
+        if !projection.missing_references.is_empty() {
+            return Err(refusal_text(projection.missing_references.len()));
+        }
     }
+    if let Some(unfulfilled) = records.promised_dead_links(folder_path) {
+        if !unfulfilled.is_empty() {
+            return Err(in_flight_refusal_text(unfulfilled.len()));
+        }
+    }
+    if let Some(stale) = records.stale_sources(folder_path) {
+        if !stale.is_empty() {
+            return Err(stale_source_refusal_text(&stale));
+        }
+    }
+    if let Some(refusal) = removal_gate::refusal_for(folder_path) {
+        return Err(refusal);
+    }
+    Ok(())
 }
 
 /// The refusal a user reads. Says what did not happen, not which subsystem said
-/// no — see `docs/reference/operating/writing-release-notes.md`.
+/// no.
 pub(crate) fn refusal_text(count: usize) -> String {
     let subject = if count == 1 {
         "1 file is missing".to_string()
@@ -367,30 +409,187 @@ pub(crate) fn refusal_text(count: usize) -> String {
         format!("{count} files are missing")
     };
     format!(
-        "Nothing published — {subject}. A published site can't show a broken image. \
+        "Nothing published — {subject}. A published site can't show a broken file. \
          Fix these, then publish again."
     )
+}
+
+/// The refusal for this build's own in-flight media — see the second rule on
+/// [`refuse_publish`]. The reference is not broken, it is a moment early, so
+/// this reads as "wait" rather than "fix" — the wording is the only thing
+/// that tells the two refusals apart, and getting it backwards would send an
+/// author hunting for a broken file that does not exist.
+pub(crate) fn in_flight_refusal_text(count: usize) -> String {
+    let subject = if count == 1 {
+        "1 file is still being prepared".to_string()
+    } else {
+        format!("{count} files are still being prepared")
+    };
+    format!(
+        "Nothing published — {subject}. moss is still finishing a video in the background. \
+         Publish again in a moment."
+    )
+}
+
+/// The refusal for the third rule on [`refuse_publish`]: a structural source
+/// this build carried forward rather than read. Names the sources rather than
+/// only counting them — unlike the preflight report, there is no separate "list
+/// what's wrong" call a driver makes first, so this message is the only place
+/// an author learns which file.
+pub(crate) fn stale_source_refusal_text(stale: &[String]) -> String {
+    let subject = if stale.len() == 1 {
+        format!("{} could not be read for this build", stale[0])
+    } else {
+        format!(
+            "{} sources could not be read for this build: {}",
+            stale.len(),
+            stale.join(", ")
+        )
+    };
+    format!("Nothing published — {subject}, so moss is still showing what it built last time. Publish again once it's readable.")
+}
+
+/// The refusal for a publish from a copy of the site that is behind the live
+/// site, or `None` to go ahead.
+///
+/// The publish record is tracked by git and synced with the folder, so a copy
+/// that has pulled the one that published last holds that publish's record
+/// too. A live generation this folder's record does not name, which went live
+/// after the record was written, came from a copy this folder has not caught
+/// up with — and publishing from here would undo it.
+///
+/// Anything short of that evidence goes ahead: no live generation, no time for
+/// it, the record's own generation, or a record time that does not parse.
+pub(crate) fn stale_copy_refusal(
+    record: &crate::build::manifest::change_set::PublishedSnapshot,
+    live: &crate::seta::sites::LiveGeneration,
+) -> Option<String> {
+    if live.generation_id.as_deref()? == record.generation_id {
+        return None;
+    }
+    let live_at = chrono::DateTime::from_timestamp(live.deployed_at?, 0)?;
+    let recorded_at = chrono::DateTime::parse_from_rfc3339(&record.published_at).ok()?;
+    if live_at <= recorded_at {
+        return None;
+    }
+    let when = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%d %H:%M UTC").to_string();
+    Some(format!(
+        "Nothing published — the live site was published from another copy of this folder on {}, \
+         after this folder last published on {}. Deploying from here would undo that publish. \
+         Bring this folder up to date with the copy that published (for example, git pull), \
+         then deploy again — or pass --overwrite-newer to replace the live site anyway.",
+        when(live_at),
+        when(recorded_at.with_timezone(&chrono::Utc)),
+    ))
+}
+
+/// Refuse `moss deploy` from a copy that is behind the live site — see
+/// [`stale_copy_refusal`]. With no record there is nothing to compare, so the
+/// server is not asked; a probe that fails goes ahead, as `push`'s no-op check
+/// does, because a refusal needs evidence.
+pub async fn refuse_stale_copy(
+    folder: &std::path::Path,
+    site_id: &str,
+    identity: &crate::identity::Identity,
+) -> Result<(), String> {
+    let record = crate::config::deployment::slot_for("moss", Some(site_id)).and_then(|target| {
+        crate::build::manifest::published_record::load_for(
+            &crate::moss_paths::MossPaths::new(folder),
+            Some(&target),
+        )
+    });
+    let Some(record) = record else { return Ok(()) };
+    let environment = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
+    let client = crate::seta::client::MossSetaClient::for_environment(identity, &environment);
+    let Ok(live) = client.live_generation(site_id).await else { return Ok(()) };
+    match stale_copy_refusal(&record, &live) {
+        Some(refusal) => Err(refusal),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod stale_copy_tests {
+    use super::stale_copy_refusal;
+    use crate::build::manifest::change_set::PublishedSnapshot;
+    use crate::seta::sites::LiveGeneration;
+
+    /// This folder last published generation `ours` at 2026-09-20 09:12 UTC.
+    fn record() -> PublishedSnapshot {
+        PublishedSnapshot {
+            generation_id: "ours".to_string(),
+            target: "moss:blog".to_string(),
+            published_at: "2026-09-20T09:12:30.123456+00:00".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn live(generation_id: Option<&str>, deployed_at: Option<&str>) -> LiveGeneration {
+        LiveGeneration {
+            generation_id: generation_id.map(str::to_string),
+            deployed_at: deployed_at.map(|t| {
+                chrono::DateTime::parse_from_rfc3339(t).unwrap().timestamp()
+            }),
+        }
+    }
+
+    #[test]
+    fn a_generation_published_elsewhere_after_this_folders_last_publish_is_refused() {
+        let refusal = stale_copy_refusal(&record(), &live(Some("theirs"), Some("2026-09-24T14:03:00Z")))
+            .expect("the live site is newer than anything this folder has seen");
+        assert!(refusal.contains("2026-09-24 14:03 UTC"), "names when the live site was published: {refusal}");
+        assert!(refusal.contains("2026-09-20 09:12 UTC"), "names this folder's last publish: {refusal}");
+        assert!(refusal.contains("git pull"), "names the fix: {refusal}");
+        assert!(refusal.contains("--overwrite-newer"), "names the override: {refusal}");
+    }
+
+    #[test]
+    fn the_generation_this_folder_published_goes_ahead() {
+        assert_eq!(stale_copy_refusal(&record(), &live(Some("ours"), Some("2026-09-24T14:03:00Z"))), None);
+    }
+
+    #[test]
+    fn a_foreign_generation_that_went_live_before_this_folders_publish_goes_ahead() {
+        assert_eq!(stale_copy_refusal(&record(), &live(Some("theirs"), Some("2026-09-19T00:00:00Z"))), None);
+    }
+
+    #[test]
+    fn a_site_with_no_live_generation_goes_ahead() {
+        assert_eq!(stale_copy_refusal(&record(), &live(None, None)), None);
+        assert_eq!(stale_copy_refusal(&record(), &LiveGeneration::default()), None);
+    }
+
+    #[test]
+    fn a_live_generation_with_no_time_goes_ahead() {
+        assert_eq!(stale_copy_refusal(&record(), &live(Some("theirs"), None)), None);
+    }
+
+    #[test]
+    fn a_record_whose_time_does_not_parse_goes_ahead() {
+        let record = PublishedSnapshot { published_at: "yesterday".to_string(), ..record() };
+        assert_eq!(stale_copy_refusal(&record, &live(Some("theirs"), Some("2026-09-24T14:03:00Z"))), None);
+    }
 }
 
 /// What every publish needs before it can start: the site it publishes to, and
 /// the key it signs with.
 ///
-/// `Ok(None)` is `NeedsSetup`, and since C4g it means one specific thing: the
-/// folder has no environment set, so moss will not mint a site for it. A folder
+/// `Ok(None)` is `NeedsSetup`, meaning one specific thing: the folder has no
+/// environment set, so moss will not mint a site for it. A folder
 /// that HAS one and no `site_id` yet is registered here rather than refused —
 /// the first publish is a step of the route, not a route of its own, and
 /// putting it here is what lets both drivers and both binaries reach it.
 /// `requested_site_id` is `--site-id=<name>`; without it the name is derived
 /// from the folder.
 ///
-/// One owner since C4f, when the second driver arrived. Both
-/// [`prebuilt::run_prebuilt_deploy`] and [`push::run_hosted_deploy`] opened
-/// with the same four steps in the same order, and the twin had already
-/// drifted before it was noticed: only the app asked
-/// [`preflight_publish_inputs`], so `moss deploy --prebuilt` on an evicted
-/// iCloud folder reported the raw `Resource deadlock avoided` that moss#986
-/// was closed for. A gate added to a publish now goes in one place, which is
-/// the property that failure cost.
+/// One owner for both [`prebuilt::run_prebuilt_deploy`] and
+/// [`push::run_hosted_deploy`], so a gate added to a publish goes in exactly
+/// one place rather than two call sites that can drift apart.
+///
+/// The last gate here is [`refuse_stale_copy`], skipped when `overwrite_newer`
+/// (`--overwrite-newer`) is set. Both callers are `moss deploy` routes; the
+/// app's own publish does not come through here, and does not refuse yet,
+/// because a refusal in a window needs a designed way to explain itself.
 /// Whether moss may mint a site for a folder that has never published.
 ///
 /// Registering is irreversible external state at seta — a site ID cannot be
@@ -402,8 +601,7 @@ pub(crate) fn refusal_text(count: usize) -> String {
 ///
 /// `Err` is not `false`. An evicted `.moss/config.toml` fails to parse, and
 /// answering that with "you never ran `moss env`" sends the author to fix a
-/// thing that is not wrong — the moss#986 shape, one file over. The read's own
-/// error carries what happened.
+/// thing that is not wrong. The read's own error carries what happened.
 ///
 /// Pure and separate from [`resolve_publish_inputs`] so a test can assert it
 /// without entering a function that, if the gate regressed, would go on to call
@@ -416,6 +614,7 @@ fn first_publish_is_permitted(folder_str: &str) -> Result<bool, String> {
 pub async fn resolve_publish_inputs(
     folder: &std::path::Path,
     requested_site_id: Option<&str>,
+    overwrite_newer: bool,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<Option<(String, crate::identity::Identity)>, String> {
     let folder_str = folder.to_string_lossy().to_string();
@@ -452,13 +651,13 @@ pub async fn resolve_publish_inputs(
     // reachable bug rather than tidiness. A refused publish leaves an identity
     // behind (see the note under it), so a folder can hold a key and no
     // `site_id`; reading that key on the retry with no materialize wait is the
-    // raw `Resource deadlock avoided` moss#986 was closed for.
+    // raw `Resource deadlock avoided` the identity-file bug was closed for.
     preflight_publish_inputs(folder).await?;
 
     // Mint one if this folder has never published. A publish that cannot sign
     // cannot start, so this fails before a byte is read off disk — and, on the
     // hosted route, before the build. That ordering means a `moss deploy` that
-    // is later refused (a broken image, say) has still written `.moss/identity/`
+    // is later refused (a broken file, say) has still written `.moss/identity/`
     // into a first-time vault. Deliberate: failing after a multi-minute build
     // to say something knowable at t=0 is the worse trade, and it is what the
     // prebuilt route always did.
@@ -486,6 +685,13 @@ pub async fn resolve_publish_inputs(
         // branch where `site_id` was `None` and the gate let it through.
         (None, None) => return Ok(None),
     };
+
+    // Last, and still before the build: it needs the site and the key above,
+    // and a copy behind the live site is knowable now — saying so after a
+    // multi-minute build is saying it late.
+    if !overwrite_newer {
+        refuse_stale_copy(folder, &site_id, &identity).await?;
+    }
 
     Ok(Some((site_id, identity)))
 }
@@ -531,7 +737,7 @@ mod registration_gate_tests {
             .expect("write");
 
         let sink = super::progress::silent();
-        let err = super::resolve_publish_inputs(&vault, None, &sink)
+        let err = super::resolve_publish_inputs(&vault, None, false, &sink)
             .await
             .expect_err("a reserved name must refuse");
         assert!(err.contains("reserved"), "{err}");
@@ -708,7 +914,7 @@ mod derive_site_id_tests {
 /// took an `tauri::AppHandle` that its body never once names, and every read it
 /// does is either a value the caller already holds or a function that had
 /// already crossed: `active_environment()` is `resolve_environment(folder)`
-/// (C4d), the client is ADR-078's, and the config doors are `vault::config`'s.
+/// (C4d), the client crossed separately, and the config doors are `vault::config`'s.
 /// The same shape C4d found on the publish body, one function later. That is
 /// why a first publish no longer needs a window, and why the deploy route model
 /// has two variants rather than three.
@@ -816,5 +1022,17 @@ mod not_allowlisted_message_tests {
 
 
 #[cfg(test)]
-#[path = "deploy/missing_media_gate_tests.rs"]
-mod missing_media_gate_tests;
+#[path = "deploy/publish_preflight_gate_tests.rs"]
+mod publish_preflight_gate_tests;
+
+#[cfg(test)]
+#[path = "deploy/promised_dead_links_gate_tests.rs"]
+mod promised_dead_links_gate_tests;
+
+#[cfg(test)]
+#[path = "deploy/stale_sources_gate_tests.rs"]
+mod stale_sources_gate_tests;
+
+#[cfg(test)]
+#[path = "deploy/removal_gate_tests.rs"]
+mod removal_gate_tests;

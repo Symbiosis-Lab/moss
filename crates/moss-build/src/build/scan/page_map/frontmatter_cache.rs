@@ -2,7 +2,8 @@
 //! [`super::build_external_url_map`] — see [`FrontmatterScanCache`] for the
 //! corpus-scaled cost this closes.
 
-use std::path::Path;
+use crate::build::stat::{recording_clock, FileStat};
+use std::path::{Path, PathBuf};
 
 /// One file's cached frontmatter pre-scan result, plus the stat identity it
 /// was captured against. See [`FrontmatterScanCache`].
@@ -13,6 +14,12 @@ pub(super) struct FrontmatterScanEntry {
     mtime_nanos: Option<u32>,
     ctime: Option<i64>,
     inode: Option<u64>,
+    /// When the file was read for this entry, Unix seconds: the clock
+    /// [`FileStat::vouches_for`] needs to trust an exact-zero sub-second mtime.
+    /// No [`SCHEMA`] bump: a file written before the field reads it as `None`,
+    /// which that rule fails open on — an unknown, never a wrong answer.
+    #[serde(default)]
+    recorded_at: Option<u64>,
     pub(super) url_override: Option<String>,
     external_url: Option<String>,
     /// The `lang:` this file declares, trimmed and allowlist-validated — the
@@ -23,6 +30,12 @@ pub(super) struct FrontmatterScanEntry {
     pub(super) lang: Option<String>,
 }
 
+impl FrontmatterScanEntry {
+    fn stat(&self) -> FileStat {
+        FileStat { size: self.size, mtime: self.mtime, mtime_nanos: self.mtime_nanos, ctime: self.ctime, inode: self.inode }
+    }
+}
+
 /// Bumped whenever [`FrontmatterScanEntry`] gains or loses a field. An entry
 /// written before a new field existed is not merely incomplete, it is WRONG:
 /// a missing `lang` is indistinguishable from "this file declares none", so
@@ -30,7 +43,7 @@ pub(super) struct FrontmatterScanEntry {
 /// A mismatch discards the file, which costs one full re-scan exactly once.
 const SCHEMA: u32 = 2;
 
-/// Persisted `.moss/build/cache/frontmatter-scan.json`: the `url:` and
+/// Persisted `.moss/build.nosync/cache/frontmatter-scan.json`: the `url:` and
 /// `external_url:` frontmatter fields `build_page_map`/`build_external_url_map`
 /// pre-scan out of every markdown file, keyed by source path, so a rebuild
 /// that touches one file does not re-read and re-parse all of them.
@@ -40,25 +53,14 @@ const SCHEMA: u32 = 2;
 /// EVERY build — full time regardless of how many pages changed, and
 /// `external_url_map` costs the same whether it finds 0 entries or 20,
 /// because the cost is the read+parse of every file, not the size of the
-/// result. See docs/archive/2026-08-20-rebuild-loop-incrementality.md.
+/// result.
 ///
-/// Correctness: an entry is trusted only when the file's `(size, mtime,
-/// mtime_nanos)` match exactly AND any ctime/inode recorded on both sides
-/// agree — the same "both sides present and disagree ⇒ don't trust" rule
-/// the watcher's admission gate uses (duplicated here in miniature, see
-/// [`identity_disagrees`], rather than imported: this cache has no hash tier
-/// to demote to on disagreement, so unlike the watcher it always fails open
-/// to a full re-parse rather than trusting a forged mtime). A missed cache
-/// hit costs one extra file read; a false hit would silently ship a stale
-/// URL, so the bar here is "never wrong", not "never re-parse".
-///
-/// Known gap: unlike the watcher (`build::watch`'s `mtime_is_racy`), this
-/// cache has no same-second racy-write epsilon and no hash tier to fall
-/// back to. A same-second rewrite that preserves size and lands with
-/// identical `mtime_nanos` (coarse-resolution filesystems/mounts) can read
-/// as a hit. Bounded and self-healing: it costs one build serving the
-/// prior URL, corrected by the next edit or build once the clock ticks
-/// past the collision — never a wrong *final* state.
+/// Correctness: an entry is trusted only while the file's stat still vouches
+/// for it — the rule the hash index and the watcher's admission gate use too
+/// ([`FileStat::vouches_for`]; this cache has no hash tier to demote to, so
+/// where that rule declines it always falls through to a full re-parse). A
+/// missed cache hit costs one extra file read; a false hit would silently ship
+/// a stale URL, so the bar here is "never wrong", not "never re-parse".
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FrontmatterScanCache {
     /// `#[serde(default)]` uses the FIELD type's default (0), not this
@@ -95,7 +97,7 @@ impl FrontmatterScanCache {
         source_path: &Path,
     ) -> Self {
         let mut cache = Self::default();
-        scan_frontmatter_urls_with_evicted(files, source_path, &mut cache, &|_| false);
+        scan_frontmatter_urls_with_evicted(files, &|p| source_path.join(p), &mut cache, &|_| false);
         cache
     }
 
@@ -115,7 +117,7 @@ impl FrontmatterScanCache {
     }
 
     /// Persist to disk. Goes through `io_utils` because this file lives
-    /// under `.moss/build/` (ADR-043 — dataless is absent there).
+    /// under `.moss/build.nosync/` (dataless is treated as absent there).
     pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -134,14 +136,6 @@ fn unquote(v: &str) -> &str {
     v
 }
 
-/// Both sides present and disagree ⇒ untrusted. Absence on either side is
-/// agreement (fail open) — mirrors `build::watch`'s `identity_disagrees`,
-/// duplicated locally so this module doesn't reach into the sweep/drift
-/// machinery for three lines of logic with no hash-tier fallback to share.
-fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Option<T>) -> bool {
-    matches!((recorded, current), (Some(a), Some(b)) if a != b)
-}
-
 /// Scans every markdown file's frontmatter for `url:` and `external_url:` in
 /// ONE read+parse pass per file — both fields live on the same parsed
 /// frontmatter struct, so `build_page_map`/`build_external_url_map` running
@@ -155,41 +149,32 @@ fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Option<T>) -> 
 /// untouched). Stale entries for files no longer in `markdown_files` are
 /// left in the map too — harmless, and pruning them is the caller's call
 /// since eviction/deletion already has its own stale-cleanup pass.
-fn scan_frontmatter_urls_with_evicted(
+///
+/// Each file is read from `locate(path)`, which is the path under the site
+/// folder for every build.
+pub(super) fn scan_frontmatter_urls_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
-    source_path: &Path,
+    locate: &dyn Fn(&str) -> PathBuf,
     cache: &mut FrontmatterScanCache,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> std::collections::HashMap<String, (Option<String>, Option<String>)> {
     use std::collections::HashMap;
-    use std::time::UNIX_EPOCH;
 
     let mut out: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
 
     for file_info in markdown_files {
         let file_path = &file_info.path;
-        let source_file_path = source_path.join(file_path);
+        let source_file_path = locate(file_path);
 
         if is_evicted(&source_file_path) {
-            crate::build::cloud_readiness::request_download(&source_file_path);
             continue;
         }
 
-        let stat = std::fs::metadata(&source_file_path).ok();
+        let stat = std::fs::metadata(&source_file_path).ok().as_ref().map(FileStat::of);
         let cached = cache.entries.get(file_path);
 
         let hit = match (&stat, cached) {
-            (Some(md), Some(entry)) => {
-                let (ctime, inode) = crate::build::types::stat_identity(md);
-                let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-                md.len() == entry.size
-                    && !identity_disagrees(entry.ctime, ctime)
-                    && !identity_disagrees(entry.inode, inode)
-                    && matches!(
-                        (mtime, entry.mtime_nanos),
-                        (Some(d), Some(nanos)) if d.as_secs() == entry.mtime && d.subsec_nanos() == nanos
-                    )
-            }
+            (Some(current), Some(entry)) => entry.stat().vouches_for(current, entry.recorded_at),
             _ => false,
         };
 
@@ -199,6 +184,7 @@ fn scan_frontmatter_urls_with_evicted(
             continue;
         }
 
+        let recorded_at = recording_clock();
         let content = match std::fs::read_to_string(&source_file_path) {
             Ok(c) => c,
             Err(e) => {
@@ -207,7 +193,7 @@ fn scan_frontmatter_urls_with_evicted(
             }
         };
 
-        // ONE parser (ADR-020), one pass, both fields — same parse
+        // ONE parser, one pass, both fields — same parse
         // `build_page_map`/`build_external_url_map` used to run separately.
         let (frontmatter_url, external_url_raw, lang_raw) =
             if crate::build::markdown::is_simplified_frontmatter(&content) {
@@ -240,22 +226,21 @@ fn scan_frontmatter_urls_with_evicted(
         if let Some(raw) = external_url_raw.as_deref() {
             // http(s) only — same safety guard as the card-href substitution
             // in page.rs and the wikilink resolver in pipeline.rs. Warn
-            // before silently dropping so the user knows why. See moss#684.
+            // before silently dropping so the user knows why.
             super::warn_invalid_external_url(raw, file_path);
         }
         let external_url = external_url_raw.filter(|u| super::is_valid_external_url(u));
 
-        if let Some(md) = stat {
-            let (ctime, inode) = crate::build::types::stat_identity(&md);
-            let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
+        if let Some(FileStat { size, mtime, mtime_nanos, ctime, inode }) = stat {
             cache.entries.insert(
                 file_path.clone(),
                 FrontmatterScanEntry {
-                    size: md.len(),
-                    mtime: mtime.map(|d| d.as_secs()).unwrap_or(0),
-                    mtime_nanos: mtime.map(|d| d.subsec_nanos()),
+                    size,
+                    mtime,
+                    mtime_nanos,
                     ctime,
                     inode,
+                    recorded_at,
                     url_override: frontmatter_url.clone(),
                     external_url: external_url.clone(),
                     lang,
@@ -299,13 +284,12 @@ pub(crate) fn build_page_map_and_external_urls_cached(
         home_file_winners,
         home_overrides,
         cache,
-        &crate::build::icloud::is_evicted,
+        &crate::build::icloud::is_evicted_and_requested,
     )
 }
 
 /// Same as [`build_page_map_and_external_urls_cached`] with an injectable
-/// eviction predicate — see docs/archive/2026-07-31-cloud-download-waiting-mode.md
-/// Stage 3, and `build_page_map_with_evicted` for the same pattern.
+/// eviction predicate — see `build_page_map_with_evicted` for the same pattern.
 pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
     source_path: &Path,
@@ -319,9 +303,30 @@ pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     std::collections::HashMap<String, String>,
     std::collections::HashMap<String, String>,
 ) {
-    use std::collections::HashMap;
+    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, &|p| source_path.join(p), cache, is_evicted);
+    let (entries, dir_overrides, external_url_map) =
+        assemble_page_map(markdown_files, &scanned, root_folder_name, home_file_winners, home_overrides);
+    let page_map = entries.into_iter().map(|(k, v, _)| (k, v)).collect();
+    (page_map, dir_overrides, external_url_map)
+}
 
-    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, source_path, cache, is_evicted);
+/// The page map of [`build_page_map_and_external_urls_cached`] as
+/// `(path, url_path, is_index)` in `markdown_files` order, where `is_index`
+/// says the page is its folder's home, plus the other two maps, from the
+/// pre-scanned `url:` and `external_url:` of each file.
+#[allow(clippy::type_complexity)]
+pub(super) fn assemble_page_map(
+    markdown_files: &[crate::types::content::FileInfo],
+    scanned: &std::collections::HashMap<String, (Option<String>, Option<String>)>,
+    root_folder_name: &str,
+    home_file_winners: &std::collections::HashSet<String>,
+    home_overrides: &std::collections::HashMap<String, String>,
+) -> (
+    Vec<(String, String, bool)>,
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    use std::collections::HashMap;
 
     let mut entries: Vec<(String, String, bool)> = Vec::new();
     let mut dir_overrides: HashMap<String, String> = HashMap::new();
@@ -352,7 +357,5 @@ pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     }
 
     super::apply_cascading_dir_overrides(&mut entries, &dir_overrides);
-
-    let page_map = entries.into_iter().map(|(k, v, _)| (k, v)).collect();
-    (page_map, dir_overrides, external_url_map)
+    (entries, dir_overrides, external_url_map)
 }

@@ -5,14 +5,12 @@
 //! rename is atomic on every filesystem moss runs on, so a reader either sees
 //! the whole old file or the whole new one — never a truncated middle. That
 //! matters most for files whose partial read is a security answer rather than
-//! a nuisance: the registry kill list is the case that motivated pulling this
-//! together.
+//! a nuisance, such as the registry kill list.
 //!
 //! **The temp name is unique per write, and that is the part worth stating.**
-//! The four hand-rolled copies this replaces all used a fixed `<name>.tmp`, so
-//! two concurrent writers renamed each other's half-written bytes into place.
-//! For the registry that overlap is routine rather than exotic — refresh fires
-//! on app launch and again on catalog open.
+//! A fixed `<name>.tmp` lets two concurrent writers rename each other's
+//! half-written bytes into place. For the registry that overlap is routine
+//! rather than exotic — refresh fires on app launch and again on catalog open.
 //!
 //! The temp file is flushed with `sync_all` before the rename, so a crash
 //! cannot commit the rename ahead of the bytes it names. The parent directory
@@ -23,7 +21,7 @@
 //! Temp-then-rename rather than a plain `fs::write` for a second reason: a
 //! write opens the destination `O_TRUNC`, which fails `EDEADLK` against a file
 //! the sync client has evicted, while a rename **over** an evicted file
-//! succeeds (ADR-043). So "simplify this back to `fs::write`" is a change that
+//! succeeds. So "simplify this back to `fs::write`" is a change that
 //! breaks on a cloud-synced folder and nowhere else.
 
 use std::path::Path;
@@ -47,8 +45,12 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("{} has no usable file name", path.display()))?;
+    // No `.tmp` suffix: a caller can live inside a synced vault folder now,
+    // and iCloud Drive excludes `.tmp`-suffixed files from sync — fileproviderd
+    // may remove or interfere with them before the rename lands (see
+    // `build::cache::ObjectStore::store_file`, which hit this first).
     let tmp = parent.join(format!(
-        ".{name}.{}.{}.tmp",
+        ".{name}.pending.{}.{}",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
@@ -60,7 +62,7 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     // that pays for it: it holds deploy state nothing regenerates.
     {
         use std::io::Write;
-        // allow:raw_write writes a sibling temp file then renames; callers are app-data and vault state, never .moss/build/
+        // allow:raw_write writes a sibling temp file then renames; callers are app-data and vault state, never .moss/build.nosync/
         let mut f = std::fs::File::create(&tmp)
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
         f.write_all(contents.as_bytes())
@@ -109,7 +111,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.ends_with(".tmp"))
+            .filter(|n| n != "a.json")
             .collect();
         assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
     }

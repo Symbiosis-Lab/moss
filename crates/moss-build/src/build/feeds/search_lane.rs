@@ -1,4 +1,4 @@
-//! The search lane: a generation-free worker, adopted from a receipt (ADR-045).
+//! The search lane: a generation-free worker, adopted from a receipt.
 //!
 //! Pagefind's cost scales with **corpus size**, not with this build's delta —
 //! ~5.2 s on a 386-page vault, on every save, including the ones whose own
@@ -6,17 +6,16 @@
 //! build's worker `JoinSet`; the seal awaited every worker, then took the
 //! per-folder stage-write mutex, which the *next* build takes before doing any
 //! work — so the next save's latency was a function of the previous build's
-//! slowest background worker (moss#968 Finding 3).
+//! slowest background worker.
 //!
-//! ADR-045's rule: **a generation-free worker may never be a manifest
+//! The rule: **a generation-free worker may never be a manifest
 //! registrant, and no seal may await one.** Instead:
 //!
 //! ```text
-//!   build N  ──seal──► generation N frozen ──request(fp_N)──►  lane
-//!                                                               │ debounce
-//!                                                               │ index generations/<N>/
+//!   build N  ──seal (already debounced)──► generation N frozen ──request(fp_N)──►  lane
+//!                                                                                    │ index generations/<N>/
 //!                                                               ▼
-//!                                          .moss/build/index/<fp_N>/  +  receipt.json
+//!                                          .moss/build.nosync/index/<fp_N>/  +  receipt.json
 //!   build N+1 ──adopt_into(receipt)──► staging + PendingManifest
 //! ```
 //!
@@ -25,7 +24,7 @@
 //! `PendingManifest` is mark-and-sweep: `seal()` prunes each output bucket to
 //! the paths this build touched, and `remove_stale_files` deletes every staging
 //! file the sealed manifest omits. `_moss/pagefind/**` gets no exemption —
-//! ADR-045 rejects that as the first hole in a total invariant — so a build
+//! this rule rejects that as the first hole in a total invariant — so a build
 //! that skipped re-registering would have the deploy diff read the bundle as
 //! *removed* and delete it off the live site. Hence [`adopt_into`] runs on
 //! **every** build, inside the build's own stage-write span, registering the
@@ -41,15 +40,25 @@
 //!
 //! # Staleness budget
 //!
-//! Preview search may lag the vault by up to `MAX_DEFER + index_time`. Nothing
+//! The lane itself no longer debounces — [`request`] is called only from the
+//! seal's own debounced tail (`build::debounce`, `build.rs`'s
+//! `seal_debounce` instance), which already collapses a burst of autosaves to
+//! one seal after its own idle window. A second idle wait here would only add
+//! a further delay on top of that one without removing any real work — the
+//! search lane's old `IDLE`/`MAX_DEFER` (2 s, then 20 s) governed how often
+//! the LANE re-indexed a generation that materialized on every save; now a
+//! generation to index shows up at most once per debounced seal, already
+//! rate-limited. So the lane indexes the moment [`request`] hands it a
+//! generation, and preview search lags the vault by roughly the seal's own
+//! debounce (`build::debounce::IDLE`/`MAX_DEFER`) plus `index_time`. Nothing
 //! else consumes the index, so nothing else observes the lag.
 //! [`settle_for_publish`] is the publish path's sync point, so a deploy never
-//! ships a stale index.
+//! ships a stale index (it forces the seal's own pending debounce first, then
+//! finds this already caught up — see `build.rs`'s `settle`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -58,13 +67,6 @@ use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
 use crate::moss_paths::MossPaths;
 use crate::types::content::SiteHashes;
-
-/// Quiet period a request must survive before the lane indexes.
-const IDLE: Duration = Duration::from_secs(2);
-
-/// Upper bound on deferral under sustained saving. Without it a vault being
-/// edited continuously would never index at all.
-const MAX_DEFER: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // PageSetFp
@@ -186,12 +188,12 @@ fn read_receipt(index_dir: &Path) -> Option<BundleReceipt> {
 
 /// Token proving its holder owns the holding area for one folder.
 ///
-/// Every function that mutates `.moss/build/index/` — or reads the receipt and
+/// Every function that mutates `.moss/build.nosync/index/` — or reads the receipt and
 /// then acts on it — takes one. Without it the lane and a build interleave: the
 /// lane's [`gc_holding`] deletes `<fpA>/` while a build is halfway through
 /// copying it into staging, the build then registers nothing *and* deletes the
 /// receipt the lane just wrote for `<fpB>`, and the sweep takes the bundle off
-/// the live site — the mark-and-sweep hole ADR-045 closes, from the other side.
+/// the live site — the mark-and-sweep hole this rule closes, from the other side.
 ///
 /// Not a substitute for the build's stage-write guard, which orders builds
 /// against each other; this orders the *lane* against a build. The lane never
@@ -237,7 +239,7 @@ fn staged_fp_path(index_dir: &Path) -> PathBuf {
 /// the live site, with nothing scheduled to re-index.
 ///
 /// Both halves are needed. `skipped > 0` catches a page moss could not read (an
-/// iCloud-evicted `.html` under `.moss/build/`); `pages < want.pages` catches a
+/// iCloud-evicted `.html` under `.moss/build.nosync/`); `pages < want.pages` catches a
 /// tree that is not there at all — a generation GC'd mid-debounce walks to zero
 /// pages, indistinguishable from "this site has no indexable content".
 ///
@@ -286,6 +288,7 @@ fn publish_bundle(
         .map_err(|e| format!("failed to write search receipt: {}", e))?;
     // The staged marker names a bundle that is no longer the receipt's, so the
     // next adoption must re-lay every file rather than trust its stats.
+    // allow:unlink the search index under .moss/build.nosync/index, not staging
     let _ = std::fs::remove_file(staged_fp_path(index_dir));
     gc_holding(index_dir, fp);
     Ok(receipt)
@@ -303,7 +306,8 @@ fn gc_holding(index_dir: &Path, keep: PageSetFp) {
         if name == keep || !entry.path().is_dir() {
             continue;
         }
-        let _ = std::fs::remove_dir_all(entry.path());
+        // allow:unlink the search index under .moss/build.nosync/index, not staging
+        let _ = crate::build::io_utils::remove_output_dir_all(&entry.path());
     }
 }
 
@@ -321,7 +325,7 @@ pub enum Adoption {
     Disabled,
     /// The receipt's files were verified on disk and registered.
     Adopted(usize),
-    /// No receipt existed (search just enabled, or `.moss/build/index` was
+    /// No receipt existed (search just enabled, or `.moss/build.nosync/index` was
     /// deleted). Indexed synchronously so this build still ships a search box.
     Indexed(usize),
     /// The receipt named files that are not on disk. Registered nothing,
@@ -335,7 +339,7 @@ pub enum Adoption {
 /// seal tail and the deploy pre-flight both need it long after the
 /// `SiteConfig` that resolved it was consumed (off the critical path, so the
 /// read costs nothing). The toggle alone decides — search graduated out of
-/// `experimental.preview_features` 2026-08-31 (ADR-037 "Gating").
+/// `experimental.preview_features` 2026-08-31.
 pub fn enabled_for(mp: &MossPaths) -> bool {
     let Some(project_root) = mp.root().parent() else {
         return false;
@@ -348,7 +352,7 @@ pub fn enabled_for(mp: &MossPaths) -> bool {
 
 /// Whether a lane will ever run for this build.
 ///
-/// ADR-045's staleness budget is a promise about the *edit loop*, payable only
+/// The staleness budget is a promise about the *edit loop*, payable only
 /// because a next build is coming. A process that exits when the build returns
 /// — CLI `moss build`, `build_sync`, the snapshot harness — spawns no lane and
 /// calls [`request`] from no seal, so a receipt adopted verbatim would freeze
@@ -359,7 +363,7 @@ pub enum Freshness {
     /// A seal will hand the frozen generation to the lane. Adopt the receipt.
     Lane,
     /// Nothing will index after this build. Index now, every time — which is
-    /// what the pre-ADR-045 worker did on this path anyway.
+    /// what the earlier worker did on this path anyway.
     Now,
 }
 
@@ -405,7 +409,7 @@ pub fn adopt_into(
             // own sweep delete a bundle that no *future* build is scheduled to
             // rebuild — under the old ticket scheme a newer worker was queued
             // by construction, and under adoption none is. So fall through to a
-            // synchronous index (ADR-045, "nothing to adopt").
+            // synchronous index ("nothing to adopt").
             //
             // It indexes `staging/`, not a generation, and that is deliberate:
             // this build's own HTML is complete and, under the stage-write
@@ -462,6 +466,7 @@ pub fn adopt_into(
 /// deleting by path alone would destroy a receipt this build never read.
 fn drop_receipt_if_still(_holding: &Holding, index_dir: &Path, diverged: &BundleReceipt) {
     if read_receipt(index_dir).map(|r| r.fp) == Some(diverged.fp.clone()) {
+        // allow:unlink the search index under .moss/build.nosync/index, not staging
         let _ = std::fs::remove_file(index_dir.join("receipt.json"));
     }
 }
@@ -625,15 +630,18 @@ pub fn request(mp: &MossPaths, gen_id: &str, want: PageSet) {
     tokio::spawn(run_lane(rx));
 }
 
-/// The lane loop. Level-triggered, debounced, and skips entirely when the
-/// requested page set is the one already published — every no-op save, and
-/// where the ~5.2 s goes.
+/// The lane loop. Level-triggered and skips entirely when the requested page
+/// set is the one already published — every no-op save, and where the ~5.2 s
+/// goes. **No debounce of its own** — see the module doc's "Staleness
+/// budget": the seal that calls [`request`] is already debounced, so a
+/// generation to index shows up here already rate-limited, and adding a
+/// second idle wait would only stack a further delay on top.
 ///
 /// **It parks between requests.** Every pass is driven by a value it has not
 /// seen before; nothing runs a timer in the idle state. An earlier shape
-/// re-evaluated the last request every `IDLE` — a wakeup plus a ~440-entry JSON
-/// parse every 2 s for the life of the app, and on a folder whose index kept
-/// failing, a whole-corpus pagefind run every ~7 s forever.
+/// re-evaluated the last request every 2 s — a wakeup plus a ~440-entry JSON
+/// parse for the life of the app, and on a folder whose index kept failing, a
+/// whole-corpus pagefind run every ~7 s forever.
 async fn run_lane(mut rx: tokio::sync::watch::Receiver<LaneRequest>) {
     // The channel is created carrying the first request, and `changed()` only
     // reports *later* sends, so the first pass is seeded from the current value.
@@ -649,9 +657,6 @@ async fn run_lane(mut rx: tokio::sync::watch::Receiver<LaneRequest>) {
                 }
                 rx.borrow_and_update().clone()
             }
-        };
-        let Some(req) = quiesce(&mut rx, req).await else {
-            return;
         };
 
         if read_receipt(&req.index_dir).map(|r| r.fp()) != Some(req.want.fp) {
@@ -708,29 +713,6 @@ async fn index_one(req: &LaneRequest, watcher: tokio::sync::watch::Receiver<Lane
     }
 }
 
-/// Hold `req` until `IDLE` of quiet — but never longer than `MAX_DEFER`, or a
-/// vault under sustained editing would never be indexed at all. Returns the
-/// latest request seen, or `None` once every sender has dropped.
-async fn quiesce(
-    rx: &mut tokio::sync::watch::Receiver<LaneRequest>,
-    req: LaneRequest,
-) -> Option<LaneRequest> {
-    let first = Instant::now();
-    let mut latest = req;
-    loop {
-        tokio::select! {
-            _ = tokio::time::sleep(IDLE) => return Some(latest),
-            changed = rx.changed() => {
-                changed.ok()?;
-                latest = rx.borrow_and_update().clone();
-                if first.elapsed() >= MAX_DEFER {
-                    return Some(latest);
-                }
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Publish path
 // ---------------------------------------------------------------------------
@@ -743,7 +725,7 @@ async fn quiesce(
 /// published a receipt for this exact page set, which is what makes this a
 /// no-cost check on an idle vault.
 ///
-/// This is ADR-045's "the publish path calls `settle()`": the staleness budget
+/// This is the rule that "the publish path calls `settle()`": the staleness budget
 /// the lane buys for the edit loop is explicitly not extended to deploy.
 pub fn settle_for_publish(mp: &MossPaths, enabled: bool) -> bool {
     if !enabled {

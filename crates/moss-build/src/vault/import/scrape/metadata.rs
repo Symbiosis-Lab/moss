@@ -8,8 +8,18 @@
 //! Resolution priority for each field is documented inline. Generally
 //! JSON-LD beats OpenGraph beats `<meta name>` beats raw `<title>`.
 
-use scraper::{Html, Selector};
+use std::collections::HashSet;
+use std::sync::LazyLock;
+
+use regex::Regex;
+use scraper::{ElementRef, Html, Selector};
 use serde_json::Value;
+use url::Url;
+
+use super::converter::{resolve_url, IMG_PATTERN};
+
+mod event;
+pub use event::{derive_event, EventMetadata};
 
 /// Metadata ready to drop into YAML frontmatter, with keys aligned to
 /// moss-core's `BUILTIN_FIELDS` table.
@@ -37,6 +47,13 @@ pub struct ArticleMetadata {
     /// when selecting `cover:`. Never written to YAML — only used internally
     /// by `scrape::run` to select and download the cover asset.
     pub og_image: Option<String>,
+    /// Raw `src` of every image that must never become the fallback cover:
+    /// inside `header`/`nav`/`footer`/`aside`, or declared under 64 px. Read
+    /// from the full document, since the extractor has already stripped the
+    /// chrome by the time the cover is chosen. Never written to YAML.
+    pub chrome_images: Vec<String>,
+    /// Fields read from a schema.org `Event` block; never touches `date`.
+    pub event: EventMetadata,
 }
 
 const ARTICLE_TYPES: &[&str] = &[
@@ -60,8 +77,11 @@ pub fn derive(html: &str) -> ArticleMetadata {
 
     let og = read_meta_map(&doc);
 
-    let title = pick_title(&doc, &og, article, webpage);
     let mut publisher = pick_publisher(&og, article, webpage, &entries);
+    // The site's own name, as the page declares it: strippable from the title.
+    let site_names: Vec<&str> =
+        publisher.iter().map(String::as_str).chain(og.get("og:site_name").map(String::as_str)).collect();
+    let title = pick_title(&doc, &og, article, webpage, &site_names);
     // A publisher identical to the title is never information (seen on
     // Strikingly blog pages, where og:site_name repeats the post title).
     if publisher.is_some() && publisher == title {
@@ -77,6 +97,8 @@ pub fn derive(html: &str) -> ArticleMetadata {
         lang: pick_lang(&doc, article, webpage),
         cover: None,
         og_image: og.get("og:image").cloned(),
+        chrome_images: chrome_images(&doc),
+        event: derive_event(&entries),
     }
 }
 
@@ -133,7 +155,7 @@ fn flatten_into(value: Value, out: &mut Vec<Value>) {
     }
 }
 
-fn has_type(entry: &Value, types: &[&str]) -> bool {
+pub(crate) fn has_type(entry: &Value, types: &[&str]) -> bool {
     let Some(t) = entry.get("@type") else {
         return false;
     };
@@ -148,7 +170,7 @@ fn has_type(entry: &Value, types: &[&str]) -> bool {
     }
 }
 
-fn entry_string(entry: &Value, key: &str) -> Option<String> {
+pub(crate) fn entry_string(entry: &Value, key: &str) -> Option<String> {
     entry
         .get(key)
         .and_then(|v| v.as_str())
@@ -156,10 +178,19 @@ fn entry_string(entry: &Value, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// The first schema.org `email` the page declares (an Organization or Person
+/// entry), without any `mailto:` prefix.
+pub fn schema_email(doc: &Html) -> Option<String> {
+    parse_schema_org(doc)
+        .iter()
+        .find_map(|entry| entry_string(entry, "email"))
+        .map(|e| e.trim_start_matches("mailto:").to_string())
+}
+
 /// Read OpenGraph + standard meta tags into a map keyed by `og:title`,
 /// `og:description`, `og:site_name`, `og:image`, `article:published_time`,
 /// `article:author`, `description`, `author`. Values are trimmed.
-fn read_meta_map(doc: &Html) -> std::collections::HashMap<String, String> {
+pub(crate) fn read_meta_map(doc: &Html) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
     let mut out = HashMap::new();
     let sel = Selector::parse("meta").unwrap();
@@ -185,21 +216,32 @@ fn pick_title(
     og: &std::collections::HashMap<String, String>,
     article: Option<&Value>,
     webpage: Option<&Value>,
+    site_names: &[&str],
 ) -> Option<String> {
+    let clean = |t: String| Some(strip_site_name(&t, site_names));
+    // The known site name wins over the brand-looking-suffix guess, which would
+    // otherwise cut `Studio Name | Home` down to the brand.
+    let clean_guessing = |t: &str| {
+        let named = strip_site_name(t, site_names);
+        if named != t { Some(named) } else { Some(strip_site_suffix(t)) }
+    };
     if let Some(a) = article {
         if let Some(h) = entry_string(a, "headline") {
-            return Some(h);
+            return clean(h);
         }
         if let Some(n) = entry_string(a, "name") {
-            return Some(n);
+            return clean(n);
         }
     }
+    // `og:title` before `<title>`: it is the heading the author chose for
+    // sharing, where `<title>` is often a builder's internal page name plus
+    // the site name.
     if let Some(v) = og.get("og:title") {
-        return Some(v.clone());
+        return clean(v.clone());
     }
     if let Some(w) = webpage {
         if let Some(n) = entry_string(w, "name") {
-            return Some(strip_site_suffix(&n));
+            return clean_guessing(&n);
         }
     }
     // Final fallback: <title> tag, with site suffix stripped.
@@ -210,24 +252,73 @@ fn pick_title(
     if trimmed.is_empty() {
         None
     } else {
-        Some(strip_site_suffix(trimmed))
+        clean_guessing(trimmed)
     }
 }
 
-/// "Article Title | Site Name" → "Article Title". Splits on the longest
-/// delimiter (` — `, ` | `, ` - `) and drops the shorter trailing segment when
-/// it looks like a site brand (i.e. when the article half is at least as long).
-fn strip_site_suffix(s: &str) -> String {
-    let candidates = [" — ", " – ", " | ", " - "];
-    for delim in candidates {
-        if let Some((head, tail)) = s.rsplit_once(delim) {
-            let (head, tail) = (head.trim(), tail.trim());
-            if !head.is_empty() && !tail.is_empty() && head.len() >= tail.len() {
-                return head.to_string();
-            }
+/// Title segment separators: `|`, `·`, `::`, and spaced `-`, `—`, `–`. A bare
+/// dash stays part of the words (`Spider-Man`, `A—B`). The one definition both
+/// site-name rules below split on.
+pub(crate) static SEPARATOR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*(?:\||·|::)\s*|\s+[-—–]\s+").expect("title separator regex"));
+
+pub(crate) fn same_name(segment: &str, name: &str) -> bool {
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    norm(segment) == norm(name)
+}
+
+/// `title` without `name` when the whole name sits at either edge behind a
+/// separator (`Page | Name`, `Name — Page`), compared case-insensitively with
+/// whitespace normalised. The name is matched as one string, so a name that
+/// holds a separator itself (`Studio - Costume design`) still goes. `None`
+/// when the name is not at an edge or stripping would leave nothing.
+pub(crate) fn strip_edge_name(title: &str, name: &str) -> Option<String> {
+    let title = title.trim();
+    if name.trim().is_empty() {
+        return None;
+    }
+    let trailing = SEPARATOR
+        .find_iter(title)
+        .find(|m| same_name(&title[m.end()..], name))
+        .map(|m| title[..m.start()].trim());
+    let leading = || {
+        SEPARATOR
+            .find_iter(title)
+            .filter(|m| same_name(&title[..m.start()], name))
+            .last()
+            .map(|m| title[m.end()..].trim())
+    };
+    trailing.or_else(leading).filter(|rest| !rest.is_empty()).map(str::to_string)
+}
+
+/// Drop the site name from either edge of `title`, per [`strip_edge_name`],
+/// for the first of `names` that matches at each edge. Never returns an empty
+/// title: a title that is only the site name comes back unchanged.
+pub(crate) fn strip_site_name(title: &str, names: &[&str]) -> String {
+    let mut out = title.trim().to_string();
+    for _ in 0..2 {
+        match names.iter().find_map(|n| strip_edge_name(&out, n)) {
+            Some(next) => out = next,
+            None => break,
         }
     }
-    s.to_string()
+    out
+}
+
+/// "Article Title | Site Name" split at the last separator into the article
+/// half and the brand half — only when the article half is at least as long,
+/// which is what a brand looks like next to a title. The one guess both
+/// [`strip_site_suffix`] reads.
+fn split_brand(s: &str) -> Option<(&str, &str)> {
+    let last = SEPARATOR.find_iter(s).last()?;
+    let (head, tail) = (s[..last.start()].trim(), s[last.end()..].trim());
+    (!head.is_empty() && !tail.is_empty() && head.len() >= tail.len()).then_some((head, tail))
+}
+
+/// "Article Title | Site Name" → "Article Title". The guess for a page that
+/// does not name its site.
+fn strip_site_suffix(s: &str) -> String {
+    split_brand(s).map_or_else(|| s.to_string(), |(head, _)| head.to_string())
 }
 
 fn pick_description(
@@ -399,7 +490,7 @@ fn pick_publisher(
         .or(webpage)
         .and_then(|e| e.get("publisher"));
     if let Some(pf) = publisher_field {
-        if let Some(name) = direct_name(pf) {
+        if let Some(name) = name_from_value(pf) {
             return Some(name);
         }
         if let Some(target_id) = pf.get("@id").and_then(|v| v.as_str()) {
@@ -414,17 +505,6 @@ fn pick_publisher(
         }
     }
     og.get("og:site_name").cloned()
-}
-
-fn direct_name(v: &Value) -> Option<String> {
-    match v {
-        Value::String(s) => Some(s.trim().to_string()),
-        Value::Object(map) => map
-            .get("name")
-            .and_then(|n| n.as_str())
-            .map(|n| n.trim().to_string()),
-        _ => None,
-    }
 }
 
 fn pick_lang(doc: &Html, article: Option<&Value>, webpage: Option<&Value>) -> Option<String> {
@@ -454,6 +534,86 @@ fn normalize_lang(s: &str) -> String {
     }
 }
 
+// ---- Fallback cover -------------------------------------------------------
+//
+// `og:image` is the cover when the page declares one. Without it the cover
+// falls back to the first image of the extracted body, which on a site whose
+// header logo survives extraction made that logo the cover of every page.
+// `chrome_images` records, from the full document, the images that are not
+// content, and `fallback_cover` skips them.
+
+/// Declared `width`/`height` below this makes an image an icon, not a cover.
+const MIN_COVER_PX: u32 = 64;
+
+const CHROME_TAGS: &[&str] = &["header", "nav", "footer", "aside"];
+const CHROME_ROLES: &[&str] = &["banner", "navigation", "contentinfo", "complementary"];
+// Class/id words a builder uses for the same regions when it has no semantic
+// element (`<div class="site-header">`), which the extractor cannot tell from
+// content either.
+const CHROME_WORDS: &[&str] = &["header", "masthead", "nav", "navbar", "footer", "sidebar", "logo"];
+
+/// `src` of every `<img>` in `doc` that must never be a cover.
+pub(crate) fn chrome_images(doc: &Html) -> Vec<String> {
+    let Ok(sel) = Selector::parse("img[src]") else {
+        return Vec::new();
+    };
+    doc.select(&sel)
+        .filter(|img| in_chrome(img) || declared_small(img))
+        .filter_map(|img| img.value().attr("src").map(|s| s.trim().to_string()))
+        .collect()
+}
+
+fn in_chrome(img: &ElementRef) -> bool {
+    std::iter::once(*img)
+        .chain(img.ancestors().filter_map(ElementRef::wrap))
+        .any(is_chrome_element)
+}
+
+fn is_chrome_element(el: ElementRef) -> bool {
+    let v = el.value();
+    // A chrome word on the document root's own class list (`tweak-fixed-header`) must not blanket every image.
+    if matches!(v.name(), "html" | "body") {
+        return false;
+    }
+    CHROME_TAGS.contains(&v.name())
+        || v.attr("role").is_some_and(|r| CHROME_ROLES.contains(&r.trim()))
+        || ["class", "id"].iter().filter_map(|a| v.attr(a)).any(|names| {
+            names
+                .split(|c: char| c.is_whitespace() || c == '-' || c == '_')
+                .any(|w| CHROME_WORDS.contains(&w.to_lowercase().as_str()))
+        })
+}
+
+fn declared_small(img: &ElementRef) -> bool {
+    ["width", "height"].iter().any(|attr| {
+        img.value()
+            .attr(attr)
+            .and_then(|v| v.trim().trim_end_matches("px").parse::<u32>().ok())
+            .is_some_and(|px| px < MIN_COVER_PX)
+    })
+}
+
+/// The first non-`data:` image of `markdown` that is not in `excluded` (raw
+/// `src` values from [`chrome_images`]), resolved against `base_url`. The
+/// converter has already normalized the markdown's own URLs to that form, so
+/// the exclusions are resolved the same way before comparing.
+pub(crate) fn fallback_cover(markdown: &str, excluded: &[String], base_url: &str) -> Option<String> {
+    let base = Url::parse(base_url).ok();
+    let skip: HashSet<String> = excluded
+        .iter()
+        .filter_map(|raw| resolve_url(raw, &base))
+        .flat_map(|abs| {
+            let original = crate::vault::import::media::original_media_url(&abs);
+            [Some(abs), original]
+        })
+        .flatten()
+        .collect();
+    IMG_PATTERN.captures_iter(markdown).find_map(|c| {
+        let abs = resolve_url(&c[2], &base)?;
+        (!c[2].starts_with("data:") && !skip.contains(&abs)).then_some(abs)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,8 +630,18 @@ mod tests {
     #[test]
     fn strip_site_suffix_em_dash() {
         assert_eq!(
-            strip_site_suffix("Finding China's Voice — Abroad - The Wire China"),
-            "Finding China's Voice — Abroad"
+            strip_site_suffix("A Reporter's Voice — Abroad - Example Times"),
+            "A Reporter's Voice — Abroad"
+        );
+    }
+
+    #[test]
+    fn strip_site_suffix_keeps_an_em_dash_inside_a_long_title() {
+        // The suffix is the last segment. Splitting at the em dash first cut
+        // this title to its first half whenever that half outweighed the rest.
+        assert_eq!(
+            strip_site_suffix("The Reporter's Notebook — Abroad - Example Times"),
+            "The Reporter's Notebook — Abroad"
         );
     }
 
@@ -542,30 +712,30 @@ mod tests {
             r#"{
               "@type": "Article",
               "author": [
-                {"@type": "Person", "name": "Yi Liu"},
-                {"@type": "Person", "name": "Ella Apostoaie"}
+                {"@type": "Person", "name": "Jane Doe"},
+                {"@type": "Person", "name": "John Roe"}
               ]
             }"#,
         );
         let empty: std::collections::HashMap<String, String> = Default::default();
         assert_eq!(
             pick_author(&empty, Some(&article)).as_deref(),
-            Some("Yi Liu and Ella Apostoaie")
+            Some("Jane Doe and John Roe")
         );
     }
 
     #[test]
     fn author_from_single_object() {
-        let article = entry(r#"{"@type": "Article", "author": {"name": "Yi Liu"}}"#);
+        let article = entry(r#"{"@type": "Article", "author": {"name": "Jane Doe"}}"#);
         let empty: std::collections::HashMap<String, String> = Default::default();
-        assert_eq!(pick_author(&empty, Some(&article)).as_deref(), Some("Yi Liu"));
+        assert_eq!(pick_author(&empty, Some(&article)).as_deref(), Some("Jane Doe"));
     }
 
     #[test]
     fn author_from_bare_string() {
-        let article = entry(r#"{"@type": "Article", "author": "Yi Liu"}"#);
+        let article = entry(r#"{"@type": "Article", "author": "Jane Doe"}"#);
         let empty: std::collections::HashMap<String, String> = Default::default();
-        assert_eq!(pick_author(&empty, Some(&article)).as_deref(), Some("Yi Liu"));
+        assert_eq!(pick_author(&empty, Some(&article)).as_deref(), Some("Jane Doe"));
     }
 
     #[test]
@@ -586,7 +756,7 @@ mod tests {
         let html = r##"<html><head>
           <script type="application/ld+json">
           {"@context":"https://schema.org","@graph":[
-            {"@type":"Article","headline":"Hello","author":{"name":"Yi Liu"}},
+            {"@type":"Article","headline":"Hello","author":{"name":"Jane Doe"}},
             {"@type":"Organization","@id":"#org","name":"The Outlet"}
           ]}
           </script>
@@ -616,7 +786,7 @@ mod tests {
           {"@type":"NewsArticle",
            "headline":"Real Title",
            "datePublished":"2024-12-22T00:00:00Z",
-           "author":{"@type":"Person","name":"Yi Liu"},
+           "author":{"@type":"Person","name":"Jane Doe"},
            "publisher":{"@id":"#org"}}
           </script>
           <script type="application/ld+json">
@@ -625,7 +795,7 @@ mod tests {
         </head><body><h1>Real Title</h1><p>Body.</p></body></html>"##;
         let m = derive(html);
         assert_eq!(m.title.as_deref(), Some("Real Title"));
-        assert_eq!(m.author.as_deref(), Some("Yi Liu"));
+        assert_eq!(m.author.as_deref(), Some("Jane Doe"));
         assert_eq!(m.date.as_deref(), Some("2024-12-22"));
         assert_eq!(m.publisher.as_deref(), Some("The Site"));
         assert_eq!(m.lang.as_deref(), Some("en"));
@@ -641,5 +811,139 @@ mod tests {
         let m = derive(html);
         assert_eq!(m.title.as_deref(), Some("My Post"));
         assert_eq!(m.publisher, None, "title-as-publisher is noise");
+    }
+
+
+    fn cover_of(body: &str) -> Option<String> {
+        let html = format!("<html><head><title>T</title></head><body>{body}</body></html>");
+        let article = super::super::converter::extract_article(&html, "https://example.com/page");
+        fallback_cover(&article.markdown, &article.metadata.chrome_images, "https://example.com/page")
+    }
+
+    const TEXT: &str = "<p>A paragraph of real article text, long enough that the extractor \
+                        keeps this block as the page's main content.</p>";
+
+    #[test]
+    fn a_header_logo_is_skipped_for_the_content_image() {
+        let cover = cover_of(&format!(
+            "<div class=\"site-header\"><img src=\"/logo.png\"></div>\
+             {TEXT}<img src=\"/photo.jpg\">{TEXT}"
+        ));
+        assert_eq!(cover.as_deref(), Some("https://example.com/photo.jpg"));
+    }
+
+    #[test]
+    fn a_chrome_word_on_the_body_class_does_not_make_the_whole_page_chrome() {
+        let html = format!(
+            "<html><head><title>T</title></head><body class=\"tweak-fixed-header page\">\
+             <header><img src=\"/logo.png\"></header>\
+             <section>{TEXT}<img src=\"/photo.jpg\">{TEXT}</section></body></html>"
+        );
+        let article = super::super::converter::extract_article(&html, "https://example.com/page");
+        let cover = fallback_cover(
+            &article.markdown,
+            &article.metadata.chrome_images,
+            "https://example.com/page",
+        );
+        assert_eq!(cover.as_deref(), Some("https://example.com/photo.jpg"));
+    }
+
+    #[test]
+    fn a_cover_url_with_parentheses_survives_whole() {
+        let md = "![](https://cdn.example.com/photo(2024).jpg)\n";
+        assert_eq!(
+            fallback_cover(md, &[], "https://example.com/page").as_deref(),
+            Some("https://cdn.example.com/photo(2024).jpg")
+        );
+    }
+
+    #[test]
+    fn a_page_with_only_a_header_logo_has_no_cover() {
+        let cover = cover_of(&format!(
+            "<div class=\"site-header\"><img src=\"/logo.png\"></div>{TEXT}"
+        ));
+        assert_eq!(cover, None);
+    }
+
+    #[test]
+    fn header_nav_footer_aside_banner_and_tiny_images_are_chrome() {
+        let doc = Html::parse_document(
+            "<body><header><img src=\"/h\"></header><nav><a><img src=\"/n\"></a></nav>\
+             <footer><img src=\"/f\"></footer><aside><img src=\"/a\"></aside>\
+             <div role=\"banner\"><img src=\"/b\"></div>\
+             <main><img src=\"/icon\" width=\"32\"><img src=\"/flat\" height=\"20px\">\
+             <img src=\"/big\" width=\"800\" height=\"600\"><img src=\"/plain\"></main></body>",
+        );
+        let mut chrome = chrome_images(&doc);
+        chrome.sort();
+        assert_eq!(chrome, ["/a", "/b", "/f", "/flat", "/h", "/icon", "/n"]);
+    }
+
+    fn title_of(head: &str) -> Option<String> {
+        derive(&format!("<html><head>{head}</head><body></body></html>")).title
+    }
+
+    #[test]
+    fn og_title_beats_a_builders_internal_page_name_in_title() {
+        let t = title_of(
+            r#"<title>Reviews 1 | Studio Name</title><meta property="og:title" content="Press">"#,
+        );
+        assert_eq!(t.as_deref(), Some("Press"));
+    }
+
+    #[test]
+    fn a_trailing_site_name_is_stripped_when_the_page_names_its_site() {
+        let t = title_of(
+            r#"<title>About | Studio Name</title><meta property="og:site_name" content="Studio Name">"#,
+        );
+        assert_eq!(t.as_deref(), Some("About"));
+    }
+
+    #[test]
+    fn a_site_name_in_og_title_is_stripped_too() {
+        let t = title_of(
+            r#"<meta property="og:title" content="Press — Studio Name"><meta property="og:site_name" content="Studio Name">"#,
+        );
+        assert_eq!(t.as_deref(), Some("Press"));
+    }
+
+    #[test]
+    fn a_leading_site_name_goes_only_when_the_site_name_is_known() {
+        let known = title_of(
+            r#"<title>Studio Name | Home</title><meta property="og:site_name" content="Studio Name">"#,
+        );
+        assert_eq!(known.as_deref(), Some("Home"));
+        let unknown = title_of("<title>Studio Name | Home</title>");
+        assert_ne!(
+            unknown.as_deref(),
+            Some("Home"),
+            "a leading segment is not a site name by position alone"
+        );
+    }
+
+    #[test]
+    fn a_title_that_is_only_the_site_name_stays() {
+        let t = title_of(
+            r#"<title>Studio Name</title><meta property="og:site_name" content="Studio Name">"#,
+        );
+        assert_eq!(t.as_deref(), Some("Studio Name"));
+        assert_eq!(strip_site_name("Studio Name", &["Studio Name"]), "Studio Name");
+    }
+
+    #[test]
+    fn every_separator_is_recognised_but_a_dash_inside_a_word_is_not() {
+        for sep in [" | ", " — ", " – ", " - ", " · ", " :: "] {
+            assert_eq!(strip_site_name(&format!("About{sep}Studio Name"), &["Studio Name"]), "About");
+        }
+        assert_eq!(strip_site_name("Spider-Man", &["Man"]), "Spider-Man");
+    }
+
+    #[test]
+    fn a_site_name_that_contains_a_separator_is_stripped_from_the_edge() {
+        let name = "Studio Name - Costume and set design";
+        assert_eq!(strip_site_name(&format!("DT 17 — {name}"), &[name]), "DT 17");
+        assert_eq!(strip_site_name(&format!("{name} | Press"), &[name]), "Press");
+        assert_eq!(strip_site_name(name, &[name]), name);
+        assert_eq!(strip_site_name("Press | Studio Name", &["Studio Name"]), "Press");
     }
 }

@@ -18,9 +18,7 @@ pub fn stacks_root() -> Result<PathBuf, String> {
     if let Some(over) = std::env::var_os("MOSS_STACKS_ROOT") {
         return Ok(PathBuf::from(over));
     }
-    dirs::home_dir()
-        .map(|h| h.join(".moss").join("stacks"))
-        .ok_or_else(|| "Cannot determine home directory".to_string())
+    crate::infra::home::moss_home().map(|h| h.join("stacks"))
 }
 
 /// The source this host's platform can install from, if the declaration has

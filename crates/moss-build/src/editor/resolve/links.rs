@@ -69,7 +69,7 @@ pub struct PageSource {
     pub takeover: Option<super::takeover::Takeover>,
     /// The editable source for this URL exists but could not be *identified*
     /// yet, because a file the resolve had to read is still coming down from
-    /// the cloud (moss#1062).
+    /// the cloud.
     ///
     /// Distinct from `source_path: None`, which is a positive claim that this
     /// URL has nothing to edit. The two render different surfaces — a waiting
@@ -99,10 +99,9 @@ pub fn resolve_url_for_file_inner(
 
     // Slot files (`footer.md`) have no page of their own. `build_article_map`
     // now excludes them, but this function also falls back to probing
-    // `.moss/build/current/` on disk — and a generation built BEFORE that fix
+    // `.moss/build.nosync/current/` on disk — and a generation built BEFORE that fix
     // still has a stale `footer/index.html` sitting there. Gate structurally so
     // the answer does not depend on which build produced the output tree.
-    // See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
     let slot_probe = moss_core::slug::normalize_separators(rel_path);
     if crate::build::footer::is_excluded_from_pages(slot_probe.trim_matches('/')) {
         return Ok(None);
@@ -296,7 +295,6 @@ pub fn resolve_expected_url_for_file(
     // immediate preview URL before the first build), so it cannot learn the
     // exclusion from the article map the way `resolve_url_for_file_inner` does;
     // it has to consult the same structural predicate the build uses.
-    // See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
     if crate::build::footer::is_excluded_from_pages(normalized) {
         return None;
     }
@@ -470,7 +468,7 @@ mod tests {
     use tempfile::TempDir;
 
     /// Repo-local temp dir (test artifacts must live inside the repo —
-    /// `src-tauri/target/test-tmp/` is gitignored).
+    /// `target/test-tmp/` is gitignored).
     fn repo_temp() -> TempDir {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
@@ -592,7 +590,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
         // The build records this folder index in `pages`, keyed by served
         // url_path (slugified + lowercased), NOT in `articles`.
@@ -618,7 +616,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
         let mut map = ArticleMap::new();
         map.pages.insert(String::new(), "index.md".to_string());
@@ -638,7 +636,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
         let mut map = ArticleMap::new();
         map.pages
@@ -658,7 +656,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
         ArticleMap::new().save(&moss_dir).unwrap();
 
@@ -749,13 +747,12 @@ mod tests {
     /// the preview where it is. This is the exact regression that produced the
     /// 404: `build_article_map` used to insert `footer.md` under `footer/`, and
     /// this resolver handed that key straight to the preview follower.
-    /// See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
     #[test]
     fn slot_file_resolves_to_none() {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
         // A map that (wrongly) still carries the slot entry — e.g. written by a
         // pre-fix build — must not resurrect the URL.
@@ -785,7 +782,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
         let mut map = ArticleMap::new();
         map.articles.insert(
@@ -862,7 +859,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
         let mut map = ArticleMap::new();
         map.dir_overrides
@@ -925,7 +922,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
         let mut map = ArticleMap::new();
         map.dir_overrides
@@ -942,7 +939,6 @@ mod tests {
     /// immediate preview URL, so it is the path a freshly-created `footer.md`
     /// takes. It must refuse slot files too, or creating one jumps the preview
     /// to a `/footer/` that will never exist.
-    /// See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
     #[test]
     fn expected_url_for_slot_file_is_none() {
         let project = repo_temp();

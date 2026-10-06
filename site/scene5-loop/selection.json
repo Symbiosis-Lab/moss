@@ -1,0 +1,424 @@
+{
+ "name": "v8-press",
+ "fps": 24,
+ "transition_seconds": 0.15,
+ "loop_transition_seconds": 0.4,
+ "speed": 1,
+ "framing": "Fill 16:9 with no bars: baked-in bars are cut first, then each shot is cropped around its focus point, with the action kept near the horizontal centre because a phone shows only the middle quarter of the frame.",
+ "grading": "One film stock: monochrome at 24 fps; flicker and native grain calmed; every shot brought to the same detail ceiling; each shot's measured 1st/99th percentiles mapped to one black/white, and its median pulled toward one target by a clamped gamma so low-key shots keep their blacks; one grain layer and vignette over the finished cut. Levels are measured per shot, never per frame, so exposure does not pump. Final darkness comes from the page's scrim.",
+ "look": {
+  "size": [
+   1280,
+   720
+  ],
+  "detail_size": [
+   640,
+   360
+  ],
+  "black": 18,
+  "white": 222,
+  "median": 100,
+  "gamma_range": [
+   0.7,
+   1.45
+  ],
+  "denoise": "hqdn3d=3:2:4:3",
+  "grain": 8,
+  "vignette": "PI/5",
+  "crf": 28
+ },
+ "shots": [
+  {
+   "slug": "face-of-lincoln-1954",
+   "file": "face-of-lincoln.mpeg",
+   "title": "The Face of Lincoln",
+   "source_page": "https://archive.org/details/face_of_lincoln",
+   "source_url": "https://archive.org/download/face_of_lincoln/face_of_lincoln.mpeg",
+   "rights": "Public Domain, per the archive.org item page (USC Department of Cinema production).",
+   "start": 414.0,
+   "end": 416.6,
+   "bars": [
+    708,
+    480,
+    4,
+    0
+   ],
+   "focus": [
+    0.5,
+    0.42
+   ],
+   "reason": "Opens on the strongest image: a hand at work on a monumental face, one hard light on black."
+  },
+  {
+   "slug": "arts-crafts-kyoto-silk-painting",
+   "file": "arts-crafts-kyoto.mp4",
+   "title": "Arts And Crafts, Kyoto — brush painting on silk",
+   "source_page": "https://archive.org/details/USAF-1064",
+   "source_url": "https://archive.org/download/USAF-1064/342-USAF-11064%20Arts%20Crafts%20Kyoto%2005-19-1946%20-%2005-30-1946.mp4",
+   "rights": "Public Domain Mark 1.0 — US Army Air Forces production, National Archives Identifier 64512.",
+   "start": 61.8,
+   "end": 63.8,
+   "zoom": 0.85,
+   "focus": [
+    0.5,
+    0.5
+   ],
+   "reason": "From clay to the first mark: brush leaves on silk.",
+   "white": 145
+  },
+  {
+   "slug": "pexels-hand-equation-chalk-2019",
+   "file": "chalk-equation-pexels-3196292.mp4",
+   "title": "A Man Writing Mathematical Equation On A Blackboard",
+   "source_page": "https://www.pexels.com/video/a-man-writing-mathematical-equation-on-a-blackboard-3196292/",
+   "source_url": "https://videos.pexels.com/video-files/3196292/3196292-uhd_2560_1440_25fps.mp4",
+   "rights": "Pexels License (page: \"Free to use... You can modify... No attribution required\") — not a CC licence; modern stock footage.",
+   "start": 1.8,
+   "end": 3.8,
+   "zoom": 0.7,
+   "focus": [
+    0.33,
+    0.5
+   ],
+   "reason": "The mark becomes thought: chalk on a blackboard."
+  },
+  {
+   "slug": "glass-rosette-silent-era-1910",
+   "file": "glass-blowing-bp187.ogv",
+   "title": "Bits & Pieces BP187 — Glass blowing",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Bits_%26_Pieces_-_BP187_-_Glass_blowing_-_EYE_FLM7639_-_OB_105677.ogv",
+   "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/ba/Bits_%26_Pieces_-_BP187_-_Glass_blowing_-_EYE_FLM7639_-_OB_105677.ogv",
+   "rights": "Public Domain — Commons UsageTerms: \"Public domain\"; categories include \"Author died more than 70 years ago public domain images\", \"PD-anon-70-EU\", \"CC-PD-Mark\". Credit: Eye Filmmuseum (Netherlands), artist listed as \"unknown director\".",
+   "start": 62.8,
+   "end": 64.8,
+   "bars": [
+    702,
+    576,
+    10,
+    0
+   ],
+   "focus": [
+    0.5,
+    0.55
+   ],
+   "reason": "White chalk on black gives way to white-hot glass on black; light made by hand."
+  },
+  {
+   "slug": "bell-tuning-lathe-1979",
+   "file": "beiaardschool-1979.mp4",
+   "title": "Eerste Nederlandse beiaardschool — a freshly cast bell brushed clean",
+   "source_page": "https://www.openbeelden.nl/media/1138896",
+   "source_url": "https://www.openbeelden.nl/files/11/38/1138900.1138895.WEEKNUMMER_79-FHD00Z03PKW_232000_484000.mp4",
+   "rights": "CC BY-SA 3.0 NL. Page credit line (Dutch): \"Polygoon Hollands Nieuws (producent) / Nederlands Instituut voor Beeld en Geluid (beheerder)... Creative Commons - Naamsvermelding-GelijkDelen 3.0 Nederland (by-sa/3.0/nl)\". License link: https://creativecommons.org/licenses/by-sa/3.0/nl/",
+   "start": 155.8,
+   "end": 157.8,
+   "bars": [
+    1438,
+    1080,
+    242,
+    0
+   ],
+   "focus": [
+    0.35,
+    0.45
+   ],
+   "reason": "The turning glass gives way to a hand brushing the relief of a freshly cast bell: metal given a voice that carries across a town.",
+   "zoom": 0.8
+  },
+  {
+   "slug": "block-cutting-printing-sketch-1950",
+   "file": "block-cutting-printing.mp4",
+   "title": "Block Cutting and Printing — design transfer",
+   "source_page": "https://archive.org/details/blockcuttingandprinting",
+   "source_url": "https://archive.org/download/blockcuttingandprinting/blockcuttingandprinting/blockcuttingandprinting.mp4",
+   "rights": "No explicit licence statement on the item page; it sits in archive.org's Ephemeral Films collection, whose films are presumed to be in the public domain.",
+   "start": 114.0,
+   "end": 116.0,
+   "bars": [
+    508,
+    360,
+    66,
+    0
+   ],
+   "focus": [
+    0.5,
+    0.45
+   ],
+   "reason": "A design is transferred to the block: the first step toward print.",
+   "white": 196,
+   "rights_basis": "presumed"
+  },
+  {
+   "slug": "doubtful-dollars-1945-burin",
+   "file": "doubtful_dollars.mp4",
+   "title": "Doubtful Dollars — a burin cuts a banknote plate",
+   "source_page": "https://archive.org/details/doubtful_dollars",
+   "source_url": "https://archive.org/download/doubtful_dollars/doubtful_dollars.mp4",
+   "rights": "licenseurl: http://creativecommons.org/licenses/publicdomain/ (archive.org item metadata, Prelinger collection)",
+   "rights_basis": "explicit-pd",
+   "start": 484.4,
+   "end": 486.6,
+   "reason": "The pencil's design becomes a line cut in steel: the last hand before the machines.",
+   "bars": [
+    628,
+    480,
+    6,
+    0
+   ],
+   "zoom": 0.85,
+   "focus": [
+    0.55,
+    0.56
+   ]
+  },
+  {
+   "slug": "linotype-1960-spacebands",
+   "file": "typesetting-linotype-1960.mp4",
+   "title": "Typesetting: Linotype — spacebands fall between the jaws",
+   "source_page": "https://archive.org/details/Typesett1960",
+   "source_url": "https://archive.org/download/Typesett1960/Typesett1960.mp4",
+   "rights": "licenseurl http://creativecommons.org/licenses/publicdomain/ (archive.org item metadata, Prelinger Archives)",
+   "rights_basis": "explicit",
+   "start": 912.7,
+   "end": 914.3,
+   "reason": "The first machine shot is still almost a hand: thin white blades fluttering into place.",
+   "focus": [
+    0.55,
+    0.5
+   ]
+  },
+  {
+   "slug": "linotype-1960-clock-lever",
+   "file": "typesetting-linotype-1960-part2.mp4",
+   "title": "Typesetting: Linotype, part II — a lever turns inside a steel drum",
+   "source_page": "https://archive.org/details/Typesett1960_2",
+   "source_url": "https://archive.org/download/Typesett1960_2/Typesett1960_2.mp4",
+   "rights": "licenseurl http://creativecommons.org/licenses/publicdomain/ (archive.org item metadata and page 'License' field; Prelinger Archives)",
+   "rights_basis": "explicit",
+   "start": 85.4,
+   "end": 87.6,
+   "reason": "One moving part in a circular frame, turning like a clock hand.",
+   "focus": [
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "slug": "linotype-1960-worm-screws",
+   "file": "typesetting-linotype-1960-part2.mp4",
+   "title": "Typesetting: Linotype, part II — worm screws carry the matrices",
+   "source_page": "https://archive.org/details/Typesett1960_2",
+   "source_url": "https://archive.org/download/Typesett1960_2/Typesett1960_2.mp4",
+   "rights": "licenseurl http://creativecommons.org/licenses/publicdomain/ (archive.org item metadata and page 'License' field; Prelinger Archives)",
+   "rights_basis": "explicit",
+   "start": 630.4,
+   "end": 632.0,
+   "reason": "Spirals turning against each other while stepped teeth march through.",
+   "focus": [
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "slug": "linotype-1960-cam-face",
+   "file": "typesetting-linotype-1960.mp4",
+   "title": "Typesetting: Linotype — an animated cam opens and shuts",
+   "source_page": "https://archive.org/details/Typesett1960",
+   "source_url": "https://archive.org/download/Typesett1960/Typesett1960.mp4",
+   "rights": "licenseurl http://creativecommons.org/licenses/publicdomain/ (archive.org item metadata, Prelinger Archives)",
+   "rights_basis": "explicit",
+   "start": 511.0,
+   "end": 513.4,
+   "reason": "A white cam on black that looks like a face opening its jaw: the strangest image in the cut.",
+   "focus": [
+    0.5,
+    0.45
+   ]
+  },
+  {
+   "slug": "printing-1947-press",
+   "file": "printing1947.mpeg",
+   "title": "Printing (1947) — press run",
+   "source_page": "https://archive.org/details/Printing1947",
+   "source_url": "https://archive.org/download/Printing1947/Printing1947.mpeg",
+   "rights": "Public Domain, per the archive.org item page.",
+   "start": 332.8,
+   "end": 334.4,
+   "bars": [
+    474,
+    480,
+    2,
+    0
+   ],
+   "focus": [
+    0.5,
+    0.55
+   ],
+   "reason": "The press: making becomes publishing."
+  },
+  {
+   "slug": "tidningstryck-1937-plate",
+   "file": "tidningstryck-1937.ogv",
+   "title": "Tidningstryck — a curved stereotype plate turns on the shaving machine",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Tidningstryck_1937.ogv",
+   "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/be/Tidningstryck_1937.ogv",
+   "rights": "Public domain per the Commons file page (template PD-old); the page gives no further rationale for a 1937 studio newsreel.",
+   "rights_basis": "commons-pd-old",
+   "start": 56.9,
+   "end": 58.4,
+   "reason": "A whole newspaper page bent into a cylinder and turning.",
+   "credit_line": "AB Svensk Filmindustri (public domain; credit optional, courtesy line suggested)",
+   "bars": [
+    696,
+    576,
+    4,
+    0
+   ],
+   "zoom": 0.85,
+   "focus": [
+    0.4,
+    0.5
+   ]
+  },
+  {
+   "slug": "zettersvak-1977-web",
+   "file": "openbeelden-zettersvak-77-14.ogv",
+   "title": "Het oude zettersvak — the printed web runs over the cylinders",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Door_toename_automatisering_in_krantenbedrijf_verdwijnt_het_oude_zettersvak_Weeknummer,_77-14_-_Open_Beelden_-_13160.ogv",
+   "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/02/Door_toename_automatisering_in_krantenbedrijf_verdwijnt_het_oude_zettersvak_Weeknummer%2C_77-14_-_Open_Beelden_-_13160.ogv",
+   "rights": "CC BY-SA 3.0 nl (Commons file page licence field; Open Beelden item 13160)",
+   "rights_basis": "cc-by-sa",
+   "start": 160.9,
+   "end": 162.3,
+   "reason": "The page multiplied: newsprint gliding over the press.",
+   "credit_line": "Polygoon-Profilti / Nederlands Instituut voor Beeld en Geluid, via Open Beelden, CC BY-SA 3.0 NL",
+   "focus": [
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "slug": "tidningstryck-1937-folder",
+   "file": "tidningstryck-1937.ogv",
+   "title": "Tidningstryck — the folder's fingers take each paper",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Tidningstryck_1937.ogv",
+   "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/be/Tidningstryck_1937.ogv",
+   "rights": "Public domain per the Commons file page (template PD-old); the page gives no further rationale for a 1937 studio newsreel.",
+   "rights_basis": "commons-pd-old",
+   "start": 98.0,
+   "end": 99.8,
+   "reason": "A comb of mechanical fingers gripping sheet after sheet: the machine's own hands.",
+   "credit_line": "AB Svensk Filmindustri (public domain; credit optional, courtesy line suggested)",
+   "bars": [
+    696,
+    576,
+    4,
+    0
+   ],
+   "focus": [
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "slug": "post-office-1922-perforator",
+   "file": "fc-fc-3146.mp4",
+   "title": "Some of Uncle Sam's Workshops — a stamp perforating cylinder",
+   "source_page": "https://archive.org/details/fc-fc-3146",
+   "source_url": "https://archive.org/download/fc-fc-3146/fc-fc-3146.mp4",
+   "rights": "Public domain in the US by age: a Ford Educational Library film distributed in 1922, and US works published before 1931 are out of copyright. The archive.org item carries no licence statement; it sits in the FedFlix and usgovfilms collections, held by the US National Archives (200-FC-3146, Ford Motor Company Collection).",
+   "rights_basis": "us-pd-by-age",
+   "start": 436.0,
+   "end": 437.4,
+   "reason": "A polished ruled roller turning, close to abstract.",
+   "bars": [
+    712,
+    480,
+    2,
+    0
+   ],
+   "sar": "8/9",
+   "focus": [
+    0.5,
+    0.55
+   ]
+  },
+  {
+   "slug": "treasury-story-1969-notes",
+   "file": "gov.archives.arc.11865_512kb.mp4",
+   "title": "The Treasury Story — sheets of banknotes stream past",
+   "source_page": "https://archive.org/details/gov.archives.arc.11865",
+   "source_url": "https://archive.org/download/gov.archives.arc.11865/gov.archives.arc.11865_512kb.mp4",
+   "rights": "licenseurl: http://creativecommons.org/licenses/publicdomain/zero/1.0/ (archive.org item metadata); creator National Archives and Records Administration; collections FedFlix, usgovfilms",
+   "rights_basis": "us-gov",
+   "start": 443.4,
+   "end": 444.6,
+   "reason": "A grid of tiny notes sliding by: the quickest shot, at the top of the run.",
+   "focus": [
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "slug": "trees-to-tribunes-1937-roll",
+   "file": "trees-to-tribunes-1937.mp4",
+   "title": "Trees to Tribunes — a roll of newsprint rides down a tunnel",
+   "source_page": "https://archive.org/details/0081TreesToTribunes",
+   "source_url": "https://archive.org/download/0081TreesToTribunes/0081_Trees_to_Tribunes.mp4",
+   "rights": "No licence field in item metadata; Prelinger Archives collection",
+   "rights_basis": "presumed",
+   "start": 876.8,
+   "end": 879.6,
+   "reason": "A white dot in a round tunnel grows until the paper fills the frame.",
+   "bars": [
+    640,
+    478,
+    0,
+    2
+   ],
+   "zoom": 0.8,
+   "focus": [
+    0.6,
+    0.45
+   ],
+   "white": 170
+  },
+  {
+   "slug": "linotype-1960-linkage-drawing",
+   "file": "typesetting-linotype-1960-part2.mp4",
+   "title": "Typesetting: Linotype, part II — a linkage drawn in white line",
+   "source_page": "https://archive.org/details/Typesett1960_2",
+   "source_url": "https://archive.org/download/Typesett1960_2/Typesett1960_2.mp4",
+   "rights": "licenseurl http://creativecommons.org/licenses/publicdomain/ (archive.org item metadata and page 'License' field; Prelinger Archives)",
+   "rights_basis": "explicit",
+   "start": 135.3,
+   "end": 136.9,
+   "reason": "A machine drawn in white on black, the same hand as the animation that follows.",
+   "focus": [
+    0.4,
+    0.5
+   ]
+  },
+  {
+   "slug": "fantasmagorie-1908-hand",
+   "file": "la-fantasmagorie-1908.webm",
+   "title": "Fantasmagorie — the animator's hand",
+   "source_page": "https://commons.wikimedia.org/wiki/File:La_Fantasmagorie_(1908).webm",
+   "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/c0/La_Fantasmagorie_%281908%29.webm",
+   "rights": "Public domain per the Commons file page (template PD-old-70-1923; Émile Cohl, 1908). The archive.org copy of the film carries Public Domain Mark 1.0.",
+   "start": 90.6,
+   "end": 96.0,
+   "bars": [
+    662,
+    530,
+    32,
+    24
+   ],
+   "focus": [
+    0.5,
+    0.55
+   ],
+   "reason": "The hands set the figure down, and it gets up by itself: the drawing comes alive. Black to black, back to the face."
+  }
+ ]
+}

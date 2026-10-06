@@ -26,7 +26,11 @@ The recovery affordance the plugin proposes.
 item: string | null;
 ```
 
-The item this is about — usually a filename. `null` for build-wide.
+The site-relative path of the file this advisory is about, e.g.
+`posts/2026/hello.md` — omit it (`null`) for a build-wide notice. moss
+resolves it by joining it onto the open folder to let the reader click
+straight to the file, so an absolute path or one containing `..` is
+dropped rather than trusted; the advisory then renders build-wide.
 
 ***
 

@@ -43,8 +43,8 @@
 //!
 //! It is not a second supervisor and it grants no new verb. The stack's own
 //! launcher already holds a cross-process PID lock against a double `start`,
-//! and that stays the owner of that race; ADR-050 (the plugin's, in
-//! `plugins/onionpress/docs/decisions/`) still governs what moss may do at
+//! and that stays the owner of that race; the onionpress plugin's own
+//! architecture decisions still govern what moss may do at
 //! all. This module only makes the exclusions moss ALREADY documented true
 //! between processes instead of within one.
 

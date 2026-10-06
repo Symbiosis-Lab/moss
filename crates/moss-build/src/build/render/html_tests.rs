@@ -1,11 +1,50 @@
 use super::tab_title;
 
+/// Render `test_dir` through the build path's entry point and write its pages
+/// as rendered, since no slot pass follows here. Returns the output dir.
+fn render_for_build(
+    test_dir: &std::path::Path,
+    site_config: crate::build::render::blocking::SiteConfig,
+    exits_after_build: bool,
+) -> std::path::PathBuf {
+    let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let project_structure =
+        crate::build::scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
+    let mut pending = crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
+    crate::build::render::generate_blocking_content_for_build(
+        &crate::vault::paths::VaultRoot::resolve(test_dir),
+        &project_structure,
+        &output_dir,
+        None,
+        None,
+        true,
+        site_config,
+        &mut pending,
+        exits_after_build,
+    )
+    .expect("generate_blocking_content_for_build should succeed");
+    crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
+    output_dir
+}
+
 #[test]
 fn tab_title_rules() {
     assert_eq!(tab_title("Research", "Site", false), "Research - Site");
     assert_eq!(tab_title("Site", "Site", false), "Site"); // no X - X doubling
     assert_eq!(tab_title("Site", "Site", true), "Site"); // homepage bare
     assert_eq!(tab_title("Home", "Site", true), "Home"); // homepage bare even if differ
+}
+
+/// The message names the site-relative source file, not a bare filename or
+/// a URL path — the one fact a reader of the build log needs to find the
+/// page that supplied the intro.
+#[test]
+fn namespace_root_map_notice_names_the_source_file() {
+    assert_eq!(
+        super::namespace_root_map_notice("places/index.md"),
+        "places/index.md: supplies this page's intro; the place map composes below it"
+    );
 }
 
 /// Test that non-sidebar pages do NOT inject "No posts yet" content.
@@ -33,6 +72,11 @@ fn test_non_sidebar_homepage_should_not_inject_latest_sidebar() {
         "Non-sidebar homepage should have latest_sidebar = None, not {:?}",
         latest_sidebar
     );
+}
+
+// How many times this thread has ordered a folder's prev/next chain.
+thread_local! {
+    pub(super) static SEQUENCES_ORDERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Tests for the per-language homepage lookup helper that backs the OG
@@ -103,10 +147,10 @@ mod homepage_og_tests {
     /// Homepage with frontmatter description should use it for meta description.
     #[test]
     fn test_homepage_description_from_frontmatter() {
-        let frontmatter_desc = Some("看星星，食烟火。".to_string());
+        let frontmatter_desc = Some("第一段。".to_string());
         let content = "Some body content here.";
         let desc = meta::resolve_page_description(frontmatter_desc.as_deref(), content, true);
-        assert_eq!(desc.as_deref(), Some("看星星，食烟火。"));
+        assert_eq!(desc.as_deref(), Some("第一段。"));
     }
 
     /// Homepage without frontmatter description falls back to content extraction.
@@ -129,14 +173,27 @@ mod homepage_og_tests {
         assert_eq!(desc.as_deref(), Some("百川汇入大海，昼夜不息。"));
     }
 
-    /// Frontmatter description with markdown should be stripped.
+    /// `resolve_page_description` is the HTML-card resolution path (child
+    /// lists, grid cards): it returns the description's markdown intact, for
+    /// a caller to render with `meta::render_description_html` — it no
+    /// longer pre-strips to plain text itself, since a caller rendering HTML
+    /// needs the real markup, not text with the syntax deleted.
+    /// `resolve_page_description_with_fallbacks` (meta/OG/Twitter) is the
+    /// plain-text path and is unaffected.
     #[test]
-    fn test_description_strips_markdown_from_frontmatter() {
+    fn test_description_resolution_keeps_markdown_for_the_caller_to_render() {
         let frontmatter_desc =
             Some("A **bold** claim about [something](https://example.com)".to_string());
         let content = "Body text.";
         let desc = meta::resolve_page_description(frontmatter_desc.as_deref(), content, true);
-        assert_eq!(desc.as_deref(), Some("A bold claim about something"));
+        assert_eq!(
+            desc.as_deref(),
+            Some("A **bold** claim about [something](https://example.com)")
+        );
+        assert_eq!(
+            meta::render_description_html(&desc.unwrap()),
+            r#"A <strong>bold</strong> claim about <a href="https://example.com">something</a>"#
+        );
     }
 
     /// Empty content with no frontmatter returns None.
@@ -267,7 +324,7 @@ mod stale_cleanup_tests {
 
         // Simulate a previous build that registered video_outputs in hashes.json
         let moss_dir = test_dir.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
         let hashes_json = serde_json::json!({
             "files": {},
             "sources": {},
@@ -277,14 +334,14 @@ mod stale_cleanup_tests {
             ]
         });
         fs::write(
-            moss_dir.join("build").join("hashes.json"),
+            moss_dir.join("build.nosync").join("hashes.json"),
             hashes_json.to_string(),
         )
         .unwrap();
 
         // Create the output directory with video files that would have been
         // placed there by a previous background video conversion
-        let output_dir = moss_dir.join("build").join("site");
+        let output_dir = moss_dir.join("build.nosync").join("site");
         let videos_dir = output_dir.join("videos");
         fs::create_dir_all(&videos_dir).unwrap();
         fs::write(videos_dir.join("aimeili.mp4"), "fake mp4").unwrap();
@@ -477,7 +534,7 @@ mod stale_dir_cleanup_tests {
     }
 }
 
-/// Tests for non-blocking video conversion (ADR-001: Two-Phase Build).
+/// Tests for non-blocking video conversion (Two-Phase Build).
 ///
 /// The problem: Video conversion blocks the preview UI. Users see
 /// "Converting video 2/3... 80%" and cannot use the preview until
@@ -523,7 +580,7 @@ mod non_blocking_video_tests {
     fn test_generate_blocking_content_returns_background_context_with_videos() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
 
         // Create content with a markdown file referencing a video
         fs::write(test_dir.join("index.md"), "# Test\nVideo content").unwrap();
@@ -599,7 +656,7 @@ mod non_blocking_video_tests {
     fn test_generate_blocking_content_does_not_block_on_video_conversion() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
 
         // Create content
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
@@ -694,7 +751,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("CNAME"), "example.com").unwrap();
         fs::write(test_dir.join("robots.txt"), "User-agent: *").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -743,7 +800,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("resume.pdf"), "fake pdf").unwrap();
         fs::write(test_dir.join("CNAME"), "example.com").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Simulate previous build's hashes for these asset files
@@ -759,7 +816,7 @@ mod deferred_asset_tests {
         let moss_dir = test_dir.join(".moss");
         fs::create_dir_all(&moss_dir).unwrap();
         let hashes_json = serde_json::to_string(&previous_hashes).unwrap();
-        fs::write(moss_dir.join("build").join("hashes.json"), hashes_json).unwrap();
+        fs::write(moss_dir.join("build.nosync").join("hashes.json"), hashes_json).unwrap();
 
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -801,7 +858,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
         fs::write(test_dir.join("resume.pdf"), "fake pdf").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -879,7 +936,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -926,7 +983,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -988,7 +1045,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1055,7 +1112,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1107,7 +1164,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1140,7 +1197,7 @@ mod auto_folder_index_tests {
         fs::write(test_dir.join("index.md"), "# My Site").unwrap();
 
         // Folder with hyphens: "my-videos" should become "my videos"
-        // (#775: synthetic folder indexes use `filename_text` — hyphens →
+        // (synthetic folder indexes use `filename_text` — hyphens →
         // spaces, NO title-casing — so a folder renders identical H1/title
         // text whether or not it has an `index.md`).
         let folder = test_dir.join("my-videos");
@@ -1151,7 +1208,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1173,7 +1230,7 @@ mod auto_folder_index_tests {
         // The page title should be in the <title> tag
         assert!(
                 content.contains("my videos"),
-                "Auto-generated page title should derive from folder name 'my-videos' -> 'my videos' (#775: filename_text, no title-casing)"
+                "Auto-generated page title should derive from folder name 'my-videos' -> 'my videos' (filename_text, no title-casing)"
             );
     }
 
@@ -1200,7 +1257,7 @@ mod auto_folder_index_tests {
             )
             .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1256,7 +1313,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1321,7 +1378,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1383,7 +1440,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1441,7 +1498,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1511,7 +1568,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1702,7 +1759,7 @@ mod cover_wikilink_integration {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1782,7 +1839,7 @@ mod folder_cover_no_description {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1884,7 +1941,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1975,7 +2032,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -2050,7 +2107,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -2104,8 +2161,7 @@ mod folder_cover_grid_escapes_narrow_column {
     }
 }
 
-/// Where a cover-bearing folder home releases its narrow column, end to end
-/// (moss#903 bugs 1 and 4, closed by ADR-034).
+/// Where a cover-bearing folder home releases its narrow column, end to end.
 ///
 /// Both bugs had one cause: the release point was found by cutting the page's
 /// already-rendered HTML string. `split_lead_before_grid` walked a byte cursor
@@ -2156,7 +2212,7 @@ mod folder_cover_lede_release {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -2187,7 +2243,7 @@ mod folder_cover_lede_release {
             .unwrap_or_else(|| panic!("cover row never closes in:\n{html}"))
     }
 
-    /// moss#903 bug 1. CJK prose in the lede of a cover-bearing folder home
+    /// CJK prose in the lede of a cover-bearing folder home
     /// aborted the build outright: `start byte index 66 is not a char boundary;
     /// it is inside '在'`. Any non-ASCII byte before the grid was enough — the
     /// cursor stepped one byte at a time and then sliced.
@@ -2195,12 +2251,12 @@ mod folder_cover_lede_release {
     fn cjk_prose_before_a_grid_builds_instead_of_aborting_on_a_char_boundary() {
         let html = folder_html_for(
             "folder_cover_cjk_lede",
-            "潮汐作為一個文學計畫，關注的是非虛構寫作的現場。\n\n\
+            "河灣作為一個寫作計畫，關注的是普通人寫作的現場。\n\n\
              :::grid 2\nCard One\n+++\nCard Two\n:::\n",
         );
         let (cover_body, released) = split_cover_body(&html);
         assert!(
-            cover_body.contains("潮汐作為一個文學計畫"),
+            cover_body.contains("河灣作為一個寫作計畫"),
             "the CJK lede belongs beside the cover: {cover_body}"
         );
         assert!(
@@ -2213,7 +2269,7 @@ mod folder_cover_lede_release {
         );
     }
 
-    /// moss#903 bug 4. A long-form article body on a cover-bearing folder home
+    /// A long-form article body on a cover-bearing folder home
     /// has no grid to release at, so the whole body used to be typeset in the
     /// narrow column with half the viewport empty beside it. The release point
     /// is now the end of the lede — the first heading after a paragraph.
@@ -2273,7 +2329,7 @@ mod children_listing_and_grid_independence {
     }
 
     fn build_site(test_dir: &std::path::Path) -> std::path::PathBuf {
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -2792,7 +2848,6 @@ mod children_field_tests {
 
     /// Regression: `children: false` must suppress `data-layout="grid"`
     /// on folder-index pages that use `children_style: grid`.
-    /// See docs/archive/2026-04-20-moss-dogfood-tier-1-fixes.md Task 2.9.
     #[test]
     fn test_children_false_suppresses_grid_on_folder_index() {
         let mut homepage = make_doc("Test Site", "index.html");
@@ -2852,10 +2907,9 @@ mod children_field_tests {
     }
 
     /// Regression: `children: false` must suppress BOTH auto-listings on the homepage.
-    /// On SoCiviC we observed `.moss-cards[data-layout="grid"]` emitted above the hero and
+    /// On a real site we observed `.moss-cards[data-layout="grid"]` emitted above the hero and
     /// `.moss-cards[data-layout="list"]` after the footer on zh-hans home. This pins the
     /// behavior so custom homepages can fully opt out of auto-emitted listings.
-    /// See docs/archive/2026-04-20-moss-dogfood-tier-1-fixes.md Task 2.9.
     #[test]
     fn test_children_false_suppresses_both_on_homepage() {
         let mut homepage = make_doc("Test Site", "index.html");
@@ -2982,6 +3036,75 @@ mod children_field_tests {
             html.contains("Breaking News"),
             "Sidebar should contain child article 'Breaking News'"
         );
+    }
+
+    /// A folder's sidebar lists pages that share a date in the order its
+    /// series links walk them, not in the order the pages were read.
+    #[test]
+    fn same_date_sidebar_follows_the_series_chain() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+
+        let mut folder_index = make_doc("Serial", "serial/index.html");
+        folder_index.kind = PageKind::Folder;
+        folder_index.sidebar = Some("[[Serial]]".to_string());
+        folder_index.from_sidebar_alias = Some(true);
+
+        let chapter = |title: &str, slug: &str| {
+            let mut d = make_doc(title, &format!("serial/{slug}/index.html"));
+            d.date = Some("1804".to_string());
+            d
+        };
+        let all_docs = vec![
+            homepage,
+            chapter("Exile", "exile"),
+            chapter("The Arrival", "arrival"),
+            folder_index.clone(),
+            chapter("Departure", "departure"),
+            chapter("A Crossing", "crossing"),
+        ];
+
+        let html = generate_html(
+            Some(&folder_index),
+            &all_docs,
+            &make_project(),
+            &make_layout(),
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            true,
+            None,
+            false, // has_user_js
+            None,  // user_js_version
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        let mut listed = vec!["arrival", "crossing", "departure", "exile"];
+        listed.sort_by_key(|slug| {
+            html.find(&format!("serial/{slug}/\""))
+                .unwrap_or_else(|| panic!("{slug} missing from the sidebar: {html}"))
+        });
+        let chain: Vec<String> = super::super::sequence_siblings(
+            &all_docs,
+            "serial/index.html",
+            "serial/",
+            &folder_index.resolve_for_direct_children(),
+        )
+        .iter()
+        .map(|d| d.url_path.trim_start_matches("serial/").trim_end_matches("/index.html").to_string())
+        .collect();
+        assert_eq!(chain, listed, "the sidebar must follow the series chain's order");
     }
 
     /// Test that children_style: "summary" renders summaries instead of list.
@@ -3168,8 +3291,8 @@ mod children_field_tests {
 
         let mut folder_index = make_doc("發佈會", "events/index.html");
         folder_index.kind = PageKind::Folder;
-        folder_index.byline = vec!["主講　糜緒洋".to_string()];
-        folder_index.colophon = vec!["主辦　端傳媒".to_string()];
+        folder_index.byline = vec!["主講　陳遠山".to_string()];
+        folder_index.colophon = vec!["主辦　遠聲媒體".to_string()];
 
         let all_docs = vec![homepage, folder_index.clone()];
         let html = render_page(Some(&folder_index), &all_docs, false);
@@ -3188,8 +3311,8 @@ mod children_field_tests {
             title_at < byline_at && byline_at < colophon_at,
             "order must be title → byline → … → colophon. Got: {html}"
         );
-        assert!(html.contains("主講　糜緒洋"), "Got: {html}");
-        assert!(html.contains("主辦　端傳媒"), "Got: {html}");
+        assert!(html.contains("主講　陳遠山"), "Got: {html}");
+        assert!(html.contains("主辦　遠聲媒體"), "Got: {html}");
     }
 
     /// The rule holds for every page kind moss can assemble, and each credit
@@ -3209,8 +3332,8 @@ mod children_field_tests {
         homepage.is_root_level = true;
 
         for (label, mut doc, is_homepage) in every_page_kind() {
-            doc.byline = vec!["主講　糜緒洋".to_string()];
-            doc.colophon = vec!["主辦　端傳媒".to_string()];
+            doc.byline = vec!["主講　陳遠山".to_string()];
+            doc.colophon = vec!["主辦　遠聲媒體".to_string()];
             let all_docs = vec![homepage.clone(), doc.clone()];
             let html = render_page(Some(&doc), &all_docs, is_homepage);
 
@@ -3227,6 +3350,34 @@ mod children_field_tests {
         }
     }
 
+    /// The automatic place line reuses `render_byline_html`/
+    /// `splice_byline_at_page_head`, so it has to reach all four call sites
+    /// in `render/html.rs` (homepage page-head, folder title block,
+    /// non-homepage page-head, article) — traced directly against the
+    /// source rather than re-asserted, and exercised here through the same
+    /// `every_page_kind` cases the byline count test uses, since those
+    /// cases already cover every assembly path. This is the test that would
+    /// have caught two missing call sites in an earlier draft, and — with
+    /// `render_byline_html`'s combined-`Option` fix — a page with
+    /// `location:` set and no `byline:` at all.
+    #[test]
+    fn all_four_byline_sites_carry_the_place_line() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+
+        for (label, mut doc, is_homepage) in every_page_kind() {
+            doc.place_line = Some("Location: [Kyoto](/about/kyoto/)".to_string());
+            let all_docs = vec![homepage.clone(), doc.clone()];
+            let html = render_page(Some(&doc), &all_docs, is_homepage);
+
+            assert_eq!(
+                html.matches(r#"class="moss-place-line""#).count(),
+                1,
+                "{label}: place line must render exactly once. Got: {html}"
+            );
+        }
+    }
+
     /// Every page kind moss can assemble, as `(label, doc, is_homepage)` —
     /// one entry per assembly path in `render/html.rs`, plus the
     /// `layout: article` variants that traverse two of them.
@@ -3239,7 +3390,7 @@ mod children_field_tests {
         article_home.layout = Some("article".to_string());
         cases.push(("`layout: article` homepage", article_home, true));
 
-        let mut home_override = make_doc("Liu Guo", "en/index.html");
+        let mut home_override = make_doc("Mountain Home", "en/index.html");
         home_override.kind = PageKind::Folder;
         home_override.is_home_override = true;
         cases.push(("`home: true` folder page", home_override, false));
@@ -3315,8 +3466,8 @@ mod children_field_tests {
         homepage.is_root_level = true;
 
         for (label, mut doc, is_homepage) in every_page_kind() {
-            doc.byline = vec!["主講　糜緒洋".to_string()];
-            doc.colophon = vec!["主辦　端傳媒".to_string()];
+            doc.byline = vec!["主講　陳遠山".to_string()];
+            doc.colophon = vec!["主辦　遠聲媒體".to_string()];
             let all_docs = vec![homepage.clone(), doc.clone()];
             let html = render_page_for_editor(Some(&doc), &all_docs, is_homepage);
 
@@ -3333,7 +3484,7 @@ mod children_field_tests {
 
             // The folder-index heading is moss's own, rendered from `title:`.
             // Translation homes and `home: true` pages deliberately render no
-            // such heading (see docs/reference/title-rendering.md), so there
+            // such heading, so there
             // is nothing to annotate there.
             if html.contains("moss-folder-title") {
                 assert!(
@@ -3357,8 +3508,8 @@ mod children_field_tests {
 
         let mut folder_index = make_doc("發佈會", "events/index.html");
         folder_index.kind = PageKind::Folder;
-        folder_index.byline = vec!["主講　糜緒洋".to_string()];
-        folder_index.colophon = vec!["主辦　端傳媒".to_string()];
+        folder_index.byline = vec!["主講　陳遠山".to_string()];
+        folder_index.colophon = vec!["主辦　遠聲媒體".to_string()];
         folder_index.cover = Some("assets/cover.jpg".to_string());
 
         let mut child = make_doc("Launch", "events/launch/index.html");
@@ -3455,8 +3606,8 @@ mod children_field_tests {
     fn a_page_with_no_moss_title_places_the_byline_at_its_head() {
         let mut homepage = make_doc("Test Site", "index.html");
         homepage.is_root_level = true;
-        homepage.byline = vec!["主講　糜緒洋".to_string()];
-        homepage.colophon = vec!["主辦　端傳媒".to_string()];
+        homepage.byline = vec!["主講　陳遠山".to_string()];
+        homepage.colophon = vec!["主辦　遠聲媒體".to_string()];
 
         // No heading: the byline opens the page, before the body.
         homepage.html_content = "<p>Welcome.</p>".to_string();
@@ -3473,10 +3624,10 @@ mod children_field_tests {
         );
 
         // Authored heading: the byline sits under it, as on any other page kind.
-        homepage.html_content = "<h1>Liu Guo</h1>\n<p>Welcome.</p>".to_string();
+        homepage.html_content = "<h1>Mountain Home</h1>\n<p>Welcome.</p>".to_string();
         let all_docs = vec![homepage.clone()];
         let html = render_page(Some(&homepage), &all_docs, true);
-        let h1_at = html.find("<h1>Liu Guo</h1>").expect("authored h1 is kept");
+        let h1_at = html.find("<h1>Mountain Home</h1>").expect("authored h1 is kept");
         let byline_at = html.find(r#"class="moss-byline""#).expect("byline renders");
         let body_at = html.find("Welcome.").expect("body renders");
         assert!(
@@ -4506,8 +4657,7 @@ mod children_field_tests {
     /// An ORDINARY page (not the homepage, not a folder index) carrying
     /// `children: '[[/]]'` + `children_depth: all` should host a whole-site
     /// listing the same way the homepage branch's `children_source` does.
-    /// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §4: the
-    /// "Regular page content" arm only synthesized a children marker when
+    /// The "Regular page content" arm only synthesized a children marker when
     /// `is_folder_index || term_listing.is_some()`, so this page's parsed
     /// `children_source`/`children_depth` were silently dropped on the floor.
     #[test]
@@ -4599,6 +4749,290 @@ mod children_field_tests {
             !main_content.contains(">Everything<"),
             "the hosting page must not list itself: {}",
             main_content
+        );
+    }
+
+    /// A page that WINS a term claim (`term_listing` set) hosts that term's
+    /// member listing below its own body, but it is still an ordinary leaf
+    /// page — not `PageKind::Folder` — so the folder-cover branch above never
+    /// ran for it and its `cover:` reached only `data-share-cover` (OG/share
+    /// metadata), never a visible `<img>`. A folder-index page that claims
+    /// the same term already shows its cover (the branch gated on
+    /// `is_folder_index`); a claiming leaf page must show it too — the SAME
+    /// book-open layout (cover beside title and lede), not a bare row with
+    /// empty space beside the image — and it must still show only one
+    /// visible title: its own, not a second one from the cover component.
+    #[test]
+    fn test_claimed_leaf_page_renders_own_cover() {
+        let mut claimant = make_doc("Ada Lin", "people/ada-lin/index.html");
+        claimant.cover = Some("ada.png".to_string());
+        claimant.term_listing = Some("people/ada-lin".to_string());
+        // Stands in for the markdown pipeline's own injected article title —
+        // by the time `generate_html` runs, this shell's visible `<h1>` is
+        // already the head of the body, not something this branch adds.
+        claimant.html_content =
+            "<h1 class=\"moss-article-title\">Ada Lin</h1>\n<p>Ada Lin content</p>".to_string();
+
+        let all_docs = vec![claimant.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&claimant),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        assert!(
+            html.contains(r#"class="moss-collection-cover-body""#),
+            "a claimed leaf page with a cover must render the same book-open \
+             layout — cover beside title and lede — a claimed folder index \
+             gets, not a bare row: {}",
+            html
+        );
+        assert!(
+            html.contains(r#"<h1 class="moss-folder-title"></h1>"#),
+            "the folder-cover component's own title slot must be passed an \
+             empty label and collapse (site.css `.moss-folder-title:empty`) \
+             — the claiming leaf's visible heading is its own, not a second \
+             one from this component: {}",
+            html
+        );
+        assert!(
+            html.contains(r#"<h1 class="moss-article-title">Ada Lin</h1>"#),
+            "the page's own heading must survive, inside the cover column: {}",
+            html
+        );
+    }
+
+    /// An Article-shell claiming leaf (the default shell here: no `layout:`
+    /// override, flat mode, `is_root_level: false`) with a cover, a date, and
+    /// a byline. The date-line + reading-prefs row and the byline are built
+    /// separately, later in `generate_html`, and spliced into the WHOLE
+    /// assembled page content via `splice_after_title_block` — which used to
+    /// require the content to start with `<h1`. Once the claimed-leaf cover
+    /// wraps that title in `.moss-collection-cover-row`, the content starts
+    /// with `<div` instead, so the splice fell through to prepending: the
+    /// date-line and byline landed BEFORE the whole cover row, above the
+    /// image, on develop this page has no cover so the regression is
+    /// specific to this branch. Both must land after the real title, inside
+    /// `.moss-collection-cover-body`, and before the rest of the body.
+    #[test]
+    fn test_claimed_leaf_article_shell_date_and_byline_land_in_cover_column() {
+        let mut claimant = make_doc("Ada Lin", "people/ada-lin/index.html");
+        claimant.cover = Some("ada.png".to_string());
+        claimant.term_listing = Some("people/ada-lin".to_string());
+        claimant.date = Some("2026-04-01".to_string());
+        claimant.byline = vec!["Photography by Ada Lin".to_string()];
+        claimant.html_content =
+            "<h1 class=\"moss-article-title\">Ada Lin</h1>\n<p>Ada Lin content</p>".to_string();
+
+        let all_docs = vec![claimant.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&claimant),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        let cover_row_pos = html
+            .find(r#"class="moss-collection-cover-row""#)
+            .expect("cover row must render");
+        let title_end = html
+            .find("<h1 class=\"moss-article-title\">Ada Lin</h1>")
+            .map(|i| i + "<h1 class=\"moss-article-title\">Ada Lin</h1>".len())
+            .expect("the page's own title must render");
+        let date_line_pos = html
+            .find(r#"class="date-line""#)
+            .expect("date-line must render for a dated article");
+        let byline_pos = html
+            .find("Photography by Ada Lin")
+            .expect("byline must still render");
+        let body_pos = html
+            .find("<p>Ada Lin content</p>")
+            .expect("the rest of the body must still render");
+
+        assert!(
+            cover_row_pos < title_end,
+            "the cover row must open before the title: {}",
+            html
+        );
+        assert!(
+            date_line_pos > title_end,
+            "date-line must land after the title, not above the whole cover \
+             row: {}",
+            html
+        );
+        assert!(
+            byline_pos > title_end,
+            "byline must land after the title, not above the whole cover \
+             row: {}",
+            html
+        );
+        assert!(
+            date_line_pos < body_pos && byline_pos < body_pos,
+            "date-line and byline must land before the rest of the body: {}",
+            html
+        );
+    }
+
+    /// A claiming leaf page rendered with the PAGE shell (not Article) still
+    /// gets its `byline:` — the same `!is_article_page` splice every other
+    /// page kind uses, run on the WHOLE already cover-wrapped `content` (one
+    /// splice site, no lead-scoping special case). It lands correctly because
+    /// `splice_byline_at_page_head` delegates unconditionally to
+    /// `splice_after_title_block`, which recognizes the cover wrapper's own
+    /// empty `<h1 class="moss-folder-title">` and steps past it to splice
+    /// after this page's REAL title — not above the whole cover row, which is
+    /// where a naive first-`<h1>` test would leave it (the wrapper's outer
+    /// `<div>` is never itself an `<h1`).
+    #[test]
+    fn test_claimed_leaf_page_shell_byline_lands_beside_title_in_cover_column() {
+        let mut claimant = make_doc("Ada Lin", "people/ada-lin/index.html");
+        claimant.cover = Some("ada.png".to_string());
+        claimant.term_listing = Some("people/ada-lin".to_string());
+        claimant.layout = Some("page".to_string()); // force Page shell, not Article
+        claimant.byline = vec!["Photography by Ada Lin".to_string()];
+        claimant.html_content = "<h1>Ada Lin</h1>\n<p>Ada Lin content</p>".to_string();
+
+        let all_docs = vec![claimant.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&claimant),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        let body_col_start = html
+            .find(r#"class="moss-collection-cover-body""#)
+            .expect("cover-body column must render");
+        let title_end = html[body_col_start..]
+            .find("</h1>")
+            .map(|i| body_col_start + i)
+            .expect("a title h1 must render inside the cover column");
+        let byline_pos = html
+            .find("Photography by Ada Lin")
+            .expect("byline must still render for a Page-shell claimant");
+        assert!(
+            byline_pos > title_end,
+            "byline must land after this page's own title, inside the cover \
+             column, not above the whole cover row: {}",
+            html
+        );
+    }
+
+    /// Baseline: an ordinary leaf page with NO term claim keeps its
+    /// pre-existing behavior — `cover:` reaches `data-share-cover` only, no
+    /// visible `<img>`. Guards the claimed-page fix above from broadening
+    /// into every page that merely sets `cover:`.
+    #[test]
+    fn test_unclaimed_leaf_page_with_cover_has_no_visible_cover_row() {
+        let mut page = make_doc("First Look", "posts/first-look/index.html");
+        page.cover = Some("first-look-cover.png".to_string());
+
+        let all_docs = vec![page.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&page),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        assert!(
+            !html.contains(r#"class="moss-collection-cover-row""#),
+            "an unclaimed leaf page must not gain a visible cover row: {}",
+            html
+        );
+        assert!(
+            html.contains(r#"data-share-cover="/first-look-cover.png""#),
+            "the cover must still reach data-share-cover as before: {}",
+            html
         );
     }
 
@@ -4745,7 +5179,7 @@ mod children_field_tests {
 
     #[test]
     fn test_homepage_children_limit_picks_latest_when_input_order_disagrees() {
-        // Regression for the chps-site bug: `take(n)` ran before the date sort,
+        // Regression for a real site's bug: `take(n)` ran before the date sort,
         // so `children_limit: N` returned the lex/iteration-first N rather than
         // the latest N by date. Articles below are ordered so that BOTH input
         // order AND lexical url_path order put the OLDEST items first — only a
@@ -5030,7 +5464,7 @@ mod children_field_tests {
     /// the renderer must re-resolve the sort axis on the flattened
     /// scope. The scan cache (`direct_children_sort`) only reflects
     /// direct-children inference and misrepresents the corpus the
-    /// reader actually sees. liu-guo's home had only folder children
+    /// reader actually sees. A real site's home had only folder children
     /// at the root (dateless), which cached as Title axis even though
     /// the flattened descendants are mostly dated essays.
     #[test]
@@ -5358,6 +5792,56 @@ mod typesetting_tests {
         );
     }
 
+    /// A folder page's automatic children listing — the homepage's and any
+    /// other folder index's, two separate call sites — follows the page's
+    /// EFFECTIVE typesetting, like the shell's `data-typesetting` above. Both
+    /// used to read the site's alone, so a page's own `typesetting:` changed
+    /// the page but not the dates in its listing.
+    #[test]
+    fn folder_listings_follow_the_pages_effective_typesetting() {
+        let render = |dir: &str, page_typesetting: Option<&str>, site_typesetting: Option<&str>| {
+            let (url, source, child_url, child_source) = if dir.is_empty() {
+                ("index.html".to_string(), "index.md".to_string(), "a/index.html".to_string(), "a.md".to_string())
+            } else {
+                (format!("{dir}/index.html"), format!("{dir}/index.md"), format!("{dir}/a/index.html"), format!("{dir}/a.md"))
+            };
+            let mut folder = make_doc("Folder", &url);
+            folder.kind = PageKind::Folder;
+            folder.lang = Language::ZhHant;
+            folder.source_path = Some(source);
+            folder.typesetting = page_typesetting.map(String::from);
+            let mut child = make_doc("A", &child_url);
+            child.lang = Language::ZhHant;
+            child.source_path = Some(child_source);
+            child.date = Some("1697-09".to_string());
+            let mut all_docs = vec![folder.clone(), child];
+            if !dir.is_empty() {
+                all_docs.push(make_doc("Test Site", "index.html"));
+            }
+            let mut layout = make_layout();
+            if let Some(t) = site_typesetting {
+                layout = layout.with_typesetting(t.to_string());
+            }
+            generate_html(
+                Some(&folder), &all_docs, &make_project(), &layout, dir.is_empty(), None, None,
+                Language::ZhHant, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(), &localhost_url(), false, false, "favicon.svg",
+                None, std::path::Path::new(""),
+            )
+            .expect("generate_html should succeed")
+        };
+        // The listing's year heading reads 一六九七 under vertical CJK.
+        let cjk = "一六九七";
+        for dir in ["", "wen"] {
+            let page_vertical = render(dir, Some("vertical"), None);
+            assert!(page_vertical.contains(cjk), "{dir:?}: page-level vertical must reach the listing");
+            let site_vertical = render(dir, None, Some("vertical"));
+            assert!(site_vertical.contains(cjk), "{dir:?}: site-only vertical must reach the listing");
+            let page_horizontal = render(dir, Some("horizontal"), Some("vertical"));
+            assert!(!page_horizontal.contains(cjk), "{dir:?}: the page's horizontal must win");
+        }
+    }
+
     #[test]
     fn test_site_default_content_width() {
         let homepage = make_doc("Test Site", "index.html");
@@ -5505,17 +5989,11 @@ mod article_cover_tests {
             true,
             crate::i18n::Language::En,
             None,
-            false,
-            true,
-            true, // hard_line_breaks: [site] default (Obsidian parity)
-            true, // heading_anchors: [site] default (unconditional today)
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,
-            None,
-            false,
-            None,
-            None, // folder_lang
+            crate::build::markdown::PageContext::default(),
         )
     }
 
@@ -5589,10 +6067,9 @@ mod article_cover_tests {
 ///
 /// Class is `moss-folder-title`, shared with the explicit-folder-index paths
 /// in `folder_cover.rs` (cover branch) and the no-cover branch in this file.
-/// See `docs/reference/title-rendering.md`.
 #[test]
 fn test_auto_folder_index_includes_h1_heading() {
-    let folder_h1 = crate::build::components::folder_title::render("文字", false);
+    let folder_h1 = crate::build::components::folder_title::render("文字", false, false);
     let article_list = "<div class=\"moss-cards\" data-layout=\"list\">...</div>";
     let content_html = format!("{}\n{}", folder_h1, article_list);
 
@@ -5608,11 +6085,11 @@ fn test_auto_folder_index_includes_h1_heading() {
 
 /// Folder-index pages with no cover prepend `<h1 class="moss-folder-title">`
 /// before the body content. Closes the previous gap where files like
-/// `chps-site/Projects/Projects.md` rendered with zero h1s. Same helper
+/// a site's `Projects/Projects.md` rendered with zero h1s. Same helper
 /// as the cover branch — single source of the class string.
 #[test]
 fn folder_index_without_cover_prepends_folder_title_h1() {
-    let folder_h1 = crate::build::components::folder_title::render("Projects", false);
+    let folder_h1 = crate::build::components::folder_title::render("Projects", false, false);
     assert!(folder_h1.contains(r#"<h1 class="moss-folder-title">Projects</h1>"#));
     // Integration: the no-cover branch in this file concatenates folder_h1 \n content.
     let content = "<p>Body.</p>";
@@ -5622,16 +6099,16 @@ fn folder_index_without_cover_prepends_folder_title_h1() {
 }
 
 #[test]
-fn no_cover_folder_heading_suppressed_for_nav_folder() {
-    // A folder index that is a nav item (nav: true) gets no folder title —
-    // the nav bar already shows it.
+fn no_cover_folder_heading_hidden_for_nav_folder() {
+    // A folder index that is a nav item (nav: true) hides its folder title —
+    // the nav bar already shows it — but keeps the `<h1>` for screen readers.
     let doc = crate::build::types::ParsedDocument {
         nav: Some(true),
         ..Default::default()
     };
     assert_eq!(
         super::no_cover_folder_heading(&doc, "Projects", true, false),
-        ""
+        r#"<h1 class="moss-folder-title visually-hidden">Projects</h1>"#
     );
 }
 
@@ -5648,6 +6125,23 @@ fn no_cover_folder_heading_present_for_non_nav_folder() {
             .contains(r#"<h1 class="moss-folder-title">Projects</h1>"#),
         "non-nav folder index must keep its title"
     );
+}
+
+#[test]
+fn no_cover_folder_heading_empty_when_body_opens_with_h1() {
+    // The body's own `# Title` is already the page's h1, nav folder or not.
+    for nav in [Some(true), None] {
+        let doc = crate::build::types::ParsedDocument {
+            nav,
+            content: "# Projects\n\nBody.".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::no_cover_folder_heading(&doc, "Projects", true, false),
+            "",
+            "nav = {nav:?}"
+        );
+    }
 }
 
 // home_file_winner_tests have been moved to page_map.rs
@@ -5678,34 +6172,28 @@ mod home_file_demotion_tests {
             emit_source_lines,
             crate::i18n::Language::En,
             None,
-            false,
-            true,
-            true, // hard_line_breaks: [site] default (Obsidian parity)
-            true, // heading_anchors: [site] default (unconditional today)
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,
-            None,
-            false,
-            None,
-            None, // folder_lang
+            crate::build::markdown::PageContext::default(),
         )
     }
 
     #[test]
     fn test_self_named_demoted_when_index_exists() {
-        // Simulate: root folder "刘果" contains both index.md and 刘果.md
+        // Simulate: root folder "山居" contains both index.md and 山居.md
         // Both are processed by process_markdown_file, both get is_index=true.
         // After demotion, only the winner (index.md) stays is_index.
 
         let index_content = "---\ntitle: Home\n---\nWelcome home";
-        let self_named_content = "---\ntitle: 刘果\n---\nThis is me";
+        let self_named_content = "---\ntitle: 山居\n---\nThis is me";
 
         let empty_map = std::collections::HashMap::new();
         let index_doc =
-            process_markdown_file("index.md", index_content, "刘果", &empty_map, true).unwrap();
+            process_markdown_file("index.md", index_content, "山居", &empty_map, true).unwrap();
         let self_named_doc =
-            process_markdown_file("刘果.md", self_named_content, "刘果", &empty_map, true).unwrap();
+            process_markdown_file("山居.md", self_named_content, "山居", &empty_map, true).unwrap();
 
         // Before demotion, both should be PageKind::Folder
         assert!(
@@ -5714,10 +6202,10 @@ mod home_file_demotion_tests {
         );
         assert!(
             self_named_doc.kind == PageKind::Folder,
-            "刘果.md should be Folder before demotion (per is_home_file)"
+            "山居.md should be Folder before demotion (per is_home_file)"
         );
 
-        // Simulate demotion for 刘果.md (it's not the winner)
+        // Simulate demotion for 山居.md (it's not the winner)
         let mut doc = self_named_doc;
         doc.kind = PageKind::Article;
         let slug = generate_slug(&doc.clean_stem);
@@ -5737,7 +6225,7 @@ mod home_file_demotion_tests {
             "Demoted doc should have slug-based url_path, got: {}",
             doc.url_path
         );
-        // The slug should be based on the clean_stem "刘果"
+        // The slug should be based on the clean_stem "山居"
         assert_eq!(doc.url_path, format!("{}/index.html", slug));
     }
 
@@ -5808,7 +6296,7 @@ mod home_file_demotion_tests {
 mod video_path_mapping_integration_tests {
     /// End-to-end test: build a site with Chinese directory names and
     /// url overrides, verify that dir_overrides is captured on BackgroundContext.
-    /// Also asserts that no .placeholder.svg files are produced (Pattern E removed, #615).
+    /// Also asserts that no .placeholder.svg files are produced (Pattern E removed).
     #[test]
     fn test_cjk_dir_overrides_captured_in_deferred_work() {
         use crate::build::manifest::PendingManifest;
@@ -5839,7 +6327,7 @@ mod video_path_mapping_integration_tests {
         fs::write(test_dir.join("index.md"), "# Home").unwrap();
 
         // Create output directory
-        let output_dir = test_dir.join(".moss").join("build").join("staging");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Run the blocking phase
@@ -5872,7 +6360,7 @@ mod video_path_mapping_integration_tests {
             "dir_overrides should map '视频' → 'video'"
         );
 
-        // Pattern E removed (#615): no .placeholder.svg keys in manifest
+        // Pattern E removed: no .placeholder.svg keys in manifest
         {
             let hashes = &site_result.hashes;
             let placeholder_keys: Vec<&str> = hashes
@@ -5889,7 +6377,7 @@ mod video_path_mapping_integration_tests {
         }
     }
 
-    /// Acceptance criterion for #615: PendingManifest after generate_blocking_content
+    /// Acceptance criterion: PendingManifest after generate_blocking_content
     /// must not contain any keys ending in .placeholder.svg, even for sites with videos.
     #[test]
     fn test_no_placeholder_svg_in_manifest_after_build() {
@@ -5914,7 +6402,7 @@ mod video_path_mapping_integration_tests {
         let _cleanup = Cleanup(test_dir.clone());
 
         fs::write(test_dir.join("index.md"), "# Home").unwrap();
-        let output_dir = test_dir.join(".moss").join("build").join("staging");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         let mut project_structure =
@@ -6052,7 +6540,7 @@ mod og_url_tests {
             None,  // user_js_version
             None,
             &std::collections::HashMap::new(),
-            &SiteUrl::parse("https://liu-guo.com").unwrap(),
+            &SiteUrl::parse("https://example.com").unwrap(),
             true,
             false,
             "favicon.svg",
@@ -6062,7 +6550,7 @@ mod og_url_tests {
         .expect("generate_html should succeed");
 
         assert!(
-            html.contains(r#"og:url" content="https://liu-guo.com/writings/test/"#),
+            html.contains(r#"og:url" content="https://example.com/writings/test/"#),
             "og:url should contain absolute URL with configured domain"
         );
     }
@@ -6137,15 +6625,16 @@ mod og_url_tests {
                 is_animated: false,
             }];
             let no_previous = std::collections::HashMap::new();
-            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+            let filename_covers = crate::build::page::cover::FilenameCovers::default();
+            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
             generate_html_collect_og(
                 Some(&article), &all_docs, &project, &make_layout(), false, None, None,
                 Language::En, None, false, false, None, false, None, None,
                 &std::collections::HashMap::new(),
                 &SiteUrl::parse("https://example.com").unwrap(),
-                true, false, "favicon.svg", Some(dir.path()), &mut og_outputs,
+                true, false, "favicon.svg", false, Some(dir.path()), &mut og_outputs,
                 source_root,
-                &crate::build::emit::scripts::ScriptAssets::resolve(),
+                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
             )
             .expect("generate_html_collect_og should succeed")
         }
@@ -6178,6 +6667,191 @@ mod og_url_tests {
         );
     }
 
+    /// Every page of a folder shares the one listing the build made of it.
+    /// Listing per page was O(pages × siblings) `stat` calls, which a flat
+    /// folder of 2,000 pages turned into most of a build's time.
+    #[test]
+    fn pages_of_one_folder_share_one_listing_for_their_filename_cover() {
+        use super::super::generate_html_collect_og;
+
+        let vault = tempfile::tempdir().expect("tempdir");
+        let items = vault.path().join("items");
+        std::fs::create_dir_all(&items).unwrap();
+        std::fs::write(items.join("Cover.JPG"), b"").unwrap();
+        let out = tempfile::tempdir().expect("tempdir");
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+
+        for i in 0..5 {
+            std::fs::write(items.join(format!("p{i}.md")), b"").unwrap();
+            let mut page = make_doc(&format!("Page {i}"), &format!("items/p{i}/index.html"));
+            page.source_path = Some(format!("items/p{i}.md"));
+            let all_docs = vec![make_doc("Home", "index.html"), page.clone()];
+            let mut og_outputs =
+                crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+            let html = generate_html_collect_og(
+                Some(&page), &all_docs, &make_project(), &make_layout(), false, None, None,
+                Language::En, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(),
+                &SiteUrl::parse("https://example.com").unwrap(),
+                true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
+                vault.path(),
+                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &make_project(), &std::collections::HashMap::new()),
+            )
+            .expect("render");
+            assert!(
+                html.contains(r#"og:image" content="https://example.com/items/Cover.JPG""#),
+                "page {i} should share the folder's cover: {html}"
+            );
+            // Gone from disk after the first page: only the build's one
+            // listing can still name it for the other four.
+            if i == 0 {
+                std::fs::remove_file(items.join("Cover.JPG")).unwrap();
+            }
+        }
+    }
+
+    /// Pages read the build's one media index rather than building their own.
+    /// The index walks every image and video in the vault, so building it per
+    /// page made re-rendering a whole image-heavy site cost pages x media.
+    #[test]
+    fn pages_render_against_the_builds_one_media_index() {
+        use super::super::generate_html_collect_og;
+        use crate::build::media::dimensions::BUILT_ON_THIS_THREAD;
+
+        let out = tempfile::tempdir().expect("tempdir");
+        let home = make_doc("Home", "index.html");
+        let pages: Vec<_> = (0..3)
+            .map(|i| make_doc(&format!("Page {i}"), &format!("p{i}/index.html")))
+            .collect();
+        let mut all_docs = vec![home.clone()];
+        all_docs.extend(pages.iter().cloned());
+        let project = make_project();
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+
+        let shared = crate::build::render::build_shared::BuildShared::new(
+            crate::build::emit::scripts::ScriptAssets::resolve(),
+            &project,
+            &std::collections::HashMap::new(),
+        );
+        let before = BUILT_ON_THIS_THREAD.with(|n| n.get());
+        // The homepage and a regular page take different branches, and each
+        // used to build its own index.
+        for (page, is_homepage) in std::iter::once((&home, true)).chain(pages.iter().map(|p| (p, false))) {
+            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+            generate_html_collect_og(
+                Some(page), &all_docs, &project, &make_layout(), is_homepage, None, None,
+                Language::En, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(),
+                &SiteUrl::parse("https://example.com").unwrap(),
+                true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
+                out.path(),
+                &shared,
+            )
+            .expect("render");
+        }
+        assert_eq!(BUILT_ON_THIS_THREAD.with(|n| n.get()) - before, 0, "a page built its own media index");
+    }
+
+    /// Pages of one folder share its prev/next order, sorted once per build.
+    /// Sorting the folder for each of its pages cost n² log n on a folder of n.
+    #[test]
+    fn pages_of_a_series_share_one_ordering_of_their_folder() {
+        use super::super::generate_html_collect_og;
+        use super::SEQUENCES_ORDERED;
+
+        let out = tempfile::tempdir().expect("tempdir");
+        let mut guide = make_doc("Guide", "guide/index.html");
+        guide.kind = PageKind::Folder;
+        guide.series = Some(crate::build::types::SeriesField::Flag(true));
+        let parts: Vec<_> = (1..=3)
+            .map(|i| {
+                let mut part = make_doc(&format!("Part {i}"), &format!("guide/part-{i}/index.html"));
+                part.weight = Some(i);
+                part
+            })
+            .collect();
+        // Read out of weight order, so only the sorted chain gives each part
+        // its neighbours.
+        let all_docs = vec![
+            make_doc("Home", "index.html"),
+            parts[2].clone(),
+            guide,
+            parts[0].clone(),
+            parts[1].clone(),
+        ];
+        let project = make_project();
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let shared = crate::build::render::build_shared::BuildShared::new(
+            crate::build::emit::scripts::ScriptAssets::resolve(),
+            &project,
+            &std::collections::HashMap::new(),
+        );
+
+        let before = SEQUENCES_ORDERED.with(|n| n.get());
+        for (i, part) in (1..=3).zip(&parts) {
+            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+            let html = generate_html_collect_og(
+                Some(part), &all_docs, &project, &make_layout(), false, None, None,
+                Language::En, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(),
+                &SiteUrl::parse("https://example.com").unwrap(),
+                true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
+                out.path(),
+                &shared,
+            )
+            .expect("render");
+            let prev = match i {
+                1 => r#"moss-series-nav-prev empty"#.to_string(),
+                _ => format!(r#"&lt;</span> <span class="moss-series-nav-title">Part {}</span>"#, i - 1),
+            };
+            let next = match i {
+                3 => r#"moss-series-nav-next empty"#.to_string(),
+                _ => format!(r#"<span class="moss-series-nav-title">Part {}</span> <span class="moss-series-nav-arrow">&gt;"#, i + 1),
+            };
+            assert!(html.contains(&prev), "Part {i} should have prev `{prev}`: {html}");
+            assert!(html.contains(&next), "Part {i} should have next `{next}`: {html}");
+        }
+        assert_eq!(SEQUENCES_ORDERED.with(|n| n.get()) - before, 1, "each page sorted its folder again");
+    }
+
+    /// A favicon raster trio an earlier default-SVG build left in the output
+    /// tree is not this build's: once a vault grows its own `favicon.png`, no
+    /// PNG sizes are rasterized, and pages must not link the leftovers
+    /// (2026-09-14). The page reads the build's answer, never the
+    /// directory, so the trio can wait for the permitted staging sweep.
+    #[test]
+    fn a_leftover_favicon_raster_trio_links_nothing() {
+        use super::super::generate_html_collect_og;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let assets = dir.path().join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        for stale in ["favicon-16.png", "favicon-32.png", "favicon-180.png"] {
+            std::fs::write(assets.join(stale), b"from an earlier build").unwrap();
+        }
+        let homepage = make_doc("Home", "index.html");
+        let all_docs = vec![homepage.clone()];
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+        let html = generate_html_collect_og(
+            Some(&homepage), &all_docs, &make_project(), &make_layout(), true, None, None,
+            Language::En, None, false, false, None, false, None, None,
+            &std::collections::HashMap::new(),
+            &SiteUrl::parse("https://example.com").unwrap(),
+            true, false, "favicon.png", false, Some(dir.path()), &mut og_outputs,
+            std::path::Path::new(""),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &make_project(), &std::collections::HashMap::new()),
+        )
+        .expect("render");
+
+        assert!(!html.contains("apple-touch-icon"), "no link to a PNG this build did not write: {html}");
+        assert!(!html.contains("favicon-180.png"), "no link to a PNG this build did not write");
+    }
+
     #[test]
     fn auto_og_card_emits_when_no_frontmatter_cover() {
         use super::super::generate_html_collect_og;
@@ -6196,7 +6870,8 @@ mod og_url_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&article),
             &all_docs,
@@ -6218,10 +6893,10 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), // source_root
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -6275,7 +6950,8 @@ mod og_url_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&article),
             &all_docs,
@@ -6297,10 +6973,10 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), // source_root
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -6340,7 +7016,8 @@ mod og_url_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&article),
             &all_docs,
@@ -6362,10 +7039,10 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), // source_root
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -6399,7 +7076,8 @@ mod og_url_tests {
             let all_docs = vec![homepage, article.clone()];
             let project = make_project();
             let no_previous = std::collections::HashMap::new();
-            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+            let filename_covers = crate::build::page::cover::FilenameCovers::default();
+            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
             let html = generate_html_collect_og(
                 Some(&article),
                 &all_docs,
@@ -6421,10 +7099,10 @@ mod og_url_tests {
                 true,
                 false,
                 "favicon.svg",
+                false,
                 Some(dir.path()),
                 &mut og_outputs,
-                std::path::Path::new(""), // source_root
-                &crate::build::emit::scripts::ScriptAssets::resolve(),
+                std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
             )
             .expect("generate_html_collect_og should succeed");
             html.lines()
@@ -6458,7 +7136,8 @@ mod og_url_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&article),
             &all_docs,
@@ -6480,10 +7159,10 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), // source_root
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -6529,7 +7208,8 @@ mod og_url_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = super::super::generate_html_collect_og(
             Some(&page),
             &all_docs,
@@ -6551,10 +7231,11 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(tmp.path()),
             &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -6686,7 +7367,8 @@ mod listable_page_card_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         generate_html_collect_og(
             Some(&page),
             &all_docs,
@@ -6708,10 +7390,11 @@ mod listable_page_card_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::emit::scripts::ScriptAssets::resolve(),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
         )
         .expect("generate_html_collect_og should succeed")
     }
@@ -6868,7 +7551,10 @@ mod listable_page_card_tests {
     /// the raw ISO string. Regression guard for a69b13eef, which reverted
     /// `format_article_date` to a `parts.len() >= 3` split that silently
     /// passed any date with fewer than three dash-separated parts straight
-    /// through to the page.
+    /// through to the page. The expected text itself changed with
+    /// `format_article_date`'s move to locale-conventional month names —
+    /// month-precision now reads "May 1809", not the numeric "1809 · 5" this
+    /// guard originally pinned; a raw-ISO regression would still fail it.
     #[test]
     fn article_date_line_formats_a_month_precision_date() {
         let html = render_test_page_with(|d| {
@@ -6882,7 +7568,7 @@ mod listable_page_card_tests {
         let dateline_end = dateline.find("</div></div>").map(|i| i + 12).unwrap_or(dateline.len());
         let dateline = &dateline[..dateline_end];
         assert!(
-            dateline.contains(r#"<span class="date">1809 · 5</span>"#),
+            dateline.contains(r#"<span class="date">May 1809</span>"#),
             "expected formatted month-precision date in date-line:\n{dateline}"
         );
         assert!(
@@ -6912,6 +7598,422 @@ mod listable_page_card_tests {
                 h1 < slot && slot < body,
                 "order must be title < after-title slot < body; got h1={h1} slot={slot} body={body}\n{html}"
             );
+    }
+}
+
+/// Where the place-map locator lands in a real article's rendered HTML —
+/// the wiring between `render/html.rs`'s two `is_article_page` call sites
+/// and `BodyPlan::insert_before_text` (`build/markdown/body_plan.rs`).
+/// `body_plan_tests.rs` covers the placement logic itself in isolation;
+/// these exercise it through `generate_html`, the same function a real
+/// build calls.
+mod place_locator_position_tests {
+    use super::super::generate_html;
+    use crate::build::markdown::body_plan::{render_segmented, BodyPlan};
+    use crate::build::markdown::html_post::inject_article_title_h1;
+    use crate::build::page::layout::LayoutConfig;
+    use crate::build::place_map::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext};
+    use crate::build::site_url::SiteUrl;
+    use crate::build::types::ParsedDocument;
+    use crate::i18n::Language;
+    use crate::types::content::ProjectStructure;
+    use moss_core::ast::{parse, visit_urls_mut, DefaultHooks, Url, UrlKind};
+    use moss_core::PageKind;
+    use std::collections::BTreeMap;
+
+    fn make_project() -> ProjectStructure {
+        ProjectStructure {
+            root_path: String::new(),
+            markdown_files: vec![],
+            html_files: vec![],
+            image_files: vec![],
+            video_files: vec![],
+            notebook_files: vec![],
+            other_files: vec![],
+            total_files: 0,
+            homepage_file: Some("index.md".to_string()),
+            ffmpeg_bin_path: None,
+            evicted_count: 0,
+            evicted_paths: Vec::new(),
+            has_content_folders: false,
+            has_language_trees: false,
+            passthrough_roots: std::collections::HashSet::new(),
+            dirs: Vec::new(),
+        }
+    }
+
+    /// A layout with one gazetteer entry ("Harbor") under the "places"
+    /// namespace, same shape `place_map::context`'s own tests use — the
+    /// locator placement is the caller's, since a bare term-map splice
+    /// (`place_namespace_root_map_tests`) needs no locator at all.
+    pub(super) fn layout_with_locator(placement: LocatorPlacement) -> LayoutConfig {
+        let table: toml::value::Table =
+            toml::from_str("[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n").unwrap();
+        let gazetteer = crate::vault::places::parse_gazetteer(&table);
+        let maps = PlaceMapContext::embedded().expect("embedded place-map pack");
+        let context = PlaceMapRenderContext::new(maps, gazetteer, "places".to_string(), placement, BTreeMap::new());
+        LayoutConfig::new("test-site", Some("Test Site")).with_place_maps(Some(context))
+    }
+
+    /// Parse markdown the way the pipeline does (parse, then classify every
+    /// URL), segment it, then prepend the article title exactly as
+    /// `build::markdown::pipeline` does at parse time — before render/html.rs
+    /// ever reads `first_text_segments` to place the locator.
+    fn article_body(markdown: &str) -> BodyPlan {
+        let mut doc = parse(markdown);
+        visit_urls_mut(&mut doc, |u| {
+            if let Url::Unresolved(s) = u {
+                let kind = if s.starts_with("http") {
+                    UrlKind::External
+                } else if s.ends_with(".jpg") || s.ends_with(".png") {
+                    UrlKind::Asset
+                } else {
+                    UrlKind::Internal
+                };
+                *u = Url::resolved(s.clone(), kind);
+            }
+        });
+        let mut plan = render_segmented(&doc, &DefaultHooks::new());
+        plan.prepend_html(inject_article_title_h1("", "Research", false));
+        plan
+    }
+
+    /// Render a non-homepage article at `/research/` with `location:
+    /// ["Harbor"]` and the given body markdown, through the real
+    /// `generate_html` — the same function `build/pipeline.rs` calls.
+    fn render_article(markdown: &str) -> String {
+        let homepage = {
+            let mut d = ParsedDocument::default();
+            d.title = "Home".to_string();
+            d.label = "Home".to_string();
+            d.url_path = "index.html".to_string();
+            d.kind = PageKind::Article;
+            d
+        };
+        let mut page = ParsedDocument::default();
+        page.title = "Research".to_string();
+        page.label = "Research".to_string();
+        page.url_path = "research/index.html".to_string();
+        page.kind = PageKind::Article;
+        page.location = vec!["Harbor".to_string()];
+        let plan = article_body(markdown);
+        page.html_content = plan.to_html();
+        page.body_plan = Some(plan);
+
+        let all_docs = vec![homepage, page.clone()];
+        let project = make_project();
+        let layout = layout_with_locator(LocatorPlacement::AlignRight);
+
+        generate_html(
+            Some(&page),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &SiteUrl::parse("https://example.com").unwrap(),
+            true,
+            false,
+            "favicon.svg",
+            None, // output_dir — no auto OG card
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed")
+    }
+
+    #[test]
+    fn locator_sits_after_a_leading_heading_and_before_the_paragraph() {
+        let html = render_article("## Section\n\nBody paragraph after heading.\n");
+        let heading = html.find("<h2").expect("heading present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let para = html.find("Body paragraph after heading").expect("paragraph present");
+        assert!(
+            heading < locator && locator < para,
+            "want heading < locator < paragraph, got:\n{html}"
+        );
+    }
+
+    #[test]
+    fn locator_sits_right_before_a_leading_paragraph() {
+        let html = render_article("Opening paragraph, no heading first.\n");
+        let title = html.find("moss-article-title").expect("title present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let para = html.find("Opening paragraph").expect("paragraph present");
+        assert!(
+            title < locator && locator < para,
+            "want title < locator < paragraph, got:\n{html}"
+        );
+    }
+
+    #[test]
+    fn locator_sits_after_a_leading_image_and_before_the_paragraph() {
+        let html = render_article("![alt](photo.jpg)\n\nBody paragraph after the image.\n");
+        let image = html.find("photo.jpg").expect("image present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let para = html.find("Body paragraph after the image").expect("paragraph present");
+        assert!(
+            image < locator && locator < para,
+            "want image < locator < paragraph, got:\n{html}"
+        );
+    }
+
+    #[test]
+    fn locator_sits_right_before_a_leading_list() {
+        // A list IS a text block (same as a paragraph or blockquote), so the
+        // locator goes before it, not after — unlike the heading/image cases
+        // above, where the locator is skipping past non-text content.
+        let html = render_article("- one\n- two\n");
+        let title = html.find("moss-article-title").expect("title present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let list = html.find("<ul").expect("list present");
+        assert!(
+            title < locator && locator < list,
+            "want title < locator < list, got:\n{html}"
+        );
+    }
+
+    #[test]
+    fn locator_falls_back_to_the_front_with_no_text_block() {
+        let html = render_article("## Only a heading\n\n---\n");
+        let title = html.find("moss-article-title").expect("title present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let heading = html.find("<h2").expect("heading present");
+        assert!(
+            title < locator && locator < heading,
+            "a body with no text block keeps the locator right after the title, before \
+             everything else, got:\n{html}"
+        );
+    }
+
+    /// Render a `layout: article` HOMEPAGE with `location: ["Harbor"]` — the
+    /// other site `is_article_page` can be true at (the `(Some(doc), true)`
+    /// arm of `generate_html_inner`'s match, not the `(Some(doc), false)` arm
+    /// every other test in this module exercises).
+    fn render_homepage_article(markdown: &str) -> String {
+        let mut page = ParsedDocument::default();
+        page.title = "Research".to_string();
+        page.label = "Research".to_string();
+        page.url_path = "index.html".to_string();
+        page.kind = PageKind::Article;
+        page.layout = Some("article".to_string());
+        page.location = vec!["Harbor".to_string()];
+        let plan = article_body(markdown);
+        page.html_content = plan.to_html();
+        page.body_plan = Some(plan);
+
+        let all_docs = vec![page.clone()];
+        let project = make_project();
+        let layout = layout_with_locator(LocatorPlacement::AlignRight);
+
+        generate_html(
+            Some(&page),
+            &all_docs,
+            &project,
+            &layout,
+            true, // is_homepage
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &SiteUrl::parse("https://example.com").unwrap(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed")
+    }
+
+    #[test]
+    fn locator_sits_after_a_leading_heading_on_a_layout_article_homepage() {
+        let html = render_homepage_article("## Section\n\nBody paragraph after heading.\n");
+        let heading = html.find("<h2").expect("heading present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let para = html.find("Body paragraph after heading").expect("paragraph present");
+        assert!(
+            heading < locator && locator < para,
+            "want heading < locator < paragraph, got:\n{html}"
+        );
+    }
+}
+
+/// A real folder index at a place-typed namespace root (a real
+/// `places/index.md`, no `place_page:` claim) used to win outright over the
+/// map the unclaimed synthetic root would otherwise have shown:
+/// `render/blocking.rs`'s `folders_with_explicit_index` check skips the
+/// synthetic root whenever a real page already occupies that URL, and the
+/// map splice here fired only for a claimed `term_listing`, which a
+/// namespace root's own index never sets. `is_place_namespace_root` (set by
+/// `terms::derive_terms`) is what tells these two cases apart from a plain
+/// folder index sharing the same shape.
+mod place_namespace_root_map_tests {
+    use super::super::generate_html;
+    use super::place_locator_position_tests::layout_with_locator;
+    use crate::build::place_map::LocatorPlacement;
+    use crate::build::site_url::SiteUrl;
+    use crate::build::types::ParsedDocument;
+    use crate::i18n::Language;
+    use crate::types::content::ProjectStructure;
+    use moss_core::PageKind;
+
+    fn localhost_url() -> SiteUrl {
+        SiteUrl::parse("http://localhost").unwrap()
+    }
+
+    fn make_project() -> ProjectStructure {
+        ProjectStructure {
+            root_path: String::new(),
+            markdown_files: vec![],
+            html_files: vec![],
+            image_files: vec![],
+            video_files: vec![],
+            notebook_files: vec![],
+            other_files: vec![],
+            total_files: 0,
+            homepage_file: Some("index.md".to_string()),
+            ffmpeg_bin_path: None,
+            evicted_count: 0,
+            evicted_paths: Vec::new(),
+            has_content_folders: false,
+            has_language_trees: false,
+            passthrough_roots: std::collections::HashSet::new(),
+            dirs: Vec::new(),
+        }
+    }
+
+    /// A real `places/index.md`: `is_place_namespace_root` is what
+    /// `terms::derive_terms` would have set on it. `location` gives the
+    /// root aggregate something to draw — `PlaceMapRenderContext::aggregate`
+    /// reads every passed-in doc's own `location` for the root key, not only
+    /// a claimed member's.
+    fn root_doc(map: Option<bool>) -> ParsedDocument {
+        ParsedDocument {
+            title: "Places".to_string(),
+            label: "Places".to_string(),
+            url_path: "places/index.html".to_string(),
+            html_content: "<p>Every place this site names, on one map.</p>".to_string(),
+            reading_time: 1,
+            slug: "places".to_string(),
+            permalink: "/places".to_string(), // allow:served-path-url-construct (test fixture)
+            lang: Language::En,
+            kind: PageKind::Folder,
+            is_place_namespace_root: true,
+            map,
+            location: vec!["Harbor".to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn child_doc() -> ParsedDocument {
+        ParsedDocument {
+            title: "Harbor Diary".to_string(),
+            label: "Harbor Diary".to_string(),
+            url_path: "places/harbor-diary/index.html".to_string(),
+            html_content: "<p>Harbor Diary content</p>".to_string(),
+            reading_time: 1,
+            slug: "harbor-diary".to_string(),
+            permalink: "/places/harbor-diary".to_string(), // allow:served-path-url-construct (test fixture)
+            lang: Language::En,
+            kind: PageKind::Article,
+            ..Default::default()
+        }
+    }
+
+    fn render(doc: &ParsedDocument, all_docs: &[ParsedDocument]) -> String {
+        let project = make_project();
+        let layout = layout_with_locator(LocatorPlacement::None);
+        generate_html(
+            Some(doc),
+            all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed")
+    }
+
+    #[test]
+    fn real_index_at_place_root_composes_intro_and_map() {
+        let root = root_doc(None);
+        let all_docs = vec![root.clone(), child_doc()];
+        let html = render(&root, &all_docs);
+        assert!(
+            html.contains("Every place this site names, on one map."),
+            "the page's own intro must still render: {html}"
+        );
+        assert!(
+            html.contains("moss-place-map"),
+            "a real folder index at a place namespace root must still get the term map: {html}"
+        );
+        // An explorer root is only the map: the reader reaches places through
+        // the map and its breadcrumb menu, so the folder's own children are
+        // not listed under it. A nested place page keeps its list.
+        assert!(!html.contains("Harbor Diary"), "an explorer root must not list its children under the map: {html}");
+        // Design decision 7, "the map is the page": an explorer root carries
+        // no VISIBLE heading (the title stays out of the visible layout) but
+        // still exactly one real `<h1>`, for screen-reader navigation, with
+        // `.visually-hidden` doing the hiding rather than the heading's own
+        // absence. The map leads — the author's own intro renders BELOW it,
+        // not above.
+        let main_start = html.find("<main").expect("page has a <main>");
+        let main = &html[main_start..];
+        assert_eq!(main.matches("<h1").count(), 1, "an explorer root must carry exactly one <h1> in main: {html}");
+        let h1_start = main.find("<h1").unwrap();
+        let h1_end = main[h1_start..].find("</h1>").unwrap() + h1_start + "</h1>".len();
+        let h1 = &main[h1_start..h1_end];
+        assert!(h1.contains("visually-hidden"), "the explorer root's own <h1> must be visually hidden: {h1}");
+        assert!(h1.contains("Places"), "the hidden <h1> must still carry the page title: {h1}");
+        let map_pos = html.find("moss-place-map").unwrap();
+        let intro_pos = html.find("Every place this site names").unwrap();
+        assert!(map_pos < intro_pos, "the map must lead, with the intro below it: {html}");
+    }
+
+    #[test]
+    fn map_false_suppresses_the_map_but_keeps_intro_and_children() {
+        let root = root_doc(Some(false));
+        let all_docs = vec![root.clone(), child_doc()];
+        let html = render(&root, &all_docs);
+        assert!(
+            html.contains("Every place this site names, on one map."),
+            "the intro must still render with map: false: {html}"
+        );
+        assert!(html.contains("Harbor Diary"), "the children listing must still render with map: false: {html}");
+        assert!(!html.contains("moss-place-map"), "map: false must suppress the term map: {html}");
     }
 }
 
@@ -7196,12 +8298,12 @@ mod homepage_translation_tests {
     fn test_homepage_translation_does_not_create_index_directory() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Create both homepage files
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
-        // whatlang confidence on short bodies. Post-#545 the site default falls
+        // whatlang confidence on short bodies. The site default falls
         // back to whichever lang has a reliable detection (here only the CJK file
         // does) and the English-content `index.md` has no signal — without an
         // explicit lang both docs collapse to ZhHans and dedup uses a numeric
@@ -7265,11 +8367,11 @@ mod homepage_translation_tests {
     fn test_homepage_translation_page_content() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
-        // whatlang confidence on short bodies. Post-#545 the site default falls
+        // whatlang confidence on short bodies. The site default falls
         // back to whichever lang has a reliable detection (here only the CJK file
         // does) and the English-content `index.md` has no signal — without an
         // explicit lang both docs collapse to ZhHans and dedup uses a numeric
@@ -7319,19 +8421,18 @@ mod homepage_translation_tests {
     /// Homepage translation should NOT render an injected article title.
     /// When index.zh-hans.md is demoted (is_index=false), it must still be
     /// recognized as a folder/index page by the markdown pipeline so that
-    /// the auto-injection (`<h1 class="moss-article-title">`) added in
-    /// `docs/archive/2026-04-28-auto-h1-injection-design.md` is not applied
+    /// the auto-injection (`<h1 class="moss-article-title">`) is not applied
     /// above the authored body. The legacy `.article-title` class no
     /// longer ships as an injected class but is also asserted absent.
     #[test]
     fn test_homepage_translation_no_article_title() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
-        // whatlang confidence on short bodies. Post-#545 the site default falls
+        // whatlang confidence on short bodies. The site default falls
         // back to whichever lang has a reliable detection (here only the CJK file
         // does) and the English-content `index.md` has no signal — without an
         // explicit lang both docs collapse to ZhHans and dedup uses a numeric
@@ -7377,14 +8478,14 @@ mod homepage_translation_tests {
     }
 
     /// The `home: true` marker promotes a non-index file in a subfolder
-    /// (e.g. `en/Liu Guo.md` → `en/index.html`) to that folder's home
+    /// (e.g. `en/Mountain Home.md` → `en/index.html`) to that folder's home
     /// page. The promoted page must NOT carry an injected
     /// `<h1 class="moss-folder-title">` — it's the language-specific
     /// equivalent of the site root, not a generic folder listing. The root
     /// home (`/index.html`) already skips this H1; home-marker pages must
     /// do the same so toggling languages doesn't reveal a stray heading.
     ///
-    /// Regression for the 刘果 vault (en/Liu Guo.md): user reported "extra
+    /// Regression from a bilingual site (en/Mountain Home.md): user reported "extra
     /// H1 rendered in the English home page, but home page should not
     /// have this extra H1." Guards the re-keyed path: the marker drives
     /// `doc.is_home_override`, NOT `translationKey == "home"`.
@@ -7392,20 +8493,20 @@ mod homepage_translation_tests {
     fn test_home_marker_promoted_no_folder_title_h1() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
         fs::create_dir_all(test_dir.join("en")).unwrap();
 
-        // Mirror the 刘果 vault: site-root file is the Chinese home,
-        // en/Liu Guo.md is promoted to en/index.html via the home marker.
+        // Mirror a bilingual vault: site-root file is the Chinese home,
+        // en/Mountain Home.md is promoted to en/index.html via the home marker.
         fs::write(
-            test_dir.join("刘果.md"),
-            "---\ntitle: 刘果\nlang: zh-hans\nhome: true\n---\n看星星，食烟火。\n",
+            test_dir.join("山居.md"),
+            "---\ntitle: 山居\nlang: zh-hans\nhome: true\n---\n第一段。\n",
         )
         .unwrap();
         fs::write(
-            test_dir.join("en/Liu Guo.md"),
-            "---\ntitle: Liu Guo\nlang: en\nhome: true\n---\nWatch the stars.\n",
+            test_dir.join("en/Mountain Home.md"),
+            "---\ntitle: Mountain Home\nlang: en\nhome: true\n---\nFirst page.\n",
         )
         .unwrap();
 
@@ -7446,11 +8547,11 @@ mod homepage_translation_tests {
     fn test_homepage_translation_not_in_nav() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
-        // whatlang confidence on short bodies. Post-#545 the site default falls
+        // whatlang confidence on short bodies. The site default falls
         // back to whichever lang has a reliable detection (here only the CJK file
         // does) and the English-content `index.md` has no signal — without an
         // explicit lang both docs collapse to ZhHans and dedup uses a numeric
@@ -7506,7 +8607,7 @@ mod homepage_translation_tests {
 
     /// og:image on a translated page should resolve a cover wikilink
     /// (`cover: "[[Winter-Song.mov]]"`) into the assets directory, NOT to
-    /// the article's own markdown source path. Regression for the 刘果-vault
+    /// the article's own markdown source path. Regression for a real vault's
     /// bug where en/videos/ articles emitted
     /// `<meta property="og:image" content="/en/video/winter-song.md">`.
     ///
@@ -7519,10 +8620,10 @@ mod homepage_translation_tests {
     fn test_og_image_resolves_cover_wikilink_on_translated_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
-        // Mirror the 刘果 vault layout: language-neutral assets/ + a per-language
+        // Mirror a bilingual vault layout: language-neutral assets/ + a per-language
         // articles folder where each article has the same stem as an asset.
         fs::create_dir_all(test_dir.join("assets")).unwrap();
         fs::create_dir_all(test_dir.join("en/videos")).unwrap();
@@ -7583,29 +8684,29 @@ mod homepage_translation_tests {
 
     /// `og:site_name` should reflect the canonical site, not bleed
     /// the EN homepage's filename onto every Chinese page. The plan
-    /// reports the user's `刘果` vault (Chinese-default site with
+    /// reports a user's vault (Chinese-default site with
     /// `en/en.md` as English homepage) emitted og:site_name="En" on
     /// every page including Chinese pages.
     #[test]
     fn test_og_site_name_uses_default_lang_homepage() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Mirror the user's layout: Chinese-default site with a self-named
         // root home AND a self-named English home in the en/ subfolder.
         fs::create_dir_all(test_dir.join("en")).unwrap();
         fs::write(
-            test_dir.join("刘果.md"),
-            "---\ntitle: 刘果\nlang: zh-hans\n---\n# 你好\n这是一个网站。",
+            test_dir.join("山居.md"),
+            "---\ntitle: 山居\nlang: zh-hans\n---\n# 你好\n这是一个网站。",
         )
         .unwrap();
         // en/en.md — self-named folder note; the plan reports this filename
         // pattern leaked "En" as the site name.
         fs::write(
             test_dir.join("en/en.md"),
-            "---\ntitle: Liu Guo\nlang: en\n---\n# Hello\nThis is a site.",
+            "---\ntitle: Mountain Home\nlang: en\n---\n# Hello\nThis is a site.",
         )
         .unwrap();
         fs::write(
@@ -7628,7 +8729,7 @@ mod homepage_translation_tests {
         assert!(result.is_ok(), "generate_blocking_content should succeed");
 
         // Walk every emitted HTML page and assert og:site_name is NOT "En".
-        // The acceptable site_name is either the canonical home title (刘果)
+        // The acceptable site_name is either the canonical home title (山居)
         // or the source folder name. Either way, NEVER the EN-folder filename.
         for entry in walkdir::WalkDir::new(&output_dir)
             .into_iter()
@@ -7647,6 +8748,52 @@ mod homepage_translation_tests {
         }
     }
 
+    #[test]
+    fn localized_root_title_names_authored_and_synthetic_pages() {
+        let (test_dir, _cleanup) = create_test_dir();
+        let output_dir = test_dir.join(".moss/build/staging");
+        fs::create_dir_all(test_dir.join("zh-hant/guide")).unwrap();
+        fs::write(
+            test_dir.join("index.md"),
+            "---\ntitle: moss\nlang: en\n---\n# Home\n",
+        )
+        .unwrap();
+        fs::write(
+            test_dir.join("zh-hant/index.md"),
+            "---\ntitle: 青苔\nlang: zh-hant\n---\n# 首頁\n",
+        )
+        .unwrap();
+        fs::write(
+            test_dir.join("zh-hant/guide/page.md"),
+            "---\ntitle: 寫作\nlang: zh-hant\n---\n# 寫作\n",
+        )
+        .unwrap();
+
+        let project_structure = scan_folder(test_dir.to_str().unwrap()).unwrap();
+        generate_blocking_content(
+            &crate::vault::paths::VaultRoot::resolve(test_dir.to_str().unwrap()),
+            &project_structure,
+            &output_dir,
+            None,
+            None,
+            true,
+            SiteConfig::default(),
+            &mut PendingManifest::new(SiteHashes::default()),
+        )
+        .expect("multilingual site should build");
+
+        let authored = fs::read_to_string(output_dir.join("zh-hant/guide/page/index.html"))
+            .expect("authored Traditional Chinese page");
+        assert!(authored.contains(r#"<meta property="og:site_name" content="青苔">"#));
+        assert!(authored.contains(r#"class="site-name"#) && authored.contains(">青苔</a>"));
+
+        let synthetic = fs::read_to_string(output_dir.join("zh-hant/guide/index.html"))
+            .expect("synthetic Traditional Chinese folder page");
+        assert!(synthetic.contains(" - 青苔</title>"));
+        assert!(synthetic.contains(r#"class="site-name"#) && synthetic.contains(">青苔</a>"));
+        assert!(!synthetic.contains(" - moss</title>"));
+    }
+
     /// Same as the .mov case but for `[[scale-family-tree.html]]` —
     /// the second variant the plan reported failing, where the article's
     /// own markdown source had the same stem as a sibling .html asset.
@@ -7654,7 +8801,7 @@ mod homepage_translation_tests {
     fn test_og_image_resolves_html_cover_wikilink_on_translated_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         fs::create_dir_all(test_dir.join("assets")).unwrap();
@@ -7705,13 +8852,12 @@ mod homepage_translation_tests {
     }
 
     /// `<html lang>` should reflect each page's actual language, not the
-    /// site default. Regression for the bug filed in
-    /// docs/archive/2026-04-20-html-lang-per-page-fix.md.
+    /// site default.
     #[test]
     fn test_html_lang_attribute_is_per_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // English homepage and Chinese translation, lang pinned for determinism.
@@ -7772,8 +8918,8 @@ mod homepage_translation_tests {
 /// the production render code applies to suppress `moss-folder-title`.
 mod lang_tree_root_home_tests {
     /// Helper: compute the is_lang_tree_root_home predicate for a given
-    /// source_path and url_path, matching the production logic at
-    /// `src-tauri/src/build/render/html.rs`.
+    /// source_path and url_path, matching the production logic in
+    /// `build/render/html.rs`.
     fn is_lang_tree_root_home(source_path: Option<&str>, url_path: &str) -> bool {
         source_path
             .and_then(|p| moss_core::home::lang_tree_prefix(p))
@@ -7914,7 +9060,7 @@ mod sequence_siblings_tests {
         );
     }
 
-    /// #1012: `layout: article` is the author saying "this one is a piece",
+    /// `layout: article` is the author saying "this one is a piece",
     /// so the folder index rejoins the chain — and, being in it, renders its
     /// own prev/next too. `subfolder_index_is_not_a_neighbour` above is the
     /// other half of the pair: a folder index that said nothing stays a
@@ -7947,6 +9093,83 @@ mod sequence_siblings_tests {
             "series: false must remove the page from its siblings' chain, \
              so `one`'s next is `three` and `three`'s prev is `one`"
         );
+    }
+
+    /// A series whose chapters all share a date walks its prev/next chain in
+    /// the order the folder's own page lists them, whatever order the pages
+    /// were read in. Before, the chain kept the read order (4, 1, 2, 3 on one
+    /// build) while the listing broke the tie itself. Filenames, url slugs and
+    /// titles each sort these four differently, so only one shared key can
+    /// make the two agree.
+    #[test]
+    fn same_date_chain_matches_the_folder_listing() {
+        use crate::build::folder_embed::{resolve_markers, synthesize_children_marker};
+        use crate::i18n::Language;
+
+        fn chapter(stem: &str, title: &str) -> ParsedDocument {
+            ParsedDocument {
+                title: title.to_string(),
+                label: title.to_string(),
+                clean_stem: stem.to_string(),
+                url_path: format!("serial/{}/index.html", stem.to_lowercase()),
+                date: Some("1804".to_string()),
+                kind: PageKind::Article,
+                ..Default::default()
+            }
+        }
+
+        let project = crate::build::folder_embed::tests::test_project();
+        for (style, group) in [("grid", "none"), ("summary", "none"), ("list", "none"), ("list", "year")] {
+            let mut index = folder("serial");
+            index.url_path = "serial/index.html".to_string();
+            index.series = Some(SeriesField::Flag(true));
+            index.children_style = Some(moss_core::Resolved::frontmatter(style.to_string()));
+            index.children_group = Some(moss_core::Resolved::frontmatter(group.to_string()));
+            let docs = vec![
+                chapter("Exile", "Exile"),
+                chapter("arrival", "The Arrival"),
+                index,
+                chapter("departure", "Departure"),
+                chapter("Crossing", "A Crossing"),
+            ];
+            let index = &docs[2];
+
+            let marker = synthesize_children_marker(index, "serial", "serial/index.md");
+            let listing = resolve_markers(
+                &marker,
+                "serial/index.md",
+                &docs,
+                &project,
+                &std::collections::HashMap::new(),
+                Language::En,
+                None,
+                None,
+                false,
+            );
+            assert_eq!(
+                group == "year",
+                listing.contains("moss-cards-minimal-year-group"),
+                "only the year case renders year sections: {listing}"
+            );
+            let mut listed = vec!["arrival", "crossing", "departure", "exile"];
+            listed.sort_by_key(|slug| {
+                listing
+                    .find(&format!("href=\"/serial/{slug}/\""))
+                    .unwrap_or_else(|| panic!("{slug} missing from the {style}/{group} listing: {listing}"))
+            });
+
+            let chain: Vec<String> = sequence_siblings(
+                &docs,
+                "serial/index.html",
+                "serial/",
+                &index.resolve_for_direct_children(),
+            )
+            .iter()
+            .map(|d| d.url_path.trim_start_matches("serial/").trim_end_matches("/index.html").to_string())
+            .collect();
+
+            assert_eq!(chain, listed, "the chain must follow the {style}/{group} listing's order");
+        }
     }
 }
 
@@ -7984,7 +9207,7 @@ mod registry_clear_tests {
 
         // A site with NO videos — the case the old placement never reached.
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         // An earlier build's failure, surviving on the shared registry.
@@ -8012,5 +9235,475 @@ mod registry_clear_tests {
              survived and would strip a live <source> from healthy HTML: {:?}",
             registry.failed_keys()
         );
+    }
+}
+
+/// End-to-end proof that the build-time link-metadata fetch
+/// (`build::page::link_meta::fetch_new_link_meta_for_build`, wired in
+/// `blocking.rs` right before the per-page render loop) actually reaches a
+/// real build: a fresh site with an external grid link against a local
+/// (loopback) HTTP server, built ONCE, must show the fetched title on that
+/// SAME build — the one-build lag the owner's decision explicitly rejects
+/// ("New links: FETCH DURING THE BUILD... so a card is complete on its
+/// first build").
+mod build_time_link_meta_fetch_tests {
+    use crate::build::render::blocking::SiteConfig;
+    use std::fs;
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A server that answers every request with the same fixed HTML,
+    /// `requests` times — same shape as `link_meta.rs`'s own test helper
+    /// (kept as a local copy: that one is private to its module).
+    fn spawn_test_server(html: &'static str, requests: usize) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let body = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
+                    html.len(),
+                    html
+                );
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        (url, handle)
+    }
+
+    fn build_site(test_dir: &std::path::Path, exits_after_build: bool) {
+        super::render_for_build(test_dir, SiteConfig::default(), exits_after_build);
+    }
+
+    #[test]
+    fn a_new_external_link_shows_its_fetched_title_on_the_first_build() {
+        let html = r#"<html><head><meta property="og:title" content="Fetched On First Build"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 1);
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_build_fetch_e2e_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+
+        fs::write(
+            test_dir.join("index.md"),
+            format!(":::grid 1\n<{base}/first-build>\n:::\n"),
+        )
+        .unwrap();
+
+        build_site(&test_dir, true);
+
+        let index_html = fs::read_to_string(
+            test_dir.join(".moss").join("build.nosync").join("site").join("index.html"),
+        )
+        .expect("index.html should exist");
+        assert!(
+            index_html.contains("Fetched On First Build"),
+            "the title fetched DURING this build must appear in this build's own \
+             output, not just the next one's: {index_html}"
+        );
+
+        let _ = server.join();
+    }
+
+    #[test]
+    fn an_offline_build_with_an_unreachable_link_still_finishes_promptly() {
+        // Bind then drop, so the port is guaranteed to refuse connections —
+        // the "server down" case the owner's report has to speak to.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_build_fetch_offline_e2e_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+
+        fs::write(
+            test_dir.join("index.md"),
+            format!(":::grid 1\n<http://127.0.0.1:{port}/unreachable>\n:::\n"),
+        )
+        .unwrap();
+
+        let start = std::time::Instant::now();
+        build_site(&test_dir, true);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "an unreachable link must not stall the build near the budget's ceiling: {elapsed:?}"
+        );
+
+        let index_html = fs::read_to_string(
+            test_dir.join(".moss").join("build.nosync").join("site").join("index.html"),
+        )
+        .expect("index.html should exist even though the link never resolved");
+        assert!(
+            index_html.contains("moss-card"),
+            "the cell still renders its card, just without fetched metadata: {index_html}"
+        );
+    }
+}
+
+/// End-to-end proof that `[site].rss_footer = true` never links the footer
+/// to an `rss.xml` this build didn't actually write. The toggle alone used
+/// to be enough to print the link even on a build with no resolved site
+/// URL — which writes no feed at all — so every page carried a dead link;
+/// see the `has_rss` note in `blocking.rs` above `show_rss_in_footer`.
+mod rss_footer_feed_gate_tests {
+    use crate::build::render::blocking::SiteConfig;
+    use std::fs;
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "moss_rss_footer_{label}_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Builds a one-page site with `[site].rss_footer = true` and the given
+    /// `site_url_override` (`None` reproduces a fresh, undeployed project —
+    /// the case with no resolvable site URL and thus no feed). Returns the
+    /// built `index.html` and the path a real `rss.xml` would land at.
+    fn build_site(test_dir: &std::path::Path, site_url_override: Option<&str>) -> (String, std::path::PathBuf) {
+        fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+        fs::create_dir_all(test_dir.join(".moss")).unwrap();
+        fs::write(test_dir.join(".moss").join("config.toml"), "[site]\nrss_footer = true\n").unwrap();
+
+        let site_config = SiteConfig {
+            site_url_override: site_url_override.map(str::to_string),
+            ..SiteConfig::default()
+        };
+        let output_dir = super::render_for_build(test_dir, site_config, true);
+
+        let index_html = fs::read_to_string(output_dir.join("index.html")).expect("index.html should exist");
+        (index_html, output_dir.join("rss.xml"))
+    }
+
+    #[test]
+    fn rss_footer_on_with_no_feed_emits_no_footer_link() {
+        let test_dir = scratch_dir("no_feed");
+        let _cleanup = Cleanup(test_dir.clone());
+
+        let (index_html, rss_path) = build_site(&test_dir, None);
+
+        assert!(
+            !rss_path.exists(),
+            "precondition: an undeployed build must genuinely write no rss.xml"
+        );
+        assert!(
+            !index_html.contains(r#"href="/rss.xml""#),
+            "no feed exists; the footer must not link to one: {index_html}"
+        );
+    }
+
+    #[test]
+    fn rss_footer_on_with_a_feed_emits_the_footer_link() {
+        let test_dir = scratch_dir("with_feed");
+        let _cleanup = Cleanup(test_dir.clone());
+
+        let (index_html, rss_path) = build_site(&test_dir, Some("https://example.com"));
+
+        assert!(rss_path.exists(), "precondition: a deployed build must write rss.xml");
+        assert!(
+            index_html.contains(r#"href="/rss.xml""#),
+            "a real feed exists and rss_footer is on: the footer link must render: {index_html}"
+        );
+    }
+}
+
+/// A deployed build also serves the feed at its old address, `feed.xml`,
+/// with the same bytes, and an undeployed build writes neither.
+mod legacy_feed_alias_tests {
+    use crate::build::render::blocking::SiteConfig;
+    use std::fs;
+
+    fn build(site_url_override: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "moss_feed_alias_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+        let site_config = SiteConfig {
+            site_url_override: site_url_override.map(str::to_string),
+            ..SiteConfig::default()
+        };
+        super::render_for_build(&dir, site_config, true)
+    }
+
+    #[test]
+    fn a_deployed_build_serves_feed_xml_with_the_bytes_of_rss_xml() {
+        let out = build(Some("https://example.com"));
+        let rss = fs::read(out.join("rss.xml")).expect("rss.xml should exist");
+        let legacy = fs::read(out.join("feed.xml")).expect("feed.xml should exist");
+        assert_eq!(rss, legacy);
+    }
+
+    /// The folder's own files are copied in after this phase, so the alias
+    /// must not rest on that ordering: it is never written over a path the
+    /// folder provides.
+    #[test]
+    fn the_alias_is_not_written_where_the_folder_has_its_own_feed_xml() {
+        let dir = std::env::temp_dir().join(format!(
+            "moss_feed_alias_own_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+        fs::write(dir.join("feed.xml"), "<rss>own</rss>").unwrap();
+        let site_config = SiteConfig {
+            site_url_override: Some("https://example.com".to_string()),
+            ..SiteConfig::default()
+        };
+        let out = super::render_for_build(&dir, site_config, true);
+        assert!(out.join("rss.xml").exists());
+        assert!(!out.join("feed.xml").exists());
+    }
+
+    #[test]
+    fn an_undeployed_build_writes_neither_feed_path() {
+        let out = build(None);
+        assert!(!out.join("rss.xml").exists());
+        assert!(!out.join("feed.xml").exists());
+    }
+}
+
+/// End-to-end proof that a downloaded og:image becomes a real local cover
+/// (`build::media::remote_cover`), rendered exactly like an internal page's
+/// cover — never the remote URL — on the SAME build that introduces the
+/// link, mirroring `build_time_link_meta_fetch_tests` above for the cover
+/// half of the "one card kind" story.
+mod remote_cover_end_to_end_tests {
+    use crate::build::render::blocking::SiteConfig;
+    use std::fs;
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tiny_png_bytes() -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(4, 3, image::Rgb([30, 120, 200]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    /// A server that answers `/page` with HTML carrying an `og:image`
+    /// pointing at `/cover.png` on the SAME server, and `/cover.png` with a
+    /// real decodable PNG. One connection per path, `requests` total.
+    fn spawn_page_with_cover_server(requests: usize) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let base_for_thread = url.clone();
+        let handle = std::thread::spawn(move || {
+            let png = tiny_png_bytes();
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut req = [0u8; 2048];
+                let n = stream.read(&mut req).unwrap_or(0);
+                let req_text = String::from_utf8_lossy(&req[..n]);
+                let first_line = req_text.lines().next().unwrap_or("");
+                if first_line.contains("/cover.png") {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: image/png\r\n\r\n",
+                        png.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&png);
+                } else {
+                    let html = format!(
+                        r#"<html><head><meta property="og:title" content="Cover Page"><meta property="og:image" content="{base_for_thread}/cover.png"></head></html>"#
+                    );
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n",
+                        html.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(html.as_bytes());
+                }
+            }
+        });
+        (url, handle)
+    }
+
+    fn build_site(test_dir: &std::path::Path) -> String {
+        let output_dir = super::render_for_build(test_dir, SiteConfig::default(), true);
+        fs::read_to_string(output_dir.join("index.html")).expect("index.html should exist")
+    }
+
+    #[test]
+    fn an_og_image_becomes_a_local_cover_on_the_first_build() {
+        let (base, server) = spawn_page_with_cover_server(2);
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_remote_cover_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{base}/page>\n:::\n")).unwrap();
+
+        let index_html = build_site(&test_dir);
+
+        assert!(
+            index_html.contains(r#"class="moss-card-cover">"#),
+            "og:image present must produce a real cover, not the no-cover placeholder: {index_html}"
+        );
+        assert!(index_html.contains("_moss/link/"), "cover must be a local asset: {index_html}");
+        assert!(index_html.contains("src=\"/_moss/link/"), "cover URL must be root-relative: {index_html}");
+        assert!(index_html.contains(".webp"), "must go through the webp pipeline: {index_html}");
+        // The card's own href legitimately points at the external page (and
+        // the favicon is hotlinked by existing, unrelated design), so the
+        // "never emit the remote URL" check is scoped to the cover's own
+        // <picture> — its src/srcset must be local paths, not the origin
+        // that served the downloaded image.
+        let picture_start = index_html.find("<picture>").expect("cover must render a <picture>");
+        let picture_end = index_html[picture_start..].find("</picture>").unwrap() + picture_start;
+        let picture_markup = &index_html[picture_start..picture_end];
+        assert!(
+            !picture_markup.contains(&base),
+            "the cover's own markup must never reference the remote origin: {picture_markup}"
+        );
+
+        let _ = server.join();
+    }
+
+    #[test]
+    fn a_manually_titled_link_still_gets_a_fetched_cover_and_favicon() {
+        // Owner decision (2026-09): author-written link text wins the
+        // TITLE slot only — it must not suppress the fetch, the favicon,
+        // or the cover. The owner's real case is a row of podcast
+        // episodes written as `[episode title](https://…)` that need
+        // covers like every other card.
+        let (base, server) = spawn_page_with_cover_server(2);
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_remote_cover_manual_title_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n[Real Title]({base}/page)\n:::\n")).unwrap();
+
+        let index_html = build_site(&test_dir);
+
+        assert!(
+            index_html.contains(r#"<span class="moss-card-title">Real Title</span>"#),
+            "the author's own link text must win the title slot: {index_html}"
+        );
+        assert!(
+            index_html.contains(r#"class="moss-card-cover">"#),
+            "a manual title must not suppress the fetched cover: {index_html}"
+        );
+        assert!(index_html.contains("_moss/link/"), "cover must be a local asset: {index_html}");
+        assert!(
+            index_html.contains(r#"class="moss-card-kicker-favicon""#),
+            "a manual title must not suppress the fetched favicon: {index_html}"
+        );
+
+        let _ = server.join();
+    }
+
+    #[test]
+    fn a_link_with_no_og_image_gets_the_placeholder() {
+        let html_no_image = r#"<html><head><meta property="og:title" content="No Cover Here"></head></html>"#;
+        let (base, server) = {
+            use std::io::{Read, Write};
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let url = format!("http://127.0.0.1:{port}");
+            let handle = std::thread::spawn(move || {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n",
+                    html_no_image.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(html_no_image.as_bytes());
+            });
+            (url, handle)
+        };
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_remote_cover_no_image_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{base}/page>\n:::\n")).unwrap();
+
+        let index_html = build_site(&test_dir);
+
+        assert!(
+            index_html.contains(r#"class="moss-card-cover moss-card-no-cover"></div>"#),
+            "no og:image must fall back to the plain placeholder: {index_html}"
+        );
+        let _ = server.join();
+    }
+
+    #[test]
+    fn an_authored_image_still_wins_over_a_fetched_cover() {
+        let (base, server) = spawn_page_with_cover_server(2);
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_remote_cover_author_wins_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        fs::write(
+            test_dir.join("author.jpg"),
+            b"not a real jpeg but the render path never decodes it",
+        )
+        .unwrap();
+        fs::write(
+            test_dir.join("index.md"),
+            format!(":::grid 1\n[![Author photo](author.jpg)]({base}/page)\n:::\n"),
+        )
+        .unwrap();
+
+        let index_html = build_site(&test_dir);
+
+        assert!(index_html.contains("author.jpg"), "authored image must survive: {index_html}");
+        assert!(!index_html.contains("_moss/link/"), "must not also emit a fetched cover: {index_html}");
+        let _ = server.join();
     }
 }

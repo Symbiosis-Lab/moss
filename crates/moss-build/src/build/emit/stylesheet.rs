@@ -1,5 +1,5 @@
 //! The site stylesheet: token layer + core rules + the partials this build
-//! actually needs (`docs/archive/2026-08-04-ship-what-the-site-needs.md`).
+//! actually needs.
 //!
 //! One emit family, one owner — `blocking.rs` gates, this module assembles,
 //! per NORTH-STAR's interception rule ("new emit family → `emit/`-shaped
@@ -50,7 +50,7 @@ use crate::build::types::SiteAssets;
 
 /// One optional stylesheet partial and the fact that turns it on.
 pub struct CssPartial {
-    /// Basename in `src-tauri/src/assets/css/site/`, without `.css`.
+    /// Basename in `assets/css/site/`, without `.css`.
     pub name: &'static str,
     /// The file's bytes, `include_str!`-ed at compile time.
     pub source: &'static str,
@@ -84,6 +84,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         name: "vertical",
         source: include_str!("../../assets/css/site/vertical.css"),
         gate: |a| a.vertical,
+    },
+    CssPartial {
+        name: "places-explorer",
+        source: include_str!("../../assets/css/site/places-explorer.css"),
+        gate: |a| a.places_explorer,
     },
 ];
 

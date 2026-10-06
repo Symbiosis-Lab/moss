@@ -65,7 +65,7 @@ fn a_path_escaping_the_site_root_is_ignored_rather_than_reported() {
     assert_eq!(candidate_keys("/a/./b/"), None);
 }
 
-/// The CJK case moss#1187 names: moss emits the same file's URL percent-encoded
+/// The CJK case this module exists to handle: moss emits the same file's URL percent-encoded
 /// from one code path and literal from another. Decoding the href is what makes
 /// the encoded form find the literal manifest key.
 #[test]
@@ -103,6 +103,16 @@ fn href_and_src_are_read_and_lookalike_attributes_are_not() {
     assert_eq!(got, vec!["/a/", "/b.png", "/f.css"]);
 }
 
+/// `poster=` joined `href=`/`src=` 2026-09-16 so a video's still-frame gets
+/// the same dead-link coverage as its `src` — see the module docs.
+#[test]
+fn poster_is_read_like_href_and_src() {
+    let html = r#"<video src="/videos/clip.mp4" poster="/videos/clip.thumb.jpg" data-thumb-src="/videos/clip.thumb.jpg"></video>"#;
+    let mut got = url_attr_values(html);
+    got.sort();
+    assert_eq!(got, vec!["/videos/clip.mp4", "/videos/clip.thumb.jpg"]);
+}
+
 #[test]
 fn an_unterminated_attribute_ends_the_scan_without_hanging() {
     assert_eq!(url_attr_values(r#"<a href="/never-closed"#), Vec::<String>::new());
@@ -110,7 +120,7 @@ fn an_unterminated_attribute_ends_the_scan_without_hanging() {
 
 // ── the comparison ─────────────────────────────────────────────────────────
 
-/// The moss#1187 shape itself: the namespace the links were written against no
+/// The namespace-rename shape itself: the namespace the links were written against no
 /// longer exists, and the one that replaced it does.
 #[test]
 fn a_link_into_a_renamed_namespace_is_reported() {
@@ -156,4 +166,224 @@ fn a_file_present_in_the_stage_but_absent_from_the_manifest_is_not_dead() {
     assert_eq!(dead.iter().map(|d| d.href.as_str()).collect::<Vec<_>>(), vec!["/nope/"]);
 
     let _ = std::fs::remove_dir_all(&stage);
+}
+
+// ── dead_links_among_promises: the publish-refusing subset ──────────────────
+
+fn promised(keys: &[&str]) -> HashSet<String> {
+    keys.iter().map(|k| k.to_string()).collect()
+}
+
+/// The adjacent race this exists for: a video's page seals before
+/// its encode lands, so the mp4 and the poster both read as dead links, and
+/// both are keys this build itself promised (`AssetRegistry::pending_keys()`
+/// for the mp4, its derived poster key for the other).
+#[test]
+fn a_video_and_its_poster_still_mid_encode_are_both_promised() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<video src="/videos/clip.mp4" poster="/videos/clip.thumb.jpg"></video>"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert_eq!(dead.len(), 2);
+
+    let promises = promised(&["videos/clip.mp4", "videos/clip.thumb.jpg"]);
+    let gated = dead_links_among_promises(&dead, &promises);
+    assert_eq!(gated.len(), 2, "both the mp4 and its poster must gate publish");
+}
+
+/// An external URL never even reaches `dead_links_in_page` (it is not a
+/// root-relative candidate at all), so it cannot gate a publish either —
+/// pinned here at the layer the publish gate actually reads.
+#[test]
+fn an_external_url_is_not_promised_because_it_was_never_a_candidate() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<video poster="https://cdn.example.com/clip.thumb.jpg"></video>"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert!(dead.is_empty(), "an external URL must not be scanned as a candidate");
+}
+
+/// A deliberately unbuilt draft: the page it links to was never sealed and
+/// was never promised by any in-flight encode either. Advisory, not a
+/// refusal — the author left it out on purpose.
+#[test]
+fn a_link_to_an_unbuilt_draft_is_not_promised() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<a href="/drafts/unfinished/">still a draft</a>"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert_eq!(dead.len(), 1);
+    let promises = promised(&["videos/clip.mp4"]);
+    assert!(dead_links_among_promises(&dead, &promises).is_empty());
+}
+
+/// An optional variant the site never dispatched (no `set_pending` ever ran
+/// for it) is not this build's promise, however dead the link reads.
+#[test]
+fn an_optional_variant_never_dispatched_is_not_promised() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<source src="/img/hero.avif">"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert_eq!(dead.len(), 1);
+    let promises = promised(&["videos/clip.mp4"]);
+    assert!(dead_links_among_promises(&dead, &promises).is_empty());
+}
+
+/// A permanently failed encode must never gate publish forever — there is no
+/// override, so a stuck refusal would have no way out. The caller is
+/// responsible for this by construction: a failed key drops out of
+/// `AssetRegistry::pending_keys()` (see `assets.rs`'s own test), so it never
+/// reaches `promised` in the first place. Pinned here at the filter itself so
+/// the property holds even if a caller passes a stale promise set by mistake
+/// — i.e. NOT promised is the only thing that keeps this safe, and that is
+/// exactly what this test fixes in place.
+#[test]
+fn a_key_absent_from_promised_never_gates_however_dead_the_link() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<video src="/videos/clip.mp4" poster="/videos/clip.thumb.jpg"></video>"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert_eq!(dead.len(), 2);
+    // The failed video's keys are simply not in the promised set — exactly
+    // what a caller sees after `set_failed` has run.
+    assert!(dead_links_among_promises(&dead, &promised(&[])).is_empty());
+}
+
+// ── the WARN summary (2026-09-16) ───────────────────────────────────────────
+//
+// audit_and_report used to `log::warn!` once PER dead link — a site with one
+// stale namespace repeated across 100+ pages flooded a Send Logs bundle's
+// "RECENT ERRORS" (its 100 most-recent warn/error signatures) with nothing
+// but this module. The fix is one WARN per build naming a few examples, with
+// the full per-link list moved to DEBUG.
+
+fn dead_links(pairs: &[(&str, &str)]) -> Vec<DeadLink> {
+    pairs
+        .iter()
+        .map(|(page, href)| DeadLink { page: page.to_string(), href: href.to_string() })
+        .collect()
+}
+
+#[test]
+fn no_dead_links_produces_no_summary() {
+    assert_eq!(summary_line(&dead_links(&[])), None);
+}
+
+#[test]
+fn a_summary_names_every_link_up_to_the_example_cap() {
+    let links = dead_links(&[("a.html", "/x"), ("b.html", "/y")]);
+    let line = summary_line(&links).unwrap();
+    assert!(line.contains("2 root-relative reference"), "{line}");
+    assert!(line.contains("'/x' in 'a.html'"), "{line}");
+    assert!(line.contains("'/y' in 'b.html'"), "{line}");
+    assert!(!line.contains("more"), "{line}");
+}
+
+/// The regression case: 100+ occurrences of one dead link must cost the
+/// bundle ONE warn-level line, not one per occurrence.
+#[test]
+fn a_summary_past_the_example_cap_names_a_few_and_counts_the_rest() {
+    let links = dead_links(&[
+        ("a.html", "/x"),
+        ("b.html", "/x"),
+        ("c.html", "/x"),
+        ("d.html", "/x"),
+        ("e.html", "/x"),
+    ]);
+    let line = summary_line(&links).unwrap();
+    assert!(line.contains("5 root-relative reference"), "{line}");
+    assert!(line.contains("and 2 more"), "{line}");
+    // Exactly SUMMARY_EXAMPLES (3) occurrences named, not all 5.
+    assert_eq!(line.matches("'/x' in").count(), 3, "{line}");
+}
+
+/// A redirect stub for a hand-made `.html` address, and the feed's alias copy,
+/// are manifest keys like any other file: a link to either resolves.
+#[test]
+fn a_link_to_a_redirected_html_address_or_the_feed_alias_is_not_dead() {
+    let html = r#"<a href="/scale-compare.html">old</a><a href="/feed.xml">feed</a>"#;
+    assert!(hrefs(html, &["scale-compare.html", "feed.xml", "rss.xml"]).is_empty());
+}
+
+// ── entity-encoded attribute values ─────────────────────────────────────────
+
+/// The renderer escapes an apostrophe in a file name as `&#39;`. The file is
+/// on disk under its real name, so the reference is satisfied.
+#[test]
+fn an_entity_encoded_apostrophe_matches_the_real_file_name() {
+    let html = r#"<img src="/media/A_Carpenter&#39;s_Workshop.jpg">"#;
+    assert!(hrefs(html, &["media/A_Carpenter's_Workshop.jpg"]).is_empty());
+    // And a truly missing file is still reported, with the href as written.
+    assert_eq!(hrefs(html, &[]), vec!["/media/A_Carpenter&#39;s_Workshop.jpg"]);
+}
+
+#[test]
+fn an_encoded_ampersand_in_a_file_name_matches_too() {
+    let html = r#"<a href="/files/Q&amp;A.pdf">"#;
+    assert!(hrefs(html, &["files/Q&A.pdf"]).is_empty());
+}
+
+#[test]
+fn an_entity_hash_is_not_mistaken_for_a_fragment() {
+    // `&#39;` contains a `#`; splitting on it before decoding would cut the
+    // path at "/media/A_Carpenter&".
+    let keys = candidate_keys("/media/it&#39;s.jpg").unwrap();
+    assert_eq!(keys[0], "media/it's.jpg");
+}
+
+// ── the printed list ────────────────────────────────────────────────────────
+
+#[test]
+fn the_summary_no_longer_points_at_debug_logs() {
+    let line = summary_line(&dead_links(&[("a.html", "/x")])).unwrap();
+    assert!(!line.contains("debug"), "{line}");
+}
+
+#[test]
+fn the_list_names_every_link_with_its_page() {
+    let lines = list_lines(&dead_links(&[("a.html", "/x"), ("b.html", "/y")]));
+    assert_eq!(lines, vec!["  '/x' in 'a.html'", "  '/y' in 'b.html'"]);
+}
+
+#[test]
+fn a_long_list_is_capped_and_counts_the_rest() {
+    let pairs: Vec<(String, String)> =
+        (0..23).map(|i| (format!("p{i}.html"), format!("/gone{i}"))).collect();
+    let refs: Vec<(&str, &str)> = pairs.iter().map(|(p, h)| (p.as_str(), h.as_str())).collect();
+    let lines = list_lines(&dead_links(&refs));
+    assert_eq!(lines.len(), LIST_CAP + 1, "{lines:?}");
+    assert_eq!(lines[LIST_CAP - 1], "  '/gone19' in 'p19.html'");
+    assert_eq!(lines[LIST_CAP], "  and 3 more");
+}
+
+#[test]
+fn no_dead_links_print_no_list() {
+    assert!(list_lines(&[]).is_empty());
+}
+
+/// The list goes through the uncounted output path, so it cannot raise the
+/// `--strict` problem count however many links it names.
+#[test]
+fn printing_the_list_does_not_count_as_a_problem() {
+    let _ = crate::build::cli_output::take_cli_problems();
+    print_list(&dead_links(&[("a.html", "/x"), ("b.html", "/y")]));
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 0);
+}
+
+#[test]
+fn printed_links_show_the_decoded_href_not_the_entity_text() {
+    let links = dead_links(&[("a.html", "/media/it&#39;s.jpg")]);
+    assert_eq!(list_lines(&links), vec!["  '/media/it's.jpg' in 'a.html'"]);
+    assert!(summary_line(&links).unwrap().contains("'/media/it's.jpg' in 'a.html'"));
 }

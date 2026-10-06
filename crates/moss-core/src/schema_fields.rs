@@ -29,6 +29,10 @@
 //!   2. "Child Pages"       — controls how children are listed
 //!   3. "Child Styles"      — visual/layout controls for child listings
 //!   4. "Whole Site"        — properties read from the homepage to affect the whole site
+//!
+//! Event fields (`start`, `end`, `timezone`, `status`, `tickets`, `online`) sit in
+//! their own "Event" group beside these scopes: they describe the page itself, but
+//! only matter once a page carries `start`.
 //!   5. "Other"             — unknown user-authored fields (catch-all, TS side only)
 //!
 //! ## Scoring
@@ -100,14 +104,28 @@ pub struct BuiltinField {
     pub skip_schema: bool,
     /// UI group for the add-property dropdown. Fields with the same group
     /// are displayed together. Empty string for skip_schema fields.
-    /// One of: "This Page", "Child Pages", "Child Styles", "Whole Site".
+    /// One of: "This Page", "Event", "Child Pages", "Child Styles", "Whole Site".
     /// The "Other" group is handled entirely on the TS side for unknown fields.
     pub group: &'static str,
-    /// For `Widget::FilePicker` fields, the extension kinds the picker should
-    /// restrict search results to (e.g. `cover` → image or video; `logo` →
-    /// image only). `None` means unrestricted. This is the schema-side SSOT
-    /// the chip bar reads instead of hardcoding a `key -> ExtKind[]` switch.
+    /// For `Widget::FilePicker` fields, the extension kinds the picker should restrict
+    /// search results to (e.g. `cover` → image, video, or iframe; `logo` → image only).
+    /// `None` means unrestricted. This is the schema-side SSOT the chip bar reads instead
+    /// of hardcoding a `key -> ExtKind[]` switch.
     pub file_kinds: Option<&'static [ExtKind]>,
+    /// Whether this field feeds a term kind's derivation loop (`author`,
+    /// `tags`, `editor`, `jury`): a name/tag list a term-kind's `fields`
+    /// entry can name. `false` for every other field. Schema-derived rather
+    /// than inferred from `one_of_members` identity — `tags` has no
+    /// `one_of_members` at all, so a predicate keyed on that would silently
+    /// exclude it. Read by `name_list_fields()`.
+    pub name_list: bool,
+    /// Whether this field is a term-page claim (`author_page`, `tag_page`,
+    /// `editor_page`, `jury_page`, `place_page`): a page claiming the term
+    /// page for a name-list field's value. `false` for every other field.
+    /// Schema-derived so a claim-stripping consumer (`template.rs`'s
+    /// instantiate-frontmatter reset) needs no hand-maintained copy of this
+    /// set. Read by `term_claim_fields()`.
+    pub term_claim: bool,
 }
 
 /// Default values for optional `BuiltinField` fields. Used with struct update
@@ -129,6 +147,8 @@ const FIELD_DEFAULTS: BuiltinField = BuiltinField {
     skip_schema: false,
     group: "",
     file_kinds: None,
+    name_list: false,
+    term_claim: false,
 };
 
 /// Union members for `children`: a boolean toggle OR a single wikilink/path
@@ -167,18 +187,18 @@ const SERIES_MEMBERS: &[BuiltinField] = &[
     },
 ];
 
-/// Union members for `sort`: a named axis (`date` / `weight` / `title`) OR a
-/// list of child stems giving the explicit order. Both forms have always been
-/// honoured by the build and both are documented in the field's own
-/// description; declaring the field as a bare string made the list form —
-/// `sort: [上篇, 中篇, 下篇]` — report "wrong type: expected string, got array"
-/// on every folder index that used it.
+/// Union members for `sort`: a named axis (`date` / `date-asc` / `weight` /
+/// `title`) OR a list of child stems giving the explicit order. Both forms
+/// have always been honoured by the build and both are documented in the
+/// field's own description; declaring the field as a bare string made the
+/// list form — `sort: [上篇, 中篇, 下篇]` — report "wrong type: expected
+/// string, got array" on every folder index that used it.
 const SORT_MEMBERS: &[BuiltinField] = &[
     BuiltinField {
         name: "",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["date", "weight", "title"]),
+        enum_values: Some(&["date", "date-asc", "weight", "title"]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -302,17 +322,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
     BuiltinField {
         name: "author",
         // OneOf like `byline` (see the note there): a name string OR a list of
-        // names for co-authors. Widget stays a plain text input — the string
-        // form is the dominant authored shape; the list form exists so
-        // co-authors are structural, not prose to split.
+        // names for co-authors. Chip-list widget (the list form is structural,
+        // not prose to split) — shared with every other name-list field
+        // (`editor`, `jury`, `tags`).
         field_type: FieldType::OneOf,
-        widget: Widget::TextInput,
+        widget: Widget::TagInput,
         one_of_members: Some(NAME_LIST_MEMBERS),
         // Frequency=3, Importance=3 → score = 100 - (3*6 + 3*4) = 100 - 30 = 70
         score: 70,
-        description: "Author name, or a list of names for co-authors. A single string is kept verbatim ('A and B' stays one entry). Each name gets a generated /authors/<slug>/ page listing their works (claimable with author_page:), and names repeated in byline: become links to it. Turn the pages off with [terms].author = false. Captured by moss import from JSON-LD / OpenGraph.",
+        description: "Author name, or a list of names for co-authors. A single string is kept verbatim ('A and B' stays one entry). Each name gets a page in its term kind's namespace listing their works (default /authors/<slug>/, claimable with author_page:), and names repeated in byline: become links to it. Turn the built-in pages off with [terms].author = false, or move the field into a declared [terms.<key>] kind. Captured by moss import from JSON-LD / OpenGraph.",
         label_key: "chip.author.label",
         group: "This Page",
+        name_list: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -366,7 +387,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Cover image path",
         label_key: "chip.cover.label",
         group: "This Page",
-        file_kinds: Some(&[ExtKind::Image, ExtKind::Video]),
+        file_kinds: Some(&[ExtKind::Image, ExtKind::Video, ExtKind::Iframe]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -384,9 +405,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         items_type: Some(FieldType::String),
         // Frequency=4, Importance=3 → score = 100 - (4*6 + 3*4) = 100 - 36 = 64
         score: 64,
-        description: "Content tags. Every frontmatter tag gets a generated /tags/<slug>/ page listing the pages that carry it (a page anywhere can claim the tag with tag_page: and replace the generated one); turn the pages off with [terms].tags = false. Inline #hashtags written in the body merge into the emitted article:tag metadata and JSON-LD keywords but derive no pages - they are prose, not cataloguing.",
+        description: "Content tags. Every frontmatter tag gets a page in its term kind's namespace listing the pages that carry it (default /tags/<slug>/; a page anywhere can claim the tag with tag_page: and replace the generated one); turn the built-in pages off with [terms].tags = false, or move the field into a declared [terms.<key>] kind. Inline #hashtags written in the body merge into the emitted article:tag metadata and JSON-LD keywords but derive no pages - they are prose, not cataloguing.",
         label_key: "chip.tags.label",
         group: "This Page",
+        name_list: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -399,9 +421,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         one_of_members: Some(TERM_CLAIM_MEMBERS),
         // Frequency=0, Importance=2 → score = 100 - (0*6 + 2*4) = 92
         score: 92,
-        description: "This page IS the author page for a name: true claims the page's own title, a string claims that name. It hosts the author's works listing, replaces the generated /authors/<slug>/ page, and author mentions site-wide link here.",
+        description: "This page IS the author page for a name: true claims the page's own title, a string claims that name. It hosts the author's works listing, replaces the generated page in the kind's own namespace, and author mentions site-wide link here.",
         label_key: "chip.author_page.label",
         group: "This Page",
+        term_claim: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -412,9 +435,102 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         one_of_members: Some(TERM_CLAIM_MEMBERS),
         // Frequency=0, Importance=2 → score = 92; +1 keeps scores unique (author_page tier)
         score: 93,
-        description: "This page IS the tag page for a tag: true claims the page's own title, a string claims that tag. It hosts the tag's listing, replaces the generated /tags/<slug>/ page, and tag links site-wide point here.",
+        description: "This page IS the tag page for a tag: true claims the page's own title, a string claims that tag. It hosts the tag's listing, replaces the generated page in the kind's own namespace, and tag links site-wide point here.",
         label_key: "chip.tag_page.label",
         group: "This Page",
+        term_claim: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "editor",
+        // Same union shape as `author`: one name string, or a list for
+        // co-editors. A declared [terms.<key>] kind naming "editor" moves it
+        // out of the built-in `editors` namespace into that kind's own.
+        field_type: FieldType::OneOf,
+        widget: Widget::TagInput,
+        one_of_members: Some(NAME_LIST_MEMBERS),
+        // 70 is author; 74-78 are taken; 71 is free.
+        score: 71,
+        description: "Editor name, or a list of names for co-editors, feeding whichever term kind's `fields` names \"editor\" ([terms.<key>] fields = [\"editor\", ...] in .moss/config.toml). Same shapes and behaviour as author:.",
+        label_key: "chip.editor.label",
+        group: "This Page",
+        name_list: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "location",
+        // Same union shape as `author`/`editor`/`jury`: a place name, or a
+        // list, naming an entry in `.moss/places.toml` by its display name —
+        // slugged the same way `derive_terms` slugs any other name-list value.
+        field_type: FieldType::OneOf,
+        widget: Widget::TagInput,
+        one_of_members: Some(NAME_LIST_MEMBERS),
+        // 73 is the one free integer between jury's 72 and external_url's 74.
+        score: 73,
+        description: "Place name, or a list of names, feeding whichever term kind's `fields` names \"location\" ([terms.<key>] fields = [\"location\", ...], type = \"place\" in .moss/config.toml). Each name is looked up in .moss/places.toml. Same shapes and behaviour as author:.",
+        label_key: "chip.location.label",
+        group: "This Page",
+        name_list: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "jury",
+        // Same union shape as `author`/`editor`.
+        field_type: FieldType::OneOf,
+        widget: Widget::TagInput,
+        one_of_members: Some(NAME_LIST_MEMBERS),
+        // 72 is the next free integer after editor's 71.
+        score: 72,
+        description: "Jury member name, or a list of names, feeding whichever term kind's `fields` names \"jury\" ([terms.<key>] fields = [\"jury\", ...] in .moss/config.toml). Same shapes and behaviour as author:.",
+        label_key: "chip.jury.label",
+        group: "This Page",
+        name_list: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "editor_page",
+        // Same union as `author_page`, claiming a name in the kind that
+        // carries the `editor` field.
+        field_type: FieldType::OneOf,
+        widget: Widget::Checkbox,
+        one_of_members: Some(TERM_CLAIM_MEMBERS),
+        // 95 is the only free integer below 100 in this group (92/93 are
+        // author_page/tag_page, 94 is translationKey, 96 is slot).
+        score: 95,
+        description: "This page IS the editor page for a name: true claims the page's own title, a string claims that name. It hosts the editor's works listing, replaces the generated page in the kind's own namespace, and editor mentions site-wide link here.",
+        label_key: "chip.editor_page.label",
+        group: "This Page",
+        term_claim: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "jury_page",
+        // Same union as `editor_page`, for the `jury` field.
+        field_type: FieldType::OneOf,
+        widget: Widget::Checkbox,
+        one_of_members: Some(TERM_CLAIM_MEMBERS),
+        // One past the documented "typical" ceiling (100) — the group's own
+        // integers below it are all taken; harmless, `score` is only read at
+        // schema.rs:258 and a bare `> 0` check in schema_fields_tests.rs.
+        score: 101,
+        description: "This page IS the jury page for a name: true claims the page's own title, a string claims that name. It hosts the juror's works listing, replaces the generated page in the kind's own namespace, and jury mentions site-wide link here.",
+        label_key: "chip.jury_page.label",
+        group: "This Page",
+        term_claim: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "place_page",
+        // Same union as `jury_page`, for the `location` field.
+        field_type: FieldType::OneOf,
+        widget: Widget::Checkbox,
+        one_of_members: Some(TERM_CLAIM_MEMBERS),
+        // 102 is the next free integer past jury_page's 101.
+        score: 102,
+        description: "This page IS the place page for a name: true claims the page's own title, a string claims that name. It hosts the place's works listing, replaces the generated page in the kind's own namespace, and location mentions site-wide link here.",
+        label_key: "chip.place_page.label",
+        group: "This Page",
+        term_claim: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -440,6 +556,88 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "origin",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=2, Importance=3 → score = 100 - (2*6 + 3*4) = 100 - 24 = 76
+        score: 76,
+        description: "The address this page was imported from. Written automatically by `moss import` as provenance, not a claim that the content is also published there — unlike `external_url`, which points a linkblog post at its off-site home. A site that later declares its former domain(s) can use this field to keep that address's old links working.",
+        label_key: "chip.origin.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    // ── Event ───────────────────────────────────────────────────────────
+    // A page becomes an event by carrying `start`. `date` stays the posted date.
+    BuiltinField {
+        name: "start",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        format: Some("event-time"),
+        // Frequency=2, Importance=4 → score = 100 - (2*6 + 4*4) = 100 - 28 = 72
+        score: 72,
+        description: "When the event starts, as local wall-clock time where it happens: YYYY-MM-DD for an all-day event, or YYYY-MM-DD HH:MM. No offset or Z; set `timezone` for the zone. A page with `start` is an event; `date` stays the posted date.",
+        label_key: "chip.start.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "end",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        format: Some("event-time"),
+        // Frequency=2, Importance=3 → score = 100 - (2*6 + 3*4) = 100 - 24 = 76
+        score: 76,
+        description: "When the event ends, same forms as `start`. For an all-day event the last day is included: `end: 2026-11-03` runs through the 3rd. Must not be before `start`.",
+        label_key: "chip.end.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "timezone",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=3 → score = 100 - (1*6 + 3*4) = 100 - 18 = 82
+        score: 82,
+        description: "IANA time zone the event's `start`/`end` are in, e.g. Asia/Taipei. Only its Area/City shape is checked.",
+        label_key: "chip.timezone.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "status",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["cancelled", "postponed", "moved-online", "rescheduled"]),
+        // Frequency=1, Importance=3 → score = 100 - (1*6 + 3*4) = 100 - 18 = 82; +1 so it sorts after timezone
+        score: 83,
+        description: "Event status when it is not going ahead as planned: cancelled, postponed, moved-online or rescheduled. Absent means scheduled.",
+        label_key: "chip.status.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "tickets",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=2 → score = 100 - (1*6 + 2*4) = 100 - 14 = 86
+        score: 86,
+        description: "URL where tickets or registration are available.",
+        label_key: "chip.tickets.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "online",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=2 → score = 100 - (1*6 + 2*4) = 100 - 14 = 86; +1 so it sorts after tickets
+        score: 87,
+        description: "URL to attend the event online.",
+        label_key: "chip.online.label",
+        group: "Event",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "lang",
         field_type: FieldType::String,
         widget: Widget::TextInput,
@@ -458,6 +656,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         score: 75,
         description: "Sort weight for ordering",
         label_key: "chip.weight.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "nav_label",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        score: 76,
+        description: "A shorter name for this page in the site's nav bar and footer links, when its title is too long for them (e.g. `nav_label: Reading` on a page titled \"Course of Reading\"). The page's own heading, <title>, listing cards, breadcrumbs and feeds keep the title.",
+        label_key: "chip.nav_label.label",
         group: "This Page",
         ..FIELD_DEFAULTS
     },
@@ -503,6 +711,17 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         score: 97,
         description: "Per-page comment opt-in/out",
         label_key: "chip.comments.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "map",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        // Frequency=0, Importance=1 → score=96
+        score: 96,
+        description: "This page's own map, on or off: the term map on a place page (shown by default), the locator on a located article (follows the site's `locator` setting).",
+        label_key: "chip.map.label",
         group: "This Page",
         ..FIELD_DEFAULTS
     },
@@ -632,17 +851,17 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "sort",
         // OneOf, but NOT the union WIDGET — same reasoning as `byline`. The
         // type is a union because the field genuinely accepts an axis name or
-        // a list of child stems; the widget stays a select over the three axes
+        // a list of child stems; the widget stays a select over the four axes
         // because that is what an author picks from in the common case.
         // `enum_values` stays on the parent so `sort: banana` is still an
         // error: the enum check only fires on string values and ignores lists.
         field_type: FieldType::OneOf,
         widget: Widget::Select,
         one_of_members: Some(SORT_MEMBERS),
-        enum_values: Some(&["date", "weight", "title"]),
+        enum_values: Some(&["date", "date-asc", "weight", "title"]),
         // Frequency=3, Importance=3 → score = 100 - (3*6 + 3*4) = 70
         score: 70,
-        description: "How to sort children in this folder's listing. Use date for chronological streams, weight for authored order, title for alphabetical. A list of child stems (e.g. [intro, setup]) declares explicit order.",
+        description: "How to sort children in this folder's listing. Use date for newest-first chronological streams, date-asc for the same but oldest first, weight for authored order, title for alphabetical. A list of child stems (e.g. [intro, setup]) declares explicit order.",
         label_key: "chip.sort.label",
         group: "Child Pages",
         ..FIELD_DEFAULTS
@@ -690,10 +909,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "children_group",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["year", "none"]),
+        enum_values: Some(&["year", "none", "upcoming"]),
         // Frequency=2, Importance=2 → score=80
         score: 80,
-        description: "How children are grouped: year (default for list) or none (default for card)",
+        description: "How children are grouped: year (default for list), none (default for card), or upcoming",
         label: Some("Group"),
         label_key: "chip.children_group.label",
         group: "Child Styles",
@@ -845,7 +1064,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         // and returns 8 RANDOM hex chars, so a uid can never be recomputed
         // from the path or the bytes. This string is the SSOT that
         // `frontmatter_fields()` copies into `moss describe --json`,
-        // `docs/reference/contract.md` and the hooks-site contract fixture —
+        // the generated contract documentation and the hooks-site contract fixture —
         // a plugin author who believed it was derivable and recomputed it to
         // re-join `.moss/social/*.json` would miss on every single key.
         description: "Stable note identity: 8 random hex chars minted at first build. NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",
@@ -869,6 +1088,23 @@ pub fn asset_field_names() -> impl Iterator<Item = &'static str> {
         .iter()
         .filter(|f| matches!(f.widget, Widget::FilePicker))
         .map(|f| f.name)
+}
+
+/// Frontmatter fields that feed a term kind's derivation loop: `author`,
+/// `tags`, `editor`, `jury`. The SSOT `build::terms::term_kinds` filters a
+/// declared `[terms.<key>] fields = [...]` list through this, so an
+/// unrecognized name is a diagnostic rather than a silent no-op.
+pub fn name_list_fields() -> impl Iterator<Item = &'static str> {
+    BUILTIN_FIELDS.iter().filter(|f| f.name_list).map(|f| f.name)
+}
+
+/// Frontmatter fields that are a term-page claim: `author_page`, `tag_page`,
+/// `editor_page`, `jury_page`, `place_page`. The schema-derived replacement
+/// for a hand-maintained claim-field list — `template.rs`'s instantiate-reset
+/// strips every one of these from a captured page's frontmatter without
+/// naming them itself.
+pub fn term_claim_fields() -> impl Iterator<Item = &'static str> {
+    BUILTIN_FIELDS.iter().filter(|f| f.term_claim).map(|f| f.name)
 }
 
 #[cfg(test)]

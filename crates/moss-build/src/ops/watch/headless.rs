@@ -2,28 +2,23 @@
 //! `build --serve --watch`, and the process-global content-hash stash they
 //! read.
 //!
-//! Extracted at slice C1 of the 2026-08-28 preview-server relocation plan.
-//! W1 crossed the *driver* (`ops/watch.rs`) and left the rebuild bodies
-//! host-side, because on the GUI they are managed-state glue. Headless they
-//! are not: with no shell there is no `RebuildState`, no publish freeze (a
-//! headless process cannot deploy), no progress channel and no live-port
-//! resolver — what remains is worker admission, the stage-lock probe, the
-//! content-hash gate and one `run_pipeline` call, all of which already live
-//! in this crate. Both headless hosts — the app binary's `moss build` arm
-//! (`src-tauri/src/build_shell/watch.rs::start_file_watching_headless`, which
-//! adds the app-side sweep on top) and `moss-cli` — construct through here,
-//! so the CLI gaining `--watch` did not mint a second copy of these bodies.
+//! On the GUI the rebuild bodies are managed-state glue and stay host-side
+//! (the driver is `ops/watch.rs`). Headless there is no `RebuildState`, no
+//! publish freeze (a headless process cannot deploy), no progress channel and
+//! no live-port resolver — what remains is worker admission, the stage-lock
+//! probe, the content-hash gate and one `run_pipeline` call. Both headless
+//! hosts — the app binary's `moss build` arm and `moss-cli` — construct
+//! through here, so there is one copy of these bodies.
 //!
 //! What a host still decides arrives as [`HeadlessWatchConfig`] values: the
 //! [`HostPorts`] each rebuild runs with (both are `HostPorts::headless`; the
 //! two differ only in the `HostStore` — the app binary migrates `.moss` on
 //! disk, moss-cli in memory), and the rebuild's [`PluginMode`].
 //!
-//! Known headless gap, deliberate: the sweep — the periodic disk-vs-baseline
-//! backbone (`build_shell/watch/sweep.rs`) — is app-side today (it reads the
-//! app's manifest cache and emits folder-health events), so the app's
-//! headless arm runs it and moss-cli's watch is watcher-only until the sweep
-//! crosses.
+//! [`start`] also starts the folder's sweep (`ops/watch/sweep.rs`) beside the
+//! watcher, on the same `dispatch` closure — the disk-vs-baseline backbone
+//! that backstops a watcher stream dying silently is no longer app-only, so
+//! `moss build --watch` gets it too.
 
 use std::sync::Arc;
 
@@ -32,6 +27,31 @@ use crate::build::watch::{baseline_for_rebuild, decide_rebuild_event};
 use crate::build::{run_pipeline, BuildTrigger, HostPorts, PipelineConfig, PluginMode};
 use crate::ops::serve::events::CarrierReporter;
 use crate::ops::watch::{worker, EventRelay, RebuildAttempt, RebuildDispatch, WatchConfig};
+
+pub(crate) fn absolute_watch_root(folder_path: &str) -> String {
+    let path = std::path::Path::new(folder_path);
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join(path)
+        }
+    });
+    absolute.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::absolute_watch_root;
+
+    #[test]
+    fn relative_watch_root_is_canonicalized_for_absolute_notify_paths() {
+        let expected = std::fs::canonicalize(".").expect("current directory is readable");
+        assert_eq!(std::path::Path::new(&absolute_watch_root(".")), expected);
+    }
+}
 
 /// Resolve the [`HostPorts`] a build of `folder` runs with. A factory rather
 /// than a value because every watch rebuild constructs a fresh set (ports are
@@ -60,11 +80,34 @@ pub struct HeadlessWatchConfig {
 /// immediately.
 #[must_use = "dropping the shutdown sender stops the watcher immediately"]
 pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<()> {
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    // notify reports absolute paths. Keep the root in the same coordinate
+    // system so vault-relative filtering does not judge the checkout's parent
+    // directories or discard every event from a relative CLI argument.
+    let folder_path = absolute_watch_root(&config.folder_path);
+    // The caller's sender stops BOTH the watcher and the sweep: this task
+    // relays it, cancelling the folder's session (which ends the sweep and
+    // frees its claim, so a resumed process starts a fresh one) and then
+    // handing the watcher its own shutdown. A dropped sender resolves the
+    // await too.
+    let (shutdown_tx, outer_rx) = tokio::sync::oneshot::channel::<()>();
+    let (inner_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let session = crate::system::folder_session::registry()
+        .get(&folder_path)
+        // Nothing registered a session: a standalone one, cancelled only by
+        // the relay below.
+        .unwrap_or_else(|| crate::system::folder_session::FolderSession::new(std::path::PathBuf::from(&folder_path)));
+    {
+        let session = session.clone();
+        tokio::spawn(async move {
+            let _ = outer_rx.await;
+            session.cancel.cancel();
+            let _ = inner_tx.send(());
+        });
+    }
 
     let emit: EventRelay = Arc::new(|event| crate::ops::serve::events::publish(&event));
     let dispatch: RebuildDispatch = {
-        let folder = config.folder_path.clone();
+        let folder = folder_path.clone();
         let host_ports = config.host_ports.clone();
         let plugins = config.plugins.clone();
         Arc::new(move |req| {
@@ -77,7 +120,7 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
         })
     };
     let attempt: RebuildAttempt = {
-        let folder = config.folder_path.clone();
+        let folder = folder_path.clone();
         let host_ports = config.host_ports.clone();
         let plugins = config.plugins.clone();
         Arc::new(move |req, handle| {
@@ -90,14 +133,40 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
         })
     };
 
+    // Headless has no visibility signal (no window, no webview) — the
+    // cadence-aware timers this receiver drives must never throttle, so it
+    // is pinned to `Live` for the life of the watch. The sender drops
+    // normally at the end of this function (`super::start(...).await`
+    // below only completes setup and returns almost immediately — it
+    // spawns the long-lived session task and hands back — so a sender
+    // meant to outlive that session could never have been scoped to this
+    // function correctly anyway): `CadenceTicker` treats a closed channel
+    // as "the cadence is fixed from here" and just keeps waiting out the
+    // last-known interval, so there is nothing that needs to stay alive.
+    let (_sender, always_live) =
+        tokio::sync::watch::channel(crate::ops::watch::cadence::Cadence::Live);
     super::start(WatchConfig {
-        folder_path: config.folder_path.clone(),
+        folder_path: folder_path.clone(),
         spawner: Arc::new(crate::build::ports::spawner::TokioSpawner),
         shutdown_rx,
-        emit,
-        dispatch,
+        emit: emit.clone(),
+        dispatch: dispatch.clone(),
         attempt,
+        cadence: always_live.clone(),
     })
+    .await;
+
+    // The correctness backbone beside the accelerator: same folder, same
+    // `dispatch` (so a sweep trigger takes the identical worker-slot →
+    // admission → content-hash-gate → build path a watcher trigger does),
+    // the carrier reporter for cloud-sync progress (a no-op today — nothing
+    // headless renders it yet, same as before this crossed). Started AFTER
+    // `super::start` so the worker it just registered is in place for the
+    // sweep's first stat pass.
+    super::sweep::start(
+        session,
+        super::sweep::SweepHost { dispatch, reporter: Arc::new(CarrierReporter), emit, cadence: always_live },
+    )
     .await;
 
     shutdown_tx
@@ -228,9 +297,9 @@ async fn do_rebuild_and_notify(
     admission_epoch: Option<u64>,
 ) -> bool {
     let source = std::path::PathBuf::from(folder_path);
-    // Post-generations: the pipeline writes to .moss/build/staging/. A stable
+    // Post-generations: the pipeline writes to .moss/build.nosync/staging/. A stable
     // path reference for the baseline diff lookup.
-    let output = source.join(".moss/build/staging");
+    let output = crate::moss_paths::MossPaths::new(&source).staging_dir();
 
     // Baseline for the change-detection diff: prefer the PREVIOUS build's
     // race-free in-memory hashes over re-reading the asynchronously-sealed
@@ -283,4 +352,3 @@ async fn do_rebuild_and_notify(
     }
     true
 }
-

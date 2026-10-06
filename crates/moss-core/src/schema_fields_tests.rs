@@ -71,7 +71,7 @@ fn test_all_non_skip_fields_have_a_group() {
 
 #[test]
 fn test_groups_are_valid_scope_groups() {
-    const VALID: &[&str] = &["This Page", "Child Pages", "Child Styles", "Whole Site"];
+    const VALID: &[&str] = &["This Page", "Event", "Child Pages", "Child Styles", "Whole Site"];
     for field in BUILTIN_FIELDS {
         if !field.skip_schema {
             assert!(
@@ -146,6 +146,14 @@ fn every_file_picker_field_declares_file_kinds() {
                 f.name
             );
         }
+        if f.name == "cover" {
+            assert!(
+                f.file_kinds.unwrap().contains(&ExtKind::Iframe),
+                "cover's file_kinds must include Iframe — moss-build has rendered \
+                 .html/.htm covers as CoverType::Iframe since 2026-03-09 \
+                 (crates/moss-build/src/build/media/cover.rs, detect_cover_type)"
+            );
+        }
     }
 }
 
@@ -153,4 +161,40 @@ fn every_file_picker_field_declares_file_kinds() {
 fn asset_field_names_is_exactly_cover_and_logo() {
     let names: Vec<&str> = asset_field_names().collect();
     assert_eq!(names, vec!["cover", "logo"]);
+}
+
+/// Per round-2 review R3: set equality against the exact four, not merely
+/// non-empty — a wildcard match arm elsewhere (`_ => &[]`) would otherwise
+/// pass as a real accessor for a name the set silently dropped.
+#[test]
+fn name_list_fields_is_exactly_the_five_name_list_fields() {
+    let names: std::collections::HashSet<&str> = name_list_fields().collect();
+    assert_eq!(names, std::collections::HashSet::from(["author", "tags", "editor", "jury", "location"]));
+}
+
+/// Same discipline as `name_list_fields_is_exactly_the_four_name_list_fields`:
+/// set equality against the exact five term-claim fields, not merely
+/// non-empty.
+#[test]
+fn term_claim_fields_is_exactly_the_five_term_claim_fields() {
+    let names: std::collections::HashSet<&str> = term_claim_fields().collect();
+    assert_eq!(
+        names,
+        std::collections::HashSet::from(["author_page", "tag_page", "editor_page", "jury_page", "place_page"])
+    );
+}
+
+#[test]
+fn test_event_fields_are_registered() {
+    let field = |n: &str| BUILTIN_FIELDS.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("{n} missing"));
+    for name in ["start", "end", "timezone", "status", "tickets", "online"] {
+        assert_eq!(field(name).group, "Event", "{name}");
+    }
+    assert_eq!(field("start").format, Some("event-time"));
+    assert_eq!(field("end").format, Some("event-time"));
+    assert_eq!(
+        field("status").enum_values,
+        Some(&["cancelled", "postponed", "moved-online", "rescheduled"][..])
+    );
+    assert!(field("children_group").enum_values.unwrap().contains(&"upcoming"));
 }

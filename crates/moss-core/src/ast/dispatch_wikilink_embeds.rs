@@ -1,52 +1,59 @@
 //! Wikilink embed dispatch visitor.
 //!
 //! Walks a [`Document`] and routes every wikilink embed image
-//! (`Inline::Image { is_wikilink: true, .. }`) through the
-//! [`crate::resolve::wikilink_dispatch::dispatch_wikilink_embed_with_registry`]
+//! (`Inline::Image { is_wikilink: true, .. }`), plus a standard
+//! `![alt](clip.mp4)` naming a typed site file ([`dispatcher_takes_embed`]),
+//! through the
+//! [`crate::resolve::wikilink_dispatch::dispatch_wikilink_embed`]
 //! dispatcher, replacing the block-level paragraph with the renderer's
-//! output (HTML, inline markdown re-parse, deferred plugin marker, or
-//! standard link).
+//! output (HTML, inline markdown re-parse, or standard link).
 //!
 //! # Why a separate visitor
 //!
-//! Pre-Phase-4, `transform_events` ran this dispatch INLINE on each
-//! `Event::Start(Tag::Image { link_type: LinkType::WikiLink, .. })`
-//! event from pulldown-cmark, swallowing the event range. With the flip to
-//! `parse → render_document`, pulldown-cmark only runs once (during
-//! `parse`), so the dispatcher must operate on the typed AST instead. This
-//! visitor IS the AST equivalent.
+//! pulldown-cmark runs once, during `parse`, so the dispatcher must operate
+//! on the typed AST rather than on the event stream.
 //!
 //! # Why ![`![[...]]`] needs pothole preservation
 //!
-//! PR3.5 (2026-05-28) added wikilink-alt classification to the parser, so
-//! `![[v.mp4|width=400]]` arrives at the AST with `alt: ""` (params
-//! consumed) and the original `width=400` token is gone. The dispatcher
-//! needs the original pothole to compose typed params for the video synth.
-//! PR7a-flip-core-B added the `wikilink_pothole` field on `Inline::Image`
-//! that the parser populates from the raw alt text BEFORE classification
-//! runs — this visitor reads it for embed dispatch.
+//! The parser's wikilink-alt classification consumes params, so
+//! `![[v.mp4|width=400]]` arrives at the AST with `alt: ""` and the original
+//! `width=400` token is gone. The dispatcher needs the original pothole to
+//! compose typed params for the video synth, so the parser populates
+//! `wikilink_pothole` on `Inline::Image` from the raw alt text BEFORE
+//! classification runs; this visitor reads it for embed dispatch.
 //!
 //! # Inline vs block-level
 //!
-//! Per the SoCiviC + chps fixtures (the 4 client sites at Phase 4 cutover),
-//! every wikilink embed in production is a "lone embed paragraph": a
-//! paragraph whose only `Inline::Image { is_wikilink: true, .. }` plus
-//! whitespace/linebreaks. The visitor detects this shape and replaces the
-//! whole paragraph with the dispatch output (so block-level HTML doesn't
-//! get `<p>`-wrapped).
+//! Most wikilink embeds are a "lone embed paragraph": a paragraph whose
+//! only content is one `Inline::Image { is_wikilink: true, .. }` plus
+//! whitespace/linebreaks. The visitor detects this shape
+//! ([`find_lone_wikilink_image`]) and replaces the whole paragraph with the
+//! dispatch output (so block-level HTML doesn't get `<p>`-wrapped).
 //!
-//! Inline wikilink images (e.g. `Some text ![[icon.png]] more text` in the
-//! same paragraph) stay as `Inline::Image` and route through the normal
-//! `render_inline` → `hooks.render_image` synth path. The dispatcher does
-//! NOT walk them — the `<picture>` shape produced by `synthesize_image_html`
-//! is the right output for inline embeds.
+//! An embed can also sit beside other content in the same paragraph — a
+//! caption on the next line joined by a soft break, or plain prose before
+//! or after it (`Some text ![[icon.png]] more text`, or
+//! `![[clip.mp4]]\nA caption.`). That paragraph isn't the lone-embed shape,
+//! but every `Inline::Image { is_wikilink: true, .. }` inside it still names
+//! a real file with a real extension, and [`dispatch_inline_wikilink_embeds`]
+//! dispatches each one through [`dispatch_embed`] — the SAME call the
+//! lone-paragraph path makes — so kind (image / video / audio / pdf /
+//! iframe / 3D model) is decided in one place regardless of position. An
+//! image extension routes back through the ordinary `render_inline` →
+//! `hooks.render_image` synth path (the `<picture>` shape
+//! `synthesize_image_html` produces is already correct there). A non-image
+//! kind is spliced in via `Inline::Other` ONLY when the dispatcher's answer
+//! is known to be phrasing content (`EmitKind::Html`) — a bare `<video>`,
+//! `<audio>`, `<object>`, `<iframe>` or `<model-viewer>`, all legal `<p>`
+//! children. Anything block-level (a captioned `<figure>`) or not known to
+//! be phrasing content (a deferred post-pass marker) is left as the
+//! original `Inline::Image`; see
+//! [`dispatch_inline_wikilink_embeds`]'s own doc for the full list.
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;
-use crate::resolve::registry::RendererRegistry;
-use crate::resolve::wikilink_dispatch::{
-    dispatch_wikilink_embed_with_registry, EmitKind, WikilinkEmit,
-};
+use crate::resolve::ext_kind::dispatcher_takes_embed;
+use crate::resolve::wikilink_dispatch::{dispatch_wikilink_embed, EmitKind, WikilinkEmit};
 use crate::resolve::{Diagnostic, OutgoingLink};
 
 use super::document::Document;
@@ -71,7 +78,7 @@ pub struct WikilinkDispatchResult {
 }
 
 /// Walk the document's top-level blocks and dispatch every wikilink
-/// embed image (`![[…]]` paragraph) through the embed-renderer registry.
+/// embed image (`![[…]]` paragraph) through the wikilink-embed dispatcher.
 ///
 /// Returns the aggregated outgoing-link + diagnostic data; mutates
 /// `doc.blocks` in place to substitute embed paragraphs with their
@@ -81,7 +88,7 @@ pub struct WikilinkDispatchResult {
 ///
 /// Run BEFORE [`crate::ast::resolve_urls::resolve_urls`]. The dispatcher
 /// reads `Inline::Image.src` as `Url::Unresolved(raw)` — the parser's
-/// pre-resolve form — because `dispatch_wikilink_embed_with_registry` does
+/// pre-resolve form — because `dispatch_wikilink_embed` does
 /// its own [`crate::resolve::fuzzy_path::resolve_reference`] internally.
 /// If `resolve_urls` runs first, the wikilink images' src is already
 /// `Url::Resolved(href)` and the dispatcher's internal resolver would
@@ -90,18 +97,10 @@ pub fn dispatch_wikilink_embeds(
     doc: &mut Document,
     snapshot: &AssetSnapshot,
     graph: &ContentGraph,
-    registry: &RendererRegistry,
     source_path: &str,
 ) -> WikilinkDispatchResult {
     let mut result = WikilinkDispatchResult::default();
-    dispatch_in_block_children(
-        &mut doc.blocks,
-        snapshot,
-        graph,
-        registry,
-        source_path,
-        &mut result,
-    );
+    dispatch_in_block_children(&mut doc.blocks, snapshot, graph, source_path, &mut result);
     result
 }
 
@@ -112,7 +111,6 @@ fn dispatch_in_block_children(
     blocks: &mut Vec<Block>,
     snapshot: &AssetSnapshot,
     graph: &ContentGraph,
-    registry: &RendererRegistry,
     source_path: &str,
     result: &mut WikilinkDispatchResult,
 ) {
@@ -125,21 +123,22 @@ fn dispatch_in_block_children(
         };
 
         if let Some((dest_url, pothole)) = dispatch_info {
-            let emit = dispatch_wikilink_embed_with_registry(
-                &dest_url,
-                pothole.as_deref(),
-                true, // is_embed: lone-paragraph wikilink image is an embed
-                graph,
-                source_path,
-                snapshot,
-                registry,
-            );
+            let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, source_path);
             apply_emit(blocks, i, emit, result);
             i += 1;
             continue;
         }
 
-        // Not a lone embed — descend into nested containers if any.
+        // Not a lone embed. A paragraph disqualified from the lone-embed
+        // shape (sibling text, more than one embed) may still carry a
+        // wikilink embed image whose extension is a real kind — dispatch
+        // each one in place so paragraph position never decides whether an
+        // embed gets its own element.
+        if let Block::Paragraph(inlines) = &mut blocks[i] {
+            dispatch_inline_wikilink_embeds(inlines, snapshot, graph, source_path, result);
+        }
+
+        // Descend into nested containers if any.
         //
         // PR7a-flip-core-C (2026-05-28): the recursion now matches the
         // visitor pattern in `visit.rs` for `Grid.cells` and `Hero.overlay`
@@ -150,41 +149,20 @@ fn dispatch_in_block_children(
             Block::BlockQuote(children)
             | Block::Callout { children, .. }
             | Block::FootnoteDefinition { children, .. } => {
-                dispatch_in_block_children(
-                    children,
-                    snapshot,
-                    graph,
-                    registry,
-                    source_path,
-                    result,
-                );
+                dispatch_in_block_children(children, snapshot, graph, source_path, result);
             }
             Block::List { items, .. } => {
                 for item in items.iter_mut() {
-                    dispatch_in_block_children(
-                        item,
-                        snapshot,
-                        graph,
-                        registry,
-                        source_path,
-                        result,
-                    );
+                    dispatch_in_block_children(item, snapshot, graph, source_path, result);
                 }
             }
             Block::LinkCard { children, .. } => {
                 // PR4.5 compound-link cell — descend into its block body so
                 // wikilinks inside a grid LinkCard render correctly.
-                dispatch_in_block_children(
-                    children,
-                    snapshot,
-                    graph,
-                    registry,
-                    source_path,
-                    result,
-                );
+                dispatch_in_block_children(children, snapshot, graph, source_path, result);
             }
             Block::Shortcode(sc) => {
-                dispatch_in_shortcode(sc, snapshot, graph, registry, source_path, result);
+                dispatch_in_shortcode(sc, snapshot, graph, source_path, result);
             }
             _ => {}
         }
@@ -199,7 +177,6 @@ fn dispatch_in_shortcode(
     sc: &mut Shortcode,
     snapshot: &AssetSnapshot,
     graph: &ContentGraph,
-    registry: &RendererRegistry,
     source_path: &str,
     result: &mut WikilinkDispatchResult,
 ) {
@@ -211,25 +188,18 @@ fn dispatch_in_shortcode(
         | Shortcode::Recent(_)
         | Shortcode::Apply(_) => {}
         Shortcode::Hero(args) => {
-            dispatch_in_block_children(
-                &mut args.overlay,
-                snapshot,
-                graph,
-                registry,
-                source_path,
-                result,
-            );
+            dispatch_in_block_children(&mut args.overlay, snapshot, graph, source_path, result);
         }
         Shortcode::Grid(args) => {
             for cell in args.cells.iter_mut() {
-                dispatch_in_block_children(cell, snapshot, graph, registry, source_path, result);
+                dispatch_in_block_children(cell, snapshot, graph, source_path, result);
             }
         }
     }
 }
 
 /// Detect a "lone wikilink image" paragraph: exactly one
-/// `Inline::Image { is_wikilink: true, .. }` modulo whitespace text and
+/// image the dispatcher takes ([`dispatcher_takes_embed`]) modulo whitespace text and
 /// line breaks.
 ///
 /// Returns `Some((dest_url, pothole))` where `dest_url` is the unresolved
@@ -241,7 +211,9 @@ fn find_lone_wikilink_image(inlines: &[Inline]) -> Option<(String, Option<String
         match inline {
             Inline::Image {
                 src,
-                is_wikilink: true,
+                alt,
+                title,
+                is_wikilink,
                 wikilink_pothole,
                 ..
             } => {
@@ -252,7 +224,10 @@ fn find_lone_wikilink_image(inlines: &[Inline]) -> Option<(String, Option<String
                     Url::Unresolved(s) => s.clone(),
                     Url::Resolved(r) => r.href.clone(),
                 };
-                found = Some((dest, wikilink_pothole.clone()));
+                if !dispatcher_takes_embed(*is_wikilink, &dest) {
+                    return None; // A plain image: the ordinary image path owns it.
+                }
+                found = Some((dest, embed_pothole(*is_wikilink, alt, title, wikilink_pothole)));
             }
             // Whitespace / linebreak siblings are tolerated.
             Inline::Text(t) if t.trim().is_empty() => {}
@@ -263,10 +238,122 @@ fn find_lone_wikilink_image(inlines: &[Inline]) -> Option<(String, Option<String
     found
 }
 
+/// The pothole text the dispatcher reads for an image: the raw text after `|`
+/// for a wikilink; for a standard `![alt](src "title")` image the alt text, or
+/// the title when the alt is empty.
+fn embed_pothole(
+    is_wikilink: bool,
+    alt: &str,
+    title: &Option<String>,
+    wikilink_pothole: &Option<String>,
+) -> Option<String> {
+    if is_wikilink {
+        return wikilink_pothole.clone();
+    }
+    Some(if alt.is_empty() { title.clone().unwrap_or_default() } else { alt.to_string() })
+        .filter(|t| !t.is_empty())
+}
+
+/// Dispatch every wikilink-embed image inside a paragraph that
+/// [`find_lone_wikilink_image`] did NOT claim — i.e. one with sibling text,
+/// or more than one embed. Mutates matching `Inline::Image` entries in
+/// place.
+///
+/// Each embed is routed through [`dispatch_embed`], the exact dispatcher
+/// call the lone-paragraph path uses — kind (image / video / audio / pdf /
+/// iframe / 3D model) is decided in that one place regardless of where in
+/// the document an embed sits. Only `EmitKind::Html` changes anything here;
+/// every other variant is left exactly as it rendered before this function
+/// existed (the original `Inline::Image`), because none of them are known
+/// to be phrasing content — the one thing that's safe inside this
+/// paragraph's `<p>`:
+///
+/// - `EmitKind::Html` — the dispatcher resolved a real, non-image kind with
+///   no caption, which every per-kind synthesizer emits as a bare element
+///   (`<video>`, `<audio>`, `<object>`, `<iframe>`, `<model-viewer>`) —
+///   phrasing content. Its HTML replaces the `Inline::Image` via
+///   `Inline::Other`.
+/// - `EmitKind::HtmlFigure` — the same resolution, but with a caption:
+///   `wrap_embed_with_caption` wraps the element in a block-level
+///   `<figure><figcaption>`. Splicing that into this paragraph's inline
+///   stream would land a block element inside `<p>…</p>`, which a browser
+///   corrects by closing the paragraph early and reopening a new one —
+///   splitting the very paragraph this embed sits in.
+/// - `EmitKind::Block` — an image extension (the dispatcher's typed
+///   `Block::Figure` arm). Left untouched: the ordinary `render_inline` →
+///   `hooks.render_image` path already produces the correct bare
+///   `<picture>`/`<img>` shape for an inline image, and redoing that
+///   decision here would just be a second copy of it.
+/// - `EmitKind::Inline` / `Link` — an unresolved reference or an unknown
+///   extension's link fallback. `resolve_urls` and the ordinary image path
+///   already cover an unresolved/unknown embed the same way they did
+///   before this function existed.
+fn dispatch_inline_wikilink_embeds(
+    inlines: &mut [Inline],
+    snapshot: &AssetSnapshot,
+    graph: &ContentGraph,
+    source_path: &str,
+    result: &mut WikilinkDispatchResult,
+) {
+    for inline in inlines.iter_mut() {
+        let (dest_url, pothole) = match inline {
+            Inline::Image {
+                src: Url::Unresolved(dest),
+                alt,
+                title,
+                is_wikilink,
+                wikilink_pothole,
+                ..
+            } if dispatcher_takes_embed(*is_wikilink, dest) => {
+                (dest.clone(), embed_pothole(*is_wikilink, alt, title, wikilink_pothole))
+            }
+            // Already-resolved src (shouldn't happen — this visitor runs
+            // before `resolve_urls`) or an image the dispatcher doesn't take.
+            _ => continue,
+        };
+        let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, source_path);
+        match emit.output {
+            EmitKind::Html(html) => {
+                if let Some(link) = emit.outgoing_link {
+                    result.outgoing_links.push(link);
+                }
+                result.diagnostics.extend(emit.diagnostics);
+                *inline = Inline::Other(html);
+            }
+            // Not known to be phrasing content — see function doc. Left as
+            // the original Inline::Image.
+            EmitKind::HtmlFigure(_) | EmitKind::Block(_) | EmitKind::Inline(_) | EmitKind::Link(_) => {}
+        }
+    }
+}
+
+/// Dispatch one wikilink-embed image with `is_embed: true` — the one call
+/// built by both the lone-paragraph path ([`dispatch_in_block_children`])
+/// and the mid-paragraph path ([`dispatch_inline_wikilink_embeds`]), so the
+/// two can never drift on how an embed is dispatched.
+fn dispatch_embed(
+    dest_url: &str,
+    pothole: Option<&str>,
+    snapshot: &AssetSnapshot,
+    graph: &ContentGraph,
+    source_path: &str,
+) -> WikilinkEmit {
+    dispatch_wikilink_embed(
+        dest_url,
+        pothole,
+        true, // is_embed
+        graph,
+        source_path,
+        snapshot,
+    )
+}
+
 /// Apply the dispatcher's `EmitKind` to `blocks[i]`.
 ///
-/// - `Html` / `Deferred` → replace with `Block::Other(html_or_marker)`
-///   (block-level raw HTML, bypassing `<p>` wrap).
+/// - `Html` / `HtmlFigure` → replace with `Block::Other(html)` (block-level
+///   raw HTML, bypassing `<p>` wrap — the whole reason `HtmlFigure`'s
+///   `<figure>` is fine here and only here: this call site is never inside
+///   a `<p>`).
 /// - `Inline` / `Link` → re-parse via [`parse`]; splice the resulting
 ///   blocks in at position `i` (so e.g. an image embed that re-parses
 ///   into a `Block::Paragraph(vec![Inline::Image { … }])` becomes the
@@ -283,7 +370,7 @@ fn apply_emit(
     result.diagnostics.extend(emit.diagnostics);
 
     match emit.output {
-        EmitKind::Html(html) | EmitKind::Deferred(html) => {
+        EmitKind::Html(html) | EmitKind::HtmlFigure(html) => {
             blocks[i] = Block::Other(html);
         }
         EmitKind::Block(block) => {
@@ -335,7 +422,6 @@ mod tests {
     use super::*;
     use crate::asset_snapshot::AssetSnapshot;
     use crate::content_graph::ContentGraph;
-    use crate::resolve::registry::RendererRegistry;
 
     fn empty_graph() -> ContentGraph {
         crate::content_graph::ContentGraphBuilder::new().build()
@@ -343,10 +429,6 @@ mod tests {
 
     fn empty_snapshot() -> AssetSnapshot {
         AssetSnapshot::default()
-    }
-
-    fn empty_registry() -> RendererRegistry {
-        RendererRegistry::builtin().build()
     }
 
     #[test]
@@ -365,8 +447,7 @@ mod tests {
         }])]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let result = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let result = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         // The original paragraph is replaced. Either with Block::Figure
         // (after re-parse) or Block::Paragraph (when re-parse doesn't
         // promote). Either way, the resulting blocks should NOT contain
@@ -383,28 +464,48 @@ mod tests {
         let _ = result;
     }
 
-    #[test]
-    fn non_wikilink_image_is_left_alone() {
-        // Standard markdown image (not a wikilink). Dispatch should
-        // skip it.
-        let mut doc = Document::from_blocks(vec![Block::Paragraph(vec![Inline::Image {
-            src: Url::unresolved("photo.png"),
-            alt: "a".into(),
+    fn standard_image(dest: &str, alt: &str) -> Block {
+        Block::Paragraph(vec![Inline::Image {
+            src: Url::unresolved(dest),
+            alt: alt.into(),
             title: None,
             is_wikilink: false,
             wikilink_pothole: None,
-        }])]);
-        let snap = empty_snapshot();
-        let graph = empty_graph();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
-        match &doc.blocks[0] {
-            Block::Paragraph(inlines) => match &inlines[0] {
-                Inline::Image { is_wikilink, .. } => assert!(!is_wikilink),
-                _ => panic!("expected Image"),
-            },
-            _ => panic!("expected Paragraph"),
+        }])
+    }
+
+    #[test]
+    fn standard_image_is_left_alone_unless_it_is_a_typed_site_file() {
+        // The dispatcher takes a standard `![alt](path)` only for a site file
+        // of a typed non-image kind. Images, external URLs, data URIs and
+        // unknown extensions stay plain images.
+        for dest in [
+            "photo.png",
+            "photo.png?v=2",
+            "https://example.com/clip.mp4",
+            "//example.com/clip.mp4",
+            "data:video/mp4;base64,AAAA",
+            "thing.xyz",
+        ] {
+            let mut doc = Document::from_blocks(vec![standard_image(dest, "a")]);
+            let _ = dispatch_wikilink_embeds(&mut doc, &empty_snapshot(), &empty_graph(), "post.md");
+            match &doc.blocks[0] {
+                Block::Paragraph(inlines) => match &inlines[0] {
+                    Inline::Image { is_wikilink, .. } => assert!(!is_wikilink, "{dest}"),
+                    _ => panic!("{dest}: expected Image"),
+                },
+                other => panic!("{dest}: expected Paragraph, got {other:?}"),
+            }
         }
+    }
+
+    #[test]
+    fn standard_image_of_a_typed_site_file_is_dispatched() {
+        // Unresolved target: the dispatcher's answer for the wiki form
+        // (a link to the missing file), not a left-behind `<img>`.
+        let mut doc = Document::from_blocks(vec![standard_image("clip.mp4", "")]);
+        let r = dispatch_wikilink_embeds(&mut doc, &empty_snapshot(), &empty_graph(), "post.md");
+        assert!(!r.diagnostics.is_empty(), "dispatcher must have seen the embed");
     }
 
     #[test]
@@ -425,8 +526,7 @@ mod tests {
         ])]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         // The paragraph should still carry the inline wikilink image
         // (text + image + text shape preserved).
         match &doc.blocks[0] {
@@ -449,8 +549,7 @@ mod tests {
         let mut doc = Document::from_blocks(vec![]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let result = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let result = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         assert!(doc.blocks.is_empty());
         assert!(result.outgoing_links.is_empty());
         assert!(result.diagnostics.is_empty());
@@ -543,11 +642,12 @@ mod tests {
                 classes: String::new(),
                 cells: vec![cell],
                 width: None,
+                scroll: false,
+                label: None,
             }))]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         let has_wikilink_image = find_any_wikilink_image(&doc.blocks);
         assert!(
             !has_wikilink_image,
@@ -559,7 +659,7 @@ mod tests {
     fn hero_overlay_wikilink_embed_is_dispatched() {
         // A `:::hero` whose overlay contains a lone wikilink embed paragraph.
         // The visitor must descend into Hero.overlay and dispatch the embed.
-        // SoCiviC's fixtures rely on this — hero overlays carry markdown
+        // Real-site fixtures rely on this — hero overlays carry markdown
         // that may include `![[...]]` references.
         use super::super::shortcode::{HeroShortcode, Shortcode};
 
@@ -580,12 +680,12 @@ mod tests {
                 overlay_text: String::new(),
                 width: None,
                 mobile: None,
+                align: None,
                 caption: String::new(),
             }))]);
         let snap = empty_snapshot();
         let graph = empty_graph();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         let has_wikilink_image = find_any_wikilink_image(&doc.blocks);
         assert!(
             !has_wikilink_image,
@@ -613,8 +713,7 @@ mod tests {
         }
         let graph = b.build();
         let snap = empty_snapshot();
-        let reg = empty_registry();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
         doc.blocks
     }
 
@@ -640,8 +739,10 @@ mod tests {
         let blocks = parse_and_dispatch("![[clip.mov|77%]]\n", &["clip.mov"]);
         let html = dispatched_html(&blocks);
         assert!(html.contains("<video"), "got: {html}");
+        // A bare percent is the element's own width, so it rides inline
+        // style — `<video width="77%">` was never valid HTML anyway.
         assert!(
-            html.contains(r#"width="77%""#),
+            html.contains(r#"style="width:77%""#),
             "percent width dropped: {html}"
         );
         assert!(
@@ -675,4 +776,127 @@ mod tests {
             other => panic!("expected Figure for image percent, got {other:?}"),
         }
     }
+
+    // --- mid-paragraph embeds (not the lone-embed shape) ------------------
+    //
+    // An embed followed or preceded by text in the same paragraph (a
+    // caption joined by a soft break, or plain prose) disqualifies
+    // `find_lone_wikilink_image`. Before `dispatch_inline_wikilink_embeds`
+    // existed, that meant the embed never reached kind dispatch at all: it
+    // stayed an `Inline::Image` and rendered through the generic image
+    // synth path regardless of its real extension — a video or audio file
+    // rendered as `<img src="clip.mp4">`.
+
+    /// One paragraph, one non-whitespace `Inline::Other` (the dispatched
+    /// embed HTML) — panics with the actual shape otherwise.
+    fn dispatched_inline_html(blocks: &[Block]) -> &str {
+        match blocks {
+            [Block::Paragraph(inlines)] => inlines
+                .iter()
+                .find_map(|i| match i {
+                    Inline::Other(html) => Some(html.as_str()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no Inline::Other in paragraph: {inlines:?}")),
+            other => panic!("expected one Paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn video_followed_by_text_in_same_paragraph_still_renders_as_video() {
+        // The exact shape from the bug report: an embed alone on its line,
+        // then a caption on the next line joined by a soft break (no blank
+        // line between them, so it's one paragraph).
+        let blocks = parse_and_dispatch(
+            "![[clip.mp4]]\nSome caption text on the next line.\n",
+            &["clip.mp4"],
+        );
+        let html = dispatched_inline_html(&blocks);
+        assert!(html.contains("<video"), "got: {html}");
+        assert!(!html.contains("<img"), "must not fall back to <img>: {html}");
+        match &blocks[..] {
+            [Block::Paragraph(inlines)] => {
+                let text: String = inlines
+                    .iter()
+                    .filter_map(|i| match i {
+                        Inline::Text(t) => Some(t.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(
+                    text.contains("Some caption text on the next line."),
+                    "caption text must survive alongside the video: {inlines:?}"
+                );
+            }
+            other => panic!("expected one Paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_before_video_in_same_paragraph_still_renders_as_video() {
+        let blocks = parse_and_dispatch(
+            "Watch this clip:\n![[clip.mp4]]\n",
+            &["clip.mp4"],
+        );
+        let html = dispatched_inline_html(&blocks);
+        assert!(html.contains("<video"), "got: {html}");
+        assert!(!html.contains("<img"), "must not fall back to <img>: {html}");
+    }
+
+    #[test]
+    fn audio_followed_by_text_in_same_paragraph_still_renders_as_audio() {
+        let blocks = parse_and_dispatch(
+            "![[clip.mp3]]\nRecorded live.\n",
+            &["clip.mp3"],
+        );
+        let html = dispatched_inline_html(&blocks);
+        assert!(html.contains("<audio"), "got: {html}");
+        assert!(!html.contains("<img"), "must not fall back to <img>: {html}");
+    }
+
+    #[test]
+    fn text_before_audio_in_same_paragraph_still_renders_as_audio() {
+        let blocks = parse_and_dispatch(
+            "Listen:\n![[clip.mp3]]\n",
+            &["clip.mp3"],
+        );
+        let html = dispatched_inline_html(&blocks);
+        assert!(html.contains("<audio"), "got: {html}");
+        assert!(!html.contains("<img"), "must not fall back to <img>: {html}");
+    }
+
+    #[test]
+    fn captioned_video_mid_paragraph_does_not_nest_a_figure_in_the_paragraph() {
+        // `align-right|My caption` gives the embed both a placement token
+        // and caption text, which the lone-paragraph path wraps in a
+        // block-level `<figure>` (`wrap_embed_with_caption`). Mid-paragraph,
+        // splicing that `<figure>` in would nest a block element inside
+        // `<p>` — invalid HTML a browser corrects by splitting the
+        // paragraph. The dispatcher must leave this one as `Inline::Image`
+        // rather than produce that.
+        let blocks = parse_and_dispatch(
+            "Watch this: ![[clip.mp4|align-right|My caption]] please.\n",
+            &["clip.mp4"],
+        );
+        match &blocks[..] {
+            [Block::Paragraph(inlines)] => {
+                assert!(
+                    inlines.iter().all(|i| !matches!(i, Inline::Other(h) if h.contains("<figure"))),
+                    "a <figure> must never be spliced into paragraph inlines: {inlines:?}"
+                );
+                assert!(
+                    inlines.iter().any(|i| matches!(
+                        i,
+                        Inline::Image {
+                            is_wikilink: true,
+                            ..
+                        }
+                    )),
+                    "the embed must survive as Inline::Image when its HTML can't be inlined: {inlines:?}"
+                );
+            }
+            other => panic!("expected one Paragraph, got {other:?}"),
+        }
+    }
+
 }

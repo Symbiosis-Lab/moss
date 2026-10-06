@@ -1,0 +1,17 @@
+# Folder Passthrough Iframe Site
+
+---
+
+## Folder Passthrough Iframe Site
+
+# Folder Passthrough Iframe Site
+
+A demo of embedding a static passthrough app folder via `![[/folder/]]`.
+
+The `app/` folder has an `index.html` but no markdown index, so it
+classifies as `FolderIndexIframe` and renders as an `<iframe>`.
+
+## Embedded app
+
+<!--MOSS_MARKER_FOLDER_LIST:path=/app/|from=index.md-->
+

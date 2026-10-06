@@ -1,0 +1,1 @@
+{"/":{"description":"A page for verifying the no-provider slot baseline.","preview":"This page verifies that slot markers are stripped from built HTML when no plugin provides content for them.","title":"Slots Baseline"}}

@@ -22,7 +22,7 @@
 //!     final HTML
 //! ```
 //!
-//! Design principles (from `docs/reference/typed-body-ast.md`):
+//! Design principles:
 //!
 //! - The AST is data, not a hierarchy of objects. Pattern matching is the
 //!   visitor framework.
@@ -39,6 +39,7 @@ pub mod extract_hero;
 pub mod footnotes;
 pub mod grid_parts;
 pub mod line_breaks;
+pub mod link_card;
 pub mod linked_embed;
 pub mod hooks;
 pub mod math_text;
@@ -64,11 +65,11 @@ pub use parser::{parse, parse_with_config, parser_options, unwrap_implicit_figur
 pub use plain_text::{inlines_to_plain_text, render_plain_text};
 pub use query::find_first_block_image;
 pub use render::{render_block_with_meta, render_blocks, render_document};
-pub use resolve_urls::{classify_remaining_urls, resolve_urls, GraphAssetIndex, UrlResolution};
+pub use resolve_urls::{classify_remaining_urls, resolve_urls, UrlResolution};
 pub use shortcode::{
     ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode, HeroShortcode,
     RecentShortcode, Shortcode, ShortcodeKind, SubscribeShortcode,
 };
 pub use tags::extract_inline_tags;
 pub use url::{ResolvedUrl, Url, UrlKind};
-pub use visit::{has_callout_recursive, has_shortcode_recursive, visit_blocks, visit_urls_mut};
+pub use visit::{has_callout_recursive, has_scroll_row_recursive, has_shortcode_recursive, visit_blocks, visit_urls_mut};

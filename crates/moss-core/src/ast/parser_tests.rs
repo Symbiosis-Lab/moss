@@ -288,8 +288,8 @@ fn callout_case_insensitive_kind() {
 
 #[test]
 fn callout_pending_alias_canonicalizes_to_todo() {
-    // SoCiviC Theatre's voices.md uses `> [!pending]` — carried
-    // over from Stage 1 support.
+    // Existing sites use `> [!pending]` — carried over from Stage 1
+    // support.
     match first_block("> [!pending] Trailer video\n> Add when ready.\n") {
         Block::Callout { kind, title, .. } => {
             assert_eq!(kind, CalloutKind::Todo);
@@ -358,6 +358,7 @@ fn parses_link_with_unresolved_url() {
                 title,
                 children,
                 is_wikilink,
+                has_pothole: _,
             } => {
                 assert!(url.is_unresolved());
                 match url {
@@ -785,7 +786,7 @@ fn heading_id(md: &str) -> Option<String> {
 
 #[test]
 fn heading_id_simple_phrase() {
-    // SoCiviC `## Mission` baseline case.
+    // A plain `## Mission` baseline case.
     assert_eq!(heading_id("## Mission\n"), Some("mission".to_string()));
 }
 
@@ -832,18 +833,18 @@ fn heading_id_with_inline_code_includes_code_payload() {
 
 #[test]
 fn heading_id_with_inline_html_strips_html() {
-    // SoCiviC `# FAREWELL,<br>AND ERASE` — the `<br>` is Event::InlineHtml
+    // `# HELLO,<br>AND GOODBYE` — the `<br>` is Event::InlineHtml
     // and must NOT appear in the slug. Production's slug for this is
-    // derived from "FAREWELL,AND ERASE".
-    let id = heading_id("# FAREWELL,<br>AND ERASE\n").expect("heading id");
+    // derived from "HELLO,AND GOODBYE".
+    let id = heading_id("# HELLO,<br>AND GOODBYE\n").expect("heading id");
     // No `<br>` or `br` injected; punctuation preserved (`,`), spaces → `-`.
     assert!(!id.contains("br"), "got: {id}");
-    assert_eq!(id, "farewell,and-erase");
+    assert_eq!(id, "hello,and-goodbye");
 }
 
 #[test]
 fn heading_id_cjk_preserved() {
-    // 刘果's CJK headings exercise Unicode anchor normalization —
+    // CJK headings exercise Unicode anchor normalization —
     // characters pass through unchanged (lowercase already, no whitespace).
     assert_eq!(heading_id("## 视频\n"), Some("视频".to_string()));
     assert_eq!(heading_id("## 中文标题\n"), Some("中文标题".to_string()));
@@ -935,7 +936,7 @@ fn duplicate_suffix_descends_into_hero_overlay() {
 
 #[test]
 fn duplicate_suffix_descends_into_link_card() {
-    // The SoCiviC compound-link cell: `Block::LinkCard { children }` holds
+    // The compound-link cell: `Block::LinkCard { children }` holds
     // block-level content, headings included.
     let doc = parse(":::grid\n[### Notes\n\ntext](/a)\n:::\n\n## Notes\n");
     let mut found_ids: Vec<String> = Vec::new();
@@ -1033,7 +1034,7 @@ fn image_only_paragraph_with_empty_alt_stays_as_paragraph() {
     // visual noise (no figcaption text) without a11y benefit. The
     // bytes match production's `<p><img></p>` shape.
     //
-    // Parity-probe evidence: pre-guard, 7 CJK 刘果 fixtures with
+    // Parity-probe evidence: pre-guard, 7 CJK real-site fixtures with
     // trailing empty-alt images flipped to "other" because the AST
     // emitted `<figure>` and prod did not. Guard restores parity.
     match first_block("![](logo.png)\n") {
@@ -1134,6 +1135,17 @@ fn two_images_in_one_paragraph_do_not_promote() {
 // Editor Image UX (2026-06-04): standard-image `|NN%` width carries
 // into Block::Figure.width instead of leaking into the caption.
 // ------------------------------------------------------------------
+
+#[test]
+fn standard_image_percent_wins_over_a_width_token() {
+    // ![alt|wide|40%](pic.jpg): the percent is the more specific ask, and a
+    // figure carrying both would be centred for the token's band while the
+    // inline style shrank it — pushing it out of the column.
+    match first_block("![alt|wide|40%](pic.jpg)\n") {
+        Block::Figure { width, .. } => assert_eq!(width.as_deref(), Some("40%")),
+        other => panic!("expected a Figure, got {other:?}"),
+    }
+}
 
 #[test]
 fn standard_image_percent_promotes_with_width() {
@@ -1714,8 +1726,7 @@ fn parse_implicit_figure_off_leaves_a_footnote_definition_image_unpromoted() {
 // The implicit-figure caption is the image's alt content parsed as
 // inline markdown — `*em*`, links, `` `code` `` and typeset math — while
 // the `alt=` attribute keeps the flat plain-text source (math verbatim).
-// Matches Pandoc's implicit-figure model. See
-// docs/reference/target and the caption fix design.
+// Matches Pandoc's implicit-figure model.
 // -----------------------------------------------------------------
 
 #[test]
@@ -1964,6 +1975,23 @@ fn wikilink_pdf_alias_stays_paragraph() {
         matches!(block, Block::Paragraph(_)),
         "expected Paragraph, got {block:?}"
     );
+}
+
+#[test]
+fn standard_embed_of_a_typed_site_file_stays_paragraph() {
+    // `![alt](thing.glb)` is the standard spelling of `![[thing.glb]]`; the
+    // dispatcher only visits paragraphs, so it must not be promoted either.
+    for md in ["![a model](m/thing.glb)\n", "![400](clip.mp4)\n", "![](paper.pdf)\n"] {
+        assert!(
+            matches!(first_block(md), Block::Paragraph(_)),
+            "{md:?} must stay Paragraph for dispatch"
+        );
+    }
+    // Externals and plain images keep the ordinary figure path.
+    assert!(matches!(
+        first_block("![cap](https://e.com/clip.mp4)\n"),
+        Block::Figure { .. }
+    ));
 }
 
 #[test]

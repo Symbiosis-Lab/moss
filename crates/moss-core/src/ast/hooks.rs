@@ -5,29 +5,17 @@
 //! method has a default implementation in [`DefaultHooks`] that produces
 //! moss's canonical HTML.
 //!
-//! Consumers (src-tauri's `PipelineHooks`, future plugins) override one
+//! Consumers (moss-build's `PipelineHooks`, future plugins) override one
 //! method without touching the renderer or the AST. Defaults handle the
 //! ~80% case; overrides handle site-specific concerns (asset path
 //! rewriting, classname injection, etc).
 //!
-//! # Architectural prior art
+//! # Prior art
 //!
 //! `RenderHooks` is moss's port of Hugo's render-hooks pattern
 //! ([`markup/goldmark/render_hooks.go`](https://github.com/gohugoio/hugo/blob/master/markup/goldmark/render_hooks.go)).
-//! In Hugo, `hookedRenderer` IS Goldmark's `NodeRenderer` — hooks fire
-//! during the AST walk, every CommonMark-native attribute reaches the hook
-//! (e.g. `linkContext.Title`), and the template owns rendering decisions.
-//!
-//! Cross-SSG research (2026-05-27) confirms this is the canonical shape:
-//! every AST-bearing SSG (Hugo, Markdoc, mdast/remark, Pandoc, comrak,
-//! recent mdBook) carries every parser-emitted attribute (including link
-//! title) through to the renderer. Dropping fields the parser saw is
-//! universally regarded as Gatsby's mistake — lossy AST forces consumers
-//! into a plugin ecosystem they wouldn't need if the AST were faithful.
-//!
-//! See [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md)
-//! for the full research synthesis and [typed-body-ast.md](../../../../../docs/reference/typed-body-ast.md)
-//! for the design intent + 7 principles.
+//! Hooks fire during the AST walk and every CommonMark-native attribute
+//! reaches the hook, so the consumer owns rendering decisions.
 
 use super::grid_parts::GridParts;
 use super::shortcode::{GridShortcode, Shortcode};
@@ -49,33 +37,17 @@ pub trait RenderHooks {
     /// **orthogonal** — a wikilink that resolves to an asset-newtab target
     /// emits BOTH `class="wikilink"` AND `target="_blank" rel="noopener"`.
     ///
-    /// # `is_wikilink` parameter (PR7a-flip-core-A)
+    /// # `is_wikilink` parameter
     ///
-    /// Phase 4 PR7a-flip-core-A (2026-05-28) added `is_wikilink: bool` to
-    /// the signature. Before this change, the renderer had to synthesize
-    /// a wikilink-kinded `ResolvedUrl` to coax the hook into emitting
-    /// `class="wikilink"` — a lossy workaround that fused two orthogonal
-    /// concerns (URL kind + wikilink syntax discriminator) into a single
-    /// field. The flag carries pulldown-cmark's `LinkType::WikiLink`
-    /// discriminator faithfully into the renderer, matching how every
-    /// AST-bearing SSG threads its parse-time link metadata through
-    /// (Hugo's `linkContext.Type`, Markdoc, mdast's `Resource`).
+    /// The flag carries pulldown-cmark's `LinkType::WikiLink` discriminator
+    /// into the renderer, keeping two orthogonal concerns (URL kind and
+    /// wikilink syntax) in separate fields.
     ///
-    /// # Title parameter (PR8 — scheduled)
+    /// # Title parameter
     ///
-    /// This signature is still missing the `title: Option<&str>` parameter
-    /// that CommonMark links can carry (`[text](href "title")`). Title is
-    /// silently dropped today through the AST render path. Invisible
-    /// because production HTML still comes from `pulldown_cmark::html::push_html`
-    /// (events carry title natively); becomes a regression the moment
-    /// PR7a flips production to `render_document`.
-    ///
-    /// PR8 restores `title: Option<&str>` alongside other `RenderHooks`
-    /// signature changes (`ResolvedUrl` private-constructor lockdown).
-    /// Every comparable AST-bearing SSG passes title to its render hook
-    /// (Hugo's `linkContext.Title`, Markdoc, mdast's `Resource.title`,
-    /// comrak, Pandoc) — see
-    /// [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md).
+    /// This signature does not carry the `title: Option<&str>` that
+    /// CommonMark links can have (`[text](href "title")`); the title is
+    /// dropped on the AST render path.
     fn render_link(
         &self,
         out: &mut String,
@@ -115,14 +87,15 @@ pub trait RenderHooks {
     /// `object-fit:cover`); `width` is the enclosing figure's `data-width`
     /// token (`wide|page|screen|body`, or a percent) so snapshot-aware impls
     /// can declare an honest `sizes=` for the escape band the figure renders
-    /// in (ADR-021 Corollary 2). Both are `None` on the inline-image and
+    /// in. Both are `None` on the inline-image and
     /// CommonMark `![](url)` figure paths, which MUST stay byte-identical to
     /// what this trait emitted before those params existed.
     ///
-    /// This is deliberately ONE method rather than a styled/unstyled pair:
-    /// moss#754 was a wrapper impl forwarding only the styleless half,
-    /// silently dropping embed styles inside `:::hero` overlays. With a
-    /// single entry point a delegating impl cannot forward half the concept.
+    /// This is deliberately ONE method rather than a styled/unstyled pair: a
+    /// past regression came from a wrapper impl forwarding only the
+    /// styleless half, silently dropping embed styles inside `:::hero`
+    /// overlays. With a single entry point a delegating impl cannot forward
+    /// half the concept.
     fn render_image(
         &self,
         out: &mut String,
@@ -153,7 +126,7 @@ pub trait RenderHooks {
     /// Close the scope opened by [`begin_grid_cells`]. Default: no-op.
     fn end_grid_cells(&self) {}
 
-    /// Emit a math equation (ADR-030). `tex` is the raw LaTeX the author typed
+    /// Emit a math equation. `tex` is the raw LaTeX the author typed
     /// (delimiters stripped, unescaped); `display` distinguishes `$$…$$` from
     /// `$…$`; `fallback_html` is the P1 escaped-source `<code class="moss-math">`
     /// node the parser already built — the honest, never-blank rendering of the
@@ -161,12 +134,12 @@ pub trait RenderHooks {
     ///
     /// **Default impl (this crate, the editor, tests): emit `fallback_html`
     /// verbatim.** moss-core ships no typesetting engine, and this keeps every
-    /// non-pipeline render byte-identical to P1. src-tauri's `PipelineHooks`
+    /// non-pipeline render byte-identical to P1. moss-build's `PipelineHooks`
     /// overrides this to typeset `tex` to an inline `<svg>` via RaTeX, falling
     /// back to `fallback_html` on any guard/engine/validation refusal — so the
     /// two impls are genuinely different (SVG vs source), which is why this is a
-    /// hook and not a fixed AST rendering (the three-question gate; ADR-030
-    /// §3.2). The renderer routes `Inline::Other` math nodes here; a non-math
+    /// hook and not a fixed AST rendering (the three-question gate). The
+    /// renderer routes `Inline::Other` math nodes here; a non-math
     /// `Inline::Other` never reaches this method.
     fn render_math(&self, out: &mut String, tex: &str, display: bool, fallback_html: &str) {
         let _ = (tex, display);
@@ -201,13 +174,13 @@ pub trait RenderHooks {
     ///
     /// The default impl produces a minimal HTML skeleton suitable for the
     /// moss-core test harness; site-specific HTML (subscribe forms, button
-    /// styles, gallery grids) lives in src-tauri's `PipelineHooks` impl
+    /// styles, gallery grids) lives in moss-build's `PipelineHooks` impl
     /// because it depends on filesystem context (site_id, lang, asset
     /// paths) that moss-core doesn't have.
     fn render_shortcode(&self, out: &mut String, sc: &Shortcode, source_line: Option<usize>) {
         match sc {
             Shortcode::Subscribe(args) => {
-                // Test-harness skeleton; src-tauri's PipelineHooks renders
+                // Test-harness skeleton; moss-build's PipelineHooks renders
                 // the production HTML (form action URL, language defaults,
                 // status spans). Description prose moved out of the
                 // shortcode under the unified grammar.
@@ -394,7 +367,7 @@ pub trait RenderHooks {
             }
             Shortcode::Hero(args) => {
                 // Test-harness skeleton; the production renderer in
-                // src-tauri's PipelineHooks routes the image through the
+                // moss-build's PipelineHooks routes the image through the
                 // resolver, runs media-attrs into a style attribute, and
                 // processes the overlay markdown to HTML. This default
                 // emits a minimal `<section class="moss-hero">` so unit
@@ -405,23 +378,18 @@ pub trait RenderHooks {
                 // `--moss-hero-mobile-bg`/`--moss-hero-mobile-color` CSS custom
                 // properties — those require `dominant_color` from the scan
                 // cache which is not available in moss-core (zero-I/O invariant).
-                // Before PR7a-flip-core-B promotes `render_document` as the sole
-                // Hero rendering path, this arm must either be updated or
-                // callers must use `PipelineHooks` to get full mobile attrs.
-                // Tracked: src-tauri issue #747 (HeroRenderContext refactor).
+                // Callers needing the mobile attrs must use `PipelineHooks`;
+                // this arm is not the sole Hero rendering path.
                 //
-                // Phase 4 PR1 (2026-05-27): the inner `<img>` is now
-                // emitted via [`crate::render::image::synthesize_image_html`]
-                // instead of a bare `<img>` literal so the `img_contract_test`
-                // invariant ("every <img> is synth-emitted or a documented
-                // carve-out") holds when `render_document` runs through
-                // `DefaultHooks`. When the impl carries a snapshot
-                // (`gallery_assets()` is `Some`) the synth uses
-                // `ImageContext::Hero` (full `<picture>`/dims/LQIP byte
-                // shape); without a snapshot it falls back to the
-                // `ImageContext::HeroBare` carve-out per ADR-013 — the
-                // legitimate "before set_pending" path where no variant
-                // can be promised.
+                // The inner `<img>` is emitted via
+                // [`crate::render::image::synthesize_image_html`] so the
+                // `img_contract_test` invariant ("every <img> is synth-emitted
+                // or a documented carve-out") holds under `DefaultHooks`.
+                // With a snapshot (`gallery_assets()` is `Some`) the synth
+                // uses `ImageContext::Hero` (full `<picture>`/dims/LQIP byte
+                // shape); without one it falls back to the
+                // `ImageContext::HeroBare` carve-out, where no variant can
+                // be promised.
                 let mut class_attr = String::from("moss-hero");
                 if !args.classes.is_empty() {
                     class_attr.push(' ');
@@ -492,7 +460,8 @@ pub trait RenderHooks {
                             // synthesis as `![[clip.mp4|loop]]`.
                             let mut params = crate::resolve::title_params::TitleParams::default();
                             params.params.insert("loop".into(), "1".into());
-                            crate::render::video::synthesize_video_html(&params, href, snap)
+                            let place = crate::media::Placement::default();
+                            crate::render::video::synthesize_video_html(&params, &place, href, snap)
                         } else {
                             crate::render::image::synthesize_image_html(
                                 href,
@@ -559,7 +528,7 @@ pub trait RenderHooks {
             }
             Shortcode::Recent(_args) => {
                 // Test-harness skeleton; the production renderer in
-                // src-tauri's PipelineHooks queries the post set (which
+                // moss-build's PipelineHooks queries the post set (which
                 // moss-core cannot see) and emits the actual list. This
                 // default emits an empty `<div class="moss-recent">` so
                 // unit tests that only care about presence can pattern-
@@ -569,7 +538,7 @@ pub trait RenderHooks {
             }
             Shortcode::Apply(args) => {
                 // Test-harness skeleton; the production renderer in
-                // src-tauri's PipelineHooks emits the full form HTML with
+                // moss-build's PipelineHooks emits the full form HTML with
                 // the seta action URL and language-specific copy.
                 let placeholder = args.placeholder.as_deref().unwrap_or("your@email.com");
                 out.push_str(r#"<div class="moss-apply">"#);
@@ -599,10 +568,10 @@ pub trait RenderHooks {
     /// strings with `args.cells` and decides per cell from the typed blocks.
     /// That is the whole point: the *decision* is made on the same typed data
     /// the emission was made from, so the two can never drift — unlike the
-    /// regex-over-emitted-HTML pass this replaced (ADR-034).
+    /// regex-over-emitted-HTML pass this replaced.
     ///
     /// Impls that delegate `render_shortcode`'s `Grid` arm to a *different*
-    /// hooks value (src-tauri's `PipelineHooks` delegates to a
+    /// hooks value (moss-build's `PipelineHooks` delegates to a
     /// [`DefaultHooks`] bound to its asset snapshot, so grid-cell images get
     /// the snapshot-aware `sizes=` ladder) must override this method the same
     /// way, or the split form will render cells through the wrong hooks.
@@ -614,7 +583,7 @@ pub trait RenderHooks {
     /// `id="fnref-…"` / `href="#fn-…"` anchors.
     ///
     /// Default `true` — byte-identical to before this method existed.
-    /// `crate` (src-tauri)'s `EmailHooks` overrides to `false`: ADR-035 fixes
+    /// The desktop app's `EmailHooks` overrides to `false`: this fixes
     /// "email emits no anchors" as the target behavior (an in-body fragment
     /// link is dead weight in a mail client, and a stray `id=` surviving a
     /// client's HTML sanitizer is noise), but the marker's visible number and
@@ -625,26 +594,35 @@ pub trait RenderHooks {
         true
     }
 
-    /// Whether headings carry the `moss-heading-anchor` permalink.
+    /// Whether a heading at `level` carries the `moss-heading-anchor`
+    /// permalink. The `id` is kept regardless of the answer, so a fragment
+    /// link (`#section`) still resolves either way — this only gates the
+    /// visible `#` appended after the heading text.
     ///
-    /// False for hero overlays: hero headings are display titles, not
-    /// in-page navigation landmarks, so the `#` link is visual noise. The
-    /// `id` attribute is kept regardless, so fragment links still resolve.
+    /// Trait default: no for `level == 1`, yes otherwise. A level-1 heading
+    /// is a page's own title, not a section of it, so it is never a
+    /// fragment a reader deep-links to — true of an author-written
+    /// `# Title` in the body just as much as the auto-injected article
+    /// title (which skips this hook entirely; see [`RenderHooks::render_heading`]).
+    /// Overrides only narrow further, never widen past `level == 1`:
+    /// [`DefaultHooks::hero_overlay`]/[`grid_cells`](DefaultHooks::grid_cells)
+    /// say no at every level (a card/hero heading is a display title
+    /// regardless of level), and a hosting site can do the same for a
+    /// specific page (e.g. the home page).
     ///
-    /// A policy hook rather than a `render_heading` override (the shape
-    /// [`emit_footnote_anchors`](RenderHooks::emit_footnote_anchors) already
-    /// established) so there stays exactly ONE heading emitter — moss#754
-    /// was a second, partially-delegating hooks impl drifting from the
-    /// first.
-    fn emit_heading_anchors(&self) -> bool {
-        true
+    /// A policy hook rather than a `render_heading` override — same shape
+    /// as [`emit_footnote_anchors`](RenderHooks::emit_footnote_anchors) —
+    /// so exactly ONE heading emitter exists; a past regression introduced
+    /// a second, partially-delegating impl that drifted from the first.
+    fn emit_heading_anchors(&self, level: u8) -> bool {
+        level != 1
     }
 
     /// The localized `aria-label` for the per-heading permalink anchor
     /// (`<a class="moss-heading-anchor" aria-label="…">`).
     ///
     /// moss-core is pure Rust with no i18n table (no `i18n::Language`),
-    /// so the LOCALIZED string is resolved by the src-tauri caller
+    /// so the LOCALIZED string is resolved by moss-build's caller
     /// (`crate::i18n::strings::t(site_lang, "permalink_section")`) and
     /// threaded in via the hooks impl — `render_heading` just emits
     /// whatever this returns. The trait default keeps the historical
@@ -662,7 +640,7 @@ pub trait RenderHooks {
     /// `source_line` is the 1-based source line where the heading appears
     /// in the markdown. When `Some`, the rendered tag carries
     /// `data-source-line="N"` for the preview's editor↔preview scroll
-    /// sync (see `frontend/bridge/iframe-bridge.ts`'s `scrollToSourceLine`
+    /// sync (see moss-build's iframe bridge's `scrollToSourceLine`
     /// RPC). When `None` (default config / fragment-render paths), no
     /// attr is emitted — byte-identical to the pre-source-line shape.
     ///
@@ -691,12 +669,14 @@ pub trait RenderHooks {
         }
         out.push('>');
         out.push_str(content);
-        // Permalink anchor — only when the heading has a slug id. Appended
-        // AFTER content / BEFORE </h> so the opening tag (id, data-source-line)
-        // stays byte-identical for preview scroll-sync. The auto-injected
-        // article-title H1 (`<h1 class="moss-article-title">`) is emitted
-        // separately in src-tauri html_post.rs and never reaches this hook,
-        // so it correctly gets no anchor.
+        // Permalink anchor — only when the heading has a slug id AND
+        // `emit_heading_anchors(level)` says yes (never for level 1 by
+        // default; see that method's doc for the rest of the policy).
+        // Appended AFTER content / BEFORE </h> so the opening tag (id,
+        // data-source-line) stays byte-identical for preview scroll-sync.
+        // The auto-injected article-title H1 (`<h1 class="moss-article-title">`)
+        // is emitted separately in moss-build's HTML post-pass and never
+        // reaches this hook — its "no anchor" is structural, not this gate.
         //
         // The `#` glyph is NOT in here. It is drawn by site.css as
         // `.moss-heading-anchor::after { content: "#" }`, because generated
@@ -707,7 +687,7 @@ pub trait RenderHooks {
         // Safari, and in moss's own WebKit preview, selecting a heading
         // copied "Introduction#". Measured in both engines 2026-08-09; the
         // heading-anchor-copy render gate pins it.
-        if let Some(id) = id.filter(|_| self.emit_heading_anchors()) {
+        if let Some(id) = id.filter(|_| self.emit_heading_anchors(level)) {
             out.push_str(r##"<a class="moss-heading-anchor" href="#"##);
             out.push_str(&escape_attr(id));
             out.push_str(r##"" aria-label=""##);
@@ -752,9 +732,17 @@ pub struct DefaultHooks<'a> {
     /// Stored negated so `#[derive(Default)]` still means "anchors on".
     /// Set by [`DefaultHooks::hero_overlay`] and [`DefaultHooks::grid_cells`].
     suppress_heading_anchors: bool,
+    /// The page is vertically typeset (see [`DefaultHooks::vertical`]).
+    vertical: bool,
 }
 
 impl<'a> DefaultHooks<'a> {
+    /// Mark the page as vertically typeset; only body images' `sizes=` reads it.
+    pub fn vertical(mut self, vertical: bool) -> Self {
+        self.vertical = vertical;
+        self
+    }
+
     /// Construct a no-snapshot `DefaultHooks`. The `Gallery` arm of
     /// [`RenderHooks::render_shortcode`] emits the legacy bare-`<img>`
     /// byte shape so the regex post-pass can fill in attributes. Use
@@ -784,7 +772,7 @@ impl<'a> DefaultHooks<'a> {
     /// `assets` is the caller's snapshot, if any — the same `None`/`Some`
     /// split as [`new`](Self::new) / [`with_snapshot`](Self::with_snapshot).
     ///
-    /// moss#754: this replaced a `HeroOverlayHooks` wrapper that re-implemented
+    /// This replaced a `HeroOverlayHooks` wrapper that re-implemented
     /// `RenderHooks` by forwarding to an inner impl. Forwarding was manual, so
     /// the wrapper silently dropped every hook nobody remembered to list —
     /// which is how image embeds inside hero overlays lost their
@@ -809,7 +797,7 @@ impl<'a> DefaultHooks<'a> {
     /// trait defaults said anchors-on and English-label, so a cell heading
     /// carried a `#` even on a site with `[site].heading_anchors = false`, and
     /// carried `aria-label="Permalink to this section"` on a zh-tw site. Both
-    /// were invisible from the src-tauri side, which reads its own
+    /// were invisible from moss-build's side, which reads its own
     /// `PipelineHooks` overrides and never sees the ones a delegated render
     /// uses. Suppressing outright means neither setting can be wrong here.
     pub fn grid_cells(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
@@ -826,8 +814,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         self.assets
     }
 
-    fn emit_heading_anchors(&self) -> bool {
-        !self.suppress_heading_anchors
+    fn emit_heading_anchors(&self, level: u8) -> bool {
+        level != 1 && !self.suppress_heading_anchors
     }
 
     fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {
@@ -842,27 +830,16 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         self.grid_cell_sizes.borrow_mut().pop();
     }
 
-    /// Phase 4 PR1 (2026-05-27): when the impl carries an `AssetSnapshot`
-    /// (production path via [`DefaultHooks::with_snapshot`]), route the
-    /// inline `Inline::Image` emission through
-    /// [`crate::render::image::synthesize_image_html`] with
+    /// When the impl carries an `AssetSnapshot` (production path via
+    /// [`DefaultHooks::with_snapshot`]), route the inline `Inline::Image`
+    /// emission through [`crate::render::image::synthesize_image_html`] with
     /// [`crate::render::image::ImageContext::MarkdownInline`] — produces
     /// `<picture><img></picture>` for raster originals (with dims, LQIP,
-    /// `loading="lazy"`) WITHOUT `<figure>` wrap. The figure wrap is
-    /// PR3's territory: `Block::Figure { image, caption }` is the typed
-    /// variant emitted for image-only paragraphs, and its renderer uses
-    /// `MarkdownStandalone` to apply the `<figure class="moss-image">`
-    /// wrap.
-    ///
-    /// **PR1 v2 correction (2026-05-27 post-Wave-0.5 parity probe):** an
-    /// earlier PR1 iteration used `MarkdownStandalone` here, which wrapped
-    /// EVERY inline image in `<figure>` even when the paragraph carried
-    /// sibling content (image + italic caption text + prose). The parity
-    /// probe surfaced 9 false-positive divergences (刘果/文字/* CJK
-    /// content with image+caption-inline patterns) where the AST emitted
-    /// `<figure>` and production correctly did not. Fix: use
-    /// `MarkdownInline` here; let PR3's `Block::Figure` own the figure
-    /// wrap for the legitimate image-only-paragraph case.
+    /// `loading="lazy"`) WITHOUT `<figure>` wrap. The figure wrap belongs to
+    /// `Block::Figure { image, caption }`, emitted for image-only paragraphs,
+    /// whose renderer uses `MarkdownStandalone`; using it here would wrap
+    /// every inline image in `<figure>`, even when the paragraph carries
+    /// sibling content.
     ///
     /// Without a snapshot, fall back to [`push_bare_img`] — the same shape
     /// the trait default emits (test / fragment-render paths). Production
@@ -870,9 +847,7 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
     ///
     /// `title` is the CommonMark image title — emitted as a `title=""`
     /// HTML attribute on the rendered `<img>` (or `<picture>`'s inner
-    /// `<img>`). Per cross-SSG research (2026-05-27), every AST-bearing
-    /// SSG carries title through to the renderer; dropping = Gatsby's
-    /// mistake.
+    /// `<img>`).
     /// Snapshot-aware figure-inner image. `img_style` (fit/position from a
     /// parameterized wikilink embed) flows through
     /// `ImageRenderOptions.extra_attrs` onto the inner `<img>`; the
@@ -882,10 +857,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
     /// yields `ImageRenderOptions::default()` — byte-identical to before the
     /// synth-collapse.
     ///
-    /// `sizes=` precedence for the srcset ladder (most specific slot
-    /// knowledge wins): the figure's own `data-width` token → the enclosing
-    /// grid cell scope ([`begin_grid_cells`]) → the context default
-    /// ([`crate::contract::sizes::SIZES_BODY`] via `MarkdownInline`).
+    /// `sizes=` is the synthesizer's decision; this hands it the `data-width`
+    /// token, the grid cell scope ([`begin_grid_cells`]) and the typesetting.
     fn render_image(
         &self,
         out: &mut String,
@@ -913,15 +886,17 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         let ctx = crate::render::image::ImageContext::MarkdownInline;
         let style_attr =
             img_style.map(|s| format!(r#"style="{}""#, crate::media::html_escape(s)));
-        // sizes= precedence: figure data-width token > grid cell scope >
-        // context default (see doc comment above).
         let cell_scope = self.grid_cell_sizes.borrow();
-        let sizes: Option<&str> = width
-            .and_then(crate::contract::sizes::sizes_for_data_width)
-            .or_else(|| cell_scope.last().map(String::as_str));
         let opts = crate::render::image::ImageRenderOptions {
             extra_attrs: style_attr.as_deref(),
-            sizes,
+            grid_cell_sizes: cell_scope.last().map(String::as_str),
+            data_width: width,
+            vertical: self.vertical,
+            // Body image: the one context that gets the default
+            // handscroll/hanging-scroll presentation for an extreme-aspect
+            // source. Hero/GalleryThumb/FolderCardCover route through their
+            // own `ImageContext` variants, never this method.
+            scroll_shape: true,
             ..Default::default()
         };
         let html = crate::render::image::synthesize_image_html(
@@ -1596,7 +1571,7 @@ mod tests {
     // longer emits a raw `<img src="…" alt="" />` — it routes through
     // `synthesize_image_html` with `ImageContext::Hero` (snapshot
     // present) or `ImageContext::HeroBare` (no snapshot — the legitimate
-    // ADR-013 carve-out). Both shapes satisfy `img_contract_test`'s
+    // carve-out). Both shapes satisfy `img_contract_test`'s
     // invariant: `<picture>`-wrapped synth in the first case,
     // `<section class="moss-hero">`-scoped bare-img in the second
     // (HeroBare). The test below pins both paths so a future regression
@@ -1625,7 +1600,7 @@ mod tests {
             "expected hero section wrap, got: {out}",
         );
         assert!(out.contains(r#"src="hero.jpg""#), "got: {out}");
-        // HeroBare carve-out: no `<picture>` (ADR-013 — no variant
+        // HeroBare carve-out: no `<picture>` (no variant
         // promised before set_pending), no `loading=` (CSS owns priority).
         assert!(
             !out.contains("<picture"),
@@ -1675,7 +1650,7 @@ mod tests {
         // `:::hero {.plate}`: the raw `plate` class becomes `data-fit="plate"`
         // on the section, and the inner image's `sizes=` fixes at/above
         // DEPLOY_MAX_EDGE instead of the ordinary hero's viewport-relative
-        // 100vw — see docs/archive/2026-09-11-hero-plate-variant.md.
+        // 100vw.
         let src = "scroll.jpg";
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from(src), (2400, 316));
@@ -1717,8 +1692,8 @@ mod tests {
         // Before v2 (early PR1) used `MarkdownStandalone` here and applied
         // figure wrap to every inline image — incorrect for paragraphs
         // with sibling content (image + italic caption + prose). Parity
-        // probe surfaced this as 9 false-positive divergences on 刘果
-        // CJK fixtures.
+        // probe surfaced this as 9 false-positive divergences on a real
+        // site's CJK fixtures.
         let src = "photos/cat.jpg";
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from(src), (800, 600));
@@ -1804,7 +1779,7 @@ mod tests {
 
     #[test]
     fn default_hooks_hero_overlay_heading_has_no_permalink_anchor() {
-        // Regression for Yi-website: headings inside :::hero overlays must not
+        // Regression from a real site: headings inside :::hero overlays must not
         // carry moss-heading-anchor when rendered through DefaultHooks
         // (the moss-core test-harness path). The DefaultHooks::render_shortcode
         // Hero arm delegates overlay rendering to render_hero_overlay_blocks
@@ -1835,8 +1810,8 @@ mod tests {
         // Both in-workspace impls override `render_image`, so the trait's own
         // default body is reachable only by a downstream crate — nothing here
         // exercises it. It used to drop `img_style` on the floor, which is
-        // half of what made moss#754 possible, so pin it directly via a
-        // minimal impl rather than leaving the claim untested.
+        // half of what made a past regression possible, so pin it directly
+        // via a minimal impl rather than leaving the claim untested.
         use crate::ast::{ResolvedUrl, UrlKind};
         struct BareHooks;
         impl RenderHooks for BareHooks {}
@@ -1857,9 +1832,10 @@ mod tests {
 
     #[test]
     fn hero_overlay_figure_keeps_embed_img_style() {
-        // moss#754: `![[photo.jpg|cover left]]` inside a :::hero overlay lost
-        // its `object-fit`/`object-position` while the identical embed rendered
-        // correctly everywhere else. The overlay renders through
+        // A past regression: `![[photo.jpg|cover left]]` inside a :::hero
+        // overlay lost its `object-fit`/`object-position` while the
+        // identical embed rendered correctly everywhere else. The overlay
+        // renders through
         // a hooks impl that used to be a partially-delegating wrapper: it
         // forwarded only the styleless image entry point, so the style
         // silently fell off at the wrapper boundary.
@@ -1947,7 +1923,7 @@ mod tests {
 
         // Three columns in the content column, so each cell gets a third of
         // that band — NOT the whole column.
-        let cell_sizes = "calc(min(47.25rem, 100vw) / 3)";
+        let cell_sizes = "auto, calc(min(47.25rem, 100vw) / 3)";
         assert!(
             in_hero.contains(&format!(r#"sizes="{cell_sizes}""#)),
             "grid cell inside a hero overlay must scope sizes= to the cell; got: {in_hero}"
@@ -2031,7 +2007,7 @@ mod tests {
         );
     }
 
-    // --- ADR-021 Corollary 2: sizes= threading through the typed paths ---
+    // --- Content-width escape: sizes= threading through the typed paths ---
     //
     // These pin the PRODUCTION figure/grid render paths (Block::Figure and
     // the Grid arm — the wikilink `![[x|screen]]` route), not just the
@@ -2103,11 +2079,13 @@ mod tests {
             classes: String::new(),
             cells: vec![vec![figure_block(None)]],
             width: Some("page".to_string()),
+            scroll: false,
+            label: None,
         });
         let mut out = String::new();
         hooks.render_shortcode(&mut out, &grid, None);
         assert!(
-            out.contains(r#"sizes="calc(min(1200px, 100vw) / 3)""#),
+            out.contains(r#"sizes="auto, calc(min(1200px, 100vw) / 3)""#),
             "a widthless figure in a 3-col page grid declares the cell track; got: {out}"
         );
 
@@ -2131,6 +2109,8 @@ mod tests {
             classes: String::new(),
             cells: vec![vec![figure_block(Some("screen"))]],
             width: None,
+            scroll: false,
+            label: None,
         });
         let mut out = String::new();
         hooks.render_shortcode(&mut out, &grid, None);

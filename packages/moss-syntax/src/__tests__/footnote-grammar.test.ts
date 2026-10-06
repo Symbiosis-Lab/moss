@@ -209,6 +209,54 @@ describe('a definition spans the lines its note spans', () => {
     expect(n).toBe(2);
   });
 
+  test('back-to-back definitions are separate notes, as in the build', () => {
+    // pulldown-cmark: a `[^x]:` line interrupts the paragraph above it. Folded in
+    // as lazy continuation, the second label had no definition and `[^long]`
+    // rendered as plain text in the editor.
+    const doc = 'A[^1] B[^long]\n\n[^1]: one\n[^long]: two\n';
+    const defs: string[] = [];
+    lang.language.parser.parse(doc).iterate({ enter: (x) => { if (x.name === 'FootnoteDefinition') defs.push(doc.slice(x.from, x.to)); } });
+    expect(defs).toEqual(['[^1]: one', '[^long]: two']);
+  });
+
+  // What the end-of-paragraph rule must NOT overreach on: it follows the marker
+  // line's own indent (under four columns, as pulldown-cmark reads it), and it
+  // looks only at the line that would continue a paragraph.
+  const topLevelDefs = (doc: string): string[] => {
+    const defs: string[] = [];
+    lang.language.parser.parse(doc).iterate({
+      enter: (x) => {
+        if (x.name === 'FootnoteDefinition' && x.node.parent?.name === 'Document') defs.push(doc.slice(x.from, x.to));
+      },
+    });
+    return defs;
+  };
+
+  test.each([1, 2, 3])('a definition indented %i space(s) still ends the note above it', (spaces) => {
+    const pad = ' '.repeat(spaces);
+    expect(topLevelDefs(`[^1]: one\n${pad}[^b]: two\n`)).toEqual(['[^1]: one', `${pad}[^b]: two`]);
+  });
+
+  test('a definition indented four spaces is a continuation: the note stays one note', () => {
+    const doc = '[^1]: one\n    [^b]: two\n';
+    expect(topLevelDefs(doc)).toEqual(['[^1]: one\n    [^b]: two']);
+  });
+
+  test('a lazy continuation line after `> text` inside a note stays in the note and its quote', () => {
+    const doc = '[^1]: > quoted\nlazy line\n\nafter\n';
+    expect(topLevelDefs(doc)).toEqual(['[^1]: > quoted\nlazy line']);
+    expect(nodes(doc, 'Blockquote')).toEqual([[6, 24, '> quoted\nlazy line']]);
+  });
+
+  test('a definition line after a quote inside a note ends the note, not just the quote', () => {
+    expect(topLevelDefs('[^1]: > quoted\n[^b]: two\n')).toEqual(['[^1]: > quoted', '[^b]: two']);
+  });
+
+  test('a marker mid-line does not end the note', () => {
+    const doc = '[^1]: one with a ref[^2]: still prose\n';
+    expect(defOf(doc)?.to).toBe(doc.trimEnd().length);
+  });
+
   test('the note body is parsed as markdown, so emphasis inside it renders', () => {
     expect(kindsIn('[^1]: see **bold**\n')).toContain('StrongEmphasis');
   });

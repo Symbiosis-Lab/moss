@@ -8,7 +8,7 @@ translationKey: docs-reference
 
 # Reference
 
-The contract for building with moss: exact field names, class names, and commands. For prose writing, see [[writing|Writing]]. For styling, start with [[Write a theme|Write a theme]] and come here for the precise names.
+The contract for building with moss: exact field names, class names, and commands. For prose writing, see [Writing](/docs/writing/). For styling, start with [[Write a theme|Write a theme]] and come here for the precise names.
 
 - [[frontmatter|Frontmatter]] — every page metadata field.
 - [[css-tokens|CSS tokens]] · [[components|Component classes]] · [[html-structure|HTML structure]] — the design contract.

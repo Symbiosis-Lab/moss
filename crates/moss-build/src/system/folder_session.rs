@@ -1,6 +1,6 @@
 //! Per-folder session: owns UiBound work and is cancelled on window close.
 //!
-//! See moss#548 for design rationale. Cancellation has a single source of
+//! Cancellation has a single source of
 //! truth: the session's `cancel` token, fired by the close handler in
 //! `system/utils.rs`. Three classes of consumers attach:
 //!
@@ -25,6 +25,9 @@ use tokio::task::JoinSet;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+mod derived_work;
+pub use derived_work::DerivedWorkGate;
+
 pub struct FolderSession {
     pub folder: PathBuf,
     pub cancel: CancellationToken,
@@ -36,7 +39,7 @@ pub struct FolderSession {
     /// each other's progress.
     ///
     /// A plain level is enough because the build is FROZEN for the duration of
-    /// a publish (moss#959): `build_shell/watch.rs::attempt_admitted_rebuild`
+    /// a publish: `build_shell/watch.rs::attempt_admitted_rebuild`
     /// admits nothing while `deploy::publish_in_flight()`, so the set the
     /// drain waits on can only shrink and the level reaches zero. The
     /// monotonic `admitted`/`completed` totals that briefly lived here existed
@@ -45,7 +48,7 @@ pub struct FolderSession {
     /// genuinely-old site-sized work by a 300 s settle timer — an I1
     /// violation. The freeze removes the premise; do not reintroduce them.
     ui_bound: AtomicU32,
-    /// Serializes access to the folder's mutable `.moss/build/staging/`
+    /// Serializes access to the folder's mutable `.moss/build.nosync/staging/`
     /// directory between (a) a build's synchronous stage-writing span
     /// (`generate_blocking_content` through notebook processing, in
     /// `build/pipeline.rs::build_inner`) and (b) a PRIOR generation's
@@ -60,8 +63,7 @@ pub struct FolderSession {
     /// or deleting stale entries in — that same directory, producing a
     /// generation that gets silently promoted to `current` despite being a
     /// torn mix of two builds' content (or directly deleting a live-served
-    /// file out from under a request). This is the root cause resolved by
-    /// the seal-persist-race-404 fix.
+    /// file out from under a request).
     ///
     /// Deliberately narrower than `ui_bound`: it is held only across the
     /// fast synchronous stage-writing span (through notebook processing),
@@ -76,15 +78,10 @@ pub struct FolderSession {
     /// minting a fresh, unrelated `Mutex`. The lock's whole job is
     /// serializing writes to a physical directory (`stage_dir`) that does
     /// not change identity across a reopen — only the session (cancellation,
-    /// UI-bound counter) does. Before this shared it, a build that started
-    /// under the PRIOR session and was still running (unkillable —
-    /// `spawn_blocking`, see the worker's `OverdueWatchdog` doc) held the old
-    /// `Mutex`, while any build admitted under the NEW session — including
-    /// the reopened folder's own first build — acquired a brand-new, wholly
-    /// unrelated one: two pipelines writing `stage_dir` with no exclusion
-    /// between them, the same failure class part 1 of the open-double-build
-    /// fix closed for the pre-worker window, reachable here instead via a
-    /// reopen. See `tests::reopen_shares_the_stage_write_lock` below.
+    /// UI-bound counter) does. A fresh `Mutex` per session would let a build
+    /// still running under the prior session and a build admitted under the
+    /// new one write `stage_dir` with no exclusion between them at all. See
+    /// `tests::reopen_shares_the_stage_write_lock` below.
     stage_write_lock: Arc<Mutex<()>>,
     /// The sweep's "project unavailable" verdict (watcher-reliability design,
     /// 2026-08-18, "Root-gone is a verdict, not a mechanism"): consecutive
@@ -95,9 +92,11 @@ pub struct FolderSession {
     ///
     /// State only, like the worker's `degraded` flag: nothing gates on it.
     /// The sweep reads it every tick and surfaces transitions to the preview
-    /// as `FolderHealthChanged` — the full-window project-unavailable state
-    /// (moss#1075).
+    /// as `FolderHealthChanged` — the full-window project-unavailable state.
     unavailable: AtomicBool,
+    /// The host's Live/Background signal, once a watch attaches one. Read
+    /// through [`DerivedWorkGate`]; see `folder_session/derived_work.rs`.
+    cadence: StdMutex<Option<tokio::sync::watch::Receiver<crate::ops::watch::cadence::Cadence>>>,
 }
 
 impl FolderSession {
@@ -117,6 +116,7 @@ impl FolderSession {
             ui_bound: AtomicU32::new(0),
             stage_write_lock,
             unavailable: AtomicBool::new(false),
+            cadence: StdMutex::new(None),
         })
     }
 
@@ -205,10 +205,7 @@ impl FolderSession {
     ///    task. This eliminates a race where a synchronous consumer
     ///    (`spawn_blocking` runner that never yields) could observe `false`
     ///    on its first `Ordering::SeqCst` load because the bridge task
-    ///    hadn't been polled yet. Was the root cause of a batched-test
-    ///    flake in 2026-05; the test continued to pass in isolation
-    ///    because lighter scheduler load happened to poll the bridge in
-    ///    time.
+    ///    hadn't been polled yet.
     /// 2. **Async bridge.** Spawns a task that awaits `cancelled().await`
     ///    and stores `true` when the token fires — handles the
     ///    "cancelled DURING run" case (folder switch mid-conversion,
@@ -242,8 +239,11 @@ impl FolderSession {
         });
     }
 
-    /// Fire cancel and drain the JoinSet within `grace`. Returns the number
-    /// of tasks that did not finish before the grace window expired.
+    /// Fire cancel and drain the JoinSet within `grace`, then drop the
+    /// folder's seal debounce lane (`build::seal_phase::evict`), which is
+    /// keyed by folder rather than owned by this session and would otherwise
+    /// outlive it. Returns the number of tasks that did not finish before
+    /// the grace window expired.
     pub async fn shutdown(self: Arc<Self>, grace: Duration) -> usize {
         self.cancel.cancel();
         let mut tasks = self.tasks.lock().await;
@@ -262,13 +262,14 @@ impl FolderSession {
                 }
             }
         }
+        crate::build::seal_phase::evict(&self.folder);
         leaked
     }
 }
 
 /// Registry of active folder sessions, keyed by canonicalized folder path.
 ///
-/// moss enforces one open folder at a time (see #548 non-goals), so this
+/// moss enforces one open folder at a time, so this
 /// registry typically holds zero or one session. When a new folder is opened,
 /// `swap_in` cancels and removes any existing session before inserting the new one.
 #[derive(Default)]
@@ -276,7 +277,7 @@ pub struct FolderSessionRegistry {
     sessions: StdMutex<HashMap<String, Arc<FolderSession>>>,
 }
 
-/// The process-global registry (ADR-010, 2026-08-24 extension: lifetime
+/// The process-global registry (2026-08-24 extension: lifetime
 /// differences live in the `FolderSession`, and the session must therefore be
 /// reachable without an `AppHandle`). Until then this was `app.manage`d, which
 /// made every headless path session-less by construction — the watcher's

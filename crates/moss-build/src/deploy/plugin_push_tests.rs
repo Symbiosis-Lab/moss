@@ -1,7 +1,7 @@
 //! The two decisions in [`super`] that need no plugin, no build and no vault.
 //!
 //! What the driver as a whole does is proved a layer up, by
-//! `src-tauri/tests/deploy_plugin_route_test.rs`, which runs both binaries
+//! the app's own deploy-plugin route test, which runs both binaries
 //! over a vault carrying a real deploy plugin. These are the pieces that would
 //! otherwise only be exercised on their happy path there.
 
@@ -79,7 +79,7 @@ fn success_with_no_deployment_has_no_address_to_print() {
 }
 
 /// The mismatch no cheaper layer can see: the deploy context enumerates a
-/// directory and the plugin reads bytes through `.moss/build/current`. If the
+/// directory and the plugin reads bytes through `.moss/build.nosync/current`. If the
 /// build's generation is not the active one, publishing would ship one tree
 /// and describe another.
 #[test]
@@ -129,10 +129,13 @@ fn a_generation_that_was_not_promoted_refuses_rather_than_shipping_the_old_one()
 /// through `site_dir_for_plugin`, because the bug was that the body returned
 /// early before reaching the check.
 ///
-/// `structural_incomplete` — a dehydrated cloud folder whose sources could not
-/// be read (moss#1042) — is how a real build lands here: `should_publish`
-/// withholds promotion, the seal tail skips `adopt_sealed`, and the slot the
-/// driver captured stays empty.
+/// A folder that closes mid-build (`PipelineRunOutput::publishable == false`)
+/// is how a real build lands here: promotion is withheld
+/// (`ship::Promotion::Withheld`), the seal tail skips `adopt_sealed`, and the
+/// slot the driver captured stays empty. Originally, a dehydrated
+/// cloud folder whose sources could not be read reached the same withhold;
+/// that path was removed on 2026-09-17, leaving
+/// cancellation as the only cause.
 #[tokio::test]
 async fn a_publish_with_no_promoted_generation_refuses() {
     struct NoSink;

@@ -89,10 +89,7 @@ Declarative additions moss acts on without running your code:
 just the contribution. `jobs` supplies the words moss uses when it reports your
 hook's progress — moss owns the pixels, you supply the verb and noun.
 
-There is a third key, `embed_renderers`, for renderers of embed syntax. moss
-parses it and **nothing consumes it yet** — the adapter exists but no build path
-constructs it, so a plugin declaring one gets nothing. Do not build on it until
-this note says otherwise.
+A `contributes.embed_renderers` key is no longer recognized. It was parsed but never consumed by any build path, so a plugin declaring one got nothing; moss silently ignores the key now instead of parsing it into a no-op.
 
 ## Configuration
 
@@ -215,6 +212,6 @@ your plugin exports will be read from your code at install time rather than
 declared. `capabilities` keeps working for at least a release after that, so
 there is no version where you must have migrated.
 
-The rationale is in the moss repository as ADR-055: a manifest should say what
+The rationale: a manifest should say what
 the user is choosing, and anything that merely restates what the code already
 says will drift from it.

@@ -75,7 +75,7 @@ pub fn generate_year_grouped_article_list(
         .filter(|doc| {
             if doc.url_path == "index.html" { return false; }
             // Listing chrome — exclude draft / slot-only via the
-            // canonical predicate (PR7b/moss#599 routed `footer.md` etc.
+            // canonical predicate (an earlier change routed `footer.md` etc.
             // through the documents slice for layout-slot wiring; the
             // `slot_only` arm of `is_listable` keeps them out of articles).
             if !doc.is_listable() { return false; }
@@ -101,11 +101,15 @@ pub fn generate_year_grouped_article_list(
                 url: article_map::to_pretty_url(&doc.url_path),
                 // Article listing is chrome; use the plain-text label.
                 title: doc.label.clone(),
+                url_path: doc.url_path.clone(),
+                place: doc.place_names.clone(),
             }
         })
         .collect();
 
-    components::render_year_grouped_list(&articles, minimal, lang, typesetting)
+    // This flattened, site-wide list has no single folder whose `sort:` could
+    // apply — always newest-first.
+    components::render_year_grouped_list(&articles, minimal, lang, typesetting, false)
 }
 
 #[cfg(test)]

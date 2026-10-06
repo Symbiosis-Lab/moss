@@ -9,8 +9,6 @@
 //! persistence is [`super::cache`] — and `cache` runs every document back
 //! through the functions here on the way OUT of the disk as well as in, so
 //! these rules hold on both sides of it.
-//!
-//! Schema and its client-facing invariants: `docs/archive/2026-07-23-plugin-registry-design.md`.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +23,11 @@ pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 /// one" claim true, and a v1 client must not break when the first
 /// `"type": "theme"` entry appears.
 const ENTRY_TYPE_PLUGIN: &str = "plugin";
+
+/// A ready-made site the desktop app offers as a place to start. It rides in
+/// the same signed index as plugins, so it is covered by the same signature,
+/// serial and revocation rules.
+const ENTRY_TYPE_STARTER: &str = "starter";
 
 /// One installable plugin, exactly as the index publishes it.
 ///
@@ -70,13 +73,85 @@ pub struct IndexEntry {
     pub icon_url: Option<String>,
     /// The publisher does not consider this version ready to be offered by
     /// default. Presentation only — it decides who is SHOWN the row, never
-    /// who may install it (ADR-053).
+    /// who may install it.
     #[serde(default)]
     pub preview: bool,
     /// The plugin's runtime is a machine-wide companion stack downloaded on
     /// first install (OnionPress).
     #[serde(default)]
     pub requires_stack: bool,
+    /// Every field this struct does not name. Kept only so
+    /// [`RegistryIndex::starters`] can read the fields that belong to a
+    /// starter without every entry type's fields living on this one struct.
+    #[serde(flatten, default)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One stop on a starter's guided tour: a label and the page it opens.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TourStop {
+    pub label: String,
+    pub path: String,
+}
+
+/// One starter site, exactly as the index publishes it.
+///
+/// Unknown fields are ignored, as for [`IndexEntry`]. The archive hashes pin
+/// what was reviewed; fetching and checking them is the caller's job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StarterEntry {
+    pub id: String,
+    pub version: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Where the sample content came from.
+    #[serde(default)]
+    pub credit: String,
+    /// BCP 47 tag of the site's language, such as `en` or `zh-Hant`.
+    #[serde(default)]
+    pub language: String,
+    /// Display order, ascending.
+    #[serde(default)]
+    pub order: u32,
+    /// The oldest moss that may open this starter. Absent means no floor.
+    #[serde(default)]
+    pub min_moss_version: Option<String>,
+    #[serde(default)]
+    pub tour: Vec<TourStop>,
+    pub download_url: String,
+    pub sha256: String,
+    #[serde(default)]
+    pub size_bytes: u64,
+    /// A prebuilt copy of the site for previewing without building it.
+    #[serde(default)]
+    pub preview_url: Option<String>,
+    #[serde(default)]
+    pub preview_sha256: Option<String>,
+    #[serde(default)]
+    pub preview_size_bytes: u64,
+    /// The moss release that built the preview.
+    #[serde(default)]
+    pub preview_moss_version: Option<String>,
+    /// The posters as standalone JPEGs, so a picker card is drawn without
+    /// fetching the source zip. The registry lists all six poster fields or
+    /// none; entries released before posters were attached have none.
+    #[serde(default)]
+    pub poster_light_url: Option<String>,
+    #[serde(default)]
+    pub poster_light_sha256: Option<String>,
+    #[serde(default)]
+    pub poster_light_size_bytes: u64,
+    #[serde(default)]
+    pub poster_dark_url: Option<String>,
+    #[serde(default)]
+    pub poster_dark_sha256: Option<String>,
+    #[serde(default)]
+    pub poster_dark_size_bytes: u64,
+    /// A full site made with this starter, wherever its author chose to put
+    /// it. Optional; the index does not check what it points at.
+    #[serde(default)]
+    pub demo_url: Option<String>,
 }
 
 /// The published catalog. Exactly one entry per id — the latest version — so
@@ -104,10 +179,24 @@ impl RegistryIndex {
     /// one-entry-per-id invariant — a duplicate would be a registry bug, and
     /// silently preferring the first is the behaviour that cannot surprise).
     pub fn plugins(&self) -> Vec<&IndexEntry> {
+        self.entries_of(ENTRY_TYPE_PLUGIN)
+    }
+
+    /// The starter sites, under the same id rules as [`Self::plugins`]. A
+    /// starter row that does not read as a [`StarterEntry`] is dropped, like
+    /// one with an unusable id, so it cannot take the plugin catalog with it.
+    pub fn starters(&self) -> Vec<StarterEntry> {
+        self.entries_of(ENTRY_TYPE_STARTER)
+            .into_iter()
+            .filter_map(|e| serde_json::from_value(serde_json::to_value(e).ok()?).ok())
+            .collect()
+    }
+
+    fn entries_of(&self, entry_type: &str) -> Vec<&IndexEntry> {
         let mut seen: Vec<&str> = Vec::new();
         let mut out = Vec::new();
         for entry in &self.entries {
-            if entry.entry_type != ENTRY_TYPE_PLUGIN {
+            if entry.entry_type != entry_type {
                 continue;
             }
             if !crate::plugins::install::is_usable_id(&entry.id) {
@@ -214,18 +303,46 @@ impl std::fmt::Display for RejectReason {
 /// and catalog open, so re-fetching the same unchanged file is the ordinary
 /// case, not an attack. Only a serial that went *backwards* is a replay.
 pub fn accept_index(raw: &str, highest_seen_serial: u64) -> Result<RegistryIndex, RejectReason> {
-    let index: RegistryIndex =
-        serde_json::from_str(raw).map_err(|e| RejectReason::Unparseable(e.to_string()))?;
-    if index.schema_version != SUPPORTED_SCHEMA_VERSION {
-        return Err(RejectReason::UnknownSchemaVersion(index.schema_version));
+    /// The document with its rows still untyped, so one row can fail alone.
+    #[derive(Deserialize)]
+    struct RawIndex {
+        schema_version: u32,
+        serial: u64,
+        entries: Vec<serde_json::Value>,
     }
-    if index.serial < highest_seen_serial {
+    let raw_index: RawIndex =
+        serde_json::from_str(raw).map_err(|e| RejectReason::Unparseable(e.to_string()))?;
+    if raw_index.schema_version != SUPPORTED_SCHEMA_VERSION {
+        return Err(RejectReason::UnknownSchemaVersion(raw_index.schema_version));
+    }
+    if raw_index.serial < highest_seen_serial {
         return Err(RejectReason::SerialWentBackwards {
             seen: highest_seen_serial,
-            offered: index.serial,
+            offered: raw_index.serial,
         });
     }
-    Ok(index)
+    let mut entries = Vec::with_capacity(raw_index.entries.len());
+    for row in raw_index.entries {
+        match serde_json::from_value::<IndexEntry>(row.clone()) {
+            Ok(entry) => entries.push(entry),
+            // A plugin row is what this client must trust: one that does not
+            // read means the registry is broken, so the whole index is refused.
+            Err(e) if row.get("type").and_then(|t| t.as_str()) == Some(ENTRY_TYPE_PLUGIN) => {
+                return Err(RejectReason::Unparseable(e.to_string()));
+            }
+            // Any other row (a starter, a type from the future) is optional
+            // content. It must not hide every plugin, so it is dropped alone.
+            Err(e) => {
+                let id = row.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                log::warn!(target: "registry", "dropping unreadable index row {id}: {e}");
+            }
+        }
+    }
+    Ok(RegistryIndex {
+        schema_version: raw_index.schema_version,
+        serial: raw_index.serial,
+        entries,
+    })
 }
 
 /// Parse and accept a freshly fetched `revoked.json`.
@@ -333,6 +450,122 @@ mod tests {
         let index = accept_index(&index_json(2, &both), 0).unwrap();
         let ids: Vec<&str> = index.plugins().iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["github"], "a theme entry must be skipped, not fatal");
+    }
+
+    fn starter(id: &str, extra: &str) -> String {
+        format!(
+            r#"{{"type":"starter","id":"{id}","version":"1.0.0","display_name":"Essays",
+                 "description":"A writer's own site","credit":"Filled with public-domain essays",
+                 "language":"en","order":10,"min_moss_version":"0.15.4",
+                 "tour":[{{"label":"Home","path":"/"}}],
+                 "download_url":"https://example.invalid/{id}.zip","sha256":"{sha}","size_bytes":7,
+                 "preview_url":"https://example.invalid/{id}-preview.zip",
+                 "preview_sha256":"{sha}","preview_size_bytes":9,"preview_moss_version":"0.15.4"{extra}}}"#,
+            sha = "ab".repeat(32)
+        )
+    }
+
+    #[test]
+    fn starters_are_read_and_plugins_stay_apart() {
+        let both = format!("{},{}", starter("essays", ""), entry("github", "plugin"));
+        let index = accept_index(&index_json(3, &both), 0).unwrap();
+        let starters = index.starters();
+        assert_eq!(starters.len(), 1);
+        let s = &starters[0];
+        assert_eq!((s.id.as_str(), s.order), ("essays", 10));
+        assert_eq!(s.min_moss_version.as_deref(), Some("0.15.4"));
+        assert_eq!(s.tour, vec![TourStop { label: "Home".into(), path: "/".into() }]);
+        assert_eq!(s.preview_size_bytes, 9);
+        assert_eq!(s.sha256, "ab".repeat(32));
+        let ids: Vec<&str> = index.plugins().iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["github"], "a starter is not a plugin");
+        assert!(index.find("essays").is_none());
+    }
+
+    #[test]
+    fn an_index_with_only_plugins_has_no_starters() {
+        let index = accept_index(&index_json(1, &entry("github", "plugin")), 0).unwrap();
+        assert!(index.starters().is_empty());
+    }
+
+    #[test]
+    fn a_starter_with_an_unusable_id_is_dropped_and_the_rest_survive() {
+        let both = format!("{},{}", starter("../../etc", ""), starter("essays", ""));
+        let index = accept_index(&index_json(1, &both), 0).unwrap();
+        let ids: Vec<String> = index.starters().into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec!["essays"]);
+    }
+
+    #[test]
+    fn a_malformed_starter_is_dropped_without_failing_the_index() {
+        let bad = r#"{"type":"starter","id":"broken","version":"1.0.0","display_name":"B",
+            "download_url":"https://example.invalid/b.zip","sha256":"aa","tour":"not a list"}"#;
+        let both = format!("{bad},{}", starter("essays", ""));
+        let index = accept_index(&index_json(1, &both), 0).expect("one bad row is not fatal");
+        let ids: Vec<String> = index.starters().into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec!["essays"]);
+    }
+
+    /// Plugins and one healthy starter around a single bad row.
+    fn assert_bad_row_dropped_alone(bad: &str) {
+        let doc = format!("{},{},{}", entry("github", "plugin"), bad, starter("essays", ""));
+        let index = accept_index(&index_json(1, &doc), 0).expect("one bad starter row is not fatal");
+        let plugins: Vec<&str> = index.plugins().iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(plugins, vec!["github"]);
+        let starters: Vec<String> = index.starters().into_iter().map(|s| s.id).collect();
+        assert_eq!(starters, vec!["essays"]);
+    }
+
+    #[test]
+    fn a_starter_missing_download_url_is_dropped_alone() {
+        assert_bad_row_dropped_alone(
+            r#"{"type":"starter","id":"bad","version":"1.0.0","display_name":"B","sha256":"aa"}"#,
+        );
+    }
+
+    #[test]
+    fn a_starter_missing_sha256_is_dropped_alone() {
+        assert_bad_row_dropped_alone(
+            r#"{"type":"starter","id":"bad","version":"1.0.0","display_name":"B",
+                "download_url":"https://example.invalid/b.zip"}"#,
+        );
+    }
+
+    #[test]
+    fn a_starter_with_a_wrong_typed_version_is_dropped_alone() {
+        assert_bad_row_dropped_alone(
+            r#"{"type":"starter","id":"bad","version":1,"display_name":"B",
+                "download_url":"https://example.invalid/b.zip","sha256":"aa"}"#,
+        );
+    }
+
+    #[test]
+    fn an_unreadable_row_of_an_unknown_type_is_dropped_alone() {
+        assert_bad_row_dropped_alone(r#"{"type":"hologram","id":"bad"}"#);
+    }
+
+    #[test]
+    fn a_broken_plugin_row_still_rejects_the_whole_index() {
+        let bad = r#"{"type":"plugin","id":"bad","version":"1.0.0","display_name":"B","sha256":"aa"}"#;
+        let doc = format!("{},{bad},{}", entry("github", "plugin"), starter("essays", ""));
+        assert!(matches!(
+            accept_index(&index_json(1, &doc), 0),
+            Err(RejectReason::Unparseable(_))
+        ));
+    }
+
+    #[test]
+    fn a_starter_carries_its_demo_url_when_it_has_one() {
+        let with = format!("{},{}", starter("essays", r#","demo_url":"https://essays.example.org/""#), starter("plain", ""));
+        let index = accept_index(&index_json(1, &with), 0).unwrap();
+        let demos: Vec<Option<String>> = index.starters().into_iter().map(|s| s.demo_url).collect();
+        assert_eq!(demos, vec![Some("https://essays.example.org/".to_string()), None]);
+    }
+
+    #[test]
+    fn a_starter_ignores_fields_it_does_not_know() {
+        let index = accept_index(&index_json(1, &starter("essays", r#","brand_new":42"#)), 0).unwrap();
+        assert_eq!(index.starters().len(), 1);
     }
 
     #[test]
@@ -482,6 +715,68 @@ mod tests {
                 .as_slice()
             )
         );
+    }
+
+    #[test]
+    fn reads_what_the_registry_builder_emits() {
+        // Emitted by moss-registry's own builder over its real starter
+        // manifests (see the README beside the fixture). A starter field the
+        // builder writes in a shape this reader cannot take must never hide
+        // the plugins: an older client once rejected a whole index over one
+        // mistyped starter field.
+        let raw = include_str!("../../../../tests/fixtures/registry/index-with-starters.json");
+        let index = accept_index(raw, 0).expect("the builder's own output must be accepted");
+
+        let plugin_ids: Vec<&str> = index.plugins().iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(plugin_ids, vec!["github", "ipfs", "matters", "onionpress"]);
+
+        let starters = index.starters();
+        let ids: Vec<&str> = starters.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["essays", "organisation", "vertical"]);
+        for s in &starters {
+            assert_eq!(s.version, "1.1.0");
+            assert_eq!(s.sha256.len(), 64, "{}: source hash", s.id);
+            assert!(s.size_bytes > 0, "{}: source size", s.id);
+            assert!(s.download_url.ends_with(&format!("{}-1.1.0.zip", s.id)));
+            assert_eq!(s.preview_sha256.as_deref().map(str::len), Some(64), "{}: preview hash", s.id);
+            assert!(s.preview_size_bytes > s.size_bytes, "{}: preview size", s.id);
+            assert!(s.preview_url.is_some(), "{}: preview url", s.id);
+            assert_eq!(s.min_moss_version.as_deref(), Some("0.15.4"));
+            assert_eq!(s.preview_moss_version.as_deref(), Some("0.15.4"), "{}: preview moss", s.id);
+            for (scheme, url, sha, size) in [
+                ("light", &s.poster_light_url, &s.poster_light_sha256, s.poster_light_size_bytes),
+                ("dark", &s.poster_dark_url, &s.poster_dark_sha256, s.poster_dark_size_bytes),
+            ] {
+                let url = url.as_deref().unwrap_or_else(|| panic!("{}: poster {scheme} url", s.id));
+                assert!(url.ends_with(&format!("{}-1.1.0-poster-{scheme}.jpg", s.id)), "{url}");
+                assert_eq!(sha.as_deref().map(str::len), Some(64), "{}: poster {scheme} hash", s.id);
+                assert!(size > 0, "{}: poster {scheme} size", s.id);
+            }
+            assert!(!s.tour.is_empty() && !s.credit.is_empty() && !s.description.is_empty());
+        }
+        let languages: Vec<&str> = starters.iter().map(|s| s.language.as_str()).collect();
+        assert_eq!(languages, vec!["en", "en", "zh-Hant"]);
+        let demos: Vec<Option<&str>> = starters.iter().map(|s| s.demo_url.as_deref()).collect();
+        assert_eq!(
+            demos,
+            vec![
+                Some("https://virginia-woolf.mosspub.com/"),
+                Some("https://chautauqua-circle.mosspub.com/"),
+                Some("https://zhudasnotebook.com/"),
+            ]
+        );
+        let orders: Vec<u32> = starters.iter().map(|s| s.order).collect();
+        assert_eq!(orders, vec![10, 20, 30]);
+
+        // A type this client has never heard of rides along without effect.
+        let mut doc: serde_json::Value = serde_json::from_str(raw).unwrap();
+        doc["entries"].as_array_mut().unwrap().push(serde_json::json!({
+            "type": "hologram", "id": "future", "display_name": "F", "version": "1.0.0",
+            "download_url": "https://example.invalid/f.zip", "sha256": "0".repeat(64)
+        }));
+        let index = accept_index(&doc.to_string(), 0).expect("an unknown type must not reject the index");
+        assert_eq!(index.plugins().len(), 4);
+        assert_eq!(index.starters().len(), 3);
     }
 
     #[test]

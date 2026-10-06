@@ -2,7 +2,9 @@
 //!
 //! This module provides shared types for the resolve phase of the
 //! build pipeline, a fuzzy path resolver that wraps
-//! [`ContentGraph::resolve_path`](crate::content_graph::ContentGraph::resolve_path),
+//! [`ContentGraph::resolve_path`](crate::content_graph::ContentGraph::resolve_path)
+//! (in `content_graph.rs`, the one function that decides which site file a
+//! target names; `asset_class::resolve_file_target` is its file-reference view),
 //! and the top-level [`resolve_content`] function that ties all phases together.
 //!
 //! **Architectural boundary:** Downstream code (markdown.rs, render.rs) receives
@@ -22,10 +24,10 @@ pub mod reference;
 pub mod fuzzy_path;
 pub mod link_class;
 pub mod output_url;
-pub mod registry;
 pub mod title_params;
 pub mod wikilink_dispatch;
 pub mod md_extract;
+pub mod authored_assets;
 
 /// A link going out from a document.
 #[derive(Debug, Clone)]
@@ -104,7 +106,7 @@ pub struct ResolveResult {
 /// typed AST (`crates/moss-core/src/ast/`). For standard markdown
 /// links, the AST visitor (`ast/resolve_urls::resolve_link_urls`)
 /// emits the same `moss-resolved:` sentinel Stage 1 used to emit, so
-/// src-tauri's `classify_url_prod` decoder still drives page_map /
+/// moss-build's `classify_url_prod` decoder still drives page_map /
 /// external_url_map / wikilink-class decoding unchanged.
 pub fn resolve_content(
     source_path: &str,
@@ -113,23 +115,15 @@ pub fn resolve_content(
     file_reader: &dyn Fn(&str) -> Option<String>,
 ) -> ResolveResult {
     let handlers = embeds::MarkerHandlers::new();
-    let registry = registry::RendererRegistry::builtin().build();
-    resolve_content_with_handlers(
-        source_path,
-        raw_markdown,
-        graph,
-        file_reader,
-        &registry,
-        &handlers,
-    )
+    resolve_content_with_handlers(source_path, raw_markdown, graph, file_reader, &handlers)
 }
 
-/// Variant of [`resolve_content`] that threads a custom [`registry::RendererRegistry`]
-/// (plugin-aware renderer dispatch) and [`embeds::MarkerHandlers`] (resolvers for
-/// Deferred markers: notebook, table, plugin renderers) through the pipeline.
+/// Variant of [`resolve_content`] that threads custom [`embeds::MarkerHandlers`]
+/// (resolvers for Deferred markers: notebook, table, plugin renderers) through
+/// the pipeline.
 ///
 /// Built-in-only pipelines should call [`resolve_content`]. Pipelines that load
-/// plugins at init time build a registry + handlers once and call this variant.
+/// plugins at init time build a handler set once and call this variant.
 ///
 /// The handler registry fires in a **new step 4.25** that runs after embed
 /// resolution and before the second wikilink pass. This ordering lets
@@ -139,7 +133,6 @@ pub fn resolve_content_with_handlers(
     raw_markdown: &str,
     graph: &ContentGraph,
     file_reader: &dyn Fn(&str) -> Option<String>,
-    registry: &registry::RendererRegistry,
     handlers: &embeds::MarkerHandlers<'_>,
 ) -> ResolveResult {
     // Default-empty snapshot for callers that don't yet thread asset data.
@@ -152,7 +145,6 @@ pub fn resolve_content_with_handlers(
         raw_markdown,
         graph,
         file_reader,
-        registry,
         handlers,
         &empty_snapshot,
     )
@@ -164,18 +156,14 @@ pub fn resolve_content_with_handlers(
 /// **Phase 0**: the snapshot is threaded but **not yet consumed** by any
 /// resolver — Stage 1 still emits markdown without reading variants/dims.
 /// Phase 1 wires the consumption side in moss-core's synthesizer. The
-/// signature exists now so src-tauri's build pipeline can populate the
+/// signature exists now so moss-build's build pipeline can populate the
 /// snapshot (from `MediaDimensionLookup` + `AssetRegistry`) and prove the
 /// threading path before consumers depend on it.
-///
-/// See `docs/archive/2026-05-25-phase0-asset-snapshot-and-translator.md`
-/// § Phase F for the thread-first / consume-later rationale.
 pub fn resolve_content_with_handlers_and_snapshot(
     source_path: &str,
     raw_markdown: &str,
     graph: &ContentGraph,
     file_reader: &dyn Fn(&str) -> Option<String>,
-    registry: &registry::RendererRegistry,
     handlers: &embeds::MarkerHandlers<'_>,
     // Phase 0: threaded but not yet consumed. Phase 1 wires up reads.
     _assets: &AssetSnapshot,
@@ -186,16 +174,14 @@ pub fn resolve_content_with_handlers_and_snapshot(
     // Phase 3 PR2: Stage 1's wikilink rewriter + stage1_sweep retire.
     // pulldown-cmark now parses `[[…]]` / `![[…]]` natively via
     // `Options::ENABLE_WIKILINKS` (flipped in PR2 at every Parser::new_ext
-    // site), and `transform_events::dispatch_wikilink_at` routes each event
-    // through the EmbedRenderer registry. The `stage1_sweep`
+    // site), and `process_markdown_file` dispatches each event directly
+    // (see `moss_core::ast::dispatch_wikilink_embeds`) — this crate-side
+    // path no longer dispatches embeds in Stage 1. The `stage1_sweep`
     // (`![alt](file.pdf)` → `moss:kind=pdf` title rewrite) is retired per
     // plan Option A: authors who want non-image embeds use the wikilink
     // form `![[report.pdf]]`. See plan v2 § PR2.
     let outgoing_links: Vec<OutgoingLink> = Vec::new();
     let diagnostics: Vec<Diagnostic> = Vec::new();
-    let _ = registry; // Phase 3 PR2: registry flows directly to src-tauri's
-                      // `transform_events` via `process_markdown_file`; this
-                      // crate-side path no longer dispatches embeds in Stage 1.
 
     // Phase 3 PR2: pre-pass that lowers block-level wikilinks into
     // marker comments BEFORE pulldown-cmark sees them. Two classes of
@@ -206,7 +192,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     //     `![[note#section]]`) → `<!-- moss-embed:TARGET -->` for
     //     `embeds::resolve_embeds` to inline the body.
     //   - **folder-list embeds** (`![[/dir/|limit:N]]`) →
-    //     `<!-- MOSS_MARKER_FOLDER_LIST:… -->` for src-tauri's marker
+    //     `<!-- MOSS_MARKER_FOLDER_LIST:… -->` for moss-build's marker
     //     handlers to expand into card grids.
     // Both cases used to be emitted by Stage 1's wikilink resolver; with
     // that resolver retired, pulldown-cmark's Stage 2 dispatcher would
@@ -218,7 +204,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
 
     // Step 3: Resolve markdown transclusion embeds. The inlined body of
     // each embedded `.md` file is appended verbatim — its wikilinks (if
-    // any) survive into the markdown handed back to src-tauri, where
+    // any) survive into the markdown handed back to moss-build, where
     // pulldown-cmark + Stage 2 dispatcher resolves them along with the
     // host page's own wikilinks.
     let embed_result = embeds::resolve_embeds(&body, source_path, file_reader);
@@ -237,7 +223,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     // `markdown_links::resolve_markdown_links` is gone. The typed AST
     // visitor (`crates/moss-core/src/ast/resolve_urls.rs::resolve_link_urls`)
     // now produces byte-equivalent results — including the
-    // `moss-resolved:<path>` sentinel that src-tauri's `classify_url_prod`
+    // `moss-resolved:<path>` sentinel that moss-build's `classify_url_prod`
     // decoder consumes for `page_map` / `external_url_map` / wikilink-class
     // decoding. `outgoing_links` remains empty at this layer; the AST
     // visitor's OutgoingLink Vec is consumed downstream in
@@ -280,8 +266,9 @@ pub fn resolve_content_with_handlers_and_snapshot(
 ///
 /// Why this pre-pass exists: pre-Phase-3, Stage 1's wikilink resolver
 /// did this conversion. Phase 3 retires that resolver and routes most
-/// wikilink handling through pulldown-cmark's Stage 2 dispatcher in
-/// `src-tauri/src/build/markdown/pipeline.rs::transform_events`. But
+/// wikilink handling through this crate's own AST visitor
+/// ([`crate::ast::dispatch_wikilink_embeds`]), called from moss-build's
+/// `process_markdown_file`. But
 /// `embeds::resolve_embeds` runs BEFORE pulldown-cmark, so the
 /// dispatcher cannot emit the marker in time. We pre-convert the
 /// transclusion wikilinks here.
@@ -363,6 +350,30 @@ fn lower_transclusion_and_folder_wikilinks(
                 None => (inner_no_pothole, None),
             };
 
+            let pothole_raw = inner.split_once('|').map_or("", |(_, params)| params);
+            let params = embed_renderer::folder_list::classify_folder_segments(pothole_raw);
+            if params.style.as_deref() == Some("map") && !file_part.ends_with('/') {
+                let target = if file_part.is_empty() && anchor == Some("") {
+                    source_path.to_string()
+                } else {
+                    match fuzzy_path::resolve_reference(file_part, graph, source_path) {
+                        fuzzy_path::ResolvedRef::Found(path) => path,
+                        fuzzy_path::ResolvedRef::Unresolved => file_part.to_string(),
+                    }
+                };
+                let target = match anchor.filter(|a| !a.is_empty()) {
+                    Some(section) => format!("{target}#{section}"),
+                    None => target,
+                };
+                rewritten.push_str(&embed_renderer::folder_list::emit_marker(
+                    &embed_renderer::folder_list::marker_encode(&target),
+                    &embed_renderer::folder_list::marker_encode(source_path),
+                    &params,
+                ));
+                rest = remainder;
+                continue;
+            }
+
             // Skip empty target (`![[]]` is meaningless).
             if file_part.is_empty() {
                 rewritten.push_str(token);
@@ -371,15 +382,10 @@ fn lower_transclusion_and_folder_wikilinks(
             }
 
             // Folder-list embed: trailing slash dispatches to the
-            // `MOSS_MARKER_FOLDER_LIST` marker that src-tauri's marker
+            // `MOSS_MARKER_FOLDER_LIST` marker that moss-build's marker
             // handler resolves into a card grid. The pothole carries
             // params (limit:N, more, sort:axis) in pipe-encoded form.
             if file_part.ends_with('/') {
-                let pothole_raw = match inner.split_once('|') {
-                    Some((_, params)) => params,
-                    None => "",
-                };
-                let params = embed_renderer::folder_list::parse_params(pothole_raw);
                 let marker =
                     embed_renderer::folder_list::emit_marker(file_part, source_path, &params);
                 rewritten.push_str(&marker);
@@ -411,7 +417,9 @@ fn lower_transclusion_and_folder_wikilinks(
                     Some(a) => format!("{}#{}", target_path, a),
                     None => target_path,
                 };
-                rewritten.push_str("<!-- moss-embed:");
+                rewritten.push_str("<!-- ");
+                rewritten.push_str(embed_renderer::MARKER_MARKDOWN);
+                rewritten.push(':');
                 rewritten.push_str(&target_with_anchor);
                 rewritten.push_str(" -->");
                 rest = remainder;
@@ -419,13 +427,13 @@ fn lower_transclusion_and_folder_wikilinks(
             }
             // Deferred-handler embeds: `.ipynb` → notebook marker,
             // `.csv` / `.tsv` → table marker. These extensions route to
-            // src-tauri marker handlers; the Stage 2 dispatcher would
+            // moss-build's marker handlers; the Stage 2 dispatcher would
             // also produce these markers, but it runs AFTER
             // `resolve_deferred_markers`, so pre-converting here keeps
             // the existing marker-handler pipeline working.
             let marker_prefix = match ext.as_str() {
-                "ipynb" => Some("moss-embed-ipynb"),
-                "csv" | "tsv" => Some("moss-embed-table"),
+                "ipynb" => Some(embed_renderer::MARKER_IPYNB),
+                "csv" | "tsv" => Some(embed_renderer::MARKER_TABLE),
                 _ => None,
             };
             if let Some(prefix) = marker_prefix {
@@ -663,6 +671,35 @@ mod tests {
         b.build()
     }
 
+    #[test]
+    fn article_map_projection_does_not_transclude_its_target() {
+        for target in ["#", "note", "note.md"] {
+            let input = format!("![[{target}|style:map|align-right 50%|A map]]");
+            let resolved = resolve_content("note.md", &input, &test_graph(), &|_| {
+                panic!("map projection must never read the target body")
+            });
+            assert!(resolved.content_markdown.contains("path=note.md|from=note.md|style=map"), "{}", resolved.content_markdown);
+            assert!(resolved.content_markdown.contains("align=right|pct=50%|caption=A map"));
+            assert!(!resolved.content_markdown.contains("moss-embed:"));
+        }
+    }
+
+    #[test]
+    fn a_self_map_marker_cannot_be_terminated_by_its_source_filename() {
+        let resolved = resolve_content("a --> b|c.md", "![[#|style:map]]\nAfter", &test_graph(), &|_| None);
+        assert!(resolved.content_markdown.contains("path=a --%3E b%7Cc.md|from=a --%3E b%7Cc.md"));
+        assert!(resolved.content_markdown.ends_with("After"));
+    }
+
+    #[test]
+    fn article_map_projection_respects_inert_regions() {
+        let input = "`![[#|style:map]]`\n\n```md\n![[note|style:map]]\n```\n\n![[#|style:map]]";
+        let output = lower_transclusion_and_folder_wikilinks(input, &test_graph(), "note.md");
+        assert_eq!(output.matches("MOSS_MARKER_FOLDER_LIST").count(), 1);
+        assert!(output.contains("`![[#|style:map]]`"));
+        assert!(output.contains("![[note|style:map]]"));
+    }
+
     fn test_files() -> HashMap<String, String> {
         let mut files = HashMap::new();
         files.insert(
@@ -724,6 +761,66 @@ mod tests {
             lower("`![[note.md]]` renders ![[note.md]] inline\n"),
             "`![[note.md]]` renders <!-- moss-embed:note.md --> inline\n"
         );
+    }
+
+    /// Run the real entry point, not just the pre-pass: the marker has to
+    /// survive everything downstream of it, and it is what moss-build reads.
+    fn marker_for(body: &str) -> String {
+        resolve_content("index.md", body, &test_graph(), &|_| None).content_markdown
+    }
+
+    #[test]
+    fn a_folder_embed_accepts_key_equals_value() {
+        // `sort=date` used to be dropped on the floor: the comma grammar
+        // only ever looked for `:`.
+        let out = marker_for("![[/journal/|sort=date]]\n");
+        assert!(out.contains("sort=date"), "got: {out}");
+    }
+
+    #[test]
+    fn a_folder_embed_reads_params_placement_and_caption_from_one_pothole() {
+        let out = marker_for("![[/journal/|style:grid|wide|A caption]]\n");
+        assert!(out.contains("style=grid"), "style must not swallow the rest: {out}");
+        assert!(out.contains("width=wide"), "got: {out}");
+        assert!(out.contains("caption=A caption"), "got: {out}");
+    }
+
+    #[test]
+    fn a_folder_embed_reads_a_float_and_its_size() {
+        let out = marker_for("![[/journal/|align-right 33%|A caption]]\n");
+        assert!(out.contains("align=right"), "got: {out}");
+        // `pct`, not `size` — `size=` is the static-index iframe's own token.
+        assert!(out.contains("pct=33%"), "got: {out}");
+        assert!(!out.contains("size=33%"), "got: {out}");
+    }
+
+    #[test]
+    fn a_bare_percent_still_sizes_the_static_index_iframe() {
+        let out = marker_for("![[/journal/|80%]]\n");
+        assert!(out.contains("size=80%"), "got: {out}");
+        assert!(!out.contains("pct="), "got: {out}");
+    }
+
+    #[test]
+    fn a_caption_survives_every_character_that_could_end_the_marker() {
+        use crate::resolve::embed_renderer::folder_list::{marker_decode, marker_encode};
+        for raw in [
+            "a|b",
+            "a,b",
+            "a=b",
+            "a --> b",
+            "100% of it",
+            "普通的標題",
+        ] {
+            assert_eq!(marker_decode(&marker_encode(raw)), raw, "round trip: {raw:?}");
+        }
+        // The marker's own terminator must not appear in the encoded form,
+        // or everything after the caption is truncated away.
+        assert!(!marker_encode("a --> b").contains("-->"));
+
+        let out = marker_for("![[/journal/|wide|Then --> after]]\n");
+        assert!(out.contains("caption=Then --%3E after"), "got: {out}");
+        assert!(out.ends_with("-->\n"), "marker must still terminate: {out}");
     }
 
     #[test]
@@ -871,8 +968,9 @@ mod tests {
             .starts_with("---\ntitle: Test\n---\n"));
 
         // Phase 3 PR2: `resolve_content` no longer resolves body wikilinks
-        // — that's the Stage 2 dispatcher's job in
-        // `src-tauri/src/build/markdown/pipeline.rs::transform_events`.
+        // — that's this crate's own AST visitor's job, in
+        // `crate::ast::dispatch_wikilink_embeds`, called from moss-build's
+        // `process_markdown_file`.
         // The `[[guide#Setup]]` wikilink passes through unchanged here.
         assert!(result.content_markdown.contains("[[guide#Setup]]"));
 
@@ -930,8 +1028,8 @@ mod tests {
 
         // disclaimer.md body contains `See [[guide]] for details.`
         // Phase 3 PR2: the embedded body's wikilink is no longer
-        // resolved by `resolve_content`; the Stage 2 dispatcher in
-        // src-tauri handles it. `resolve_content` lowers
+        // resolved by `resolve_content`; the Stage 2 dispatcher (`ast::dispatch_wikilink_embeds`)
+        // handles it. `resolve_content` lowers
         // `![[disclaimer]]` into the `<!-- moss-embed:disclaimer.md -->`
         // marker, then `resolve_embeds` inlines the disclaimer body
         // verbatim — wikilinks inside survive into the markdown
@@ -956,7 +1054,7 @@ mod tests {
         let files = HashMap::new();
 
         // Phase 3 PR2: wikilink unresolved diagnostics now surface from
-        // the Stage 2 dispatcher in src-tauri. `resolve_content` only
+        // the Stage 2 dispatcher (`ast::dispatch_wikilink_embeds`). `resolve_content` only
         // surfaces diagnostics from passes it still runs (transclusion
         // / deferred markers / block refs). `![[missing]]` with no
         // extension resolves to Unresolved in the lowering pass — but
@@ -984,7 +1082,7 @@ mod tests {
         let files = test_files();
 
         // Phase 3 PR2: body wikilink outgoing-links are populated by
-        // the Stage 2 dispatcher in src-tauri (not by `resolve_content`).
+        // `ast::dispatch_wikilink_embeds` (not by `resolve_content`).
         // What this layer still populates: block_refs results. The
         // wikilink body links `[[guide]]` and `![[disclaimer]]` pass
         // through to Stage 2; standard markdown links pass through to
@@ -1039,7 +1137,7 @@ mod tests {
         );
     }
 
-    // ----- Regression test for deeply-nested Unicode paths (#342) -----
+    // ----- Regression test for deeply-nested Unicode paths -----
 
     #[test]
     fn test_deeply_nested_unicode_bare_filename() {
@@ -1362,8 +1460,8 @@ mod tests {
         );
 
         // Phase 3 PR2: body wikilink `[[news]]` passes through as raw
-        // markdown — Stage 2 in src-tauri resolves it via the
-        // `dispatch_wikilink_embed` arm in `transform_events`.
+        // markdown — this crate's own `ast::dispatch_wikilink_embeds`
+        // visitor resolves it via the `dispatch_wikilink_embed` arm.
         assert!(
             result.content_markdown.contains("[[news]]"),
             "Expected body wikilink to pass through verbatim, got: {}",
@@ -1423,7 +1521,7 @@ mod tests {
         // the typed AST visitor
         // (`ast/resolve_urls::resolve_link_urls`) emits the
         // `moss-resolved:文字/文字.md` sentinel later in
-        // `process_markdown_file`, and src-tauri's `classify_url_prod`
+        // `process_markdown_file`, and moss-build's `classify_url_prod`
         // decodes the sentinel into the final pretty URL. Visitor
         // coverage lives in
         // `resolve_urls.rs::tests::standard_markdown_link_emits_sentinel`.

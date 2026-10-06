@@ -1,8 +1,5 @@
 //! Media pipeline. Consolidates image, video, placeholder, cover, QR, ffmpeg orchestration.
 //!
-//! Per docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 8
-//! and docs/archive/2026-04-20-media-pipeline-refactor.md.
-//!
 //! # Module layout
 //!
 //! - `ffmpeg`      — FFmpeg detection, video conversion helpers, the encode plan
@@ -10,6 +7,9 @@
 //! - `image`       — WebP image conversion, ImageConversionItem, run_image_conversion
 //! - `fallback_raster` — the deployed raster original (the `<img>` inside `<picture>`)
 //! - `video`       — Video transcoding dispatch, run_video_conversion
+//! - `decode`      — the one place `image::ImageReader` is opened with content
+//!                   sniffing instead of trusting the extension; shared by every
+//!                   reader of image bytes in and outside this module
 //! - `dimensions`  — MediaDimensionLookup (dimension / LQIP / color lookup table) +
 //!                   extract_video_dominant_color (FFmpeg-based color extraction)
 //! - `cover`       — CoverType detection and cover HTML rendering
@@ -19,7 +19,7 @@
 //!
 //! # Singleflight
 //!
-//! Both image and video conversion use `Singleflight` dedup (ADR-010). When
+//! Both image and video conversion use `Singleflight` dedup. When
 //! concurrent builds try to convert the same source_oid, only the first runs
 //! the encoder; waiters receive a clone of the result.
 //!
@@ -32,6 +32,7 @@
 //! re-exports are omitted to avoid compiler warnings.
 
 pub mod cover;
+pub(crate) mod decode;
 pub mod dimensions;
 pub mod fallback_raster;
 pub mod hls;
@@ -43,6 +44,7 @@ pub mod pipeline;
 pub(crate) mod promise;
 pub mod qr;
 pub mod raw_img_warning;
+pub(crate) mod remote_cover;
 pub mod rungs;
 pub(crate) mod sniff;
 pub mod symlink;

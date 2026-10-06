@@ -1,8 +1,8 @@
 //! Directory-shaped resolution capability (injected; pure core).
 //! Build impl is backed by the content graph + html_files; the editor impl by
 //! the last build's folder-index URL set plus a vault walk. Separate from
-//! AssetIndex because the backing data and the query shape (is_dir /
-//! markdown-index / static-index) differ.
+//! the file set (a `ContentGraph`) because the backing data and the query
+//! shape (is_dir / markdown-index / static-index) differ.
 
 pub trait FolderIndex {
     /// Does a directory exist at this root-relative path?
@@ -11,7 +11,7 @@ pub trait FolderIndex {
     /// Build: a doc whose url_path is this folder's index URL (covers
     /// content-folder promotion). Editor: the last build's folder-index URL
     /// set, reconstructed from `ArticleMap.pages` ∪ the scanned directory set
-    /// (see ADR-040) — NOT an `index.md` stat.
+    /// — NOT an `index.md` stat.
     fn dir_has_markdown_index(&self, root_rel: &str) -> bool;
     /// Does this folder have a static index.html/.htm (and no markdown index)?
     /// Returns the index filename (→ FolderIndexIframe).

@@ -216,7 +216,7 @@ fn filename_from_path(path: &str) -> &str {
 /// otherwise images, fonts, and scripts in the user's HTML pages would break.
 ///
 /// Uses `Sec-Fetch-Dest` (WebKit/Safari 16+) with `Accept` header fallback.
-fn is_navigation_request(headers: &axum::http::HeaderMap) -> bool {
+pub(crate) fn is_navigation_request(headers: &axum::http::HeaderMap) -> bool {
     // Primary: Sec-Fetch-Dest header (most reliable when available)
     if let Some(dest) = headers.get("sec-fetch-dest").and_then(|v| v.to_str().ok()) {
         return dest == "document" || dest == "iframe";

@@ -1,4 +1,5 @@
-//! Page facade fingerprints and the cross-build diff cache (moss#922 Stage 4).
+//! Page facade fingerprints and the cross-build diff cache (Stage 4 of the
+//! incremental-build work).
 //!
 //! A "facade" is a content fingerprint over every field of a `ParsedDocument`
 //! another page's render could observe. It is computed from the `Debug`
@@ -12,7 +13,7 @@
 //! facade silently to include it.
 //!
 //! `FacadeCache` persists the previous build's facades to
-//! `.moss/build/cache/dep-cache.json` (`MossPaths::cache_dep_graph`) so a
+//! `.moss/build.nosync/cache/dep-cache.json` (`MossPaths::cache_dep_graph`) so a
 //! save-triggered rebuild can diff against them — mirrors `HashIndex`
 //! (`cache.rs`) for load/save shape, simplified because a facade IS the
 //! content signature (no separate stat-based skip-hashing needed the way
@@ -96,7 +97,7 @@ fn hash_str(rendered: &str) -> String {
 /// for any page whose source carries no `uid:`. moss normally writes the
 /// minted value straight back into the frontmatter, so the churn lasts one
 /// build. It lasts FOREVER for a page with no frontmatter block at all
-/// (`footer.md` in the harbor/潮汐 reference vault is exactly this), because
+/// (`footer.md` in the riverbend/河灣 reference vault is exactly this), because
 /// there is nowhere to write it: that one page then reports as changed on
 /// every build, and since slot pages are global invalidators it would force a
 /// full render every single save, silently reducing this whole feature to a
@@ -117,15 +118,14 @@ fn normalized(doc: &ParsedDocument) -> ParsedDocument {
 ///
 /// The facade answers "does THIS page need re-rendering"; the surface answers
 /// "could this page's change alter some OTHER page's HTML by a route the
-/// dependency graph cannot see" (moss#922 Stage 5b). Only a handful of fields
+/// dependency graph cannot see" (Stage 5b of the incremental-build work). Only a handful of fields
 /// are excluded, and the exclusion is written as a blank-out on a clone rather
 /// than a hand-picked include list, so a field added to `ParsedDocument`
 /// lands in the surface by default — the rot direction is "more full
 /// renders," never "silently skip a page that should have rendered."
 ///
-/// **The surface alone is not a safety argument.** An audit of every
-/// cross-page read of another document's body (2026-07-31, recorded in
-/// `docs/archive/2026-07-31-incremental-build-facade-diff.md`) found three
+/// **The surface alone is not a safety argument.** A 2026-07-31 audit of every
+/// cross-page read of another document's body found three
 /// routes by which one page's raw markdown reaches another page's HTML with
 /// no metadata field moving and no link edge to follow:
 ///
@@ -139,9 +139,9 @@ fn normalized(doc: &ParsedDocument) -> ParsedDocument {
 /// So the surface is only half the gate. Routes 2 and 3 are closed by a
 /// full-render fallback when a homepage or slot page changes. **Route 1 is
 /// closed by a THIRD fingerprint** — the listing group digest
-/// (`build/render/incremental/listing.rs`, ADR-044), which hashes the
+/// (`build/render/incremental/listing.rs`), which hashes the
 /// *resolved* excerpt and the member-derived listing plan per folder group.
-/// Until moss#968 it was closed instead by rendering every listing host
+/// It used to be closed instead by rendering every listing host
 /// unconditionally, which cost 114 of 214 pages on every save.
 ///
 /// The listing projection is deliberately NOT folded in here. A non-empty
@@ -187,7 +187,7 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // background media phase fills those in AFTER the build that first sees
     // the image. So every hero-bearing page's surface moved as soon as its
     // cover was enriched, and one enriched cover full-renders the site.
-    // Measured on the 223-page harbor vault: ~390ms per edit, on four of
+    // Measured on the 223-page riverbend vault: ~390ms per edit, on four of
     // six page classes.
     //
     // `hero_image_url` — the genuinely cross-page half, read by the homepage
@@ -196,14 +196,26 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `reading_time` is `word_count / 200` (`markdown/pipeline.rs`) — a
     // non-monotone function of the body, so it steps on any edit that crosses
     // a 200-word boundary. Same class as `hero_html`: an audit for this fix
-    // (docs/archive/2026-08-20-rebuild-loop-incrementality.md, "The leaf,
-    // explained on the instrument's first use: `lang`") found no cross-page
+    // found no cross-page
     // render consumer — every production read is the page's own
     // `ParsedDocument` (`pipeline.rs` sets it once per doc) and every other
     // hit is a test fixture. It stays in the FACADE and out of the surface.
     stripped.reading_time = 0;
-    // `lang` — moss#1041 audit, redone after
-    // docs/archive/2026-08-20-rebuild-loop-incrementality.md called `lang`
+    // `slug` moves in lockstep with `title` (`markdown/pipeline.rs`'s
+    // `generate_slug(&title)`) but, unlike `title`, has NO reader at all:
+    // grepping every `.slug` access across `moss-build` and `moss-core`
+    // finds only its own assignment sites (the real one and a synthetic-page
+    // one) and unrelated `Heading::slug` hits (a different struct, anchor
+    // text for in-page headings). Nothing renders it, on this page or any
+    // other. Left in the surface it defeated exactly the narrowing added
+    // below: `title` is classified
+    // (`render::incremental::dependents::field_is_classified`), but `slug`
+    // is not, so every title edit anywhere still carried an unclassified
+    // field into `moved_surface_fields` and forced `FullCause::SurfaceChanged`
+    // regardless. It stays in the FACADE (nothing here claims it can't affect
+    // some future per-page use) and comes out of the surface only.
+    stripped.slug = String::new();
+    // `lang` — audited again after an earlier pass called `lang`
     // "genuinely cross-page-visible" and stopped there. Re-auditing every
     // cross-page read of another document's `lang` (not just this page's own —
     // that stays in the FACADE and re-renders this page as normal) found
@@ -229,7 +241,8 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     //    field can carry this; it is closed instead by
     //    `render::lang_roots::lang_switcher_globals`, a build-global digest
     //    (`FullCause::LangGlobalsMoved`) hashing what those three functions
-    //    actually compute, mirroring how ADR-044 closed the listing-host case.
+    //    actually compute, mirroring how the listing group digest closed the
+    //    listing-host case above.
     //
     // What would break this: a NEW consumer that reads some OTHER document's
     // raw `.lang` outside `translations` and outside `lang_switcher_globals`'s
@@ -237,6 +250,16 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // comment on a future change — the two channels above were exhaustive as
     // of this audit, not by construction.
     stripped.lang = crate::i18n::Language::default();
+    // `raw_frontmatter` is kept in the surface (nothing above blanks it) as
+    // the catch-all that lets an unmodeled or plugin-only key (`syndicated:`
+    // and friends) still reach here — but that means it duplicates every
+    // OTHER surface field the frontmatter also sets. Left whole, editing
+    // only `weight:` moves the opaque `raw_frontmatter` field right beside
+    // the named, classifiable `weight` field, and an opaque move can never
+    // be classified. Stripping the keys that already have their own
+    // dedicated field removes exactly that duplication, not the catch-all
+    // itself — see `dependents::strip_typed_frontmatter_keys`.
+    crate::build::render::incremental::dependents::strip_typed_frontmatter_keys(&mut stripped.raw_frontmatter);
     format!("{:?}", normalized(&stripped))
 }
 
@@ -366,7 +389,7 @@ pub struct PageFingerprints {
     /// input to any verdict.
     ///
     /// It costs ~500 bytes per page in `dep-cache.json` (90 KB -> ~205 KB on
-    /// the 223-page harbor vault) and buys a `SurfaceChanged` line that
+    /// the 223-page riverbend vault) and buys a `SurfaceChanged` line that
     /// names the field. That trade was made after a full render whose cause
     /// took three diagnoses to find, two of them wrong, because the only
     /// evidence a whole-struct hash leaves is "something moved".
@@ -424,7 +447,7 @@ pub struct FacadeCache {
     /// Fail-safe in the correct direction.
     #[serde(default)]
     asset_versions: String,
-    /// Per-listing-group digests (moss#968 Stage 2, ADR-044), keyed by
+    /// Per-listing-group digests, keyed by
     /// `GroupKey::id()`.
     ///
     /// **Only digests cross builds.** The group graph itself is rebuilt from
@@ -444,7 +467,7 @@ pub struct FacadeCache {
     ///
     /// The point of narrowing it: a home page's whole body used to invalidate
     /// the site, so every save while editing the homepage re-rendered all 223
-    /// pages of the harbor vault when the only thing other pages read from
+    /// pages of the riverbend vault when the only thing other pages read from
     /// it is its extracted excerpt — which most edits do not touch at all.
     ///
     /// **Keyed by the page that contributes.** It was one digest over all of
@@ -466,12 +489,22 @@ pub struct FacadeCache {
     ///
     /// **Keyed by input**, for the same reason as `global_contributions` and
     /// with a sharper edge: `image_files` and `video_files` are in here, so
-    /// an image arriving or being enriched full-renders the site through this
-    /// branch — which is the exact class of silent whole-site render this
-    /// vault has produced twice. One digest could not say that; eight named
-    /// ones can.
+    /// an image arriving full-renders the site through this branch — which
+    /// is the exact class of silent whole-site render this vault has produced
+    /// twice. One digest could not say that; eight named ones can. An image
+    /// being enriched with its placeholder no longer does; see
+    /// `image_placeholders` below.
     #[serde(default)]
     listing_globals: std::collections::BTreeMap<String, String>,
+    /// Per image, a digest of the placeholder fields `listing_globals` leaves
+    /// out of `image_files` (`render::incremental::listing::image_placeholders`).
+    /// A move re-renders the pages that show the image, not the site.
+    ///
+    /// `serde(default)` gives an empty map for a cache written before this
+    /// existed, so every image reads as moved and every page that shows one
+    /// renders once.
+    #[serde(default)]
+    image_placeholders: std::collections::BTreeMap<String, String>,
     /// Build-global inputs to the nav language switcher and the subscribe-form
     /// language sections (`build::render::lang_roots::lang_switcher_globals`):
     /// `lang_roots`, `lang_multi`, `lang_email_sections`. A mismatch is a
@@ -485,6 +518,28 @@ pub struct FacadeCache {
     /// direction as `asset_versions`.
     #[serde(default)]
     lang_globals: std::collections::BTreeMap<String, String>,
+    /// Per-language digest of that language's nav bar membership/order
+    /// (`render::incremental::dependents::nav_globals`) — the first of the
+    /// three per-language digests that let a `SurfaceChanged` verdict narrow
+    /// to "every page of the affected language" instead of the whole site.
+    ///
+    /// `serde(default)` gives an empty map for a cache written before this
+    /// field existed, so every language reads as moved on the first build
+    /// after upgrading — the same one-time, fail-safe-direction cost
+    /// `asset_versions`/`listing_globals`/`lang_globals` all pay.
+    #[serde(default)]
+    nav_globals: std::collections::BTreeMap<String, String>,
+    /// Per-language digest of that language's home-page title
+    /// (`render::incremental::dependents::home_title_globals`). See
+    /// `nav_globals`'s field docs for the shared rationale and fail-safe
+    /// direction.
+    #[serde(default)]
+    home_title_globals: std::collections::BTreeMap<String, String>,
+    /// Per-language digest of that language's home page's `breadcrumb:`
+    /// site-wide toggle (`render::incremental::dependents::home_breadcrumb_globals`).
+    /// See `nav_globals`'s field docs.
+    #[serde(default)]
+    home_breadcrumb_globals: std::collections::BTreeMap<String, String>,
 }
 
 /// Which keys differ between two digest maps — sorted, and including keys
@@ -509,6 +564,20 @@ fn moved_keys(
     moved
 }
 
+/// The seven per-part digest maps `FacadeCache` keeps, one per field of the
+/// same name. They share one shape and one comparison ([`moved_keys`]); they
+/// differ only in what a move obliges the caller to render.
+#[derive(Debug, Clone, Copy)]
+pub enum DigestMap {
+    GlobalContributions,
+    ListingGlobals,
+    ImagePlaceholders,
+    LangGlobals,
+    NavGlobals,
+    HomeTitleGlobals,
+    HomeBreadcrumbGlobals,
+}
+
 impl FacadeCache {
     /// Load a facade cache from a JSON file on disk. Returns an empty cache
     /// if the file doesn't exist or can't be parsed — same fail-open
@@ -526,7 +595,7 @@ impl FacadeCache {
     /// that method's doc comment for the iCloud-exclusion rationale).
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
+            crate::build::io_utils::create_output_dir_all(parent)
                 .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
         let json = serde_json::to_string_pretty(self)
@@ -534,6 +603,7 @@ impl FacadeCache {
         let tmp = path.with_extension(format!("json.pending.{}", uuid::Uuid::new_v4()));
         fs::write(&tmp, json.as_bytes())  // allow:raw_write the temp for this cache's own atomic save under .moss/cache
             .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
+        // allow:unlink rename into place outside staging
         fs::rename(&tmp, path)
             .map_err(|e| format!("Failed to rename {} -> {}: {}", tmp.display(), path.display(), e))
     }
@@ -546,22 +616,24 @@ impl FacadeCache {
             asset_versions: String::new(),
             listing_groups: std::collections::BTreeMap::new(),
             listing_globals: std::collections::BTreeMap::new(),
+            image_placeholders: std::collections::BTreeMap::new(),
             global_contributions: std::collections::BTreeMap::new(),
             lang_globals: std::collections::BTreeMap::new(),
+            nav_globals: std::collections::BTreeMap::new(),
+            home_title_globals: std::collections::BTreeMap::new(),
+            home_breadcrumb_globals: std::collections::BTreeMap::new(),
         }
     }
 
-    /// Record this build's listing globals and per-group digests. Chained onto
+    /// Record this build's per-group listing digests. Chained onto
     /// `from_facades` alongside `with_asset_versions`.
-    pub fn with_listing(
+    pub fn with_listing_groups(
         mut self,
-        globals: std::collections::BTreeMap<String, String>,
         groups: std::collections::BTreeMap<
             String,
             crate::build::render::incremental::listing::GroupDigest,
         >,
     ) -> Self {
-        self.listing_globals = globals;
         self.listing_groups = groups;
         self
     }
@@ -576,50 +648,36 @@ impl FacadeCache {
         self.listing_groups.get(&key.id())
     }
 
-    /// True when a build-global input to card rendering moved. Callers must
-    /// treat it as a full-render bypass — see the `listing_globals` field docs.
-    pub fn listing_globals_changed(
-        &self,
-        current: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        moved_keys(&self.listing_globals, current)
+    fn digests(&self, which: DigestMap) -> &std::collections::BTreeMap<String, String> {
+        match which {
+            DigestMap::GlobalContributions => &self.global_contributions,
+            DigestMap::ListingGlobals => &self.listing_globals,
+            DigestMap::ImagePlaceholders => &self.image_placeholders,
+            DigestMap::LangGlobals => &self.lang_globals,
+            DigestMap::NavGlobals => &self.nav_globals,
+            DigestMap::HomeTitleGlobals => &self.home_title_globals,
+            DigestMap::HomeBreadcrumbGlobals => &self.home_breadcrumb_globals,
+        }
     }
 
-    /// Record this build's language-switcher globals. Chained onto `from_facades`.
-    pub fn with_lang_globals(
-        mut self,
-        globals: std::collections::BTreeMap<String, String>,
-    ) -> Self {
-        self.lang_globals = globals;
+    /// Record this build's digests for `which`. Chained onto `from_facades`.
+    pub fn with_digests(mut self, which: DigestMap, digests: std::collections::BTreeMap<String, String>) -> Self {
+        *match which {
+            DigestMap::GlobalContributions => &mut self.global_contributions,
+            DigestMap::ListingGlobals => &mut self.listing_globals,
+            DigestMap::ImagePlaceholders => &mut self.image_placeholders,
+            DigestMap::LangGlobals => &mut self.lang_globals,
+            DigestMap::NavGlobals => &mut self.nav_globals,
+            DigestMap::HomeTitleGlobals => &mut self.home_title_globals,
+            DigestMap::HomeBreadcrumbGlobals => &mut self.home_breadcrumb_globals,
+        } = digests;
         self
     }
 
-    /// True when a build-global input to the nav language switcher or the
-    /// subscribe-form language sections moved. Callers must treat it as a
-    /// full-render bypass — see the `lang_globals` field docs.
-    pub fn lang_globals_changed(
-        &self,
-        current: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        moved_keys(&self.lang_globals, current)
-    }
-
-    /// Record this build's global contributions. Chained onto `from_facades`.
-    pub fn with_global_contributions(
-        mut self,
-        digests: std::collections::BTreeMap<String, String>,
-    ) -> Self {
-        self.global_contributions = digests;
-        self
-    }
-
-    /// True when a body-derived value that other pages read moved. Callers
-    /// must treat it as a full-render bypass — see the field docs.
-    pub fn global_contributions_changed(
-        &self,
-        current: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        moved_keys(&self.global_contributions, current)
+    /// The keys of `which` that moved since the cache-writing build. What a
+    /// move obliges the caller to render is on each field's docs.
+    pub fn digests_moved(&self, which: DigestMap, current: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+        moved_keys(self.digests(which), current)
     }
 
     /// Record this build's asset versions, so the next build can detect one
@@ -823,16 +881,16 @@ mod tests {
     fn a_moved_build_global_names_the_part_that_moved() {
         let before = map(&[("math", "a"), ("image_files", "b"), ("site_lang", "c")]);
         let cache = FacadeCache::from_facades(HashMap::new())
-            .with_listing(before.clone(), std::collections::BTreeMap::new())
-            .with_global_contributions(map(&[("footer.md", "f"), ("index.md", "i")]));
+            .with_digests(DigestMap::ListingGlobals, before.clone())
+            .with_digests(DigestMap::GlobalContributions, map(&[("footer.md", "f"), ("index.md", "i")]));
 
-        assert!(cache.listing_globals_changed(&before).is_empty(), "identical inputs must not fire");
+        assert!(cache.digests_moved(DigestMap::ListingGlobals, &before).is_empty(), "identical inputs must not fire");
         assert_eq!(
-            cache.listing_globals_changed(&map(&[("math", "a"), ("image_files", "MOVED"), ("site_lang", "c")])),
+            cache.digests_moved(DigestMap::ListingGlobals, &map(&[("math", "a"), ("image_files", "MOVED"), ("site_lang", "c")])),
             ["image_files"]
         );
         assert_eq!(
-            cache.global_contributions_changed(&map(&[("footer.md", "CHANGED"), ("index.md", "i")])),
+            cache.digests_moved(DigestMap::GlobalContributions, &map(&[("footer.md", "CHANGED"), ("index.md", "i")])),
             ["footer.md"]
         );
     }
@@ -843,8 +901,8 @@ mod tests {
     #[test]
     fn a_vanished_build_global_part_still_counts_as_moved() {
         let cache = FacadeCache::from_facades(HashMap::new())
-            .with_global_contributions(map(&[("footer.md", "f"), ("index.md", "i")]));
-        assert_eq!(cache.global_contributions_changed(&map(&[("index.md", "i")])), ["footer.md"]);
+            .with_digests(DigestMap::GlobalContributions, map(&[("footer.md", "f"), ("index.md", "i")]));
+        assert_eq!(cache.digests_moved(DigestMap::GlobalContributions, &map(&[("index.md", "i")])), ["footer.md"]);
     }
 
     #[test]
@@ -882,7 +940,7 @@ mod tests {
 
     #[test]
     fn a_freshly_minted_uid_does_not_move_either_fingerprint() {
-        // `footer.md` in the harbor/潮汐 reference vault has no frontmatter
+        // `footer.md` in the riverbend/河灣 reference vault has no frontmatter
         // block, so the uid moss mints for it can never be written back and is
         // random on every build. Left in the fingerprint it forced a full
         // render on every save forever — see `normalized`.
@@ -937,6 +995,8 @@ mod tests {
             body_plan: Some(crate::build::markdown::body_plan::BodyPlan {
                 segments: vec![crate::build::markdown::body_plan::BodySegment::Html(html.to_string())],
                 lede_segments: 1,
+                first_text_segments: 0,
+                after_first_text_segments: 0,
             }),
             ..Default::default()
         };
@@ -984,6 +1044,44 @@ mod tests {
             compute_page_surface(&b),
             "no other page reads this page's reading_time — it must not full-render the site"
         );
+    }
+
+    /// `slug` moves whenever `title` does (both derive from the same source)
+    /// but has no reader anywhere — see `surface_debug`'s comment. A title
+    /// edit still has to re-render the page's own HTML, but the accompanying
+    /// slug move must not ALSO show up as a second, unclassifiable surface
+    /// field next to the classified `title` field.
+    #[test]
+    fn a_slug_change_moves_the_facade_but_not_the_surface() {
+        let a = ParsedDocument { title: "A".to_string(), slug: "a".to_string(), ..Default::default() };
+        let b = ParsedDocument { title: "A".to_string(), slug: "b".to_string(), ..Default::default() };
+        assert_ne!(compute_page_facade(&a), compute_page_facade(&b), "slug is part of this page's own HTML");
+        assert_eq!(
+            compute_page_surface(&a),
+            compute_page_surface(&b),
+            "no page reads another's slug — it must not full-render the site"
+        );
+    }
+
+    /// The actual bug this fixes: a REAL title edit moves `title` (and the
+    /// no-op-for-rendering `label`/`slug` that ride along with it), and only
+    /// `title` may show up as a moved surface field — `slug` riding along
+    /// silently must not.
+    #[test]
+    fn a_title_edit_does_not_also_report_slug_as_a_moved_surface_field() {
+        let title = |t: &str| ParsedDocument {
+            title: t.to_string(),
+            label: t.to_string(),
+            slug: t.to_lowercase(),
+            ..Default::default()
+        };
+        let a = title("Original");
+        let b = title("Renamed");
+        let names = surface_field_names();
+        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        let mut moved_sorted = moved.clone();
+        moved_sorted.sort();
+        assert_eq!(moved_sorted, ["label", "title"], "got {moved:?}");
     }
 
     #[test]
@@ -1041,6 +1139,52 @@ mod tests {
         let a = ParsedDocument { label: "A".to_string(), ..Default::default() };
         let b = ParsedDocument { label: "B".to_string(), ..Default::default() };
         assert_ne!(compute_page_surface(&a), compute_page_surface(&b));
+    }
+
+    /// `raw_frontmatter` is a whole-map catch-all kept in the surface so an
+    /// unmodeled or plugin-only frontmatter key (`syndicated:`, say) still
+    /// reaches it — but a real edit always moves the SAME key's copy inside
+    /// `raw_frontmatter` too. Left whole, editing only `weight:` would move
+    /// BOTH the named `weight` field AND the opaque `raw_frontmatter` field,
+    /// and an opaque move can never be classified
+    /// (`render::incremental::dependents::field_is_classified`) — every
+    /// weight edit on a nav-eligible page would still force
+    /// `FullCause::SurfaceChanged` despite the narrowing this fix exists for.
+    /// Per-field attribution is what proves it: only `weight` may move here,
+    /// not `raw_frontmatter` alongside it.
+    #[test]
+    fn a_typed_frontmatter_keys_raw_copy_does_not_also_move_the_surface() {
+        use std::collections::BTreeMap;
+        let raw = |weight: i64| {
+            let mut m = BTreeMap::new();
+            m.insert("weight".to_string(), serde_json::Value::Number(weight.into()));
+            m
+        };
+        let a = ParsedDocument { weight: Some(10), raw_frontmatter: raw(10), ..Default::default() };
+        let b = ParsedDocument { weight: Some(25), raw_frontmatter: raw(25), ..Default::default() };
+
+        let names = surface_field_names();
+        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        assert_eq!(moved, ["weight"], "raw_frontmatter must not also show up as moved: {moved:?}");
+    }
+
+    /// The other half of the same fix: a key with NO dedicated struct field
+    /// (a plugin-only key like `syndicated:`) has nowhere else to be seen,
+    /// so `raw_frontmatter`'s own move must still be reported for it.
+    #[test]
+    fn an_untyped_frontmatter_keys_move_still_shows_up_as_raw_frontmatter() {
+        use std::collections::BTreeMap;
+        let raw = |value: &str| {
+            let mut m = BTreeMap::new();
+            m.insert("syndicated".to_string(), serde_json::Value::String(value.to_string()));
+            m
+        };
+        let a = ParsedDocument { raw_frontmatter: raw("no"), ..Default::default() };
+        let b = ParsedDocument { raw_frontmatter: raw("yes"), ..Default::default() };
+
+        let names = surface_field_names();
+        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        assert_eq!(moved, ["raw_frontmatter"]);
     }
 
     #[test]

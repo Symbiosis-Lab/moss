@@ -127,6 +127,14 @@ fn card_script(lang: crate::i18n::Language, title: &str) -> Option<CardScript> {
         if title.chars().any(kana) {
             return None;
         }
+        // Both judges inside `detect_language` (its own CJK count and
+        // whatlang's Mandarin script) only answer Chinese for a character at
+        // or above U+2E80. Below that the answer is `En` or nothing, so a
+        // Latin title skips the detector, which costs more than the card
+        // decision around it.
+        if title.chars().all(|c| c < '\u{2e80}') {
+            return None;
+        }
         crate::i18n::detect::detect_language(title).and_then(script_of)
     })
 }
@@ -137,15 +145,27 @@ fn card_script(lang: crate::i18n::Language, title: &str) -> Option<CardScript> {
 /// One value, not two parameters: "there is somewhere to record this card" and
 /// "there is a manifest to look it up in" are the same fact, and splitting them
 /// would let a caller supply a sink with no lookup — the state whose only exit
-/// is a read of `.moss/build/`.
+/// is a read of `.moss/build.nosync/`.
+///
+/// It also carries the build's filename-convention cover answers, the other
+/// per-build input the og decision reads, so every page of a folder shares
+/// one listing of it.
 pub struct OgSink<'a> {
     previous_files: &'a std::collections::HashMap<String, String>,
+    filename_covers: &'a crate::build::page::cover::FilenameCovers,
     cards: Vec<CardOutput>,
 }
 
 impl<'a> OgSink<'a> {
-    pub fn new(previous_files: &'a std::collections::HashMap<String, String>) -> Self {
-        Self { previous_files, cards: Vec::new() }
+    pub fn new(
+        previous_files: &'a std::collections::HashMap<String, String>,
+        filename_covers: &'a crate::build::page::cover::FilenameCovers,
+    ) -> Self {
+        Self { previous_files, filename_covers, cards: Vec::new() }
+    }
+
+    pub fn filename_covers(&self) -> &'a crate::build::page::cover::FilenameCovers {
+        self.filename_covers
     }
 
     /// Render (or carry) one card and record its receipt, returning the served
@@ -214,7 +234,7 @@ impl CardOutput {
 /// `previous_files` is the previous build's `files` map. A card already on disk
 /// is reused only if that map has an entry for it: the on-disk copy carries no
 /// hash anyone still holds, so without an entry to carry there would be nothing
-/// to register but the bytes — and fetching those means reading `.moss/build/`,
+/// to register but the bytes — and fetching those means reading `.moss/build.nosync/`,
 /// which is the read this change exists to delete. Rasterizing instead is
 /// deterministic and costs one render.
 pub fn render_card(
@@ -267,7 +287,7 @@ pub fn render_card(
     }
     let bytes = pixmap.encode_png().map_err(|e| CardError::Encode(e.to_string()))?;
 
-    // `write_output`, not a bare write: `output_root` is under `.moss/build/`,
+    // `write_output`, not a bare write: `output_root` is under `.moss/build.nosync/`,
     // and it lands the bytes in a uniquely-named temp sibling before renaming
     // onto the content-addressed path. The path is addressed by (script, title,
     // site_name, colors) — site_name and the colors are build constants,
@@ -519,6 +539,10 @@ fn rasterize(
         });
     }
 
+    // This SVG is moss's own generated card markup, never an author's — a
+    // usvg/resvg warning here names no moss file, so it must not reach the
+    // terminal unattributed. See `cli_output::suppress_renderer_warnings`.
+    let _suppress = crate::build::cli_output::suppress_renderer_warnings();
     let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| CardError::Svg(e.to_string()))?;
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| CardError::Encode("pixmap allocation failed".into()))?;
@@ -564,7 +588,7 @@ impl std::error::Error for CardError {}
 /// skips, and `remove_stale_files` deletes any `image_outputs` entry this
 /// build didn't re-register — so without this the card of an unmodified page
 /// would be pruned and its `og:image` would 404 until that page next
-/// re-rendered (moss#966).
+/// re-rendered.
 ///
 /// Cards are content-addressed by (title, site_name, colors) under
 /// `_moss/og/`, and a carry only happens when no page's surface moved, so
@@ -574,7 +598,7 @@ impl std::error::Error for CardError {}
 /// unmodified page's social preview.
 ///
 /// Two facts are required per card, and both used to come from one read of
-/// `.moss/build/`: the hash, and the proof the file is there. The manifest
+/// `.moss/build.nosync/`: the hash, and the proof the file is there. The manifest
 /// supplies the hash; `output_present` is the other half — the same conjunct a
 /// reuse in `render_card` applies. An entry without a file would put a path
 /// in the manifest that no generation contains, and publish would refuse the
@@ -901,7 +925,7 @@ mod tests {
 
     /// The reuse gate is the disk AND the previous manifest, not the disk
     /// alone: a card whose entry is gone has no hash anyone still holds, and
-    /// the only way to get one back without reading `.moss/build/` is to
+    /// the only way to get one back without reading `.moss/build.nosync/` is to
     /// rasterize it again.
     #[test]
     fn reuse_needs_both_the_file_and_a_previous_entry() {
@@ -1381,7 +1405,7 @@ mod tests {
         // multiple workers call render_card on that shared path at once and
         // then read it back to hash for the manifest. A non-atomic save_png
         // tears the PNG and lets a reader observe partial bytes (→ corrupt
-        // shipped card + manifest/disk hash mismatch, ADR-013). render_card
+        // shipped card + manifest/disk hash mismatch). render_card
         // must write atomically (temp + rename) so every reader sees a
         // complete, identical file regardless of interleaving.
         use std::sync::{Arc, Barrier};

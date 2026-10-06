@@ -10,8 +10,7 @@
 //!
 //! Numbering is FIRST-REFERENCE order, not source order. Scope is the whole
 //! block tree except shortcode bodies, which render through
-//! [`super::render::render_blocks`] as their own little documents. See
-//! ADR-035 for the three call paths and why they differ.
+//! [`super::render::render_blocks`] as their own little documents.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -31,8 +30,7 @@ use super::render::{render_blocks_with, render_inlines};
 ///
 /// Scope: the whole block tree EXCEPT shortcode bodies. A `:::grid` cell or
 /// `:::hero` overlay is parsed and rendered as its own little document
-/// through [`super::render::render_blocks`], which carries no index — see
-/// ADR-035 for why the three call paths differ.
+/// through [`super::render::render_blocks`], which carries no index.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FootnoteIndex {
     numbers: std::collections::HashMap<String, usize>,
@@ -61,7 +59,7 @@ impl FootnoteIndex {
         // than seeding it. When the walked list runs out and
         // never-referenced definitions remain (GFM drops these; moss
         // numbers them after the referenced notes, in source order, so the
-        // author's text is never silently deleted — ADR-035), the reader's
+        // author's text is never silently deleted), the reader's
         // next stop is the first such note's body — so it joins the walk
         // right there, not after the loop ends. Appending the tail after
         // the loop mis-numbered a marker met only inside an unreferenced

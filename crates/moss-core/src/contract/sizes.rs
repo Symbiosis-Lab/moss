@@ -14,7 +14,26 @@
 //! - nav/content breakpoint: 48rem (see .claude/CLAUDE.md § "Navigation
 //!   Responsive Breakpoints")
 //! - `.moss-grid` runs 1–4 columns via data-columns within the content/wide
-//!   column, at every viewport width — no mobile collapse
+//!   column; a horizontal site collapses to 1 column below 768px, a
+//!   vertical one never does (site.css) — see `sizes_for_grid_cell`'s
+//!   `auto,` lead, which reads the real width instead of guessing it
+//! - vertical typesetting: the column is a HEIGHT, not a width — see
+//!   [`sizes_vertical_body`]
+//!
+//! A `sizes=` value is a fetch hint and nothing else. The synthesizer emits
+//! the source's `width`/`height` alongside every srcset, and site.css caps
+//! images on their logical axes, so the laid-out box comes from those hints
+//! and the column, never from the density `sizes=` implies. Overstating the
+//! rendered width only over-fetches (a bigger rung than needed); understating
+//! it blurs (the browser upscales a smaller rung). Every value here therefore
+//! errs on the large side when it cannot be exact.
+//!
+//! Engine support constrains the spelling. WebKit (26, 2026-09) drops a
+//! source-size entry that uses `min()` or `clamp()` and falls through to the
+//! next one — ultimately `100vw` — while Chromium and Firefox evaluate them;
+//! `calc()` with viewport units works in all three. The `min()` values below
+//! degrade to `100vw` there, an over-fetch; a new value must not rely on
+//! `min()`/`clamp()` to avoid an understatement.
 
 /// Hero images and `data-width="screen|full"` figures: span the viewport
 /// (bounded by the 2400px deploy cap).
@@ -22,20 +41,32 @@ pub const SIZES_FULL_BLEED: &str = "100vw";
 
 /// `:::hero {.plate}` images (2026-09-11): the plate variant's CSS shows
 /// the image whole and never upscales it — render width tracks the
-/// image's own delivered resolution (up to `DEPLOY_MAX_EDGE`), not the
-/// viewport. `100vw` would therefore ask the srcset ladder to resolve
-/// against viewport width, which under-selects a wide plate (a 7.6:1
-/// handscroll can render near its full deployed width while
-/// `sizes=100vw` picks a mid rung — a blurry upscale; see
-/// `docs/archive/2026-09-11-hero-plate-variant.md`). A plate can
-/// legitimately render at up to its full deployed width regardless of
-/// viewport, so `sizes=` names a fixed value at least as large as
-/// [`crate::asset_paths::DEPLOY_MAX_EDGE`] — this always selects the top
-/// (base) rung, the same trade every institutional handscroll viewer
-/// makes (serve one high-resolution asset rather than device-tiering the
-/// object). `sizes_hero_plate_covers_deploy_max_edge` pins the two in
-/// sync so a future ceiling change can't silently starve the ladder.
+/// image's own delivered resolution, not the viewport. `100vw` would
+/// therefore ask the srcset ladder to resolve against viewport width,
+/// which under-selects a wide plate (a 7.6:1 handscroll can render near
+/// its full deployed width while `sizes=100vw` picks a mid rung — a
+/// blurry upscale).
+/// So `sizes=` names a fixed value wider than every ladder rung, which
+/// always selects the base — the same trade every institutional
+/// handscroll viewer makes (serve one high-resolution asset rather than
+/// device-tiering the object). The base itself may be wider than 2400px
+/// for an elongated image (`asset_paths::deployed_long_edge`); that
+/// changes nothing here. `sizes_hero_plate_selects_the_base` pins the
+/// value above the top rung.
 pub const SIZES_HERO_PLATE: &str = "2400px";
+
+/// A body image tagged `data-aspect="scroll"` (`asset_paths::is_scroll_shape`
+/// — a handscroll or hanging scroll): the same trade [`SIZES_HERO_PLATE`]
+/// makes, for the same reason. Its CSS (site.css / vertical.css) lets the
+/// image render at up to its own delivered resolution — a fixed-height
+/// scrolling strip horizontally, the full column height vertically — never
+/// fit to the viewport-derived column width [`SIZES_BODY`] assumes. Naming
+/// that column width here anyway would ask the srcset ladder to resolve
+/// against it, under-selecting a wide scroll (a browser picking the `w800`
+/// rung for a source displayed at its own 2400px width is the same blurry-
+/// upscale mistake `SIZES_HERO_PLATE`'s doc names). Same value, so the same
+/// `sizes_hero_plate_selects_the_base` test covers both.
+pub const SIZES_SCROLL: &str = SIZES_HERO_PLATE;
 
 /// `data-width="wide"` figures: the wide band —
 /// `min(56 × reading-size, site-max)` = `min(63rem, 1200px)` = 63rem at the
@@ -74,8 +105,7 @@ pub const SIZES_BODY: &str = "(min-width: 48rem) 47.25rem, 100vw";
 /// an engine that doesn't support `auto` yet, e.g. WebKit as of 2026-09).
 /// It stays a viewport-width guess, and stays safe only because a
 /// generic <picture> `sizes` overstatement over-fetches rather than
-/// blurs — see the module doc's caveat on theme overrides. Prior history
-/// of the fallback value itself: docs/archive/2026-09-14-phone-card-composition-fix.md.
+/// blurs — see the module doc's caveat on theme overrides.
 pub const SIZES_CARD: &str = "auto, (min-width: 48rem) 24rem, 100vw";
 
 /// Gallery thumbnails: 2–3 across on desktop.
@@ -100,12 +130,17 @@ pub fn sizes_for_data_width(width: &str) -> Option<&'static str> {
 /// The `sizes=` value for an image inside a `.moss-grid` cell: the cell
 /// track is the grid's band width divided by its column count (gaps are
 /// ignored — a slight, safe over-declaration). The band is the content
-/// column, or the escape band when the grid carries `data-width`
-/// (ADR-021 Corollary 2).
+/// column, or the escape band when the grid carries `data-width`.
 ///
-/// `:::grid N` keeps N tracks at every viewport width — site.css carries no
-/// mobile collapse for it — so the column count divides the band the same
-/// way on a phone as on a desktop, with no narrow-viewport branch here.
+/// Leads with `auto,` for the same reason as [`SIZES_CARD`]: `:::grid N`
+/// keeps N tracks at every width on a vertical site but collapses to 1
+/// below 768px on a horizontal one (site.css), so no static formula fits
+/// both without knowing the page's typesetting — which this contract layer
+/// doesn't carry. `auto` sidesteps that by reading the cell's real
+/// laid-out width instead. The trailing static value is the pre-`auto`
+/// fallback: it only fires for an eager image or an engine without
+/// `sizes="auto"` support, so it stays the old always-N-tracks guess,
+/// suboptimal on a collapsed horizontal-mobile cell but never broken.
 ///
 /// This exists because the pre-escape mapping declared the CONTENT COLUMN
 /// for grid-cell images: a 3-across featured wall emitted
@@ -120,11 +155,41 @@ pub fn sizes_for_grid_cell(columns: u32, data_width: Option<&str>) -> String {
         _ => "min(47.25rem, 100vw)",
     };
     let cols = columns.max(1);
-    if cols == 1 {
+    let fallback = if cols == 1 {
         band.to_string()
     } else {
         format!("calc({band} / {cols})")
-    }
+    };
+    format!("auto, {fallback}")
+}
+
+/// Body images on a `typesetting = "vertical"` page: `calc(A * (100vh - 4rem))`
+/// with `A` = the source's width/height, rounded UP to three decimals.
+///
+/// Under vertical-rl the column is a fixed HEIGHT
+/// (`--moss-vertical-column: min(38em, 100svh - 4rem)` in vertical.css), the
+/// image's inline size (its height) fills it, and its physical width follows
+/// from the aspect ratio: roughly column × A. None of the horizontal values
+/// describe that — `SIZES_BODY` names a 47.25rem WIDTH, which asked a
+/// 2400×1771 plate rendered ~794px wide for the 800w rung, and a 23:1
+/// handscroll laid out thousands of px wide for the same.
+///
+/// `100vh - 4rem` is an upper bound on the column, not the column: it drops
+/// the `38em` term (a theme or the reading-scale control can move `em`, and
+/// an understated column would blur) and uses `vh`, which is never smaller
+/// than `svh`. Rounding `A` up keeps the bound. The cost is ~28% of width on
+/// common viewports; see the module doc for why no `min()` is used. The
+/// render gate `vertical-sizes` pins the fetch this produces against the CSS
+/// column, so a change to `--moss-vertical-column` that outgrows this bound
+/// turns it red.
+///
+/// Applies to `data-width` figures too: width tokens are inert under
+/// vertical typesetting, so such a figure sits in the column like any
+/// other body image.
+pub fn sizes_vertical_body(width: u32, height: u32) -> String {
+    let h = u64::from(height.max(1));
+    let milli = (u64::from(width) * 1000).div_ceil(h);
+    format!("calc({}.{:03} * (100vh - 4rem))", milli / 1000, milli % 1000)
 }
 
 #[cfg(test)]
@@ -138,11 +203,10 @@ mod tests {
         // requires the LAST comma-segment to be unconditional — no LEADING
         // media condition, i.e. it must not start with `(` — though it may
         // still be a `calc(…)` expression, which is why the check below is
-        // "does not start with", not "does not contain": `:::grid N` no
-        // longer has a narrow-viewport branch to be unconditional ABOUT
-        // (site.css carries no mobile collapse for it), so the whole value
-        // is now a single `calc()` segment with no media condition at all.
-        // Every media condition's parentheses must still balance.
+        // "does not start with", not "does not contain": the grid samples'
+        // trailing fallback segment is a `calc(…)` or bare `min(…)`/`100vw`
+        // value, never a media condition. Every media condition's
+        // parentheses must still balance.
         let grid_samples: Vec<String> = (1..=4)
             .flat_map(|n| {
                 [None, Some("wide"), Some("page"), Some("screen")]
@@ -190,29 +254,59 @@ mod tests {
     #[test]
     fn grid_cell_declares_cell_not_column() {
         // The motivating bug: a 3-across grid cell must declare ~band/3,
-        // not the full content column. No narrow-viewport branch: `:::grid
-        // N` keeps N tracks at every width, so one value covers every
-        // viewport.
+        // not the full content column, once past the `auto,` lead — the
+        // fallback that fires when `auto` doesn't apply.
         assert_eq!(
             sizes_for_grid_cell(3, None),
-            "calc(min(47.25rem, 100vw) / 3)"
+            "auto, calc(min(47.25rem, 100vw) / 3)"
         );
         assert_eq!(
             sizes_for_grid_cell(3, Some("page")),
-            "calc(min(1200px, 100vw) / 3)"
+            "auto, calc(min(1200px, 100vw) / 3)"
         );
         // Single column: no calc wrapper.
-        assert_eq!(sizes_for_grid_cell(1, Some("screen")), "100vw");
+        assert_eq!(sizes_for_grid_cell(1, Some("screen")), "auto, 100vw");
         // Zero-column defensive clamp.
-        assert_eq!(sizes_for_grid_cell(0, None), "min(47.25rem, 100vw)");
+        assert_eq!(sizes_for_grid_cell(0, None), "auto, min(47.25rem, 100vw)");
     }
 
     #[test]
-    fn sizes_hero_plate_covers_deploy_max_edge() {
-        // SIZES_HERO_PLATE must always select the base (highest) srcset
-        // rung, i.e. it must be >= DEPLOY_MAX_EDGE. If the deploy cap ever
-        // changes this test forces SIZES_HERO_PLATE to move with it rather
-        // than silently starving the ladder for a plate hero.
+    fn vertical_body_names_the_column_height_times_the_aspect() {
+        assert_eq!(sizes_vertical_body(2400, 1771), "calc(1.356 * (100vh - 4rem))");
+        assert_eq!(sizes_vertical_body(1000, 4000), "calc(0.250 * (100vh - 4rem))");
+        assert_eq!(sizes_vertical_body(21969, 950), "calc(23.126 * (100vh - 4rem))");
+        // WebKit drops a source-size entry using min()/clamp() (module doc).
+        let s = sizes_vertical_body(2400, 1771);
+        assert!(!s.contains("min(") && !s.contains("clamp(") && !s.contains("max("), "{s}");
+    }
+
+    #[test]
+    fn vertical_body_never_understates_the_aspect() {
+        // An understated coefficient fetches a smaller rung than the
+        // rendered width needs, i.e. blurs.
+        for w in (1..=6000u32).step_by(37) {
+            for h in (1..=6000u32).step_by(41) {
+                let s = sizes_vertical_body(w, h);
+                // Integer thousandths: `9.200` → 9200 (f64 would round
+                // an exact 9.2 × 165 below 1518).
+                let milli: u64 = s
+                    .strip_prefix("calc(")
+                    .and_then(|r| r.split(' ').next())
+                    .unwrap()
+                    .replace('.', "")
+                    .parse()
+                    .unwrap();
+                assert!(milli * u64::from(h) >= u64::from(w) * 1000, "{w}x{h} -> {s}");
+            }
+        }
+    }
+
+    #[test]
+    fn sizes_hero_plate_selects_the_base() {
+        // SIZES_HERO_PLATE must always select the base srcset candidate:
+        // wider than every ladder rung, and at least the long-edge cap so a
+        // base at the cap is taken at 1x. A ladder or cap change must move
+        // it rather than silently starve a plate hero.
         let px: u32 = SIZES_HERO_PLATE
             .strip_suffix("px")
             .expect("SIZES_HERO_PLATE must be a bare px length, not a media-query list")
@@ -224,5 +318,7 @@ mod tests {
              under-selects its srcset rung",
             crate::asset_paths::DEPLOY_MAX_EDGE,
         );
+        let top_rung = *crate::asset_paths::LADDER.last().unwrap();
+        assert!(px > top_rung, "SIZES_HERO_PLATE ({px}px) must exceed the top rung ({top_rung}w)");
     }
 }

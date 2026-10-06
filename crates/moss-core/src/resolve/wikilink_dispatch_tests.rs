@@ -274,34 +274,27 @@ fn dispatch_anchor_wikilink_preserves_section_in_href() {
 
 // --- build_anchor / dispatch_wikilink_form (`[[…]]` text-link) -------
 //
-// SCOPE WARNING — read before trusting these as link-path coverage.
+// SCOPE WARNING: the three tests below drive `dispatch_wikilink_embed(...,
+// is_embed: false, ..)`, the `dispatch_wikilink_form` branch and its
+// `build_anchor` helper. That branch is dormant in the live build: the sole
+// production caller, `crate::ast::dispatch_wikilink_embeds`, hard-codes
+// `is_embed: true`. Plain `[[Page#Heading]]` text links arrive as
+// `Inline::Link { is_wikilink: true }` and are resolved by
+// `crate::ast::resolve_urls`, whose `slug_wikilink_suffix` does the
+// `#Heading → #heading` slugging.
 //
-// The three tests below drive `dispatch_wikilink_embed(..., is_embed:
-// false, ..)`, i.e. the `dispatch_wikilink_form` branch and its
-// `build_anchor` helper. That branch is the ONLY caller of `build_anchor`,
-// and in the LIVE build it is DORMANT: the sole production caller of this
-// dispatcher — the AST visitor `crate::ast::dispatch_wikilink_embeds`
-// (`ast/dispatch_wikilink_embeds.rs`) — hard-codes `is_embed: true`
-// (it only walks `![[…]]` image-embed `Inline::Image` nodes). Plain
-// `[[Page#Heading]]` TEXT links never reach this function in production;
-// they arrive as `Inline::Link { is_wikilink: true }` and are resolved
-// by `crate::ast::resolve_urls`, whose `slug_wikilink_suffix` performs
-// the user-facing `#Heading → #heading` slugging.
+// The real guards for text-link slugging live in
+// `crates/moss-core/src/ast/resolve_urls.rs`:
+//   - wikilink_cross_page_fragment_is_slugged
+//   - wikilink_same_page_fragment_is_slugged
+//   - markdown_link_fragment_stays_raw_not_slugged
+//   - wikilink_block_ref_keeps_id_raw
+//   - wikilink_cjk_fragment_preserved
+//   - slug_wikilink_suffix_preserves_query
 //
-// ==> The REAL guards for `[[Page#Heading]]` text-link slugging live in
-//     `crates/moss-core/src/ast/resolve_urls.rs`:
-//       - wikilink_cross_page_fragment_is_slugged
-//       - wikilink_same_page_fragment_is_slugged
-//       - markdown_link_fragment_stays_raw_not_slugged
-//       - wikilink_block_ref_keeps_id_raw
-//       - wikilink_cjk_fragment_preserved
-//       - slug_wikilink_suffix_preserves_query
-//
-// These three tests are kept because `build_anchor` is real code worth
-// locking (it mirrors `slug_wikilink_suffix`, and a plugin/CLI caller
-// could pass `is_embed: false`), NOT because they cover the live link
-// path. Their names are deliberately `build_anchor_*` so a future reader
-// is not misled into thinking text-link resolution is guarded here.
+// These tests lock `build_anchor` (it mirrors `slug_wikilink_suffix`, and a
+// plugin/CLI caller could pass `is_embed: false`); they do not cover the live
+// link path, hence the `build_anchor_*` names.
 
 #[test]
 fn build_anchor_slugs_section_fragment() {
@@ -427,7 +420,7 @@ fn dispatch_video_extension_routes_to_synth() {
 #[test]
 fn dispatch_pdf_extension_routes_to_synth() {
     // See `dispatch_video_extension_routes_to_synth` for the PR4.5
-    // routing rationale. PdfRenderer emits an `<object type="application/pdf">`.
+    // routing rationale. The pdf synthesizer emits an `<object type="application/pdf">`.
     let graph = build_graph(&["report.pdf"]);
     let emit = dispatch_wikilink_embed(
         "report.pdf",
@@ -579,8 +572,7 @@ fn dispatch_video_sizing_alias_propagates_dims() {
 
 // --- Image display-attr dispatch (fit / position threading) ----------
 //
-// The polish-pass plan (docs/archive/2026-05-27-polish-passes-followups.md
-// Item B) flagged that `![[hero.jpg|cover]]` and
+// The polish-pass plan flagged that `![[hero.jpg|cover]]` and
 // `![[hero.jpg|fit=cover position=left]]` were silently dropping
 // fit/position. `ImageRenderer::render_to_markdown` builds `TitleParams`
 // from the alias / pothole, then explicitly discards them with
@@ -726,6 +718,18 @@ fn dispatch_image_width_token_preserved_as_data_width() {
 }
 
 #[test]
+fn dispatch_image_percent_wins_over_a_width_token() {
+    use crate::ast::node::Block;
+    let emit = dispatch_img(Some("wide|40%"));
+    match figure_of(&emit) {
+        Block::Figure { width, .. } => assert_eq!(width.as_deref(), Some("40%")),
+        other => panic!("expected Figure, got {other:?}"),
+    }
+    let html = render_figure(&emit);
+    assert!(!html.contains("data-width"), "got: {html}");
+}
+
+#[test]
 fn dispatch_image_cover_emits_object_fit_on_inner_img() {
     use crate::ast::node::Block;
     let emit = dispatch_img(Some("cover"));
@@ -786,24 +790,184 @@ fn dispatch_image_two_word_position_combines() {
     }
 }
 
+/// One row of the image-pothole vocabulary table below.
+struct PotholeRow {
+    /// The pipe text after `![[photo.jpg|`.
+    alias: &'static str,
+    /// `Block::Figure.width` — a named token (`wide`) or a percent (`33%`).
+    width: Option<&'static str>,
+    /// `Block::Figure.align` — the full CSS class, or `None` for no float.
+    align: Option<&'static str>,
+    /// The `<figcaption>` text, or `None` when the whole pothole was display
+    /// vocabulary.
+    caption: Option<&'static str>,
+    /// A fragment the inner `<img>`'s `style=` must contain (object-fit /
+    /// object-position), or `None` when the image carries no inline style.
+    img_style: Option<&'static str>,
+}
+
+/// Every spelling of the image pothole in one place: width, float alignment,
+/// the float's own percent size, and the caption — in every order and
+/// combination moss accepts, plus the width vocabulary on its own.
+///
+/// Width and alignment are independent of each other and of the caption, and
+/// a segment may combine them (`align-right 33%`). The percent form tolerates
+/// a space before the sign (`55 %`), because `parse_image_width` does.
+const POTHOLE_TABLE: &[PotholeRow] = &[
+    PotholeRow {
+        alias: "align-right",
+        width: None,
+        align: Some("moss-align-right"),
+        caption: None,
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "align-right wide",
+        width: Some("wide"),
+        align: Some("moss-align-right"),
+        caption: None,
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "align-right cover",
+        width: None,
+        align: Some("moss-align-right"),
+        caption: None,
+        img_style: Some("object-fit:cover"),
+    },
+    PotholeRow {
+        alias: "align-right 33%",
+        width: Some("33%"),
+        align: Some("moss-align-right"),
+        caption: None,
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "align-right|A caption",
+        width: None,
+        align: Some("moss-align-right"),
+        caption: Some("A caption"),
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "A caption|align-right",
+        width: None,
+        align: Some("moss-align-right"),
+        caption: Some("A caption"),
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "align-right|wide|A caption",
+        width: Some("wide"),
+        align: Some("moss-align-right"),
+        caption: Some("A caption"),
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "align-right|33%|A caption",
+        width: Some("33%"),
+        align: Some("moss-align-right"),
+        caption: Some("A caption"),
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "wide|A caption",
+        width: Some("wide"),
+        align: None,
+        caption: Some("A caption"),
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "33%|A caption",
+        width: Some("33%"),
+        align: None,
+        caption: Some("A caption"),
+        img_style: None,
+    },
+    // A width has to stand alone in its own segment or be paired with other
+    // display vocabulary; a percent trailing prose stays part of the prose.
+    PotholeRow {
+        alias: "Caption 55%",
+        width: None,
+        align: None,
+        caption: Some("Caption 55%"),
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "55 %|Caption",
+        width: Some("55%"),
+        align: None,
+        caption: Some("Caption"),
+        img_style: None,
+    },
+    // The width vocabulary on its own — percent, fractional percent, and the
+    // `full` spelling that canonicalises to `screen`.
+    PotholeRow {
+        alias: "100%",
+        width: Some("100%"),
+        align: None,
+        caption: None,
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "50.5%",
+        width: Some("50.5%"),
+        align: None,
+        caption: None,
+        img_style: None,
+    },
+    PotholeRow {
+        alias: "full",
+        width: Some("screen"),
+        align: None,
+        caption: None,
+        img_style: None,
+    },
+];
+
 #[test]
-fn dispatch_image_wide_cover_combines_width_and_fit() {
-    use crate::ast::node::Block;
-    // width → figure data-width; fit → inner <img> style. Both survive
-    // (the pre-collapse fast-path DROPPED width when fit was present).
-    let emit = dispatch_img(Some("wide cover"));
-    match figure_of(&emit) {
-        Block::Figure {
-            width, img_style, ..
-        } => {
-            assert_eq!(width.as_deref(), Some("wide"));
-            assert_eq!(img_style.as_deref(), Some("object-fit:cover"));
+fn image_pothole_vocabulary_table() {
+    use crate::ast::node::{Block, Inline};
+    let mut failures: Vec<String> = Vec::new();
+    for row in POTHOLE_TABLE {
+        let emit = dispatch_img(Some(row.alias));
+        let Block::Figure {
+            width,
+            align,
+            caption,
+            img_style,
+            ..
+        } = figure_of(&emit)
+        else {
+            failures.push(format!("{:?}: not a Figure", row.alias));
+            continue;
+        };
+        let got_caption: Option<&str> = caption.as_ref().and_then(|c| match c.as_slice() {
+            [Inline::Text(t)] => Some(t.as_str()),
+            _ => None,
+        });
+        let mut row_failures: Vec<String> = Vec::new();
+        if width.as_deref() != row.width {
+            row_failures.push(format!("width {:?} != {:?}", width.as_deref(), row.width));
         }
-        other => panic!("expected Figure, got {other:?}"),
+        if align.as_deref() != row.align {
+            row_failures.push(format!("align {:?} != {:?}", align.as_deref(), row.align));
+        }
+        if got_caption != row.caption {
+            row_failures.push(format!("caption {:?} != {:?}", got_caption, row.caption));
+        }
+        match (img_style.as_deref(), row.img_style) {
+            (Some(got), Some(want)) if got.contains(want) => {}
+            (None, None) => {}
+            (got, want) => {
+                row_failures.push(format!("img_style {:?} != {:?}", got, want));
+            }
+        }
+        if !row_failures.is_empty() {
+            failures.push(format!("{:?}: {}", row.alias, row_failures.join("; ")));
+        }
     }
-    let html = render_figure(&emit);
-    assert!(html.contains(r#"data-width="wide""#), "got: {html}");
-    assert!(html.contains("object-fit:cover"), "got: {html}");
+    assert!(failures.is_empty(), "{} row(s) wrong:\n{}", failures.len(), failures.join("\n"));
 }
 
 #[test]
@@ -816,40 +980,85 @@ fn dispatch_image_inner_img_has_single_style_attr() {
     assert_eq!(n, 1, "exactly one style= attr, got {n}: {html}");
 }
 
-// Editor Image UX (2026-06-04): wikilink `|NN%` percent width carries
-// into Block::Figure.width instead of leaking into the caption.
-// -------------------------------------------------------------------
+// --- Captions on non-image embeds -------------------------------------
 
-#[test]
-fn wikilink_image_percent_carries_width() {
-    use crate::ast::node::Block;
-    // ![[pic.jpg|55%]] → Figure { width: Some("55%") }, no bogus caption
-    let emit = dispatch_img(Some("55%"));
-    match figure_of(&emit) {
-        Block::Figure { width, caption, .. } => {
-            assert_eq!(width.as_deref(), Some("55%"));
-            assert!(caption.is_none(), "percent must not become a caption");
-        }
-        other => panic!("expected Figure, got {other:?}"),
+fn dispatch_embed(file: &str, alias: Option<&str>) -> EmitKind {
+    let graph = build_graph(&["report.pdf", "clip.mp4", "widget.html"]);
+    dispatch_wikilink_embed(file, alias, true, &graph, "index.md", &empty_snapshot()).output
+}
+
+/// Unwrap a captioned dispatch. Asserts the caption→`HtmlFigure` invariant
+/// itself, not just the HTML shape below: a regression that kept emitting
+/// `Html` for a captioned embed would still produce figure-shaped HTML text
+/// (`wrap_embed_with_caption` didn't change), so a string-only assertion
+/// can't see it — but the mid-paragraph splice guard
+/// (`ast::dispatch_wikilink_embeds`) reads the variant, not the string, and
+/// a caption reaching it as `Html` would be spliced straight into a `<p>`.
+fn expect_figure(emit: EmitKind) -> String {
+    match emit {
+        EmitKind::HtmlFigure(s) => s,
+        other => panic!("expected HtmlFigure (captioned embed), got {other:?}"),
+    }
+}
+
+/// Unwrap an uncaptioned dispatch, asserting it is bare `Html` (not
+/// figure-wrapped) — the mirror check to [`expect_figure`].
+fn expect_bare(emit: EmitKind) -> String {
+    match emit {
+        EmitKind::Html(s) => s,
+        other => panic!("expected Html (uncaptioned embed), got {other:?}"),
     }
 }
 
 #[test]
-fn wikilink_image_percent_with_caption() {
-    use crate::ast::node::{Block, Inline};
-    // ![[pic.jpg|My cap|55%]] → width Some("55%"), caption "My cap"
-    let emit = dispatch_img(Some("My cap|55%"));
-    match figure_of(&emit) {
-        Block::Figure { width, caption, .. } => {
-            assert_eq!(width.as_deref(), Some("55%"));
-            let cap = caption.as_ref().expect("caption present");
-            assert!(
-                matches!(cap.as_slice(), [Inline::Text(t)] if t == "My cap"),
-                "caption should be the non-width segment, got {cap:?}"
-            );
-        }
-        other => panic!("expected Figure, got {other:?}"),
-    }
+fn a_captioned_embed_wears_its_placement_on_the_figure_not_the_element() {
+    let html = expect_figure(dispatch_embed("clip.mp4", Some("align-right 25%|Some caption")));
+    let figure_open = r#"<figure class="moss-embed-figure moss-align-right" style="width:25%">"#;
+    assert!(html.starts_with(figure_open), "got: {html}");
+    assert!(html.contains("<figcaption>Some caption</figcaption>"), "got: {html}");
+    // The float class AND the size sit on the figure alone; the video wears
+    // neither, or a figure with no width of its own shrinks to fit it and
+    // the 50% float cap then caps that shrunk box instead of the real 25%.
+    let after_figure_tag = &html[figure_open.len()..];
+    assert!(!after_figure_tag.contains(r#"moss-embed-video moss-align-right"#), "got: {html}");
+    assert!(
+        !after_figure_tag.contains(r#"style="width:25%""#),
+        "video must not carry the size: {html}"
+    );
+}
+
+#[test]
+fn a_captioned_embed_still_escapes_the_content_column() {
+    // The case a naive wrapper breaks: `article.container > [data-width]`
+    // is a direct-child selector, so `data-width` has to be on the figure.
+    let html = expect_figure(dispatch_embed("report.pdf", Some("wide|A caption")));
+    assert!(
+        html.starts_with(r#"<figure class="moss-embed-figure" data-width="wide">"#),
+        "got: {html}"
+    );
+    assert!(!html.contains(r#"<object class="moss-embed" data-type="pdf" data-width"#), "got: {html}");
+    assert!(html.contains("<figcaption>A caption</figcaption>"), "got: {html}");
+}
+
+#[test]
+fn an_uncaptioned_embed_wears_its_placement_directly() {
+    let html = expect_bare(dispatch_embed("clip.mp4", Some("align-right 25%")));
+    assert!(!html.contains("moss-embed-figure"), "no wrapper without a caption: {html}");
+    assert!(html.contains("moss-embed-video moss-align-right"), "got: {html}");
+    assert!(html.contains(r#"style="width:25%""#), "got: {html}");
+}
+
+#[test]
+fn a_pothole_with_no_placement_keeps_meaning_exactly_what_it_did() {
+    // An iframe title and a sizing hint are not captions, and adding the
+    // caption grammar must not turn them into ones.
+    let html = expect_bare(dispatch_embed("widget.html", Some("My Widget")));
+    assert!(html.contains(r#"title="My Widget""#), "got: {html}");
+    assert!(!html.contains("figcaption"), "got: {html}");
+
+    let html = expect_bare(dispatch_embed("clip.mp4", Some("wide|640x360")));
+    assert!(html.contains(r#"width="640px""#), "got: {html}");
+    assert!(!html.contains("figcaption"), "got: {html}");
 }
 
 // --- External URL dispatch ---

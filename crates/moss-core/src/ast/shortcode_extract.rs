@@ -88,7 +88,10 @@ fn parse_shortcode_block(
     match name {
         "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), vec![]),
         "buttons" => (Some(Shortcode::Buttons(parse_buttons_body(args, body))), vec![]),
-        "gallery" => (Some(Shortcode::Gallery(parse_gallery_body(args, body))), vec![]),
+        "gallery" => {
+            let (sc, warns) = parse_gallery_body(args, body);
+            (Some(Shortcode::Gallery(sc)), warns)
+        }
         "hero" => {
             // Body media lines are the CANONICAL multi-slide grammar (the
             // only way to express a crossfading hero), not a deprecated
@@ -101,6 +104,14 @@ fn parse_shortcode_block(
                     warns.push(format!(
                         "shortcode `:::hero` has unrecognized `mobile={v}`. \
                          Only `mobile=overlay` is recognized. The attribute is ignored."
+                    ));
+                }
+            }
+            if let Some(ref v) = sc.align {
+                if v != "end" {
+                    warns.push(format!(
+                        "shortcode `:::hero` has unrecognized `align={v}`. \
+                         Only `align=end` is recognized. The attribute is ignored."
                     ));
                 }
             }
@@ -146,17 +157,43 @@ pub fn parse_recent_args(args: &str, body: &str) -> RecentShortcode {
     }
 }
 
+/// Reads the `per-line=` column-count attribute, with the deprecated
+/// `cols=` spelling as a fallback. Shared between `:::grid` and
+/// `:::gallery` so the alias and its warning exist in exactly one place.
+///
+/// `per-line` is the current name — under vertical typesetting the grid's
+/// tracks run along the line, not down a "column", so "N per line" is true
+/// in both writing modes where "N columns" is not. When both are written,
+/// `per-line` wins, but the second element is still `true` — the author
+/// wrote the deprecated key, so they still see the warning even though it
+/// lost the value.
+fn per_line_attr<'a>(parsed: &'a super::attrs::AttrBlock) -> (Option<&'a str>, bool) {
+    let cols = parsed.get("cols");
+    (parsed.get("per-line").or(cols), cols.is_some())
+}
+
+/// Deprecation warning for the `cols=` alias, shared between `:::grid` and
+/// `:::gallery` so the message can't drift between the two shortcodes.
+fn cols_alias_warning(shortcode_name: &str) -> String {
+    format!(
+        "shortcode `:::{shortcode_name}` uses `cols=` (deprecated). \
+         Use `per-line=` or the positional form `:::{shortcode_name} 3`."
+    )
+}
+
 /// Parse a `:::grid` block.
 ///
 /// Args parsing supports both:
 /// - **Positional** (legacy moss-releases): `:::grid 2 1:2 {.classes}` —
 ///   first token is column count, second optional token is the ratio.
-/// - **Attribute** (new grammar): `:::grid {cols=2}` or `:::grid {cols=1:1:2}` —
-///   `cols=integer` sets the column count; `cols=ratio` sets both the
-///   ratio and the count (= ratio length).
+/// - **Attribute** (current grammar): `:::grid {per-line=2}` or
+///   `:::grid {per-line=1:1:2}` — `per-line=integer` sets the column
+///   count; `per-line=ratio` sets both the ratio and the count (= ratio
+///   length). `cols=` is a deprecated alias for `per-line=` — see
+///   [`per_line_attr`].
 ///
 /// Cells are split on lines containing only `+++` (new grammar) or
-/// `---` (legacy moss-releases). Step 3 of #613 rewrites `---` to `+++`
+/// `---` (legacy moss-releases). A migration step rewrites `---` to `+++`
 /// in moss-releases content; the parser accepts both during the
 /// migration window.
 ///
@@ -164,7 +201,8 @@ pub fn parse_recent_args(args: &str, body: &str) -> RecentShortcode {
 /// when any `---` legacy divider was encountered (triggers a deprecation
 /// warning), and the `Vec<String>` carries warnings collected while
 /// re-parsing cell bodies as fragments (e.g. a misspelled shortcode nested
-/// inside a cell) — see [`parse_cell_to_blocks`].
+/// inside a cell) — see [`parse_cell_to_blocks`] — plus the `cols=`
+/// deprecation warning when that alias was written.
 fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, bool, Vec<String>) {
     let trimmed = args.trim();
     let (positional, attr_block): (&str, &str) = if let Some(pos) = trimmed.find('{') {
@@ -182,11 +220,14 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
     };
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
+    let scroll = parsed.scroll;
+    let label = parsed.get("label").map(str::to_string);
 
     let mut columns: u32 = 1;
     let mut ratio: Option<String> = None;
+    let (per_line_value, used_cols_alias) = per_line_attr(&parsed);
 
-    if let Some(cols_value) = parsed.get("cols") {
+    if let Some(cols_value) = per_line_value {
         if cols_value.contains(':') {
             ratio = Some(cols_value.to_string());
             columns = cols_value.split(':').count() as u32;
@@ -218,7 +259,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
     //
     // - A "compound-link" cell whose entire content is wrapped in a markdown
     //   link `[inner](url)` and whose `inner` carries block-level content
-    //   (image + heading + paragraphs — the SoCiviC pattern). CommonMark's
+    //   (image + heading + paragraphs — the poster-card pattern). CommonMark's
     //   inline parser cannot represent a `[](url)` with `### heading` inside,
     //   so we detect this shape at the cell-string level FIRST and emit a
     //   typed [`Block::LinkCard { url, children }`] where `children` is the
@@ -236,6 +277,9 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
             blocks
         })
         .collect();
+    if used_cols_alias {
+        fragment_warnings.push(cols_alias_warning("grid"));
+    }
 
     (
         GridShortcode {
@@ -244,6 +288,8 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
             classes,
             cells,
             width,
+            scroll,
+            label,
         },
         found_legacy_dash,
         fragment_warnings,
@@ -367,11 +413,8 @@ fn detect_bare_url_cell(cell_text: &str) -> Option<String> {
 /// image-link-plus-caption shape described below; it is `""` for the
 /// classic whole-cell-is-the-link shape.
 ///
-/// Ported from src-tauri's `crate::build::markdown::typed_renderers::
-/// detect_compound_link` (Phase 4 PR4.5, 2026-05-28) — the AST-level
-/// equivalent of the same string-level detection. The src-tauri version
-/// is deleted in PR4.5. NOT the general cure for `[![[x.png]]](/url)` —
-/// [`super::linked_embed`] is; this is the block-level grid *card*.
+/// NOT the general cure for `[![[x.png]]](/url)` — [`super::linked_embed`]
+/// is; this is the block-level grid *card*.
 ///
 /// Safety rules that cause this function to return `None`:
 /// - Cell contains a top-level code fence (\`\`\` or ~~~).
@@ -385,7 +428,7 @@ fn detect_bare_url_cell(cell_text: &str) -> Option<String> {
 /// - There is content after the closing `)`, separated by a blank line,
 ///   but the inner content does not lead with a WIKILINK image (`![[`).
 ///   Trailing caption paragraphs are only recognized for this exact shape,
-///   the image-card-plus-caption cell (see moss#928-adjacent). A cell led by
+///   the image-card-plus-caption cell. A cell led by
 ///   an ordinary markdown image (`![alt](src)`) is deliberately excluded:
 ///   pulldown-cmark parses `![alt](src)` fine on its own, so
 ///   `[![alt](src)](url)\n\ncaption` already reaches the plain block
@@ -589,7 +632,7 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
 /// grammar) or `---` (legacy moss-releases backward-compat).
 ///
 /// Mirrors [`super::cells::split_cells`] but accepts either divider.
-/// Step 3 of #613 rewrites `---` to `+++` in moss-releases content;
+/// A migration step rewrites `---` to `+++` in moss-releases content;
 /// after that, this helper retires in favor of `split_cells`.
 ///
 /// **A divider only counts when it belongs to THIS grid.** A `+++` inside a
@@ -664,7 +707,7 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
 ///
 /// The structural half of rename tracking: these paths carry NO markdown
 /// reference syntax, so [`crate::resolve::md_extract::extract_md_references`]
-/// cannot see them and a rename silently broke them. Offsets are absolute in
+/// cannot see them and a rename would silently break them. Offsets are absolute in
 /// `source`; the body is never joined, so CRLF sources are exact by
 /// construction (unlike `extract_with_state`, which parses a
 /// `lines().join("\n")` copy and destroys offsets one level above the
@@ -693,6 +736,28 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
 ///
 /// Kept in step with the parsers by `spans_agree_with_parsers`.
 pub fn shortcode_asset_spans(source: &str) -> Vec<AssetPathSpan> {
+    structural_asset_spans(source, StructuralAssetMode::RenameSuperset)
+}
+
+/// Byte-offset media paths which the shortcode parser actually renders.
+///
+/// Unlike [`shortcode_asset_spans`], this follows the parser's ownership of
+/// nested blocks: CSS and unknown wrappers recurse, grids recurse into their
+/// parsed bodies, and a recognized hero or gallery owns its body. It is for
+/// source evidence, where reporting a path from an unrendered unknown shape
+/// would create a false blocking error; rename tracking deliberately has the
+/// broader contract above.
+pub fn authored_asset_spans(source: &str) -> Vec<AssetPathSpan> {
+    structural_asset_spans(source, StructuralAssetMode::Rendered)
+}
+
+#[derive(Clone, Copy)]
+enum StructuralAssetMode {
+    RenameSuperset,
+    Rendered,
+}
+
+fn structural_asset_spans(source: &str, mode: StructuralAssetMode) -> Vec<AssetPathSpan> {
     let mask = crate::inert_regions::mask_inert(source);
     // Line table over the RAW source. Index-aligned with `str::lines()`, but
     // additionally carrying each line's absolute base and terminator length
@@ -700,56 +765,93 @@ pub fn shortcode_asset_spans(source: &str) -> Vec<AssetPathSpan> {
     let table = line_table(source);
     let mask_lines: Vec<&str> = mask.lines().collect();
     let mut out = Vec::new();
-    let mut i = 0;
+    collect_structural_asset_spans(
+        source, &mask, &table, &mask_lines, 0, table.len(), mode, &mut out,
+    );
+    out.sort_by_key(|span| span.value.start);
+    out
+}
 
-    while i < table.len() {
-        let Some(mline) = mask_lines.get(i) else { break };
-        let Some((arity, name, single_line_args)) = parse_shortcode_opener(mline.trim()) else {
+fn collect_structural_asset_spans(
+    source: &str,
+    mask: &str,
+    table: &[(usize, usize, usize)],
+    mask_lines: &[&str],
+    start: usize,
+    end: usize,
+    mode: StructuralAssetMode,
+    out: &mut Vec<AssetPathSpan>,
+) {
+    let mut i = start;
+    while i < end {
+        let Some(block) = structural_block_at(mask_lines, i, end) else {
             i += 1;
             continue;
         };
-
-        // Where does the opener's attribute block end? Reuse the extractor's
-        // own ladder so a multi-line `{ … }` is measured identically.
-        let (_, opener_lines_consumed) =
-            gather_multi_line_attrs(single_line_args, &mask_lines[i + 1..]);
-        let body_start = i + 1 + opener_lines_consumed;
-
-        // Matching closer at this arity.
-        let mut close = None;
-        for j in body_start..table.len() {
-            if is_close_fence(mask_lines.get(j).map_or("", |l| l.trim()), arity) {
-                close = Some(j);
-                break;
-            }
-        }
-        let Some(j) = close else {
-            // Unclosed: `extract_with_state` emits the block verbatim, so
-            // nothing inside it is live. Descend in place.
+        let Some(close) = block.close else {
+            // Matches extract_with_state: an unclosed opener is literal and
+            // scanning resumes on its next physical line.
             i += 1;
             continue;
         };
-
-        match name {
+        match block.name {
             "gallery" => {
-                for k in body_start..j {
-                    if let Some(span) = gallery_body_span(source, &table, k) {
+                for line in block.body_start..close {
+                    if let Some(span) = gallery_body_span(source, table, line) {
                         out.push(span);
                     }
                 }
-                i = j + 1;
             }
-            "hero" => {
-                super::extract_hero::hero_asset_spans(source, &mask, &table, i, body_start, j, &mut out);
-                i = j + 1;
+            "hero" => super::extract_hero::hero_asset_spans(
+                source, mask, table, i, block.body_start, close, out,
+            ),
+            // These are the only containers whose parser re-parses body
+            // markdown. Other typed shortcodes own their body as data.
+            "grid" | "" if matches!(mode, StructuralAssetMode::Rendered) => {
+                collect_structural_asset_spans(
+                    source, mask, table, mask_lines, block.body_start, close, mode, out,
+                )
             }
-            // Unknown / CssRegion / other typed block: descend in place so a
-            // gallery nested inside it is still found.
-            _ => i += 1,
+            name if !is_typed_known(name) && matches!(mode, StructuralAssetMode::Rendered) => {
+                collect_structural_asset_spans(
+                    source, mask, table, mask_lines, block.body_start, close, mode, out,
+                )
+            }
+            _ if matches!(mode, StructuralAssetMode::RenameSuperset) => {
+                // Rename follows every physical line after a non-media block,
+                // deliberately finding paths the renderer will not own.
+                i += 1;
+                continue;
+            }
+            _ => {}
         }
+        i = close + 1;
     }
+}
 
-    out
+struct StructuralBlock<'a> {
+    name: &'a str,
+    body_start: usize,
+    close: Option<usize>,
+}
+
+/// Parse one block boundary using the same multi-line-attribute and
+/// same-arity-closer rules as `extract_with_state`.
+fn structural_block_at<'a>(
+    mask_lines: &'a [&str],
+    opener: usize,
+    end: usize,
+) -> Option<StructuralBlock<'a>> {
+    let line = mask_lines.get(opener)?;
+    let (arity, name, args) = parse_shortcode_opener(line.trim())?;
+    let (_, attrs_lines) = gather_multi_line_attrs(args, &mask_lines[opener + 1..end]);
+    let body_start = opener + 1 + attrs_lines;
+    if body_start > end {
+        return Some(StructuralBlock { name, body_start, close: None });
+    }
+    let close = (body_start..end)
+        .find(|&line| is_close_fence(mask_lines.get(line).map_or("", |line| line.trim()), arity));
+    Some(StructuralBlock { name, body_start, close })
 }
 
 /// One `:::gallery` body line → an [`AssetPathSpan`], or `None`.
@@ -864,16 +966,23 @@ pub(crate) fn gallery_item_span(line: &str) -> Option<MediaLineSpan> {
     }
 }
 
-fn parse_gallery_body(args: &str, body: &str) -> GalleryShortcode {
-    // Args: `N {.classes width}` where N is optional columns count and
-    // `width` is one of the spec § P9 width tokens (handled inside
-    // `split_positional_and_classes`).
-    let (positional, classes, width) = split_positional_classes_and_width(args);
-    let columns = if positional.is_empty() {
-        None
-    } else {
-        positional.parse::<u32>().ok()
-    };
+/// Parse a `:::gallery` block.
+///
+/// Args: `N {.classes width per-line=N}` where `N` is optional column
+/// count and `width` is one of the spec § P9 width tokens (handled inside
+/// [`split_positional_classes_width_and_per_line`]). `per-line=` wins over
+/// a positional `N` when both are present; `cols=` is a deprecated alias
+/// for `per-line=` — see [`per_line_attr`].
+///
+/// Returns the shortcode plus any deprecation warnings (currently just the
+/// `cols=` alias warning, when that key was written).
+fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>) {
+    let attrs = split_positional_classes_width_and_per_line(args);
+    let columns = attrs
+        .per_line
+        .as_deref()
+        .or(if attrs.positional.is_empty() { None } else { Some(attrs.positional.as_str()) })
+        .and_then(|v| v.parse::<u32>().ok());
     let mut items: Vec<GalleryItem> = Vec::new();
     for line in body.lines() {
         if let Some(it) = gallery_item_span(line) {
@@ -884,22 +993,45 @@ fn parse_gallery_body(args: &str, body: &str) -> GalleryShortcode {
             });
         }
     }
-    GalleryShortcode {
-        columns,
-        classes,
-        items,
-        width,
+    let mut warnings = Vec::new();
+    if attrs.used_cols_alias {
+        warnings.push(cols_alias_warning("gallery"));
     }
+    (
+        GalleryShortcode {
+            columns,
+            classes: attrs.classes,
+            items,
+            width: attrs.width,
+        },
+        warnings,
+    )
 }
 
-/// Split `args` into `(positional_text, classes, width)`.
+/// [`split_positional_classes_width_and_per_line`]'s result.
+struct GalleryPositionalAttrs {
+    positional: String,
+    classes: String,
+    width: Option<String>,
+    /// Resolved `per-line=` value, with `cols=` as a fallback — see
+    /// [`per_line_attr`].
+    per_line: Option<String>,
+    /// Whether `cols=` was written (whichever value won), so the caller
+    /// knows to emit the deprecation warning.
+    used_cols_alias: bool,
+}
+
+/// Split `args` into positional text, classes, the spec § P9 width token,
+/// and the resolved `per-line=`/`cols=` column count.
 ///
-/// Same routing as [`split_positional_and_classes`], but also surfaces the
-/// spec § P9 width token (`body | wide | page | screen`, with `full`
-/// aliased to `screen`). Returns `width = None` when the author did not
-/// set one, or when the legacy fallback path fires (malformed attrs
-/// where the structured parser bailed).
-fn split_positional_classes_and_width(args: &str) -> (String, String, Option<String>) {
+/// Same routing as [`split_positional_and_classes`]. `width` and `per_line`
+/// are `None` when the author did not set them, or when the legacy
+/// fallback path fires (malformed attrs where the structured parser
+/// bailed) — that path only recovers `.class` tokens, on the same
+/// reasoning the width token already skipped: malformed enough to bail
+/// means the author's intent is unclear, and omitting is safer than
+/// guessing.
+fn split_positional_classes_width_and_per_line(args: &str) -> GalleryPositionalAttrs {
     let trimmed = args.trim();
     if let Some(brace_start) = trimmed.find('{') {
         #[allow(clippy::string_slice)]
@@ -910,16 +1042,15 @@ fn split_positional_classes_and_width(args: &str) -> (String, String, Option<Str
             #[allow(clippy::string_slice)]
             let attr_block_str = &trimmed[brace_start..=brace_start + brace_end];
             if let Ok(parsed) = super::attrs::parse_attrs(attr_block_str) {
-                return (
+                let (per_line, used_cols_alias) = per_line_attr(&parsed);
+                return GalleryPositionalAttrs {
                     positional,
-                    parsed.class_string(),
-                    parsed.width.map(str::to_string),
-                );
+                    classes: parsed.class_string(),
+                    width: parsed.width.map(str::to_string),
+                    per_line: per_line.map(str::to_string),
+                    used_cols_alias,
+                };
             }
-            // Legacy fallback for malformed inputs: scan only for `.class`.
-            // Width tokens are skipped here on purpose — if attrs are
-            // malformed enough to bail, the author's intent is unclear and
-            // omitting the width is safer than guessing.
             #[allow(clippy::string_slice)]
             let inner = &trimmed[brace_start + 1..brace_start + brace_end];
             let mut classes = Vec::new();
@@ -930,10 +1061,22 @@ fn split_positional_classes_and_width(args: &str) -> (String, String, Option<Str
                     }
                 }
             }
-            return (positional, classes.join(" "), None);
+            return GalleryPositionalAttrs {
+                positional,
+                classes: classes.join(" "),
+                width: None,
+                per_line: None,
+                used_cols_alias: false,
+            };
         }
     }
-    (trimmed.to_string(), String::new(), None)
+    GalleryPositionalAttrs {
+        positional: trimmed.to_string(),
+        classes: String::new(),
+        width: None,
+        per_line: None,
+        used_cols_alias: false,
+    }
 }
 
 /// Split `args` into `(positional_text, classes)` from `{...}` syntax.
@@ -1196,7 +1339,7 @@ fn extract_with_state(
     // this module used to track fenced code itself and knew nothing about
     // HTML comments, which is how a `:::gallery` inside an authored
     // `<!-- TODO … -->` block got extracted, spliced a sentinel into the
-    // middle of the comment, and deleted the rest of the page (#903 bug 2).
+    // middle of the comment, and deleted the rest of the page.
     let inert = crate::inert_regions::inert_lines(markdown);
     let is_inert = |idx: usize| inert.get(idx).copied().unwrap_or(false);
     let mut i = 0;
@@ -1271,7 +1414,7 @@ fn extract_with_state(
             // the fence we just stopped on belongs to THAT block, and this
             // one ended early. Nothing about the parse changes; the author
             // just gets told, because the page still builds and only looks
-            // wrong (stray `+++`, cells outside the grid). See #1014.
+            // wrong (stray `+++`, cells outside the grid).
             if let Some(inner) = nested_same_arity {
                 warnings.push(nested_arity_warning(arity, trimmed, inner));
             }
@@ -1296,7 +1439,7 @@ fn extract_with_state(
             if name.is_empty() {
                 // CssRegion (Task D). Recurse into the body so typed
                 // shortcodes nested inside the styling wrapper (the
-                // common SoCiviC pattern of `:::{.support-band}` around
+                // common site pattern of `:::{.support-band}` around
                 // `::::buttons`) also get extracted into sentinels.
                 // Higher-arity inner blocks survive because the outer
                 // closer-search only matches the outer's exact arity;
@@ -1329,7 +1472,7 @@ fn extract_with_state(
                     // preview scroll sync (the home page grid scrolled the preview
                     // to the bottom). Trailing blank lines after the sentinel HTML
                     // comment produce no pulldown-cmark events, so the AST is
-                    // unchanged. See docs/reference/editor-preview-sync.md.
+                    // unchanged.
                     for _ in 0..(j - i) {
                         output.push('\n');
                     }
@@ -1379,7 +1522,7 @@ fn extract_with_state(
     output
 }
 
-/// Word the "this block ended at someone else's fence" warning (#1014).
+/// Word the "this block ended at someone else's fence" warning.
 ///
 /// `arity` and `outer_line` describe the OUTER opener; `inner_line` is the
 /// trimmed text of the nested opener that has the same colon count. Says what

@@ -3,8 +3,6 @@
 //! Pure Rust, zero I/O. Consumed by:
 //!   - the build pipeline (scan pass, card renderer, series-nav)
 //!   - the editor form (to show "inferred: date" next to undeclared sort:)
-//!
-//! See docs/archive/2026-05-17-listing-sort-and-embeds-design.md.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,9 +10,29 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "lowercase")]
 pub enum SortAxis {
+    /// Newest first — the default, and the only direction before `DateAsc`
+    /// existed.
     Date,
+    /// Oldest first. A second, sibling axis rather than a flag on `Date`: a
+    /// reader picks `sort:` from one flat list of tokens, and `date-asc`
+    /// reads the same way `date`/`weight`/`title` already do. Presents
+    /// identically to `Date` everywhere but the comparator's direction — see
+    /// [`SortAxis::shows_date`].
+    #[serde(rename = "date-asc")]
+    DateAsc,
     Weight,
     Title,
+}
+
+impl SortAxis {
+    /// True for either date axis — `Date` and `DateAsc` present identically
+    /// (a compact date in the card meta slot, auto-year-grouping), and only
+    /// [`cmp_date_axis`]'s direction tells them apart. Callers deciding
+    /// "does this listing show a date" call this instead of comparing to
+    /// `Date` alone, so `DateAsc` is never silently treated like `Weight`/`Title`.
+    pub fn shows_date(&self) -> bool {
+        matches!(self, Self::Date | Self::DateAsc)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,7 +66,7 @@ impl ResolvedSort {
     }
 }
 
-/// Minimal document trait for sort inference. Both src-tauri's
+/// Minimal document trait for sort inference. Both moss-build's
 /// ParsedDocument and the editor's in-memory document model implement this.
 pub trait SortableDoc {
     fn url_path(&self) -> &str;
@@ -65,6 +83,28 @@ pub trait SortableDoc {
     fn is_folder_index(&self) -> bool {
         false
     }
+
+    /// The name an explicit `sort: [a, b, c]` list matches this child
+    /// against. Defaults to `clean_stem()`, correct for a leaf — its own
+    /// filename is exactly what an author types to name it.
+    ///
+    /// A folder index is the case this default gets wrong: its home file is
+    /// very often literally `index.md` (the generic convention, not a
+    /// self-named file), so its `clean_stem()` is the fixed string
+    /// `"index"` — never what an author would write to name the folder
+    /// itself. `render/html.rs`'s own "every folder index's clean_stem is
+    /// 'index'" comment already routes around this same fact for sibling
+    /// identity; an explicit-order list must do the same, or a folder named
+    /// in the list silently falls through to the inferred axis instead of
+    /// keeping its declared position — invisible in a flat folder (an
+    /// article's `clean_stem` already matches), and only visible once the
+    /// matching child is itself a folder.
+    ///
+    /// An implementor whose `url_path()` can name the folder some other way
+    /// should override this; the default keeps today's behavior.
+    fn order_match_name(&self) -> &str {
+        self.clean_stem()
+    }
 }
 
 const DATE_FRACTION_THRESHOLD: f32 = 0.8;
@@ -78,7 +118,7 @@ pub fn resolve_folder_sort<D: SortableDoc>(
     // wrong under pretty URLs — every article also ends with
     // `<stem>/index.html` — so we delegate to the impl. The default
     // `is_folder_index() == false` keeps moss-core's existing single-file
-    // tests (`a.url = "a.html"`) green; src-tauri's `ParsedDocument`
+    // tests (`a.url = "a.html"`) green; moss-build's `ParsedDocument`
     // returns true when `kind == Folder`.
     let article_children: Vec<&&D> = children
         .iter()
@@ -128,8 +168,17 @@ mod tests {
     #[test]
     fn sort_field_parses_axis_strings() {
         assert!(matches!(serde_yaml::from_str::<SortField>("date").unwrap(), SortField::Axis(SortAxis::Date)));
+        assert!(matches!(serde_yaml::from_str::<SortField>("date-asc").unwrap(), SortField::Axis(SortAxis::DateAsc)));
         assert!(matches!(serde_yaml::from_str::<SortField>("weight").unwrap(), SortField::Axis(SortAxis::Weight)));
         assert!(matches!(serde_yaml::from_str::<SortField>("title").unwrap(), SortField::Axis(SortAxis::Title)));
+    }
+
+    #[test]
+    fn shows_date_is_true_for_both_date_axes_only() {
+        assert!(SortAxis::Date.shows_date());
+        assert!(SortAxis::DateAsc.shows_date());
+        assert!(!SortAxis::Weight.shows_date());
+        assert!(!SortAxis::Title.shows_date());
     }
 
     #[test]
@@ -279,7 +328,7 @@ mod inference_tests {
     }
 
     #[test]
-    fn chps_style_root_with_only_subfolders_falls_to_title() {
+    fn root_with_only_subfolders_falls_to_title() {
         let f = folder("root/index.html", None);
         let sub_a = folder("root/news/index.html", None);
         let sub_b = folder("root/projects/index.html", None);
@@ -304,11 +353,11 @@ pub trait SortableLabel {
 
 /// The one comparator for ordering two user-visible listing labels by title.
 ///
-/// All four alphabetical orderings of user-visible labels route here: the
-/// `SortAxis::Title` arm below, the dateless tiebreak in each of
-/// `folder_embed::generate_children`'s two branches, and the same-date
-/// tiebreak in `year_group`. (The `SortAxis::Weight` arm below does not — it
-/// breaks ties on `clean_stem`, a filename, which is not a label.)
+/// All three alphabetical orderings of user-visible labels route here: the
+/// `SortAxis::Title` arm below, the undated tiebreak in [`cmp_date_axis`]
+/// (which folder listings share), and the tiebreak between undated rows in
+/// `year_group`. (The `SortAxis::Weight` arm below does not — it breaks ties
+/// on `clean_stem`, a filename, which is not a label.)
 ///
 /// Case is a tiebreak, not a primary key. Comparing codepoints put `mao`
 /// after every capitalised name on the reference vault's roster, which is a
@@ -325,12 +374,42 @@ pub trait SortableLabel {
 /// site whose resident script is Han, so it needs the site language, which is
 /// not a parameter here. Both ship together as their own reviewed change;
 /// this function exists so that change lands in one place.
-/// Provenance: docs/archive/2026-09-06-authors-index-design-decision.md
 pub fn cmp_labels(a: &str, b: &str) -> std::cmp::Ordering {
     fn folded(s: &str) -> impl Iterator<Item = char> + '_ {
         s.chars().flat_map(char::to_lowercase)
     }
     folded(a).cmp(folded(b)).then_with(|| a.cmp(b))
+}
+
+/// What the date axis reads off one listing entry.
+pub struct DateSortKey<'a> {
+    pub date: Option<&'a str>,
+    pub is_folder: bool,
+    pub label: &'a str,
+    pub url_path: &'a str,
+}
+
+/// The one date-axis order. A folder's listing and its series chain both
+/// sort through here, so a reader walking the chain meets the pages in the
+/// order the folder's page lists them.
+///
+/// Newest first when `ascending` is false (the `Date` axis), oldest first
+/// when true (`DateAsc`); dated entries always sort before undated ones,
+/// regardless of direction — a chronology oldest-first still doesn't want
+/// its undated stragglers leading. Among undated entries folders come first,
+/// then titles in [`cmp_labels`] order, the same in both directions. The url
+/// path, unique per page, settles anything still tied — otherwise a tie
+/// keeps the order pages were read from disk, which changes between builds
+/// and platforms.
+pub fn cmp_date_axis(a: &DateSortKey<'_>, b: &DateSortKey<'_>, ascending: bool) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a.date, b.date) {
+        (Some(ad), Some(bd)) => if ascending { ad.cmp(bd) } else { bd.cmp(ad) },
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => b.is_folder.cmp(&a.is_folder).then_with(|| cmp_labels(a.label, b.label)),
+    }
+    .then_with(|| a.url_path.cmp(b.url_path))
 }
 
 pub fn sort_by_resolved<'a, D>(
@@ -340,13 +419,16 @@ pub fn sort_by_resolved<'a, D>(
 where
     D: SortableDoc + SortableLabel,
 {
+    let date_key = |d: &'a D| DateSortKey {
+        date: d.date(),
+        is_folder: d.is_folder_index(),
+        label: d.label(),
+        url_path: d.url_path(),
+    };
     let axis_cmp = |a: &&'a D, b: &&'a D| -> std::cmp::Ordering {
         match resolved.axis {
-            SortAxis::Date => {
-                let ad = a.date().unwrap_or("");
-                let bd = b.date().unwrap_or("");
-                bd.cmp(ad)
-            }
+            SortAxis::Date => cmp_date_axis(&date_key(a), &date_key(b), false),
+            SortAxis::DateAsc => cmp_date_axis(&date_key(a), &date_key(b), true),
             SortAxis::Weight => match (a.weight(), b.weight()) {
                 (Some(aw), Some(bw)) => aw.cmp(&bw),
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -355,6 +437,9 @@ where
             },
             SortAxis::Title => cmp_labels(a.label(), b.label()),
         }
+        // Same settlement on every axis: two pages with one weight or one
+        // title fall back to their url path, as tied dates do above.
+        .then_with(|| a.url_path().cmp(b.url_path()))
     };
 
     match &resolved.explicit_order {
@@ -366,11 +451,11 @@ where
                 .map(|(i, s)| (s.as_str(), i))
                 .collect();
             let (mut listed, mut unlisted): (Vec<_>, Vec<_>) = docs.iter().copied().partition(|d| {
-                order_map.contains_key(d.clean_stem().to_lowercase().as_str())
+                order_map.contains_key(d.order_match_name().to_lowercase().as_str())
             });
             listed.sort_by(|a, b| {
-                let ai = order_map.get(a.clean_stem().to_lowercase().as_str()).copied().unwrap_or(usize::MAX);
-                let bi = order_map.get(b.clean_stem().to_lowercase().as_str()).copied().unwrap_or(usize::MAX);
+                let ai = order_map.get(a.order_match_name().to_lowercase().as_str()).copied().unwrap_or(usize::MAX);
+                let bi = order_map.get(b.order_match_name().to_lowercase().as_str()).copied().unwrap_or(usize::MAX);
                 ai.cmp(&bi)
             });
             unlisted.sort_by(axis_cmp);
@@ -422,6 +507,70 @@ mod sort_dispatch_tests {
         let sorted = sort_by_resolved(&[&a, &b, &c], &r);
         assert_eq!(sorted[0].clean_stem(), "b");
         assert_eq!(sorted[2].clean_stem(), "a");
+    }
+
+    /// `sort: date-asc` — a chronology wanted oldest-first (a site publishing
+    /// a sequence of lectures by year, say) rather than the newest-first
+    /// default.
+    #[test]
+    fn date_asc_orders_oldest_first() {
+        let a = doc_with_label("a", Some("2025-01-01"), None, "A");
+        let b = doc_with_label("b", Some("2025-03-01"), None, "B");
+        let c = doc_with_label("c", Some("2025-02-01"), None, "C");
+        let r = ResolvedSort { axis: SortAxis::DateAsc, explicit_order: None, series_default: false };
+        let sorted = sort_by_resolved(&[&a, &b, &c], &r);
+        assert_eq!(sorted[0].clean_stem(), "a");
+        assert_eq!(sorted[1].clean_stem(), "c");
+        assert_eq!(sorted[2].clean_stem(), "b");
+    }
+
+    /// Undated entries still trail every dated one under `date-asc`, same as
+    /// `date` — ascending reverses which dated entry leads, not whether an
+    /// undated one does.
+    #[test]
+    fn date_asc_still_keeps_undated_entries_last() {
+        let dated = doc_with_label("dated", Some("2025-01-01"), None, "Dated");
+        let undated = doc_with_label("undated", None, None, "Undated");
+        let r = ResolvedSort { axis: SortAxis::DateAsc, explicit_order: None, series_default: false };
+        let sorted = sort_by_resolved(&[&undated, &dated], &r);
+        assert_eq!(sorted[0].clean_stem(), "dated");
+        assert_eq!(sorted[1].clean_stem(), "undated");
+    }
+
+    /// Pages on the same date come out in one order however they arrive:
+    /// by url path, the same order the folder's own listing uses. A tie used
+    /// to keep the order the pages were read in, so a series whose chapters
+    /// share a date read 4, 1, 2, 3 on one build and 4, 3, 2, 1 on another.
+    #[test]
+    fn date_ties_order_by_url_path_whatever_the_input_order() {
+        let c1 = doc_with_label("chapter-1", Some("1804"), None, "Chapter 1");
+        let c2 = doc_with_label("chapter-2", Some("1804"), None, "Chapter 2");
+        let c3 = doc_with_label("chapter-3", Some("1804"), None, "Chapter 3");
+        let c4 = doc_with_label("chapter-4", Some("1804"), None, "Chapter 4");
+        let later = doc_with_label("epilogue", Some("1805"), None, "Epilogue");
+        let r = ResolvedSort { axis: SortAxis::Date, explicit_order: None, series_default: true };
+        let order = |docs: &[&TestDocWithLabel]| -> Vec<String> {
+            sort_by_resolved(docs, &r).iter().map(|d| d.clean_stem().to_string()).collect()
+        };
+        let expected = vec!["epilogue", "chapter-1", "chapter-2", "chapter-3", "chapter-4"];
+        assert_eq!(order(&[&c4, &c1, &later, &c2, &c3]), expected);
+        assert_eq!(order(&[&c4, &c3, &c2, &later, &c1]), expected);
+    }
+
+    /// The same holds for two chapters given the same weight, or two pages
+    /// with the same title in a title-sorted folder.
+    #[test]
+    fn weight_and_title_ties_order_by_url_path_whatever_the_input_order() {
+        let a = doc_with_label("a", None, Some(1), "Same");
+        let b = doc_with_label("b", None, Some(1), "Same");
+        for axis in [SortAxis::Weight, SortAxis::Title] {
+            let r = ResolvedSort { axis, explicit_order: None, series_default: true };
+            let order = |docs: &[&TestDocWithLabel]| -> Vec<String> {
+                sort_by_resolved(docs, &r).iter().map(|d| d.clean_stem().to_string()).collect()
+            };
+            assert_eq!(order(&[&b, &a]), vec!["a", "b"], "{axis:?}");
+            assert_eq!(order(&[&a, &b]), vec!["a", "b"], "{axis:?}");
+        }
     }
 
     #[test]
@@ -494,6 +643,51 @@ mod sort_dispatch_tests {
         assert_eq!(sorted[0].clean_stem(), "intro");  // listed first
         assert_eq!(sorted[1].clean_stem(), "a");      // newest in tail
         assert_eq!(sorted[2].clean_stem(), "b");
+    }
+
+    /// A doc that can stand in for either a leaf (`order_match_name` equal to
+    /// `clean_stem`, the default) or a folder whose home file is the generic
+    /// `index.md` (`clean_stem` is "index", `order_match_name` is the
+    /// folder's real name) — the same split `ParsedDocument`'s own override
+    /// makes in moss-build, reproduced minimally here so `sort_by_resolved`'s
+    /// explicit-order match is proven to read `order_match_name`, not
+    /// `clean_stem`, at the trait level.
+    struct NamedDoc {
+        base: TestDocWithLabel,
+        order_name: &'static str,
+    }
+    impl SortableDoc for NamedDoc {
+        fn url_path(&self) -> &str { self.base.url_path() }
+        fn date(&self) -> Option<&str> { self.base.date() }
+        fn weight(&self) -> Option<i32> { self.base.weight() }
+        fn declared_sort(&self) -> Option<&SortField> { self.base.declared_sort() }
+        fn clean_stem(&self) -> &str { self.base.clean_stem() }
+        fn order_match_name(&self) -> &str { self.order_name }
+    }
+    impl SortableLabel for NamedDoc {
+        fn label(&self) -> &str { self.base.label() }
+    }
+
+    #[test]
+    fn explicit_order_matches_by_order_match_name_not_clean_stem() {
+        let intro = NamedDoc { base: doc_with_label("intro", None, None, "Intro"), order_name: "intro" };
+        // Stands in for a subfolder named "appendix" whose home file is the
+        // generic `index.md`: clean_stem is "index", but order_match_name —
+        // what `ParsedDocument` derives from the URL, and what the author
+        // wrote in `sort:` — is "appendix".
+        let appendix = NamedDoc { base: doc_with_label("index", None, None, "Appendix"), order_name: "appendix" };
+        let r = ResolvedSort {
+            axis: SortAxis::Title,
+            explicit_order: Some(vec!["appendix".into(), "intro".into()]),
+            series_default: true,
+        };
+
+        let sorted = sort_by_resolved(&[&appendix, &intro], &r);
+        assert_eq!(
+            sorted.iter().map(|d| d.order_match_name()).collect::<Vec<_>>(),
+            vec!["appendix", "intro"],
+            "appendix must keep its declared first position, matched by order_match_name"
+        );
     }
 }
 

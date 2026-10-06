@@ -1,16 +1,16 @@
-//! The open moss CLI (ADR-050, #1019): `moss build` with no window system in
+//! The open moss CLI: `moss build` with no window system in
 //! the dependency graph. `preview` and `edit` hand off to moss desktop rather
-//! than running a window here (E2', `desktop.rs`).
+//! than running a window here (`desktop.rs`).
 //!
 //! `build` drives the same headless driver the app binary's CLI interception
-//! does (`moss_build::ops::run_headless_build` — slice C1 of the ADR-067
-//! relocation folded the two mirrored bodies into it), so a `moss-cli build`
+//! does (`moss_build::ops::run_headless_build` — the server relocation
+//! folded the two mirrored bodies into it), so a `moss-cli build`
 //! and an app-binary `moss build` are byte-identical (the build-parity
 //! harness runs this binary as one leg). `--serve`/`--watch` run the crossed
 //! preview server and watch driver (`moss_build::ops::{serve,watch}`), and
-//! plugin hooks run through the crossed manager (ADR-076): plugins follow
+//! plugin hooks run through the crossed manager: plugins follow
 //! `--no-plugins`/`--allow-plugins`/`--wait-plugins` exactly as they do in
-//! the app binary, because the one headless driver decides (ADR-077).
+//! the app binary, because the one headless driver decides.
 
 use std::sync::Arc;
 
@@ -40,6 +40,8 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     // Lives under `deploy/history/`, not `cli/` (file budget — see the
     // publish-history design's "Placement and budgets").
     ("history", moss_build::deploy::history::cli::run),
+    // Lives beside the comment feature, not in `cli/` (file budget).
+    ("comments", moss_build::build::features::comment::cli::run),
 ];
 
 fn answers(name: &str) -> bool {
@@ -56,6 +58,17 @@ fn main() {
     // The app binary does this before dispatch too, so a crossed verb reads the
     // same `MOSS_ENV` / `MOSS_SETA_URL` in both binaries.
     dotenvy::dotenv().ok();
+
+    // `build`, `deploy` and `history` already install this logger themselves
+    // (inside moss-build, since the app binary's own headless interception
+    // needs it too), but the rest of the `CROSSED` table — `import` among
+    // them — never did, so every `log::warn!`/`log::info!` a crossed command
+    // raised (the importer's rate-limit and unrecognized-variant warnings,
+    // for instance) was silently dropped by `log`'s default no-op logger.
+    // Installing it once, here, before any dispatch, covers every verb this
+    // binary can run; `install_headless_logger` is `Once`-guarded, so the
+    // three verbs that already call it internally are unaffected.
+    moss_build::build::cli_output::install_headless_logger();
 
     let args: Vec<String> = std::env::args().collect();
     // `--help` only when it is the whole request, so `<cmd> --help` falls
@@ -132,11 +145,11 @@ fn main() {
                 folder_path: parsed.folder.clone(),
                 flags: parsed.flags,
                 host_ports: Arc::new(|folder| moss_build::cli::host::cli_host_ports(folder)),
+                serve: Default::default(),
                 start_watch: Box::new(|folder, plugins| {
                     Box::pin(async move {
-                        // No sweep here: the periodic disk-vs-baseline
-                        // backbone is app-side today; moss-cli's `--watch`
-                        // is watcher-only (see `ops/watch/headless.rs`).
+                        // `headless::start` runs the sweep beside the
+                        // watcher — see `ops/watch/headless.rs`.
                         moss_build::ops::watch::headless::start(
                             moss_build::ops::watch::headless::HeadlessWatchConfig {
                                 folder_path: folder,

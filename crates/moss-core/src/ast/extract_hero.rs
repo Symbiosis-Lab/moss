@@ -5,39 +5,28 @@
 //! and returns the rendered hero HTML plus the OG-fallback fields the
 //! cover/description chains consume.
 //!
-//! # Why extract-at-caller (Phase 4 PR7a)
+//! # Why extract-at-caller
 //!
-//! Production has historically hoisted the first `:::hero` block to the
-//! article template's hero slot (the rendered HTML lands in the template
-//! header, separate from the body). `apply_typed_shortcodes` intercepted
-//! Hero variants in the AST before they reached the HTML renderer.
+//! The first `:::hero` block renders into the article template's hero slot,
+//! separate from the body. Letting the body renderer handle a Hero shortcode
+//! itself would either duplicate the rendering (hero in both the template
+//! slot and the body) or force the hooks to emit nothing for Hero —
+//! indistinguishable from a real empty emission.
 //!
-//! When PR7a flips production to `render_document`, the body renderer
-//! walks the full block sequence. Letting it render a Hero shortcode
-//! inline would duplicate the slot rendering (hero appears in BOTH the
-//! template hero slot AND the body) OR force the hooks to emit nothing
-//! for Hero (which the renderer can't distinguish from a real empty
-//! emission).
-//!
-//! Extract-at-caller solves this cleanly:
-//! 1. The pipeline calls `extract_hero(&mut doc, &hooks)` BEFORE
-//!    `render_document(&doc, &hooks)`.
-//! 2. `extract_hero` walks `doc.blocks`, finds the first Hero, calls
-//!    the hooks to render it, removes the Hero block from `doc.blocks`,
-//!    and returns the rendered HTML + captured OG fields.
-//! 3. `render_document` then walks the hero-free block sequence; no
-//!    special Hero arm needed in the renderer or hooks.
+//! Extract-at-caller avoids both: the pipeline calls
+//! `extract_hero(&mut doc, &hooks)` before `render_document(&doc, &hooks)`,
+//! which finds the first Hero block, renders it via the hooks, removes it
+//! from `doc.blocks`, and returns the rendered HTML plus captured OG fields.
+//! `render_document` then walks a hero-free block sequence; no special Hero
+//! arm is needed in the renderer or hooks.
 //!
 //! # Why top-level only
 //!
-//! Per the current SoCiviC + chps fixtures (the 4 client sites at Phase 4
-//! cutover), `:::hero` blocks only appear at the document top level
-//! (or as the only block in the document). The extractor doesn't descend
-//! into shortcode bodies. If a future fixture nests Hero inside Grid
-//! cells, this function will not extract it — the renderer's hooks
-//! implementation must decide what to do then (probably error or render
-//! inline). Keeping the extractor top-level matches today's interception
-//! semantics in `apply_typed_shortcodes`.
+//! `:::hero` blocks only appear at the document top level (or as the only
+//! block in the document); the extractor doesn't descend into shortcode
+//! bodies. If a future document nests Hero inside Grid cells, this function
+//! will not extract it — the caller must decide what to do then (probably
+//! error or render inline).
 
 use super::document::Document;
 use super::hooks::RenderHooks;
@@ -264,6 +253,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
     let mobile = parsed.get("mobile").map(str::to_string);
+    let align = parsed.get("align").map(str::to_string);
     // Read once, for all three image-source branches below — a caption belongs
     // to the hero, not to whichever syntax named its image.
     let caption = parsed.get("caption").unwrap_or_default().trim().to_string();
@@ -287,6 +277,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 overlay_text,
                 width,
                 mobile,
+                align,
                 caption,
             },
             false,
@@ -315,6 +306,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 overlay_text,
                 width,
                 mobile,
+                align,
                 caption,
             },
             false,
@@ -369,6 +361,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             overlay_text,
             width,
             mobile,
+            align,
             caption,
         },
         used_priority_3,
@@ -380,7 +373,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
 ///
 /// Phase 4 PR4.5 (2026-05-28): mirrors `parse_cell_to_blocks` for the
 /// grid-cell path but without compound-link detection (an overlay is not
-/// a compound-link surface; the SoCiviC pattern is grid-cell-specific).
+/// a compound-link surface; that pattern is grid-cell-specific).
 /// Returns an empty vec (and no warnings) when the overlay is empty.
 /// Otherwise returns `(blocks, warnings)` — the fragment `Document`'s
 /// warnings (e.g. a misspelled `:::name` shortcode nested inside the

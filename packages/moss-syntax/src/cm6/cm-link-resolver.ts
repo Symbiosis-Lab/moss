@@ -26,9 +26,8 @@
 // there is noise while they type. A sibling link on the same line keeps its
 // feedback. (Matches the per-node reveal contract — cm-live-preview header.)
 //
-// The old `resolve_links` RPC + `ResolveLinksFn` + the four shared caches were
-// removed in Task 12 — every consumer (lint, hover, cmd-click nav, image render)
-// now reads the ONE shared reference cache.
+// Every consumer (lint, hover, cmd-click nav, image render) reads the ONE
+// shared reference cache.
 
 import { ViewPlugin, ViewUpdate, EditorView, Decoration, DecorationSet } from '@codemirror/view';
 import { Extension, RangeSetBuilder, type EditorState, type StateEffectType } from '@codemirror/state';
@@ -37,7 +36,6 @@ import { extractLinkTargets } from './cm-link-extract.js';
 import { isEmbedNode } from './cm-image-extract.js';
 import { syntaxTree } from '@codemirror/language';
 import { nodeTouchesSelection } from './cm-active-lines.js';
-import { revealInputsChangedIn } from './cm-source-mode.js';
 
 // ── Structural envelope type ──────────────────────────────────────────────────
 // The shape of moss's generated `EditorReferenceResolution` (bindings.ts, from
@@ -155,7 +153,7 @@ const unresolvedDimDecoration = Decoration.mark({ class: 'cm-link-unresolved-dim
  *
  * Embeds get the hand but never the dim, which is why they are a separate walk
  * rather than an addition to `extractLinkTargets`: that extractor skips
- * `WikilinkEmbed` on purpose (ADR-041) because a lint underline belongs on link
+ * `WikilinkEmbed` on purpose because a lint underline belongs on link
  * text, not on a rendered card. The CURSOR is a different question — an embed
  * is exactly as followable as a link, and cm-link-nav has followed one since
  * `followTargetAt` learned about embeds. While the card is rendered its source
@@ -237,7 +235,7 @@ export function linkValidationExtension(opts: {
     // per-node suppression must lift once the cursor leaves the link, and the
     // source-mode flip suppresses every diagnostic at once.
     needsRefresh: (update) =>
-      revealInputsChangedIn(update) ||
+      update.docChanged || update.selectionSet ||
       update.transactions.some(tr =>
         tr.effects.some(e => e.is(opts.refsResolvedEffect))),
   });
@@ -262,7 +260,7 @@ export function linkValidationExtension(opts: {
         // refsResolvedEffect: dim marks appear when the batch lands.
         const batchLanded = update.transactions.some(tr =>
           tr.effects.some(e => e.is(opts.refsResolvedEffect)));
-        if (revealInputsChangedIn(update) || update.viewportChanged || batchLanded) {
+        if (update.docChanged || update.selectionSet || update.viewportChanged || batchLanded) {
           this.decorations = buildLinkDecorations(update.state, opts.resolvedCache);
         }
       }

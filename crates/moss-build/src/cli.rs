@@ -15,7 +15,7 @@ pub mod commands;
 pub mod doctor;
 pub mod list;
 // `env` reads and writes the environment through `vault::config`, the one
-// config writer both binaries share (ADR-059 amendment).
+// config writer both binaries share.
 pub mod env;
 // `rename` is the editor's rename-with-refs from the terminal; its whole body
 // is `editor::ref_scan`, which crossed with it.
@@ -25,10 +25,10 @@ pub mod rename;
 // what it prints rather than one crate up behind a shim.
 pub mod guide;
 // The nested-site decision table + CLI refusal shapes, shared by both hosts
-// (open-CLI slice 3, #1019). The GUI surfaces stay app-side.
+// (open-CLI slice 3). The GUI surfaces stay app-side.
 pub mod site_guard;
 // `domain list` / `domain link` talk to seta with the vault's own identity.
-// The client crossed with ADR-078, and every other door this file opens
+// The client crossed into this crate, and every other door this file opens
 // (VaultRoot, site_config, Identity::load_for_signing) was already here.
 pub mod domain;
 // Argument parsing for `moss import`, over the engine in

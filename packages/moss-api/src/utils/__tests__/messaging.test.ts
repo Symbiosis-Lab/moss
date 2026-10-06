@@ -164,7 +164,7 @@ describe("Messaging Utilities", () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // startTask (ADR-015 Phase 2 — T8a)
+  // startTask
   //
   // The lifecycle API is invoke-based end-to-end (every transition needs
   // an acknowledgment so the Rust-side store keeps in sync), so all

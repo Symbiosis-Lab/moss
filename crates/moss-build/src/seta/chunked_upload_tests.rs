@@ -32,60 +32,14 @@ async fn upload_file_chunked_sends_content_hash_header() {
     let (tx, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
 
     tokio::spawn(async move {
-        /// Drain headers (up to blank line) + body per Content-Length,
-        /// then write back `resp`. Handles large auth headers gracefully.
-        async fn handle_conn(mut stream: tokio::net::TcpStream, resp: &[u8]) -> Vec<u8> {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut raw = Vec::new();
-            // Read until we see the end of headers (\r\n\r\n) plus body.
-            let mut buf = [0u8; 8192];
-            loop {
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                raw.extend_from_slice(&buf[..n]);
-                // Look for end-of-headers marker.
-                if let Some(hdr_end) = find_header_end(&raw) {
-                    // Parse Content-Length if present to drain body.
-                    let hdr_str = String::from_utf8_lossy(&raw[..hdr_end]);
-                    let body_len = hdr_str
-                        .lines()
-                        .find_map(|l| {
-                            let low = l.to_ascii_lowercase();
-                            if low.starts_with("content-length:") {
-                                l.split(':')
-                                    .nth(1)
-                                    .and_then(|v| v.trim().parse::<usize>().ok())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0);
-                    let expected_total = hdr_end + 4 + body_len; // hdr + \r\n\r\n + body
-                    while raw.len() < expected_total {
-                        let n = stream.read(&mut buf).await.unwrap_or(0);
-                        if n == 0 {
-                            break;
-                        }
-                        raw.extend_from_slice(&buf[..n]);
-                    }
-                    break;
-                }
-            }
-            stream.write_all(resp).await.ok();
-            stream.shutdown().await.ok();
-            raw
-        }
-
-        fn find_header_end(data: &[u8]) -> Option<usize> {
-            data.windows(4).position(|w| w == b"\r\n\r\n")
-        }
-
+        // Drain-request-then-canned-response is `crate::test_mock_http_conn`
+        // — shared with `deploy::push::tests::mock_seta_sequence` and
+        // `deploy::upload::tests`, which had each grown their own copy of
+        // this exact loop.
         // conn 0: GET /uploads → 200 [] (nothing staged; upload from zero)
         {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_conn(
+            crate::test_mock_http_conn(
                 stream,
                 b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]",
             )
@@ -95,17 +49,17 @@ async fn upload_file_chunked_sends_content_hash_header() {
         let create_resp = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 29\r\n\r\n{\"uploadId\":\"test-upload-id\"}";
         {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_conn(stream, create_resp).await;
+            crate::test_mock_http_conn(stream, create_resp).await;
         }
         // conn 2: PATCH chunk → 200
         {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_conn(stream, b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n").await;
+            crate::test_mock_http_conn(stream, b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n").await;
         }
         // conn 3: POST complete — capture request, then respond 200
         {
             let (stream, _) = listener.accept().await.unwrap();
-            let raw = handle_conn(stream, b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n").await;
+            let raw = crate::test_mock_http_conn(stream, b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n").await;
             let _ = tx.send(raw);
         }
     });
@@ -488,13 +442,11 @@ async fn a_fatal_failure_still_deletes_the_session() {
 
 /// **The escalation ladder must be walked on a link that is actually slow.**
 ///
-/// Its one previous test drove a mock that answered 524 *instantly*, which is
-/// the only regime where the old gate could pass: `allows_another_attempt`
+/// A mock that answers 524 *instantly* cannot exercise it: `allows_another_attempt`
 /// requires `futile_elapsed + UPLOAD_REQUEST_TIMEOUT <= UPLOAD_RETRY_BUDGET`,
 /// so with real 150 s timeouts three failures spend 450 s of the 600 s window
-/// and the *first* rung is the last. `escalate_down` fired only when failures
-/// were free — never on the slow link it was written for. There was no test in
-/// which escalation happened at all.
+/// and the *first* rung is the last. Escalation only fires on a link where
+/// failures cost real time.
 ///
 /// So the mock has to make each PATCH *expensive*: it reads the request, then
 /// jumps the clock past the client's own request timeout, which is what a
@@ -516,9 +468,7 @@ async fn a_fatal_failure_still_deletes_the_session() {
 /// client's 150 s `UPLOAD_REQUEST_TIMEOUT` *before* the mock had read the
 /// request off the socket. reqwest checks its overall timeout before it checks
 /// the response, so the request then failed without the mock ever seeing it,
-/// `sizes` stayed empty, and the first assertion below read `None`. That is the
-/// macOS-only failure of PR #1000; measured here, 123 of 200 loopback requests
-/// issued through reqwest under `start_paused` timed out spuriously.
+/// `sizes` stayed empty, and the first assertion below read `None`.
 ///
 /// So: **do not put `start_paused` back on this test, and do not widen the
 /// freeze.** Freezing only once the request is recorded means the one thing the
@@ -627,11 +577,11 @@ async fn a_slow_link_walks_the_escalation_ladder_down() {
     assert!(result.is_err(), "nothing ever succeeded; the upload must fail");
     let sizes = sizes.lock().unwrap().clone();
     // "No request arrived" and "escalation didn't happen" are different
-    // failures; conflating them cost an hour of diagnosis on #992.
+    // failures; conflating them once cost an hour of diagnosis.
     assert!(
         !sizes.is_empty(),
         "the mock server recorded no request at all — the upload failed before \
-         the first chunk went out (#992's flake shape), not per-chunk as this \
+         the first chunk went out, not per-chunk as this \
          test intends"
     );
     assert_eq!(sizes.first(), Some(&size), "the first request is the planned size");

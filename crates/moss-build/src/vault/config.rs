@@ -8,8 +8,7 @@
 //! write `save_domain_selection` (desktop) already makes, dns-observation reset
 //! included, rather than a second hand-rolled one.
 //!
-//! [ADR-059](../../../../../docs/decisions/ADR-059-config-reader-and-migration-runner-after-the-crate-split.md)
-//! keeps the app the owner of this file: its settings modals write it, the CLI
+//! A design decision keeps the app the owner of this file: its settings modals write it, the CLI
 //! reads it, advanced users hand-edit it. The 2026-09-07 amendment moved the
 //! *primitive* here — a load that substitutes an empty table only for a file
 //! proven absent, a render that edits the original bytes instead of
@@ -81,16 +80,13 @@ pub fn load_managed_toml(path: &Path) -> Result<ManagedToml, String> {
 /// field being saved, because `toml_rewrite::apply_changes` is surgical: an
 /// edit that changes nothing renders the original bytes back exactly. One
 /// check therefore covers every writer, including those that rewrite a whole
-/// section. Until 2026-08-31 this check lived inside the site-language
-/// writer alone, which made "does not thrash the watcher" a property of one
-/// function rather than of writing config; that writer has since gone.
+/// section, so "does not thrash the watcher" is a property of writing config,
+/// not of one writer.
 ///
 /// The write commits through [`crate::infra::atomic_write::write_atomic`], so
 /// a reader — the watcher rebuilding on the change, or the other binary —
 /// never observes a half-written config, and two writers racing cannot rename
-/// each other's bytes into place. Until 2026-09-07 only `save_environment`
-/// committed atomically; nobody has argued for a config write that may be
-/// observed half-written, so it is now the one way.
+/// each other's bytes into place.
 /// A document a newer moss already stamped is refused, not patched. Every
 /// writer above reaches `.moss/config.toml` through `load_managed_toml` +
 /// this function, and none of them checks `schema_version` before mutating —
@@ -100,16 +96,20 @@ pub fn load_managed_toml(path: &Path) -> Result<ManagedToml, String> {
 /// shape from, silently, with `schema_version` left at 6 so nothing downstream
 /// notices. Checking here, once, is what makes "no writer can corrupt a
 /// version-ahead config" true of all of them rather than of whichever ones
-/// remembered to ask. `state.toml` and the `[deployment_setup]` snapshot's own
-/// nested `schema_version` both read as v0 by `version_ahead` (no top-level
-/// key), so this never fires for either.
-pub fn write_managed_toml(path: &Path, original: &str, root: &Table) -> Result<(), String> {
-    if let Some(found) = crate::config::migrations::version_ahead(root) {
+/// remembered to ask. `state.toml`'s writer (`vault::deployment_state`) shares
+/// this same door and guards against its own, separate
+/// [`crate::config::migrations::STATE_CURRENT_VERSION`] — `supported` is
+/// which of the two applies to the document `path` names. A nested
+/// `schema_version` inside a section such as `[deployment_setup]` is still
+/// invisible to this check either way: `version_ahead` only ever inspects the
+/// top-level key.
+pub fn write_managed_toml(path: &Path, original: &str, root: &Table, supported: u32) -> Result<(), String> {
+    if let Some(found) = crate::config::migrations::version_ahead(root, supported) {
         return Err(format!(
             "{} is at schema_version {found}, newer than this build of moss supports (up to {}). \
              Refusing to write — update moss before changing settings on this site.",
             path.display(),
-            crate::config::migrations::CURRENT_VERSION,
+            supported,
         ));
     }
     let out = crate::infra::toml_rewrite::apply_changes(original, root)?;
@@ -145,7 +145,7 @@ pub fn save_environment(project_path: &str, env: HostingEnvironment) -> Result<(
     let config_path = Path::new(project_path).join(".moss").join("config.toml");
     let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
     root.insert("environment".to_string(), Value::String(env.name().to_string()));
-    write_managed_toml(&config_path, &original, &root)
+    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
 }
 
 /// Write one `[site]` field — the shared frame behind the typed wrappers
@@ -155,7 +155,7 @@ fn save_site_value(project_path: &str, field: &str, value: Value) -> Result<(), 
     let config_path = Path::new(project_path).join(".moss").join("config.toml");
     let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
     subtable(&mut root, "site")?.insert(field.to_string(), value);
-    write_managed_toml(&config_path, &original, &root)
+    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
 }
 
 /// Write a string field into `[site]`.

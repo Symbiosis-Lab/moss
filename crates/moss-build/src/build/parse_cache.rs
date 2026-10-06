@@ -1,7 +1,7 @@
-//! Loop A parse cache (moss#922 Stage 7).
+//! Loop A parse cache.
 //!
 //! Stage 0 measured Loop A — read + Obsidian-resolve + parse, `render/blocking.rs` —
-//! at ~70-74% of render wall time (~16-18s of ~22s on the 216-page harbor/潮汐
+//! at ~70-74% of render wall time (~16-18s of ~22s on the 216-page riverbend/河灣
 //! vault). Stages 4-6 only ever skip Loop B, so a one-file save still paid for
 //! parsing all 216 pages. This module lets an unchanged page replay the
 //! `ParsedDocument` the previous build produced instead.
@@ -13,7 +13,7 @@
 //! whole-corpus "Reduce" pass (`uid_dedup::resolve_duplicate_uids`,
 //! `resolve_duplicate_slugs_with_lang`, `apply_cascade`,
 //! `populate_direct_children_sorts`, `folder_embed::expand_markers_in_documents`,
-//! translation-linking). Those passes then run over the assembled vector —
+//! `email::stamp_inline_subscribe_scopes`, translation-linking). Those passes then run over the assembled vector —
 //! some entries replayed, some fresh — unchanged in shape, every build, exactly
 //! as today. Caching a POST-Reduce document would carry another page's
 //! inherited cascade/translation state forward, which is why the boundary is
@@ -25,7 +25,7 @@
 //! facts moved it in-process instead:
 //!
 //! 1. `ParsedDocument` is not round-trippable through serde. `body_plan`
-//!    (ADR-034 — what the render phase actually renders) and `outgoing_links`
+//!    (what the render phase actually renders) and `outgoing_links`
 //!    are `#[serde(skip)]`, and `BodyPlan`/`OutgoingLink` do not implement
 //!    `Serialize` at all. A JSON cache would silently replay documents with no
 //!    body plan, i.e. HTML missing every grid/cover enhancement — the exact
@@ -60,8 +60,10 @@
 //!   verified by mutation in
 //!   `tests/incremental_parse_cache.rs::a_transclusion_edit_reaches_the_rendered_html_on_disk`.
 //!
-//! Content hashes go through [`HashIndex`], the existing `(size, mtime) →
-//! sha256` accelerator, so an unchanged file is not re-read to be hashed.
+//! Content hashes go through [`HashIndex`], the existing `stat → sha256`
+//! accelerator, so an unchanged file is not re-read to be hashed. It trusts a
+//! hash only for the file's full stat record, so a same-size edit in the same
+//! second as the last one is not mistaken for no edit.
 //!
 //! # What this deliberately does NOT track
 //!
@@ -109,21 +111,43 @@
 //! acted on (every page is parsed for real), and each would-be hit is verified
 //! against the freshly parsed document's facade so a stale reuse shows up as a
 //! logged error instead of a wrong page.
+//!
+//! # A second, unrelated process-lifetime cache lives here too
+//!
+//! [`math_cache_lookup`]/[`math_cache_store`], near the bottom of this file,
+//! are the in-memory level of the math-equation render cache
+//! (`markdown::math`'s "Render caching" module doc section) — NOT part of
+//! the Loop A parse-cache design above. They are co-located here rather than
+//! threaded through [`ParseSession`] because math rendering runs in a later
+//! pipeline phase with no session in scope, and because they need none of
+//! this module's VALIDITY machinery: a rendered equation is a pure function
+//! of its own text (plus two process-wide constants), so a HIT, when there is
+//! one, is correct forever — there is no per-build eligibility to gate a
+//! lookup on, unlike `entries` above. RETENTION is a separate question, and
+//! it does share `STORE`'s shape: [`math_cache_finish_build`] persists a
+//! root-scoped snapshot that gets replaced wholesale on a root switch, the
+//! same as `entries`, and additionally drops whichever of a root's own
+//! equations are no longer in its corpus — see that function's doc for why
+//! the sweep is computed from the build's parsed documents rather than
+//! tracked live, and for the production call site (later than
+//! `ParseSession::finish`, at the true end of the build).
 
 use crate::build::cache::HashIndex;
+use crate::build::stat::FileStat;
+use crate::build::markdown::math::TypesetMath;
 use crate::build::types::ParsedDocument;
 use moss_core::dep_graph::DepGraph;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+#[cfg(test)]
+use std::{cell::Cell, sync::MutexGuard};
 
 /// One page's replayable parse plus everything needed to prove it still applies.
 #[derive(Debug, Clone)]
 struct ParseCacheEntry {
-    /// SHA-256 of the page's own source bytes, as read by the build that wrote
-    /// this entry (i.e. BEFORE that build's uid write-back, if any — which
-    /// simply costs the next build one reparse of that page).
+    /// SHA-256 of the exact final source bytes recorded with this snapshot.
     content_hash: String,
     /// `(path, hash)` for every member of the page's transitive embed closure,
     /// as of the same moment. Materialized at write time so validity checking
@@ -184,16 +208,57 @@ pub fn last_stats() -> Option<ParseCacheStats> {
 /// Forget everything. Test-only lever: cargo runs a test binary's tests in one
 /// process, so two tests over two temp vaults would otherwise share a store.
 pub fn reset_for_tests() {
+    #[cfg(test)]
+    assert!(cache_test_is_active(), "reset_for_tests requires store_lock_for_tests");
     if let Ok(mut store) = STORE.lock() {
         *store = None;
     }
+    #[cfg(test)]
+    if let Ok(mut stats) = LAST_STATS.lock() {
+        *stats = None;
+    }
+}
+
+/// Opt a test into owning the process-global parse cache.
+///
+/// Only the focused parse-cache stories take this guard. Other test builds do
+/// not publish their disabled or incidental cache sessions into the singleton.
+#[cfg(test)]
+pub(crate) fn store_lock_for_tests() -> ParseCacheTestGuard {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    CACHE_TEST_ACTIVE.with(|active| {
+        assert!(!active.replace(true), "nested parse-cache test guards are unsupported");
+    });
+    ParseCacheTestGuard { _lock: lock }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CACHE_TEST_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) struct ParseCacheTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for ParseCacheTestGuard {
+    fn drop(&mut self) {
+        CACHE_TEST_ACTIVE.with(|active| active.set(false));
+    }
+}
+
+#[cfg(test)]
+fn cache_test_is_active() -> bool {
+    CACHE_TEST_ACTIVE.with(Cell::get)
 }
 
 /// Content hashing for the current build, memoized.
 ///
 /// Memoization is not just a speed-up: `finish` must record for X exactly the
-/// hash `lookup` compared against, even though the uid write-back may have
-/// rewritten X's bytes in between.
+/// final bytes whose evidence travels in the cached document.
 struct FileHasher {
     root: PathBuf,
     index: Mutex<HashIndex>,
@@ -229,43 +294,45 @@ impl FileHasher {
     }
 
     fn compute(&self, relative_path: &str) -> Option<String> {
+        self.compute_with(relative_path, |abs| std::fs::read(abs).ok())
+    }
+
+    /// [`compute`](Self::compute) with the read passed in, so a test can change the
+    /// file between the read and the record. The index does the rest — stat before the
+    /// read, no read of a page still in the cloud, the record — as it does for every
+    /// other reader of it. Rayon's Loop A calls this from many threads, and the index
+    /// lock is held across the read; a page is small and a hit (the usual answer)
+    /// costs a stat.
+    fn compute_with(&self, relative_path: &str, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -> Option<String> {
         let abs = self.root.join(relative_path);
-        let meta = std::fs::metadata(&abs).ok()?;
-        let size = meta.len();
-        let mtime = meta
-            .modified()
+        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        index
+            .resolve_with(
+                &abs,
+                relative_path,
+                |path| read(path).map(|bytes| format!("{:x}", Sha256::digest(&bytes))).ok_or_else(|| "unreadable".to_string()),
+                crate::build::icloud::is_still_in_the_cloud,
+            )
             .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        if let Some(hit) = self
-            .index
-            .lock()
-            .ok()
-            .and_then(|i| i.lookup(relative_path, size, mtime).map(str::to_string))
-        {
-            return Some(hit);
-        }
-        let bytes = std::fs::read(&abs).ok()?;
-        let hash = format!("{:x}", Sha256::digest(&bytes));
-        if let Ok(mut index) = self.index.lock() {
-            index.update(relative_path.to_string(), size, mtime, hash.clone());
-        }
-        Some(hash)
     }
 
     /// Memoize the hash of bytes the caller has ALREADY read, without touching
     /// the stat-keyed index.
     ///
-    /// Loop A reads a page's source before parsing it, and may then write a
-    /// freshly minted `uid:` back into that same file. The hash that describes
-    /// the parse is the one over the bytes that were parsed — the PRE-write-back
-    /// ones. Recording those bytes against the POST-write-back `(size, mtime)`
-    /// in `HashIndex` would make the next build call a changed file unchanged,
-    /// so this path deliberately only fills the per-build memo: the next build
-    /// re-hashes, sees the difference, and reparses that page once.
-    fn note_bytes(&self, relative_path: &str, bytes: &[u8]) {
+    /// Loop A may mint a `uid:` after parsing. Its caller passes the one final
+    /// source string used for the deferred write, so cache identity and source
+    /// evidence agree with the bytes the next build reads.
+    ///
+    /// With the file's `stat` from before those bytes were read (or from the
+    /// write that put them there) and a clock sampled before that, the hash is
+    /// recorded in the index too — otherwise a build that parsed every page
+    /// leaves no page in it, and the next one reads and hashes them all again.
+    fn note_bytes(&self, relative_path: &str, bytes: &[u8], stat: Option<FileStat>, recorded_at: Option<u64>) {
         let hash = format!("{:x}", Sha256::digest(bytes));
+        if let Some(stat) = stat {
+            let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+            index.update_read_at(relative_path.to_string(), &stat, hash.clone(), recorded_at);
+        }
         if let Ok(mut cache) = self.computed.lock() {
             cache.insert(relative_path.to_string(), Some(hash));
         }
@@ -285,9 +352,14 @@ pub struct ParseSession {
     inputs_fingerprint: String,
     shadow: bool,
     hasher: FileHasher,
+    /// When this session began, before Loop A read any page: the recording
+    /// clock for the page hashes [`Self::note_source_bytes`] records.
+    began_at: Option<u64>,
     /// Decisions taken during Loop A: `path → hit`.
     decisions: Mutex<HashMap<String, bool>>,
     stats: Mutex<ParseCacheStats>,
+    #[cfg(test)]
+    publish_global_cache: bool,
 }
 
 impl ParseSession {
@@ -338,8 +410,11 @@ impl ParseSession {
             inputs_fingerprint,
             shadow,
             hasher: FileHasher::new(root, HashIndex::load(index_path)),
+            began_at: crate::build::stat::recording_clock(),
             decisions: Mutex::new(HashMap::new()),
             stats: Mutex::new(stats),
+            #[cfg(test)]
+            publish_global_cache: enabled && cache_test_is_active(),
         }
     }
 
@@ -381,9 +456,11 @@ impl ParseSession {
 
     /// Tell the session what a page's source bytes were at the moment Loop A
     /// parsed them (see [`FileHasher::note_bytes`] for why this is not the same
-    /// as hashing the file again afterwards).
-    pub fn note_source_bytes(&self, relative_path: &str, bytes: &[u8]) {
-        self.hasher.note_bytes(relative_path, bytes);
+    /// as hashing the file again afterwards). `stat` is the file's stat from
+    /// before those bytes were read, or `None` when they are not what the file
+    /// holds; with it, the hash is recorded for the next build as well.
+    pub fn note_source_bytes(&self, relative_path: &str, bytes: &[u8], stat: Option<FileStat>) {
+        self.hasher.note_bytes(relative_path, bytes, stat, self.began_at);
     }
 
     /// Shadow-mode falsifier: a page the cache called a HIT must parse to the
@@ -515,16 +592,22 @@ impl ParseSession {
             );
         }
 
-        if let Ok(mut last) = LAST_STATS.lock() {
-            *last = Some(stats);
-        }
+        #[cfg(test)]
+        let publish_global_cache = self.publish_global_cache;
+        #[cfg(not(test))]
+        let publish_global_cache = true;
+        if publish_global_cache {
+            if let Ok(mut last) = LAST_STATS.lock() {
+                *last = Some(stats);
+            }
 
-        let cache = ParseCache {
-            inputs_fingerprint: self.inputs_fingerprint,
-            entries,
-        };
-        if let Ok(mut store) = STORE.lock() {
-            *store = Some((self.root, cache));
+            let cache = ParseCache {
+                inputs_fingerprint: self.inputs_fingerprint,
+                entries,
+            };
+            if let Ok(mut store) = STORE.lock() {
+                *store = Some((self.root, cache));
+            }
         }
 
         // Merge, don't overwrite: the background image/video workers own
@@ -535,7 +618,23 @@ impl ParseSession {
     }
 }
 
-/// Fingerprint of Loop A's non-content inputs (moss#922 Stage 7).
+/// The build-level scalars `process_markdown_file` reads, as the
+/// `site_scalars` argument of [`inputs_fingerprint`]. A function rather than a
+/// tuple written at the call site so a test can build exactly what production
+/// hashes: `render/blocking.rs` passes the same `SiteMarkdown` value to the
+/// call, so the two cannot disagree about which `[site]` flags a parse reads.
+pub fn site_scalars<'a>(
+    site_lang: crate::i18n::Language,
+    site_id: Option<&'a str>,
+    seta_url: &'a str,
+    site: crate::build::markdown::SiteMarkdown<'a>,
+    emit_source_lines: bool,
+    has_content_folders: bool,
+) -> impl std::fmt::Debug + 'a {
+    (site_lang, site_id, seta_url, site, emit_source_lines, has_content_folders)
+}
+
+/// Fingerprint of Loop A's non-content inputs.
 ///
 /// Every one of these is a whole-corpus pre-scan result threaded into
 /// `process_markdown_file`, so a change to any of them can alter a page's parse
@@ -552,7 +651,7 @@ impl ParseSession {
 /// (`event_level_image_lookup`, the asset snapshot) — see the module docs for
 /// why those are handled by the whole-build markdown-only gate instead.
 ///
-/// SEE ALSO — moss#922 has TWO whole-build bypasses, not one, and they are
+/// SEE ALSO — there are TWO whole-build bypasses, not one, and they are
 /// computed by entirely separate code paths. This one is PRE-parse and input-
 /// SHAPE-based; its post-parse, CONTENT-based sibling is the
 /// `global_invalidator_changed` check in `render/incremental/verdict.rs`,
@@ -586,16 +685,174 @@ pub fn inputs_fingerprint(
     crate::build::facade::debug_hash(&ordered)
 }
 
+// ---------------------------------------------------------------------------
+// Math render cache — in-memory level (see this module's doc, above)
+// ---------------------------------------------------------------------------
+
+/// The process-global WORKING map, keyed by
+/// [`crate::build::emit::math_png::content_hash`]. `lookup`/`store` need no
+/// per-build setup — a caller that never reaches
+/// [`math_cache_finish_build`] (a unit test, a fragment-render path) just
+/// gets an always-on cache that grows for the life of the process. That is
+/// fine there (short-lived, few distinct equations) and is NOT how this
+/// map's size is actually bounded in production — see
+/// `math_cache_finish_build`.
+static MATH_RENDER_CACHE: OnceLock<Mutex<HashMap<String, TypesetMath>>> = OnceLock::new();
+
+fn math_render_cache() -> &'static Mutex<HashMap<String, TypesetMath>> {
+    MATH_RENDER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A previously typeset equation for `key`, if this process has already paid
+/// for it. See `markdown::math::typeset`, the only caller.
+pub fn math_cache_lookup(key: &str) -> Option<TypesetMath> {
+    math_render_cache().lock().ok()?.get(key).cloned()
+}
+
+/// Record a freshly typeset equation under `key`.
+pub fn math_cache_store(key: String, value: TypesetMath) {
+    if let Ok(mut cache) = math_render_cache().lock() {
+        cache.insert(key, value);
+    }
+}
+
+/// One root's math cache as of its own last completed build: what
+/// [`math_cache_finish_build`] persists and the next call for the SAME root
+/// reads back, purely to compute which of THAT root's keys it contributed
+/// last time. Root-scoped and replaced wholesale — the same shape as
+/// [`STORE`] — so a folder switch drops the old root's accounting instead of
+/// accumulating across roots. (The equations themselves stay shareable in
+/// [`MATH_RENDER_CACHE`] regardless of which root asked for them first —
+/// content-addressed, so a hit is correct no matter who populated it; only
+/// this bookkeeping is per-root.)
+static MATH_STORE: Mutex<Option<(PathBuf, HashMap<String, TypesetMath>)>> = Mutex::new(None);
+
+/// Bound the math render cache's growth for one build: drop whichever of
+/// `root`'s PREVIOUSLY-cached equations are no longer in `documents`' corpus
+/// (an edited-away equation's stale key), then record `root`'s current set
+/// as the baseline the next call diffs against. Without this, repeated
+/// edits of one equation leave every prior version live forever; this
+/// sweep is what makes only the CURRENT version survive, so the cache stays
+/// bounded to the current site's equations rather than every equation it
+/// has ever seen. Verified by
+/// `the_in_memory_math_cache_drops_superseded_equations_at_build_end`
+/// (ablate by skipping the removal loop below: red).
+///
+/// Deliberately NOT a live `used_this_build` set mutated from inside
+/// `math_cache_lookup`/`store`: those run on whichever rayon worker is
+/// rendering a page, and — unlike `ParseSession`, which is a value the
+/// caller threads through Loop A by hand — `typeset` has no per-build handle
+/// to carry such a set on (that gap is exactly why `math_cache_lookup`/
+/// `store` are free functions over a process global in the first place; see
+/// `math.rs`'s "Render caching" doc). A live set would also need to survive
+/// this process potentially building SEVERAL roots concurrently — moss's own
+/// test suite does this routinely — and a set that is really "per build" but
+/// lives in one global slot would have builds for different roots stomping
+/// each other's bookkeeping. Deriving the live set from `documents` here
+/// instead needs no shared mutable state at all: it is pure, so two builds
+/// finishing concurrently for two different roots never contend, and — the
+/// property that actually matters for test safety — a build for a root with
+/// no math, or a root this process has never seen before, has nothing stored
+/// for it and so removes nothing from the shared working map, never an
+/// unrelated concurrent build's equations.
+///
+/// A root SWITCH is the other case this must handle: if [`MATH_STORE`] holds
+/// a DIFFERENT root when this runs, that other root's whole key set is freed
+/// right away rather than left behind — it can never be reached by a diff
+/// again, because every future call diffs against its OWN root. Verified by
+/// `a_root_switch_frees_the_old_roots_math_cache` (ablate by skipping that
+/// branch's removal loop: red).
+///
+/// Called once per build, at the TRUE end — not at [`ParseSession::finish`],
+/// which runs at the end of Loop A, well BEFORE `emit_math_pngs`'s later
+/// site-wide sweep in the SAME build (`render/blocking.rs`'s
+/// `generate_blocking_content_for_build` runs both). Sweeping that early
+/// would evict entries math_png is about to look up again a few hundred
+/// lines later, turning an in-memory hit into an avoidable disk round trip
+/// within the same build. Production call site: the end of that function,
+/// immediately before it returns.
+pub fn math_cache_finish_build(root: &Path, documents: &[ParsedDocument]) {
+    let live_keys: std::collections::HashSet<String> = documents
+        .iter()
+        .flat_map(|d| crate::build::emit::math_png::collect_math_events(&d.content))
+        .map(|(tex, display)| crate::build::emit::math_png::content_hash(&tex, display))
+        .collect();
+
+    // Same root as last time: the keys IT contributed, diffed against its
+    // CURRENT corpus below. A DIFFERENT root (or no previous build at all):
+    // nothing to diff — but if a different root really was stored, every one
+    // of its keys is now unreachable from any future call, since every
+    // future call diffs against its OWN root, never this one. Free them
+    // right here instead of leaving them in the shared map forever; that gap
+    // is exactly what let a folder switch leak the old site's equations
+    // before this fix.
+    let previous_for_root: std::collections::HashSet<String> = match MATH_STORE.lock() {
+        Ok(mut store) => match store.take() {
+            Some((stored_root, keys)) if stored_root == root => keys.into_keys().collect(),
+            Some((_, stale_keys)) => {
+                if let Ok(mut working) = math_render_cache().lock() {
+                    for key in stale_keys.keys() {
+                        working.remove(key.as_str());
+                    }
+                }
+                std::collections::HashSet::new()
+            }
+            None => std::collections::HashSet::new(),
+        },
+        Err(_) => std::collections::HashSet::new(),
+    };
+
+    let dropped: Vec<&String> = previous_for_root.difference(&live_keys).collect();
+    if !dropped.is_empty() {
+        if let Ok(mut working) = math_render_cache().lock() {
+            for key in &dropped {
+                working.remove(key.as_str());
+            }
+        }
+    }
+
+    let snapshot: HashMap<String, TypesetMath> = math_render_cache()
+        .lock()
+        .ok()
+        .map(|working| {
+            live_keys
+                .iter()
+                .filter_map(|k| working.get(k).cloned().map(|v| (k.clone(), v)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Ok(mut store) = MATH_STORE.lock() {
+        *store = Some((root.to_path_buf(), snapshot));
+    }
+}
+
+/// Serializes tests that call [`math_cache_finish_build`] against each
+/// other — the `store_lock_for_tests`/`disk_cache_lock_for_tests` pattern,
+/// applied to this pair's own global state. Two such tests running
+/// concurrently (cargo's default) would otherwise race on the single
+/// [`MATH_STORE`] slot: whichever runs its `finish_build` call while the
+/// OTHER is mid-test would see a root mismatch and free that other test's
+/// keys out from under it. Caught this by observation, not by reasoning
+/// alone: the two lifecycle tests below passed every time run in isolation
+/// but failed intermittently as part of the full suite before this guard
+/// existed.
+#[cfg(test)]
+fn math_cache_test_lock() -> MathCacheTestGuard {
+    static LOCK: Mutex<()> = Mutex::new(());
+    MathCacheTestGuard {
+        _lock: LOCK.lock().unwrap_or_else(|e| e.into_inner()),
+    }
+}
+
+#[cfg(test)]
+struct MathCacheTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The store is process-global, and cargo runs these tests in parallel
-    /// threads. Every test that touches it takes this lock.
-    fn store_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    use crate::build::stat::FileStat;
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -665,6 +922,32 @@ mod tests {
     }
 
     #[test]
+    fn a_site_typesetting_toggle_moves_the_inputs_fingerprint() {
+        // A vertical page's body images declare a different `sizes=`, so a
+        // `[site] typesetting` edit must not replay bodies parsed under the
+        // old value.
+        let page_map = map(&[("a.md", "a/index.html")]);
+        let fingerprint = |typesetting: Option<&str>| {
+            let cfg = crate::build::render::config::SiteConfig {
+                typesetting: typesetting.map(String::from),
+                ..Default::default()
+            };
+            let scalars = site_scalars(crate::i18n::Language::En, None, "", cfg.markdown(), false, false);
+            let fp = inputs_fingerprint(
+                &["a.md".to_string()],
+                &page_map,
+                &HashMap::new(),
+                &HashMap::new(),
+                &std::collections::HashSet::new(),
+                "site",
+                &scalars,
+            );
+            fp
+        };
+        assert_ne!(fingerprint(None), fingerprint(Some("vertical")));
+    }
+
+    #[test]
     fn a_new_file_moves_the_inputs_fingerprint() {
         let page_map = map(&[("a.md", "a/index.html")]);
         let one = inputs_fingerprint(
@@ -689,8 +972,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_session_stays_send_and_sync_for_rayon() {
+        fn assert_send_and_sync<T: Send + Sync>() {}
+        assert_send_and_sync::<ParseSession>();
+    }
+
+    #[test]
     fn a_disabled_session_never_hits() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.md"), "hello").unwrap();
         reset_for_tests();
@@ -734,8 +1023,30 @@ mod tests {
     }
 
     #[test]
+    fn a_cache_disabled_test_session_does_not_publish_global_state() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("hash-index.json");
+        std::fs::write(dir.path().join("a.md"), "hello").unwrap();
+        let doc = ParsedDocument {
+            source_path: Some("a.md".to_string()),
+            ..Default::default()
+        };
+        reset_for_tests();
+
+        ParseSession::begin(dir.path(), &index, false, "fp".to_string())
+            .finish(std::slice::from_ref(&doc));
+
+        assert!(last_stats().is_none(), "a non-cache test build published cache stats");
+        let enabled = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
+        assert!(enabled.is_cold(), "a non-cache test build seeded the global cache");
+        enabled.finish(std::slice::from_ref(&doc));
+        reset_for_tests();
+    }
+
+    #[test]
     fn an_edit_to_the_page_itself_misses() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index = dir.path().join("hash-index.json");
         std::fs::write(dir.path().join("a.md"), "hello").unwrap();
@@ -755,11 +1066,145 @@ mod tests {
         reset_for_tests();
     }
 
+    /// A same-size edit in the same wall-clock second as the write the last build
+    /// hashed is still an edit. The content hash comes from the stat-keyed index, and
+    /// a stat that cannot tell the two writes apart replays the old parse.
+    #[test]
+    fn a_same_size_edit_in_the_same_second_misses() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("hash-index.json");
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        reset_for_tests();
+        let doc = ParsedDocument {
+            source_path: Some("a.md".to_string()),
+            ..Default::default()
+        };
+
+        ParseSession::begin(dir.path(), &index, true, "fp".to_string())
+            .finish(std::slice::from_ref(&doc));
+        let before = std::fs::metadata(&page).unwrap().modified().unwrap();
+        std::fs::write(&page, "world").unwrap();
+        FileStat::stamp_in_the_second_of(&page, before);
+
+        let session = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
+        assert!(session.lookup("a.md").is_none());
+        session.finish(std::slice::from_ref(&doc));
+        reset_for_tests();
+    }
+
+    /// A replace-via-rename — the atomic-save pattern — that carries the old mtime
+    /// across and keeps the size: only the inode says the page is a different file.
+    #[cfg(unix)]
+    #[test]
+    fn a_page_replaced_by_rename_with_its_size_and_mtime_kept_misses() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("hash-index.json");
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        reset_for_tests();
+        let doc = ParsedDocument {
+            source_path: Some("a.md".to_string()),
+            ..Default::default()
+        };
+
+        ParseSession::begin(dir.path(), &index, true, "fp".to_string())
+            .finish(std::slice::from_ref(&doc));
+        FileStat::replace_by_rename_keeping_mtime(&page, b"world");
+
+        let session = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
+        assert!(session.lookup("a.md").is_none(), "replayed the parse of the page that was replaced");
+        session.finish(std::slice::from_ref(&doc));
+        reset_for_tests();
+    }
+
+    /// What `compute` feeds the index: the file's whole stat record. A record that
+    /// differs in any one field is not this file's — and the hash in it, planted here
+    /// so a wrongly trusted entry is visible, must not come back. The exact record is
+    /// the control: a hit is answered from the index without reading the file.
+    #[test]
+    fn the_hasher_trusts_an_entry_only_for_the_files_whole_stat_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        let real = FileStat::of(&std::fs::metadata(&page).unwrap());
+        let read = format!("{:x}", Sha256::digest(b"hello"));
+
+        let hashed_with_entry_recorded_at = |recorded: &FileStat| {
+            let mut index = HashIndex::new();
+            index.update("a.md".to_string(), recorded, "planted".to_string());
+            FileHasher::new(dir.path(), index).hash("a.md")
+        };
+
+        assert_eq!(hashed_with_entry_recorded_at(&real).as_deref(), Some("planted"), "control: the exact record hits");
+        for (field, changed) in real.each_field_changed() {
+            assert_eq!(
+                hashed_with_entry_recorded_at(&changed).as_deref(),
+                Some(read.as_str()),
+                "an entry recorded for another {field} was trusted"
+            );
+        }
+    }
+
+    /// The stat is taken before the bytes are read, so a write landing during the read
+    /// leaves an entry the file no longer matches. Recording the stat afterwards would
+    /// pair the new file's stat with the old bytes' hash and vouch for it. The read is
+    /// injected, so the write lands exactly between the two.
+    #[test]
+    fn the_hasher_records_the_stat_the_file_had_before_it_was_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        let hasher = FileHasher::new(dir.path(), HashIndex::new());
+
+        let hash = hasher.compute_with("a.md", |abs| {
+            let bytes = std::fs::read(abs).ok();
+            std::fs::write(abs, "rewritten while it was being hashed").unwrap();
+            bytes
+        });
+
+        assert_eq!(hash, Some(format!("{:x}", Sha256::digest(b"hello"))), "the hash is of the bytes that were read");
+        let now = FileStat::of(&std::fs::metadata(&page).unwrap());
+        assert!(
+            hasher.into_index().lookup("a.md", &now).is_none(),
+            "the index vouches for the rewritten file with the hash of the old bytes"
+        );
+    }
+
+    /// A page still in the cloud is not read to learn its hash. The desktop app's
+    /// fail-fast policy turns that read into an error and a miss, but the headless CLI's
+    /// watch rebuild would block on the download. A provider re-materialising a page
+    /// changes its ctime and inode, so the index no longer vouches for it and a hasher
+    /// that reads on a miss would read exactly the pages the provider just evicted. The
+    /// entry here was recorded before that; the file is marked evicted once it is on disk.
+    #[test]
+    fn the_hasher_does_not_read_a_page_that_is_still_in_the_cloud() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        let real = FileStat::of(&std::fs::metadata(&page).unwrap());
+        let mut index = HashIndex::new();
+        index.update("a.md".to_string(), &FileStat { ctime: Some(1), inode: Some(1), ..real }, "old".to_string());
+        let hasher = FileHasher::new(dir.path(), index);
+        let _cloud = crate::build::icloud::pretend::evicted(&page);
+
+        let mut read_called = false;
+        let hash = hasher.compute_with("a.md", |abs| {
+            read_called = true;
+            std::fs::read(abs).ok()
+        });
+
+        assert!(!read_called, "the hasher read a page that is still in the cloud");
+        assert_eq!(hash, None, "a page that cannot be read cannot be proven unchanged");
+    }
+
     #[test]
     fn an_edit_two_embed_hops_down_misses_the_top_page() {
         // index.md ← a.md ← b.md. Editing b.md must miss ALL THREE, which a
         // flat `embed_deps` filter on index.md would get wrong.
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index_json = dir.path().join("hash-index.json");
         for (name, body) in [("index.md", "top"), ("a.md", "mid"), ("b.md", "leaf")] {
@@ -799,7 +1244,7 @@ mod tests {
 
     #[test]
     fn an_unrelated_edit_leaves_an_embed_chain_hot() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index_json = dir.path().join("hash-index.json");
         for name in ["index.md", "a.md", "b.md", "other.md"] {
@@ -833,8 +1278,39 @@ mod tests {
     }
 
     #[test]
+    fn a_warm_entry_replays_its_missing_reference_evidence() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        let index_json = dir.path().join("hash-index.json");
+        std::fs::write(dir.path().join("a.md"), "![alt](gone.png)\n").unwrap();
+        reset_for_tests();
+        let doc = ParsedDocument {
+            source_path: Some("a.md".to_string()),
+            missing_reference_occurrences: vec![crate::build::types::MissingReferenceOccurrence {
+                source_path: "a.md".to_string(),
+                source_revision: crate::build::types::SourceRevision::from_source("revision"),
+                reference: "gone.png".to_string(),
+                source_span: crate::build::types::SourceSpan {
+                    start_byte: 7,
+                    end_byte: 15,
+                    line: 1,
+                },
+            }],
+            ..Default::default()
+        };
+        ParseSession::begin(dir.path(), &index_json, true, "fp".to_string()).finish(&[doc]);
+
+        let session = ParseSession::begin(dir.path(), &index_json, true, "fp".to_string());
+        let replayed = session.lookup("a.md").expect("unchanged source is warm");
+        assert_eq!(replayed.missing_reference_occurrences.len(), 1);
+        assert_eq!(replayed.missing_reference_occurrences[0].reference, "gone.png");
+        session.finish(&[replayed]);
+        reset_for_tests();
+    }
+
+    #[test]
     fn a_changed_inputs_fingerprint_disables_the_whole_build() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index_json = dir.path().join("hash-index.json");
         for name in ["a.md", "b.md"] {
@@ -857,5 +1333,103 @@ mod tests {
         assert!(session.lookup("b.md").is_none());
         session.finish(&docs);
         reset_for_tests();
+    }
+
+    // ---- Math render cache: growth bound ----
+
+    #[test]
+    fn the_in_memory_math_cache_drops_superseded_equations_at_build_end() {
+        let _guard = math_cache_test_lock();
+        // A literal, not a tempdir: `math_cache_finish_build`'s `root` is a
+        // pure lookup key here, never touched for I/O, and a fixed string
+        // unique to this test can never collide with a real vault path or
+        // another test's root.
+        let root = Path::new("test-root-math-cache-generational-probe-7e21");
+        let mut keys = Vec::new();
+
+        // Edit the "same" equation 10 times — same base identity, different
+        // text each time, exactly what a person iterating on one formula
+        // does. Each edit gets its own `finish_build` call, standing in for
+        // one build per edit (the real watch-loop cadence).
+        for i in 0..10 {
+            let tex = format!(r"\delta_{{cache_probe_gen_7e21_{i}}}");
+            crate::build::markdown::math::render_math(&tex, false).expect("should typeset");
+            keys.push(crate::build::emit::math_png::content_hash(&tex, false));
+            let doc = ParsedDocument {
+                content: format!("${tex}$"),
+                ..Default::default()
+            };
+            math_cache_finish_build(root, std::slice::from_ref(&doc));
+        }
+
+        for (i, old_key) in keys[..9].iter().enumerate() {
+            assert!(
+                math_cache_lookup(old_key).is_none(),
+                "edit {i}'s superseded version must not survive a later edit's build-end sweep"
+            );
+        }
+        assert!(
+            math_cache_lookup(&keys[9]).is_some(),
+            "the CURRENT (10th) version must still be cached after its own build finished"
+        );
+    }
+
+    #[test]
+    fn a_root_switch_frees_the_old_roots_math_cache() {
+        let _guard = math_cache_test_lock();
+        let root_a = Path::new("test-root-math-cache-switch-probe-a-4b2c");
+        let root_b = Path::new("test-root-math-cache-switch-probe-b-4b2c");
+
+        let tex_a = r"\epsilon_{cache_probe_switch_4b2c}";
+        crate::build::markdown::math::render_math(tex_a, false).expect("should typeset");
+        let key_a = crate::build::emit::math_png::content_hash(tex_a, false);
+        let doc_a = ParsedDocument {
+            content: format!("${tex_a}$"),
+            ..Default::default()
+        };
+        math_cache_finish_build(root_a, std::slice::from_ref(&doc_a));
+        assert!(
+            math_cache_lookup(&key_a).is_some(),
+            "root A's equation must be cached once its own build has finished"
+        );
+
+        // A completely different root, with no math of its own at all.
+        let doc_b = ParsedDocument {
+            content: "no math here".to_string(),
+            ..Default::default()
+        };
+        math_cache_finish_build(root_b, std::slice::from_ref(&doc_b));
+
+        assert!(
+            math_cache_lookup(&key_a).is_none(),
+            "switching roots must free the OLD root's whole equation set, not just \
+             whatever it happened to lose since its own last build"
+        );
+    }
+
+    /// A build parses every page it did not replay, and notes the bytes it parsed
+    /// rather than hashing the file again. Unless that note is recorded in the
+    /// index, a cold build leaves no page there and the first rebuild after it
+    /// reads and hashes every page. Recorded with the stat from before the read,
+    /// the next session answers the page from the index; without a stat (a page
+    /// whose bytes are not what the file holds) nothing is recorded.
+    #[test]
+    fn a_noted_page_is_recorded_so_the_next_build_answers_it_from_the_index() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "hello").unwrap();
+        std::fs::write(dir.path().join("b.md"), "world").unwrap();
+        let index_path = dir.path().join("hash-index.json");
+
+        let session = ParseSession::begin(dir.path(), &index_path, false, "fp".to_string());
+        for (page, vouched) in [("a.md", true), ("b.md", false)] {
+            let (stat, bytes) = crate::build::stat::stat_then(&dir.path().join(page), |path| std::fs::read(path));
+            session.note_source_bytes(page, &bytes.unwrap(), stat.filter(|_| vouched));
+        }
+        session.finish(&[]);
+
+        let index = HashIndex::load(&index_path);
+        let now = |page: &str| FileStat::of(&std::fs::metadata(dir.path().join(page)).unwrap());
+        assert_eq!(index.lookup("a.md", &now("a.md")), Some(format!("{:x}", Sha256::digest(b"hello")).as_str()));
+        assert!(index.lookup("b.md", &now("b.md")).is_none(), "an unvouched note must not be recorded");
     }
 }

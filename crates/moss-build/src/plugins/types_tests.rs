@@ -66,6 +66,41 @@ fn plugin_non_blocking_severities_pass_through() {
 }
 
 #[test]
+fn plugin_item_outside_the_site_root_is_dropped() {
+    use crate::advisory::{Action, Scope, Severity};
+    // `item` carries the same contract as `Advisory::item`: the frontend's
+    // click-to-open resolves it by joining it onto the open folder, so an
+    // absolute path or one that escapes via `..` would point that click
+    // anywhere on disk. A plugin proposing one is dropped to None rather
+    // than trusted.
+    for item in ["/etc/passwd", "../../etc/passwd", "posts/../../etc/passwd"] {
+        let proposed = PluginAdvisory {
+            scope: Scope::File,
+            severity: Severity::NeedsAction,
+            item: Some(item.to_string()),
+            what: "suspicious item".into(),
+            action: Action::None,
+        };
+        let clamped = clamp_plugin_advisory(proposed);
+        assert_eq!(clamped.item, None, "{item:?} must be dropped");
+    }
+
+    // A real site-relative path — with or without a directory — passes
+    // through untouched, same as every other field.
+    for item in ["clip.mov", "posts/2026/hello.md"] {
+        let proposed = PluginAdvisory {
+            scope: Scope::File,
+            severity: Severity::NeedsAction,
+            item: Some(item.to_string()),
+            what: "shipped unoptimized".into(),
+            action: Action::None,
+        };
+        let clamped = clamp_plugin_advisory(proposed);
+        assert_eq!(clamped.item.as_deref(), Some(item));
+    }
+}
+
+#[test]
 fn manifest_parses_registry_fields() {
     let json = r#"{
             "name": "example",
@@ -692,7 +727,7 @@ fn contributes_jobs_round_trips_as_a_bare_map() {
 
 // ── PluginHook / TriggerContext / Capability::Import ──────────────────
 //
-// Foundational types for ADR-015 (PanelTask). These tests pin the
+// Foundational types for PanelTask. These tests pin the
 // serde wire format (JSON-side spelling) so the closed enums stay
 // stable across the router (T1), the matters manifest, and bindings.ts.
 
@@ -771,7 +806,7 @@ fn project_info_folder_name_survives_a_dot_path_root() {
     use crate::vault::paths::VaultRoot;
 
     let tmp = std::env::temp_dir().join(format!("moss_pi_dot_{}", uuid::Uuid::new_v4()));
-    let site = tmp.join("潮汐");
+    let site = tmp.join("河灣");
     fs::create_dir_all(&site).unwrap();
     fs::write(site.join("index.md"), "---\ntitle: 首頁\n---\n內容\n").unwrap();
 
@@ -781,14 +816,14 @@ fn project_info_folder_name_survives_a_dot_path_root() {
         ProjectInfo::from_structure(&ps, &root)
             .folder_name
             .as_deref(),
-        Some("潮汐"),
+        Some("河灣"),
         "a `.` root must still tell plugins the folder name"
     );
 
     let _ = fs::remove_dir_all(&tmp);
 }
 
-// --- ADR-055: contributions fold forward into capabilities ---
+// --- contributions fold forward into capabilities ---
 
 #[test]
 fn a_contributed_deploy_target_is_a_deploy_capability() {
@@ -862,7 +897,7 @@ fn a_legacy_capability_list_still_works() {
 
     assert!(
         manifest.has_capability(&Capability::Deploy),
-        "every installed plugin predates ADR-055; none may break on the \
+        "every installed plugin predates this capability fold; none may break on the \
          release that ships it"
     );
 }

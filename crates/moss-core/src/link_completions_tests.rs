@@ -73,10 +73,10 @@ fn embed_ranks_assets_before_pages() {
 
 #[test]
 fn cjk_prefix_matches() {
-    let t = vec![page("刘果的笔记.md"), page("about.md")];
-    let ranked = rank(&t, &ctx(Wikilink, "刘果", ""));
+    let t = vec![page("山居的笔记.md"), page("about.md")];
+    let ranked = rank(&t, &ctx(Wikilink, "山居", ""));
     assert_eq!(ranked.len(), 1);
-    assert_eq!(ranked[0].label(), "刘果的笔记");
+    assert_eq!(ranked[0].label(), "山居的笔记");
 }
 
 #[test]
@@ -153,22 +153,22 @@ fn ties_break_by_path_deterministically() {
 
 #[test]
 fn path_query_matches_across_an_omitted_directory() {
-    // THE CORPUS BUG: `關於/頭像-李柏萱.png` written for a file that lives at
-    // `關於/assets/頭像-李柏萱.png`. The filename-only matcher found nothing.
-    let t = vec![asset("關於/assets/頭像-李柏萱.png")];
-    assert_eq!(rank(&t, &ctx(Embed, "關於/頭像-李", "潮汐.md")).len(), 1);
+    // THE CORPUS BUG: `關於/頭像-李知安.png` written for a file that lives at
+    // `關於/assets/頭像-李知安.png`. The filename-only matcher found nothing.
+    let t = vec![asset("關於/assets/頭像-李知安.png")];
+    assert_eq!(rank(&t, &ctx(Embed, "關於/頭像-李", "河灣.md")).len(), 1);
 }
 
 #[test]
 fn path_query_rejects_a_different_directory() {
-    let t = vec![asset("關於/assets/頭像-李柏萱.png")];
-    assert!(rank(&t, &ctx(Embed, "獎項/頭像-李", "潮汐.md")).is_empty());
+    let t = vec![asset("關於/assets/頭像-李知安.png")];
+    assert!(rank(&t, &ctx(Embed, "評選/頭像-李", "河灣.md")).is_empty());
 }
 
 #[test]
 fn partial_directory_segment_still_lists_the_subtree() {
     let t = vec![asset("關於/assets/f99cc68b.png"), asset("關於/assembly.png")];
-    let ranked = rank(&t, &ctx(Embed, "關於/ass", "潮汐.md"));
+    let ranked = rank(&t, &ctx(Embed, "關於/ass", "河灣.md"));
     assert_eq!(ranked.len(), 2);
     // `assembly.png` matches on the FILENAME; the subtree listing under
     // `assets/` matched only a directory.
@@ -193,7 +193,7 @@ fn bare_query_ordering_is_unchanged_by_path_keys() {
 #[test]
 fn contiguous_suffix_dir_match_outranks_a_gapped_one() {
     let t = vec![asset("關於/deep/assets/x.png"), asset("assets/x.png")];
-    let ranked = rank(&t, &ctx(Embed, "assets/x", "潮汐.md"));
+    let ranked = rank(&t, &ctx(Embed, "assets/x", "河灣.md"));
     assert_eq!(ranked[0], &t[1]);
 }
 
@@ -216,8 +216,8 @@ fn heading_candidates_ignore_slashes_in_the_query() {
 
 #[test]
 fn trailing_slash_lists_only_that_directory() {
-    let t = vec![asset("關於/assets/a.png"), asset("獎項/b.png")];
-    let ranked = rank(&t, &ctx(Embed, "關於/", "潮汐.md"));
+    let t = vec![asset("關於/assets/a.png"), asset("評選/b.png")];
+    let ranked = rank(&t, &ctx(Embed, "關於/", "河灣.md"));
     assert_eq!(ranked.len(), 1);
     assert_eq!(ranked[0], &t[0]);
 }
@@ -227,7 +227,7 @@ fn trailing_slash_lists_only_that_directory() {
 #[test]
 fn a_folder_lists_under_a_trailing_slash_but_never_itself() {
     let t = vec![folder("關於"), folder("關於/assets"), asset("關於/near.png")];
-    let ranked = rank(&t, &ctx(Embed, "關於/", "潮汐.md"));
+    let ranked = rank(&t, &ctx(Embed, "關於/", "河灣.md"));
     assert_eq!(ranked.len(), 2, "the folder the author is already inside is not offered");
     // The file matched the same segment as the subfolder; files first.
     assert_eq!(ranked[0], &t[2]);
@@ -329,9 +329,7 @@ fn asset_path_syntax_never_offers_pages() {
 
 #[test]
 fn insert_for_always_round_trips_through_the_resolver() {
-    use crate::resolve::asset_class::{
-        resolve_asset_ref, AssetProvenance, AssetResolution, FakeAssetIndex,
-    };
+    use crate::resolve::asset_class::{resolve_file_target, AssetProvenance, AssetResolution};
 
     // The corpus shape: a root-level source and a nested one, against a sibling
     // asset, a subtree asset, a cross-tree asset and a root-level asset. The
@@ -339,18 +337,18 @@ fn insert_for_always_round_trips_through_the_resolver() {
     // `關於/x.md`, where the bare root-relative form would resolve to the
     // DIFFERENT, also-existing `關於/assets/首頁hero.png`.
     let paths = [
-        "關於/assets/頭像-李柏萱.png",
+        "關於/assets/頭像-李知安.png",
         "關於/歷季得獎者.md",
         "關於/近照.png",
         "assets/首頁hero.png",
         "關於/assets/首頁hero.png",
         "首頁.png",
     ];
-    let idx = FakeAssetIndex::new(&paths);
+    let idx = crate::content_graph::ContentGraph::from_paths(&paths);
 
-    for from_rel in ["潮汐.md", "關於/歷季得獎者.md"] {
+    for from_rel in ["河灣.md", "關於/歷季得獎者.md"] {
         for rel in [
-            "關於/assets/頭像-李柏萱.png",
+            "關於/assets/頭像-李知安.png",
             "關於/近照.png",
             "assets/首頁hero.png",
             "首頁.png",
@@ -359,7 +357,7 @@ fn insert_for_always_round_trips_through_the_resolver() {
             for c in [ctx(Embed, "關於/x", from_rel), ctx(Inline, "x", from_rel)] {
                 let emitted = insert_for(&asset(rel), &c);
                 assert_eq!(
-                    resolve_asset_ref(&emitted, from_rel, &idx),
+                    resolve_file_target(&emitted, from_rel, &idx),
                     AssetResolution::Resolved {
                         root_rel: rel.to_string(),
                         provenance: AssetProvenance::Literal,
@@ -375,23 +373,69 @@ fn insert_for_always_round_trips_through_the_resolver() {
     b.add_file("notes/ideas.md", "notes/ideas");
     b.add_file("關於/歷季得獎者.md", "關於/歷季得獎者");
     let graph = b.build();
-    for from_rel in ["潮汐.md", "關於/歷季得獎者.md"] {
-        for c in [ctx(Wikilink, "notes/id", from_rel), ctx(Inline, "id", from_rel)] {
+    for from_rel in ["河灣.md", "關於/歷季得獎者.md"] {
+        for (c, want) in [
+            (ctx(Wikilink, "notes/id", from_rel), "notes/ideas"),
+            (ctx(Inline, "id", from_rel), if from_rel == "河灣.md" { "notes/ideas.md" } else { "../notes/ideas.md" }),
+        ] {
             let emitted = insert_for(&page("notes/ideas.md"), &c);
-            assert_eq!(emitted, "notes/ideas");
+            assert_eq!(emitted, want);
             assert_eq!(graph.resolve_path(&emitted, from_rel).as_deref(), Some("notes/ideas.md"));
         }
     }
 }
 
 #[test]
+fn a_picked_file_resolves_to_itself_although_a_copy_sits_beneath_the_page() {
+    use crate::resolve::asset_class::{resolve_file_target, AssetProvenance, AssetResolution};
+
+    let idx = crate::content_graph::ContentGraph::from_paths(&[
+        "a/b/page.md", "a/c/p.png", "a/b/c/p.png", "a/c/my photo.jpg", "a/b/c/my photo.jpg",
+    ]);
+    for rel in ["a/c/p.png", "a/b/c/p.png", "a/c/my photo.jpg", "a/b/c/my photo.jpg"] {
+        for c in [ctx(Inline, "p", "a/b/page.md"), ctx(Embed, "c/p", "a/b/page.md")] {
+            let emitted = insert_for(&asset(rel), &c);
+            match resolve_file_target(&emitted, "a/b/page.md", &idx) {
+                AssetResolution::Resolved { root_rel, .. } => assert_eq!(root_rel, rel, "emitted {emitted}"),
+                other => panic!("{emitted} from a/b/page.md gave {other:?}, wanted {rel}"),
+            }
+        }
+    }
+    assert_eq!(insert_for(&asset("a/c/p.png"), &ctx(Inline, "p", "a/b/page.md")), "../c/p.png");
+    assert_eq!(
+        resolve_file_target("../c/p.png", "a/b/page.md", &idx),
+        AssetResolution::Resolved { root_rel: "a/c/p.png".into(), provenance: AssetProvenance::Literal },
+    );
+}
+
+#[test]
+fn a_folder_with_a_space_inserts_a_valid_destination_that_still_resolves() {
+    let mut b = crate::content_graph::ContentGraphBuilder::new();
+    b.add_file("my folder/index.md", "my-folder");
+    b.add_file("a/b/page.md", "a/b/page");
+    let graph = b.build();
+    let f = folder("my folder");
+    for from_rel in ["page.md", "a/b/page.md"] {
+        let emitted = insert_for(&f, &ctx(Inline, "my", from_rel));
+        assert_eq!(emitted, "my%20folder/");
+        assert_eq!(
+            crate::resolve::fuzzy_path::resolve_reference(&emitted, &graph, from_rel),
+            crate::resolve::fuzzy_path::ResolvedRef::Found("my folder/index.md".into()),
+            "from {from_rel}"
+        );
+    }
+    // The wiki form is not a destination: the name stays as written.
+    assert_eq!(insert_for(&f, &ctx(Wikilink, "my", "page.md")), "my folder/");
+    // And the query the author edits afterwards still reopens inside it.
+    assert_eq!(rank(&[asset("my folder/x.png")], &ctx(Inline, "my%20folder/", "page.md")).len(), 1);
+}
+
+#[test]
 fn bare_wikilink_queries_keep_the_obsidian_forms() {
-    // The chip-bar contract: a bare query in a wikilink/embed/asset-path
-    // context writes the bare filename, so the frontmatter cover picker keeps
-    // writing `[[x.png]]`.
+    // The chip-bar contract: a bare query in a wikilink/embed context writes
+    // the bare filename, so the frontmatter cover picker keeps writing `[[x.png]]`.
     let a = asset("關於/assets/x.png");
     assert_eq!(insert_for(&a, &ctx(Embed, "x", "關於/y.md")), "x.png");
-    assert_eq!(insert_for(&a, &ctx(AssetPath, "x", "關於/y.md")), "x.png");
     assert_eq!(insert_for(&page("notes/ideas.md"), &ctx(Wikilink, "id", "index.md")), "ideas");
 }
 
@@ -427,4 +471,194 @@ fn asset_ref_relative_from_a_root_page_is_root_relative() {
 #[test]
 fn asset_ref_relative_normalizes_windows_separators() {
     assert_eq!(asset_ref_relative("關於\\x.md", "關於\\img\\cover.png"), "img/cover.png");
+}
+
+// ── Standard forms write a real relative path ────────────────────────
+
+/// Every file of the fixture site. Same-named decoys sit in other folders so a
+/// destination that only names the file, and leans on name search, picks the
+/// wrong one or is ambiguous.
+const SITE: &[&str] = &[
+    "a/page.md",
+    "a/photo.jpg",
+    "a/my photo.jpg",
+    "a/photos/photo.jpg",
+    "b/photo.jpg",
+    "b/my photo.jpg",
+    "c/other.jpg",
+    "d/other.jpg",
+    "c/my photo.jpg",
+    "c/頭像.png",
+    "d/頭像.png",
+    "c/x #1 (a).png",
+    "d/x #1 (a).png",
+    "a/v:1.png",
+    "n/alpha.md",
+    "m/alpha.md",
+];
+
+/// What the build resolves `dest` to when written as `[t](dest)` or `![t](dest)`
+/// on the page at `from`: the real parser and `resolve_urls`.
+fn build_resolves(image: bool, dest: &str, from: &str) -> Option<String> {
+    let mut b = crate::content_graph::ContentGraphBuilder::new();
+    for p in SITE {
+        b.add_file(p, p);
+    }
+    let graph = b.build();
+    let src = format!("{}[t]({dest})", if image { "!" } else { "" });
+    let mut doc = crate::ast::parser::parse(&src);
+    let out = crate::ast::resolve_urls::resolve_urls(&mut doc, &graph, from);
+    match out.outgoing.as_slice() {
+        [one] => Some(one.target_path.clone()),
+        _ => None,
+    }
+}
+
+const FROM: &str = "a/page.md";
+
+/// (file, expected insert) for a file seen from `a/page.md`.
+const CASES: &[(&str, &str)] = &[
+    ("a/photo.jpg", "photo.jpg"),
+    ("a/photos/photo.jpg", "photos/photo.jpg"),
+    ("c/other.jpg", "../c/other.jpg"),
+    ("a/my photo.jpg", "my%20photo.jpg"),
+    ("c/my photo.jpg", "../c/my%20photo.jpg"),
+    ("c/頭像.png", "../c/頭像.png"),
+    ("c/x #1 (a).png", "../c/x%20%231%20(a).png"),
+    ("a/v:1.png", "./v:1.png"),
+];
+
+#[test]
+fn a_file_is_inserted_as_the_encoded_path_from_the_page_folder() {
+    let mut wrong = Vec::new();
+    for syntax in [Inline, AssetPath] {
+        for (file, want) in CASES {
+            let got = insert_for(&asset(file), &ctx(syntax, "", FROM));
+            if got != *want {
+                wrong.push(format!("{syntax:?} {file}: got {got:?}, want {want:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_typed_name_or_path_gives_the_same_relative_path() {
+    for typed in ["ph", "photos/ph", "c/oth", "my%20ph"] {
+        for syntax in [Inline, AssetPath] {
+            let got = insert_for(&asset("c/other.jpg"), &ctx(syntax, typed, FROM));
+            assert_eq!(got, "../c/other.jpg", "{syntax:?} typed {typed:?}");
+        }
+    }
+}
+
+#[test]
+fn every_inserted_text_resolves_to_the_chosen_file_in_the_build() {
+    let mut wrong = Vec::new();
+    for (syntax, image) in [(Inline, false), (AssetPath, true)] {
+        for (file, _) in CASES {
+            let dest = insert_for(&asset(file), &ctx(syntax, "", FROM));
+            let got = build_resolves(image, &dest, FROM);
+            if got.as_deref() != Some(*file) {
+                wrong.push(format!("{syntax:?} {file}: inserted {dest:?} resolves to {got:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_folder_named_like_a_language_round_trips_from_an_ordinary_page() {
+    let mut b = crate::content_graph::ContentGraphBuilder::new();
+    for p in ["trips/index.md", "trips/uk/day1.jpg", "trips/2023/uk/day1.jpg"] {
+        b.add_file(p, p);
+    }
+    let graph = b.build();
+    for file in ["trips/uk/day1.jpg", "trips/2023/uk/day1.jpg"] {
+        let dest = insert_for(&asset(file), &ctx(AssetPath, "", "trips/index.md"));
+        let mut doc = crate::ast::parser::parse(&format!("![t]({dest})"));
+        let out = crate::ast::resolve_urls::resolve_urls(&mut doc, &graph, "trips/index.md");
+        let got: Vec<&str> = out.outgoing.iter().map(|o| o.target_path.as_str()).collect();
+        assert_eq!(got, [file], "inserted {dest:?}");
+    }
+}
+
+#[test]
+fn a_page_is_linked_by_its_relative_source_path_with_extension() {
+    let c = ctx(Inline, "al", FROM);
+    for (source, want) in [("n/alpha.md", "../n/alpha.md"), ("m/alpha.md", "../m/alpha.md")] {
+        let dest = insert_for(&page_at(source, "Alpha", "/alpha/"), &c);
+        assert_eq!(dest, want);
+        assert_eq!(build_resolves(false, &dest, FROM).as_deref(), Some(source), "{dest}");
+    }
+    // Same folder: just the file name, still with its extension.
+    assert_eq!(insert_for(&page("a/page.md"), &ctx(Inline, "pa", "a/other.md")), "page.md");
+}
+
+#[test]
+fn a_leading_slash_keeps_published_addresses_and_root_paths() {
+    let c = ctx(Inline, "/", FROM);
+    assert_eq!(insert_for(&page_at("n/alpha.md", "Alpha", "/alpha/"), &c), "/alpha/");
+    assert_eq!(insert_for(&asset("c/other.jpg"), &c), "/c/other.jpg");
+}
+
+#[test]
+fn wiki_contexts_keep_their_forms() {
+    let a = asset("c/my photo.jpg");
+    assert_eq!(insert_for(&a, &ctx(Wikilink, "my", FROM)), "my photo.jpg");
+    assert_eq!(insert_for(&a, &ctx(Embed, "my", FROM)), "my photo.jpg");
+    assert_eq!(insert_for(&page("n/alpha.md"), &ctx(Wikilink, "al", FROM)), "alpha");
+}
+
+// ── Search ───────────────────────────────────────────────────────────
+
+#[test]
+fn spaces_are_found_whether_typed_raw_or_as_percent_20() {
+    let t = vec![asset("c/my photo.jpg"), asset("c/other.jpg")];
+    for typed in ["my ph", "my%20ph", "c/my%20ph", "c/my ph"] {
+        for syntax in [Inline, AssetPath, Embed] {
+            let ranked = rank(&t, &ctx(syntax, typed, FROM));
+            assert_eq!(ranked, vec![&t[0]], "{syntax:?} typed {typed:?}");
+        }
+    }
+}
+
+#[test]
+fn a_partial_percent_escape_while_typing_does_not_hide_everything() {
+    let t = vec![asset("c/my photo.jpg"), asset("c/other.jpg")];
+    for typed in ["my", "my%", "my%2", "my%20"] {
+        assert_eq!(rank(&t, &ctx(Inline, typed, FROM)), vec![&t[0]], "typed {typed:?}");
+    }
+}
+
+// ── Order: nearer to the page first among equal matches ──────────────
+
+#[test]
+fn equal_matches_come_nearest_the_page_first_then_alphabetical() {
+    let t = vec![
+        asset("photo.png"),
+        asset("c/photo.png"),
+        asset("a/sub/photo.png"),
+        asset("a/aaa/photo.png"),
+        asset("a/photo.png"),
+        asset("a/sub/deep/photo.png"),
+    ];
+    let order: Vec<String> = rank(&t, &ctx(Inline, "photo", FROM))
+        .into_iter()
+        .map(|x| match x {
+            Target::Asset { source } => source.clone(),
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(
+        order,
+        ["a/photo.png", "a/aaa/photo.png", "a/sub/deep/photo.png", "a/sub/photo.png", "c/photo.png", "photo.png"]
+    );
+}
+
+#[test]
+fn a_better_match_still_beats_a_nearer_one() {
+    let t = vec![asset("a/xx-photo.png"), asset("c/photo.png")];
+    let ranked = rank(&t, &ctx(Inline, "photo", FROM));
+    assert_eq!(ranked[0], &t[1], "a name starting with the query outranks one merely containing it");
 }

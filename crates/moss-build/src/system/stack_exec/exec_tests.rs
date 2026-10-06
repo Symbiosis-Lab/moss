@@ -19,7 +19,7 @@ fn stack_with_argv(start: Vec<&str>, uninstall: Vec<&str>) -> StackContribution 
 }
 
 /// A stand-in for a stack's binary: a `#!/bin/sh` script, in the same shape
-/// as `fake_onionpress` at `src-tauri/src/system/stack_install.rs:2734`,
+/// as `fake_onionpress` in the desktop app's stack installer tests,
 /// lifted here stack-agnostic. It prints its own argv, working directory and
 /// one env var, one per line, so a test can pin all three from
 /// [`super::run`]'s `BoundedOutput::stdout` without a real subprocess
@@ -56,8 +56,13 @@ fn the_declared_start_argv_is_what_runs() {
     let out = run(&home, Verb::Start, opts).expect("the declared start argv runs the fake binary");
     assert!(out.status.success());
     assert!(out.stdout.contains("ARGV:start --managed"), "got: {}", out.stdout);
+    // Canonicalize: on macOS `TempDir::path()` comes back under `/var`, a
+    // symlink to `/private/var`, and the subprocess's own `pwd` resolves it —
+    // comparing the raw path against a real `getcwd()` fails on every macOS
+    // run regardless of what cwd the executor actually passed.
+    let expected_cwd = std::fs::canonicalize(home_dir.path()).unwrap();
     assert!(
-        out.stdout.contains(&format!("CWD:{}", home_dir.path().display())),
+        out.stdout.contains(&format!("CWD:{}", expected_cwd.display())),
         "got: {}",
         out.stdout
     );

@@ -20,8 +20,7 @@
 //! Gated commands are those that escape the QuickJS sandbox in a way the user
 //! cannot undo — today just `execute_binary` (arbitrary native processes).
 //! Using a key from the keystore is NOT gated: a caller signs only with its
-//! own scoped key, which spends nothing of the user's or another plugin's
-//! (ADR-032 plugin agency; ADR-031 keystore).
+//! own scoped key, which spends nothing of the user's or another plugin's.
 
 use super::EngineHost;
 

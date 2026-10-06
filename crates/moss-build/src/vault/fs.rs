@@ -11,12 +11,10 @@
 //!   holds the identity secret, every plugin's declared capability grants, and
 //!   other plugins' stored credentials.
 //!
-//! Those two rules used to live in two places under one name, and the fence
-//! built for the second one silently caged the first: moss's own Analytics
-//! dashboard read `.moss/data/events.jsonl` through the plugin door and got a
-//! refusal on every load, for eleven days, rendered as a plausible "no data
-//! yet" (moss#997). The lesson is not "pick the right function" — it is that a
-//! policy repeated at N call sites cannot say *which* door it guards.
+//! A policy repeated at every call site cannot say *which* door it guards —
+//! moss's own Analytics dashboard once got refused reading
+//! `.moss/data/events.jsonl` because it went through the plugin sandbox
+//! instead of the first-party door.
 //!
 //! So the two policies are separate, and the plugin one is a **type**:
 //! [`PluginPath`] is the only thing the plugin file commands accept, and
@@ -31,6 +29,9 @@
 //! and what is it called?".
 
 use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "macos")]
+use trash::macos::{DeleteMethod, TrashContextExtMacos};
 
 // ── First-party domain ─────────────────────────────────────────────────────
 
@@ -72,11 +73,10 @@ pub(crate) fn rejects_traversal(path: &str) -> Result<(), String> {
 /// callers get one guard rather than a lexical one they must remember to
 /// pair.
 ///
-/// Pairing it by hand is exactly what went wrong: nine call sites, and
-/// `create_entry_path` was the one that never did, which left `create_file`
-/// and `create_folder` able to write outside the vault on BOTH carriers.
-/// [`recheck_canonical`] remains public for the callers that need the
-/// resolved `(root, target)` pair back, not for containment.
+/// Pairing it by hand is the hazard this removes: one forgotten call site is
+/// enough to let a write land outside the vault.
+/// [`recheck_canonical`] remains public for callers that need the resolved
+/// `(root, target)` pair back, not for containment.
 pub fn validate_entry_path(project_root: &Path, path: &str) -> Result<PathBuf, String> {
     rejects_traversal(path)?;
     let p = PathBuf::from(path);
@@ -151,54 +151,94 @@ pub fn recheck_canonical_allowing_missing(
     }
 }
 
-/// Move a file or folder to the OS trash — recoverable via the file manager,
-/// never a permanent unlink. Refuses to trash the project root itself (callers
-/// should never surface Delete on the root; defend in depth). The ONE delete
-/// core: the desktop `delete_entry` command and the HTTP mutation arm both
-/// call here, so the two carriers cannot drift on the containment checks.
-pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String> {
-    // Fast pre-check: traversal guard + raw starts_with.
-    let target = validate_entry_path(project_root, path)?;
+/// Move one or more files/folders to the OS trash — recoverable via the file
+/// manager, never a permanent unlink. Refuses to trash the project root
+/// itself (callers should never surface Delete on the root; defend in
+/// depth). The ONE delete core: the desktop's single-entry and batch delete
+/// commands, and both HTTP mutation arms (`delete_entry`, `delete_entries`),
+/// all call here — [`delete_entry_inner`] below is this loop's one-element
+/// case, not a second copy of it.
+///
+/// Stops at the first failure. The OS trash call is not transactional: an
+/// entry already processed earlier in the same batch stays trashed even when
+/// a later one fails, and there is no multi-entry rollback — see the
+/// per-entry comment below for why a single delete can genuinely fail with
+/// nothing further to try.
+pub fn delete_entries_inner(project_root: &Path, paths: &[String]) -> Result<(), String> {
+    for path in paths {
+        // Fast pre-check: traversal guard + raw starts_with.
+        let target = validate_entry_path(project_root, path)?;
 
-    // Already gone — the state the delete asked for. Without this, the
-    // canonical recheck below turns an achieved goal into "Failed to
-    // resolve … os error 2": on 2026-09-05 a Drive-synced vault trashed
-    // `untitled.md` moments before the command landed, and the author got a
-    // failure dialog for a delete that had succeeded.
-    if target.symlink_metadata().is_err() {
-        return Ok(());
-    }
+        // Already gone — the state the delete asked for. Without this, the
+        // canonical recheck below turns an achieved goal into "Failed to
+        // resolve … os error 2": on 2026-09-05 a Drive-synced vault trashed
+        // `untitled.md` moments before the command landed, and the author got
+        // a failure dialog for a delete that had succeeded.
+        if target.symlink_metadata().is_err() {
+            continue;
+        }
 
-    // Canonical-form recheck to defeat symlink-escape.
-    let (root_canonical, target_canonical) = recheck_canonical(project_root, &target)?;
+        // Canonical-form recheck to defeat symlink-escape.
+        let (root_canonical, target_canonical) = recheck_canonical(project_root, &target)?;
 
-    if target_canonical == root_canonical {
-        return Err("Cannot delete the project root".to_string());
-    }
+        if target_canonical == root_canonical {
+            return Err("Cannot delete the project root".to_string());
+        }
 
-    // On macOS, trash via `NSFileManager.trashItemAtURL`, not the crate's
-    // default Finder AppleScript. The Finder route serializes through a
-    // busy Finder under the default ~60s AppleEvent ceiling — on a cloud
-    // File Provider vault it timed out (-1712) where trashItemAtURL took
-    // 30ms (measured 2026-09-05, Google Drive) — and it needs the
-    // Automation permission whose denial (-1743) was moss#1171. Both
-    // failure modes cease to exist on this route. Known cost: Finder may
-    // not offer "Put Back" for items trashed this way; drag-out recovery
-    // still works.
-    #[allow(unused_mut)]
-    let mut ctx = trash::TrashContext::default();
-    #[cfg(target_os = "macos")]
-    {
-        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        // On macOS, trash via `NSFileManager.trashItemAtURL`, not the crate's
+        // default Finder AppleScript. The Finder route serializes through a
+        // busy Finder under the default ~60s AppleEvent ceiling, which times
+        // out on a cloud File Provider vault, and it needs the Automation
+        // permission, whose denial is a real regression. Both failure modes
+        // cease to exist on this route. Known cost: Finder may not offer "Put
+        // Back" for items trashed this way; drag-out recovery still works.
+        //
+        // Deliberately NO fallback route when this fails. On a volume whose
+        // Trash is unusable, every sanctioned API — `FileManager.trashItem`,
+        // `NSWorkspace.recycle` (the same underlying failure, not a second
+        // door) — fails the same way, and the one route that "succeeds",
+        // handing the delete to Finder via `osascript`, does so by deleting
+        // the file permanently: gone from `~/.Trash`, the volume, and —
+        // propagated by sync — every other device, with no undo.
+        //
+        // A delete door that silently becomes a shredder in its degraded
+        // case is worse than one that refuses, so it refuses. Trashing an
+        // item really can be impossible (a File Provider item whose provider
+        // does not advertise `allowsTrashing`, a volume with no Trash), and
+        // destroying it anyway is a decision only the person can make —
+        // which needs a typed error here instead of a string, and a
+        // confirmation the UI owns. Until then: say so, and stop.
+        #[allow(unused_mut)]
+        let mut ctx = trash::TrashContext::default();
+        #[cfg(target_os = "macos")]
         ctx.set_delete_method(DeleteMethod::NsFileManager);
+        match ctx.delete(&target) {
+            Ok(()) => {}
+            // Vanished mid-flight (the pre-check's race window): goal state
+            // reached, same as the pre-check.
+            Err(_) if target.symlink_metadata().is_err() => {}
+            Err(e) => {
+                // The raw `trash::Error` is a nested Rust Debug dump — not
+                // something to hand a user through a toast that is otherwise in
+                // their own language. Keep it in the log for support; give the
+                // user one sentence that tells them what to do next, including
+                // the part they need to weigh: Finder can remove it, but where
+                // there is no Trash to move it to, Finder removes it for good.
+                log::error!("delete_entry: couldn't move '{}' to the Trash: {}", path, e);
+                return Err(format!(
+                    "Couldn't move '{}' to the Trash. Deleting it in Finder will work, \
+                     but may remove it permanently.",
+                    path
+                ));
+            }
+        }
     }
-    match ctx.delete(&target) {
-        Ok(()) => Ok(()),
-        // Vanished mid-flight (the pre-check's race window): goal state
-        // reached, same as the pre-check.
-        Err(_) if target.symlink_metadata().is_err() => Ok(()),
-        Err(e) => Err(format!("Failed to move '{}' to trash: {}", path, e)),
-    }
+    Ok(())
+}
+
+/// [`delete_entries_inner`] for exactly one path.
+pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String> {
+    delete_entries_inner(project_root, std::slice::from_ref(&path.to_string()))
 }
 
 /// Rename an entry: path-traversal guard + project-root boundary check +
@@ -211,7 +251,7 @@ pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String>
 /// `renameEntry` and assert on its relative-path argument, which baked in the
 /// origin bug (a relative `old`/`new` slipped past a boundary check that was
 /// only ever exercised through a mock). The cross-boundary regression lives in
-/// `tests/rename_boundary_test.rs` and calls this fn directly (#715/#731).
+/// `tests/rename_boundary_test.rs` and calls this fn directly.
 ///
 /// `old`/`new` must be ABSOLUTE paths under `project_root` — the same contract
 /// the command receives from the frontend (which resolves to absolute at the FS
@@ -234,105 +274,100 @@ pub fn rename_entry_inner(
         .ok_or_else(|| "Invalid destination path".to_string())?;
     recheck_canonical(project_root, new_parent)?;
 
-    // Detect whether this is a directory rename before we move it.
-    let is_dir = old_p.is_dir();
+    // `fs::rename` silently replaces an existing file. Refuse, unless this is
+    // a case-only rename, where a case-insensitive filesystem reports the
+    // destination as existing because it is the source itself.
+    if std::fs::symlink_metadata(&new_p).is_ok() && !is_case_only_rename(&old_p, &new_p) {
+        return Err(format!("'{}' already exists", new_p.display()));
+    }
+
+    // A folder's self-named home file is carried to the new name after the
+    // move. Decide that, and refuse a collision, before anything moves: the
+    // carry's own `fs::rename` would replace a page already named that.
+    let carry = if old_p.is_dir() { home_carry_names(&old_p, &new_p) } else { None };
+    if let Some((from, to)) = &carry {
+        let (src, dst) = (old_p.join(from), old_p.join(to));
+        if std::fs::symlink_metadata(&dst).is_ok() && !is_case_only_rename(&src, &dst) {
+            return Err(format!("'{}' already exists", new_p.join(to).display()));
+        }
+    }
 
     std::fs::rename(&old_p, &new_p)
         .map_err(|e| format!("Failed to rename '{}': {}", old_p.display(), e))?;
 
-    // After a successful directory rename, check whether the folder had a
-    // self-named home file and carry it to the new name (best-effort).
-    if is_dir {
-        rename_self_named_home(project_root, &old_p, &new_p);
+    if let Some((from, to)) = carry {
+        carry_home(project_root, &new_p.join(from), &new_p.join(to));
     }
 
     Ok(())
 }
 
-/// After a directory is renamed from `old_dir` to `new_dir`, rename its
-/// self-named home file if one exists.
+/// True when `new` differs from `old` only in letter case, in the same
+/// folder, and names the same file: the one case where an existing
+/// destination is not another file. A hard link or symlink to the source is
+/// the same file but not a case-only rename.
+fn is_case_only_rename(old: &std::path::Path, new: &std::path::Path) -> bool {
+    let (Some(a), Some(b)) = (old.file_name(), new.file_name()) else { return false };
+    old.parent() == new.parent()
+        && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        && same_file::is_same_file(old, new).unwrap_or(false)
+}
+
+/// File names `(from, to)` of the self-named home file a directory rename
+/// carries along, looking inside `old_dir` before the move.
 ///
 /// A "self-named" home file is `<old_folder_name>.md` (case-insensitive, with
 /// optional recognized lang-suffix) inside the directory.  Index/README/
 /// `_index`/`main` stems are left untouched — they are conventional and do not
 /// need to track the folder name.
-///
-/// This is best-effort: any error emits a `log::warn!` and returns without
-/// propagating — the `home: true` marker keeps resolution working even if the
-/// file name doesn't match.
-fn rename_self_named_home(
-    project_root: &std::path::Path,
-    old_dir: &std::path::Path,
-    new_dir: &std::path::Path,
-) {
-    // Extract old and new folder base-names as lowercase strings.
-    let old_name = match old_dir.file_name().and_then(|n| n.to_str()) {
-        Some(n) => n.to_string(),
-        None => return,
-    };
-    let new_name = match new_dir.file_name().and_then(|n| n.to_str()) {
-        Some(n) => n.to_string(),
-        None => return,
-    };
+fn home_carry_names(old_dir: &std::path::Path, new_dir: &std::path::Path) -> Option<(String, String)> {
+    let old_name = old_dir.file_name()?.to_str()?;
+    let new_name = new_dir.file_name()?.to_str()?;
 
-    // Build the candidate path: <new_dir>/<old_name>.md
-    // (the file was already moved with the directory)
-    let candidate = new_dir.join(format!("{}.md", old_name));
-    if !candidate.exists() {
-        // No self-named home file found — nothing to carry.
-        return;
+    let from = format!("{old_name}.md");
+    if !old_dir.join(&from).exists() {
+        return None;
     }
-
-    // Extract the stem of the candidate (without ".md") to check whether it
-    // is truly self-named for the OLD folder and not an index stem.
-    let stem = match candidate
-        .file_stem()
-        .and_then(|s| s.to_str())
-    {
-        Some(s) => s.to_string(),
-        None => return,
-    };
+    let stem = old_name;
 
     // Strip a recognized lang-suffix if present (e.g. "游记.zh-hans" → "游记").
-    let bare_stem = moss_core::home::strip_lang_suffix(&stem)
-        .unwrap_or(&stem)
-        .to_string();
+    let bare_stem = moss_core::home::strip_lang_suffix(stem).unwrap_or(stem);
 
-    // If the bare stem is a recognized index stem (index, readme, etc.),
-    // do NOT rename — those are conventional and folder-name-independent.
-    if moss_core::home::is_index_stem(&bare_stem) {
-        return;
+    // Index stems (index, readme, etc.) are conventional and folder-name-independent.
+    if moss_core::home::is_index_stem(bare_stem) {
+        return None;
     }
 
     // Confirm the bare stem matches the OLD folder name (case-insensitive).
     if bare_stem.to_lowercase() != old_name.to_lowercase() {
-        // Not self-named for this folder — leave it alone.
-        return;
+        return None;
     }
 
-    // Build the destination: <new_dir>/<new_name>.md (preserving any lang suffix).
-    let new_filename = match stem.rsplit_once('.') {
-        // A recognized lang suffix was stripped — preserve it.
+    // Destination: <new_name>.md, preserving any lang suffix.
+    let to = match stem.rsplit_once('.') {
         Some((_, suffix)) if bare_stem != stem => format!("{new_name}.{suffix}.md"),
-        // No lang suffix — plain `<new_name>.md`
         _ => format!("{new_name}.md"),
     };
+    Some((from, to))
+}
 
-    let destination = new_dir.join(&new_filename);
-
+/// Rename the home file inside the already-moved directory. Best-effort: an
+/// error emits a `log::warn!` and returns — the `home: true` marker keeps
+/// resolution working even if the file name doesn't match.
+fn carry_home(project_root: &std::path::Path, candidate: &std::path::Path, destination: &std::path::Path) {
     // Validate destination is still within the project root (best-effort guard).
     if let Err(e) = validate_entry_path(project_root, destination.to_str().unwrap_or("")) {
         log::warn!(
-            "rename_self_named_home: destination '{}' failed path guard: {}",
+            "carry_home: destination '{}' failed path guard: {}",
             destination.display(),
             e
         );
         return;
     }
 
-    if let Err(e) = std::fs::rename(&candidate, &destination) {
+    if let Err(e) = std::fs::rename(candidate, destination) {
         log::warn!(
-            "rename_self_named_home: could not rename '{}' → '{}': {}",
+            "carry_home: could not rename '{}' → '{}': {}",
             candidate.display(),
             destination.display(),
             e
@@ -394,8 +429,7 @@ fn create_entry_path(
     Ok(path)
 }
 
-/// Create one empty note. Monotonic mode: the filename IS the title (see
-/// docs/archive/2026-05-25-editor-heading-monotonic.md), so a new file starts
+/// Create one empty note. Monotonic mode: the filename IS the title, so a new file starts
 /// with no frontmatter and no `title:`; authors add fields through the ChipBar,
 /// which writes them on first edit.
 pub fn create_file_inner(
@@ -469,7 +503,7 @@ fn write_new_page(path: &Path, content: &str) -> Result<String, String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create folder '{}': {}", parent.display(), e))?;
     }
-    // allow:raw_write creates a brand-new note in the vault content tree — never .moss/build/, and the path was just uniqueness-checked
+    // allow:raw_write creates a brand-new note in the vault content tree — never .moss/build.nosync/, and the path was just uniqueness-checked
     std::fs::write(path, content)
         .map_err(|e| format!("Failed to create file '{}': {}", path.display(), e))?;
     Ok(path.to_string_lossy().to_string())
@@ -503,7 +537,7 @@ pub fn create_folder_inner(
 ///
 /// First-party code has no reason to construct one; if you are reaching for
 /// this from moss's own UI, the file you want has an owning module that should
-/// read it for you (see moss#997).
+/// read it for you.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginPath(String);
 
@@ -550,7 +584,7 @@ impl PluginPath {
     }
 
     /// The one documented exception to the `.moss/` fence above: the shared
-    /// comment-data directories from docs/reference/social-data-standard.md —
+    /// comment-data directories —
     /// but only for the **caller's own** file.
     ///
     /// `.moss/data/social/` is a genuinely multi-writer directory by design —
@@ -566,7 +600,7 @@ impl PluginPath {
     /// plugin owns outright. Without this, any plugin could overwrite
     /// first-party `.moss/data/social/review.json`
     /// (`build/features/review.rs`) or a sibling plugin's comment file.
-    /// `.moss/social/` is the pre-#793 legacy home of the same data; it stays
+    /// `.moss/social/` is the legacy home of the same data; it stays
     /// reachable, under the same one-file-per-plugin rule plus its
     /// `.migrated-bak` archive copy, only so the plugin's one-time reconcile
     /// can find and migrate a straggler file.

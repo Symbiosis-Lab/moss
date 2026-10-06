@@ -126,8 +126,8 @@ pub(crate) fn real_trash(vault_root: &Path, path: &str) -> Result<(), String> {
 
 fn restore_entry(store: &ObjectStore, entry: &Entry, target: &Path) -> Result<(), String> {
     if entry.mode == MODE_SYMLINK {
-        let blob = store.get_path(&entry.hash).ok_or_else(|| not_kept_reason(entry))?;
-        // allow:raw_read the per-computer history store under app data (ADR-083) — never a vault input, never cloud-synced
+        let blob = store.ready_blob(&entry.hash).ok_or_else(|| not_kept_reason(entry))?;
+        // allow:raw_read .moss/history/ — cloud-synced now, but content-addressed and write-once: a missing/evicted blob already reads as "not kept," never silently as fresh
         let target_str =
             std::fs::read_to_string(&blob).map_err(|e| format!("could not read the kept symlink target: {e}"))?;
         if let Some(parent) = target.parent() {
@@ -139,7 +139,7 @@ fn restore_entry(store: &ObjectStore, entry: &Entry, target: &Path) -> Result<()
         let _ = std::fs::remove_file(target);
         symlink_to(&target_str, target)
     } else {
-        store.get_path(&entry.hash).ok_or_else(|| not_kept_reason(entry))?;
+        store.ready_blob(&entry.hash).ok_or_else(|| not_kept_reason(entry))?;
         store.link_to(&entry.hash, target)
     }
 }

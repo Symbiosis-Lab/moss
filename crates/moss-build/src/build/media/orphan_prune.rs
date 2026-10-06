@@ -1,10 +1,10 @@
-//! Ship-time pruning of unreferenced `.webp` variants (moss#976 B2).
+//! Ship-time pruning of unreferenced `.webp` variants.
 //!
 //! `scan.rs` walks and encodes every image file under the site folder — there
-//! is no reference-graph filter anywhere in the encode path (moss#976
-//! measured 534 orphaned `.webp` files / 31.1 MB per generation on a real
-//! site: vault images under `assets/` that no markdown, template, feed, or
-//! plugin output ever links to).
+//! is no reference-graph filter anywhere in the encode path. Measurement on a
+//! real site found 534 orphaned `.webp` files / 31.1 MB per generation:
+//! vault images under `assets/` that no markdown, template, feed, or
+//! plugin output ever links to.
 //!
 //! **Scope: `.webp` only, deliberately not the raster (`.png`/`.jpg`)
 //! fallback tier.** The raster fallback is referenced a third way that never
@@ -16,7 +16,7 @@
 //! out-of-band consumer — the WebP `<source>` only ever exists inside
 //! rendered `<picture>` markup that IS in `stage_dir` — so pruning them is
 //! safe under invariant 6 without also solving the email case. Pruning the
-//! raster tier is moss#976 follow-up work, gated on either scanning
+//! raster tier is follow-up work, gated on either scanning
 //! newsletter-eligible content or accepting that risk explicitly.
 //!
 //! ## How "referenced" is decided
@@ -39,10 +39,10 @@
 //! delimiters (whitespace, quotes, `<>()`, and `:` to block a URL scheme),
 //! not an enumerated allowlist of "safe" bytes. An enumerated allowlist is
 //! only ever as complete as the encoder it was copied from — moss shipped
-//! exactly that failure once (docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
-//! Bug A: one un-encoded asset-URL emitter produced raw non-ASCII bytes the
-//! old ASCII-only class couldn't span, so the match backtracked to a
-//! truncated tail and a live reference read as an orphan). The negated
+//! exactly that failure once: one un-encoded asset-URL emitter produced raw
+//! non-ASCII bytes the old ASCII-only class couldn't span, so the match
+//! backtracked to a truncated tail and a live reference read as an orphan.
+//! The negated
 //! class survives *any* future emitter that ships raw bytes — CJK,
 //! Cyrillic, Arabic, Devanagari, combining marks, emoji — because it does
 //! not need to enumerate them in advance. See the inline comment on the
@@ -88,23 +88,25 @@ const SCAN_EXTENSIONS: &[&str] = &["html", "xml", "json", "js", "txt", "css", "s
 /// the other way: an unreadable page (a cloud eviction, a mid-flight write, a
 /// permission fault) was skipped silently, which SHRINKS `tails`, and a smaller
 /// reference set authorizes MORE deletion. One unreadable page could therefore
-/// permit deleting every variant only that page referenced — and since moss#1085
-/// the deletion is persisted as a cross-build verdict, so recovery takes several
-/// builds. That is the mechanism behind moss#976 (525 files deleted, 207 images
-/// 404-ing for real readers). Pruning saves bytes; deleting wrongly costs the
+/// permit deleting every variant only that page referenced — and the
+/// deletion is persisted as a cross-build verdict, so recovery takes several
+/// builds. That is the mechanism behind an earlier incident on a real site
+/// (525 files deleted, 207 images 404-ing for real readers). Pruning saves
+/// bytes; deleting wrongly costs the
 /// site, so the scan reports its own blindness and the caller fails closed.
 pub struct ReferenceScan {
     pub tails: HashSet<String>,
+    /// Each token resolved against the file it was found in, and nothing
+    /// else: what a reference actually points at. `tails` widens every token
+    /// to all its path suffixes, which is right for deciding what NOT to
+    /// delete and wrong for deciding what is missing — a page at `a/b/` that
+    /// references its own `a/b/assets/x.webp` contributes `assets/x.webp` and
+    /// `x.webp` to `tails`, keys that exist nowhere. Read this set when the
+    /// question is "which references resolve to nothing".
+    pub resolved: HashSet<String>,
     /// Paths the scan could not read. Non-empty means `tails` is a SUBSET of
     /// the truth, so pruning from it would delete referenced files.
     pub unreadable: Vec<std::path::PathBuf>,
-}
-
-/// Bytes freed and files removed by [`prune_orphaned_webp`].
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct PruneResult {
-    pub files_removed: usize,
-    pub bytes_freed: u64,
 }
 
 /// Walk `stage_dir` and collect every embedded image-path token from the
@@ -121,9 +123,8 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
     // delimiters, not an enumerated allowlist — every byte that isn't a
     // structural delimiter is a legal filename byte, ASCII or not. This is
     // the defence-in-depth fix for moss's own contract violation that
-    // shipped one un-encoded asset-URL emitter (see
-    // docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
-    // Bug A): the pruner is correct against a fully-percent-encoded URL, but
+    // shipped one un-encoded asset-URL emitter: the pruner is correct
+    // against a fully-percent-encoded URL, but
     // an enumerated allowlist is only ever as complete as the encoder it was
     // copied from, and a *future* un-encoded emitter — raw CJK, Cyrillic,
     // Arabic, Devanagari, combining marks, emoji, whatever a plugin author
@@ -189,20 +190,11 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
     // `tests/staged_html_manifest_parity.rs`.
     // Case-insensitive on the extension alternation as defense
     // in depth — moss itself always emits lowercase, but nothing enforces
-    // that on a plugin-authored reference.
-    // Two spellings of the same class, differing only in whether `'` ends a
-    // token. See the discussion above: each alone has a false negative the
-    // other does not, and the union of the two has neither.
-    const TOKEN_PATTERNS: [&str; 2] = [
-        r#"[A-Za-z0-9_%\x{80}-\x{10FFFF}][^\s"'<>():]*\.(?i:webp|png|jpe?g|gif|svg|avif)"#,
-        r#"[A-Za-z0-9_%\x{80}-\x{10FFFF}][^\s"<>():]*\.(?i:webp|png|jpe?g|gif|svg|avif)"#,
-    ];
-    let token_res: Vec<regex::Regex> = TOKEN_PATTERNS
-        .iter()
-        .map(|p| regex::Regex::new(p).expect("static regex"))
-        .collect();
+    // that on a plugin-authored reference. The patterns themselves live in
+    // [`token_regexes`], the per-token work in [`collect_references`].
 
     let mut referenced = HashSet::new();
+    let mut resolved_refs = HashSet::new();
     let (files, mut unreadable) = walk_files(stage_dir);
     for path in files {
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -241,55 +233,104 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
             .ok()
             .and_then(|r| r.to_str())
             .map(|r| r.replace('\\', "/"));
-        for m in token_res.iter().flat_map(|re| re.find_iter(&text)) {
-            // The token charset excludes `:`, so an absolute URL's scheme
-            // (`https:`) can never be PART of a match — but the regex still
-            // finds a match starting right after "//", e.g. the
-            // `example.com/x.webp` tail of `https://example.com/x.webp`.
-            // That tail's suffixes would otherwise collide with a same-named
-            // local file's key. Reject any match immediately preceded by
-            // `//` (covers `https://`, `http://`, and protocol-relative
-            // `//`) so an external URL can never falsely protect a local
-            // orphan.
-            if text.as_bytes()[..m.start()].ends_with(b"//") {
-                continue;
-            }
-            let Some(decoded) = decode_reference(m.as_str()) else {
-                continue;
-            };
-            // Two readings of the same token, unioned, because neither alone
-            // is complete and invariant 6 only permits erring wide.
-            //
-            // SUFFIXES of the token cover a reference written DEEPER than the
-            // key — a page at `a/b/c/` writing `../../../assets/x.webp` — and
-            // a data file listing site-root-relative keys without a leading
-            // `/`.
-            //
-            // RESOLUTION against the file the token was found in covers the
-            // opposite direction, which suffixes structurally cannot: a
-            // reference written SHALLOWER than the key. That is the ordinary
-            // shape for every non-HTML scanned type, whose URLs are relative
-            // to their own file — `gallery/style.css` with
-            // `url(assets/x.webp)` means `gallery/assets/x.webp`, and by
-            // suffixes alone it reads as `assets/x.webp`, matches no key, and
-            // the live reference is pruned. Before moss#1085 that was a
-            // deletion the next build undid; now the verdict is persisted and
-            // `suppressed_variants` reads it back through this same set, so
-            // the variant would stay missing while a stylesheet still asks
-            // for it. `resolve_to_root_relative` is the canonical resolver
-            // (it already backs frontmatter `cover:`), so this is one call,
-            // not a second implementation.
-            referenced.extend(path_suffixes(&strip_relative_prefixes(&decoded)));
-            if let Some(doc) = doc.as_deref() {
-                let resolved =
-                    crate::build::markdown::html_post::resolve_to_root_relative(&decoded, doc);
-                if !resolved.is_empty() {
-                    referenced.insert(resolved);
-                }
+        collect_references(&text, doc.as_deref(), &mut referenced, &mut resolved_refs);
+    }
+    ReferenceScan { tails: referenced, resolved: resolved_refs, unreadable }
+}
+
+/// The image references in one scanned file's `text`, read both ways
+/// [`extract_referenced_tails`] reads them, and unioned the same way —
+/// suffixes plus resolution against `doc`, the file's site-root-relative
+/// path. For a caller asking whether one page shows an image.
+pub fn references_in(text: &str, doc: &str) -> HashSet<String> {
+    let mut tails = HashSet::new();
+    collect_references(text, Some(doc), &mut tails, &mut HashSet::new());
+    tails
+}
+
+/// Two spellings of the same token class, differing only in whether `'` ends
+/// a token — see the discussion in [`extract_referenced_tails`]: each alone
+/// has a false negative the other does not, and the union of the two has
+/// neither. Compiled once per process.
+fn token_regexes() -> &'static [regex::Regex; 2] {
+    static RES: std::sync::OnceLock<[regex::Regex; 2]> = std::sync::OnceLock::new();
+    RES.get_or_init(|| {
+        [
+            r#"[A-Za-z0-9_%\x{80}-\x{10FFFF}][^\s"'<>():]*\.(?i:webp|png|jpe?g|gif|svg|avif)"#,
+            r#"[A-Za-z0-9_%\x{80}-\x{10FFFF}][^\s"<>():]*\.(?i:webp|png|jpe?g|gif|svg|avif)"#,
+        ]
+        .map(|p| regex::Regex::new(p).expect("static regex"))
+    })
+}
+
+/// One file's share of [`extract_referenced_tails`]: every token in `text`,
+/// into `tails` (suffixes and resolution, unioned) and `resolved`
+/// (resolution only). `doc` is the file's site-root-relative path; without
+/// it only the suffix reading is possible.
+fn collect_references(
+    text: &str,
+    doc: Option<&str>,
+    tails: &mut HashSet<String>,
+    resolved: &mut HashSet<String>,
+) {
+    for m in token_regexes().iter().flat_map(|re| re.find_iter(text)) {
+        // The token charset excludes `:`, so an absolute URL's scheme
+        // (`https:`) can never be PART of a match — but the regex still
+        // finds a match starting right after "//", e.g. the
+        // `example.com/x.webp` tail of `https://example.com/x.webp`.
+        // That tail's suffixes would otherwise collide with a same-named
+        // local file's key. Reject any match immediately preceded by
+        // `//` (covers `https://`, `http://`, and protocol-relative
+        // `//`) so an external URL can never falsely protect a local
+        // orphan.
+        if text.as_bytes()[..m.start()].ends_with(b"//") {
+            continue;
+        }
+        // The start class cannot begin a token on `/` or `.`, so a match
+        // never carries its own `/`, `./` or `../` prefix. Taken back here,
+        // or the resolution below reads `/a/b/x.webp` on a page in `a/b/`
+        // as `a/b/a/b/x.webp`, and `../x.webp` as a sibling of the page.
+        // The suffix reading strips the prefix again, so it is unchanged.
+        let prefix = text.as_bytes()[..m.start()]
+            .iter()
+            .rev()
+            .take_while(|b| matches!(b, b'.' | b'/'))
+            .count();
+        let Some(decoded) = decode_reference(&text[m.start() - prefix..m.end()]) else {
+            continue;
+        };
+        // Two readings of the same token, unioned, because neither alone
+        // is complete and invariant 6 only permits erring wide.
+        //
+        // SUFFIXES of the token cover a reference written DEEPER than the
+        // key — a page at `a/b/c/` writing `../../../assets/x.webp` — and
+        // a data file listing site-root-relative keys without a leading
+        // `/`.
+        //
+        // RESOLUTION against the file the token was found in covers the
+        // opposite direction, which suffixes structurally cannot: a
+        // reference written SHALLOWER than the key. That is the ordinary
+        // shape for every non-HTML scanned type, whose URLs are relative
+        // to their own file — `gallery/style.css` with
+        // `url(assets/x.webp)` means `gallery/assets/x.webp`, and by
+        // suffixes alone it reads as `assets/x.webp`, matches no key, and
+        // the live reference is pruned. That used to be a
+        // deletion the next build undid; now the verdict is persisted and
+        // `suppressed_variants` reads it back through this same set, so
+        // the variant would stay missing while a stylesheet still asks
+        // for it. `resolve_to_root_relative` is the canonical resolver
+        // (it already backs frontmatter `cover:`), so this is one call,
+        // not a second implementation.
+        tails.extend(path_suffixes(&strip_relative_prefixes(&decoded)));
+        if let Some(doc) = doc {
+            let resolved_key =
+                crate::build::markdown::html_post::resolve_to_root_relative(&decoded, doc);
+            if !resolved_key.is_empty() {
+                tails.insert(resolved_key.clone());
+                resolved.insert(resolved_key);
             }
         }
     }
-    ReferenceScan { tails: referenced, unreadable }
 }
 
 /// The `.webp` variants a producer must NOT put back into `stage_dir`.
@@ -303,11 +344,11 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
 /// encoder in `run_image_conversion`, and the fingerprint-skip self-heal in
 /// `dispatch_image_conversions`.
 ///
-/// Before moss#1085 both derived it themselves, from `scan.rs`'s walk of every
+/// Before this fix both derived it themselves, from `scan.rs`'s walk of every
 /// image file under the vault, so on any site holding an unreferenced image
 /// the producers and the prune disagreed by construction and each build
 /// re-created exactly what the previous build had deleted. Measured on
-/// harbor 2026-08-19: sixteen consecutive builds, each logging `self-heal:
+/// riverbend 2026-08-19: sixteen consecutive builds, each logging `self-heal:
 /// re-materialized 96 staged .webp file(s)` and then `orphan prune: removed 96
 /// unreferenced .webp file(s), 3553600 bytes freed` — identical counts,
 /// identical bytes, work that could never settle.
@@ -353,47 +394,26 @@ pub fn suppressed_variants(
         .collect()
 }
 
-/// Remove every `.webp` key in `image_outputs` whose normalized path is not
-/// among `referenced_tails`.
+/// Every `.webp` key in `image_outputs` whose normalized path is not among
+/// `referenced_tails`.
 ///
-/// Returns the removed keys (so the caller can also drop them from the sealed
-/// manifest — see [`crate::build::manifest::SealedManifest::remove_entries`])
-/// alongside the byte/file count. Errors removing an individual file are
-/// logged and skipped — a stray unremovable file costs bytes, not
-/// correctness, so it must never fail the build.
-pub fn prune_orphaned_webp(
-    stage_dir: &Path,
+/// Pure set arithmetic, and deliberately so: the keys it returns leave the
+/// sealed manifest, and `ship_phase` copies `sealed.files()` and nothing else,
+/// so dropping the entry is already the whole of "this variant does not ship".
+/// This used to unlink the staged file here as well, which is a write into the
+/// directory the preview server is reading — see the sweep in
+/// `build::pipeline`, which does the unlinking at the next build's start.
+pub fn orphaned_webp_keys(
     image_outputs: &HashSet<String>,
     referenced_tails: &HashSet<String>,
-) -> (HashSet<String>, PruneResult) {
-    let mut removed_keys = HashSet::new();
-    let mut result = PruneResult::default();
-
-    for key in image_outputs {
-        if !key.ends_with(".webp") {
-            continue; // raster fallback tier — see module docs
-        }
-        if referenced_tails.contains(key.as_str()) {
-            continue;
-        }
-        let full = stage_dir.join(key);
-        let size = std::fs::metadata(&full).map(|m| m.len()).unwrap_or(0);
-        match std::fs::remove_file(&full) {
-            Ok(()) => {
-                removed_keys.insert(key.clone());
-                result.files_removed += 1;
-                result.bytes_freed += size;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Already absent — still drop it from the manifest.
-                removed_keys.insert(key.clone());
-            }
-            Err(e) => {
-                log::warn!("orphan prune: failed to remove {:?}: {}", full, e);
-            }
-        }
-    }
-    (removed_keys, result)
+) -> HashSet<String> {
+    image_outputs
+        .iter()
+        // `.png`/`.jpg` are the raster fallback tier — see module docs.
+        .filter(|key| key.ends_with(".webp"))
+        .filter(|key| !referenced_tails.contains(key.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Decode an extracted token to a path via the shared HTML-reference

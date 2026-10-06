@@ -1,28 +1,25 @@
 //! Typed URL resolution: walk a [`Document`] and classify every
 //! [`Url::Unresolved`] into a [`Url::Resolved`] with the right [`UrlKind`].
 //!
-//! One typed visitor replaces the two line-level "Stage 1" regex passes it was
-//! migrated from (`markdown_refs` for bare-filename image refs,
-//! `markdown_links` for standard `[text](url)` links), both deleted after
-//! parity was proven — history in `docs/archive/2026-05-28-*`. Two properties
-//! come from the AST rather than from code here: `Inline::Image::src` (always
-//! an asset URL) is structurally distinct from `Inline::Link::url` (may be a
+//! One typed visitor does the classification. Two properties come from the
+//! AST rather than from code here: `Inline::Image::src` (always an asset
+//! URL) is structurally distinct from `Inline::Link::url` (may be a
 //! markdown target), and code is never visited by [`visit_urls_mut`], so no
 //! fence tracking is needed.
 //!
 //! `resolve_link_urls` emits a `moss-resolved:<path>` sentinel and leaves the
-//! URL `Url::Unresolved` so src-tauri's `classify_url_prod` can apply
+//! URL `Url::Unresolved` so moss-build's `classify_url_prod` can apply
 //! `page_map` / `external_url_map` / wikilink-class-aware decoding. That
-//! sentinel IS the moss-core ↔ src-tauri layering seam: moss-core resolves
-//! filesystem paths, src-tauri owns the deployed URL space.
+//! sentinel IS the moss-core ↔ moss-build layering seam: moss-core resolves
+//! filesystem paths, moss-build owns the deployed URL space.
 //!
 //! ## OutgoingLink contract
 //!
-//! [`UrlResolution::outgoing`] carries the same load-bearing shape (target_path,
-//! link_type, document-order sequence) the deleted passes produced. It uses
-//! parsed inline text for `display_text` where they used the raw source between
-//! `[` and `]`; `display_text` has no production consumer, so the divergence is
-//! non-breaking (see `link_wrapping_image_target_path`).
+//! [`UrlResolution::outgoing`] carries a load-bearing shape (target_path,
+//! link_type, document-order sequence). `display_text` holds parsed inline
+//! text rather than the raw source between `[` and `]`; it has no production
+//! consumer, so that divergence is non-breaking (see
+//! `link_wrapping_image_target_path`).
 
 use super::document::Document;
 use super::node::{Block, Inline};
@@ -30,39 +27,13 @@ use super::shortcode::Shortcode;
 use super::url::{ResolvedUrl, Url, UrlKind};
 use super::visit::visit_urls_mut;
 use crate::content_graph::ContentGraph;
-use crate::resolve::asset_class::{resolve_asset_ref, AssetIndex, AssetResolution};
+use crate::resolve::asset_class::{resolve_file_target, AssetResolution};
 use crate::resolve::fuzzy_path::{resolve_reference, ResolvedRef};
 use crate::resolve::{Diagnostic, DiagnosticKind, LinkType, OutgoingLink};
 
-// ---------------------------------------------------------------------------
-// GraphAssetIndex: adapts ContentGraph to the AssetIndex trait so the pure
-// engine (resolve_asset_ref) can run against a real content graph.
-// ---------------------------------------------------------------------------
-
-/// Adapts [`ContentGraph`] to the [`AssetIndex`] trait.
-///
-/// Wraps a borrowed `ContentGraph` so that `resolve_asset_ref` (the pure
-/// shared engine in `moss_core::resolve::asset_class`) can be driven by the
-/// build-time in-memory index — identical to how `FsAssetIndex` in src-tauri
-/// drives it from the live filesystem. Exposed `pub` so integration tests and
-/// editor↔build parity tests can construct both adapters over the same file set.
-pub struct GraphAssetIndex<'a>(pub &'a ContentGraph);
-
-impl<'a> AssetIndex for GraphAssetIndex<'a> {
-    fn contains(&self, p: &str) -> bool {
-        self.0.asset_contains(p)
-    }
-    fn contains_ci(&self, p: &str) -> Option<String> {
-        self.0.asset_contains_ci(p)
-    }
-    fn find_by_suffix(&self, s: &str) -> Vec<String> {
-        self.0.asset_find_by_suffix(s)
-    }
-}
-
 /// What one `resolve_urls` walk learned: the dependency edges the build needs,
 /// and the references it could not resolve. A miss produces a diagnostic and
-/// keeps the author's bytes — never a guessed URL (moss#903 bug 3). The host
+/// keeps the author's bytes — never a guessed URL. The host
 /// surfaces diagnostics; moss-core does no I/O.
 #[derive(Debug, Default)]
 pub struct UrlResolution {
@@ -82,8 +53,9 @@ pub struct UrlResolution {
 ///   are left untouched (idempotent on a resolved document).
 /// * `graph` — the content graph for bare-filename / cross-page lookups.
 /// * `source_path` — the file containing the URLs, used by
-///   [`resolve_reference`] for relative-path disambiguation. It does NOT enter
-///   the emitted URL (see [`ContentGraph::pinned_url`]).
+///   [`resolve_reference`] for relative-path
+///   disambiguation. It does NOT enter the emitted URL (see
+///   [`ContentGraph::pinned_url`]).
 pub fn resolve_urls(
     doc: &mut Document,
     graph: &ContentGraph,
@@ -116,7 +88,7 @@ pub fn resolve_urls(
     // anchors that fell through, edge cases), the caller is responsible
     // for one more classification pass before rendering. Callers that
     // need a complete classification can call
-    // [`classify_remaining_urls`] explicitly. The src-tauri host pipeline
+    // [`classify_remaining_urls`] explicitly. moss-build's host pipeline
     // chains a second `visit_urls_mut` to apply its `classify_url_prod`
     // for page_map-aware decoding of the three sentinel prefixes.
 
@@ -156,7 +128,7 @@ fn resolve_image_urls(
     // URLs through the same bare-filename resolver so wikilink targets
     // like `![[hero.jpg]]` resolve to `assets/hero.jpg` against the
     // graph, mirroring the `Inline::Image` path. Regression fix for
-    // the chps-site home hero (2026-05-29): the previous skip left
+    // a real site's home hero (2026-05-29): the previous skip left
     // `args.image` as `Url::Unresolved("hero.jpg")` → the renderer
     // emitted `<img src="hero.jpg">` instead of the depth-correct
     // `assets/hero.jpg`.
@@ -172,19 +144,19 @@ fn resolve_image_urls(
 /// args (Hero, Gallery). Behavior:
 /// - Already `Url::Resolved` → no-op.
 /// - Pipe-bearing → pass through verbatim (Phase 3 PR3 contract).
-/// - External, anchor, data URLs → pass through (engine returns NotFound for
+/// - External, anchor, data URLs → pass through (the resolver finds no file for
 ///   these, so they fall through to the verbatim passthrough arm).
 /// - Separator-bearing, bare filename, or `/`-absolute → routed through
-///   [`resolve_asset_ref`] (the unified engine). On `Resolved` / `Ambiguous`:
+///   [`resolve_file_target`] (the one resolver, [`ContentGraph::resolve_path`]). On `Resolved` / `Ambiguous`:
 ///   emit the target's pinned URL and push an OutgoingLink. On `NotFound`: keep
 ///   the author's bytes and record a diagnostic — the build never hard-fails on
 ///   an unresolved asset ref, and never invents a path either.
 ///
 /// Every resolved href is [`ContentGraph::pinned_url`], so the referencing
 /// page's depth and the target folder's case are structurally out of the answer
-/// (moss#903 bug 3: the same embed emitted a working URL from the vault root and
-/// a broken one from a note two folders down, because the href was computed
-/// relative to the referencing file).
+/// (a past regression here had the same embed emit a working URL from the
+/// vault root and a broken one from a note two folders down, because the
+/// href was computed relative to the referencing file).
 fn resolve_asset_url(
     url: &mut Url,
     alt: &str,
@@ -206,7 +178,7 @@ fn resolve_asset_url(
     }
 
     // External, anchor, and data URLs are not asset filesystem references.
-    // Pass them through before invoking the engine (which only understands
+    // Pass them through before resolving (which only understands
     // filesystem paths) so we don't misinterpret `https://...` as a path.
     if raw.starts_with('#')
         || raw.starts_with("http://")
@@ -220,7 +192,7 @@ fn resolve_asset_url(
     }
 
     // Route ALL remaining refs (bare filenames, separator paths, absolute
-    // `/…` paths) through the unified asset engine. This replaces BOTH the
+    // `/…` paths) through the one resolver. This replaces BOTH the
     // old `is_bare_filename` branch (which called `resolve_reference`) and
     // the old passthrough branch (which emitted the verbatim separator path,
     // causing 404s for cross-directory relative paths).
@@ -231,8 +203,8 @@ fn resolve_asset_url(
     // the editor adapter (`editor::asset_resolver`) via the `@codemirror/lint`
     // hover tooltip. The build's job here is only to emit a correct URL; a
     // build-time console warning is a deferred follow-up (would require
-    // surfacing provenance to the src-tauri build layer).
-    match resolve_asset_ref(&raw, source_path, &GraphAssetIndex(graph)) {
+    // surfacing provenance to moss-build's build layer).
+    match resolve_file_target(&raw, source_path, graph) {
         AssetResolution::Resolved { root_rel, provenance: _ } => {
             pin_asset_url(url, root_rel, alt, graph, found);
         }
@@ -243,8 +215,23 @@ fn resolve_asset_url(
             // Keep the author's bytes (an unresolved asset ref never fails the
             // build) and say so. Synthesizing a plausible-looking path is what
             // shipped a 404 that looked like a working link.
+            //
+            // A target containing `[[` or a raw newline can't legitimately be
+            // a filename — both are signs the target is itself embed syntax,
+            // almost always a paste landing inside an already-open `![[ ]]`.
+            // Name the cause and the fix rather than the generic message.
+            let message = if raw.contains("[[") || raw.contains('\n') {
+                format!(
+                    "Nested embed target — \"{raw}\" contains embed syntax \
+                     instead of a filename, most likely from pasting an image \
+                     inside empty `![[ ]]` brackets. Remove the outer `![[ ]]` \
+                     and keep only the inner filename."
+                )
+            } else {
+                format!("Unresolved asset reference: {raw}")
+            };
             found.diagnostics.push(Diagnostic {
-                message: format!("Unresolved asset reference: {raw}"),
+                message,
                 source_path: source_path.to_string(),
                 reference: raw.clone(),
                 // The one blocking kind. `raw` is the author's literal
@@ -295,7 +282,7 @@ fn resolve_shortcode_image_urls(
                 }
                 // Multi-image hero: every extra slide resolves exactly like
                 // the primary — skipping this re-creates the 2026-05-29
-                // chps-site regression (raw filenames at depth) per slide.
+                // home-hero regression (raw filenames at depth) per slide.
                 for image_url in &mut args.extra_images {
                     resolve_asset_url(image_url, "", graph, source_path, found);
                 }
@@ -363,7 +350,8 @@ fn resolve_shortcode_image_urls(
 /// Mirrors `markdown_links::resolve_markdown_links`:
 /// - Only touches Link URLs (image URLs were handled in phase 1).
 /// - Resolvable targets (not external / not anchor / not protocol /
-///   not absolute-path / not already-prefixed) → graph lookup.
+///   not already-prefixed, and not a `/…` published address unless it
+///   exactly names a Markdown source file) → graph lookup.
 /// - On `Found`: classify into Internal (markdown) / Asset (binary) and
 ///   push OutgoingLink with target_path = resolved path.
 /// - On `Unresolved`: leave URL author-input; Stage 1 emitted a diagnostic
@@ -417,9 +405,9 @@ fn resolve_link_urls(
         // sentinel (`moss-resolved:`, `moss-newtab:`, `wikilink:`) carry
         // Stage 1 / upstream state the visitor cannot decode in isolation
         // — the final pretty URL depends on the host's `page_map`, which
-        // lives in src-tauri's pipeline context. Leave these as
+        // lives in moss-build's pipeline context. Leave these as
         // `Url::Unresolved` so the host's per-URL classifier
-        // (`classify_url_prod` in src-tauri's pipeline) can apply the
+        // (`classify_url_prod` in moss-build's pipeline) can apply the
         // page_map-aware decoding. This preserves the byte-equivalence
         // contract (no OutgoingLink emitted for already-resolved targets
         // — Stage 1 already counted them) while letting the host close
@@ -432,9 +420,13 @@ fn resolve_link_urls(
             return;
         }
 
-        // Absolute filesystem path — treat as opaque. Mirrors
-        // markdown_links: `if url.starts_with('/') { return false; }`.
-        if raw.starts_with('/') {
+        // A destination starting with `/` is a published address and is kept
+        // as written, except when it exactly names a Markdown source file of
+        // the site (`/notes/alpha.md`): that file is not served under its
+        // source name, so the link resolves to the page like any other path.
+        let (path_part, suffix) = split_path_suffix(&raw);
+        let rooted_page = path_part.strip_prefix('/').filter(|rel| names_page_source(rel, graph));
+        if raw.starts_with('/') && rooted_page.is_none() {
             *link_url = Url::Resolved(ResolvedUrl::new(raw, UrlKind::Internal));
             return;
         }
@@ -446,14 +438,19 @@ fn resolve_link_urls(
         // (`moss-resolved:<path>[<suffix>]`), same suffix concatenation.
         //
         // Phase 4 PR7a-stage1b (2026-05-28): moss-core resolves the
-        // filesystem path; src-tauri's `classify_url_prod` decodes the
+        // filesystem path; moss-build's `classify_url_prod` decodes the
         // sentinel into the final pretty / external / asset URL using
         // `page_map`, `external_url_map`, and the wikilink-class signal.
-        // The sentinel IS the moss-core ↔ src-tauri layering seam — the
+        // The sentinel IS the moss-core ↔ moss-build layering seam — the
         // visitor must NOT collapse it to a final `Url::Resolved` or
         // page_map decoding silently breaks.
-        let (path_part, suffix) = split_path_suffix(&raw);
-        match resolve_reference(path_part, graph, source_path) {
+        let target = match rooted_page {
+            // The root address names this one file; no search, no language-tree
+            // scoping from the referencing page.
+            Some(rel) => ResolvedRef::Found(rel.to_string()),
+            None => resolve_reference(path_part, graph, source_path),
+        };
+        match target {
             ResolvedRef::Found(resolved) => {
                 found.outgoing.push(OutgoingLink {
                     target_path: resolved.clone(),
@@ -493,15 +490,22 @@ fn resolve_link_urls(
     });
 }
 
+/// `true` iff `rel` (a site-root path without its leading `/`) is, spelled
+/// exactly, a Markdown source file the graph holds.
+fn names_page_source(rel: &str, graph: &ContentGraph) -> bool {
+    let is_page = crate::path_ext::path_extension(rel)
+        .is_some_and(|ext| crate::page_kind::PAGE_EXTENSIONS.contains(&ext.as_str()));
+    is_page && graph.resolve_path(rel, "").as_deref() == Some(rel)
+}
+
 /// Split a URL into (path, suffix) where `suffix` is `?query` and/or
 /// `#fragment` in source order. Suffix is opaque — round-trip parity with
-/// `crate::build::markdown::pipeline::classify_url_prod` (the src-tauri
+/// moss-build's `build::markdown::pipeline::classify_url_prod` (its
 /// decoder) is the contract; this function must not reorder, normalize,
 /// or escape the suffix bytes.
 ///
-/// The parallel src-tauri implementation lives at
-/// `src-tauri/src/build/markdown/pipeline.rs::split_path_suffix` and must
-/// share this exact shape.
+/// moss-build carries a parallel implementation,
+/// `pipeline.rs::split_path_suffix`, which must share this exact shape.
 fn split_path_suffix(url: &str) -> (&str, Option<&str>) {
     let q = url.find('?');
     let h = url.find('#');
@@ -532,7 +536,7 @@ fn split_path_suffix(url: &str) -> (&str, Option<&str>) {
 /// - `?query` → `?query` (no fragment, untouched)
 /// - `?query#frag` → `?query#<slug>` (query verbatim, fragment slugged)
 ///
-/// `pub` (ADR-036 stage 2): `src-tauri`'s `newsletter.rs` has no content
+/// `pub`: the desktop app's `newsletter.rs` has no content
 /// graph to resolve wikilinks through — it just needs this same fragment
 /// half — so it calls this directly instead of carrying its own copy of the
 /// block-ref-vs-heading-anchor branch.
@@ -568,7 +572,7 @@ pub fn slug_wikilink_suffix(suffix: &str) -> String {
 /// `Inline::Link` variant added before its phase-2 arm is wired).
 ///
 /// Callers that follow [`resolve_urls`] with their own per-URL classifier
-/// (e.g., src-tauri's pipeline calling `classify_url_prod` for
+/// (e.g., moss-build's pipeline calling `classify_url_prod` for
 /// resolver-prefix decoding) should NOT call this — let the secondary
 /// classifier handle the remaining URLs. Callers that have no secondary
 /// pass should call this to maintain the render invariant.

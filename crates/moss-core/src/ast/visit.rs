@@ -277,23 +277,46 @@ where
     true
 }
 
+/// Core of every single-predicate `has_*_recursive` query below: true if any
+/// block in the document (recursive, via [`visit_blocks`]) matches `pred`.
+/// `has_callout_recursive` stays separate — its predicate is a multi-arm
+/// match over several block shapes, not a single test, so folding it in here
+/// would hide that shape rather than share it.
+fn any_block(doc: &Document, pred: impl Fn(&Block) -> bool) -> bool {
+    let mut found = false;
+    visit_blocks(doc, |block| {
+        if pred(block) {
+            found = true;
+            return false; // short-circuit
+        }
+        true
+    });
+    found
+}
+
 /// True if any block in the document is a shortcode of the given kind
 /// (recursive — descends into callouts, blockquotes, list items).
 ///
 /// Replaces the `project_has_inline_subscribe` filesystem scan once
 /// shortcodes migrate to typed AST in Phase B.
 pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
-    let mut found = false;
-    visit_blocks(doc, |block| {
-        if let Block::Shortcode(sc) = block {
-            if sc.kind() == kind {
-                found = true;
-                return false; // short-circuit
-            }
-        }
-        true
-    });
-    found
+    any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == kind))
+}
+
+/// True if any `:::grid` in the document is a scroll row at all — see
+/// [`GridShortcode::is_scroll_row`] — recursive, like
+/// [`has_shortcode_recursive`]. Gates the scroll-row runtime script, so a
+/// site with no scroll row ships none of it. A `{scroll}` grid whose cells
+/// all fit still counts: it only *looks* like a plain grid on a wide
+/// screen, but it needs the script's resize-driven `tabindex`/dots toggling
+/// to become a real scroller once the viewport narrows — only a one-cell
+/// `{scroll}` grid, which is never a scroll row at any width, ships none of
+/// it.
+pub fn has_scroll_row_recursive(doc: &Document) -> bool {
+    any_block(
+        doc,
+        |block| matches!(block, Block::Shortcode(Shortcode::Grid(grid)) if grid.is_scroll_row()),
+    )
 }
 
 /// True if any block in the document is a callout (recursive — a callout
@@ -302,9 +325,9 @@ pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
 /// Gates the `callouts` site stylesheet partial: a build whose every page
 /// answers `false` here never ships `assets/css/site/callouts.css`. The
 /// query is a lowering of the typed tree, never a scan of emitted HTML —
-/// see NORTH-STAR "parse once, lower to many".
+/// parse once, lower to many.
 ///
-/// # The four shapes it matches
+/// # Shapes beyond `Block::Callout`
 ///
 /// The gate is only as complete as the typed tree, and three documented paths
 /// reach a `class="callout"` element without a `Block::Callout`:
@@ -441,6 +464,7 @@ mod tests {
             title: None,
             children: vec![Inline::Text("t".into())],
             is_wikilink: false,
+            has_pothole: false,
         }])
     }
 
@@ -540,6 +564,7 @@ mod tests {
                 title: None,
                 children: vec![Inline::Text("t".into())],
                 is_wikilink: false,
+                has_pothole: false,
             }],
             id: None,
         }]);
@@ -556,6 +581,7 @@ mod tests {
                 title: None,
                 children: vec![],
                 is_wikilink: false,
+                has_pothole: false,
             }]),
         ])])]);
         let mut count = 0;
@@ -578,6 +604,7 @@ mod tests {
                 wikilink_pothole: None,
             }],
             is_wikilink: false,
+            has_pothole: false,
         }])]);
         let mut seen: Vec<String> = Vec::new();
         visit_urls_mut(&mut doc, |u| match u {
@@ -623,12 +650,14 @@ mod tests {
                 title: None,
                 children: vec![],
                 is_wikilink: false,
+                has_pothole: false,
             }]],
             rows: vec![vec![vec![Inline::Link {
                 url: Url::unresolved("r"),
                 title: None,
                 children: vec![],
                 is_wikilink: false,
+                has_pothole: false,
             }]]],
             alignments: Vec::new(),
             header_source_line: None,
@@ -910,6 +939,7 @@ mod tests {
                 title: None,
                 children: vec![Inline::Text("credit".into())],
                 is_wikilink: false,
+                has_pothole: false,
             }]),
             width: None,
             align: None,

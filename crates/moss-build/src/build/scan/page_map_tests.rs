@@ -16,17 +16,17 @@ mod home_file_winner_tests {
 
     #[test]
     fn test_root_index_md_wins_over_self_named() {
-        // Root with index.md + 刘果.md, root_folder_name "刘果"
+        // Root with index.md + 山居.md, root_folder_name "山居"
         // Winner should be index.md (index stems beat self-named)
-        let files = vec![make_file("index.md"), make_file("刘果.md")];
-        let winners = compute_home_file_winners(&files, "刘果", &std::collections::HashMap::new());
+        let files = vec![make_file("index.md"), make_file("山居.md")];
+        let winners = compute_home_file_winners(&files, "山居", &std::collections::HashMap::new());
         assert!(
             winners.contains("index.md"),
             "index.md should be the winner"
         );
         assert!(
-            !winners.contains("刘果.md"),
-            "刘果.md should NOT be the winner"
+            !winners.contains("山居.md"),
+            "山居.md should NOT be the winner"
         );
         assert_eq!(winners.len(), 1);
     }
@@ -53,13 +53,13 @@ mod home_file_winner_tests {
 
     #[test]
     fn test_self_named_wins_when_only_candidate() {
-        // Root with ONLY 刘果.md, root_folder_name "刘果"
-        // Winner should be 刘果.md (self-named, no index.md)
-        let files = vec![make_file("刘果.md"), make_file("about.md")];
-        let winners = compute_home_file_winners(&files, "刘果", &std::collections::HashMap::new());
+        // Root with ONLY 山居.md, root_folder_name "山居"
+        // Winner should be 山居.md (self-named, no index.md)
+        let files = vec![make_file("山居.md"), make_file("about.md")];
+        let winners = compute_home_file_winners(&files, "山居", &std::collections::HashMap::new());
         assert!(
-            winners.contains("刘果.md"),
-            "刘果.md should be the winner when no index.md exists"
+            winners.contains("山居.md"),
+            "山居.md should be the winner when no index.md exists"
         );
     }
 
@@ -126,25 +126,25 @@ mod build_page_map_tests {
     #[test]
     fn home_overrides_and_winners_agree_on_the_root_name_for_a_dot_path() {
         let tmp = setup_temp_dir(&[]);
-        let site = tmp.path().join("潮汐");
+        let site = tmp.path().join("河灣");
         fs::create_dir_all(site.join("en")).unwrap();
         fs::write(
-            site.join("潮汐.md"),
-            "---\ntranslationKey: x\n---\n# 潮汐\n",
+            site.join("河灣.md"),
+            "---\ntranslationKey: x\n---\n# 河灣\n",
         )
         .unwrap();
         fs::write(
-            site.join("en/潮汐.md"),
-            "---\ntranslationKey: x\nlang: en\n---\n# Tide\n",
+            site.join("en/河灣.md"),
+            "---\ntranslationKey: x\nlang: en\n---\n# Bay\n",
         )
         .unwrap();
 
         let dotted = VaultRoot::resolve_in(Path::new("."), &site);
         let absolute = VaultRoot::resolve(&site);
-        assert_eq!(dotted.name(), "潮汐", "a `.` root must still know its name");
+        assert_eq!(dotted.name(), "河灣", "a `.` root must still know its name");
         assert_eq!(dotted.name(), absolute.name());
 
-        let files = vec![make_file("潮汐.md"), make_file("en/潮汐.md")];
+        let files = vec![make_file("河灣.md"), make_file("en/河灣.md")];
         let dotted_overrides = compute_home_overrides(&files, &dotted);
         assert_eq!(dotted_overrides, compute_home_overrides(&files, &absolute));
 
@@ -156,7 +156,7 @@ mod build_page_map_tests {
         // The self-named root file IS the root home: a `""` root name would have
         // demoted it off `/`.
         assert!(
-            compute_home_file_winners(&files, dotted.name(), &dotted_overrides).contains("潮汐.md")
+            compute_home_file_winners(&files, dotted.name(), &dotted_overrides).contains("河灣.md")
         );
     }
 
@@ -444,38 +444,38 @@ mod build_page_map_tests {
     }
 
     /// The `home: true` marker promotes a non-INDEX_STEM, non-self-named
-    /// file to be the folder home — issue #587. `en/Liu Guo.md` should
+    /// file to be the folder home. `en/Mountain Home.md` should
     /// land at `en/index.html`, not at the slug-based
-    /// `en/liu-guo/index.html`.
+    /// `en/mountain-home/index.html`.
     #[test]
     fn home_marker_promotes_to_folder_index() {
         let dir = setup_temp_dir(&[
-            ("刘果.md", "---\nhome: true\n---\n# 刘果\n"),
+            ("山居.md", "---\nhome: true\n---\n# 山居\n"),
             (
-                "en/Liu Guo.md",
-                "---\nhome: true\nlang: en\n---\n# Liu Guo\n",
+                "en/Mountain Home.md",
+                "---\nhome: true\nlang: en\n---\n# Mountain Home\n",
             ),
             ("en/about.md", "# About\n"),
         ]);
         let files = vec![
-            make_file("刘果.md"),
-            make_file("en/Liu Guo.md"),
+            make_file("山居.md"),
+            make_file("en/Mountain Home.md"),
             make_file("en/about.md"),
         ];
         let overrides = compute_home_overrides(&files, &vroot(dir.path()));
-        let winners = compute_home_file_winners(&files, "刘果", &overrides);
-        let (map, _) = build_page_map(&files, dir.path(), "刘果", &winners, &overrides);
+        let winners = compute_home_file_winners(&files, "山居", &overrides);
+        let (map, _) = build_page_map(&files, dir.path(), "山居", &winners, &overrides);
 
         // The promoted home gets the folder's index URL.
         assert_eq!(
-            map.get("en/Liu Guo.md").unwrap(),
+            map.get("en/Mountain Home.md").unwrap(),
             "en/index.html",
-            "home: true should promote en/Liu Guo.md to en/index.html"
+            "home: true should promote en/Mountain Home.md to en/index.html"
         );
         // Other files in the folder keep their slug URLs.
         assert_eq!(map.get("en/about.md").unwrap(), "en/about/index.html");
         // The root home is still index.html.
-        assert_eq!(map.get("刘果.md").unwrap(), "index.html");
+        assert_eq!(map.get("山居.md").unwrap(), "index.html");
     }
 
     /// Without the `home: true` marker, the previous (filename-only)
@@ -486,17 +486,17 @@ mod build_page_map_tests {
     #[test]
     fn no_home_marker_falls_back_to_filename_detection() {
         let dir = setup_temp_dir(&[
-            ("en/Liu Guo.md", "# Liu Guo\n"), // no frontmatter
+            ("en/Mountain Home.md", "# Mountain Home\n"), // no frontmatter
         ]);
-        let files = vec![make_file("en/Liu Guo.md")];
+        let files = vec![make_file("en/Mountain Home.md")];
         let overrides = compute_home_overrides(&files, &vroot(dir.path()));
         let winners = compute_home_file_winners(&files, "site", &overrides);
         let (map, _) = build_page_map(&files, dir.path(), "site", &winners, &overrides);
 
         // Without the home marker, falls back to slug-based URL.
-        // (This is the issue-#587 behavior; user opt-in via
+        // (This is the documented behavior; user opt-in via
         // home: true is required to promote.)
-        assert_eq!(map.get("en/Liu Guo.md").unwrap(), "en/liu-guo/index.html");
+        assert_eq!(map.get("en/Mountain Home.md").unwrap(), "en/mountain-home/index.html");
     }
 
     /// Promotion is decoupled from the `translationKey` *value*: a keyed
@@ -509,20 +509,20 @@ mod build_page_map_tests {
             // translationKey: home — the OLD trigger — must NOT promote
             // because no member of the group is an anchor.
             (
-                "en/Liu Guo.md",
-                "---\ntranslationKey: home\nlang: en\n---\n# Liu Guo\n",
+                "en/Mountain Home.md",
+                "---\ntranslationKey: home\nlang: en\n---\n# Mountain Home\n",
             ),
             // A different folder shares the key but is not an anchor either.
             (
-                "fr/Liu Guo.md",
-                "---\ntranslationKey: home\nlang: fr\n---\n# Liu Guo\n",
+                "fr/Mountain Home.md",
+                "---\ntranslationKey: home\nlang: fr\n---\n# Mountain Home\n",
             ),
             // An arbitrary translationKey value with no anchor must NOT promote.
             ("en/post.md", "---\ntranslationKey: my-post\n---\n# Post\n"),
         ]);
         let files = vec![
-            make_file("en/Liu Guo.md"),
-            make_file("fr/Liu Guo.md"),
+            make_file("en/Mountain Home.md"),
+            make_file("fr/Mountain Home.md"),
             make_file("en/post.md"),
         ];
         let overrides = compute_home_overrides(&files, &vroot(dir.path()));
@@ -549,44 +549,44 @@ mod build_page_map_tests {
         );
     }
 
-    /// Promotion-by-relationship (the 刘果 case, NO marker): a root file
-    /// that is self-named (`刘果.md` with project root basename `刘果`) is an
-    /// anchor by name alone. It shares a `translationKey` with `en/Liu Guo.md`
+    /// Promotion-by-relationship (the self-named root case, NO marker): a root file
+    /// that is self-named (`山居.md` with project root basename `山居`) is an
+    /// anchor by name alone. It shares a `translationKey` with `en/Mountain Home.md`
     /// which is NOT self-named and has NO `home` marker. The shared key
-    /// propagates home-ness: `en/Liu Guo.md` becomes `en/`'s home.
+    /// propagates home-ness: `en/Mountain Home.md` becomes `en/`'s home.
     #[test]
     fn promotion_by_relationship_self_named_anchor() {
         let dir = setup_temp_dir(&[
             // Self-named root file → anchor (root basename derived from the
             // temp dir's own name, so we pass that as root_folder_name and
             // also exercise is_home_file against source_path.file_name()).
-            ("刘果.md", "---\ntranslationKey: x\n---\n# 刘果\n"),
+            ("山居.md", "---\ntranslationKey: x\n---\n# 山居\n"),
             (
-                "en/Liu Guo.md",
-                "---\ntranslationKey: x\nlang: en\n---\n# Liu Guo\n",
+                "en/Mountain Home.md",
+                "---\ntranslationKey: x\nlang: en\n---\n# Mountain Home\n",
             ),
             ("en/about.md", "# About\n"),
         ]);
-        // The temp dir's basename is random, so 刘果.md is NOT self-named
+        // The temp dir's basename is random, so 山居.md is NOT self-named
         // against it. Re-create with a controlled root basename by nesting:
-        // build a child folder whose name is 刘果 and treat it as the root.
-        let root = dir.path().join("刘果");
+        // build a child folder whose name is 山居 and treat it as the root.
+        let root = dir.path().join("山居");
         std::fs::create_dir_all(root.join("en")).unwrap();
         std::fs::write(
-            root.join("刘果.md"),
-            "---\ntranslationKey: x\n---\n# 刘果\n",
+            root.join("山居.md"),
+            "---\ntranslationKey: x\n---\n# 山居\n",
         )
         .unwrap();
         std::fs::write(
-            root.join("en/Liu Guo.md"),
-            "---\ntranslationKey: x\nlang: en\n---\n# Liu Guo\n",
+            root.join("en/Mountain Home.md"),
+            "---\ntranslationKey: x\nlang: en\n---\n# Mountain Home\n",
         )
         .unwrap();
         std::fs::write(root.join("en/about.md"), "# About\n").unwrap();
 
         let files = vec![
-            make_file("刘果.md"),
-            make_file("en/Liu Guo.md"),
+            make_file("山居.md"),
+            make_file("en/Mountain Home.md"),
             make_file("en/about.md"),
         ];
         let overrides = compute_home_overrides(&files, &vroot(&root));
@@ -600,19 +600,19 @@ mod build_page_map_tests {
             None,
             "a name-based anchor is not added to the override map"
         );
-        // en/Liu Guo.md inherits home-ness via the shared key.
+        // en/Mountain Home.md inherits home-ness via the shared key.
         assert_eq!(
             overrides.get("en"),
-            Some(&"en/Liu Guo.md".to_string()),
+            Some(&"en/Mountain Home.md".to_string()),
             "translation member of an anchor group becomes its own folder's home"
         );
 
-        // End-to-end through the page map: en/Liu Guo.md → en/index.html.
-        let winners = compute_home_file_winners(&files, "刘果", &overrides);
-        let (map, _) = build_page_map(&files, &root, "刘果", &winners, &overrides);
-        assert_eq!(map.get("en/Liu Guo.md").unwrap(), "en/index.html");
+        // End-to-end through the page map: en/Mountain Home.md → en/index.html.
+        let winners = compute_home_file_winners(&files, "山居", &overrides);
+        let (map, _) = build_page_map(&files, &root, "山居", &winners, &overrides);
+        assert_eq!(map.get("en/Mountain Home.md").unwrap(), "en/index.html");
         assert_eq!(map.get("en/about.md").unwrap(), "en/about/index.html");
-        assert_eq!(map.get("刘果.md").unwrap(), "index.html");
+        assert_eq!(map.get("山居.md").unwrap(), "index.html");
     }
 
     /// The translationKey VALUE is irrelevant — any value works the same.
@@ -669,12 +669,12 @@ mod build_page_map_tests {
     #[test]
     fn own_anchor_beats_inherited() {
         let dir = setup_temp_dir(&[]);
-        let root = dir.path().join("刘果");
+        let root = dir.path().join("山居");
         std::fs::create_dir_all(root.join("en")).unwrap();
         // Root self-named anchor sharing key `k`.
         std::fs::write(
-            root.join("刘果.md"),
-            "---\ntranslationKey: k\n---\n# 刘果\n",
+            root.join("山居.md"),
+            "---\ntranslationKey: k\n---\n# 山居\n",
         )
         .unwrap();
         // en/ has its OWN name-based anchor (index.md).
@@ -688,7 +688,7 @@ mod build_page_map_tests {
         .unwrap();
 
         let files = vec![
-            make_file("刘果.md"),
+            make_file("山居.md"),
             make_file("en/index.md"),
             make_file("en/foo.md"),
         ];
@@ -704,7 +704,7 @@ mod build_page_map_tests {
         );
 
         // End-to-end: en/ home stays index.md.
-        let winners = compute_home_file_winners(&files, "刘果", &overrides);
+        let winners = compute_home_file_winners(&files, "山居", &overrides);
         assert!(
             winners.contains("en/index.md"),
             "en/index.md remains the home"
@@ -743,7 +743,7 @@ mod build_page_map_tests {
 }
 
 // =========================================================================
-// external_url validation tests (moss#684)
+// external_url validation tests
 //
 // These tests cover `is_valid_external_url` (pure predicate) and the
 // downstream `external_url()` accessor which must return None for anything
@@ -913,7 +913,7 @@ mod video_path_mapping_tests {
     use super::*;
     use std::collections::HashMap;
 
-    // test_placeholder_svg_uses_mapped_path was removed in #615
+    // test_placeholder_svg_uses_mapped_path was removed
     // (generate_svg_placeholder deleted — Pattern E removed).
 
     /// AssetRegistry keys must match HTML <video src> paths (page-tree).
@@ -952,8 +952,7 @@ mod video_path_mapping_tests {
     }
 }
 
-/// Tests for the `_with_evicted` injectable-predicate seam added by
-/// docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3 — proves
+/// Tests for the `_with_evicted` injectable-predicate seam — proves
 /// the guarded read sites skip a "cloud-dataless" file exactly like a read
 /// error, without needing real `SF_DATALESS` state to exercise the path.
 mod with_evicted_seam_tests {
@@ -990,12 +989,12 @@ mod with_evicted_seam_tests {
     fn compute_home_overrides_with_evicted_skips_evicted_home_marker() {
         // Content says `home: true`, but the predicate reports it evicted —
         // the promotion must not happen (the frontmatter is never read).
-        let dir = setup_temp_dir(&[("liu-guo.md", "---\nhome: true\n---\n# Liu Guo\n")]);
+        let dir = setup_temp_dir(&[("mountain-home.md", "---\nhome: true\n---\n# Mountain Home\n")]);
         let root = vroot(dir.path());
-        let files = vec![make_file("liu-guo.md")];
+        let files = vec![make_file("mountain-home.md")];
 
-        let is_evicted = |p: &Path| p.ends_with("liu-guo.md");
-        let overrides = compute_home_overrides_with_evicted(&files, &root, &is_evicted);
+        let is_evicted = |p: &Path| p.ends_with("mountain-home.md");
+        let overrides = compute_home_overrides_with_evicted(&files, &root, &|p| root.path().join(p), &is_evicted);
         assert!(
             overrides.is_empty(),
             "an evicted home-marker file must not be promoted — its frontmatter was never read"
@@ -1005,7 +1004,7 @@ mod with_evicted_seam_tests {
         // DOES promote — proving the test fixture is valid and the skip
         // above is caused by eviction, not a fixture mistake.
         let not_evicted = |_: &Path| false;
-        let real_overrides = compute_home_overrides_with_evicted(&files, &root, &not_evicted);
+        let real_overrides = compute_home_overrides_with_evicted(&files, &root, &|p| root.path().join(p), &not_evicted);
         assert!(!real_overrides.is_empty(), "fixture sanity check: non-evicted read should promote");
     }
 
@@ -1072,7 +1071,6 @@ mod with_evicted_seam_tests {
 /// file's extraction without re-reading it, but never serve a changed file
 /// from a stale entry — and the merged cached scan must return exactly what
 /// the two separate uncached scans it replaced would have.
-/// See docs/archive/2026-08-20-rebuild-loop-incrementality.md.
 mod frontmatter_scan_cache_tests {
     use super::*;
     use std::fs;
@@ -1165,6 +1163,39 @@ mod frontmatter_scan_cache_tests {
             "poisoned/index.html",
             "an unchanged file must be served from the cache, not re-read"
         );
+    }
+
+    /// An exact-zero sub-second mtime (a ZIP extraction, `rsync -a`) is served
+    /// from the cache once the scan that recorded it read the file more than the
+    /// skew margin after that mtime — and re-read while it was inside it.
+    #[test]
+    fn a_zero_subsecond_mtime_is_cached_only_when_read_well_after_it() {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        for (mtime, served_from_cache) in [(now - 3 * crate::build::stat::ZERO_NANOS_TRUST_AGE_SECS, true), (now, false)] {
+            let dir = setup_temp_dir(&[("about.md", "---\nurl: custom-slug\n---\n# About\n")]);
+            fs::File::options()
+                .write(true)
+                .open(dir.path().join("about.md"))
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime))
+                .unwrap();
+            let files = vec![make_file("about.md")];
+            let winners = compute_home_file_winners(&files, "mysite", &std::collections::HashMap::new());
+            let overrides = std::collections::HashMap::new();
+            let not_evicted = |_: &Path| false;
+            let mut cache = FrontmatterScanCache::default();
+
+            build_page_map_and_external_urls_cached_with_evicted(
+                &files, dir.path(), "mysite", &winners, &overrides, &mut cache, &not_evicted,
+            );
+            // Poisoned value, untouched stat: a hit returns it, a re-read does not.
+            cache.entries.get_mut("about.md").unwrap().url_override = Some("poisoned".to_string());
+            let (map, ..) = build_page_map_and_external_urls_cached_with_evicted(
+                &files, dir.path(), "mysite", &winners, &overrides, &mut cache, &not_evicted,
+            );
+            let expected = if served_from_cache { "poisoned/index.html" } else { "custom-slug/index.html" };
+            assert_eq!(map.get("about.md").unwrap(), expected, "mtime {mtime}, read at about {now}");
+        }
     }
 
     #[test]

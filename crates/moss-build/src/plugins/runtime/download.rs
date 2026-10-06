@@ -81,7 +81,7 @@ pub(super) async fn do_http_request(
         HttpMethod::PostBytes { .. } => "POST",
     };
 
-    log::debug!("{}: starting {} request to {}", tag, method_label, url);
+    log::debug!("{}: starting {} request", tag, method_label);
 
     let url_clone = url.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -125,15 +125,13 @@ pub(super) async fn do_http_request(
 
     let (status, ok, content_type, bytes) = result?;
     if ok {
-        log::debug!("{}: completed {} ({} bytes)", tag, url, bytes.len());
+        log::debug!("{}: completed ({} bytes)", tag, bytes.len());
     } else {
         log::warn!(
-            "{}: HTTP {} from {} ({} bytes) body: {}",
+            "{}: HTTP {} ({} bytes)",
             tag,
             status,
-            url,
-            bytes.len(),
-            body_snippet(&bytes, 256)
+            bytes.len()
         );
     }
     let body_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -186,22 +184,6 @@ pub(super) fn build_multipart_body(
     (body, content_type)
 }
 
-/// Render an error-response body for the log: lossy UTF-8, whitespace
-/// collapsed to single spaces, truncated to `max` characters so a giant
-/// HTML error page cannot flood the log. Error bodies are the only way to
-/// distinguish e.g. Matters' 500-for-expired-token from a real outage
-/// (their TOKEN_INVALID code travels in the body), so on failure the body
-/// is evidence, not noise.
-pub(crate) fn body_snippet(bytes: &[u8], max: usize) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    let mut s = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if s.chars().count() > max {
-        s = s.chars().take(max).collect();
-        s.push('…');
-    }
-    s
-}
-
 /// Process ureq response or error into a standardized result tuple.
 ///
 /// Shared helper for `fetch_url`, `http_post`, and `download_asset`.  Extracts
@@ -252,7 +234,7 @@ pub fn process_ureq_response(
             } else {
                 format!("Request failed: {}", e)
             };
-            log::warn!("⚠️ HTTP request failed for {}: {}", url, msg);
+            log::warn!("HTTP request failed ({:?})", e.kind());
             Err(msg)
         }
     }
@@ -383,7 +365,7 @@ pub async fn download_asset_impl(
         .await
         .map_err(|_| "Download semaphore closed".to_string())?;
 
-    log::debug!("download_asset: starting request to {} (permit acquired)", url);
+    log::debug!("download_asset: starting request (permit acquired)");
 
     let url_clone = url.clone();
     let url_for_timeout_msg = url.clone();
@@ -430,12 +412,11 @@ pub async fn download_asset_impl(
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
-    // allow:raw_write downloaded asset lands in the plugin's target dir under the project root, not .moss/build/ — freshly created path, no evicted destination
+    // allow:raw_write downloaded asset lands in the plugin's target dir under the project root, not .moss/build.nosync/ — freshly created path, no evicted destination
     fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write file: {}", e))?;
 
     log::debug!(
-        "download_asset: saved {} ({} bytes) to {}",
-        url,
+        "download_asset: saved {} bytes to {}",
         bytes_len,
         relative_path
     );
@@ -589,7 +570,7 @@ pub fn validate_binary_request(
     Ok(())
 }
 
-/// Headless half of the #1019 split: validation + timeout + blocking
+/// Headless half of the split: validation + timeout + blocking
 /// execution, no AppHandle anywhere. The QuickJS engine's `execute_binary`
 /// arm calls this directly (it never streams); the webview command's
 /// streaming branch lives app-side in `binary.rs`.
@@ -680,32 +661,6 @@ pub(crate) async fn execute_binary_blocking(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn body_snippet_collapses_whitespace_and_truncates() {
-        let body = "{\n  \"errors\": [\n    { \"message\": \"token invalid\" }\n  ]\n}";
-        let s = super::body_snippet(body.as_bytes(), 256);
-        assert!(!s.contains('\n'), "newlines must be collapsed: {s}");
-        assert!(s.contains("token invalid"));
-
-        let long = "x".repeat(1000);
-        let t = super::body_snippet(long.as_bytes(), 256);
-        assert!(t.chars().count() <= 257, "256 chars + ellipsis, got {}", t.chars().count());
-        assert!(t.ends_with('…'));
-    }
-
-    #[test]
-    fn body_snippet_survives_invalid_utf8_and_multibyte_content() {
-        let s = super::body_snippet(&[0xff, 0xfe, b'o', b'k'], 256);
-        assert!(s.contains("ok"));
-
-        // 300 multibyte chars exceed the 256-CHAR cap (truncation is by
-        // chars, not bytes) and must truncate without panicking.
-        let cjk = "错".repeat(300);
-        let t = super::body_snippet(cjk.as_bytes(), 256);
-        assert!(t.ends_with('…'));
-        assert!(t.chars().count() <= 257);
-    }
-
     #[test]
     fn build_multipart_body_orders_fields_then_files_with_boundary() {
         let text = vec![
@@ -822,7 +777,7 @@ mod tests {
 #[cfg(test)]
 mod execute_binary_tests {
     //! Moved beside their subject when `execute_binary_blocking` crossed
-    //! into moss-build (#1019 slice-2 fix-forward): these exercise the
+    //! into moss-build: these exercise the
     //! process-spawning core, not the app-side streaming adapter.
     use super::execute_binary_blocking;
     use crate::plugins::runtime::portable::BinaryExecutionResult;

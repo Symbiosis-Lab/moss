@@ -140,25 +140,25 @@ fn paths(source: &str, output: &str) -> (PathBuf, PathBuf) {
 
 #[test]
 fn resolve_video_cover_uses_thumbnail_in_output_root() {
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     let resolved = resolve_color_source_path("音乐/cover.mp4", &src, &out)
         .expect("video cover should resolve");
     assert_eq!(
         resolved,
-        PathBuf::from("/site/.moss/build/current/音乐/cover.thumb.jpg")
+        PathBuf::from("/site/.moss/build.nosync/current/音乐/cover.thumb.jpg")
     );
 }
 
 #[test]
 fn resolve_video_cover_handles_uppercase_extensions() {
     // iPhone .MOV, GoPro .MP4 — case must not matter.
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     for cover in ["clip.MOV", "clip.MP4", "clip.Mp4", "clip.WEBM"] {
         let resolved = resolve_color_source_path(cover, &src, &out)
             .unwrap_or_else(|| panic!("uppercase {cover} should resolve"));
         assert_eq!(
             resolved,
-            PathBuf::from("/site/.moss/build/current/clip.thumb.jpg"),
+            PathBuf::from("/site/.moss/build.nosync/current/clip.thumb.jpg"),
             "{cover} should map to .thumb.jpg",
         );
     }
@@ -167,12 +167,12 @@ fn resolve_video_cover_handles_uppercase_extensions() {
 #[test]
 fn resolve_video_cover_strips_leading_slash() {
     // Cover URLs from frontmatter often start with "/" (root-relative).
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     let resolved = resolve_color_source_path("/videos/clip.mov", &src, &out)
         .expect("leading-slash video should resolve");
     assert_eq!(
         resolved,
-        PathBuf::from("/site/.moss/build/current/videos/clip.thumb.jpg")
+        PathBuf::from("/site/.moss/build.nosync/current/videos/clip.thumb.jpg")
     );
 }
 
@@ -183,7 +183,7 @@ fn resolve_image_cover_prefers_source_root_when_present() {
     let src = tmp.path();
     std::fs::create_dir_all(src.join("assets")).unwrap();
     std::fs::write(src.join("assets/cover.jpg"), b"fake").unwrap();
-    let out = src.join(".moss/build/current");
+    let out = src.join(".moss/build.nosync/current");
 
     let resolved = resolve_color_source_path("assets/cover.jpg", src, &out)
         .expect("image cover should resolve");
@@ -196,7 +196,7 @@ fn resolve_image_cover_falls_back_to_output_when_source_missing() {
     // build hook into output only), fall back to the output root.
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
-    let out = src.join(".moss/build/current");
+    let out = src.join(".moss/build.nosync/current");
 
     let resolved = resolve_color_source_path("assets/missing.jpg", src, &out)
         .expect("image cover should resolve to fallback");
@@ -205,7 +205,7 @@ fn resolve_image_cover_falls_back_to_output_when_source_missing() {
 
 #[test]
 fn resolve_external_url_returns_none() {
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     assert_eq!(
         resolve_color_source_path("https://example.com/cover.jpg", &src, &out),
         None,
@@ -224,20 +224,20 @@ fn resolve_cover_decodes_a_percent_encoded_url_back_to_the_on_disk_name() {
     // silently dropping the card's dominant color.
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
-    std::fs::create_dir_all(src.join("獎項")).unwrap();
-    std::fs::write(src.join("獎項/封面.jpg"), b"fake").unwrap();
-    let out = src.join(".moss/build/current");
+    std::fs::create_dir_all(src.join("評選")).unwrap();
+    std::fs::write(src.join("評選/封面.jpg"), b"fake").unwrap();
+    let out = src.join(".moss/build.nosync/current");
 
     let resolved =
-        resolve_color_source_path("/%E7%8D%8E%E9%A0%85/%E5%B0%81%E9%9D%A2.jpg", src, &out)
+        resolve_color_source_path("/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.jpg", src, &out)
             .expect("encoded cover should resolve");
-    assert_eq!(resolved, src.join("獎項/封面.jpg"));
+    assert_eq!(resolved, src.join("評選/封面.jpg"));
 }
 
 #[test]
 fn resolve_cover_decode_leaves_a_literal_percent_filename_alone() {
     // A lone `%` is a legal filename byte, not a truncated escape.
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     let resolved =
         resolve_color_source_path("assets/100%.jpg", &src, &out).expect("should resolve");
     assert_eq!(resolved, out.join("assets/100%.jpg"));
@@ -374,6 +374,32 @@ fn cache_path_and_runtime_extraction_produce_equivalent_colors() {
     );
 }
 
+/// A file whose extension lies about its format — a PNG saved with a `.jpg`
+/// extension, e.g. by an export tool that mislabels its output — must still
+/// yield a color instead of silently losing it. The color/LQIP half of the
+/// same extension-vs-content bug `extract_image_dimensions` has in
+/// `build/scan/scan.rs`; both now go through `media::decode::sniff_decode`.
+///
+/// Ablation: reverting `extract_dominant_color` to `image::open(image_path)`
+/// (extension-only) makes this fail — the JPEG decoder rejects the PNG bytes
+/// and the function returns `None`.
+#[test]
+fn extracts_a_color_from_a_png_saved_with_a_jpg_extension() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("mislabeled.jpg");
+
+    let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([255u8, 0, 0]));
+    image::DynamicImage::ImageRgb8(img)
+        .save_with_format(&path, image::ImageFormat::Png)
+        .unwrap();
+
+    let color = extract_dominant_color(&path);
+    assert!(
+        color.is_some(),
+        "a PNG saved with a .jpg extension must still yield a dominant color, not None"
+    );
+}
+
 #[test]
 fn video_cover_resolves_and_extracts_end_to_end() {
     // The strongest regression guard: bypass the asymmetry by going
@@ -384,7 +410,7 @@ fn video_cover_resolves_and_extracts_end_to_end() {
     // alone wouldn't catch a renaming of `.thumb.jpg`.
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
-    let out_videos = src.join(".moss/build/current/videos");
+    let out_videos = src.join(".moss/build.nosync/current/videos");
     std::fs::create_dir_all(&out_videos).unwrap();
 
     // Synthesize a 4×4 solid-blue JPEG at the conventional .thumb.jpg
@@ -392,13 +418,13 @@ fn video_cover_resolves_and_extracts_end_to_end() {
     // upscale), averages, darkens for WCAG — the result must be a
     // blue HSL string.
     let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 0, 255]));
-    let thumb_path = src.join(".moss/build/current/videos/clip.thumb.jpg");
+    let thumb_path = src.join(".moss/build.nosync/current/videos/clip.thumb.jpg");
     image::DynamicImage::ImageRgb8(img)
         .save_with_format(&thumb_path, image::ImageFormat::Jpeg)
         .unwrap();
 
     let resolved =
-        resolve_color_source_path("/videos/clip.mp4", src, &src.join(".moss/build/current"))
+        resolve_color_source_path("/videos/clip.mp4", src, &src.join(".moss/build.nosync/current"))
             .expect("video cover should resolve");
     assert_eq!(resolved, thumb_path);
 
@@ -422,7 +448,7 @@ fn resolve_video_cover_never_falls_back_to_source_root() {
     let src = tmp.path();
     std::fs::create_dir_all(src.join("音乐")).unwrap();
     std::fs::write(src.join("音乐/cover.mp4"), b"fake mp4 bytes").unwrap();
-    let out = src.join(".moss/build/current");
+    let out = src.join(".moss/build.nosync/current");
 
     let resolved =
         resolve_color_source_path("音乐/cover.mp4", src, &out).expect("video should resolve");
@@ -833,9 +859,11 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
     // CoverType::Video must route through resolve_color_source_path's
     // .mp4 → .thumb.jpg rewrite from the shared entry point too —
     // same pin as video_cover_resolves_and_extracts_end_to_end, but
-    // through resolve_card_color.
+    // through resolve_card_color. `staging/`, not `current/`:
+    // resolve_card_color reads THIS build's own render-time output, which is
+    // staging — see the "reads fresh render output" tests below for why.
     let tmp = repo_tmp();
-    let out_dir = tmp.path().join(".moss/build/current/videos");
+    let out_dir = tmp.path().join(".moss/build.nosync/staging/videos");
     std::fs::create_dir_all(&out_dir).unwrap();
     let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 0, 255]));
     image::DynamicImage::ImageRgb8(img)
@@ -868,7 +896,7 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
 #[test]
 fn card_color_video_self_heals_once_the_poster_lands() {
     let tmp = repo_tmp();
-    let out_dir = tmp.path().join(".moss/build/current/videos");
+    let out_dir = tmp.path().join(".moss/build.nosync/staging/videos");
     std::fs::create_dir_all(&out_dir).unwrap();
 
     // Before: background video conversion hasn't produced the thumbnail yet —
@@ -907,6 +935,49 @@ fn card_color_video_self_heals_once_the_poster_lands() {
             c.starts_with("hsla(240,") || c.starts_with("hsla(239,") || c.starts_with("hsla(241,")
         }),
         "expected blue hue once the poster exists, got {after:?}"
+    );
+}
+
+/// `current` can lag `staging` by up to the seal's own debounce window
+/// (`build::seal_phase`'s `IDLE`/`MAX_DEFER`), not just one build. A render
+/// that reads `current_ptr()` here would bake
+/// whichever color a stale — or absent — generation happened to have,
+/// permanently, since nothing re-triggers this render once the real
+/// generation eventually seals. Plant a STALE poster under `current/` and a
+/// FRESH, different-colored one under `staging/` (this build's own output,
+/// written before this call, every build, regardless of whether its
+/// generation is ever promoted) and require the fresh one.
+#[test]
+fn card_color_video_reads_this_builds_staging_not_a_lagging_current_generation() {
+    let tmp = repo_tmp();
+    let stale_dir = tmp.path().join(".moss/build.nosync/current/videos");
+    let fresh_dir = tmp.path().join(".moss/build.nosync/staging/videos");
+    std::fs::create_dir_all(&stale_dir).unwrap();
+    std::fs::create_dir_all(&fresh_dir).unwrap();
+
+    // The stale generation's poster from several debounced seals ago: green.
+    let stale = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 255, 0]));
+    image::DynamicImage::ImageRgb8(stale)
+        .save_with_format(stale_dir.join("clip.thumb.jpg"), image::ImageFormat::Jpeg)
+        .unwrap();
+    // This build's own, not-yet-materialized poster: red.
+    let fresh = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([255, 0, 0]));
+    image::DynamicImage::ImageRgb8(fresh)
+        .save_with_format(fresh_dir.join("clip.thumb.jpg"), image::ImageFormat::Jpeg)
+        .unwrap();
+
+    let color = resolve_card_color(
+        Some("videos/clip.mp4"),
+        Some(CoverType::Video),
+        Some(tmp.path()),
+        None,
+    );
+    assert!(
+        color.as_deref().is_some_and(|c| {
+            c.starts_with("hsla(0,") || c.starts_with("hsla(359,") || c.starts_with("hsla(1,")
+        }),
+        "expected red (this build's own staging output), got {color:?} — reading a stale \
+         `current` generation instead would give green"
     );
 }
 

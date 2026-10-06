@@ -3,8 +3,8 @@ use super::*;
 /// Deliver `name` to `plugin` every 10 ms until the returned task is aborted.
 /// Delivery before the plugin's listener is registered is a silent drop (the
 /// `plugins.get` miss arm in [`QuickJsEngine::deliver_event`]), so a test
-/// delivering once on a timer races bundle compilation on a loaded box
-/// (#1138); repetition closes the race for any idempotent payload. Abort the
+/// delivering once on a timer races bundle compilation on a loaded box;
+/// repetition closes the race for any idempotent payload. Abort the
 /// handle once the hook under test has resolved.
 pub(crate) fn deliver_event_until_aborted(
     engine: &QuickJsEngine,

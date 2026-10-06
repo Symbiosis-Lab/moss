@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::page_kind::PAGE_EXTENSIONS;
 use crate::path_ext::path_extension;
 
 // ---------------------------------------------------------------------------
@@ -24,10 +25,10 @@ fn normalize_component(s: &str) -> String {
 /// Also normalises backslashes to forward slashes and collapses runs of
 /// separators.
 ///
-/// `pub(crate)` so the wikilink-completion ranker (`link_completions`) folds
-/// paths identically to the resolver when scoring same-language / tree
-/// proximity, keeping the completion order aligned with how links resolve.
-pub(crate) fn normalize_path(path: &str) -> String {
+/// This is the key the graph matches paths by, so anything that has to agree
+/// with the resolver on whether two spellings name the same file (the
+/// completion ranker, a reader that lists folders itself) folds with it.
+pub fn normalize_path(path: &str) -> String {
     path.replace('\\', "/")
         .split('/')
         .filter(|c| !c.is_empty())
@@ -47,11 +48,29 @@ fn filename_stem(normalized: &str) -> &str {
     }
 }
 
-/// Extract the filename (with extension) from a path.
-fn filename_with_ext(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
+
+/// `target` written from the folder `base_dir`, with `.` and `..` resolved and
+/// separators normalized, in the letter case written; `None` when it climbs
+/// above the site root.
+pub fn join_written(base_dir: &str, target: &str) -> Option<String> {
+    let joined = format!("{base_dir}/{target}").replace('\\', "/");
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in joined.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            name => parts.push(name),
+        }
+    }
+    Some(parts.join("/"))
 }
 
+/// Whether two paths are the same text once both are NFC-normalized.
+fn same_nfc(a: &str, b: &str) -> bool {
+    a.nfc().eq(b.nfc())
+}
 
 /// Return the directory prefix components of a path as a Vec.
 /// `pub(crate)` — shared with `link_completions` (see `normalize_path`).
@@ -70,36 +89,24 @@ pub(crate) fn common_prefix_len(a: &[&str], b: &[&str]) -> usize {
     a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
 }
 
-/// Score a candidate's extension against the reference's extension for the
-/// ambiguity tiebreaker. Returns 1 only when the reference carries an
-/// extension AND the candidate's matches it (case-insensitive). Returns 0
-/// otherwise so bare references — which can't express extension intent —
-/// keep their existing tiebreaker behavior.
-fn ext_match_score(ref_ext: Option<&str>, candidate: &str) -> u8 {
-    let Some(want) = ref_ext else { return 0 };
-    match path_extension(candidate) {
-        Some(have) if have == want => 1,
-        _ => 0,
-    }
-}
-
 /// Score a candidate's page-ness against a bare (extensionless) reference.
 ///
 /// A reference that names no extension can't express asset intent, so a
-/// stem collision between a page and a same-named asset — `古梅圖.md` next
-/// to `古梅圖.jpg` — must not fall through to the alphabetical tiebreaker,
-/// where an asset's extension can sort ahead of `.md` for no reason a reader
-/// would recognize (`[[古梅圖]]` resolved to the plate, not the page). Once
-/// the reference already carries an extension, `ext_match_score` is the
-/// authority on what the caller wants and this term must not fight it, so
-/// it stays 0 for every candidate in that case.
-fn page_preference_score(ref_ext: Option<&str>, candidate: &str) -> u8 {
-    if ref_ext.is_some() {
-        return 0;
-    }
-    match path_extension(candidate) {
-        Some(ext) if ext.eq_ignore_ascii_case("md") => 1,
-        _ => 0,
+/// stem collision between a page and a same-named asset — `示例圖.md` next
+/// to `示例圖.jpg` — must not fall through to the alphabetical tiebreaker,
+/// where an asset's extension can sort ahead of the page's for no reason a reader
+/// would recognize (`[[示例圖]]` resolved to the plate, not the page). A
+/// reference that carries an extension only ever reaches files with that
+/// extension, so this term stays 0 for every candidate in that case.
+///
+/// The second term ranks the page extensions in [`PAGE_EXTENSIONS`] order,
+/// `.md` first; [`ContentGraph::nearest`] applies it after nearness, so it
+/// only settles pages that are otherwise exactly as near.
+fn page_preference_score(ref_ext: Option<&str>, candidate: &str) -> (u8, usize) {
+    let pos = path_extension(candidate).and_then(|ext| PAGE_EXTENSIONS.iter().position(|p| *p == ext));
+    match pos {
+        Some(pos) if ref_ext.is_none() => (1, PAGE_EXTENSIONS.len() - pos),
+        _ => (0, 0),
     }
 }
 
@@ -137,8 +144,8 @@ fn lang_tree_match(candidate: &str, from_lang: Option<&str>) -> u8 {
 /// Examples:
 /// - `"posts/Hello World.md"` -> `"posts/hello-world"`
 /// - `"guides/Setup.md"` -> `"guides/setup"`
-/// - `"news/Farewell, and Erase on BroadwayWorld.md"`
-///   -> `"news/farewell-and-erase-on-broadwayworld"`
+/// - `"news/Hello, and Goodbye on NewsWire.md"`
+///   -> `"news/hello-and-goodbye-on-newswire"`
 /// - `"posts/Hello (World)!.md"` -> `"posts/hello-world"`
 /// - `"posts/foo--bar.md"` -> `"posts/foo-bar"`
 /// - `"image.png"` -> `"image"`
@@ -213,6 +220,35 @@ fn sanitize_slug_segment(segment: &str) -> String {
 // ContentGraph — the immutable, queryable index
 // ---------------------------------------------------------------------------
 
+/// How [`ContentGraph::resolve_path`] reached the file it returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathMatch {
+    /// The target is the file's path, written from the page's folder or,
+    /// with a leading `/`, from the site root. `exact_case` is false when the
+    /// letter case written differs from the file's.
+    Written { exact_case: bool },
+    /// The target is the file's path from the site root, written with a
+    /// folder but without a leading `/` on a page that is not at the root.
+    FromRoot { exact_case: bool },
+    /// Found by name or partial path, with a page extension added, or as a
+    /// folder's note.
+    Searched,
+}
+
+/// The answer of [`ContentGraph::resolve_path_with_ties`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathResolution {
+    /// The file the target names.
+    pub path: String,
+    /// The other files exactly as near to the page as `path` (same page
+    /// preference, language tree and shared directory depth) that lost only
+    /// to the alphabetical tiebreak. The editor reports a reference as
+    /// ambiguous exactly when this is non-empty; the build links `path`.
+    pub ties: Vec<String>,
+    /// How `path` was reached.
+    pub matched: PathMatch,
+}
+
 /// An in-memory index of all content files.
 ///
 /// Created via [`ContentGraphBuilder::build`]. All lookups are
@@ -231,18 +267,33 @@ pub struct ContentGraph {
     /// Normalized full path -> slug.
     slug_map: HashMap<String, String>,
 
-    /// Exact-case asset index: original-case paths for O(1) membership checks.
-    asset_exact: HashSet<String>,
-
-    /// Lowercased path -> Vec<original-case paths> for case-insensitive lookup.
-    asset_ci: HashMap<String, Vec<String>>,
-
     /// The build's source-directory → URL-slug overrides, so this graph can
     /// answer "what URL is this file served at" (see [`Self::pinned_url`]) and
     /// not just "which file does this reference mean". Empty unless the host
     /// installed them via [`Self::with_output_overrides`]; an empty map still
     /// yields base slugification, which is what every case-fold bug needed.
     output_overrides: HashMap<String, String>,
+
+    /// Directories the scan marked as getting an auto-generated folder-index
+    /// page (no `index.md` of their own): normalized key -> original-case
+    /// directory. Consulted only after both file-backed folder-note checks
+    /// miss, inside `resolve_path`'s `folder_note` closure — so a `[[Folder]]`
+    /// wikilink can resolve to that folder's SYNTHETIC index, the same page
+    /// the renderer's auto-index loop emits. Registered by the host (once,
+    /// alongside the scan) via [`ContentGraphBuilder::register_auto_index_dir`]
+    /// from the same source the renderer itself reads its folder set from —
+    /// so this graph never resolves a folder the renderer does not actually
+    /// generate a page for. Empty unless the host registers anything, which
+    /// keeps every existing caller (tests included) unaffected.
+    auto_index_dirs: HashMap<String, String>,
+
+    /// Every spelling, sorted, of a path held by files differing only in letter
+    /// case (a case-sensitive disk); `files` keeps one of them, and a path
+    /// written from the page or the root gets the twin it spells exactly.
+    case_twins: HashMap<String, Vec<String>>,
+
+    /// Normalized names of the folders at the site root that hold a file.
+    top_dirs: HashSet<String>,
 }
 
 impl ContentGraph {
@@ -250,7 +301,7 @@ impl ContentGraph {
     /// graph the authority on emitted URLs as well as on resolution.
     ///
     /// The host calls this once, right after the overrides are computed
-    /// (`build_page_map` in src-tauri), and every emitter downstream reads the
+    /// (`build_page_map` in moss-build), and every emitter downstream reads the
     /// answer off the same graph it already holds. Sites that don't map any
     /// directory still benefit: base slugification (`MIRROR/` → `mirror/`) runs
     /// with an empty map.
@@ -269,68 +320,196 @@ impl ContentGraph {
     ///
     /// **Never** re-derive an emitted URL from a folder name, a referencing
     /// page's depth, or a case-insensitive retry: those are the four-times-
-    /// recurring bug class this method exists to end (moss#903 bug 3). A
+    /// recurring bug class this method exists to end. A
     /// reference that does not resolve gets a `Diagnostic`, not a guessed path.
     pub fn pinned_url(&self, root_rel: &str) -> String {
         crate::resolve::output_url::pinned_url(root_rel, &self.output_overrides)
     }
 
-    /// **Single source of truth for target resolution in moss.**
+    /// **The one function that decides which site file a target names.**
     ///
-    /// Every link syntax — wikilinks `[[x]]`, standard markdown links
-    /// `[t](x)`, image refs `![](x)`, embeds `![[x]]`, frontmatter refs —
-    /// MUST resolve through this function. See the resolve pipeline in
-    /// [`crate::resolve::resolve_content`] and the prose overview in
-    /// `moss/docs/reference/link-resolution.md` for the per-syntax call sites.
+    /// Every reference form — wikilinks `[[x]]`, standard markdown links
+    /// `[t](x)`, image refs `![](x)`, embeds `![[x]]`, shortcode and
+    /// frontmatter asset paths, the editor's classifier and the rename,
+    /// delete and scan tools — MUST get its file from this function. The only
+    /// thing layered on top is [`crate::resolve::asset_class::resolve_file_target`],
+    /// which turns the [`PathMatch`] this function reports into a label and
+    /// reports files exactly as near as the pick as ambiguous; it matches
+    /// nothing itself. See the resolve pipeline in
+    /// [`crate::resolve::resolve_content`] for the per-syntax call sites.
+    ///
+    /// A leading `/` starts at the site root (the exact path is tried first
+    /// like any other), and only files the graph holds are ever returned, so
+    /// nothing outside the site can be named.
     ///
     /// Downstream code (the compiler's URL-prettifier, for instance)
     /// receives already-resolved hrefs and MUST NOT reimplement any
-    /// part of this chain. Adding a parallel resolver was the root
-    /// cause of the `[文字](文字.md)` regression on sites using folder
-    /// notes.
+    /// part of this chain; a parallel resolver diverges on folder notes.
     ///
     /// Resolution chain (first match wins):
-    /// 1. Exact normalized path
-    /// 2. Exact + `.md`
-    /// 3. Filename match (case-insensitive, without extension)
-    /// 4. Filename + `.md` match
+    /// 0. The target written from the referencing page's folder (`.` and `..`
+    ///    resolved), as an exact path, plus a page extension, or, for a slashed target
+    ///    without an extension, the file of that name in that folder. A
+    ///    leading `/` skips this step, and so does a target starting with a
+    ///    language folder when the page is itself in a language tree.
+    /// 1. The path from the site root (`.` and `..` resolved)
+    /// 2. Exact + a page extension (`.md`, `.markdown`, `.mdown`, `.mkd`)
+    /// 3. Filename match (case-insensitive, without extension); a target
+    ///    that names an extension only matches files with that extension
+    /// 4. Filename + a page extension
     /// 5. Folder note: `reference/index.md` or `reference/<reference>.md`
+    ///    (`.md` only, as the build elects a folder's home),
+    ///    else — if the host registered it via [`ContentGraphBuilder::register_auto_index_dir`] —
+    ///    the directory's synthetic `<dir>/index.md`, for a folder with no
+    ///    note of its own
     ///
     /// Ambiguity tiebreakers, applied in order:
-    /// candidates whose extension matches the reference's extension win first
-    /// (e.g. `![[scale-compare.png]]` prefers a `.png` sibling over a `.html`
-    /// sibling — only applies when the reference carries an extension); then,
-    /// only when the reference is bare (no extension), a `.md` candidate
-    /// wins over a same-stem asset (`[[古梅圖]]` prefers the page over the
+    /// only when the reference is bare (no extension), a page candidate
+    /// wins over a same-stem asset (`[[示例圖]]` prefers the page over the
     /// sibling `.jpg` — a bare reference can't express asset intent, so a
     /// caller that wants the asset must name its extension); candidates in
     /// the same language tree as the source are preferred next;
-    /// then longest common directory prefix with `from_path`; then alphabetical
+    /// then longest common directory prefix with `from_path`; then, for a bare
+    /// reference, `.md` before `.markdown`, `.mdown`, `.mkd`; then alphabetical
     /// by normalized path (so results are independent of registration order
     /// when all earlier keys tie).
+    ///
+    /// A target that matches nothing as written is tried once more
+    /// percent-decoded: Obsidian writes `my%20note.md` for a real
+    /// "my note.md". A file whose name literally contains `%20` still wins,
+    /// because the text as written goes first.
     pub fn resolve_path(&self, reference: &str, from_path: &str) -> Option<String> {
+        self.resolve_path_with_ties(reference, from_path).map(|r| r.path)
+    }
+
+    /// [`resolve_path`](Self::resolve_path), also reporting how the file was
+    /// reached and which other files were exactly as near to `from_path` as
+    /// the winner.
+    pub fn resolve_path_with_ties(&self, reference: &str, from_path: &str) -> Option<PathResolution> {
+        let resolve = |text: &str| {
+            let mut ties = Vec::new();
+            let mut matched = PathMatch::Searched;
+            let path = self.resolve_ranked(text, from_path, &mut ties, &mut matched)?;
+            Some(PathResolution { path, ties, matched })
+        };
+        resolve(reference).or_else(|| {
+            crate::resolve::fuzzy_path::percent_decoded_fallback(reference).and_then(|d| resolve(&d))
+        })
+    }
+
+    /// The page at the normalized path `key` plus a page extension, `.md` first.
+    fn page_at(&self, key: &str) -> Option<String> {
+        PAGE_EXTENSIONS.iter().find_map(|ext| self.path_index.get(&format!("{key}.{ext}"))).map(|&i| self.files[i].clone())
+    }
+
+    /// The file at index `idx` as `written` spells it, and whether the case
+    /// matches: of case twins, the one spelled exactly, else the kept one.
+    fn spelled_as(&self, idx: usize, written: &str) -> (String, bool) {
+        let twins = self.case_twins.get(&normalize_path(written)).into_iter().flatten();
+        match twins.chain([&self.files[idx]]).find(|t| same_nfc(t, written)) {
+            Some(exact) => (exact.clone(), true),
+            None => (self.files[idx].clone(), false),
+        }
+    }
+
+    /// The nearest of several same-named files to the page `norm_from`: a
+    /// page over a same-stem asset for a bare reference, then the same language tree, then the longest shared
+    /// directory prefix, then `.md` over the other page extensions, then alphabetical by path. Pushes every other
+    /// candidate that ties with the winner on all but the alphabetical key
+    /// onto `ties`.
+    fn nearest(
+        &self,
+        candidates: &[usize],
+        ref_ext: Option<&str>,
+        norm_from: &str,
+        from_lang: Option<&str>,
+        ties: &mut Vec<String>,
+    ) -> Option<usize> {
+        let from_dirs = dir_components(norm_from);
+        // self.files stores original (pre-normalized) paths for filesystem
+        // fidelity; re-normalize to compare against norm_from.
+        let rank = |idx: usize| {
+            let normalized = normalize_path(&self.files[idx]);
+            let tree_match = lang_tree_match(&normalized, from_lang);
+            let (page_score, extension_rank) = page_preference_score(ref_ext, &normalized);
+            let near = common_prefix_len(&dir_components(&normalized), &from_dirs);
+            ((page_score, tree_match, near, extension_rank), normalized)
+        };
+        let best = candidates
+            .iter()
+            .copied()
+            .max_by_key(|&idx| {
+                let (key, normalized) = rank(idx);
+                (key, std::cmp::Reverse(normalized))
+            })?;
+        let best_key = rank(best).0;
+        ties.extend(
+            candidates
+                .iter()
+                .copied()
+                .filter(|&idx| idx != best && rank(idx).0 == best_key)
+                .map(|idx| self.files[idx].clone()),
+        );
+        Some(best)
+    }
+
+    /// The file `reference` names when written from the folder of `from_path`
+    /// (`.` and `..` resolved), if the graph holds it: the exact path, then the
+    /// path plus a page extension, then, for a target without an extension, the file of
+    /// that name in that folder (page over same-named asset, as for a bare name).
+    fn named_from_page(
+        &self,
+        reference: &str,
+        from_path: &str,
+        ref_ext: Option<&str>,
+        from_lang: Option<&str>,
+        ties: &mut Vec<String>,
+        matched: &mut PathMatch,
+    ) -> Option<String> {
+        let from = from_path.replace('\\', "/");
+        let written = join_written(crate::resolve::parent_dir(&from), reference)?;
+        let joined = normalize_path(&written);
+        if let Some(&idx) = self.path_index.get(&joined) {
+            let (path, exact_case) = self.spelled_as(idx, &written);
+            *matched = PathMatch::Written { exact_case };
+            return Some(path);
+        }
+        if let Some(page) = self.page_at(&joined) {
+            return Some(page);
+        }
+        let norm_ref = normalize_path(reference);
+        let parts: Vec<&str> = joined.split('/').collect();
+        let (name, dir) = parts.split_last()?;
+        if ref_ext.is_some() || !norm_ref.contains('/') {
+            return None;
+        }
+        let candidates: Vec<usize> = self
+            .filename_index
+            .get(&normalize_component(name))?
+            .iter()
+            .copied()
+            .filter(|&i| dir_components(&normalize_path(&self.files[i])).as_slice() == dir)
+            .collect();
+        let idx = self.nearest(&candidates, None, &normalize_path(from_path), from_lang, ties)?;
+        Some(self.files[idx].clone())
+    }
+
+    fn resolve_ranked(
+        &self,
+        reference: &str,
+        from_path: &str,
+        ties: &mut Vec<String>,
+        matched: &mut PathMatch,
+    ) -> Option<String> {
         let norm_ref = normalize_path(reference);
         let norm_from = normalize_path(from_path);
         let ref_ext = path_extension(&norm_ref);
 
-        // A reference of one or more slashes and nothing else (`/`, `//`, …)
-        // names the vault root itself, not a missing file. Return "/" rather
-        // than "" — `frontmatter_ref_to_stem`, `resolve_children_source_folder_path`,
-        // `synthesize_children_marker` and `resolve_folder_id` (moss-build's
-        // folder_embed.rs) all special-case a literal "/" down to the empty
-        // folder-id already, for the "root" sense that `children: '[[/]]'`
-        // needs; but a resolved value of "" was itself dropped by
-        // `normalize_children` (frontmatter_union.rs), which treats an empty
-        // children value as "no listing" — so the frontmatter substitution
-        // must land on "/", not "". Body wikilinks are unaffected: `pinned_url`
-        // strips a leading "/" before mapping, so `pinned_url("")` and
-        // `pinned_url("/")` already produced the same "/" href. This function
-        // is the single source of truth for wikilink resolution generally, so
-        // a bare `[[/]]` — in frontmatter or body — resolves through the same
-        // call every other wikilink does instead of the generic diagnostics
-        // scanner (which has no per-key knowledge) reporting it unresolved.
-        // Guarded on `reference` being non-empty so an actually-empty
-        // reference (`[[]]`) is unaffected.
+        // Only slashes (`/`, `//`) name the site root itself. The answer is
+        // "/", not "": `normalize_children` (frontmatter_union.rs) reads an
+        // empty `children:` value as "no listing", while the folder-embed code
+        // already maps "/" to the root folder and `pinned_url` serves both at
+        // "/". An empty reference (`[[]]`) names nothing.
         if !reference.is_empty() && norm_ref.is_empty() {
             return Some("/".to_string());
         }
@@ -340,37 +519,59 @@ impl ContentGraph {
         // same-language-tree candidates when the reference is bare (no slash).
         let from_lang = crate::home::lang_tree_prefix(&norm_from);
 
-        // 1. Exact path match
-        if self.path_index.contains_key(&norm_ref) {
-            return Some(self.files[self.path_index[&norm_ref]].clone());
-        }
-
-        // 1b. Bare reference (no slash) from a language-tree source:
-        // prefer a same-language-tree sibling before falling back to root.
-        // e.g. ![[footer]] from "zh-hans/about.md" should match
-        //      "zh-hans/footer.md" if it exists, not root "footer.md".
-        if !norm_ref.contains('/') {
-            if let Some(lang) = from_lang {
-                let scoped = format!("{}/{}", lang, norm_ref);
-                if let Some(&idx) = self.path_index.get(&scoped) {
-                    return Some(self.files[idx].clone());
-                }
-                let scoped_md = format!("{}/{}.md", lang, norm_ref);
-                if let Some(&idx) = self.path_index.get(&scoped_md) {
-                    return Some(self.files[idx].clone());
-                }
+        // 0. A target written from the page's folder names that file when the
+        // file exists, whatever else the name could also match. `../c/p.png`
+        // from `a/b/` is `a/c/p.png`, not the nearer `a/b/c/p.png` the search
+        // below would otherwise prefer. A leading `/` starts at the site root
+        // instead and skips this step. So does a target naming a language tree
+        // the site has, from a page inside one (`en/x` from `zh-hans/` is the
+        // English page, never `zh-hans/en/x`); any other folder called `uk` or
+        // `id` is an ordinary folder.
+        let names_other_tree = from_lang.is_some()
+            && crate::home::lang_tree_prefix(&norm_ref).is_some_and(|tree| self.top_dirs.contains(tree));
+        if !reference.starts_with(['/', '\\']) && !names_other_tree {
+            if let Some(found) =
+                self.named_from_page(reference, from_path, ref_ext.as_deref(), from_lang, ties, matched)
+            {
+                return Some(found);
             }
         }
 
-        // 2. Exact + .md
-        let with_md = format!("{}.md", norm_ref);
-        if self.path_index.contains_key(&with_md) {
-            return Some(self.files[self.path_index[&with_md]].clone());
+        // 1. The path from the site root, `.` and `..` resolved.
+        let from_root = join_written("", reference).unwrap_or_default();
+        if let Some(&idx) = self.path_index.get(&normalize_path(&from_root)) {
+            let (path, exact_case) = self.spelled_as(idx, &from_root);
+            // A bare name spells out no folder, so finding it at the root is
+            // a search like any other.
+            *matched = if reference.starts_with(['/', '\\']) {
+                PathMatch::Written { exact_case }
+            } else if from_root.contains('/') {
+                PathMatch::FromRoot { exact_case }
+            } else {
+                PathMatch::Searched
+            };
+            return Some(path);
+        }
+
+        // 1b. From a page inside a language tree, the same path inside that
+        // tree, before step 2 tries the site root: `[[work/spring-show]]` from
+        // `zh-hans/blog/post.md` is `zh-hans/work/spring-show.md` when that
+        // exists. A reference naming a language tree itself is never re-scoped.
+        if let Some(lang) = from_lang.filter(|_| crate::home::lang_tree_prefix(&norm_ref).is_none()) {
+            let scoped = format!("{lang}/{norm_ref}");
+            if let Some(found) = self.path_index.get(&scoped).map(|&i| self.files[i].clone()).or_else(|| self.page_at(&scoped)) {
+                return Some(found);
+            }
+        }
+
+        // 2. Exact + a page extension
+        if let Some(page) = self.page_at(&norm_ref) {
+            return Some(page);
         }
 
         // 2b. Suffix match for partial paths (Obsidian shortest-path resolution).
         // e.g. "游记/index.md" matches "文字/游记/index.md"
-        // Also handles vault-root prefix: "刘果/交互实验/index.md" → try
+        // Also handles vault-root prefix: "山居/交互实验/index.md" → try
         // progressively shorter sub-paths until a match is found.
         if norm_ref.contains('/') {
             let parts: Vec<&str> = norm_ref.split('/').collect();
@@ -385,10 +586,8 @@ impl ContentGraph {
                 if self.path_index.contains_key(&subpath) {
                     return Some(self.files[self.path_index[&subpath]].clone());
                 }
-                // Try exact + .md
-                let with_md = format!("{}.md", subpath);
-                if self.path_index.contains_key(&with_md) {
-                    return Some(self.files[self.path_index[&with_md]].clone());
+                if let Some(page) = self.page_at(&subpath) {
+                    return Some(page);
                 }
 
                 // Try suffix match (sub-path as suffix of a longer graph path)
@@ -397,35 +596,8 @@ impl ContentGraph {
                     .filter(|(_, f)| normalize_path(f).ends_with(&suffix))
                     .map(|(i, _)| i)
                     .collect();
-                if candidates.len() == 1 {
-                    return Some(self.files[candidates[0]].clone());
-                }
-                if candidates.len() > 1 {
-                    let from_dirs = dir_components(&norm_from);
-                    let best = candidates.iter().copied().max_by_key(|&idx| {
-                        // self.files stores original (pre-normalized) paths for
-                        // filesystem fidelity; re-normalize here to compare
-                        // against norm_from and lang_tree_prefix output.
-                        let normalized = normalize_path(&self.files[idx]);
-                        let candidate_dirs = dir_components(&normalized);
-                        let tree_match = lang_tree_match(&normalized, from_lang);
-                        let ext_match = ext_match_score(ref_ext.as_deref(), &normalized);
-                        let page_score = page_preference_score(ref_ext.as_deref(), &normalized);
-                        // Final key: alphabetical-by-path, ascending (Reverse so
-                        // smaller path wins under max_by_key). Removes residual
-                        // dependence on registration order when all other keys
-                        // tie — see "then alphabetical" in the doc comment.
-                        (
-                            ext_match,
-                            page_score,
-                            tree_match,
-                            common_prefix_len(&candidate_dirs, &from_dirs),
-                            std::cmp::Reverse(normalized.clone()),
-                        )
-                    });
-                    if let Some(idx) = best {
-                        return Some(self.files[idx].clone());
-                    }
+                if let Some(idx) = self.nearest(&candidates, ref_ext.as_deref(), &norm_from, from_lang, ties) {
+                    return Some(self.files[idx].clone());
                 }
             }
         }
@@ -434,66 +606,39 @@ impl ContentGraph {
         // Skip stem matching when the reference is a multi-component path with an
         // index stem — falling back to just "index" would match every index.md in
         // the vault and return an arbitrary wrong result.
-        let ref_stem = normalize_component(
-            filename_stem(filename_with_ext(&norm_ref)),
-        );
+        let ref_stem = normalize_component(filename_stem(&norm_ref));
         let skip_stem = norm_ref.contains('/') && crate::home::is_index_stem(&ref_stem);
+        // A target that names an extension only names a file with it: `chart.png`
+        // is never the page `chart.md`, nor `logo.png` the file `logo.svg`.
         if !skip_stem {
             if let Some(candidates) = self.filename_index.get(&ref_stem) {
-                if candidates.len() == 1 {
-                    return Some(self.files[candidates[0]].clone());
-                }
-                // Ambiguity tiebreakers, in priority order:
-                //   1. Reference-extension match (only when the reference has
-                //      an extension — otherwise this term is constant)
-                //   2. Same language tree as the source (or both tree-less)
-                //   3. Longest common directory prefix with from_path
-                let from_dirs = dir_components(&norm_from);
-                let best = candidates
+                let candidates: Vec<usize> = candidates
                     .iter()
                     .copied()
-                    .max_by_key(|&idx| {
-                        // self.files stores original (pre-normalized) paths for
-                        // filesystem fidelity; re-normalize here to compare
-                        // against norm_from and lang_tree_prefix output.
-                        let normalized = normalize_path(&self.files[idx]);
-                        let candidate_dirs = dir_components(&normalized);
-                        let tree_match = lang_tree_match(&normalized, from_lang);
-                        let ext_match = ext_match_score(ref_ext.as_deref(), &normalized);
-                        let page_score = page_preference_score(ref_ext.as_deref(), &normalized);
-                        // Final key: alphabetical-by-path, ascending (Reverse so
-                        // smaller path wins under max_by_key). Removes residual
-                        // dependence on registration order when all other keys
-                        // tie — see "then alphabetical" in the doc comment.
-                        (
-                            ext_match,
-                            page_score,
-                            tree_match,
-                            common_prefix_len(&candidate_dirs, &from_dirs),
-                            std::cmp::Reverse(normalized.clone()),
-                        )
-                    });
-                if let Some(idx) = best {
+                    .filter(|&i| ref_ext.is_none() || path_extension(&self.files[i]) == ref_ext)
+                    .collect();
+                if let Some(idx) = self.nearest(&candidates, ref_ext.as_deref(), &norm_from, from_lang, ties) {
                     return Some(self.files[idx].clone());
                 }
             }
         }
 
-        // 5. Folder note: a folder reference resolves to that folder's home
-        // file — either a recognized index stem (`<ref>/index.md`, in priority
-        // order) or the self-named note (`<ref>/<leaf>.md`).
+        // 5. Folder note: the page the build elects as the folder's home by
+        // name (`home::detect_home_file_in_folder`): an index stem in priority
+        // order, then the self-named note, as `.md` only. The build publishes
+        // an `index.mdown` as an ordinary page, never as the folder's.
         let folder_note = |base: &str| -> Option<String> {
-            for stem in crate::home::INDEX_STEMS {
-                let folder_index = format!("{}/{}.md", base, stem);
-                if let Some(&idx) = self.path_index.get(&folder_index) {
-                    return Some(self.files[idx].clone());
-                }
-            }
             let leaf = base.rsplit('/').next().unwrap_or(base);
-            let self_named = format!("{}/{}.md", base, leaf);
-            self.path_index
-                .get(&self_named)
-                .map(|&idx| self.files[idx].clone())
+            let home = crate::home::INDEX_STEMS.iter().chain([&leaf]).find_map(|stem| self.path_index.get(&format!("{base}/{stem}.md")));
+            if let Some(&idx) = home {
+                return Some(self.files[idx].clone());
+            }
+            // No file backs this folder: the synthetic index page the
+            // renderer generates for it, if the scan registered one, at
+            // `<original-case dir>/index.md` so headings keep the author's case.
+            self.auto_index_dirs
+                .get(base)
+                .map(|orig_case_dir| format!("{orig_case_dir}/index.md"))
         };
 
         // 5a. Language-tree-scoped folder note: a bare folder reference like
@@ -524,39 +669,19 @@ impl ContentGraph {
         self.slug_map.get(&norm).map(|s| s.as_str())
     }
 
+    /// `true` iff `path` names a real, registered file — O(1) via the same
+    /// normalized-path index `resolve_path`'s exact-match tier uses, rather
+    /// than a linear scan of [`all_files`](Self::all_files). Distinguishes a
+    /// real file from a synthetic path `resolve_path` only ever manufactures
+    /// (the auto-index folder-note fallback's `<dir>/index.md`), which by
+    /// construction is never itself registered.
+    pub fn contains_path(&self, path: &str) -> bool {
+        self.path_index.contains_key(&normalize_path(path))
+    }
+
     /// All file paths in insertion order.
     pub fn all_files(&self) -> &[String] {
         &self.files
-    }
-
-    // -----------------------------------------------------------------------
-    // Exact-case asset index — backed by real-case paths, NOT the lowercased
-    // path_index / filename_index. Task 6 wires these to the AssetIndex trait.
-    // -----------------------------------------------------------------------
-
-    /// Return `true` iff `p` is present in the graph with exactly this casing.
-    pub fn asset_contains(&self, p: &str) -> bool {
-        self.asset_exact.contains(p)
-    }
-
-    /// Case-insensitive membership: return the first canonical real-case path
-    /// whose lowercased form equals `p.to_lowercase()`, or `None`.
-    pub fn asset_contains_ci(&self, p: &str) -> Option<String> {
-        self.asset_ci.get(&p.to_lowercase()).and_then(|v| v.first().cloned())
-    }
-
-    /// Return all real-case paths whose lowercased form ends with `/<suffix>`
-    /// (or equals `suffix` exactly). Results are sorted for determinism.
-    pub fn asset_find_by_suffix(&self, suffix: &str) -> Vec<String> {
-        let ls = suffix.to_lowercase();
-        let mut v: Vec<String> = self.asset_exact.iter().filter(|p| {
-            let lp = p.to_lowercase();
-            lp.ends_with(&ls)
-                && (lp.len() == ls.len()
-                    || lp.as_bytes()[lp.len() - ls.len() - 1] == b'/')
-        }).cloned().collect();
-        v.sort();
-        v
     }
 
     /// Build a graph from a bare list of file paths (no slugs).
@@ -587,8 +712,9 @@ pub struct ContentGraphBuilder {
     filename_index: HashMap<String, Vec<usize>>,
     path_index: HashMap<String, usize>,
     slug_map: HashMap<String, String>,
-    asset_exact: HashSet<String>,
-    asset_ci: HashMap<String, Vec<String>>,
+    auto_index_dirs: HashMap<String, String>,
+    case_twins: HashMap<String, Vec<String>>,
+    top_dirs: HashSet<String>,
 }
 
 impl ContentGraphBuilder {
@@ -604,13 +730,27 @@ impl ContentGraphBuilder {
     pub fn add_file(&mut self, relative_path: &str, slug: &str) {
         let norm = normalize_path(relative_path);
 
-        // Skip duplicates: if this normalized path is already registered, don't
-        // add another entry to `files` or `filename_index`.
-        if self.path_index.contains_key(&norm) {
+        // One entry per normalized path. Twins that differ only in letter case
+        // (possible on a case-sensitive disk) keep the byte-smaller spelling,
+        // so the pick never depends on the order a directory listing returned;
+        // every spelling is remembered for a target that writes one exactly.
+        if let Some(&idx) = self.path_index.get(&norm) {
+            let twins = self.case_twins.entry(norm.clone()).or_insert_with(|| vec![self.files[idx].clone()]);
+            if !twins.iter().any(|t| t == relative_path) {
+                twins.push(relative_path.to_string());
+                twins.sort();
+            }
+            if relative_path < self.files[idx].as_str() {
+                self.files[idx] = relative_path.to_string();
+                self.slug_map.insert(norm, slug.to_owned());
+            }
             return;
         }
 
         let idx = self.files.len();
+        if let Some((top, _)) = norm.split_once('/') {
+            self.top_dirs.insert(top.to_owned());
+        }
 
         // Build filename stem index
         let stem = filename_stem(&norm).to_owned();
@@ -624,13 +764,17 @@ impl ContentGraphBuilder {
 
         // Store original path (preserve casing for filesystem operations)
         self.files.push(relative_path.to_string());
+    }
 
-        // Exact-case asset index: keyed on real-case path, NOT normalized.
-        self.asset_exact.insert(relative_path.to_string());
-        self.asset_ci
-            .entry(relative_path.to_lowercase())
-            .or_default()
-            .push(relative_path.to_string());
+    /// Register a directory that gets an auto-generated folder-index page —
+    /// the input to `resolve_path`'s synthetic-folder-note fallback (see the
+    /// field doc on [`ContentGraph::auto_index_dirs`]). `dir` is the
+    /// original-case, project-relative directory path; the graph keys by its
+    /// normalized form so a reference in any case still matches, and keeps
+    /// `dir` verbatim as the value so the resolved page's H1/breadcrumb can
+    /// show the author's own casing.
+    pub fn register_auto_index_dir(&mut self, dir: &str) {
+        self.auto_index_dirs.insert(normalize_path(dir), dir.to_string());
     }
 
     /// Consume the builder and produce an immutable [`ContentGraph`].
@@ -640,8 +784,9 @@ impl ContentGraphBuilder {
             filename_index: self.filename_index,
             path_index: self.path_index,
             slug_map: self.slug_map,
-            asset_exact: self.asset_exact,
-            asset_ci: self.asset_ci,
+            auto_index_dirs: self.auto_index_dirs,
+            case_twins: self.case_twins,
+            top_dirs: self.top_dirs,
             // Installed by the host via `with_output_overrides` once the build's
             // page map is known; the builder itself is scan-time and has none.
             output_overrides: HashMap::new(),
@@ -784,6 +929,197 @@ mod tests {
         );
     }
 
+    // 1b. A path-shaped reference (contains a slash) from a language-tree
+    // source prefers the same-language sibling over the root, as a bare
+    // reference does: `[[work/spring-show]]` from a zh-hans page is
+    // `zh-hans/work/spring-show.md`, not the root `work/spring-show.md`.
+    #[test]
+    fn test_path_reference_prefers_same_language_tree() {
+        let g = ContentGraph::from_paths(&[
+            "work/spring-show.md",
+            "zh-hans/work/spring-show.md",
+            "zh-hans/index.md",
+        ]);
+
+        // The bare form already worked before this fix.
+        assert_eq!(
+            g.resolve_path("spring-show", "zh-hans/index.md"),
+            Some("zh-hans/work/spring-show.md".into())
+        );
+
+        // The path form must land on the same page.
+        assert_eq!(
+            g.resolve_path("work/spring-show", "zh-hans/index.md"),
+            Some("zh-hans/work/spring-show.md".into())
+        );
+
+        // From a root page, the path form still resolves to the root page.
+        assert_eq!(
+            g.resolve_path("work/spring-show", "index.md"),
+            Some("work/spring-show.md".into())
+        );
+    }
+
+    // 1b-fallback. When no same-language sibling exists, a language-tree
+    // page's path reference falls back to the exact path rather than failing.
+    #[test]
+    fn test_path_reference_falls_back_to_exact_path_when_no_language_sibling() {
+        let g = ContentGraph::from_paths(&["work/spring-show.md", "zh-hans/index.md"]);
+
+        assert_eq!(
+            g.resolve_path("work/spring-show", "zh-hans/index.md"),
+            Some("work/spring-show.md".into())
+        );
+    }
+
+    // 1b-explicit. An author who names a language tree explicitly in the
+    // reference itself is never re-scoped — [[en/work/spring-show]] from a
+    // zh-hans page must still resolve to the named English page even when an
+    // (adversarial, same-shape) zh-hans sibling exists at that literal path.
+    #[test]
+    fn test_path_reference_with_explicit_language_prefix_is_not_rescoped() {
+        let g = ContentGraph::from_paths(&[
+            "en/work/spring-show.md",
+            "zh-hans/en/work/spring-show.md",
+            "zh-hans/index.md",
+        ]);
+
+        assert_eq!(
+            g.resolve_path("en/work/spring-show", "zh-hans/index.md"),
+            Some("en/work/spring-show.md".into())
+        );
+    }
+
+    // A target that names an extension names a file of that extension: the
+    // name search never answers `chart.png` with a page or another format.
+    #[test]
+    fn a_name_with_an_extension_matches_only_that_extension() {
+        let g = ContentGraph::from_paths(&["notes/chart.md", "img/logo.svg", "a/note.md", "b/photo.jpg"]);
+        assert_eq!(g.resolve_path("chart.png", "a/page.md"), None);
+        assert_eq!(g.resolve_path("logo.png", "a/page.md"), None);
+        assert_eq!(g.resolve_path("LOGO.SVG", "a/page.md"), Some("img/logo.svg".into()));
+        // Without an extension a name still finds the page, then any file.
+        assert_eq!(g.resolve_path("note", "x.md"), Some("a/note.md".into()));
+        assert_eq!(g.resolve_path("note.md", "x.md"), Some("a/note.md".into()));
+        assert_eq!(g.resolve_path("photo", "x.md"), Some("b/photo.jpg".into()));
+        assert_eq!(g.resolve_path("photo.jpg", "x.md"), Some("b/photo.jpg".into()));
+    }
+
+    // Two files whose paths differ only in letter case (a case-sensitive disk)
+    // are one key; which of them the graph keeps must not depend on the order
+    // a directory listing happened to return them in.
+    #[test]
+    fn of_two_case_twins_the_same_one_is_kept_whatever_the_order() {
+        let a = ContentGraph::from_paths(&["a/photo.jpg", "a/Photo.jpg"]);
+        let b = ContentGraph::from_paths(&["a/Photo.jpg", "a/photo.jpg"]);
+        assert_eq!(a.resolve_path("photo.jpg", "a/p.md"), b.resolve_path("photo.jpg", "a/p.md"));
+        assert_eq!(a.all_files(), b.all_files());
+    }
+
+    // A target without an extension names a page of any page extension, as
+    // `.md`, before a same-named file that is not a page; a bare image name
+    // still finds the image when no page shares it.
+    #[test]
+    fn a_target_without_an_extension_finds_a_page_of_any_page_extension() {
+        let g = ContentGraph::from_paths(&["notes/note.markdown", "img/note.jpg"]);
+        assert_eq!(g.resolve_path("note", "x.md"), Some("notes/note.markdown".into()));
+        let g = ContentGraph::from_paths(&["posts/note.mdown", "other/note.md"]);
+        assert_eq!(g.resolve_path("posts/note", "other/x.md"), Some("posts/note.mdown".into()));
+        let g = ContentGraph::from_paths(&["posts/note.mkd", "note.md"]);
+        assert_eq!(g.resolve_path("note", "posts/a.md"), Some("posts/note.mkd".into()));
+        let g = ContentGraph::from_paths(&["zh-hans/footer.mdown", "footer.md", "zh-hans/blog/p.md"]);
+        assert_eq!(g.resolve_path("footer", "zh-hans/blog/p.md"), Some("zh-hans/footer.mdown".into()));
+        let g = ContentGraph::from_paths(&["archive/archive.mkd"]);
+        assert_eq!(g.resolve_path("archive", "x.md"), Some("archive/archive.mkd".into()));
+        let g = ContentGraph::from_paths(&["a/photo.jpg", "b/photo.mdown"]);
+        assert_eq!(g.resolve_path("photo.jpg", "b/x.md"), Some("a/photo.jpg".into()));
+        let g = ContentGraph::from_paths(&["a/photo.jpg", "b/other.mdown"]);
+        assert_eq!(g.resolve_path("photo", "b/x.md"), Some("a/photo.jpg".into()));
+    }
+
+    // Of pages that differ only in extension and are equally near, `.md` wins
+    // and the others are not reported as ties; nearness still comes first.
+    #[test]
+    fn of_equally_near_pages_the_md_one_wins_without_a_tie() {
+        let g = ContentGraph::from_paths(&["a/note.markdown", "a/note.md", "a/note.mdown"]);
+        let r = g.resolve_path_with_ties("note", "x.md").unwrap();
+        assert_eq!((r.path.as_str(), r.ties.len()), ("a/note.md", 0));
+        let g = ContentGraph::from_paths(&["a/note.md", "b/note.markdown"]);
+        assert_eq!(g.resolve_path("note", "b/x.md"), Some("b/note.markdown".into()));
+    }
+
+    // A folder's note is the page the build makes its home: `index.md` and the
+    // other home names as `.md` only, so `readme.md` beats `index.mdown`, which
+    // the build publishes as an ordinary page.
+    #[test]
+    fn a_folder_note_is_the_home_the_build_elects() {
+        let g = ContentGraph::from_paths(&["docs/index.mdown", "docs/readme.md"]);
+        assert_eq!(g.resolve_path("docs", "x.md"), Some("docs/readme.md".into()));
+        let g = ContentGraph::from_paths(&["docs/index.mdown", "docs/a.md"]);
+        assert_eq!(g.resolve_path("docs", "x.md"), None);
+        let names = ["index.mdown", "readme.md"];
+        assert_eq!(crate::home::detect_home_file_in_folder(&names, "docs"), Some("readme.md"));
+    }
+
+    // From a page in a language tree, a target whose first folder only looks
+    // like a language code is read from the page's folder unless the site has
+    // a top-level folder of that name; `en/x` still means the English tree.
+    #[test]
+    fn a_language_shaped_folder_is_a_language_tree_only_when_the_site_has_one() {
+        let g = ContentGraph::from_paths(&["zh-hans/travel/a.md", "zh-hans/travel/uk/p.jpg", "zh-hans/travel/a/uk/p.jpg"]);
+        let r = g.resolve_path_with_ties("uk/p.jpg", "zh-hans/travel/a.md").unwrap();
+        assert_eq!((r.path.as_str(), r.matched), ("zh-hans/travel/uk/p.jpg", PathMatch::Written { exact_case: true }));
+        let g = ContentGraph::from_paths(&["zh-hans/travel/a.md", "zh-hans/travel/uk/p.jpg", "uk/p.jpg"]);
+        assert_eq!(g.resolve_path("uk/p.jpg", "zh-hans/travel/a.md"), Some("uk/p.jpg".into()));
+    }
+
+    // A reference spelled exactly like one of two case twins names that twin,
+    // in every form; a spelling matching neither gets the kept one.
+    #[test]
+    fn a_reference_spelled_like_one_case_twin_names_that_twin() {
+        for order in [["a/photo.jpg", "a/Photo.jpg"], ["a/Photo.jpg", "a/photo.jpg"]] {
+            let g = ContentGraph::from_paths(&order);
+            let r = g.resolve_path_with_ties("photo.jpg", "a/p.md").unwrap();
+            assert_eq!((r.path.as_str(), r.matched), ("a/photo.jpg", PathMatch::Written { exact_case: true }));
+            let r = g.resolve_path_with_ties("Photo.jpg", "a/p.md").unwrap();
+            assert_eq!((r.path.as_str(), r.matched), ("a/Photo.jpg", PathMatch::Written { exact_case: true }));
+            let r = g.resolve_path_with_ties("/a/photo.jpg", "b/p.md").unwrap();
+            assert_eq!((r.path.as_str(), r.matched), ("a/photo.jpg", PathMatch::Written { exact_case: true }));
+            assert_eq!(g.resolve_path("../a/photo.jpg", "b/p.md"), Some("a/photo.jpg".into()));
+            let r = g.resolve_path_with_ties("PHOTO.jpg", "a/p.md").unwrap();
+            assert_eq!((r.path.as_str(), r.matched), ("a/Photo.jpg", PathMatch::Written { exact_case: false }));
+        }
+        // Twins differing in a folder's case: the path written names its twin.
+        let g = ContentGraph::from_paths(&["A/x.jpg", "a/x.jpg"]);
+        let r = g.resolve_path_with_ties("x.jpg", "a/p.md").unwrap();
+        assert_eq!((r.path.as_str(), r.matched), ("a/x.jpg", PathMatch::Written { exact_case: true }));
+        let r = g.resolve_path_with_ties("x.jpg", "A/p.md").unwrap();
+        assert_eq!((r.path.as_str(), r.matched), ("A/x.jpg", PathMatch::Written { exact_case: true }));
+    }
+
+    // A target that matches nothing as written is tried percent-decoded, in
+    // every form: `[[my%20note]]` and an encoded separator both find the file.
+    #[test]
+    fn a_percent_encoded_target_is_tried_decoded() {
+        let g = ContentGraph::from_paths(&["notes/my note.md", "a/b.png", "c/100%.png"]);
+        assert_eq!(g.resolve_path("my%20note", "x.md"), Some("notes/my note.md".into()));
+        assert_eq!(g.resolve_path("a%2Fb.png", "x.md"), Some("a/b.png".into()));
+        assert_eq!(g.resolve_path("a%2fb.png", "x.md"), Some("a/b.png".into()));
+        // A `%` that is not an escape is matched as written.
+        assert_eq!(g.resolve_path("100%.png", "x.md"), Some("c/100%.png".into()));
+    }
+
+    // A folder whose name happens to be a language code (`uk`, `id`) is an
+    // ordinary folder to a page outside any language tree: the path written
+    // from the page's folder names its file.
+    #[test]
+    fn a_language_shaped_folder_beside_an_ordinary_page_is_read_from_the_page() {
+        let g = ContentGraph::from_paths(&["trips/index.md", "trips/uk/day1.jpg", "trips/2023/uk/day1.jpg"]);
+        assert_eq!(g.resolve_path("uk/day1.jpg", "trips/index.md"), Some("trips/uk/day1.jpg".into()));
+        let g = ContentGraph::from_paths(&["notes/a.md", "notes/id/card.png", "id/card.png"]);
+        assert_eq!(g.resolve_path("id/card.png", "notes/a.md"), Some("notes/id/card.png".into()));
+    }
+
     // 7b. Self-named folder note: [[daily]] -> notes/daily/daily.md
     #[test]
     fn test_self_named_folder_note_resolution() {
@@ -810,6 +1146,44 @@ mod tests {
             g.resolve_path("archive", ""),
             Some("archive/archive.md".into())
         );
+    }
+
+    // 7d. Auto-index folder note: a folder registered via
+    // `register_auto_index_dir` (no `index.md`, no self-named note of its
+    // own) resolves to its synthetic `<dir>/index.md`, case-insensitively.
+    #[test]
+    fn test_auto_index_dir_resolves_when_no_real_note_exists() {
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("essays/entry.md", "/essays/entry");
+        b.register_auto_index_dir("Essays");
+        let g = b.build();
+
+        assert_eq!(g.resolve_path("essays", ""), Some("Essays/index.md".into()));
+        assert_eq!(g.resolve_path("Essays", ""), Some("Essays/index.md".into()));
+    }
+
+    // 7e. A real folder note (self-named or an index stem) wins over the
+    // registered auto-index dir — steps 1-4 and the file-backed checks
+    // inside `folder_note` all run before the auto-index fallback.
+    #[test]
+    fn test_real_folder_note_wins_over_auto_index_registration() {
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("news/index.md", "/news");
+        b.register_auto_index_dir("news");
+        let g = b.build();
+
+        assert_eq!(g.resolve_path("news", ""), Some("news/index.md".into()));
+    }
+
+    // 7f. A directory that was never registered does not resolve through
+    // this fallback — an unregistered folder must not silently match.
+    #[test]
+    fn test_unregistered_dir_does_not_resolve_via_auto_index_fallback() {
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("essays/entry.md", "/essays/entry");
+        let g = b.build();
+
+        assert_eq!(g.resolve_path("essays", ""), None);
     }
 
     // 8. Unresolved returns None
@@ -875,6 +1249,19 @@ mod tests {
         assert_eq!(g.get_slug("posts/hello.md"), Some("/posts/hello"));
         assert_eq!(g.get_slug("Posts/Hello.md"), Some("/posts/hello"));
         assert_eq!(g.get_slug("nope.md"), None);
+    }
+
+    #[test]
+    fn test_contains_path() {
+        let g = sample_graph();
+
+        assert!(g.contains_path("posts/hello.md"));
+        // Case-insensitive, like every other path_index lookup.
+        assert!(g.contains_path("Posts/Hello.md"));
+        // A synthetic path resolve_path can manufacture (an auto-index
+        // folder's home page) but never registers as a real file.
+        assert!(!g.contains_path("posts/index.md"));
+        assert!(!g.contains_path("nope.md"));
     }
 
     // all_files preserves insertion order
@@ -965,8 +1352,8 @@ mod tests {
     #[test]
     fn test_generate_slug_strips_ascii_punctuation() {
         assert_eq!(
-            generate_slug("news/Farewell, and Erase on BroadwayWorld.md"),
-            "news/farewell-and-erase-on-broadwayworld"
+            generate_slug("news/Hello, and Goodbye on NewsWire.md"),
+            "news/hello-and-goodbye-on-newswire"
         );
         assert_eq!(generate_slug("posts/Hello (World)!.md"), "posts/hello-world");
         assert_eq!(generate_slug("posts/it's-mine.md"), "posts/its-mine");
@@ -1067,7 +1454,7 @@ mod tests {
         );
     }
 
-    // Vault-root prefix: "刘果/交互实验/index.md" should resolve to "交互实验/index.md"
+    // Vault-root prefix: "山居/交互实验/index.md" should resolve to "交互实验/index.md"
     // by stripping the leading component that doesn't match any graph path.
     // This matches Obsidian's behavior where vault name can prefix markdown links.
     #[test]
@@ -1079,7 +1466,7 @@ mod tests {
 
         // Should resolve to 交互实验/index.md, NOT 文字/分布式信息网络/index.md
         assert_eq!(
-            g.resolve_path("刘果/交互实验/index.md", ""),
+            g.resolve_path("山居/交互实验/index.md", ""),
             Some("交互实验/index.md".into())
         );
     }
@@ -1215,21 +1602,21 @@ mod tests {
 
     #[test]
     fn stem_collision_bare_ref_prefers_page_over_asset() {
-        // A folder holding both a page and a same-stem asset — 古梅圖.md
-        // beside 古梅圖.jpg, one per work in the zhu-da vault — must resolve
-        // a bare `[[古梅圖]]` to the page. Before this test, the ambiguity
+        // A folder holding both a page and a same-stem asset — 示例圖.md
+        // beside 示例圖.jpg, one per work in a painting archive — must resolve
+        // a bare `[[示例圖]]` to the page. Before this test, the ambiguity
         // fell through to the alphabetical tiebreaker, where ".jpg" sorts
         // ahead of ".md" and the link silently became a dead label card
         // pointing at the plate. ".jpg" alphabetically precedes ".md", so
         // this fails without the page-preference term.
         let mut b = ContentGraphBuilder::new();
-        b.add_file("畫/古梅圖.md", "/畫/古梅圖.md");
-        b.add_file("畫/古梅圖.jpg", "/畫/古梅圖.jpg");
+        b.add_file("作品/示例圖.md", "/作品/示例圖.md");
+        b.add_file("作品/示例圖.jpg", "/作品/示例圖.jpg");
         let g = b.build();
 
         assert_eq!(
-            g.resolve_path("古梅圖", "其他/note.md"),
-            Some("畫/古梅圖.md".into())
+            g.resolve_path("示例圖", "其他/note.md"),
+            Some("作品/示例圖.md".into())
         );
     }
 
@@ -1239,13 +1626,13 @@ mod tests {
         // — page preference only applies to a bare reference, which can't
         // express asset intent in the first place.
         let mut b = ContentGraphBuilder::new();
-        b.add_file("畫/古梅圖.md", "/畫/古梅圖.md");
-        b.add_file("畫/古梅圖.jpg", "/畫/古梅圖.jpg");
+        b.add_file("作品/示例圖.md", "/作品/示例圖.md");
+        b.add_file("作品/示例圖.jpg", "/作品/示例圖.jpg");
         let g = b.build();
 
         assert_eq!(
-            g.resolve_path("古梅圖.jpg", "其他/note.md"),
-            Some("畫/古梅圖.jpg".into())
+            g.resolve_path("示例圖.jpg", "其他/note.md"),
+            Some("作品/示例圖.jpg".into())
         );
     }
 
@@ -1289,13 +1676,13 @@ mod tests {
         // reference — the two arms carry duplicated tiebreaker logic and both
         // must apply the rule.
         let mut b = ContentGraphBuilder::new();
-        b.add_file("vault/畫/古梅圖.md", "/vault/畫/古梅圖.md");
-        b.add_file("vault/畫/古梅圖.jpg", "/vault/畫/古梅圖.jpg");
+        b.add_file("vault/作品/示例圖.md", "/vault/作品/示例圖.md");
+        b.add_file("vault/作品/示例圖.jpg", "/vault/作品/示例圖.jpg");
         let g = b.build();
 
         assert_eq!(
-            g.resolve_path("畫/古梅圖", "vault/other/note.md"),
-            Some("vault/畫/古梅圖.md".into())
+            g.resolve_path("作品/示例圖", "vault/other/note.md"),
+            Some("vault/作品/示例圖.md".into())
         );
     }
 
@@ -1340,6 +1727,27 @@ mod tests {
     }
 
     #[test]
+    fn the_nearest_copy_wins_and_only_a_true_tie_is_reported() {
+        let g = ContentGraph::from_paths(&["z/far.jpg", "a/x/y/far.jpg", "a/b/dup.jpg", "a/c/dup.jpg"]);
+        // Nearest beats shallowest, with nothing tied.
+        assert_eq!(
+            g.resolve_path_with_ties("far.jpg", "a/x/page.md").map(|r| (r.path, r.ties)),
+            Some(("a/x/y/far.jpg".to_string(), vec![]))
+        );
+        // Two copies equally near: the alphabetical first wins, the other is reported.
+        assert_eq!(
+            g.resolve_path_with_ties("dup.jpg", "a/x/page.md").map(|r| (r.path, r.ties)),
+            Some(("a/b/dup.jpg".to_string(), vec!["a/c/dup.jpg".to_string()]))
+        );
+        // A copy sharing one more directory with the page is not a tie.
+        assert_eq!(
+            g.resolve_path_with_ties("dup.jpg", "a/c/page.md").map(|r| (r.path, r.ties)),
+            Some(("a/c/dup.jpg".to_string(), vec![]))
+        );
+        assert_eq!(g.resolve_path("dup.jpg", "a/x/page.md").as_deref(), Some("a/b/dup.jpg"));
+    }
+
+    #[test]
     fn stem_collision_case_insensitive_extension() {
         // Author may write `.PNG`; should still match `.png` candidate.
         let mut b = ContentGraphBuilder::new();
@@ -1350,21 +1758,6 @@ mod tests {
         assert_eq!(
             g.resolve_path("photo.png", "interactive/article.md"),
             Some("interactive/photo.PNG".into())
-        );
-    }
-
-    #[test]
-    fn exact_case_asset_index() {
-        let g = ContentGraph::from_paths(&["assets/Hoon.JPG", "News/post.md"]);
-        assert!(g.asset_contains("assets/Hoon.JPG"));
-        assert!(!g.asset_contains("assets/hoon.jpg")); // exact case
-        assert_eq!(
-            g.asset_contains_ci("assets/hoon.jpg").as_deref(),
-            Some("assets/Hoon.JPG")
-        );
-        assert_eq!(
-            g.asset_find_by_suffix("Hoon.JPG"),
-            vec!["assets/Hoon.JPG".to_string()]
         );
     }
 }

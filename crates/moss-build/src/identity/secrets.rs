@@ -95,7 +95,7 @@ impl SecretStore {
     /// Both moss's credential modal and a plugin may write here: a plugin may
     /// deposit what a login moss supervised already returned to it, but may
     /// never write a key its own manifest declared as user-supplied, because
-    /// only moss draws that field (ADR-072 §3, amended 2026-08-30 — the
+    /// only moss draws that field (the
     /// caller-side gate lives in `plugins::commands::secrets`).
     ///
     /// Erasing on empty is what keeps [`Self::remove`]'s promise that "moss has

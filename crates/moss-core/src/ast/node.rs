@@ -3,12 +3,12 @@
 //! Closed enums; pattern matching is the visitor framework. The variants
 //! model every construct [`super::parser::parser_options`] turns on —
 //! CommonMark plus the GFM tables, strikethrough, footnotes and task lists
-//! moss enables (ADR-035 § Task lists, amended) — so nothing pulldown-cmark
+//! moss enables — so nothing pulldown-cmark
 //! emits for those constructs reaches a catch-all.
 //!
 //! `Block::Other` / `Inline::Other` are NOT a general catch-all. They carry
 //! **raw HTML only** — `Tag::HtmlBlock` and `Event::Html`/`InlineHtml` in
-//! [`super::parser`] — plus payloads moss synthesizes itself (math, ADR-030;
+//! [`super::parser`] — plus payloads moss synthesizes itself (math;
 //! dispatched wikilink embeds). Anything pulldown-cmark emits that has no arm
 //! is **dropped, not passed through**: `parse_block`, `parse_block_with_tag`
 //! and `parse_inline` all end in `_ => (None, 1)`, and
@@ -18,9 +18,9 @@
 //! variant here PLUS arms in `parse_block_with_tag` / `parse_inline` /
 //! `parse_inline_event`'s whitelist, in the same change, or the construct
 //! silently disappears from published pages. That is not hypothetical: before
-//! ADR-035, `~~` was a construct the AST hadn't modeled and it did not flow
-//! through `Inline::Other` — `~~gone~~ stays` published `gone stays` for two
-//! months. See ADR-035 § Why now.
+//! this rule was enforced, `~~` was a construct the AST hadn't modeled and it
+//! did not flow through `Inline::Other` — `~~gone~~ stays` published
+//! `gone stays` for two months.
 
 use serde::{Deserialize, Serialize};
 
@@ -84,9 +84,9 @@ impl CalloutKind {
     /// - `error` → `Danger`
     /// - `cite` → `Quote`
     ///
-    /// `pending` is also accepted as an alias for `Todo` (used by
-    /// SoCiviC Theatre voices.md; carried over from pre-Phase-4 Stage 1
-    /// support in `crates/moss-core/src/resolve/callouts.rs`).
+    /// `pending` is also accepted as an alias for `Todo` (used by a real
+    /// site's pages; carried over from pre-Phase-4 Stage 1 support in
+    /// `crates/moss-core/src/resolve/callouts.rs`).
     ///
     /// Note: the [`CalloutKind`] enum reserves `Important`, `Summary`,
     /// and `Help` as canonical variants for future Stage 2 use (e.g.
@@ -121,8 +121,8 @@ impl CalloutKind {
             "error" => Self::Danger,
             "cite" => Self::Quote,
             // Legacy alias retained from pre-Phase-4 Stage 1
-            // (`crates/moss-core/src/resolve/callouts.rs`). SoCiviC
-            // Theatre's voices.md uses `> [!pending]`; map to Todo.
+            // (`crates/moss-core/src/resolve/callouts.rs`). Existing sites
+            // use `> [!pending]`; map to Todo.
             "pending" => Self::Todo,
             _ => return None,
         };
@@ -231,8 +231,8 @@ pub enum Block {
     /// for symmetry with [`crate::ast::document::BlockMeta::source_line`]).
     ///
     /// Phase 4 source-lines followup (2026-05-28): added because the
-    /// preview's scroll-sync (cm-scroll-sync via
-    /// `frontend/bridge/iframe-bridge.ts`) interpolates editor positions
+    /// preview's scroll-sync (the desktop editor's cm-scroll-sync, through
+    /// moss-build's iframe bridge) interpolates editor positions
     /// proportionally between annotated DOM elements. A 30-item list
     /// spanning 50 source lines without per-`<li>` annotations forces
     /// interpolation between the outer `<ul>` and the next top-level
@@ -294,8 +294,7 @@ pub enum Block {
     ThematicBreak,
     /// Image-only paragraph promoted to a typed figure.
     ///
-    /// Detected by the parser's `Tag::Paragraph` arm (Phase 4 PR3,
-    /// 2026-05-27): a paragraph that contains exactly one
+    /// Detected by the parser's `Tag::Paragraph` arm: a paragraph that contains exactly one
     /// [`Inline::Image`] modulo whitespace text and line breaks. The
     /// renderer emits `<figure class="moss-image">…<figcaption>…</figcaption></figure>`,
     /// wrapping the image hook's output and appending the caption when
@@ -311,12 +310,10 @@ pub enum Block {
     ///
     /// The figure-level display params (`width`, `align`, `class_names`,
     /// `img_style`) are populated only when a figure originates from a
-    /// parameterized wikilink embed (`![[photo.jpg|wide cover]]`) — the
-    /// image-embed synth-collapse routes such embeds through this typed
-    /// node so width/fit/position/align survive (previously dropped by the
-    /// markdown round-trip). The CommonMark `![](url)` promotion path
-    /// (`try_promote_to_figure`) leaves them at their defaults, so its
-    /// rendered output is byte-identical to before the collapse.
+    /// parameterized wikilink embed (`![[photo.jpg|wide cover]]`), which is
+    /// routed through this typed node so width/fit/position/align survive.
+    /// The CommonMark `![](url)` promotion path (`try_promote_to_figure`)
+    /// leaves them at their defaults.
     Figure {
         image: Inline,
         caption: Option<Vec<Inline>>,
@@ -339,7 +336,7 @@ pub enum Block {
     },
     /// Compound-link grid cell: the entire cell is a single markdown
     /// link `[inner](url)` whose `inner` is parsed as block-level content
-    /// (images, headings, paragraphs, emphasis). The SoCiviC Theatre
+    /// (images, headings, paragraphs, emphasis). The poster-card
     /// pattern: `[![[poster]] ### Title *date* description](/url)`.
     ///
     /// Phase 4 PR4.5 (2026-05-28): added because CommonMark restricts
@@ -352,15 +349,18 @@ pub enum Block {
     /// single-element `vec![Block::LinkCard { url, children }]` with the
     /// inner markdown parsed into typed blocks.
     ///
-    /// Render shape (matches today's `render_compound_link_cell` byte
-    /// shape):
-    /// - External URL (`http(s)://...`): `<a href=URL class="moss-grid-card link-preview" target="_blank" rel="noopener">children</a>`.
+    /// Render shape:
+    /// - External URL (`http(s)://...`): the unified `.moss-card` shell
+    ///   (`<a href=URL class="moss-card" data-external target="_blank"
+    ///   rel="noopener">…</a>`), the same shell an internal page card uses —
+    ///   never the retired `.moss-grid-card.link-preview` shape. See
+    ///   `super::link_card::render_external_link_card`.
     /// - Internal URL: `<a href=URL class="moss-grid-card" data-kind="link">children</a>`.
     LinkCard { url: Url, children: Vec<Block> },
     /// `[^label]: body` — a GFM footnote definition, wherever the author
     /// wrote it (pulldown-cmark nests one written inside a blockquote or a
     /// list item under that container). The renderer hoists it out to the
-    /// document's endnote section; see ADR-035.
+    /// document's endnote section.
     FootnoteDefinition { label: String, children: Vec<Block> },
     /// Raw HTML passthrough: a `Tag::HtmlBlock` the author wrote, or a
     /// payload moss synthesized itself (the shortcode sentinel pass in
@@ -393,6 +393,20 @@ pub enum Inline {
         /// Renderer adds `class="wikilink"` for true.
         #[serde(default)]
         is_wikilink: bool,
+        /// True when a wikilink carried an explicit `|alias` (mirrors
+        /// pulldown-cmark's `LinkType::WikiLink { has_pothole }`). Meaningless
+        /// when `is_wikilink` is false — a standard `[text](url)` link has no
+        /// synthesized default, so `text` is always the author's choice there.
+        ///
+        /// For a bare `[[target]]`, pulldown-cmark synthesizes `target` itself
+        /// as the child text (see `wikilink_has_pothole` in the pulldown-cmark
+        /// fork), which is not something the author wrote — a consumer that
+        /// wants "did the author choose this text" must check this flag
+        /// rather than compare `children`'s text against the target, because
+        /// an alias that happens to equal the target must still count as
+        /// chosen.
+        #[serde(default)]
+        has_pothole: bool,
     },
     /// `![alt](src "title")` or `![[wikilink]]`.
     ///
@@ -440,7 +454,7 @@ pub enum Inline {
     /// `[^label]` — a GFM footnote marker. Carries the author's label, not
     /// the printed number: numbering is first-reference order over the whole
     /// document, which is a render-time fact (same rule as
-    /// [`ColumnAlignment`]'s numeric auto-alignment). See ADR-035.
+    /// [`ColumnAlignment`]'s numeric auto-alignment).
     FootnoteRef(String),
     /// The `[ ]` / `[x]` of a GFM task-list item, carrying its checked state.
     ///
@@ -448,10 +462,10 @@ pub enum Inline {
     /// where pulldown-cmark puts it: `Event::TaskListMarker` is the first event
     /// *inside* `Tag::Item`, ahead of the item's own content. Keeping it inline
     /// leaves `Block::List`'s shape untouched and avoids a third vector parallel
-    /// to `items` / `item_source_lines`. See ADR-035 § Task lists.
+    /// to `items` / `item_source_lines`.
     TaskMarker(bool),
     /// Raw inline HTML passthrough (`Event::Html` / `Event::InlineHtml`),
-    /// plus the math node `math_text::math_inline` synthesizes (ADR-030).
+    /// plus the math node `math_text::math_inline` synthesizes.
     /// NOT a fallback for unmodeled pulldown constructs — see the module doc.
     Other(String),
 }
@@ -647,6 +661,7 @@ mod tests {
             title: None,
             children: vec![text("Documentation")],
             is_wikilink: false,
+            has_pothole: false,
         };
         match i {
             Inline::Link {
@@ -654,6 +669,7 @@ mod tests {
                 title,
                 children,
                 is_wikilink,
+                has_pothole: _,
             } => {
                 assert!(url.is_unresolved());
                 assert!(title.is_none());
@@ -767,7 +783,7 @@ mod tests {
         assert_eq!(CalloutKind::from_raw("missing"), Some(CalloutKind::Failure));
         assert_eq!(CalloutKind::from_raw("error"), Some(CalloutKind::Danger));
         assert_eq!(CalloutKind::from_raw("cite"), Some(CalloutKind::Quote));
-        // Legacy alias for SoCiviC Theatre's `> [!pending]` syntax.
+        // Legacy alias for the `> [!pending]` syntax existing sites use.
         assert_eq!(CalloutKind::from_raw("pending"), Some(CalloutKind::Todo));
     }
 
@@ -820,6 +836,7 @@ mod tests {
             title: Some("Docs".to_string()),
             children: vec![Inline::Text("see".to_string())],
             is_wikilink: true,
+            has_pothole: false,
         };
         let s = serde_json::to_string(&original).expect("serialize");
         let back: Inline = serde_json::from_str(&s).expect("deserialize");

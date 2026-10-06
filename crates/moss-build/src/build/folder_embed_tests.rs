@@ -53,6 +53,24 @@ fn parse_marker_body_round_trips_with_emit() {
 }
 
 #[test]
+fn parse_marker_body_accepts_date_asc() {
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        sort: Some(SortAxis::DateAsc),
+        ..Default::default()
+    };
+    let m = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "/journal/",
+        "index.md",
+        &params,
+    );
+    let body = m
+        .trim_start_matches(MARKER_FOLDER_LIST)
+        .trim_end_matches(MARKER_END);
+    let parsed = parse_marker_body(body).unwrap();
+    assert_eq!(parsed.sort, Some(SortAxis::DateAsc));
+}
+
+#[test]
 fn resolve_folder_id_absolute_strips_slashes() {
     assert_eq!(resolve_folder_id("/journal/", "index.md"), "journal");
     assert_eq!(
@@ -151,7 +169,7 @@ fn full_listing_renders_all_articles_in_date_order() {
 
 #[test]
 fn also_in_doc_outside_folder_is_included_in_direct_listing() {
-    // moss#907 gap-4 sweep changed `select_children_by_slug`'s depth check
+    // A gap-4 sweep changed `select_children_by_slug`'s depth check
     // (folder_embed.rs, the `strip_prefix(folder_prefix).is_none_or(...)`
     // arm): an `also_in` doc that is NOT physically under the folder used to
     // be excluded from a "direct" (non-flatten, the default) listing by the
@@ -353,6 +371,46 @@ fn zh_hant_vertical_listing_shows_card_meta_in_chinese_numerals() {
     );
 }
 
+/// A body embed's listing follows its host page's EFFECTIVE typesetting —
+/// the page's own `typesetting:`, else the site's. It used to read only the
+/// page's, so on a site set vertical in config.toml alone, a zh-hant body
+/// embed printed Arabic dates beside a page written in Chinese numerals.
+#[test]
+fn body_embed_listing_follows_the_hosts_effective_typesetting() {
+    let folder = make_folder_doc("文/index.html", "文");
+    let mut article = make_doc("文/a.html", "A", Some("1697-09"));
+    article.lang = crate::i18n::Language::ZhHant;
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        style: Some("summary".to_string()),
+        ..Default::default()
+    };
+    let marker =
+        moss_core::resolve::embed_renderer::folder_list::emit_marker("/文/", "home.md", &params);
+    let media_lookup =
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
+    let expand = |page: Option<&str>, site: Option<&str>| {
+        let host = ParsedDocument {
+            url_path: "index.html".to_string(),
+            source_path: Some("home.md".to_string()),
+            html_content: marker.clone(),
+            kind: PageKind::Article,
+            lang: crate::i18n::Language::ZhHant,
+            typesetting: page.map(String::from),
+            ..Default::default()
+        };
+        let mut documents = vec![host, folder.clone(), article.clone()];
+        expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup, site);
+        documents.swap_remove(0).html_content
+    };
+    let cjk = "一六九七年·九月";
+    let site_only = expand(None, Some("vertical"));
+    assert!(site_only.contains(cjk), "site-only vertical must reach the embed: {site_only}");
+    let page_override = expand(Some("horizontal"), Some("vertical"));
+    assert!(!page_override.contains(cjk), "the page's horizontal must win: {page_override}");
+}
+
 #[test]
 fn root_homepage_self_listing_suppresses_more_link() {
     // Homepage listing its own root children (no children_source) with a limit
@@ -408,7 +466,7 @@ fn children_more_emits_link_even_on_self_listing_when_truncated() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -443,7 +501,7 @@ fn children_more_unresolved_target_omits_more_link() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -518,7 +576,7 @@ fn children_more_link_text_uses_target_title() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -580,10 +638,10 @@ fn root_self_named_home_self_listing_suppresses_more_link() {
     // A root home that is self-named / marker / inherited (NOT literally
     // `index.md`) is still its folder's index, so its own depth listing with a
     // limit must NOT emit a `More →`. Regresses the `is_index_source` root /
-    // home-override gap: `is_home_file("刘果","")` is false (empty parent), so the
+    // home-override gap: `is_home_file("山居","")` is false (empty parent), so the
     // filename heuristic alone misses it — the doc lookup (kind == Folder) catches it.
     let mut folder = make_folder_doc("index.html", "Home");
-    folder.source_path = Some("刘果.md".to_string()); // root self-named home (kind=Folder)
+    folder.source_path = Some("山居.md".to_string()); // root self-named home (kind=Folder)
     let a = make_doc("a.html", "A", Some("2025-01-01"));
     let b = make_doc("b.html", "B", Some("2025-03-01"));
     let c = make_doc("c.html", "C", Some("2025-02-01"));
@@ -594,12 +652,12 @@ fn root_self_named_home_self_listing_suppresses_more_link() {
         limit: Some(2),
         ..Default::default()
     };
-    // from = 刘果.md (the root self-named home), path = / (self-listing).
+    // from = 山居.md (the root self-named home), path = / (self-listing).
     let marker =
-        moss_core::resolve::embed_renderer::folder_list::emit_marker("/", "刘果.md", &params);
+        moss_core::resolve::embed_renderer::folder_list::emit_marker("/", "山居.md", &params);
     let out = resolve_markers(
         &marker,
-        "刘果.md",
+        "山居.md",
         &docs,
         &project,
         &dir_overrides,
@@ -735,7 +793,7 @@ fn sort_override_changes_order() {
     );
 }
 
-fn test_project() -> ProjectStructure {
+pub(crate) fn test_project() -> ProjectStructure {
     ProjectStructure {
         root_path: "/tmp".into(),
         markdown_files: vec![],
@@ -1041,7 +1099,7 @@ fn iframe_src_uses_relative_path_from_nested_page() {
 
 #[test]
 fn iframe_src_is_slugified_lowercase_when_source_lacks_shared_prefix() {
-    // Regression (yinlab.io): ![[/Resources/cities-heat-map-app/]] embedded
+    // Regression (a real site): ![[/Resources/cities-heat-map-app/]] embedded
     // from a ROOT page. moss slugifies output directories to lowercase
     // ("resources/cities-heat-map-app/"), but the iframe src was emitted
     // from the case-preserving folder_id ("Resources/..."), so it 404'd on
@@ -1292,7 +1350,7 @@ fn synthesize_marker_from_frontmatter() {
     let mut doc = ParsedDocument::default();
     doc.children_style = Some(moss_core::Resolved::frontmatter("grid".to_string()));
     doc.children_limit = Some(5);
-    let marker = synthesize_children_marker(&doc, "projects", "index.md", false);
+    let marker = synthesize_children_marker(&doc, "projects", "index.md");
     assert!(marker.contains("path=/projects/"));
     assert!(marker.contains("from=index.md"));
     assert!(marker.contains("style=grid"));
@@ -1301,20 +1359,19 @@ fn synthesize_marker_from_frontmatter() {
 
 #[test]
 fn synthesize_marker_homepage_defaults_depth_all() {
-    let doc = ParsedDocument::default();
-    let marker = synthesize_children_marker(&doc, "", "index.md", true);
+    let doc = ParsedDocument { url_path: "index.html".to_string(), ..Default::default() };
+    let marker = synthesize_children_marker(&doc, "", "index.md");
     assert!(marker.contains("depth=all"));
 }
 
 #[test]
 fn synthesize_marker_folder_index_no_depth_default() {
     let doc = ParsedDocument::default();
-    let marker = synthesize_children_marker(&doc, "articles", "articles/index.md", false);
+    let marker = synthesize_children_marker(&doc, "articles", "articles/index.md");
     assert!(!marker.contains("depth="));
 }
 
 // ---- Multilingual children scoping (location model) ----
-// See docs/archive/2026-06-06-multilingual-children-scoping-design.md.
 
 fn multilingual_project() -> ProjectStructure {
     let mut p = test_project();
@@ -1336,7 +1393,7 @@ fn root_homepage_multilingual_excludes_language_subtrees() {
     let project = multilingual_project();
     let dir_overrides = std::collections::HashMap::new();
     // Drive the real root-home path: is_homepage = true (sets scope_default_tree + depth=all).
-    let marker = synthesize_children_marker(&docs[0], "", "index.md", true);
+    let marker = synthesize_children_marker(&docs[0], "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -1376,7 +1433,7 @@ fn single_language_root_homepage_lists_all() {
     let docs = vec![home, a, b];
     let project = test_project(); // has_language_trees = false
     let dir_overrides = std::collections::HashMap::new();
-    let marker = synthesize_children_marker(&docs[0], "", "index.md", true);
+    let marker = synthesize_children_marker(&docs[0], "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -1404,7 +1461,7 @@ fn coincidental_language_named_folder_excluded_from_root_home() {
     let docs = vec![home, a, en];
     let project = multilingual_project(); // scan would set this true given en/
     let dir_overrides = std::collections::HashMap::new();
-    let marker = synthesize_children_marker(&docs[0], "", "index.md", true);
+    let marker = synthesize_children_marker(&docs[0], "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -1424,55 +1481,21 @@ fn coincidental_language_named_folder_excluded_from_root_home() {
     );
 }
 
-/// Regression guard for the EXISTING mechanism: a language-subtree home is a
-/// folder index (is_homepage = false) scoped by its folder prefix, not by the
-/// new flag. It lists its own subtree and excludes root docs. (Review A: the
-/// `/en/` home is folder_prefix-scoped — this drives that real path.)
-#[test]
-fn language_home_excludes_root_docs_via_folder_prefix() {
-    let mut en_home = make_folder_doc("en/index.html", "En Home");
-    en_home.children_depth = Some("all".to_string());
-    let en_doc = make_doc("en/writing/xray.html", "Xray", Some("2025-03-01"));
-    let zh_doc = make_doc("alpha.html", "Alpha", Some("2025-01-01"));
-    let docs = vec![en_home.clone(), en_doc, zh_doc];
-    let project = multilingual_project();
-    let dir_overrides = std::collections::HashMap::new();
-    // is_homepage = false → folder-index path (scope_default_tree stays false).
-    let marker = synthesize_children_marker(&en_home, "en", "en/index.md", false);
-    let out = resolve_markers(
-        &marker,
-        "en/index.md",
-        &docs,
-        &project,
-        &dir_overrides,
-        crate::i18n::Language::En,
-        None,
-        None,
-        true,
-    );
-    assert!(out.contains(">Xray<"), "en/ doc must be listed: {}", out);
-    assert!(
-        !out.contains(">Alpha<"),
-        "root doc excluded via folder_prefix: {}",
-        out
-    );
-}
-
 /// A `children_source` homepage targets another folder by user intent, so it is
 /// NOT scoped to the default tree (scope_default_tree stays false).
 #[test]
 fn synthesize_marker_children_source_not_scoped() {
     let mut doc = ParsedDocument::default();
     doc.children_source = Some("projects".to_string());
-    let marker = synthesize_children_marker(&doc, "projects", "index.md", true);
+    let marker = synthesize_children_marker(&doc, "projects", "index.md");
     assert!(!marker.contains("scope_default_tree"), "marker: {}", marker);
 }
 
 /// The root homepage default-mode marker carries the scope flag.
 #[test]
 fn synthesize_marker_root_homepage_sets_scope_default_tree() {
-    let doc = ParsedDocument::default();
-    let marker = synthesize_children_marker(&doc, "", "index.md", true);
+    let doc = ParsedDocument { url_path: "index.html".to_string(), ..Default::default() };
+    let marker = synthesize_children_marker(&doc, "", "index.md");
     assert!(marker.contains("scope_default_tree"), "marker: {}", marker);
 }
 
@@ -1527,7 +1550,7 @@ fn root_wikilink_with_depth_all_lists_every_page_not_folders_or_self() {
     let (mut everything, docs) = whole_site_listing_fixture();
     everything.children_depth = Some("all".to_string());
 
-    let marker = synthesize_children_marker(&everything, "", "everything.md", false);
+    let marker = synthesize_children_marker(&everything, "", "everything.md");
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
     let out = resolve_markers(
@@ -1568,7 +1591,7 @@ fn root_wikilink_without_depth_lists_direct_folders_only() {
     let (everything, docs) = whole_site_listing_fixture();
     // children_depth left unset — render_one defaults to "direct".
 
-    let marker = synthesize_children_marker(&everything, "", "everything.md", false);
+    let marker = synthesize_children_marker(&everything, "", "everything.md");
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
     let out = resolve_markers(
@@ -1607,7 +1630,7 @@ fn root_wikilink_without_depth_lists_direct_folders_only() {
 /// `from` is anchored on whichever page the embed is written in — which is
 /// where the root-slash bug actually bit: a nested `from` used to resolve
 /// `/` to the EMBEDDING page's own folder instead of the site root, a bug
-/// invisible as long as every test (and the Blake homepage itself) happened
+/// invisible as long as every test (and the real homepage itself) happened
 /// to embed from a root-level page.
 #[test]
 fn root_body_embed_with_depth_all_lists_whole_site_from_a_nested_page() {
@@ -1734,7 +1757,7 @@ fn grid_embed_iframe_cover_gets_dark_default_color() {
     );
 }
 
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §6: CSS needs
+/// CSS needs
 /// to tell a body `![[folder/|…]]` embed apart from the frontmatter-
 /// synthesized listing (homepage / folder index), so only the embed follows
 /// block rhythm while the trailing automatic listing keeps its larger
@@ -1770,7 +1793,7 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
     let media_lookup =
         crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
     let mut documents = vec![host, folder.clone(), a.clone(), b.clone()];
-    expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup);
+    expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup, None);
     assert!(
         documents[0].html_content.contains("data-embed"),
         "a literal body embed must be tagged; got: {}",
@@ -1780,7 +1803,7 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
     // The frontmatter path: the SAME folder and children, synthesized as the
     // folder index's own automatic listing would be.
     let docs = vec![folder.clone(), a, b];
-    let marker = synthesize_children_marker(&folder, "lab", "lab/index.md", false);
+    let marker = synthesize_children_marker(&folder, "lab", "lab/index.md");
     let out = resolve_markers(
         &marker,
         "lab/index.md",
@@ -1799,9 +1822,9 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
     );
 }
 
-/// blakesnotebook.com regression (moss#1101): a page that is NOT the home
-/// embeds the vault root (`![[/|...]]`) — the same construct `Archive.md`
-/// carries on the real site. The root's own home doc is a `PageKind::Folder`
+/// A regression where a page that is NOT the home
+/// embeds the vault root (`![[/|...]]`) — the same construct a page named
+/// `Archive.md` might carry. The root's own home doc is a `PageKind::Folder`
 /// whose SOURCE lives at the vault root but whose `url_path` a caller could
 /// get wrong (home election is a separate concern from this lookup); the
 /// embed must still resolve from a page other than the home, because
@@ -1811,10 +1834,10 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
 fn root_self_embed_resolves_from_a_page_that_is_not_the_home() {
     let home = ParsedDocument {
         url_path: "index.html".to_string(),
-        source_path: Some("William Blake.md".to_string()),
-        label: "William Blake".to_string(),
-        title: "William Blake".to_string(),
-        clean_stem: "william-blake".to_string(),
+        source_path: Some("Garden Path.md".to_string()),
+        label: "Garden Path".to_string(),
+        title: "Garden Path".to_string(),
+        clean_stem: "garden-path".to_string(),
         kind: PageKind::Folder,
         direct_children_sort: Some(ResolvedSort {
             axis: SortAxis::Date,
@@ -1844,7 +1867,7 @@ fn root_self_embed_resolves_from_a_page_that_is_not_the_home() {
     let media_lookup =
         crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
     let mut documents = vec![archive, home, a, b];
-    expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup);
+    expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup, None);
 
     let out = &documents[0].html_content;
     assert!(
@@ -1876,7 +1899,7 @@ fn children_style_list_always_emits_data_layout_minimal() {
     let dir_overrides = std::collections::HashMap::new();
 
     // Synthesize the marker exactly as html.rs does for a folder-index page.
-    let marker = synthesize_children_marker(&folder, "archive", "archive/index.md", false);
+    let marker = synthesize_children_marker(&folder, "archive", "archive/index.md");
 
     let out = resolve_markers(
         &marker,
@@ -1942,6 +1965,7 @@ fn year_groups_under_non_date_axis_skip_resort() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     // Year sections must appear.
@@ -1995,6 +2019,152 @@ fn year_groups_under_non_date_axis_skip_resort() {
     );
 }
 
+/// `sort: date-asc` (a site wanting a chronology oldest-first, e.g. a
+/// sequence of lectures) — the year-grouped listing leads with the oldest
+/// year, and rows within a year also run oldest-first, the reverse of
+/// `date`'s default. `DateAsc.shows_date()` still triggers the resort
+/// (skip_resort=false), same as plain `Date`.
+#[test]
+fn date_asc_year_groups_lead_with_the_oldest_year() {
+    let alpha = make_doc("alpha.html", "Alpha", Some("1924-05-01"));
+    let bravo = make_doc("bravo.html", "Bravo", Some("1926-03-01"));
+    let charlie = make_doc("charlie.html", "Charlie", Some("1924-09-01"));
+    let items = vec![&alpha, &bravo, &charlie];
+    let all: Vec<&ParsedDocument> = items.clone();
+
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let out = generate_children(
+        &items,
+        &all,
+        &project,
+        "minimal",
+        "year",
+        crate::i18n::Language::En,
+        false, // DateAsc still resorts, same as Date
+        &dir_overrides,
+        None,
+        None,
+        Some(moss_core::sort::SortAxis::DateAsc),
+        true,
+        false,
+        &Default::default(),
+    );
+
+    let pos_1924 = out.find("<h2>1924</h2>").expect("1924 heading present");
+    let pos_1926 = out.find("<h2>1926</h2>").expect("1926 heading present");
+    assert!(
+        pos_1924 < pos_1926,
+        "oldest year must lead under date-asc; got: {}",
+        out
+    );
+
+    // Within 1924: Alpha (May) before Charlie (September) — oldest first.
+    let pos_alpha = out.find("Alpha").unwrap();
+    let pos_charlie = out.find("Charlie").unwrap();
+    assert!(
+        pos_alpha < pos_charlie,
+        "within-year order must be oldest-first too; got: {}",
+        out
+    );
+}
+
+/// The bug this exists for, seen live: a `sort: date-asc` folder listing
+/// two dated pages (1924, 1926) and one subfolder whose own home page is
+/// dated 1928 and located — the subfolder, having children of its own,
+/// sorted first (folders always hoisted above articles) and its card showed
+/// only "2 articles", no date, no place, breaking the chronology and hiding
+/// its occasion. A folder with a dated home page now sorts by that date like
+/// any page, and its meta shows the same `date · place` a page gets, with
+/// the count after it.
+#[test]
+fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
+    let cambridge_1924 = ParsedDocument {
+        url_path: "lectures/cambridge-1924.html".to_string(),
+        label: "Cambridge Lecture".to_string(),
+        title: "Cambridge Lecture".to_string(),
+        clean_stem: "cambridge-1924".to_string(),
+        date: Some("1924-05-18".to_string()),
+        place_names: Some("Cambridge".to_string()),
+        kind: PageKind::Article,
+        ..Default::default()
+    };
+    let hayes_court_1926 = ParsedDocument {
+        url_path: "lectures/hayes-court-1926.html".to_string(),
+        label: "Hayes Court Lecture".to_string(),
+        title: "Hayes Court Lecture".to_string(),
+        clean_stem: "hayes-court-1926".to_string(),
+        date: Some("1926-01-30".to_string()),
+        place_names: Some("Hayes Court".to_string()),
+        kind: PageKind::Article,
+        ..Default::default()
+    };
+    // The subfolder's own home page: dated and located, same as a page —
+    // and, matching the reported shape, it has children of its own (its
+    // home file is the generic `index.md`, clean_stem "index", not a
+    // self-named one).
+    let series_1928 = ParsedDocument {
+        url_path: "lectures/1928-series/index.html".to_string(),
+        label: "1928 Series".to_string(),
+        title: "1928 Series".to_string(),
+        clean_stem: "index".to_string(),
+        date: Some("1928-10-20".to_string()),
+        place_names: Some("Cambridge".to_string()),
+        kind: PageKind::Folder,
+        ..Default::default()
+    };
+    let series_child_a = ParsedDocument {
+        url_path: "lectures/1928-series/opening.html".to_string(),
+        clean_stem: "opening".to_string(),
+        kind: PageKind::Article,
+        ..Default::default()
+    };
+    let series_child_b = ParsedDocument {
+        url_path: "lectures/1928-series/closing.html".to_string(),
+        clean_stem: "closing".to_string(),
+        kind: PageKind::Article,
+        ..Default::default()
+    };
+
+    let items = vec![&cambridge_1924, &hayes_court_1926, &series_1928];
+    let all: Vec<&ParsedDocument> =
+        vec![&cambridge_1924, &hayes_court_1926, &series_1928, &series_child_a, &series_child_b];
+
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let out = generate_children(
+        &items,
+        &all,
+        &project,
+        "minimal",
+        "none",
+        crate::i18n::Language::En,
+        false, // DateAsc resorts, same as Date
+        &dir_overrides,
+        None,
+        None,
+        Some(moss_core::sort::SortAxis::DateAsc),
+        true,
+        false,
+        &Default::default(),
+    );
+
+    let pos_1924 = out.find(r#"href="/lectures/cambridge-1924""#).expect("1924 lecture present");
+    let pos_1926 = out.find(r#"href="/lectures/hayes-court-1926""#).expect("1926 lecture present");
+    let pos_1928 = out.find("1928-series").expect("1928 series folder present");
+    assert!(
+        pos_1924 < pos_1926 && pos_1926 < pos_1928,
+        "chronology must read 1924, 1926, 1928 (oldest first) — the dated \
+         subfolder must not be hoisted above pages older than it; got: {out}"
+    );
+
+    assert!(
+        out.contains(r#"<span class="moss-prefix-link-prefix">1928 · 10 · Cambridge · 2 articles</span>"#),
+        "the subfolder's meta must read date · place · count, the same form \
+         a page's date and place take; got: {out}"
+    );
+}
+
 /// BUG 7 regression — folders always render FLAT above the year sections
 /// under group=="year" skip_resort; they are never bucketed into a year.
 #[test]
@@ -2026,6 +2196,7 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     // Sections exist for the articles.
@@ -2078,6 +2249,7 @@ fn no_group_skip_resort_stays_flat() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     assert!(
@@ -2111,8 +2283,8 @@ fn no_group_skip_resort_stays_flat() {
     );
 }
 
-/// The actual bug this fix exists for (docs/archive/2026-09-14-blakesnotebook-five-fixes-plan.md
-/// item 3, blakesnotebook.com's `Writings/`): a `children_style: summary`
+/// The actual bug this fix exists for (a real site's `Writings/` folder,
+/// 2026-09-14): a `children_style: summary`
 /// folder with an author-chosen `weight:` order (skip_resort=true, axis
 /// Weight, group != "year") interleaved folders and articles before this
 /// fix, because the folder/article partition was only applied on the
@@ -2156,6 +2328,7 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     // Both folders must precede both articles.
@@ -2224,6 +2397,7 @@ fn skip_resort_summary_year_still_groups_by_year() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     assert!(
@@ -2252,7 +2426,6 @@ fn skip_resort_summary_year_still_groups_by_year() {
 /// which is summary-only), so ordering is the only thing left carrying the
 /// section/page distinction; and codepoint order used to exile a lowercase
 /// label past every capitalised one.
-/// Design: docs/archive/2026-09-06-authors-index-design-decision.md
 #[test]
 fn undated_grid_puts_folders_first_then_folds_case() {
     let zebra = make_folder_doc("zebra", "Zebra");
@@ -2279,6 +2452,7 @@ fn undated_grid_puts_folders_first_then_folds_case() {
         Some(moss_core::sort::SortAxis::Title),
         true,
         false,
+        &Default::default(),
     );
 
     let order: Vec<&str> = ["Zebra", "Alpha", "mao", "Scarly"]
@@ -2323,7 +2497,7 @@ fn children_covers_only_keeps_newest_covered_pages() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -2358,7 +2532,7 @@ fn children_covers_absent_keeps_default_behavior() {
     let project = test_project();
     let dir_overrides = std::collections::HashMap::new();
 
-    let marker = synthesize_children_marker(&home, "", "index.md", true);
+    let marker = synthesize_children_marker(&home, "", "index.md");
     let out = resolve_markers(
         &marker,
         "index.md",
@@ -2382,7 +2556,6 @@ fn children_covers_absent_keeps_default_behavior() {
 /// Under the old `any()` quantifier a single claimed author who wrote one
 /// paragraph flipped the whole roster to "summary" — 56 archive rows, no action
 /// by the other 55 authors and no signal that it happened.
-/// Design: docs/archive/2026-09-07-listing-style-bulk-test.md
 #[cfg(test)]
 mod bulk_style_tests {
     use super::*;
@@ -2412,7 +2585,7 @@ mod bulk_style_tests {
 
     #[test]
     fn one_claimed_term_in_a_roster_leaves_the_index_a_grid() {
-        // The harbor case: 1 claimed author, the rest bare labels. Both
+        // The riverbend case: 1 claimed author, the rest bare labels. Both
         // clauses must fail — it is neither mostly rich nor a handful of rows.
         assert_eq!(one_rich_among(8), "grid", "one claim must not re-style the roster");
     }
@@ -2472,4 +2645,179 @@ mod bulk_style_tests {
 
         assert_eq!(auto_style(&docs), "list");
     }
+}
+
+/// Markdown → the moss-core pre-pass → the marker → this renderer: the
+/// whole chain a body `![[folder/|…]]` embed takes.
+fn render_body_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
+    let graph = moss_core::content_graph::ContentGraphBuilder::new().build();
+    let resolved = moss_core::resolve::resolve_content("index.md", markdown, &graph, &|_| None);
+    resolve_markers(
+        &resolved.content_markdown,
+        "index.md",
+        docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    )
+}
+
+fn render_place_map_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
+    let graph = moss_core::content_graph::ContentGraphBuilder::new().build();
+    let resolved = moss_core::resolve::resolve_content("index.md", markdown, &graph, &|_| None);
+    let table: toml::value::Table = toml::from_str(
+        "[\"Kyoto\"]\nlat = 35.0116\nlng = 135.7681\nprecision = \"city\"\n",
+    ).unwrap();
+    let maps = crate::build::place_map::PlaceMapRenderContext::new(
+        crate::build::place_map::PlaceMapContext::embedded().unwrap(),
+        crate::vault::places::parse_gazetteer(&table),
+        "places".into(),
+        crate::build::place_map::LocatorPlacement::None,
+        std::collections::BTreeMap::new(),
+    );
+    resolve_markers_with_place_maps(
+        &resolved.content_markdown, "index.md", docs, &test_project(),
+        &std::collections::HashMap::new(), crate::i18n::Language::En,
+        None, None, true, Some(&maps),
+    )
+}
+
+fn journal_docs() -> Vec<ParsedDocument> {
+    vec![
+        make_folder_doc("journal/index.html", "Journal"),
+        make_doc("journal/a.html", "A", Some("2025-01-01")),
+        make_doc("journal/b.html", "B", Some("2025-03-01")),
+    ]
+}
+
+#[test]
+fn a_captioned_folder_embed_puts_its_width_on_the_figure() {
+    let out = render_body_embed("![[/journal/|style:grid|wide|A caption]]\n", &journal_docs());
+    assert!(
+        out.starts_with(r#"<figure class="moss-embed-figure" data-width="wide"><div class="moss-cards-container">"#),
+        "the figure is outermost and the container carries no width of its own: {out}"
+    );
+    assert!(out.contains(r#"data-layout="grid""#), "style must survive the extra segments: {out}");
+    assert!(out.trim_end().ends_with("<figcaption>A caption</figcaption></figure>"), "got: {out}");
+}
+
+#[test]
+fn an_uncaptioned_folder_embed_wears_its_placement_on_the_container() {
+    let out = render_body_embed("![[/journal/|align-right 40%]]\n", &journal_docs());
+    assert!(!out.contains("moss-embed-figure"), "no wrapper without a caption: {out}");
+    assert!(
+        out.contains(r#"<div class="moss-cards-container moss-align-right" style="width:40%">"#),
+        "got: {out}"
+    );
+}
+
+#[test]
+fn a_caption_with_marker_breaking_characters_reaches_the_page_intact() {
+    let out = render_body_embed("![[/journal/|wide|Before --> after, a=b]]\n", &journal_docs());
+    assert!(
+        out.contains("<figcaption>Before --&gt; after, a=b</figcaption>"),
+        "got: {out}"
+    );
+}
+
+/// A term page reached only through DERIVED membership (no real folder
+/// backs `places/kyoto` — it is a pseudo-folder, not a directory) used to
+/// render "Folder not found" for a body embed, because in the real build
+/// pipeline `derive_terms` (which is what fills `also_in`) ran AFTER
+/// markers were resolved, so `also_in` was still empty at the point this
+/// pseudo-folder branch checked it. Reproduces that shape with a real
+/// `derive_terms` call (not hand-authored `also_in`), then feeds the
+/// resulting docs through the exact chain a body embed takes.
+#[test]
+fn pseudo_folder_place_embed_lists_its_derived_members() {
+    let kind = crate::build::terms::TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: Default::default(), explorer: None, line: None,
+    };
+    let mut docs = vec![
+        make_doc("travel/kyoto-temple.html", "Kyoto Temple", Some("2025-01-01")),
+        make_doc("travel/kyoto-market.html", "Kyoto Market", Some("2025-03-01")),
+    ];
+    docs[0].location = vec!["Kyoto".to_string()];
+    docs[1].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut docs, vec![kind]);
+
+    let out = render_body_embed("![[/places/kyoto/]]\n", &docs);
+    assert!(!out.contains("moss-embed-missing"), "got: {out}");
+    assert!(out.contains("Kyoto Temple"), "got: {out}");
+    assert!(out.contains("Kyoto Market"), "got: {out}");
+    // Same default a pseudo-folder with no target doc gets everywhere else
+    // in this file (date-descending) — matching the order the generated
+    // term page itself would render its members in, since both paths run
+    // through this same `render_one`.
+    let pos_market = out.find("Kyoto Market").expect("Kyoto Market missing");
+    let pos_temple = out.find("Kyoto Temple").expect("Kyoto Temple missing");
+    assert!(pos_market < pos_temple, "expected date-desc order: {out}");
+}
+
+#[test]
+fn place_map_embed_emits_svg_with_placement_and_caption() {
+    let kind = crate::build::terms::TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: Default::default(), explorer: None, line: None,
+    };
+    let mut docs = vec![make_doc("travel/kyoto.html", "Kyoto", Some("2025-01-01"))];
+    docs[0].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut docs, vec![kind]);
+
+    let out = render_place_map_embed(
+        "![[/places/kyoto/|style:map|align-right 40%|Kyoto map]]\n",
+        &docs,
+    );
+    // The figure also carries the embed-hydration handshake now
+    // (`style:map` is always an embed, never a page's own primary map) —
+    // `data-moss-place-embed`/`data-hydrate-url` land BEFORE `class=`, the
+    // same splice point `locator.rs`'s own `data-map-locator-profile` uses.
+    assert!(
+        out.starts_with(
+            r#"<div class="moss-place-map-frame moss-align-right" style="width:40%"><figure data-moss-place-embed data-hydrate-url="/places/?place=places/kyoto&embed=1" data-embed-name="Kyoto" class="moss-place-map""#
+        ),
+        "got: {out}"
+    );
+    assert!(out.contains("data-map-location=\"Kyoto\""), "got: {out}");
+    assert!(out.trim_end().ends_with("</figure><div class=\"moss-place-map-caption\">Kyoto map</div></div>"), "got: {out}");
+    assert!(!out.contains("moss-cards-container"), "map style must replace the listing: {out}");
+}
+
+/// Same bug, the roll-up-ancestor shape: `places/japan` has no doc that
+/// declares `location: Japan` directly — it exists only because a city
+/// under it rolls up through the gazetteer's `parent` chain
+/// (`build::terms::places`), landing `places/japan` in that doc's
+/// `also_in` alongside `places/kyoto`. An ancestor reached only this way
+/// still needs a listing of every doc that names it, transitively.
+#[test]
+fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
+    let kind = crate::build::terms::TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: [("places/kyoto".to_string(), "Japan".to_string())].into_iter().collect(),
+        explorer: None, line: None,
+    };
+    let mut docs = vec![make_doc("travel/kyoto-temple.html", "Kyoto Temple", Some("2025-01-01"))];
+    docs[0].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut docs, vec![kind]);
+    assert!(
+        docs[0].also_in.as_ref().unwrap().contains(&"places/japan".to_string()),
+        "sanity: derive_terms must roll the city up into the country's also_in"
+    );
+
+    let out = render_body_embed("![[/places/japan/]]\n", &docs);
+    assert!(!out.contains("moss-embed-missing"), "got: {out}");
+    assert!(out.contains("Kyoto Temple"), "got: {out}");
 }

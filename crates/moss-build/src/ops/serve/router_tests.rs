@@ -2,7 +2,9 @@ use super::*;
 // `is_port_available` is no longer needed by the production server-start
 // path (the bind-with-scan helper is the authoritative check), but tests
 // still use it as a non-binding "did the port get freed?" probe.
-use super::super::port::is_port_available;
+// `moss_health_body`/`MOSS_HEALTH_MARKER` moved to `port.rs` alongside the
+// constant and the probe that reads their shared body shape.
+use super::super::port::{is_port_available, moss_health_body, MOSS_HEALTH_MARKER};
 use std::sync::Arc;
 
 /// Sync test: the moss-health body MUST contain `MOSS_HEALTH_MARKER`.
@@ -11,18 +13,41 @@ use std::sync::Arc;
 /// reject moss's own server.
 #[test]
 fn moss_health_body_contains_marker() {
-    let body = moss_health_body();
+    let body = moss_health_body(Some("abc123"), 999);
     assert!(
         body.contains(MOSS_HEALTH_MARKER),
         "moss_health_body() must contain MOSS_HEALTH_MARKER ({}); got: {}",
         MOSS_HEALTH_MARKER,
         body
     );
-    // Spot-check the schema field landed too — readers don't parse it
-    // yet but its presence is part of the wire-format contract.
+    // Schema 2: `find_live_owner` parses `folder_id` and `pid` out of this
+    // body to confirm a URL still answers for the folder it was recorded
+    // for — see `moss_health_body`'s doc on why the gate is `>= 2`.
     assert!(
-        body.contains("\"schema\":1"),
-        "moss_health_body() must include schema:1; got: {}",
+        body.contains("\"schema\":2"),
+        "moss_health_body() must include schema:2; got: {}",
+        body
+    );
+    assert!(
+        body.contains("\"folder_id\":\"abc123\""),
+        "moss_health_body() must carry the folder id it was given; got: {}",
+        body
+    );
+    assert!(
+        body.contains("\"pid\":999"),
+        "moss_health_body() must carry the pid it was given; got: {}",
+        body
+    );
+}
+
+#[test]
+fn moss_health_body_folder_id_is_null_when_absent() {
+    let body = moss_health_body(None, 1);
+    assert!(
+        body.contains("\"folder_id\":null"),
+        "a server with no resolvable vault must report folder_id as JSON null, not an \
+         empty string a real folder id could never collide with but a careless reader \
+         might; got: {}",
         body
     );
 }
@@ -132,6 +157,7 @@ async fn test_image_file_returns_wrapped_html() {
     // Verify that requesting an image file returns an HTML wrapper with <img> tag,
     // __moss_raw=1 reference, and the injected bridge script.
     use tempfile::TempDir;
+    let _viewers = event_stream_lock();
 
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     // Write a fake PNG file (content doesn't matter for wrapping logic)
@@ -340,12 +366,10 @@ async fn cold_start_serves_generation_through_current_symlink() {
 async fn frozen_generation_page_regains_preview_gate_attribute() {
     // Simulates the zero-flicker window: during rebuilds (and on cold
     // start) the server serves the previous SHIPPED generation, where
-    // ship_phase removed the no-preview markers (keeping the beacon
-    // script for deploy) and stripped data-moss-preview from <body>.
-    // Runtime preview gates — the beacon's self-gate, subscribe.ts's
-    // no-real-POST gate — all read that attribute, so the middleware
-    // must re-guarantee it on every served HTML response. This is the
-    // regression test for the beacon firing from a local preview.
+    // ship_phase stripped data-moss-preview from <body>. subscribe.ts's
+    // no-real-POST gate reads that attribute, so the middleware must
+    // re-guarantee it on every served HTML response regardless of which
+    // generation backs it.
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -353,7 +377,7 @@ async fn frozen_generation_page_regains_preview_gate_attribute() {
         temp_dir.path().join("index.html"),
         concat!(
             "<html><head>",
-            "<script id=\"moss-beacon\">/* gates on data-moss-preview */</script>",
+            "<script id=\"moss-beacon\" data-moss-deploy-only></script>",
             "</head><body class=\"page\"><p>frozen</p></body></html>",
         ),
     )
@@ -381,8 +405,330 @@ async fn frozen_generation_page_regains_preview_gate_attribute() {
     let _ = shutdown_tx.send(());
 }
 
+/// The bug this stage fixes, proved through the real HTTP path: a page
+/// served by the preview ROUTER from a SHIP-TRANSFORMED generation must
+/// carry no deploy-only script, and must be byte-identical to the same
+/// page served from fresh staging output. Before this fix, the marker
+/// wrapping the beacon/analytics script was removed by ship (keeping the
+/// script for deploy), so a shipped generation's markup had no marker
+/// left for the serve-time strip to find — the script reached the
+/// browser, and idiomorph's morph guard then forced a full reload on
+/// every such transition. Real emitted markup on both sides, not a
+/// hand-written fixture.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_pages() {
+    use tempfile::TempDir;
+
+    let deploy = crate::config::deployment::DomainDeploymentConfig {
+        deploy_method: Some("moss".into()),
+        site_id: Some("router-seam-test".into()),
+        ..Default::default()
+    };
+    let services = crate::config::services::ServicesConfig {
+        analytics: Some(crate::config::services::AnalyticsService {
+            common: crate::config::services::ServiceCommon {
+                enabled: None,
+                provider: Some("goatcounter".into()),
+            },
+            script: Some("https://router-seam-test.goatcounter.com/count".into()),
+        }),
+        ..Default::default()
+    };
+    let slots = crate::build::features::generate_native_slots(
+        &services,
+        "/nonexistent-router-seam-test",
+        false,
+        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+        &std::collections::HashMap::new(),
+        &[],
+        "en",
+        None,
+        Some(deploy),
+        false,
+        None,
+        None,
+    );
+    let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
+    assert!(
+        head_end.contains("moss-beacon") && head_end.contains("goatcounter"),
+        "precondition: the emitter injects both the beacon and analytics, got: {head_end}"
+    );
+
+    let staging_page = format!(
+        "<html><head>{head_end}</head><body data-moss-preview class=\"page\"><p>content</p></body></html>"
+    );
+    let shipped_bytes = crate::build::ship::apply_transform(
+        crate::build::ship::ShipTransform::StripPreviewAttrs,
+        staging_page.as_bytes(),
+    );
+    let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");
+    assert!(
+        shipped_page.contains("moss-beacon") && shipped_page.contains("goatcounter"),
+        "precondition: ship keeps both deploy-only scripts, got: {shipped_page}"
+    );
+
+    let staging_dir = TempDir::new().expect("staging temp dir");
+    std::fs::write(staging_dir.path().join("index.html"), &staging_page).unwrap();
+    let shipped_dir = TempDir::new().expect("shipped temp dir");
+    std::fs::write(shipped_dir.path().join("index.html"), &shipped_page).unwrap();
+
+    let staging_state = Arc::new(std::sync::RwLock::new(staging_dir.path().to_path_buf()));
+    let (staging_port, staging_shutdown) = start_server(ServeConfig {
+        ..ServeConfig::new(staging_state, 61800)
+    })
+    .await
+    .expect("staging server should start");
+    let shipped_state = Arc::new(std::sync::RwLock::new(shipped_dir.path().to_path_buf()));
+    let (shipped_port, shipped_shutdown) = start_server(ServeConfig {
+        ..ServeConfig::new(shipped_state, 61900)
+    })
+    .await
+    .expect("shipped server should start");
+
+    let get = |port: u16| {
+        let url = format!("http://localhost:{port}/index.html");
+        ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .call()
+            .expect("request should succeed")
+            .into_string()
+            .expect("read body")
+    };
+    let staging_served = get(staging_port);
+    let shipped_served = get(shipped_port);
+
+    for (label, served) in [("staging", &staging_served), ("shipped", &shipped_served)] {
+        assert!(
+            !served.contains("moss-beacon") && !served.contains("goatcounter"),
+            "{label}-origin page must carry neither deploy-only script, got: {served}"
+        );
+    }
+    assert_eq!(
+        staging_served, shipped_served,
+        "the preview router must serve byte-identical pages regardless of the origin generation"
+    );
+
+    let _ = staging_shutdown.send(());
+    let _ = shipped_shutdown.send(());
+}
+
+/// The seal tail runs DETACHED, and it runs against the very directory the
+/// preview server is reading: `pipeline::run` points the server at
+/// `staging/` when the render finishes, and nothing moves it off until the
+/// NEXT build starts. So any pass in that tail that unlinks a staged file
+/// takes the file out from under a live reader — and the frontend asks for
+/// pages at exactly that moment, because `refresh-preview` fires as soon as
+/// the build returns.
+///
+/// Driven step by step rather than raced: the repair pass is called directly
+/// and the served tree is fetched on both sides of it, so a regression is a
+/// deterministic 404 instead of a timing window that passes on a fast box.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+    use crate::moss_paths::MossPaths;
+    use crate::types::content::SiteHashes;
+
+    // Repo-local temp (project rule: never /tmp).
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let vault = tempfile::TempDir::new_in(&base).expect("temp vault");
+
+    let mp = MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(stage.join("assets")).unwrap();
+    let html = concat!(
+        "<html><body data-moss-preview>",
+        r#"<picture><source srcset="assets/kept.webp" type="image/webp">"#,
+        r#"<img src="assets/kept.jpg"></picture>"#,
+        "</body></html>\n",
+    );
+    std::fs::write(stage.join("index.html"), html).unwrap();
+    std::fs::write(stage.join("assets/kept.webp"), b"kept webp bytes").unwrap();
+    // Registered, on disk, and referenced by nothing: the orphan prune's arm.
+    std::fs::write(stage.join("assets/orphan.webp"), b"orphan webp bytes").unwrap();
+
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    pending.register(
+        &ServedPath::from_source("index.html").unwrap(),
+        html.as_bytes(),
+        HashBucket::Files,
+    );
+    for (rel, bytes) in [
+        ("assets/kept.webp", b"kept webp bytes".as_slice()),
+        ("assets/orphan.webp", b"orphan webp bytes".as_slice()),
+    ] {
+        pending.register(
+            &ServedPath::from_source(rel).unwrap(),
+            bytes,
+            HashBucket::ImageVariants,
+        );
+    }
+    let mut sealed = pending.seal();
+
+    let (port, shutdown_tx, _token) = serve_bound(stage.clone(), 59700).await;
+    let get = |rel: &str| {
+        let url = format!("http://localhost:{}/{}", port, rel);
+        match ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport error fetching {rel}: {e}"),
+        }
+    };
+
+    // Control: everything the tail is about to walk over is reachable now.
+    assert_eq!(get("index.html"), 200, "control: the page must be served before the tail runs");
+    assert_eq!(get("assets/orphan.webp"), 200, "control: the orphan must be on disk before the tail runs");
+
+    crate::build::degrade::repair_staged_html(
+        &mp,
+        &stage,
+        &mut sealed,
+        std::collections::HashSet::new(),
+    );
+
+    assert_eq!(
+        get("index.html"),
+        200,
+        "the tail must not take the page out from under the reader"
+    );
+    assert_eq!(
+        get("assets/orphan.webp"),
+        200,
+        "an unreferenced variant leaves the GENERATION by leaving the manifest — \
+         unlinking it from the tree the preview is serving is a live 404"
+    );
+    assert!(
+        !sealed.files().contains_key("assets/orphan.webp"),
+        "it must still be dropped from the manifest, or ship_phase copies it into the generation"
+    );
+
+    // `remove_stale_html` unlinks from staging, so it needs a permit, and the
+    // permit comes from a lifecycle that has caught up: the render on screen
+    // is on `current`, so the park moves the server there first. Driven
+    // against a second real server whose cell the lifecycle moves.
+    use crate::build::lifecycle;
+    use crate::build::media::pipeline::remove_stale_html;
+
+    std::fs::create_dir_all(stage.join("old-page")).unwrap();
+    std::fs::write(stage.join("old-page/index.html"), "<html>old</html>").unwrap();
+    let blocking_keys: std::collections::HashSet<String> =
+        std::iter::once("index.html".to_string()).collect();
+
+    let _record = lifecycle::lock_for(&mp);
+    std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
+    let site_dir_cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    lifecycle::adopt_server(&mp, &site_dir_cell);
+    let (shown, _) = lifecycle::show_render(&mp, true);
+    assert!(lifecycle::promote(&mp, crate::build::ship::next_promotion_epoch(), Some(shown), "g1", true).unwrap());
+    let (port2, shutdown_tx2) = start_server(ServeConfig {
+        ..ServeConfig::new(site_dir_cell.clone(), 59750)
+    })
+    .await
+    .expect("second server should start");
+    let get2 = |rel: &str| {
+        let url = format!("http://localhost:{}/{}", port2, rel);
+        match ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport error fetching {rel}: {e}"),
+        }
+    };
+
+    let permit = lifecycle::park_for_rebuild(&mp, false, Default::default()).expect("a caught-up lifecycle permits the sweep");
+    assert_eq!(*site_dir_cell.read().unwrap(), mp.current_ptr(), "and parks the server off staging first");
+    remove_stale_html(&stage, &blocking_keys, &std::collections::HashSet::new(), &permit);
+
+    // Only the next render moves the server back onto `stage`.
+    lifecycle::show_render(&mp, true);
+
+    assert_eq!(
+        get2("old-page/index.html"),
+        404,
+        "the deleted source's page must already be gone by the moment the server can reach stage_dir"
+    );
+    assert_eq!(
+        get2("index.html"),
+        200,
+        "the kept page must be servable the instant the switch lands"
+    );
+
+    let _ = shutdown_tx2.send(());
+    let _ = shutdown_tx.send(());
+}
+
+/// A rebuild that starts before the last render's generation is promoted
+/// must not move the preview to `current`: `current` is older than what the
+/// author is looking at, so every page that render added would 404 for the
+/// length of the rebuild. It stays on staging and that build sweeps nothing.
+/// Once the render's generation is promoted, the next rebuild parks on it and
+/// may sweep, because `current` now holds everything staging showed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render_on_screen() {
+    use crate::build::lifecycle;
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+    use crate::build::ship::{materialize_and_promote, next_promotion_epoch, Promotion, ShipVerdict};
+    use crate::moss_paths::MossPaths;
+    use crate::types::content::SiteHashes;
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let vault = tempfile::TempDir::new_in(&base).expect("temp vault");
+    let mp = MossPaths::new(vault.path());
+    let _record = lifecycle::lock_for(&mp);
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
+    std::fs::write(mp.generation_dir("g1").join("index.html"), "<html>g1</html>").unwrap();
+
+    // Render 1 is shown and promoted as g1, which has no `fresh/`.
+    let cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    lifecycle::adopt_server(&mp, &cell);
+    let (r1, _) = lifecycle::show_render(&mp, true);
+    assert!(lifecycle::promote(&mp, next_promotion_epoch(), Some(r1), "g1", true).unwrap());
+
+    // Render 2 adds `fresh/` and is on screen; its seal tail has not run.
+    let pages = [("index.html", "<html>home</html>"), ("fresh/index.html", "<html>fresh</html>")];
+    for (rel, html) in pages {
+        std::fs::create_dir_all(stage.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(stage.join(rel), html).unwrap();
+    }
+    let (r2, _) = lifecycle::show_render(&mp, true);
+
+    let (port, shutdown_tx) = start_server(ServeConfig::new(cell.clone(), 59800)).await.expect("server");
+    let get = |rel: &str| {
+        let url = format!("http://localhost:{}/{}", port, rel);
+        match ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport error fetching {rel}: {e}"),
+        }
+    };
+
+    assert!(lifecycle::park_for_rebuild(&mp, false, Default::default()).is_none(), "a rebuild ahead of the promotion may not sweep");
+    assert_eq!(get("fresh/"), 200, "the page render 2 added must stay served through the rebuild");
+
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    for (rel, html) in pages {
+        pending.register(&ServedPath::from_source(rel).unwrap(), html.as_bytes(), HashBucket::Files);
+    }
+    let sealed = pending.seal();
+    let promotion =
+        materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(r2), ShipVerdict::Ship);
+    assert_eq!(promotion, Ok(Promotion::Promoted));
+
+    assert!(lifecycle::park_for_rebuild(&mp, false, Default::default()).is_some(), "caught up, the next rebuild may sweep");
+    assert_eq!(*cell.read().unwrap(), mp.current_ptr(), "and it parks on current");
+    assert_eq!(get("fresh/"), 200, "which now holds render 2's pages");
+
+    let _ = shutdown_tx.send(());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_pdf_file_returns_unsupported_page() {
+    let _viewers = event_stream_lock();
     // Verify that unsupported file types (PDF) get the "open in system viewer" page.
     use tempfile::TempDir;
 
@@ -788,7 +1134,7 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     // dataless-fail-fast policy a plain `open` of an evicted file SUCCEEDS, so
     // `ServeFile` would answer 200 with a full Content-Length and a body that
     // dies on first poll. A truncated 200 is as unrecoverable for `<picture>` as
-    // the 404 ADR-013 forbids, so the probe has to be asked BEFORE the open.
+    // the 404 the promise model forbids, so the probe has to be asked BEFORE the open.
     //
     // Injecting the verdict is not faking the test: the bytes, the registry, the
     // router and the response are all real, and the assertion is that a `true`
@@ -1133,9 +1479,10 @@ async fn test_bind_dual_stack_scan_skips_v6_collision() {
 
     // The bind-with-scan helper must skip `start_port` and return a
     // later port with both listeners cleanly bound.
-    let (bound_port, v4, v6) = bind_dual_stack_with_scan(start_port)
+    let (bound_port, v4, v6) = super::super::port::bind_with_scan(None, start_port)
         .await
-        .expect("bind_dual_stack_with_scan must succeed by hopping past the IPv6-held port");
+        .expect("bind_with_scan must succeed by hopping past the IPv6-held port");
+    let v6 = v6.expect("a None bind must return a secondary IPv6 listener");
 
     assert!(
         bound_port > start_port,
@@ -1169,7 +1516,7 @@ async fn test_bind_dual_stack_scan_skips_v6_collision() {
 /// for a directory, so checking the joined path answered "not evicted" for
 /// every page on the site — including `/` — and let tower-http's bodyless 500
 /// through. That is the single most likely way a user meets this code path:
-/// the sync client evicting moss's own `index.html` out of `.moss/build/`.
+/// the sync client evicting moss's own `index.html` out of `.moss/build.nosync/`.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_directory_url_is_resolved_to_its_index_before_the_cloud_check() {
@@ -1199,8 +1546,8 @@ fn a_directory_url_is_resolved_to_its_index_before_the_cloud_check() {
     );
 }
 
-/// ADR-022 in one assertion: `/__moss/source/` serves the VAULT's bytes, never
-/// the build output's.
+/// One assertion for the invariant that `/__moss/source/` serves the VAULT's
+/// bytes, never the build output's.
 ///
 /// The fixture puts a different file at the same relative path in both places,
 /// so the test can tell them apart. Wiring this route to the served site dir —
@@ -1216,7 +1563,7 @@ async fn source_route_serves_vault_bytes_not_build_output() {
     let vault_path = vault.path();
 
     // `.moss/` is the vault marker VaultRoot::find_containing walks up to.
-    let site_dir = vault_path.join(".moss/build/current");
+    let site_dir = vault_path.join(".moss/build.nosync/current");
     std::fs::create_dir_all(site_dir.join("assets")).unwrap();
     std::fs::create_dir_all(vault_path.join("assets")).unwrap();
     std::fs::write(vault_path.join("assets/photo.txt"), b"SOURCE").unwrap();
@@ -1264,7 +1611,7 @@ async fn source_route_rejects_escape_above_the_vault() {
     std::fs::write(parent.path().join("secret.txt"), b"SECRET").unwrap();
 
     let vault_path = parent.path().join("vault");
-    let site_dir = vault_path.join(".moss/build/current");
+    let site_dir = vault_path.join(".moss/build.nosync/current");
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.txt"), b"INSIDE").unwrap();
 
@@ -1395,6 +1742,59 @@ async fn trust_boundary_refuses_a_foreign_origin() {
     let _ = shutdown_tx.send(());
 }
 
+/// `ServeConfig::extra_hosts` widens the trust boundary's `Host` allowlist end
+/// to end: a `Host` naming a configured extra host passes, loopback still
+/// passes alongside it, and an unlisted hostname still 421s exactly as a
+/// rebound one does today. Raw TCP for the same reason the rebind test above
+/// uses it — `ureq` manages `Host` from the URL.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_extra_host_passes_the_trust_boundary_but_an_unlisted_one_still_421s() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(temp_dir.path().join("index.html"), b"<html>ok</html>").unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    // `bind` is loopback itself here — only `extra_hosts` is under test, and
+    // binding elsewhere would make the test depend on the sandbox's network
+    // config rather than the Host-allowlist logic.
+    let (port, shutdown_tx) = start_server(ServeConfig {
+        bind: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+        extra_hosts: vec!["preview.example.com".to_string()],
+        ..ServeConfig::new(site_dir_state, 58950)
+    })
+    .await
+    .expect("Server should start");
+
+    let status_line = |host: &str| -> String {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        stream
+            .write_all(
+                format!("GET /__moss_health/ HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        resp.lines().next().unwrap_or("").to_string()
+    };
+
+    assert!(
+        status_line("localhost").contains("200"),
+        "control: loopback must still pass alongside a configured extra host"
+    );
+    assert!(
+        status_line("preview.example.com").contains("200"),
+        "a configured extra host must pass the Host check"
+    );
+    assert!(
+        status_line("unlisted.example.com").contains("421"),
+        "a hostname not in extra_hosts must still be refused, same as a rebound one"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
 // ===== Read-only HTTP command carrier: POST /__moss/invoke/<cmd> =====
 
 /// A read-only command invoked over `POST /__moss/invoke/<cmd>` with a JSON
@@ -1425,7 +1825,7 @@ async fn invoke_carrier_runs_a_read_only_command_over_http() {
 }
 
 /// A `State<'_, AppState>` command works over the carrier too: the project root
-/// is derived from the server's live `site_dir` (`<vault>/.moss/build/current`),
+/// is derived from the server's live `site_dir` (`<vault>/.moss/build.nosync/current`),
 /// so `editor_resolve_asset` resolves an asset that lives in the vault — proving
 /// the InvokeCtx project-root threading, not just pure-args plumbing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1435,7 +1835,7 @@ async fn invoke_carrier_resolves_an_asset_using_the_derived_project_root() {
     // Rooted in the crate dir (not /tmp): resolve_asset canonicalizes, and on
     // macOS /tmp is a symlink — the sibling source-route test does the same.
     let vault = TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build/current");
+    let site_dir = vault.path().join(".moss/build.nosync/current");
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::create_dir_all(vault.path().join("assets")).unwrap();
     std::fs::write(vault.path().join("assets/hero.jpg"), b"JPGBYTES").unwrap();
@@ -1469,7 +1869,7 @@ async fn invoke_carrier_resolves_an_asset_using_the_derived_project_root() {
 }
 
 /// A command that is NOT in the read-only allowlist is ABSENT from the carrier:
-/// the router returns 404 (ADR-032 §5 — unexposed is not gated, it does not
+/// the router returns 404 (unexposed is not gated, it does not
 /// exist here), never a runtime 403. `reveal_entry` is a real registered command,
 /// so this proves the *allowlist* subsets the registry, not merely that unknown
 /// strings 404.
@@ -1528,7 +1928,7 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 
 // ===== Token-gated HTTP mutation carrier: POST /__moss/mutate/<cmd> =====
 
-/// Stand up a vault fixture whose site dir is `<vault>/.moss/build/current`, so
+/// Stand up a vault fixture whose site dir is `<vault>/.moss/build.nosync/current`, so
 /// `VaultRoot::find_containing` (walked up by the carrier to derive the project
 /// root) resolves to the vault. Returns the TempDir (kept alive by the caller)
 /// and the site_dir path. Rooted in the crate dir, not /tmp: create_files /
@@ -1537,7 +1937,7 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 #[cfg(test)]
 fn served_vault() -> (tempfile::TempDir, std::path::PathBuf) {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build/current");
+    let site_dir = vault.path().join(".moss/build.nosync/current");
     std::fs::create_dir_all(&site_dir).unwrap();
     (vault, site_dir)
 }
@@ -1641,15 +2041,59 @@ async fn mutate_carrier_without_or_with_wrong_token_is_401() {
     let _ = shutdown_tx.send(());
 }
 
-/// A token is bound to the vault it was minted for (ADR-075 rule 4). Point the
+/// `carrier_token::admit` accepts the session token carried as the
+/// `moss_token` cookie, not just the `X-Moss-Token` header — the second way
+/// in, set by `GET /__moss/session`'s `Set-Cookie` response for a plain
+/// browser tab with no script of its own. A wrong cookie value still 401s;
+/// the gate is comparing the value, not just checking the cookie's presence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_accepts_the_session_cookie_and_rejects_a_wrong_one() {
+    let (vault, site_dir) = served_vault();
+    let (port, shutdown_tx, token) = serve_bound(site_dir, 62750).await;
+
+    let target = vault.path().join("via-cookie.md");
+    let payload = serde_json::json!({
+        "files": [{ "dir": vault.path().to_string_lossy(), "name": "via-cookie", "frontmatter": {} }],
+    })
+    .to_string();
+    let url = format!("http://localhost:{}/__moss/mutate/create_files", port);
+
+    // A wrong cookie value must still 401, and must not create the file.
+    match ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("Cookie", "moss_token=not-the-real-token")
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&payload)
+    {
+        Err(ureq::Error::Status(401, _)) => {}
+        Ok(resp) => panic!("a wrong cookie must 401; got {}", resp.status()),
+        Err(e) => panic!("expected a 401, got transport error: {e}"),
+    }
+    assert!(!target.exists(), "a 401'd mutation must not have created any file");
+
+    // The real token, carried as a cookie instead of the header, must pass.
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("Cookie", &format!("other=ignored; moss_token={token}"))
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&payload)
+        .expect("the session cookie must admit the mutation carrier");
+    assert_eq!(resp.status(), 200);
+    assert!(target.exists(), "the carrier must have created the file");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A token is bound to the vault it was minted for. Point the
 /// SAME server at a second vault — the reused-server folder switch the app
 /// performs by rewriting `site_dir` — and the first vault's token is 401 on the
 /// very next request, while the token the switch published under the second
-/// vault's `.moss/build/` is accepted. Before this, the token was minted once
+/// vault's `.moss/build.nosync/` is accepted. Before this, the token was minted once
 /// per server while the root moved underneath it, so a forgotten tab followed
 /// the server into whatever folder it was next pointed at.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn folder_switch_retires_the_previous_vaults_token() {
+    let _streams = event_stream_lock();
     let (vault_a, site_a) = served_vault();
     let (vault_b, site_b) = served_vault();
     let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
@@ -1881,6 +2325,38 @@ async fn read_carrier_validate_content_returns_diagnostics_for_a_bad_field() {
     let _ = shutdown_tx.send(());
 }
 
+/// `resolve_page_source` is on the authed-read tier: no token is a 401, and
+/// with one the site root resolves to the vault's home page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_carrier_resolve_page_source_is_token_gated_and_finds_the_home() {
+    let (vault, site_dir) = served_vault();
+    std::fs::write(vault.path().join("index.md"), "---\ntitle: Home\n---\nhi").unwrap();
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63950).await;
+
+    let url = format!("http://localhost:{}/__moss/read/resolve_page_source", port);
+    let body = serde_json::json!({ "urlPath": "" }).to_string();
+    match ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&body)
+    {
+        Err(ureq::Error::Status(401, _)) => {}
+        Ok(resp) => panic!("resolve_page_source must 401 without a token; got {}", resp.status()),
+        Err(e) => panic!("expected a 401, got transport error: {e}"),
+    }
+    let page: serde_json::Value = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&body)
+        .expect("200 with a token")
+        .into_json()
+        .expect("json");
+    assert!(page["source_path"].as_str().is_some_and(|p| p.ends_with("index.md")), "{page}");
+
+    let _ = shutdown_tx.send(());
+}
+
 /// The editor's boot reads are gated behind the SAME token as mutations, and a
 /// valid token boots the real editor payload. This is the security-relevant
 /// claim of the authed-read tier (the whole vault tree is reachable through it,
@@ -2083,7 +2559,7 @@ async fn dual_path_parity_create_folder_effect_matches_the_pure_core() {
 
 // The `save_editor_content` dual-path parity test (HTTP arm vs the REAL Tauri
 // command inner, `save_editor_content_with_task`) lives app-side in
-// src-tauri/src/preview/server.rs tests: the command inner and its
+// the desktop app's preview server tests: the command inner and its
 // TaskRegistry wiring stay in the app crate, and the parity claim is about
 // THAT code, so the test follows it.
 
@@ -2103,7 +2579,7 @@ fn confinement_vault() -> (tempfile::TempDir, std::path::PathBuf, std::path::Pat
         .unwrap();
 
     let vault_path = parent.path().join("vault");
-    let site_dir = vault_path.join(".moss/build/current");
+    let site_dir = vault_path.join(".moss/build.nosync/current");
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.md"), "---\ntitle: INSIDE\n---\nin the vault\n")
         .unwrap();
@@ -2272,6 +2748,15 @@ async fn read_carrier_walks_its_own_root_not_a_caller_supplied_one() {
 
 // ── The event carrier (`GET /__moss/events`) ─────────────────────────────────
 
+/// Held by every test that opens `/__moss/events` or navigates to a page:
+/// both move the one process-global viewer-activity signal, so what a test
+/// reads of it is only meaningful while no sibling can move it.
+static EVENT_STREAM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn event_stream_lock() -> std::sync::MutexGuard<'static, ()> {
+    EVENT_STREAM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Read one SSE record (up to the blank line) off a blocking reader, or give up.
 ///
 /// Deliberately hand-rolled rather than pulled from a crate: the frame format
@@ -2298,6 +2783,7 @@ fn read_one_sse_record(mut reader: impl std::io::Read) -> Option<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn event_stream_refuses_a_subscriber_with_no_token() {
+    let _streams = event_stream_lock();
     let (_parent, _vault_path, site_dir) = confinement_vault();
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63410).await;
 
@@ -2354,6 +2840,7 @@ async fn event_stream_refuses_a_subscriber_with_no_token() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn event_stream_delivers_a_published_event_to_a_browser() {
+    let _streams = event_stream_lock();
     use crate::ops::serve::events;
 
     let (_parent, _vault_path, site_dir) = confinement_vault();
@@ -2401,6 +2888,498 @@ async fn event_stream_delivers_a_published_event_to_a_browser() {
     assert_eq!(json["name"], crate::types::events::MOSS_EVENT_CHANNEL);
     assert_eq!(json["payload"]["kind"], "BuildComplete");
     assert_eq!(json["payload"]["payload"]["total_time_ms"], 42);
+
+    let _ = shutdown_tx.send(());
+}
+
+/// An event stream counts while a browser holds it open and stops counting
+/// once it disconnects, and both moments are activity — the signal a host
+/// waits on to tell whether anyone is watching outside its own window.
+#[tokio::test(flavor = "multi_thread")]
+async fn viewer_activity_follows_an_open_event_stream() {
+    use crate::ops::serve::events;
+    let _streams = event_stream_lock();
+
+    let (_parent, _vault_path, site_dir) = confinement_vault();
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63430).await;
+    let mut activity = events::viewer_activity();
+    let before = *activity.borrow_and_update();
+
+    let url = format!("http://localhost:{port}/__moss/events");
+    // Headers arrive only after the handler has subscribed.
+    let stream = tokio::task::spawn_blocking(move || {
+        ureq::get(&url)
+            .set("X-Moss-Token", &token)
+            .timeout(std::time::Duration::from_secs(30))
+            .call()
+            .expect("the stream must open")
+            .into_reader()
+    })
+    .await
+    .unwrap();
+    let opened = *activity.borrow_and_update();
+    assert_eq!(opened.streams, before.streams + 1);
+    assert!(opened.last_activity > before.last_activity, "opening a stream is activity");
+
+    drop(stream);
+    let closed = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        activity.wait_for(|a| a.streams == before.streams),
+    )
+    .await
+    .expect("a closed stream must stop counting")
+    .expect("the signal outlives the test");
+    assert!(closed.last_activity > opened.last_activity, "closing a stream is activity");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A page navigation is activity; one of the page's own assets is not, or a
+/// page with a slow-loading image would read as a viewer for as long as it
+/// loads, and `<img>` re-fetches after a rebuild would keep a hidden app awake.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_navigation_is_viewer_activity_and_its_assets_are_not() {
+    use crate::ops::serve::events;
+    let _viewers = event_stream_lock();
+
+    let site = tempfile::TempDir::new().unwrap();
+    std::fs::write(site.path().join("index.html"), "<html><body>home</body></html>").unwrap();
+    std::fs::write(site.path().join("photo.png"), b"PNG").unwrap();
+    let (port, shutdown_tx) = start_server(ServeConfig::new(
+        Arc::new(std::sync::RwLock::new(site.path().to_path_buf())),
+        63440,
+    ))
+    .await
+    .expect("Server should start");
+    let mut activity = events::viewer_activity();
+    activity.borrow_and_update();
+
+    let get = |path: &str, dest: &'static str| {
+        let url = format!("http://localhost:{port}{path}");
+        tokio::task::spawn_blocking(move || {
+            ureq::get(&url)
+                .set("Sec-Fetch-Dest", dest)
+                .timeout(std::time::Duration::from_secs(5))
+                .call()
+                .expect("request succeeds")
+        })
+    };
+
+    get("/photo.png", "image").await.unwrap();
+    assert!(!activity.has_changed().unwrap(), "an asset load is not a viewer");
+
+    get("/", "document").await.unwrap();
+    assert!(activity.has_changed().unwrap(), "a page navigation is a viewer");
+    assert!(activity.borrow_and_update().last_activity.is_some());
+
+    let _ = shutdown_tx.send(());
+}
+
+// ===== Host-owned routes (ServeConfig::host_routes) =====
+
+/// A tiny stand-in for what an embedding host binary would mount: one route
+/// under the reserved `/__moss/` prefix, answering with a body only the host
+/// could have produced.
+fn host_ping_router() -> axum::Router {
+    axum::Router::new().route("/__moss/host/ping", axum::routing::get(|| async { "host-pong" }))
+}
+
+/// A route contributed via `ServeConfig::host_routes` answers with the
+/// host's own body — proving the field is actually merged into the router,
+/// not just accepted and ignored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_route_answers_with_the_hosts_body() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let (port, shutdown_tx) = start_server(ServeConfig {
+        host_routes: Some(host_ping_router()),
+        ..ServeConfig::new(site_dir_state, 59200)
+    })
+    .await
+    .expect("Server should start");
+
+    let body = ureq::get(&format!("http://localhost:{}/__moss/host/ping", port))
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .expect("a mounted host route must answer")
+        .into_string()
+        .expect("body should read");
+    assert_eq!(body, "host-pong");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A site file written at the same served path as a host route does not
+/// shadow it — host routes are merged in before `.fallback(ServeDir)`, the
+/// same ordering rule that already protects every other `/__moss/` endpoint
+/// from a same-path user file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_route_is_not_shadowed_by_a_site_file_at_the_same_path() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(temp_dir.path().join("__moss/host")).unwrap();
+    std::fs::write(temp_dir.path().join("__moss/host/ping"), b"a site author's own file").unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let (port, shutdown_tx) = start_server(ServeConfig {
+        host_routes: Some(host_ping_router()),
+        ..ServeConfig::new(site_dir_state, 59300)
+    })
+    .await
+    .expect("Server should start");
+
+    let body = ureq::get(&format!("http://localhost:{}/__moss/host/ping", port))
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .expect("the host route must still answer")
+        .into_string()
+        .expect("body should read");
+    assert_eq!(
+        body, "host-pong",
+        "a site file at the same path must not shadow the host route"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A host route is behind the same trust boundary as the carrier: a rebound
+/// (non-loopback) `Host` header is refused with 421 before the host's own
+/// handler ever runs. Raw TCP for the same reason as
+/// `trust_boundary_refuses_a_rebound_host_but_serves_localhost` — ureq
+/// manages `Host` from the URL, so only a hand-written request reproduces
+/// what a rebinding attack looks like on the wire. The `localhost` request
+/// is the positive control: without it, a 421 on every request would pass
+/// just as well if the layer were refusing everything.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_route_refuses_a_rebound_host_but_serves_localhost() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let (port, shutdown_tx) = start_server(ServeConfig {
+        host_routes: Some(host_ping_router()),
+        ..ServeConfig::new(site_dir_state, 59400)
+    })
+    .await
+    .expect("Server should start");
+
+    let status_line = |host: &str| -> String {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /__moss/host/ping HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        resp.lines().next().unwrap_or("").to_string()
+    };
+
+    // Positive control: the socket and the host route both work for a loopback Host.
+    assert!(
+        status_line("localhost").contains("200"),
+        "control: a loopback Host must reach the host route; the refusal below would be vacuous otherwise"
+    );
+
+    // The rebinding attack: same socket, attacker's hostname in Host → 421.
+    assert!(
+        status_line("evil.com").contains("421"),
+        "a rebound (non-loopback) Host must be refused with 421, exactly like the carrier"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A host route registered at an engine-owned path (`/__moss/invoke/*cmd`,
+/// mounted whenever `invoke` is `Some`) does not silently shadow the
+/// engine's own handler — `Router::merge` panics on the exact path+method
+/// collision, at construction time, before the server ever binds a port.
+/// Spawned so the panic surfaces as a `JoinError` rather than aborting this
+/// test's own task; `is_panic()` is the merge order's actual guarantee here,
+/// not a graceful `Result::Err` from `start_server`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_route_colliding_with_an_engine_path_fails_construction_instead_of_shadowing_it() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
+    // Same method as the engine's own route (`POST /__moss/invoke/*cmd`):
+    // a different method at the same path is not a collision at all — axum
+    // merges it onto the same path's existing method router — so only a
+    // same-method registration actually exercises the construction-time
+    // guarantee this test is for.
+    let colliding = axum::Router::new()
+        .route("/__moss/invoke/*cmd", axum::routing::post(|| async { "shadow" }));
+
+    let result = tokio::spawn(async move {
+        start_server(ServeConfig {
+            invoke: Some(ctx),
+            host_routes: Some(colliding),
+            ..ServeConfig::new(site_dir_state, 59500)
+        })
+        .await
+    })
+    .await;
+
+    assert!(
+        result.is_err() && result.unwrap_err().is_panic(),
+        "a host route at an engine path must fail construction loudly (panic), not shadow the engine's handler"
+    );
+}
+
+// ===== File-operation arms: rename-with-refs, batch delete, reference =====
+// ===== cleanup and undo (the `file_ops` sibling module)               =====
+
+/// `rename_entry_with_refs` renames in place and rewrites the referencing
+/// file to follow it; the mutation tier must still refuse a destination
+/// outside the vault even with a valid token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_rename_entry_with_refs_renames_and_refuses_outside_the_vault() {
+    let (parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("note.md"), "# Note").unwrap();
+    std::fs::write(vault_path.join("other.md"), "See [[note]] for details.").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64100).await;
+    let url = format!("http://localhost:{}/__moss/mutate/rename_entry_with_refs", port);
+
+    // Positive control: an in-vault rename succeeds and the reference follows.
+    let old = vault_path.join("note.md");
+    let new = vault_path.join("renamed.md");
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({
+                "oldPath": old.to_string_lossy(),
+                "newPath": new.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .expect("control: an in-vault rename must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(new.exists(), "control: the renamed file must exist");
+    assert!(!old.exists(), "control: the old name must be gone");
+    let other = std::fs::read_to_string(vault_path.join("other.md")).unwrap();
+    assert!(other.contains("renamed"), "the reference must follow the rename: {other}");
+
+    // The escape: rename a vault file to a destination OUTSIDE the vault.
+    let escape_target = parent.path().join("escaped.md");
+    let escaped = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({
+                "oldPath": new.to_string_lossy(),
+                "newPath": escape_target.to_string_lossy(),
+            })
+            .to_string(),
+        );
+    assert!(escaped.is_err(), "rename must refuse a destination outside the vault");
+    assert!(!escape_target.exists(), "no file must land outside the vault");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `delete_entries` trashes a batch in one call, each entry guarded by the
+/// SAME confinement a single delete always had; an escape must be refused
+/// even with a valid token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_delete_entries_trashes_a_batch_and_refuses_outside_the_vault() {
+    let (parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("a.md"), "a").unwrap();
+    std::fs::write(vault_path.join("b.md"), "b").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64200).await;
+    let url = format!("http://localhost:{}/__moss/mutate/delete_entries", port);
+
+    // Positive control: both in-vault paths are trashed in one call.
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({
+                "paths": [
+                    vault_path.join("a.md").to_string_lossy(),
+                    vault_path.join("b.md").to_string_lossy(),
+                ],
+            })
+            .to_string(),
+        )
+        .expect("control: an in-vault batch delete must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(!vault_path.join("a.md").exists(), "control: a.md must be trashed");
+    assert!(!vault_path.join("b.md").exists(), "control: b.md must be trashed");
+
+    // The escape: a batch naming a sibling of the vault.
+    let outside = parent.path().join("secret.md");
+    let before = std::fs::read_to_string(&outside).unwrap();
+    let escaped = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&serde_json::json!({ "paths": [outside.to_string_lossy()] }).to_string());
+    assert!(escaped.is_err(), "delete_entries must refuse a path outside the vault");
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        before,
+        "the out-of-vault file must be byte-for-byte untouched"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `scan_references_for_delete` reports every referencing file for a vault
+/// path, and refuses to scan a target outside the vault even with a valid
+/// token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_scan_references_for_delete_finds_hits_and_refuses_outside_the_vault() {
+    let (parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("target.md"), "# Target").unwrap();
+    std::fs::write(vault_path.join("referrer.md"), "See [[target]] for details.").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64300).await;
+    let url = format!("http://localhost:{}/__moss/mutate/scan_references_for_delete", port);
+
+    // Positive control: the referencing file is reported.
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({ "path": vault_path.join("target.md").to_string_lossy() }).to_string(),
+        )
+        .expect("control: an in-vault scan must succeed");
+    assert_eq!(resp.status(), 200);
+    let hits: Vec<serde_json::Value> = resp.into_json().expect("a hit list");
+    assert!(
+        hits.iter()
+            .any(|h| h["referencing_file"].as_str().is_some_and(|f| f.contains("referrer"))),
+        "must report referrer.md as a referencing file: {hits:?}"
+    );
+
+    // The escape: scan a sibling of the vault.
+    let escaped = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({ "path": parent.path().join("secret.md").to_string_lossy() }).to_string(),
+        );
+    assert!(escaped.is_err(), "scan_references_for_delete must refuse a target outside the vault");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `clean_references_and_delete` strips every reference to its targets, then
+/// trashes them through the SAME core `delete_entries` uses; an escape must
+/// be refused even with a valid token, with the referencing file left
+/// byte-for-byte untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_clean_references_and_delete_cleans_and_refuses_outside_the_vault() {
+    let (parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("target.md"), "# Target").unwrap();
+    std::fs::write(vault_path.join("referrer.md"), "See [[target]] for details.").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64400).await;
+    let url = format!("http://localhost:{}/__moss/mutate/clean_references_and_delete", port);
+
+    // Positive control: the reference is stripped and the target trashed.
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({ "paths": [vault_path.join("target.md").to_string_lossy()] })
+                .to_string(),
+        )
+        .expect("control: an in-vault clean-and-delete must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(!vault_path.join("target.md").exists(), "control: target.md must be trashed");
+    let referrer = std::fs::read_to_string(vault_path.join("referrer.md")).unwrap();
+    assert!(!referrer.contains("[[target]]"), "the reference must be stripped: {referrer}");
+
+    // The escape: name a sibling of the vault.
+    let outside = parent.path().join("secret.md");
+    let before = std::fs::read_to_string(&outside).unwrap();
+    let escaped = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&serde_json::json!({ "paths": [outside.to_string_lossy()] }).to_string());
+    assert!(escaped.is_err(), "clean_references_and_delete must refuse a path outside the vault");
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        before,
+        "the out-of-vault file must be byte-for-byte untouched"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+/// `undo_rename` reverses a prior `rename_entry_with_refs` result. Its core,
+/// `rename_plan::undo_applied`, joins every path inside the plan onto the
+/// project root with no containment check of its own — it trusts the plan it
+/// was handed — so this pins that the carrier's `confine` is what refuses a
+/// forged, out-of-vault plan even with a valid token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutate_carrier_undo_rename_reverses_and_refuses_outside_the_vault() {
+    let (_parent, vault_path, site_dir) = confinement_vault();
+    std::fs::write(vault_path.join("note.md"), "# Note").unwrap();
+
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64500).await;
+
+    // Set-up: a real rename, to get a genuine RenameApplyResult to undo.
+    let rename_url = format!("http://localhost:{}/__moss/mutate/rename_entry_with_refs", port);
+    let old = vault_path.join("note.md");
+    let new = vault_path.join("renamed.md");
+    let resp = ureq::post(&rename_url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(
+            &serde_json::json!({
+                "oldPath": old.to_string_lossy(),
+                "newPath": new.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .expect("setup: the rename must succeed");
+    let applied: serde_json::Value = resp.into_json().expect("a RenameApplyResult");
+
+    // Positive control: undoing it restores the original name.
+    let undo_url = format!("http://localhost:{}/__moss/mutate/undo_rename", port);
+    let resp = ureq::post(&undo_url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&serde_json::json!({ "applied": applied }).to_string())
+        .expect("control: undo must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(old.exists(), "control: undo must restore the original name");
+    assert!(!new.exists(), "control: the renamed-to name must be gone after undo");
+
+    // The escape: a forged `applied` whose move claims a path outside the vault.
+    let forged = serde_json::json!({
+        "applied": {
+            "moves": [{ "old_path": "../secret.md", "new_path": "whatever.md", "is_dir": false }],
+            "edits": [],
+            "skipped": [],
+        }
+    });
+    let escaped = ureq::post(&undo_url)
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&forged.to_string());
+    assert!(escaped.is_err(), "undo_rename must refuse a plan naming a path outside the vault");
+    assert!(
+        !vault_path.join("whatever.md").exists(),
+        "no file must land from a forged out-of-vault undo plan"
+    );
 
     let _ = shutdown_tx.send(());
 }

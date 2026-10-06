@@ -9,6 +9,8 @@
 pub mod inventory;
 pub mod math_png;
 pub mod feature_styles;
+pub mod place_map_assets;
+pub mod place_map_labels;
 pub mod scripts;
 pub mod slots;
 pub mod stylesheet;

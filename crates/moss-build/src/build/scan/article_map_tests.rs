@@ -35,7 +35,7 @@ fn test_article_map_is_article() {
 fn test_article_map_save_and_load() {
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let mut map = ArticleMap::new();
     map.articles.insert(
@@ -55,7 +55,7 @@ fn test_article_map_save_and_load() {
 
     // Save
     map.save(moss_dir).unwrap();
-    assert!(moss_dir.join("build").join("article-map.json").exists());
+    assert!(moss_dir.join("build.nosync").join("article-map.json").exists());
 
     // Load
     let loaded = ArticleMap::load(moss_dir).unwrap();
@@ -78,17 +78,17 @@ fn test_article_map_load_nonexistent() {
 
 #[test]
 fn test_article_map_save_is_atomic_no_temp_leftover() {
-    // #820: save writes via a temp file + atomic rename so concurrent readers
+    // save writes via a temp file + atomic rename so concurrent readers
     // never catch a half-written file. Assert the rename consumed the temp
     // (no `.json.tmp` sibling left behind) and the final file is complete.
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let map = ArticleMap::new();
     map.save(moss_dir).unwrap();
 
-    let build = moss_dir.join("build");
+    let build = moss_dir.join("build.nosync");
     let leftovers: Vec<_> = fs::read_dir(&build)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -270,7 +270,7 @@ All posts"#,
         make_doc("Posts", "posts/index.html", true), // folder index (is_index=true)
     ];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
 
     // Should include article with PRETTY URL key (not file path!)
     // "posts/my-article/index.html" -> key is "posts/my-article/"
@@ -319,7 +319,7 @@ fn test_build_article_map_includes_html_content() {
         ..Default::default()
     }];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/hello/").unwrap();
 
     // html_content should be populated from ParsedDocument.html_content
@@ -336,7 +336,7 @@ fn test_build_article_map_includes_html_content() {
 fn test_article_map_html_content_roundtrips_through_json() {
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let mut map = ArticleMap::new();
     map.articles.insert(
@@ -372,7 +372,7 @@ fn test_article_map_loads_without_html_content_field() {
     // Deserialization should still work (field defaults to None)
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let old_json = r##"{
             "articles": {
@@ -385,7 +385,7 @@ fn test_article_map_loads_without_html_content_field() {
                 }
             }
         }"##;
-    fs::write(moss_dir.join("build").join("article-map.json"), old_json).unwrap();
+    fs::write(moss_dir.join("build.nosync").join("article-map.json"), old_json).unwrap();
 
     let loaded = ArticleMap::load(moss_dir).unwrap();
     let article = loaded.articles.get("posts/old/").unwrap();
@@ -402,7 +402,7 @@ fn test_article_map_uid_serialization() {
     // Test that uid field is serialized to JSON and can be loaded back
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let mut map = ArticleMap::new();
     map.articles.insert(
@@ -422,7 +422,7 @@ fn test_article_map_uid_serialization() {
 
     // Save and verify JSON contains uid
     map.save(moss_dir).unwrap();
-    let json = fs::read_to_string(moss_dir.join("build").join("article-map.json")).unwrap();
+    let json = fs::read_to_string(moss_dir.join("build.nosync").join("article-map.json")).unwrap();
     assert!(json.contains("a7b3c9d2"), "JSON should contain uid value");
 
     // Load and verify uid roundtrips
@@ -485,7 +485,7 @@ fn test_build_article_map_propagates_uid_from_parsed_document() {
         ..Default::default()
     }];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/my-article/").unwrap();
 
     // uid should be propagated from ParsedDocument
@@ -496,14 +496,13 @@ fn test_build_article_map_propagates_uid_from_parsed_document() {
 /// page, so an entry here is a URL nothing else believes in: the editor's
 /// preview follower navigates to `/footer/` and 404s, and `resolve_page_source`
 /// reports `is_article: true`, which arms the syndicate path.
-/// See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
 #[test]
 fn test_slot_only_doc_excluded_from_article_map() {
     let mut doc = make_doc("Footer", "footer/index.html", false);
     doc.slot_only = true;
     doc.source_path = Some("footer.md".to_string());
 
-    let map = build_article_map(&[doc], &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&[doc], &[], &HashMap::new(), &[], &[], &Default::default());
 
     assert!(
         !map.is_article("footer/"),
@@ -523,7 +522,7 @@ fn test_non_slot_doc_still_included_alongside_slot_file() {
     footer.source_path = Some("footer.md".to_string());
     let about = make_doc("About", "about/index.html", false);
 
-    let map = build_article_map(&[footer, about], &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&[footer, about], &[], &HashMap::new(), &[], &[], &Default::default());
 
     assert!(map.is_article("about/"), "normal page must survive the gate");
     assert!(!map.is_article("footer/"), "slot file must not");
@@ -551,7 +550,7 @@ fn make_doc(title: &str, url_path: &str, is_index: bool) -> ParsedDocument {
 fn test_root_level_article_included_in_article_map() {
     // 友链.md builds to 友链/index.html with is_index=false (it's an article, not a folder note)
     let documents = vec![make_doc("友链", "友链/index.html", false)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     assert!(
         map.is_article("友链/"),
         "Root-level article should be included in article-map"
@@ -562,7 +561,7 @@ fn test_root_level_article_included_in_article_map() {
 fn test_folder_index_excluded_from_article_map() {
     // 文字/纽约诸法门/index.md is a folder note (is_index=true)
     let documents = vec![make_doc("纽约诸法门", "文字/纽约诸法门/index.html", true)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     assert!(
         !map.is_article("文字/纽约诸法门/"),
         "Folder index page should NOT be in article-map"
@@ -573,7 +572,7 @@ fn test_folder_index_excluded_from_article_map() {
 fn test_top_level_folder_index_excluded() {
     // 文字/index.md is a top-level folder index (is_index=true)
     let documents = vec![make_doc("文字", "文字/index.html", true)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     assert!(
         !map.is_article("文字/"),
         "Top-level folder index should NOT be in article-map"
@@ -584,7 +583,7 @@ fn test_top_level_folder_index_excluded() {
 fn test_deep_article_included() {
     // A deep article like 文字/游记/某篇/index.html with is_index=false
     let documents = vec![make_doc("某篇", "文字/游记/某篇/index.html", false)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     assert!(
         map.is_article("文字/游记/某篇/"),
         "Deep article should be included in article-map"
@@ -642,7 +641,7 @@ fn test_build_article_map_special_character_filenames() {
         },
     ];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
 
     // Both articles MUST be in the map even though no source .md files
     // exist at the slug-derived paths
@@ -847,7 +846,7 @@ fn test_build_article_map_populates_source_path() {
         ..Default::default()
     }];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/test/").unwrap();
     assert_eq!(article.source_path, "posts/test-article.md");
 }
@@ -856,7 +855,7 @@ fn test_build_article_map_populates_source_path() {
 fn test_build_article_map_source_path_defaults_to_empty() {
     // When source_path is None, should default to empty string
     let documents = vec![make_doc("Test", "posts/test/index.html", false)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/test/").unwrap();
     assert_eq!(article.source_path, "");
 }
@@ -901,7 +900,7 @@ fn test_build_article_map_populates_frontmatter_and_tags() {
         ..Default::default()
     }];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/my-post/").unwrap();
 
     // source_path should be populated
@@ -931,7 +930,7 @@ fn test_build_article_map_populates_frontmatter_and_tags() {
 fn test_build_article_map_empty_frontmatter_gives_empty_tags() {
     // When raw_frontmatter is empty, tags should be empty
     let documents = vec![make_doc("Test", "posts/test/index.html", false)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/test/").unwrap();
     assert!(article.tags.is_empty());
     assert!(article.frontmatter.is_empty());
@@ -952,13 +951,82 @@ fn test_build_article_map_resolves_cover_paths_through_dir_overrides() {
     dir_overrides.insert("图片/配图".to_string(), "assets".to_string());
 
     let documents = vec![doc];
-    let map = build_article_map(&documents, &dir_overrides, &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &dir_overrides, &[], &[], &Default::default());
     let article = map.articles.get("writings/reviews/tools/").unwrap();
 
     assert_eq!(
         article.frontmatter.get("cover"),
         Some(&Value::String("image/assets/286b63.jpg".to_string())),
         "Cover path should be resolved through dir_overrides"
+    );
+}
+
+#[test]
+fn article_map_persists_kinds_and_fields_with_members() {
+    // A three-field kind where one term is reached through two of the three
+    // fields: the persisted summary must name exactly those two, in the
+    // kind's own field order, so the editor can pick a claim field without
+    // re-deriving anything.
+    use crate::build::terms::{derive_terms, TermKind};
+
+    let kinds = vec![TermKind {
+        key: "people".to_string(),
+        fields: vec![
+            "author".to_string(),
+            "editor".to_string(),
+            "jury".to_string(),
+        ],
+        title: "People".to_string(),
+        is_place: false, parents: Default::default(), explorer: None, line: None,
+    }];
+
+    let mut documents = vec![
+        make_doc("A Piece", "posts/a-piece/index.html", false),
+        make_doc("A Season", "seasons/one/index.html", false),
+    ];
+    documents[0].author = vec!["Ada Lin".to_string()];
+    documents[1].jury = vec!["Ada Lin".to_string()];
+
+    let terms = derive_terms(&mut documents, kinds.clone());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &terms);
+
+    assert_eq!(map.kinds, kinds, "the kinds table must be persisted as-is");
+    assert_eq!(
+        map.fields_with_members.get("people/ada-lin").map(Vec::as_slice),
+        Some(["author".to_string(), "jury".to_string()].as_slice()),
+        "only the fields with a member, in kind.fields order: {:?}",
+        map.fields_with_members
+    );
+}
+
+#[test]
+fn article_map_omits_a_term_no_field_claims_a_member_for() {
+    // A claimed term page whose person is named nowhere else has no member
+    // through any field. No entry at all, so the editor's `.get()` miss and
+    // its fallback-to-`fields[0]` branch agree.
+    use crate::build::terms::{derive_terms, TermKind};
+
+    let kinds = vec![TermKind {
+        key: "people".to_string(),
+        fields: vec!["author".to_string(), "editor".to_string()],
+        title: "People".to_string(),
+        is_place: false, parents: Default::default(), explorer: None, line: None,
+    }];
+
+    let mut documents = vec![make_doc("Sam Okafor", "people/sam-okafor/index.html", false)];
+    documents[0].author_page = Some(moss_core::terms::TermClaim::UseTitle);
+
+    let terms = derive_terms(&mut documents, kinds);
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &terms);
+
+    assert!(
+        map.terms.contains_key("people/sam-okafor"),
+        "the term itself still exists: {:?}",
+        map.terms.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !map.fields_with_members.contains_key("people/sam-okafor"),
+        "a term whose only page is its own self-reference has no member field"
     );
 }
 
@@ -973,7 +1041,7 @@ fn test_build_article_map_leaves_http_covers_unchanged() {
 
     let dir_overrides = HashMap::new();
     let documents = vec![doc];
-    let map = build_article_map(&documents, &dir_overrides, &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &dir_overrides, &[], &[], &Default::default());
     let article = map.articles.get("blog/post/").unwrap();
 
     assert_eq!(

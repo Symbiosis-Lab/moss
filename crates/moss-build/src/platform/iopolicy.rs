@@ -10,9 +10,6 @@
 //! (verified against a live SDK, not guessed) and confirmed against
 //! `man getiopolicy_np` and Apple technote TN3150
 //! ("Getting ready for dataless files").
-//!
-//! See docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-cloud-gate.md
-//! for the design this implements.
 
 use std::os::raw::c_int;
 
@@ -35,11 +32,10 @@ unsafe extern "C" {
 /// `stat`/`lstat`/xattr calls are unaffected, and so is a plain `open` — but
 /// **not `open` with `O_TRUNC`**, which is what `std::fs::write`,
 /// `std::fs::copy` and `File::create` all use. Truncation requires
-/// materialization, so those fail `EDEADLK` against a dataless destination too.
-/// Measured in moss#964 §1; this doc comment previously claimed `open` was
-/// unconditionally unaffected. See ADR-043 for how the build tree writes
-/// instead. Materialization becomes explicit, and confined to the download
-/// workers, via [`materialize_on_this_thread`].
+/// materialization, so those fail `EDEADLK` against a dataless destination too
+/// (see `build::io_utils` for how the build tree writes instead).
+/// Materialization becomes explicit, and confined to the download workers, via
+/// [`materialize_on_this_thread`].
 ///
 /// Child processes (`fork`+`exec`, `Command::spawn`) inherit this policy —
 /// verified empirically, and documented by `man setiopolicy_np`: "New
@@ -87,6 +83,9 @@ pub fn set_dataless_fail_fast() -> bool {
 /// Opt **the calling thread** back in to dataless materialization, overriding
 /// the process-wide fail-fast policy set by [`set_dataless_fail_fast`].
 ///
+/// `IOPOL_SCOPE_THREAD = 1` and `IOPOL_MATERIALIZE_DATALESS_FILES_ON = 2` are
+/// transcribed from `<sys/resource.h>`.
+///
 /// This is the whole download mechanism. After this call, a plain `read` of a
 /// dataless file on this thread blocks while the OS fetches the bytes, and
 /// returns once the file is materialized — for **any** File Provider, with no
@@ -127,10 +126,6 @@ pub fn set_dataless_fail_fast() -> bool {
 /// callers are the dedicated, long-lived threads in `build::cloud_prefetch`,
 /// which do nothing else for their whole lifetime, so set-once at thread start
 /// is both correct and simpler than save/restore.
-///
-/// Constants transcribed from the same SDK header as above and cross-checked
-/// against `bsd/sys/resource.h`: `IOPOL_SCOPE_THREAD = 1`,
-/// `IOPOL_MATERIALIZE_DATALESS_FILES_ON = 2`.
 ///
 /// Returns `false` (and logs) if the policy could not be set — the caller then
 /// still works, but its reads fail `EDEADLK` instead of downloading, which the

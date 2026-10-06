@@ -1,6 +1,6 @@
 //! The seal tail's announcer: who is told that a build became the site.
 //!
-//! [ADR-010] (2026-08-24 extension): the post-seal tail is one function and
+//! An earlier design decision (2026-08-24 extension): the post-seal tail is one function and
 //! takes no `AppHandle`; the observer differences between the desktop app, a
 //! headless serve, and a one-shot build cross the seam through ports. Most of
 //! what the tail says is already `PipelineEvent`-shaped and rides
@@ -18,15 +18,13 @@
 //!
 //! The last two are state handoffs rather than events, which is why they are
 //! not a fold onto `BuildReporter`: a reporter that adopted manifests would be
-//! the grab-bag ADR-058's threshold exists to catch. This trait moving ratchet
+//! exactly the grab-bag the abort-threshold rule exists to catch. This trait moving ratchet
 //! row (o) is that threshold doing its job — the raise is logged in the
 //! baseline's `accepts[]` with this module as the reason.
 //!
 //! Implementations: `events::AppAnnouncer` (webviews + `AppState`),
-//! [`LogAnnouncer`] (one-shot `moss build`); ADR-010 names a carrier-shaped
-//! one for headless watch, which lands with its caller (#1097).
-//!
-//! [ADR-010]: ../../../../../docs/decisions/ADR-010-unified-build-pipeline.md
+//! [`LogAnnouncer`] (one-shot `moss build`); that same design decision names a
+//! carrier-shaped one for headless watch, which lands with its caller.
 
 use std::path::Path;
 

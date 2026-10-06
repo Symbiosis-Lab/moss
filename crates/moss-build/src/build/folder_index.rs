@@ -7,7 +7,6 @@
 //! directory doesn't.
 
 use moss_core::content_graph::generate_slug;
-use moss_core::resolve::asset_class::AssetIndex;
 use moss_core::resolve::folder_class::FolderIndex;
 use moss_core::resolve::link_class::UrlIndex;
 use moss_core::PageKind;
@@ -47,12 +46,11 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
         // predicate that re-derives "index.html" independently can drift
         // from whatever decided `url_path` in the first place and silently
         // stop matching, exactly what happened when a root folder-note's
-        // home election missed and its `url_path` became an ordinary slug
-        // (moss#1101).
+        // home election missed and its `url_path` became an ordinary slug.
         //
         // Every OTHER directory still compares against `url_path`: that is
         // where `url:` overrides live (a source directory can be renamed for
-        // the URL, e.g. `獎項/` → `awards/`), and `url_path` is the only
+        // the URL, e.g. `評選/` → `awards/`), and `url_path` is the only
         // place that renaming is recorded — re-deriving identity from the
         // source path there would silently stop matching an overridden
         // folder (see `reference_parity.rs`'s `build_and_editor_folder_index_agree`).
@@ -86,7 +84,7 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
 ///
 /// A doc with a source file answers from that file's own location (no parent
 /// directory = the vault root), which is what stays right when the doc's
-/// `url_path` doesn't (moss#1101). A doc with no source file at all — a
+/// `url_path` doesn't. A doc with no source file at all — a
 /// synthesized folder index; term/language namespace roots have no backing
 /// markdown — has no location to read, so it falls back to the one
 /// unambiguous `url_path` check: a synthesized page is only ever the root's
@@ -102,24 +100,28 @@ pub(crate) fn is_root_source(doc: &ParsedDocument) -> bool {
     }
 }
 
-/// Stub asset/url indexes for `classify_reference` calls that only need the
-/// folder arm. Never consulted — folder markers short-circuit in
-/// classify_reference's folder arm (their `parsed.path` always ends in `/`).
-pub struct NoAssetIndex;
+/// Negative folder index for source-only reference evidence. Folder references
+/// are not missing assets, so this keeps them advisory without re-deriving the
+/// later whole-corpus page surface during Loop A.
+pub struct NoFolderIndex;
 
-impl AssetIndex for NoAssetIndex {
-    fn contains(&self, _root_rel: &str) -> bool {
+impl FolderIndex for NoFolderIndex {
+    fn is_dir(&self, _root_rel: &str) -> bool {
         false
     }
-    fn contains_ci(&self, _root_rel: &str) -> Option<String> {
-        None
+
+    fn dir_has_markdown_index(&self, _root_rel: &str) -> bool {
+        false
     }
-    fn find_by_suffix(&self, _suffix: &str) -> Vec<String> {
-        Vec::new()
+
+    fn dir_has_static_index(&self, _root_rel: &str) -> Option<String> {
+        None
     }
 }
 
-/// See `NoAssetIndex` — never consulted for folder markers.
+/// Stub url index for `classify_reference` calls that only need the folder
+/// arm. Never consulted — folder markers short-circuit in classify_reference's
+/// folder arm (their `parsed.path` always ends in `/`).
 pub struct NoUrlIndex;
 
 impl UrlIndex for NoUrlIndex {

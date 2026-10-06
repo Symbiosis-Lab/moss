@@ -4,7 +4,7 @@
 //! HTML parser:
 //!
 //! - the article scraper reads JSON-LD out of a `<script>` block, where `<` and
-//!   `&` are HTML-special, so titles and bylines arrive as `China&#8217;s` —
+//!   `&` are HTML-special, so titles and bylines arrive as `Reporter&#8217;s` —
 //!   `serde_json` parses the JSON faithfully and leaves the entities alone;
 //! - the build's HTML post-pass rewrites attribute values that the synthesizer
 //!   already escaped, so it has to decode before it can split a URL on `?`/`#`
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn decodes_numeric_and_named_entities() {
-        assert_eq!(decode("Finding China&#8217;s Voice"), "Finding China’s Voice");
+        assert_eq!(decode("The Reporter&#8217;s Notebook"), "The Reporter’s Notebook");
         assert_eq!(decode("AT&amp;T"), "AT&T");
         assert_eq!(decode("a&#x2014;b"), "a—b");
         assert_eq!(decode("no entities"), "no entities");

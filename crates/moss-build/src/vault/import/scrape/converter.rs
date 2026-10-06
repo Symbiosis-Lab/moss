@@ -18,6 +18,7 @@ use url::Url;
 
 use super::extractor::extract_main_content;
 use super::metadata::{derive, ArticleMetadata};
+use crate::vault::import::widgets::{carry_widgets, html_to_markdown, WidgetCount};
 
 /// Output of the extraction pipeline.
 pub struct Article {
@@ -28,6 +29,9 @@ pub struct Article {
     /// Metadata fields ready for YAML frontmatter, schema-aligned with
     /// moss's `BUILTIN_FIELDS`.
     pub metadata: ArticleMetadata,
+    /// Widgets (iframes, forms) the markup carried: links kept, and those
+    /// with no static form dropped.
+    pub widgets: WidgetCount,
 }
 
 /// What a per-site adapter can supply. Body may be pre-converted markdown
@@ -97,6 +101,7 @@ pub fn extract_article_with_snapshot(
     // Metadata is parsed from the raw HTML so JSON-LD / OG /
     // <html lang> survive the clutter strip.
     let mut metadata = derive(html);
+    let mut widgets = WidgetCount::default();
 
     // Main content as markdown. Known sites whose DOM defeats the generic
     // scorer get an explicit adapter first (which may hand back ready
@@ -120,8 +125,13 @@ pub fn extract_article_with_snapshot(
             htmd::convert(&h).unwrap_or(h)
         }
         None => {
-            let h = extract_main_content(html);
-            htmd::convert(&h).unwrap_or_else(|_| h.clone())
+            // Widgets are classified before the strip removes them.
+            // A page with no URL (a local file) still resolves absolute links.
+            let page_url = base.clone().unwrap_or_else(|| Url::parse("about:blank").expect("static url"));
+            let (carried, found) = carry_widgets(html, &page_url);
+            widgets = found;
+            let h = extract_main_content(&carried);
+            html_to_markdown(&h).unwrap_or_else(|_| h.clone())
         }
     };
 
@@ -130,6 +140,11 @@ pub fn extract_article_with_snapshot(
         std::collections::HashMap::new();
     for raw in extract_image_urls_in_markdown(&markdown) {
         if let Some(abs) = resolve_url(&raw, &base) {
+            // Route through the original-media table before it becomes the
+            // dedupe/download key — a CDN row (e.g. Squarespace) collapses
+            // this image's bare, `?format=750w` and `?format=2500w` markdown
+            // references onto one canonical URL, so they download once.
+            let abs = crate::vault::import::media::original_media_url(&abs).unwrap_or(abs);
             if abs != raw {
                 raw_to_resolved.insert(raw.clone(), abs.clone());
             }
@@ -157,6 +172,7 @@ pub fn extract_article_with_snapshot(
     // to normalise trailing slashes, but fall back to inserting it verbatim.
     if let Some(ref og_url) = metadata.og_image {
         let abs = resolve_url(og_url, &base).unwrap_or_else(|| og_url.clone());
+        let abs = crate::vault::import::media::original_media_url(&abs).unwrap_or(abs);
         media_urls.insert(abs.clone());
         // Keep og_image in the resolved form: the cover selection in
         // `scrape::run` uses it as a lookup key into maps keyed by the
@@ -169,6 +185,7 @@ pub fn extract_article_with_snapshot(
         markdown,
         media_urls,
         metadata,
+        widgets,
     }
 }
 
@@ -194,7 +211,10 @@ fn extract_localizable_embed_urls(md: &str) -> Vec<String> {
 
 /// Rewrite `![[URL]]` embeds through the same `remote → local` map the
 /// image rewrite uses, so downloaded files (audio, documents) point into
-/// the vault. URLs not in the map are left untouched.
+/// the vault. A localized file is written in the standard `![](path)` form,
+/// which renders the same player for a file in the site; URLs not in the map
+/// are left untouched and stay `![[URL]]`, the only form that makes a
+/// provider player.
 pub fn rewrite_embed_links(
     markdown: &str,
     remote_to_local: &std::collections::HashMap<String, String>,
@@ -202,7 +222,10 @@ pub fn rewrite_embed_links(
     WIKILINK_EMBED_PATTERN
         .replace_all(markdown, |caps: &regex::Captures| {
             match remote_to_local.get(&caps[1]) {
-                Some(local) => format!("![[{}]]", local),
+                Some(local) => format!(
+                    "![]({})",
+                    moss_core::resolve::fuzzy_path::escape_md_destination(local, false)
+                ),
                 None => caps[0].to_string(),
             }
         })
@@ -235,23 +258,7 @@ fn extract_image_urls_in_markdown(md: &str) -> Vec<String> {
         .collect()
 }
 
-/// Return the first non-`data:` image URL in the markdown, resolved against
-/// `base_url`. Used by the import pipeline to populate `cover:` frontmatter
-/// from the article's hero image. Returns `None` if no image survives the
-/// extraction.
-pub fn first_image_url(md: &str, base_url: &str) -> Option<String> {
-    let base = Url::parse(base_url).ok();
-    IMG_PATTERN.captures_iter(md).find_map(|c| {
-        let raw = c[2].to_string();
-        if raw.is_empty() || raw.starts_with("data:") {
-            None
-        } else {
-            resolve_url(&raw, &base)
-        }
-    })
-}
-
-fn resolve_url(href: &str, base: &Option<Url>) -> Option<String> {
+pub(crate) fn resolve_url(href: &str, base: &Option<Url>) -> Option<String> {
     if let Some(b) = base {
         b.join(href).ok().map(|u| u.to_string())
     } else {
@@ -267,7 +274,7 @@ fn resolve_url(href: &str, base: &Option<Url>) -> Option<String> {
 // non-paren, non-whitespace character OR a single balanced `(…)` group, which
 // covers the full CommonMark spec allowance for one level of nested parens in
 // link destinations (CommonMark spec §6.6, link destination grammar).
-static IMG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static IMG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"!\[([^\]]*)\]\(((?:[^()\s"'<>]|\([^()]*\))+)\)"#).expect("img regex")
 });
 
@@ -289,7 +296,7 @@ mod tests {
             <script type="application/ld+json">
             {"@type":"NewsArticle","headline":"Title",
              "datePublished":"2024-12-22T00:00:00Z",
-             "author":{"@type":"Person","name":"Yi Liu"},
+             "author":{"@type":"Person","name":"Jane Doe"},
              "publisher":{"@id":"#org"}}
             </script>
             <script type="application/ld+json">
@@ -307,7 +314,7 @@ mod tests {
         let art = extract_article(html, "https://example.com/p");
         assert_eq!(art.metadata.title.as_deref(), Some("Title"));
         assert_eq!(art.metadata.date.as_deref(), Some("2024-12-22"));
-        assert_eq!(art.metadata.author.as_deref(), Some("Yi Liu"));
+        assert_eq!(art.metadata.author.as_deref(), Some("Jane Doe"));
         assert_eq!(art.metadata.publisher.as_deref(), Some("The Site"));
         assert_eq!(art.metadata.lang.as_deref(), Some("en"));
         assert!(art.markdown.contains("Lede paragraph"));
@@ -327,6 +334,35 @@ mod tests {
         }
         assert!(urls.contains("https://cdn.example.com/a.png"));
         assert!(urls.contains("https://example.com/img/b.jpg"));
+    }
+
+    /// A page that links one Squarespace-CDN photo twice — once bare, once
+    /// with a size query — must queue it for download exactly once: both
+    /// markdown references route through `original_media_url` onto the same
+    /// canonical URL before landing in `media_urls`.
+    #[test]
+    fn squarespace_bare_and_sized_references_to_one_photo_dedupe() {
+        let html = r#"<article>
+            <p>intro paragraph with enough words for the scorer to like it here</p>
+            <img src="https://images.squarespace-cdn.com/content/v1/a/b/photo.jpg">
+            <img src="https://images.squarespace-cdn.com/content/v1/a/b/photo.jpg?format=2500w">
+        </article>"#;
+        let art = extract_article(html, "https://example.com/gallery");
+        let canonical =
+            "https://images.squarespace-cdn.com/content/v1/a/b/photo.jpg?format=original";
+        assert_eq!(
+            art.media_urls.len(),
+            1,
+            "expected one dedup'd entry, got {:?}",
+            art.media_urls
+        );
+        assert!(art.media_urls.contains(canonical));
+        assert_eq!(
+            art.markdown.matches(canonical).count(),
+            2,
+            "both markdown references should point at the canonical URL: {}",
+            art.markdown
+        );
     }
 
     #[test]
@@ -355,7 +391,7 @@ mod tests {
             "./assets/imported/h.mp3".to_string(),
         );
         let out = rewrite_embed_links(md, &map);
-        assert!(out.contains("![[./assets/imported/h.mp3]]"), "got: {out}");
+        assert!(out.contains("![](./assets/imported/h.mp3)"), "got: {out}");
         assert!(
             out.contains("![[https://www.youtube.com/watch?v=x1]]"),
             "provider embed must stay remote: {out}"
@@ -363,6 +399,17 @@ mod tests {
         assert!(out.contains("![[local/song.mp3]]"), "local untouched: {out}");
     }
 
+
+    #[test]
+    fn a_localized_embed_destination_is_escaped() {
+        let mut map = HashMap::new();
+        map.insert(
+            "https://example.com/a.mp3".to_string(),
+            "./assets/imported/my song (1).mp3".to_string(),
+        );
+        let out = rewrite_embed_links("![[https://example.com/a.mp3]]", &map);
+        assert_eq!(out, "![](./assets/imported/my%20song%20(1).mp3)");
+    }
 
     #[test]
     fn data_uri_images_ignored() {
@@ -396,14 +443,6 @@ mod tests {
         assert!(
             out.contains("./assets/imported/photo2024.jpg"),
             "rewrite_image_links did not substitute URL with parens; got: {out}"
-        );
-
-        // first_image_url must also resolve correctly
-        let first = first_image_url(md, "https://cdn.example.com/");
-        assert_eq!(
-            first.as_deref(),
-            Some("https://cdn.example.com/photo(2024).jpg"),
-            "first_image_url returned wrong URL: {first:?}"
         );
     }
 

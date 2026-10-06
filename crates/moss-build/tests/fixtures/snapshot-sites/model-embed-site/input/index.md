@@ -1,0 +1,7 @@
+---
+title: Model Embed Demo
+---
+
+A page with a single 3D model embed.
+
+![[mesh.glb]]

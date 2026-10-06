@@ -1,4 +1,4 @@
-//! Post-seal, pre-publish HTML degradation pass (moss#867).
+//! Post-seal, pre-publish HTML degradation pass.
 //!
 //! Glues the pure [`crate::build::markdown::html_post::degrade_failed_variants`]
 //! filter to disk: for every HTML page the sealed manifest tracked as a
@@ -20,15 +20,14 @@ use std::path::Path;
 /// so that dropping a pass from it is something a test can see.
 ///
 /// `failed` is every variant URL the AssetRegistry already knows will not
-/// exist (a terminally-failed encode, moss#867); the caller owns registry
-/// access, so this function needs no `BuildServices`. Returned is the full
-/// unshippable set — every URL the four sources between them condemned — for
-/// logging and assertions.
+/// exist (a terminally-failed encode); the caller owns registry
+/// access, so this function needs no `BuildServices`. Returned is whether the
+/// generation may ship at all.
 ///
 /// The four sources that can leave a `<source>` pointing at nothing: a failed
-/// encode (moss#867), the orphan prune (moss#976 B2), the presence pass, and a
+/// encode, the orphan prune, the presence pass, and a
 /// reference with no manifest entry at all. This is the only scope that sees
-/// all four (ADR-013 amendment 2026-09-09) — and the only one that can hand
+/// all four (as amended 2026-09-09) — and the only one that can hand
 /// them ONE reference scan, which their disjointness depends on: the prune acts
 /// on what that scan did NOT see, the fourth source on what it did. Hoisting
 /// the scan out of the prune also keeps the fourth source alive under
@@ -36,28 +35,50 @@ use std::path::Path;
 ///
 /// The order is load-bearing. Every removal pass runs before
 /// [`apply_to_staging`], which repairs the HTML LAST, after everything that can
-/// remove a file: until 2026-09-09 it ran first, so every removal shipped a
+/// remove a variant: until 2026-09-09 it ran first, so every removal shipped a
 /// live 404 that `<picture>` renders blank instead of falling back. The caller
 /// must in turn run this before it persists or materializes the generation,
-/// which would otherwise ship bytes deleted here, or advertise a manifest entry
-/// with no file behind it (deploy refuses the whole upload over one).
+/// which would otherwise advertise a manifest entry with no file behind it
+/// (deploy refuses the whole upload over one).
+///
+/// "Remove" here means remove from the MANIFEST. The preview server is reading
+/// `stage_dir` while this runs — the seal tail is detached, and nothing points
+/// the server away from staging until the next build starts — so the only write
+/// this whole sequence makes into it is [`apply_to_staging`]'s, which goes
+/// through `io_utils::write_output` and is therefore a rename, never a window
+/// where the page is absent. The staged bytes of an unshipped variant are
+/// unlinked by `build::pipeline`'s pre-render sweep instead.
+///
+/// The ship verdict is decided after the presence pass and BEFORE the repair:
+/// a generation withheld because its tree could not be read must not also
+/// rewrite the HTML the preview is serving, from a strip set that unreadable
+/// tree produced.
 pub(crate) fn repair_staged_html(
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &Path,
     sealed: &mut SealedManifest,
     failed: HashSet<String>,
-) -> HashSet<String> {
+) -> crate::build::ship::ShipVerdict {
     let mut unshippable = failed;
     let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage_dir);
-    let (pruned_keys, _) =
-        crate::build::ship::prune_orphaned_webp_before_ship(mp, stage_dir, sealed, &scan);
-    unshippable.extend(pruned_keys);
-    unshippable.extend(crate::build::ship::drop_absent_outputs(stage_dir, sealed));
+    unshippable.extend(crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan));
+    let entries = sealed.files().len();
+    // Same object store `ship_phase` will read from, so a `staged_oid` entry
+    // whose stage copy is transiently absent (evicted, mid-write, deleted by
+    // something other than moss) is asked of its live CAS blob here too,
+    // rather than being dropped from the manifest on the strength of a stage
+    // path this generation was never going to read from anyway.
+    let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
+    let lost = crate::build::ship::drop_absent_outputs(stage_dir, sealed, Some(&object_store));
+    let verdict = crate::build::ship::ShipVerdict::after_presence_pass(sealed, entries, lost.len());
+    unshippable.extend(lost);
     unshippable.extend(crate::build::ship::unregistered_referenced_variants(
         &scan, sealed, stage_dir,
     ));
-    apply_to_staging(stage_dir, sealed, &unshippable);
-    unshippable
+    if verdict.repairs_staging() {
+        apply_to_staging(stage_dir, sealed, &unshippable);
+    }
+    verdict
 }
 
 /// Rewrite every sealed HTML page in `stage_dir` to drop references to image
@@ -67,7 +88,7 @@ pub(crate) fn repair_staged_html(
 /// `failed` is every site-root-relative URL that must not survive in HTML,
 /// whatever removed it. This function does not care which — a `<picture>`
 /// cannot fall back from a chosen-source 404 regardless of who deleted the
-/// file, so every source feeds one strip set (ADR-013 amendment 2026-09-09).
+/// file, so every source feeds one strip set (as amended 2026-09-09).
 /// Taking a set rather than the `AssetRegistry` is what lets the removal
 /// passes downstream of the encoder participate at all.
 ///
@@ -137,7 +158,23 @@ pub fn apply_to_staging(
             "degrade_failed_variants: rewrote {} page(s) to drop failed image variant(s)",
             rewrites.len()
         );
+        let rewritten_keys: HashSet<String> = rewrites.keys().cloned().collect();
         sealed.apply_post_seal_rewrites(rewrites);
+        // This just wrote NEW bytes straight to `stage_dir`, bypassing the CAS
+        // entirely — any `Cas` ship source recorded before now names the
+        // PRE-rewrite bytes and must not survive to ship-by-OID: a
+        // page repaired to drop a failed image variant must not have that
+        // variant resurrected by shipping the object that predates the
+        // repair. `stamp_ship_fingerprints` both clears it and re-stamps
+        // with the bytes THIS rewrite just wrote, in one transition — a
+        // separate clear-then-stamp pair could drift apart, and a
+        // `ShipSource::Cas` entry left un-cleared here (e.g. by a future
+        // reordering) would resurrect the failed variant it was meant to
+        // strip, or, cleared without a fresh stamp, would compare the next
+        // ship against a fingerprint from before this ordinary,
+        // non-concurrent rewrite and flag every repaired page as if a race
+        // had touched it.
+        sealed.stamp_ship_fingerprints(stage_dir, rewritten_keys.iter().map(|s| s.as_str()));
     }
 }
 

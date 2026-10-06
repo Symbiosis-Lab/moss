@@ -1,16 +1,16 @@
 //! Progress communication for build process
 //!
-//! Two-tier progress system (ADR-004):
+//! Two-tier progress system:
 //! - Tier 1: ProgressUpdate via Channel → loading screen (blocking phase)
 //! - Tier 2: PipelineEvent variants relayed by the reporter to the frontend
-//!   via either the typed MossEvent bus (post-#523) or legacy string-literal
+//!   via either the typed MossEvent bus or legacy string-literal
 //!   channels (still pending migration) → toast (background phase)
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 /// Format progress message with optional counts
-/// ADR-004: Shared utility for consistent messaging
+/// Shared utility for consistent messaging
 pub fn format_progress_message(task: &str, current: u32, total: u32) -> String {
     if total > 0 {
         format!("{} ({}/{})", task, current, total)
@@ -20,7 +20,7 @@ pub fn format_progress_message(task: &str, current: u32, total: u32) -> String {
 }
 
 /// Background progress update for non-blocking tasks
-/// ADR-004: Separate from blocking ProgressUpdate for clean separation
+/// Separate from blocking ProgressUpdate for clean separation
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct BackgroundProgress {
     /// Task identifier from the emitting subsystem (e.g. "markdown",
@@ -67,7 +67,7 @@ pub struct BackgroundProgress {
 use crate::advisory::{Action, Advisory, Scope, Severity};
 
 /// Asset ready notification for placeholder swapping
-/// ADR-003: Tauri events for instant updates
+/// Tauri events for instant updates
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct AssetReady {
     /// Relative path to the asset
@@ -162,11 +162,11 @@ pub struct BuildComplete {
 /// of the pipeline, and it reports a filesystem fact rather than progress.
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct SitePromoted {
-    /// The generation now serving at `.moss/build/current`.
+    /// The generation now serving at `.moss/build.nosync/current`.
     pub generation_id: String,
 }
 
-/// Unified pipeline event enum (ADR-010).
+/// Unified pipeline event enum.
 ///
 /// All pipeline progress goes through this type. Routed via `emit_event()`
 /// (for code with a `ProgressSink`) or `BuildReporter::report` (for code with an
@@ -369,12 +369,12 @@ pub fn emit_event(sink: &super::ProgressSink, event: &PipelineEvent) {
 /// the floor. That is what happened to the pair of `[diag] preview-wait:` lines
 /// these replace. They were the CLI's only sign that `moss build
 /// --wait-plugins` had entered the blocking wait, they rode on the logger the
-/// Tauri path happened to install, and #1019 took the Tauri path away from a
+/// Tauri path happened to install, and a later change took the Tauri path away from a
 /// plugin-bearing build without anyone noticing the announcement went with it.
 ///
 /// The sink is the right channel regardless: it reaches the CLI's stderr AND
-/// the GUI loading screen, and it is the mode-agnostic seam ADR-010 asks the
-/// pipeline to branch through. Nothing is lost from the app's log either —
+/// the GUI loading screen, and it is the mode-agnostic seam the pipeline is
+/// meant to branch through. Nothing is lost from the app's log either —
 /// `PhaseTrace::start("process_hooks_await")` still records the same boundary
 /// and elapsed time wherever a logger exists.
 ///
@@ -987,7 +987,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Design Invariant Tests (ADR-010)
+    // Design Invariant Tests
     // =========================================================================
 
     /// INVARIANT: Stdout sink handles ALL PipelineEvent variants without panic.
@@ -1163,14 +1163,42 @@ fn advisory_event(task: &str, advisories: Vec<Advisory>) -> Option<PipelineEvent
     })
 }
 
-/// Build a `BackgroundProgress` advisory event for skipped symlinks.
+/// The other half of [`advisory_event`]: an explicit "this build's check ran
+/// and found nothing" signal for `task` — a `completed: true` tick with an
+/// EMPTY `advisories` vec, in place of `advisory_event`'s `None`.
+///
+/// A build-wide check (symlink-skip, config-version-ahead) used to go silent
+/// the moment its condition cleared, because `advisory_event` returns `None`
+/// for an empty vec and nothing was reported in its place. The desktop app's
+/// per-task reconciliation sweeps a task's stored advisories against the
+/// keys THAT TASK'S OWN `completed: true` tick re-raised — so a
+/// task that never ticks at all is never reconciled, and a fixed-and-rebuilt
+/// advisory sat until the folder was reopened. Emit this whenever the check
+/// actually ran this build and found nothing; never when it could not run at
+/// all (e.g. an unreadable config) — that is not evidence either way, only an
+/// unknown.
+fn clear_tick(task: &str) -> PipelineEvent {
+    PipelineEvent::BackgroundProgress {
+        task: task.into(),
+        current: 0,
+        total: 0,
+        message: String::new(),
+        completed: true,
+        advisories: vec![],
+    }
+}
+
+/// Build a `BackgroundProgress` event for the symlink-skip check, which runs
+/// unconditionally every build (the background asset-copy worker is never
+/// gated).
 ///
 /// When `count > 0` a NeedsAction advisory is returned so the L1 hairline dot
-/// shows it without a toast. Returns `None` when no symlinks were skipped
-/// (steady-state clean build).
+/// shows it without a toast. `count == 0` returns the [`clear_tick`] instead
+/// of the old `None` — a build that skipped zero symlinks still ran the
+/// check, so it still speaks for the "assets" task.
 pub fn make_symlink_skip_advisory(count: u32) -> Option<PipelineEvent> {
     if count == 0 {
-        return None;
+        return Some(clear_tick("assets"));
     }
     let key = if count == 1 {
         "symlinks_skipped_one"
@@ -1199,20 +1227,28 @@ pub fn make_symlink_skip_advisory(count: u32) -> Option<PipelineEvent> {
 /// re-derived every build (not deduped) so it clears the moment the config
 /// is fixed or moss is updated, same as every other advisory. `cfg: None`
 /// (a config that could not be read) is silently not this advisory's story
-/// to tell — something downstream already owns surfacing a real read error.
+/// to tell — something downstream already owns surfacing a real read error —
+/// and is NOT the same as "checked, schema not ahead": we don't know which,
+/// so this emits neither the advisory nor a [`clear_tick`] in that case.
 pub fn report_config_version_ahead(
     reporter: Option<&dyn super::ports::reporter::BuildReporter>,
     cfg: Option<&crate::config::ConfigFile>,
 ) {
-    let Some(found) = cfg.and_then(|c| c.schema_version_ahead()) else {
+    let Some(cfg) = cfg else {
         return;
     };
-    let Some(event) = make_config_version_ahead_advisory(found) else {
+    let event = match cfg.schema_version_ahead() {
+        Some(found) => make_config_version_ahead_advisory(found),
+        // The check ran (config was readable) and found nothing this build:
+        // an explicit clear, so the app's per-task sweep can retire a
+        // fixed-and-rebuilt advisory instead of waiting for the folder to
+        // reopen — silence is not evidence (the desktop app's silent-clear gap).
+        None => Some(clear_tick("config")),
+    };
+    let (Some(event), Some(reporter)) = (event, reporter) else {
         return;
     };
-    if let Some(reporter) = reporter {
-        reporter.report(&event);
-    }
+    reporter.report(&event);
 }
 
 /// Build a `BackgroundProgress` advisory event for a config.toml a newer
@@ -1240,6 +1276,44 @@ pub fn make_config_version_ahead_advisory(found: u32) -> Option<PipelineEvent> {
             action: Action::None,
         }],
     )
+}
+
+/// The notice for public addresses this build stops serving without the
+/// author having removed their source. An advisory: it asks nothing of the
+/// build and moves no problem count; the publish gate is what refuses.
+///
+/// Addresses the author deleted are not news, and an empty list is a
+/// [`clear_tick`] so a fixed condition clears.
+pub fn make_removed_addresses_advisory(
+    removed: &[crate::build::manifest::change_set::RemovedAddress],
+) -> PipelineEvent {
+    let lost: Vec<String> = crate::build::manifest::change_set::pending_removals(removed, None)
+        .into_iter()
+        .map(|p| p.address)
+        .collect();
+    let shown = lost.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+    let list = match lost.len().saturating_sub(3) {
+        0 => shown,
+        rest => format!("{shown}, and {rest} more"),
+    };
+    advisory_event(
+        "addresses",
+        if lost.is_empty() {
+            vec![]
+        } else {
+            vec![Advisory {
+                scope: Scope::Config,
+                severity: Severity::NeedsAction,
+                item: None,
+                what: crate::infra::app_advisory::fmt(
+                    "addresses_going_offline",
+                    &[("list", &list)],
+                ),
+                action: Action::None,
+            }]
+        },
+    )
+    .unwrap_or_else(|| clear_tick("addresses"))
 }
 
 // `make_live_record_advisory` stood here and was deleted on 2026-08-29 — see
@@ -1270,20 +1344,22 @@ pub fn make_duplicate_uid_advisory(
     let advisories: Vec<Advisory> = reassignments
         .iter()
         .filter(|r| r.live_thread_at_risk)
-        .map(|r| Advisory {
-            scope: Scope::File,
-            severity: Severity::NeedsAction,
-            item: Some(r.reassigned_path.clone()),
-            what: crate::infra::app_advisory::fmt(
-                "duplicate_note_id_live",
-                &[("keeper", &r.keeper_path), ("dup", &r.reassigned_path)],
-            ),
-            // The one advisory in moss that reports an act rather than a
-            // condition, and so the one that must outlive the build that
-            // raised it. See `Action::Acknowledge`.
-            action: Action::Acknowledge {
-                label: crate::infra::app_advisory::fmt("acknowledged_label", &[]),
-            },
+        .map(|r| {
+            Advisory::for_source(
+                Scope::File,
+                Severity::NeedsAction,
+                &r.reassigned_path,
+                crate::infra::app_advisory::fmt(
+                    "duplicate_note_id_live",
+                    &[("keeper", &r.keeper_path), ("dup", &r.reassigned_path)],
+                ),
+                // The one advisory in moss that reports an act rather than a
+                // condition, and so the one that must outlive the build that
+                // raised it. See `Action::Acknowledge`.
+                Action::Acknowledge {
+                    label: crate::infra::app_advisory::fmt("acknowledged_label", &[]),
+                },
+            )
         })
         .collect();
     advisory_event("markdown", advisories)
@@ -1435,9 +1511,22 @@ mod route_tests {
     // =========================================================================
 
     #[test]
-    fn symlink_skip_advisory_zero_returns_none() {
-        // Zero skipped symlinks → no advisory (clean build, no hairline dot).
-        assert!(make_symlink_skip_advisory(0).is_none());
+    fn symlink_skip_advisory_zero_emits_an_explicit_clear() {
+        // Zero skipped symlinks → the check still ran, so it must say so: a
+        // completed:true tick with EMPTY advisories, not the old `None` a
+        // silent build used to leave behind. The desktop app's per-task sweep
+        // only reconciles a task on that task's OWN completed tick — a task
+        // that never ticks is never reconciled, so a fixed-and-rebuilt
+        // symlink advisory sat stuck until the folder was reopened.
+        let event = make_symlink_skip_advisory(0).expect("the check ran; it must emit a clear");
+        match event {
+            PipelineEvent::BackgroundProgress { task, completed, advisories, .. } => {
+                assert_eq!(task, "assets");
+                assert!(completed, "a clear tick must be completed:true so the sweep fires");
+                assert!(advisories.is_empty(), "a clear tick carries no advisories");
+            }
+            other => panic!("expected BackgroundProgress, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1505,6 +1594,51 @@ mod route_tests {
         }
     }
 
+    /// Records every event handed to it — for asserting `report_config_
+    /// version_ahead`'s side effect, since it takes a reporter and returns
+    /// nothing.
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl crate::build::ports::reporter::BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+        fn is_terminal(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn report_config_version_ahead_emits_a_clear_when_the_config_is_readable_and_not_ahead() {
+        // The check ran (config parsed fine) and found the schema current —
+        // it must still speak for the "config" task, or a fixed-and-rebuilt
+        // config_schema_version_ahead advisory sits until the folder reopens.
+        let rec = RecordingReporter(std::sync::Mutex::new(Vec::new()));
+        let cfg = crate::config::ConfigFile::empty();
+        report_config_version_ahead(Some(&rec), Some(&cfg));
+        let events = rec.0.lock().unwrap();
+        assert_eq!(events.len(), 1, "a readable, not-ahead config must emit exactly one clear tick");
+        match &events[0] {
+            PipelineEvent::BackgroundProgress { task, completed, advisories, .. } => {
+                assert_eq!(task, "config");
+                assert!(*completed, "a clear tick must be completed:true so the sweep fires");
+                assert!(advisories.is_empty(), "a clear tick carries no advisories");
+            }
+            other => panic!("expected BackgroundProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn report_config_version_ahead_emits_nothing_when_the_config_could_not_be_read() {
+        // `cfg: None` is an UNKNOWN, not a "checked, clean" — the check did
+        // not run, so it must not claim it did by emitting a clear.
+        let rec = RecordingReporter(std::sync::Mutex::new(Vec::new()));
+        report_config_version_ahead(Some(&rec), None);
+        assert!(
+            rec.0.lock().unwrap().is_empty(),
+            "an unreadable config is not evidence either way — neither the advisory nor a clear"
+        );
+    }
+
     // I4 pluralization fix: "1 symlink(s)" → "1 symlink", "3 symlinks(s)" → "3 symlinks"
     #[test]
     fn symlink_skip_advisory_one_uses_singular_noun_no_parens() {
@@ -1544,5 +1678,59 @@ mod route_tests {
             }
             other => panic!("expected BackgroundProgress, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod removed_addresses_advisory_tests {
+    use super::*;
+    use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
+
+    fn removed(path: &str, reason: RemovalReason) -> RemovedAddress {
+        RemovedAddress { path: path.into(), reason, moved_to: None, source: None }
+    }
+
+    fn advisories(event: PipelineEvent) -> Vec<Advisory> {
+        match event {
+            PipelineEvent::BackgroundProgress { task, advisories, .. } => {
+                assert_eq!(task, "addresses");
+                advisories
+            }
+            other => panic!("expected a background tick, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unexplained_removals_are_announced_as_one_advisory_naming_them() {
+        let found = advisories(make_removed_addresses_advisory(&[
+            removed("feed.xml", RemovalReason::Unexplained),
+            removed("gone/index.html", RemovalReason::AuthorRemoved),
+        ]));
+        assert_eq!(found.len(), 1);
+        assert!(found[0].what.contains("/feed.xml"), "{}", found[0].what);
+        assert!(!found[0].what.contains("/gone/"), "an address the author removed is not news: {}", found[0].what);
+        assert!(found[0].what.contains("moss deploy --dry-run"), "{}", found[0].what);
+    }
+
+    /// Nothing to say still says so, so a fixed condition clears.
+    #[test]
+    fn nothing_unexplained_is_a_clear_tick() {
+        assert!(advisories(make_removed_addresses_advisory(&[])).is_empty());
+        assert!(advisories(make_removed_addresses_advisory(&[removed("a/index.html", RemovalReason::AuthorRemoved)]))
+            .is_empty());
+    }
+
+    /// An advisory, not a problem: printing it must not move the count that
+    /// `--strict` turns into an exit status.
+    #[test]
+    fn the_terminal_prints_it_without_counting_a_problem() {
+        use crate::build::ports::reporter::{BuildReporter, StdoutReporter};
+        let _ = crate::build::cli_output::take_cli_problems();
+        let event = make_removed_addresses_advisory(&[removed("feed.xml", RemovalReason::Unexplained)]);
+
+        assert!(crate::ops::serve::events::shows_on_terminal(&event));
+        StdoutReporter.report(&event);
+
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 0);
     }
 }

@@ -26,7 +26,7 @@
 //!
 //!   * **A browser page cannot read a local file.** `fetch('file:///…')` is
 //!     blocked; there is no API that hands a web page the bytes of
-//!     `.moss/build/http-token`. So a page cannot learn the token.
+//!     `.moss/build.nosync/http-token`. So a page cannot learn the token.
 //!   * **A browser page cannot forge the custom header cross-origin without a
 //!     CORS preflight** the server never answers. `X-Moss-Token` is not a
 //!     CORS-safelisted header, so any cross-origin `fetch` that sets it triggers
@@ -35,22 +35,22 @@
 //!
 //! This is the shape Jupyter uses (a token in a loopback-readable runtime file)
 //! paired with the MCP Inspector remediation for CVE-2025-49596 (a session
-//! token layered on top of Host/Origin checks). See ADR-022 §6.
+//! token layered on top of Host/Origin checks).
 //!
 //! ## Token lifecycle
 //!
 //! 1. **Mint** — [`mint`] draws 256 bits of entropy (two `uuid` v4 values)
 //!    when [`super::session::InvokeCtx::bind`] binds a vault the carrier was
 //!    not already serving: at start-up, and again on every folder switch,
-//!    which retires the previous vault's token (ADR-075 rule 4). It never
+//!    which retires the previous vault's token. It never
 //!    persists across restarts: a new server, a new token, and the old file
 //!    is overwritten.
 //! 2. **Publish** — [`publish`] writes the token to
-//!    `<vault>/.moss/build/http-token` (see [`token_path`]) in the same bind.
-//!    `.moss/build/` is cloud-EXCLUDED and regenerable
+//!    `<vault>/.moss/build.nosync/http-token` (see [`token_path`]) in the same bind.
+//!    `.moss/build.nosync/` is cloud-EXCLUDED and regenerable
 //!    (`moss_paths::MOSS_PATH_RULES`), so the file never syncs to another
 //!    machine and is never left dataless by an eviction — and the write goes
-//!    through `build::io_utils::write_output` per ADR-043, so it lands via
+//!    through `build::io_utils::write_output`, so it lands via
 //!    temp+rename and never materializes a dataless destination.
 //! 3. **Obtain (client)** — a local client reads the whole file, trims it, and
 //!    sends the value as `X-Moss-Token`.
@@ -66,6 +66,12 @@
 //! a multi-user host the loopback floor trusts every local *process*, but the
 //! token need only be readable by the *user* who runs moss. [`publish`]'s error
 //! path names the *path*, never the bytes.
+//!
+//! One deliberate exception: `ServeConfig::announce_sign_in` prints the token in
+//! a sign-in URL to stderr, for a non-loopback (`ServeConfig::bind`) operator
+//! who has no loopback-readable file to read it from. It is the one sink this
+//! module does not otherwise allow, scoped to the one case — an explicitly
+//! configured host — where there is no local-file alternative.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -77,8 +83,15 @@ use crate::moss_paths::MossPaths;
 /// forced through a preflight the server never approves.
 pub const TOKEN_HEADER: &str = "x-moss-token";
 
+/// The cookie name [`admit`] also accepts the token in, set by
+/// `session_route::handle_session`'s `Set-Cookie` response. `SameSite=Strict`
+/// keeps it off any cross-site request, so it widens who can authenticate
+/// (a plain browser tab with no script) without widening what a foreign page
+/// can forge.
+pub const SESSION_COOKIE: &str = "moss_token";
+
 /// The loopback-readable file the session token is published to, relative to the
-/// vault root. Under `.moss/build/` deliberately: that tree is cloud-excluded
+/// vault root. Under `.moss/build.nosync/` deliberately: that tree is cloud-excluded
 /// and regenerable (never synced, never left dataless), so the secret cannot
 /// leak to a second machine and is always readable while the server runs.
 pub fn token_path(vault_root: &Path) -> PathBuf {
@@ -99,7 +112,7 @@ pub fn mint() -> String {
 
 /// Publish `token` to [`token_path`] so a local client can read it. Writes
 /// through `build::io_utils::write_output` (temp+rename, dataless-safe) because
-/// the destination is under `.moss/build/`.
+/// the destination is under `.moss/build.nosync/`.
 ///
 /// The error string names the path only — never the token bytes.
 pub fn publish(vault_root: &Path, token: &str) -> Result<(), String> {
@@ -167,7 +180,7 @@ mod tests {
         let vault = Path::new("/tmp/some-vault");
         let p = token_path(vault);
         assert!(
-            p.ends_with(".moss/build/http-token"),
+            p.ends_with(".moss/build.nosync/http-token"),
             "token must live under the regenerable, cloud-excluded build tree; got {}",
             p.display()
         );
@@ -239,7 +252,8 @@ use axum::{
 /// static reason string only.
 ///
 /// The token half is [`admit`], shared with the event stream
-/// (`GET /__moss/events`), which needs the same 401 and no body at all.
+/// (`GET /__moss/events`) and the yield route (`POST /__moss/yield`, see
+/// `super::yield_route`), which need the same 401 and no body at all.
 pub(crate) async fn require_carrier_token(
     ctx: super::invoke::InvokeCtx,
     site_dir: Arc<RwLock<PathBuf>>,
@@ -289,7 +303,10 @@ pub(crate) async fn require_carrier_token(
 /// Separate from [`require_carrier_token`] because the event stream is a `GET`
 /// with no body, so the media-type gate that belongs on the two command routes
 /// would refuse every legitimate subscriber with a 415.
-fn admit(
+///
+/// `pub(crate)`, not `fn`, so `super::yield_route::handle_yield` can run the
+/// same check directly rather than growing a second token comparison.
+pub(crate) fn admit(
     ctx: &super::invoke::InvokeCtx,
     site_dir: &Arc<RwLock<PathBuf>>,
     request: &Request<Body>,
@@ -297,23 +314,42 @@ fn admit(
     // Bind BEFORE comparing: across a folder switch the presented token must
     // be judged against the vault the server now serves, whose token is fresh,
     // so a tab holding the previous vault's token is 401 here rather than
-    // admitted and then run against the new vault (ADR-075 rule 4). The
+    // admitted and then run against the new vault. The
     // session admitted here is the one the handler runs against.
     let Some(session) = ctx.bind(site_dir) else {
         return Err(unauthorized());
     };
+    // The header wins when both are present; the cookie is the fallback a
+    // plain browser tab (no script setting `X-Moss-Token`) relies on.
     let provided = request
         .headers()
         .get(TOKEN_HEADER)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if !provided.is_empty() && constant_time_eq(provided, session.token()) {
-        return Ok(session);
+        .filter(|v| !v.is_empty())
+        .or_else(|| cookie_token(request.headers()));
+    if let Some(provided) = provided {
+        if constant_time_eq(provided, session.token()) {
+            return Ok(session);
+        }
     }
     Err(unauthorized())
 }
 
-fn unauthorized() -> Response {
+/// The [`SESSION_COOKIE`] value out of a `Cookie` request header, if present.
+/// `Cookie` packs multiple pairs as `a=b; c=d`; this finds the one named
+/// [`SESSION_COOKIE`] without pulling in a cookie-parsing crate for one name.
+fn cookie_token(headers: &http::HeaderMap) -> Option<&str> {
+    let raw = headers.get(http::header::COOKIE)?.to_str().ok()?;
+    raw.split(';').find_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        (name == SESSION_COOKIE).then_some(value)
+    })
+}
+
+/// `pub(crate)` so the yield route's no-session-bound case (no carrier to
+/// authenticate against at all) can hand back the exact same refusal rather
+/// than a second, slightly different 401 body.
+pub(crate) fn unauthorized() -> Response {
     Response::builder()
         .status(http::StatusCode::UNAUTHORIZED)
         .header("content-type", "text/plain; charset=utf-8")

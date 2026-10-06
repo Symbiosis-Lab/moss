@@ -17,8 +17,7 @@
 //! HOME page's `cover:`, hero and body image. It read the home page's own
 //! picture as the site's brand, and on a site whose home page is a portrait
 //! every text-only letter shared with that portrait. The tail's motivating
-//! case (`docs/archive/2026-05-16-homepage-hero-og-fallback-design.md`, a hero
-//! banner standing in for the site) was an inference from the home page's
+//! case (a hero banner standing in for the site) was an inference from the home page's
 //! picture, not a declared site image, and it is the client quote card's rule
 //! that holds here too: `data-share-cover` is the page's own picture or absent.
 //! `meta.rs`'s description chain keeps its homepage tail — the site's tagline
@@ -57,12 +56,13 @@
 //!   than picking up a feed thumbnail.
 //!
 //! Users wanting any of the above as cover should set frontmatter
-//! `cover:` or use the `:::hero` cascade. See
-//! `docs/reference/structural-html-emission.md`.
+//! `cover:` or use the `:::hero` cascade.
 
 use crate::build::served_path::ServedPath;
 use crate::build::page::meta::CoverRef;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// Long-edge floor for the raster this chain resolves to.
 ///
@@ -85,7 +85,7 @@ use std::path::Path;
 ///
 /// The guard belongs on whatever number sizes the bytes behind `og:image`, not
 /// on any particular name. That is `FALLBACK_MAX_EDGE` (1200, a literal
-/// independent of the ladder since moss#976 B1) and NOT `DEPLOY_MAX_EDGE`
+/// independent of the ladder) and NOT `DEPLOY_MAX_EDGE`
 /// (2400): a local cover resolves to the deployed raster original, which is
 /// the `<picture>` fallback, and the fallback is what that constant sizes.
 const OG_IMAGE_LONG_EDGE_FLOOR: u32 = 600;
@@ -112,6 +112,8 @@ pub struct CoverChainInputs<'a> {
     pub bundle_dir: Option<&'a Path>,
     /// The site root (absolute path), used to compute relative paths for ServedPath.
     pub source_root: &'a Path,
+    /// The build's answers for the filename-convention rung, one per folder.
+    pub filename_covers: &'a FilenameCovers,
 }
 
 /// Resolve the cover image by walking the fallback chain.
@@ -119,8 +121,8 @@ pub struct CoverChainInputs<'a> {
 pub fn resolve_cover_chain(inputs: &CoverChainInputs) -> Option<CoverRef> {
     cover_from_frontmatter(inputs.page_cover)
         .or_else(|| {
-            cover_from_filename_convention(inputs.bundle_dir, inputs.source_root)
-                .map(CoverRef::Local)
+            let dir = inputs.bundle_dir?;
+            inputs.filename_covers.get(dir, inputs.source_root).map(CoverRef::Local)
         })
         .or_else(|| cover_from_frontmatter(inputs.page_hero_image_url))
         .or_else(|| cover_from_frontmatter(inputs.body_cover_path))
@@ -195,20 +197,14 @@ fn cover_from_frontmatter(s: Option<&str>) -> Option<CoverRef> {
 /// Per Hugo's actual behavior, partial-substring matches like
 /// `featured-image.jpg`, `My Cover.png`, `thumbnail-large.webp` all qualify.
 fn cover_from_filename_convention(
-    bundle_dir: Option<&Path>,
+    dir: &Path,
     source_root: &Path,
 ) -> Option<ServedPath> {
     const NEEDLES: &[&str] = &["feature", "cover", "thumbnail"];
     const EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif", "gif"];
 
-    let dir = bundle_dir?;
-    if !dir.is_dir() {
-        return None;
-    }
-
     let entries: Vec<_> = std::fs::read_dir(dir).ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
         .collect();
 
     for needle in NEEDLES {
@@ -221,7 +217,8 @@ fn cover_from_filename_convention(
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_lowercase());
             let (Some(stem), Some(ext)) = (stem, ext) else { continue };
-            if !stem.contains(needle) || !EXTS.contains(&ext.as_str()) {
+            // Name first: only a matching name costs the `stat` of `is_file`.
+            if !stem.contains(needle) || !EXTS.contains(&ext.as_str()) || !path.is_file() {
                 continue;
             }
             let rel = path.strip_prefix(source_root).ok()?;
@@ -232,6 +229,35 @@ fn cover_from_filename_convention(
         }
     }
     None
+}
+
+/// The filename-convention rung, answered once per folder for a whole build.
+///
+/// Every page in a folder shares its bundle directory, so listing it per page
+/// made the rung O(pages × siblings): a flat folder of 2,000 pages cost about
+/// four million `stat` calls a build. The answer depends only on the folder
+/// (the source root is fixed for a build), so the first page to ask lists it
+/// and every later page reads the result. One instance lives for one build;
+/// a later build must start a new one, since files may have moved.
+#[derive(Default)]
+pub struct FilenameCovers {
+    by_dir: Mutex<HashMap<PathBuf, Arc<OnceLock<Option<ServedPath>>>>>,
+}
+
+impl FilenameCovers {
+    pub fn get(&self, bundle_dir: &Path, source_root: &Path) -> Option<ServedPath> {
+        // Take the folder's cell under the lock and list outside it, so render
+        // threads on other folders never wait on this one's directory read.
+        let cell = Arc::clone(
+            self.by_dir
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(bundle_dir.to_path_buf())
+                .or_default(),
+        );
+        cell.get_or_init(|| cover_from_filename_convention(bundle_dir, source_root))
+            .clone()
+    }
 }
 
 // `first_body_image` (regex scrape of `<img>` / `<video poster>` from
@@ -256,7 +282,7 @@ fn cover_from_filename_convention(
 /// External URLs are dropped rather than emitted. The value is read back by
 /// `share-card.ts` through a `crossOrigin = "anonymous"` `<img>` and drawn onto
 /// a canvas, so a cross-origin cover either taints the canvas or fails CORS;
-/// a same-origin URL is also, per ADR-013, guaranteed registered in the
+/// a same-origin URL is also guaranteed registered in the
 /// `AssetRegistry` and therefore cannot 404 in preview.
 ///
 /// `resolve_cover` turns a raw frontmatter path into a root-relative URL
@@ -320,6 +346,9 @@ fn is_same_origin_url(url: &str) -> bool {
 mod tests {
     use super::*;
 
+    static NO_COVERS: std::sync::LazyLock<FilenameCovers> =
+        std::sync::LazyLock::new(FilenameCovers::default);
+
     fn empty_inputs(source_root: &Path) -> CoverChainInputs<'_> {
         CoverChainInputs {
             page_cover: None,
@@ -327,6 +356,7 @@ mod tests {
             body_cover_path: None,
             bundle_dir: None,
             source_root,
+            filename_covers: &NO_COVERS,
         }
     }
 
@@ -338,13 +368,13 @@ mod tests {
     fn local_video_cover_resolves_to_its_thumbnail() {
         // `og:image` pointing at a `.mov` is doubly broken: crawlers want a
         // still, and the author's original is never deployed, so the URL
-        // 404s. Observed live on liu-guo.com/video/lusheng-yelang/.
+        // 404s. Observed live on a real site's video page.
         let root = std::path::PathBuf::from("/tmp");
         let mut inputs = empty_inputs(&root);
-        inputs.page_cover = Some("assets/Yelanggu-Lusheng.mov");
+        inputs.page_cover = Some("assets/Evening-Song.mov");
         let choice = resolve_cover_chain(&inputs).unwrap();
         match choice {
-            CoverRef::Local(sp) => assert_eq!(sp.as_str(), "assets/Yelanggu-Lusheng.thumb.jpg"),
+            CoverRef::Local(sp) => assert_eq!(sp.as_str(), "assets/Evening-Song.thumb.jpg"),
             other => panic!("expected Local thumbnail, got {other:?}"),
         }
     }
@@ -410,6 +440,7 @@ mod tests {
             body_cover_path: Some("images/body.jpg"),
             bundle_dir: None,
             source_root: &root,
+            filename_covers: &FilenameCovers::default(),
         };
         let choice = resolve_cover_chain(&inputs).unwrap();
         assert!(matches!(choice, CoverRef::Local(_)));
@@ -427,6 +458,7 @@ mod tests {
             body_cover_path: None,
             bundle_dir: None,
             source_root: &root,
+            filename_covers: &FilenameCovers::default(),
         };
         let choice = resolve_cover_chain(&inputs).unwrap();
         assert!(matches!(choice, CoverRef::External(_)));
@@ -449,6 +481,7 @@ mod tests {
             body_cover_path: Some("images/body.jpg"),
             bundle_dir: None,
             source_root: &root,
+            filename_covers: &FilenameCovers::default(),
         };
         let choice = resolve_cover_chain(&inputs).unwrap();
         if let CoverRef::Local(sp) = choice {
@@ -500,6 +533,7 @@ mod tests {
             body_cover_path: Some("images/body.jpg"),
             bundle_dir: None,
             source_root: &root,
+            filename_covers: &FilenameCovers::default(),
         };
         let choice = resolve_cover_chain(&inputs).unwrap();
         if let CoverRef::Local(sp) = choice {
@@ -530,6 +564,7 @@ mod tests {
             body_cover_path: Some("data:image/png;base64,abc"),
             bundle_dir: None,
             source_root: &root,
+            filename_covers: &FilenameCovers::default(),
         };
         assert!(
             resolve_cover_chain(&inputs).is_none(),
@@ -551,6 +586,7 @@ mod tests {
             body_cover_path: Some("https://example.com/photo.jpg"),
             bundle_dir: None,
             source_root: &root,
+            filename_covers: &FilenameCovers::default(),
         };
         let choice = resolve_cover_chain(&inputs).unwrap();
         match choice {
@@ -569,7 +605,7 @@ mod tests {
         std::fs::write(bundle.join("cover.jpg"), b"").unwrap();
         std::fs::write(bundle.join("index.md"), b"").unwrap();
 
-        let result = cover_from_filename_convention(Some(&bundle), tmp.path());
+        let result = cover_from_filename_convention(&bundle, tmp.path());
         assert!(result.is_some(), "should find cover.jpg");
         let sp = result.unwrap();
         assert_eq!(sp.as_str(), "posts/my-post/cover.jpg");
@@ -584,7 +620,7 @@ mod tests {
         std::fs::write(bundle.join("featured-image.png"), b"").unwrap();
         std::fs::write(bundle.join("index.md"), b"").unwrap();
 
-        let result = cover_from_filename_convention(Some(&bundle), tmp.path());
+        let result = cover_from_filename_convention(&bundle, tmp.path());
         assert!(result.is_some(), "should find a cover");
         let sp = result.unwrap();
         // "feature" needle wins over "cover" needle
@@ -673,8 +709,56 @@ mod tests {
         std::fs::write(bundle.join("index.md"), b"").unwrap();
         std::fs::write(bundle.join("diagram.png"), b"").unwrap();
 
-        let result = cover_from_filename_convention(Some(&bundle), tmp.path());
+        let result = cover_from_filename_convention(&bundle, tmp.path());
         assert!(result.is_none(), "no cover/feature/thumbnail file present");
+    }
+
+    /// Answering once per folder keeps the convention's rules: case-blind
+    /// stems and extensions, feature over cover over thumbnail, files only
+    /// (a symlink to one included), and the same answer for every page of the
+    /// folder however many ask, from the one listing the first page made.
+    #[test]
+    fn shared_answers_keep_the_convention_for_every_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let folder = |name: &str, files: &[&str]| {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in files {
+                std::fs::write(dir.join(f), b"").unwrap();
+            }
+            dir
+        };
+        let mixed = folder("mixed", &["a.md", "b.md", "c.md", "My Cover.PNG", "Thumbnail-Large.webp", "cover.txt"]);
+        let feature = folder("feature", &["a.md", "b.md", "cover.jpeg", "FEATURED-image.JPG"]);
+        let none = folder("none", &["a.md", "diagram.png", "Cover.psd"]);
+        let linked = folder("linked", &["a.md"]);
+        std::fs::create_dir(linked.join("cover.jpg")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(feature.join("cover.jpeg"), linked.join("Thumbnail.GIF")).unwrap();
+
+        let covers = FilenameCovers::default();
+        let expected: [(&Path, Option<&str>); 4] = [
+            (&mixed, Some("mixed/My Cover.PNG")),
+            (&feature, Some("feature/FEATURED-image.JPG")),
+            (&none, None),
+            (&linked, if cfg!(unix) { Some("linked/Thumbnail.GIF") } else { None }),
+        ];
+        for (dir, want) in expected {
+            let first = covers.get(dir, root);
+            assert_eq!(first.as_ref().map(ServedPath::as_str), want, "{}", dir.display());
+            assert_eq!(first, cover_from_filename_convention(dir, root));
+            // Change the folder's answer on disk: a later page of the same
+            // build must still read the first page's, not list again.
+            match want {
+                Some(rel) => std::fs::remove_file(root.join(rel)).unwrap(),
+                None => std::fs::write(dir.join("cover.png"), b"").unwrap(),
+            }
+            assert_ne!(cover_from_filename_convention(dir, root), first, "{}", dir.display());
+            for _later_page in 0..2 {
+                assert_eq!(covers.get(dir, root), first, "{}", dir.display());
+            }
+        }
     }
 }
 
@@ -703,7 +787,6 @@ mod tests {
 /// the full image in Feed without any cropping"; LinkedIn help a521928
 /// (1200x627, 1.91:1); X card docs (2:1, min 300x157); Slack's
 /// `page_attachments.md` (max width 360 / max height 500, aspect preserved).
-/// Full survey: `docs/archive/2026-09-11-share-card-vertical-design.md`.
 pub const PASSTHROUGH_MIN_AR: f32 = 1.25;
 pub const PASSTHROUGH_MAX_AR: f32 = 2.4;
 

@@ -3,8 +3,7 @@
 // This file used to be a stub pinning the surface the decoration layer needs
 // (`scanShortcodeBlocks`, `KNOWN_SHORTCODES`, `ShortcodeBlock`,
 // `ShortcodeSpec`). That surface now ships in `@symbiosis-lab/moss-syntax`,
-// extracted from moss's editor (#1020, design:
-// docs/archive/2026-08-11-cm6-extraction-design.md), so the stub becomes a
+// extracted from moss's editor, so the stub becomes a
 // re-export and the plugin has no parser of its own to drift.
 //
 // Why the text-driven scanner and not the Lezer grammar the package also

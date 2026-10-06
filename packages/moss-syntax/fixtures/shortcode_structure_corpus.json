@@ -38,7 +38,7 @@
       "blocks": [{ "name": "grid", "gridCells": 1, "children": [{ "name": "buttons", "gridCells": null, "children": [] }] }]
     },
     {
-      "name": "SoCiviC homepage shape: grid 2, nested buttons in cell 1, +++ at grid level",
+      "name": "Homepage shape: grid 2, nested buttons in cell 1, +++ at grid level",
       "input": ":::grid 2\nleft\n::::buttons {inverted}\n[a](/a)\n[b](/b)\n::::\n+++\nright\n:::\n",
       "blocks": [{ "name": "grid", "gridCells": 2, "children": [{ "name": "buttons", "gridCells": null, "children": [] }] }]
     },

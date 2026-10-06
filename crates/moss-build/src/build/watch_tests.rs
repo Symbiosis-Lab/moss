@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::stat::{RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
 
 /// Feature 4: File Watching - File Filtering
 /// Tests which files should trigger recompilation
@@ -40,11 +41,25 @@ fn test_file_watching_should_watch_file() {
         "Should watch SVG files"
     );
 
-    // Generated/system files that should be ignored
-    // Note: .html files are not in the watch list, so generated HTML is ignored
+    // Source HTML is build input and must trigger a rebuild. Generated HTML is
+    // ignored at the .moss path boundary, not by pretending HTML is never input.
     assert!(
-        !should_watch_file(".moss/build/current/index.html"),
-        "Should ignore generated HTML files"
+        should_watch_file("index.html"),
+        "Should watch source-authored HTML files"
+    );
+    assert!(
+        !path_is_watchable(
+            std::path::Path::new("/vault"),
+            std::path::Path::new("/vault/.moss/build/current/index.html")
+        ),
+        "Should ignore generated HTML at the .moss boundary"
+    );
+    assert!(
+        !path_is_watchable(
+            std::path::Path::new("/vault"),
+            std::path::Path::new("/vault/.moss/build.nosync/current/index.html")
+        ),
+        "Should ignore generated HTML at the build.nosync boundary"
     );
     // Note: node_modules filtering happens at gitignore level, not in should_watch_file
     // The function only checks file extensions, not directory paths
@@ -145,7 +160,7 @@ fn test_file_watching_should_watch_directory() {
         "should_watch_file returns true - gitignore filters it"
     );
     assert!(
-        should_watch_file(".moss/build/current/"),
+        should_watch_file(".moss/build.nosync/current/"),
         "should_watch_file returns true - gitignore filters it"
     );
 
@@ -402,7 +417,7 @@ fn test_metadata_any_on_directory_is_suppressed() {
     use notify::EventKind;
 
     let kind = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any));
-    let dir_path = vec![PathBuf::from("/some/Yi-website")];
+    let dir_path = vec![PathBuf::from("/some/my-website")];
 
     assert!(
         !super::should_recompile_for_event_with(kind, &dir_path, |_| true),
@@ -435,13 +450,13 @@ fn test_metadata_any_mixed_batch_triggers() {
 
     let kind = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any));
     let paths = vec![
-        PathBuf::from("/some/Yi-website"),
+        PathBuf::from("/some/my-website"),
         PathBuf::from("/some/note.md"),
     ];
 
     assert!(
         super::should_recompile_for_event_with(kind, &paths, |p| {
-            p.to_string_lossy().ends_with("Yi-website")
+            p.to_string_lossy().ends_with("my-website")
         }),
         "Metadata(Any) on mixed dir+file batch should trigger (file is real signal)"
     );
@@ -697,7 +712,7 @@ fn test_no_changes_suppresses_event() {
 /// A search re-index alone must NOT refresh the preview.
 ///
 /// Pagefind shards are content-addressed, so re-indexing renames every file it
-/// touches: 85 entries between two consecutive harbor generations, all
+/// touches: 85 entries between two consecutive riverbend generations, all
 /// create+delete, none of them a change to anything the open page renders.
 /// Before the exclusion this flipped `has_changes` on its own, and the refresh
 /// it forced is the one that flashes when the morph declines it.
@@ -783,6 +798,8 @@ fn test_should_watch_moss_file() {
     assert!(should_watch_moss_file("theme/script.js"));
     assert!(should_watch_moss_file("assets/logo.png"));
     assert!(should_watch_moss_file("assets\\logo.png")); // Windows
+    // A hand edit to the gazetteer must rebuild the preview, same as config.toml.
+    assert!(should_watch_moss_file("places.toml"));
 
     // Legacy root paths are NO LONGER accepted (migration removed)
     assert!(!should_watch_moss_file("style.css"));
@@ -873,8 +890,7 @@ fn test_moss_config_toml_triggers_rebuild() {
 
 // -----------------------------------------------------------------------
 // Content-hash gate tests (source_metadata_matches, path_to_relative_key,
-// should_rebuild_for_paths, evaluate_gate). See plan
-// docs/archive/2026-04-23-watcher-content-hash-gate.md.
+// should_rebuild_for_paths, evaluate_gate).
 // -----------------------------------------------------------------------
 
 use crate::build::types::SourceMetadata;
@@ -1064,7 +1080,7 @@ fn an_inode_disagreement_demotes_the_fast_path_to_the_hash_tier() {
 fn an_agreeing_identity_keeps_the_fast_path() {
     let dir = tempfile::tempdir().unwrap();
     let p = gate_write_file(dir.path(), "a.md", b"hello");
-    let (ctime, inode) = crate::build::types::stat_identity(&std::fs::metadata(&p).unwrap());
+    let (ctime, inode) = crate::build::stat::stat_identity(&std::fs::metadata(&p).unwrap());
     let meta = SourceMetadata {
         hash: "fast-path-must-not-hash".into(),
         size: 5,
@@ -1107,27 +1123,90 @@ fn a_racy_mtime_is_hashed_not_trusted() {
     );
 }
 
-/// The racy predicate's boundaries, pinned: no capture clock means nothing
-/// is suspect (old manifests keep their fast path), and the epsilon is
-/// inclusive on the boundary.
+/// A coarse-timestamp filesystem (exFAT/FAT, older SMB/NFS, some FUSE mounts)
+/// reports a sub-second mtime but always rounds it to zero — `Some(0)`, not
+/// `None` — so a same-size rewrite landing in the same recorded second can
+/// read identically to the file that was hashed. The admission gate must not
+/// suppress a rebuild on `0 == 0` alone: it has to fall through to the hash
+/// tier, which sees the changed bytes.
 #[test]
-fn mtime_is_racy_boundaries() {
-    let m = |mtime: u64| SourceMetadata { mtime, ..Default::default() };
-    assert!(!mtime_is_racy(&m(1000), None), "no clock, nothing suspect");
-    assert!(mtime_is_racy(&m(1000), Some(1000)), "same instant is racy");
-    assert!(
-        mtime_is_racy(&m(1000), Some(1000 + RACY_WRITE_EPSILON_SECS)),
-        "the boundary is inclusive"
+fn a_same_tick_same_size_rewrite_on_a_coarse_stat_is_not_suppressed() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = gate_write_file(dir.path(), "a.md", b"hello");
+
+    // Same-size rewrite, in place (preserves the inode) — the racy-write case
+    // this whole gate exists for.
+    fs::write(&p, b"world").unwrap();
+
+    // Simulate the coarse filesystem: force the CURRENT read to carry an
+    // exact-zero sub-second mtime, at the same whole second the (also
+    // zero-nanos) baseline recorded. A real coarse filesystem gives both
+    // writes this reading regardless of when either one actually landed.
+    let secs = gate_mtime_secs(&p);
+    fs::File::options()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + std::time::Duration::new(secs, 0))
+        .unwrap();
+    let md = fs::metadata(&p).unwrap();
+    let (fs_ctime, fs_inode) = crate::build::stat::stat_identity(&md);
+
+    let meta = SourceMetadata {
+        hash: gate_sha256_hex(b"hello"), // the ORIGINAL bytes' hash
+        size: 5,                         // same size as the rewrite
+        mtime: secs,                     // same recorded second
+        mtime_nanos: Some(0),            // what the baseline's coarse stat read
+        // Identity agrees — isolating the sub-second guard as the only signal
+        // that can catch this rewrite; ctime is itself only second-resolution,
+        // so a same-tick rewrite plausibly carries the same recorded value too.
+        ctime: fs_ctime,
+        inode: fs_inode,
+    };
+
+    assert_eq!(
+        source_metadata_verdict(&meta, &md, &p, None),
+        SourceVerdict::Changed,
+        "size, whole-second mtime and identity all agree, but both sub-second \
+         readings are an unproven exact zero — must hash, and the hash differs"
     );
-    assert!(!mtime_is_racy(&m(1000), Some(1000 + RACY_WRITE_EPSILON_SECS + 1)));
-    assert!(
-        mtime_is_racy(&m(1000 + RACY_WRITE_EPSILON_SECS), Some(1000)),
-        "a write just after capture is inside the window"
+}
+
+/// The sweep's side of the git racy rule for an exact-zero sub-second mtime (a
+/// ZIP extraction, `rsync -a`): a stamp older than the manifest's capture by more
+/// than the skew margin is proof — the fast path answers without reading a byte (the
+/// recorded hash is deliberately wrong to show it) — while one inside the margin
+/// still goes to the hash tier, which sees the rewrite.
+#[test]
+fn a_zero_subsecond_mtime_fast_paths_only_when_older_than_the_capture_by_more_than_the_margin() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = gate_write_file(dir.path(), "a.md", b"world");
+    let secs = gate_mtime_secs(&p) - 3 * ZERO_NANOS_TRUST_AGE_SECS;
+    fs::File::options()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + std::time::Duration::new(secs, 0))
+        .unwrap();
+    let md = fs::metadata(&p).unwrap();
+    let (ctime, inode) = crate::build::stat::stat_identity(&md);
+    let meta = SourceMetadata {
+        hash: gate_sha256_hex(b"hello"), // not these bytes: only the fast path says Unchanged
+        size: 5,
+        mtime: secs,
+        mtime_nanos: Some(0),
+        ctime,
+        inode,
+    };
+
+    assert_eq!(
+        source_metadata_verdict(&meta, &md, &p, Some(secs + ZERO_NANOS_TRUST_AGE_SECS + 1)),
+        SourceVerdict::Unchanged { refreshed: None },
     );
-    assert!(
-        !mtime_is_racy(&m(2000), Some(1000)),
-        "a FUTURE-dated mtime far past the window is not racy: a fast-clock \
-         device's sync would otherwise be re-hashed every pass forever"
+    assert_eq!(
+        source_metadata_verdict(&meta, &md, &p, Some(secs + ZERO_NANOS_TRUST_AGE_SECS)),
+        SourceVerdict::Changed,
+        "inside the margin: hash, and the hash differs"
     );
 }
 
@@ -1140,7 +1219,7 @@ fn a_hash_confirmed_match_hands_back_the_fresh_identity() {
     let dir = tempfile::tempdir().unwrap();
     let p = gate_write_file(dir.path(), "a.md", b"same bytes");
     let md = fs::metadata(&p).unwrap();
-    let (fs_ctime, fs_inode) = crate::build::types::stat_identity(&md);
+    let (fs_ctime, fs_inode) = crate::build::stat::stat_identity(&md);
 
     // Baseline: right hash and size, but a stat identity from a previous life.
     let meta = SourceMetadata {
@@ -1188,8 +1267,8 @@ fn path_to_relative_key_returns_none_for_path_outside_folder() {
 
 fn gate_write_manifest(folder: &std::path::Path, hashes: &crate::types::content::SiteHashes) {
     // load_previous_hashes reads from MossPaths::hashes(folder), which is
-    // .moss/build/hashes.json. Mirror that layout in tests.
-    let build = folder.join(".moss").join("build");
+    // .moss/build.nosync/hashes.json. Mirror that layout in tests.
+    let build = folder.join(".moss").join("build.nosync");
     fs::create_dir_all(&build).unwrap();
     fs::write(
         build.join("hashes.json"),
@@ -1271,7 +1350,7 @@ fn gate_passes_when_manifest_file_absent() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path();
     let p = gate_write_file(folder, "a.md", b"hello");
-    // No .moss/build/hashes.json at all.
+    // No .moss/build.nosync/hashes.json at all.
     assert!(should_rebuild_for_paths(folder.to_str().unwrap(), &[p], None));
 }
 
@@ -1423,6 +1502,24 @@ fn pump_gate_proceeds_unconditionally_on_create_and_remove() {
 }
 
 #[test]
+fn pump_gate_does_not_hash_gate_background_passthrough_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path();
+    for name in ["index.html", "app.js", "style.css", "clip.mp4"] {
+        let verdict = pump_gate(
+            EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
+            folder.to_str().unwrap(),
+            &[folder.join(name)],
+        );
+        assert_eq!(
+            verdict,
+            PumpGate::Proceed,
+            "{name} is finalized after the synchronous source-hash stash"
+        );
+    }
+}
+
+#[test]
 fn pump_gate_proceeds_when_kill_switch_set() {
     let _guard = crate::ENV_TEST_MUTEX
         .lock()
@@ -1462,7 +1559,7 @@ fn pump_gate_suppresses_a_root_agent_instruction_file() {
     }
 }
 
-/// The suppression is root-only, matching `scan::classify::skip_root_agent_config`.
+/// The suppression is root-only, matching `scan::classify::left_out_of_site`.
 /// `posts/AGENTS.md` is an ordinary article and must rebuild like any other.
 #[test]
 fn pump_gate_still_rebuilds_for_a_nested_agents_md() {
@@ -1693,9 +1790,9 @@ fn decide_rebuild_event_fallback_to_disk_when_no_stash() {
     let folder = dir.path().to_str().unwrap();
 
     // Write a hashes.json so load_previous_hashes finds something.
-    // (.moss/build/staging/ is not required by load_previous_hashes — only hashes.json is.)
-    let hashes_path = dir.path().join(".moss/build/hashes.json");
-    std::fs::create_dir_all(dir.path().join(".moss/build")).unwrap();
+    // (.moss/build.nosync/staging/ is not required by load_previous_hashes — only hashes.json is.)
+    let hashes_path = dir.path().join(".moss/build.nosync/hashes.json");
+    std::fs::create_dir_all(dir.path().join(".moss/build.nosync")).unwrap();
     let mut disk_hashes = SiteHashes::new();
     disk_hashes.insert("index.html".into(), "disk-hash".into());
     std::fs::write(&hashes_path, serde_json::to_string(&disk_hashes).unwrap()).unwrap();
@@ -1753,13 +1850,13 @@ fn baseline_for_rebuild_prefers_in_memory_over_poisoned_disk() {
     // therefore make the edited page look unchanged.
     let tmp = tempfile::tempdir().unwrap();
     let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build/staging")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
     std::fs::write(
-        folder.join(".moss/build/hashes.json"),
+        folder.join(".moss/build.nosync/hashes.json"),
         r#"{"files":{"research/index.html":"100644:v2"}}"#,
     )
     .unwrap();
-    let output = folder.join(".moss/build/staging");
+    let output = folder.join(".moss/build.nosync/staging");
 
     // The race-free in-memory baseline holds the TRUE previous value ("v1").
     let mut in_mem = SiteHashes::new();
@@ -1782,13 +1879,13 @@ fn baseline_for_rebuild_prefers_in_memory_over_poisoned_disk() {
 fn baseline_for_rebuild_falls_back_to_disk_when_no_in_memory() {
     let tmp = tempfile::tempdir().unwrap();
     let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build/staging")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
     std::fs::write(
-        folder.join(".moss/build/hashes.json"),
+        folder.join(".moss/build.nosync/hashes.json"),
         r#"{"files":{"index.html":"100644:disk"}}"#,
     )
     .unwrap();
-    let output = folder.join(".moss/build/staging");
+    let output = folder.join(".moss/build.nosync/staging");
 
     let baseline = baseline_for_rebuild(None, folder.to_str().unwrap(), &output);
     assert_eq!(
@@ -1943,9 +2040,9 @@ fn build_rebuild_event_pairs_source_stable_slug_change_as_rename() {
     let pairs: [(String, String); 0] = [];
 
     let mut prev = SiteHashes::new();
-    prev.insert("works/yi-liu/index.html".into(), "hash_a".into());
+    prev.insert("works/article-slug/index.html".into(), "hash_a".into());
     prev.source_to_output
-        .insert("works/article.md".into(), "works/yi-liu/index.html".into());
+        .insert("works/article.md".into(), "works/article-slug/index.html".into());
 
     let mut new = SiteHashes::new();
     new.insert("works/article/index.html".into(), "hash_b".into());
@@ -1961,7 +2058,7 @@ fn build_rebuild_event_pairs_source_stable_slug_change_as_rename() {
     assert_eq!(
         renamed,
         vec![(
-            "works/yi-liu/index.html".to_string(),
+            "works/article-slug/index.html".to_string(),
             "works/article/index.html".to_string(),
         )]
     );
@@ -1987,11 +2084,11 @@ fn build_rebuild_event_combines_fs_rename_with_slug_change() {
 
     let mut prev = SiteHashes::new();
     prev.insert("blog/foo/index.html".into(), "hash_foo".into());
-    prev.insert("works/yi-liu/index.html".into(), "hash_yiliu".into());
+    prev.insert("works/article-slug/index.html".into(), "hash_slug".into());
     prev.source_to_output
         .insert("blog/foo.md".into(), "blog/foo/index.html".into());
     prev.source_to_output
-        .insert("works/article.md".into(), "works/yi-liu/index.html".into());
+        .insert("works/article.md".into(), "works/article-slug/index.html".into());
 
     let mut new = SiteHashes::new();
     new.insert("blog/bar/index.html".into(), "hash_bar".into());
@@ -2015,7 +2112,7 @@ fn build_rebuild_event_combines_fs_rename_with_slug_change() {
                 "blog/bar/index.html".to_string(),
             ),
             (
-                "works/yi-liu/index.html".to_string(),
+                "works/article-slug/index.html".to_string(),
                 "works/article/index.html".to_string(),
             ),
         ],
@@ -2357,12 +2454,12 @@ fn build_rebuild_event_resolves_slugified_rename_via_manifest() {
     );
 }
 
-/// Home-override page_map promotion: `en/Liu Guo.md` is configured
+/// Home-override page_map promotion: `en/Mountain Home.md` is configured
 /// as the home for the `en/` locale (frontmatter `home: true`),
 /// so `compute_home_overrides` promotes it to `en/index.html`
 /// during page_map construction. The HTML write loop registers this
 /// promoted mapping in `source_to_output`. The rename-hint resolver must
-/// pick it up — the heuristic alone would try `en/Liu Guo/index.html`
+/// pick it up — the heuristic alone would try `en/Mountain Home/index.html`
 /// (slugified incorrectly), which would never match the manifest.
 #[test]
 fn find_output_for_source_resolves_home_override_via_manifest() {
@@ -2370,10 +2467,10 @@ fn find_output_for_source_resolves_home_override_via_manifest() {
     hashes.insert("en/index.html".into(), "h1".into());
     hashes
         .source_to_output
-        .insert("en/Liu Guo.md".into(), "en/index.html".into());
+        .insert("en/Mountain Home.md".into(), "en/index.html".into());
 
     assert_eq!(
-        find_output_for_source("en/Liu Guo.md", &hashes),
+        find_output_for_source("en/Mountain Home.md", &hashes),
         Some("en/index.html".to_string()),
         "translation-home promotion must be resolved via the manifest"
     );
@@ -2491,7 +2588,7 @@ fn compute_source_change_set_finds_creates_excluding_rename_targets() {
 
     let pairs = [("renamed-from.md".to_string(), "renamed-to.md".to_string())];
 
-    let (creates, deletes) = compute_source_change_set(&new, &prev, &pairs);
+    let SourceChanges { creates, deletes, .. } = compute_source_change_set(&new, &prev, &pairs);
 
     assert_eq!(
         creates,
@@ -2519,7 +2616,7 @@ fn compute_source_change_set_finds_deletes_excluding_rename_sources() {
 
     let pairs = [("renamed-from.md".to_string(), "renamed-to.md".to_string())];
 
-    let (creates, deletes) = compute_source_change_set(&new, &prev, &pairs);
+    let SourceChanges { creates, deletes, .. } = compute_source_change_set(&new, &prev, &pairs);
 
     assert!(creates.is_empty(), "no creates in this fixture");
     assert_eq!(
@@ -2547,7 +2644,7 @@ fn compute_source_change_set_dedupes_rename_pair_from_both_sides() {
 
     let pairs = [("renamed-from.md".to_string(), "renamed-to.md".to_string())];
 
-    let (creates, deletes) = compute_source_change_set(&new, &prev, &pairs);
+    let SourceChanges { creates, deletes, .. } = compute_source_change_set(&new, &prev, &pairs);
 
     assert_eq!(creates, vec!["also-new.md".to_string()]);
     assert_eq!(deletes, vec!["also-gone.md".to_string()]);
@@ -2565,7 +2662,7 @@ fn compute_source_change_set_returns_empty_for_no_changes() {
     new.source_to_output
         .insert("only-file.md".into(), "only-file/index.html".into());
 
-    let (creates, deletes) = compute_source_change_set(&new, &prev, &[]);
+    let SourceChanges { creates, deletes, .. } = compute_source_change_set(&new, &prev, &[]);
 
     assert!(creates.is_empty());
     assert!(deletes.is_empty());
@@ -2613,7 +2710,7 @@ fn full_rename_flow_pretty_url_resolves_to_output_pair_and_suppresses_deletion()
     // Construct hashes simulating moss's PRETTY URL output (the common
     // case for non-index articles). This is what `previous_hashes.files`
     // and `new_hashes.files` actually look like in a real rebuild — see
-    // `src-tauri/src/build/markdown/pipeline.rs:559-565` ("non-index
+    // `build/markdown/pipeline.rs` ("non-index
     // files get wrapped in a subdirectory: article.md → article/index.html").
     let mut prev = SiteHashes::new();
     prev.insert("blog/old-post/index.html".into(), "hash_x".into());
@@ -2656,15 +2753,15 @@ fn previous_hashes_for_diff_loads_from_disk_when_output_exists() {
     // into the rebuild's pre/post diff baseline.
     let tmp = tempfile::tempdir().unwrap();
     let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build/staging")).unwrap();
-    std::fs::create_dir_all(folder.join(".moss/build")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync")).unwrap();
     std::fs::write(
-        folder.join(".moss/build/hashes.json"),
+        folder.join(".moss/build.nosync/hashes.json"),
         r#"{"files":{"index.html":"100644:deadbeef"}}"#,
     )
     .unwrap();
 
-    let output = folder.join(".moss/build/staging");
+    let output = folder.join(".moss/build.nosync/staging");
     let h = previous_hashes_for_diff(folder.to_str().unwrap(), &output);
     assert_eq!(
         h.files.get("index.html").map(String::as_str),
@@ -2683,15 +2780,15 @@ fn previous_hashes_for_diff_returns_empty_when_output_missing() {
     // so the post-diff sees all files as new and emits FileChanged.
     let tmp = tempfile::tempdir().unwrap();
     let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync")).unwrap();
     // hashes.json present, claims files exist…
     std::fs::write(
-        folder.join(".moss/build/hashes.json"),
+        folder.join(".moss/build.nosync/hashes.json"),
         r#"{"files":{"index.html":"100644:deadbeef"}}"#,
     )
     .unwrap();
     // …but staging/ does not.
-    let output = folder.join(".moss/build/staging");
+    let output = folder.join(".moss/build.nosync/staging");
     assert!(!output.exists(), "test setup: staging/ should be missing");
 
     let h = previous_hashes_for_diff(folder.to_str().unwrap(), &output);
@@ -3036,6 +3133,342 @@ fn build_rebuild_event_leaves_source_domain_fields_none_when_unchanged() {
     assert!(event.source_renames.is_none(), "no renames");
 }
 
+fn page_hash(hash: &str) -> SourceMetadata {
+    SourceMetadata { hash: hash.into(), ..Default::default() }
+}
+
+/// `modified_paths` names the page sources whose bytes moved — a slot file
+/// (`footer.md`, a page source with no output of its own) included — and the
+/// event emits for them even when no output changed: an edit that renders
+/// identically (a blank line added in another app) leaves the preview nothing
+/// to refresh, but the editor holding that file still has to reload it, or
+/// its next autosave writes the old text back.
+///
+/// An asset is not named. This snapshot's asset hashes are refreshed by the
+/// background asset walk after it is taken, so an asset edit would surface a
+/// rebuild late — a claim about the wrong build.
+#[test]
+fn modified_paths_names_edited_page_sources_even_when_no_output_changed() {
+    let mut prev = SiteHashes::new();
+    prev.insert("post/index.html".into(), "100644:same-output".into());
+    prev.source_to_output.insert("post.md".into(), "post/index.html".into());
+    prev.sources.insert("post.md".into(), page_hash("v1"));
+    prev.sources.insert("footer.md".into(), page_hash("f1"));
+    prev.sources.insert("untouched.md".into(), page_hash("u"));
+    prev.sources.insert("photo.jpg".into(), page_hash("p1"));
+
+    let mut new = prev.clone();
+    new.sources.insert("post.md".into(), page_hash("v2"));
+    new.sources.insert("footer.md".into(), page_hash("f2"));
+    new.sources.insert("photo.jpg".into(), page_hash("p2"));
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &[])
+        .expect("an edited source must emit even with no output change");
+    assert_eq!(
+        event.modified_paths,
+        Some(vec!["footer.md".to_string(), "post.md".to_string()]),
+    );
+    assert!(event.changed_output_files.is_none(), "the output really was identical");
+}
+
+/// The closed set of vault-config/theme keys — `.moss/config.toml`,
+/// `.moss/places.toml`, `.moss/theme/style.css` — rides the same
+/// modified-diff a page does, because all three are registered synchronously
+/// (`manifest::is_reload_tracked_source_key`). An ordinary passthrough
+/// asset elsewhere in the vault with the same `.css` extension is NOT
+/// included: it is hashed by the deferred asset walk, not synchronously, so
+/// admitting it here would be the exact staleness `is_page_source_key`'s
+/// doc comment warns about for images.
+#[test]
+fn modified_paths_names_an_edited_config_toml_places_toml_and_theme_css() {
+    use crate::build::manifest::{CONFIG_TOML_SOURCE_KEY, PLACES_TOML_SOURCE_KEY, USER_CSS_SOURCE_KEY};
+
+    let mut prev = SiteHashes::new();
+    prev.sources.insert("post.md".into(), page_hash("v1"));
+    prev.sources.insert(CONFIG_TOML_SOURCE_KEY.into(), page_hash("cfg1"));
+    prev.sources.insert(PLACES_TOML_SOURCE_KEY.into(), page_hash("places1"));
+    prev.sources.insert(USER_CSS_SOURCE_KEY.into(), page_hash("css1"));
+    prev.sources.insert("assets/site.css".into(), page_hash("asset-css1"));
+
+    let mut new = prev.clone();
+    new.sources.insert("post.md".into(), page_hash("v2"));
+    new.sources.insert(CONFIG_TOML_SOURCE_KEY.into(), page_hash("cfg2"));
+    new.sources.insert(PLACES_TOML_SOURCE_KEY.into(), page_hash("places2"));
+    new.sources.insert(USER_CSS_SOURCE_KEY.into(), page_hash("css2"));
+    new.sources.insert("assets/site.css".into(), page_hash("asset-css2"));
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &[])
+        .expect("edited sources must emit");
+    let mut modified = event.modified_paths.expect("modified_paths must be set");
+    modified.sort();
+    assert_eq!(
+        modified,
+        vec![
+            CONFIG_TOML_SOURCE_KEY.to_string(),
+            PLACES_TOML_SOURCE_KEY.to_string(),
+            USER_CSS_SOURCE_KEY.to_string(),
+            "post.md".to_string(),
+        ],
+        "config.toml, places.toml and the theme css join a page, but a passthrough asset css does not",
+    );
+}
+
+/// Each source change lands in exactly one source-domain field. A page
+/// deleted in an earlier rebuild keeps its hash in the source cache, so when a
+/// file of the same name comes back — recreated, or renamed onto — its hash
+/// reads as "moved"; but `source_creates` / `source_renames` already name it.
+#[test]
+fn a_page_returning_to_a_cached_path_is_a_create_or_rename_not_a_modification() {
+    let mut prev = SiteHashes::new();
+    prev.sources.insert("back.md".into(), page_hash("before-deletion"));
+    prev.sources.insert("onto.md".into(), page_hash("before-deletion"));
+    prev.source_to_output.insert("from.md".into(), "from/index.html".into());
+
+    let mut new = SiteHashes::new();
+    new.source_to_output.insert("back.md".into(), "back/index.html".into());
+    new.sources.insert("back.md".into(), page_hash("recreated"));
+    new.source_to_output.insert("onto.md".into(), "onto/index.html".into());
+    new.sources.insert("onto.md".into(), page_hash("renamed-here"));
+    let pairs = [("from.md".to_string(), "onto.md".to_string())];
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("a create emits");
+    assert_eq!(event.source_creates, Some(vec!["back.md".to_string()]));
+    assert!(event.modified_paths.is_none(), "{:?}", event.modified_paths);
+}
+
+/// The real producer, end to end: two builds of a vault on disk, the page
+/// rewritten between them the way another app writes it, and the second
+/// build triggered the way the watcher triggers it (`ContentOnly`, so the
+/// untouched page is carried forward rather than re-read). The event built
+/// from the two builds' own stashes must name exactly the edited page, in
+/// the project-relative form the editor's file registry is keyed by. A
+/// hand-built manifest cannot show that a real rebuild records the new hash.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    /// The stash is recorded before `run_pipeline` returns; the seal tail that
+    /// persists `hashes.json` — the next build's carry-forward — is detached.
+    async fn wait_for_seal(folder: &str, page: &str, stashed: &SiteHashes) {
+        let want = stashed.sources.get(page).map(|m| m.hash.clone());
+        for _ in 0..1500 {
+            if load_previous_hashes(folder).sources.get(page).map(|m| m.hash.clone()) == want {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the seal tail never persisted the build's manifest");
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    // Not `TempDir::new_in`: its `.tmp…` name is a hidden directory, and the
+    // scan skips hidden paths, so the vault would build as empty.
+    let tmp = tempfile::Builder::new().prefix("modified-paths-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(folder.join("notes")).unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let page = "notes/片段.md";
+    std::fs::write(folder.join(page), "# Clip\n\nwritten in moss\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    // Not in the global session registry: a concurrent test opening a folder
+    // (`register_session`) drains and cancels every registered session, and a
+    // cancelled build records no stash.
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let build = |trigger: BuildTrigger| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                site_dir: Some(cell.clone()),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+        })
+    };
+    let stash = || crate::system::build_records::records().content_hashes(&folder_key);
+
+    build(BuildTrigger::Full).await.expect("build 1");
+    let before = stash().expect("build 1 stashes its hashes");
+    wait_for_seal(&folder_key, page, &before).await;
+
+    std::fs::write(folder.join(page), "# Clip\n\nwritten in moss\n\nand then in another app\n").unwrap();
+    build(BuildTrigger::ContentOnly(vec![folder.join(page)])).await.expect("build 2");
+    let after = stash().expect("build 2 stashes its hashes");
+    wait_for_seal(&folder_key, page, &after).await;
+
+    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+        .expect("an edit on disk emits a rebuild event");
+    assert_eq!(event.modified_paths, Some(vec![page.to_string()]));
+}
+
+/// Same producer as the page test above, for `.moss/theme/style.css` — the
+/// vault-editable theme override, read synchronously in
+/// `render::blocking::generate_blocking_content` rather than through the
+/// deferred asset walk (see `manifest::is_reload_tracked_source_key`). An
+/// editor with the file open must learn about an in-place edit the same way
+/// it does for a page; before this fix the css half of `sources` was never
+/// diffed at all, so `modified_paths` stayed empty across both builds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modified_paths() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    use crate::build::manifest::USER_CSS_SOURCE_KEY;
+
+    async fn wait_for_seal(folder: &str, key: &str, stashed: &SiteHashes) {
+        let want = stashed.sources.get(key).map(|m| m.hash.clone());
+        for _ in 0..1500 {
+            if load_previous_hashes(folder).sources.get(key).map(|m| m.hash.clone()) == want {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the seal tail never persisted the build's manifest");
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::Builder::new().prefix("modified-paths-css-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(folder.join(".moss").join("theme")).unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let css_path = folder.join(".moss").join("theme").join("style.css");
+    std::fs::write(&css_path, "body { color: black; }\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let build = |trigger: BuildTrigger| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                site_dir: Some(cell.clone()),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+        })
+    };
+    let stash = || crate::system::build_records::records().content_hashes(&folder_key);
+
+    build(BuildTrigger::Full).await.expect("build 1");
+    let before = stash().expect("build 1 stashes its hashes");
+    wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &before).await;
+
+    std::fs::write(&css_path, "body { color: midnightblue; }\n").unwrap();
+    build(BuildTrigger::ContentOnly(vec![css_path.clone()])).await.expect("build 2");
+    let after = stash().expect("build 2 stashes its hashes");
+    wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &after).await;
+
+    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+        .expect("a style.css edit on disk emits a rebuild event");
+    assert_eq!(event.modified_paths, Some(vec![USER_CSS_SOURCE_KEY.to_string()]));
+}
+
+/// Same producer again, for `.moss/places.toml` — the hand-edited gazetteer,
+/// registered from `build_inner` (`pipeline.rs`) rather than from
+/// `generate_blocking_content`: `load_gazetteer` runs, and `pending` exists,
+/// before that function is even called. A hand-built manifest could pin the
+/// diff rule but not that this second, separate registration site actually
+/// runs — only a real rebuild proves that.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_places_toml_file_rewritten_on_disk_between_two_real_builds_is_in_modified_paths() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    use crate::build::manifest::PLACES_TOML_SOURCE_KEY;
+
+    async fn wait_for_seal(folder: &str, key: &str, stashed: &SiteHashes) {
+        let want = stashed.sources.get(key).map(|m| m.hash.clone());
+        for _ in 0..1500 {
+            if load_previous_hashes(folder).sources.get(key).map(|m| m.hash.clone()) == want {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the seal tail never persisted the build's manifest");
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::Builder::new().prefix("modified-paths-places-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(folder.join(".moss")).unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let places_path = folder.join(".moss").join("places.toml");
+    std::fs::write(&places_path, "[\"Kyoto\"]\nlat = 35.0116\nlng = 135.7681\nprecision = \"city\"\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let build = |trigger: BuildTrigger| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                site_dir: Some(cell.clone()),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+        })
+    };
+    let stash = || crate::system::build_records::records().content_hashes(&folder_key);
+
+    build(BuildTrigger::Full).await.expect("build 1");
+    let before = stash().expect("build 1 stashes its hashes");
+    wait_for_seal(&folder_key, PLACES_TOML_SOURCE_KEY, &before).await;
+
+    std::fs::write(&places_path, "[\"Kyoto\"]\nlat = 35.02\nlng = 135.77\nprecision = \"city\"\n").unwrap();
+    build(BuildTrigger::ContentOnly(vec![places_path.clone()])).await.expect("build 2");
+    let after = stash().expect("build 2 stashes its hashes");
+    wait_for_seal(&folder_key, PLACES_TOML_SOURCE_KEY, &after).await;
+
+    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+        .expect("a places.toml edit on disk emits a rebuild event");
+    assert_eq!(event.modified_paths, Some(vec![PLACES_TOML_SOURCE_KEY.to_string()]));
+}
+
 /// Paths outside the watched folder are skipped (returns None from
 /// `path_to_relative_key`). A rename pair where one side escapes the
 /// folder cannot be expressed in the source-domain pair format —
@@ -3179,13 +3612,13 @@ fn source_image_request_path_css_not_image() {
 fn source_image_request_path_excludes_moss_build_outputs() {
     let root = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let p = root.path();
-    std::fs::create_dir_all(p.join(".moss/build/staging/assets")).unwrap();
-    std::fs::write(p.join(".moss/build/staging/assets/x.webp"), b"o").unwrap();
+    std::fs::create_dir_all(p.join(".moss/build.nosync/staging/assets")).unwrap();
+    std::fs::write(p.join(".moss/build.nosync/staging/assets/x.webp"), b"o").unwrap();
     std::fs::create_dir_all(p.join("图片")).unwrap();
     std::fs::write(p.join("图片/x.webp"), b"o").unwrap();
     // build output is excluded
     assert_eq!(
-        source_image_request_path(p, &p.join(".moss/build/staging/assets/x.webp")),
+        source_image_request_path(p, &p.join(".moss/build.nosync/staging/assets/x.webp")),
         None
     );
     // real source still works
@@ -3273,9 +3706,9 @@ fn source_asset_request_paths_markdown_never_emits() {
 fn source_asset_request_paths_excludes_moss_outputs() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
-    std::fs::create_dir_all(root.join(".moss/build/staging/assets")).unwrap();
+    std::fs::create_dir_all(root.join(".moss/build.nosync/staging/assets")).unwrap();
     let kind = EventKind::Create(notify::event::CreateKind::Folder);
-    let out = source_asset_request_paths(&root, kind, &[root.join(".moss/build/staging/assets")]);
+    let out = source_asset_request_paths(&root, kind, &[root.join(".moss/build.nosync/staging/assets")]);
     assert!(out.is_empty(), ".moss build outputs must never notify the editor");
 }
 
@@ -3424,7 +3857,7 @@ fn raw_create_key_moss_theme_excluded() {
 /// promises a row that does not exist. This is not hypothetical: when moss
 /// wrote this file itself (agent-file sync), the watcher saw a create for the
 /// very file the tree refuses to show, and the editor's only consumer went
-/// looking for a nav row to flash and found none (#955). The same file can
+/// looking for a nav row to flash and found none. The same file can
 /// still appear today whenever an author or another agent creates it.
 ///
 /// The guard is `is_hidden` — the predicate `list_tree` filters with — so the
@@ -3451,7 +3884,7 @@ fn raw_create_key_root_agent_config_excluded() {
 
 /// The root-only half of the rule above. `posts/AGENTS.md` is an ordinary
 /// article that the tree DOES show and the build DOES publish — only the
-/// source root is a location tooling claims (see `skip_root_agent_config`).
+/// source root is a location tooling claims (see `left_out_of_site`).
 /// Suppressing it too would trade one lie for a worse one: a real file the
 /// author created, silently never flashed.
 #[test]
@@ -3491,14 +3924,14 @@ fn raw_create_key_dotfile_excluded() {
     let root = dir.path();
     let posts = root.join("posts");
     std::fs::create_dir_all(&posts).unwrap();
-    let secret = posts.join(".secret.md");
+    let secret = posts.join(".secret.jpg");
     std::fs::write(&secret, b"hidden").unwrap();
 
     let ev = synth_create(&secret, notify::event::CreateKind::File);
     let keys = collect_raw_create_keys(&[ev], root, |_| false);
     assert!(
         keys.is_empty(),
-        "dotfile posts/.secret.md must be excluded by path_is_watchable's dotfile-component rule"
+        "dotfile posts/.secret.jpg must be excluded by path_is_watchable's dotfile-component rule"
     );
 }
 
@@ -3574,4 +4007,17 @@ fn raw_create_key_all_folders_returns_empty() {
     assert!(keys.is_empty(), "all-folder batch must return empty Vec");
 }
 
-
+/// Every page extension is a page to the pump and to the editor's source-asset
+/// notifications, not only `md` and `markdown`.
+#[test]
+fn every_page_extension_is_a_page_to_the_pump() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for name in ["a.mdown", "b.mkd", "C.MD"] {
+        let page = root.join(name);
+        std::fs::write(&page, "# p").unwrap();
+        let modify = EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content));
+        assert_eq!(pump_gate(modify, root.to_str().unwrap(), std::slice::from_ref(&page)), PumpGate::DeferHashCheck, "{name}");
+        assert!(source_asset_request_paths(root, EventKind::Create(CreateKind::File), &[page]).is_empty(), "{name}");
+    }
+}

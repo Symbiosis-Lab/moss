@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "context": "versions.currentFile",
+      "reveals": 10
+    },
+    {
+      "click": "templates.saveAsTemplateAction",
+      "reveals": 1
+    },
+    {
+      "typeInto": {
+        "target": "templates.nameInput",
+        "text": {
+          "en": "Poem template",
+          "zh-hant": "\u756b\u4f5c\u7bc4\u672c",
+          "zh-hans": "\u753b\u4f5c\u6a21\u677f"
+        }
+      }
+    }
+  ]
+}

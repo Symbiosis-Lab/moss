@@ -171,7 +171,7 @@ fn legacy_dns_fields_lift_into_one_observation_and_never_persist_flat() {
     let mut state: DeploymentState = toml::from_str(
         r#"
         site_id = "her-blog"
-        domain = "um-chps.org"
+        domain = "example.org"
         dns_configured = true
         dns_configured_at = "2026-01-01T00:00:00Z"
         "#,
@@ -201,8 +201,8 @@ fn flat_view_derives_dns_fields_from_the_observation() {
         cdn_status: Some("active".to_string()),
         ..Default::default()
     });
-    let flat = state.flat_view(None, Some("um-chps.org".to_string()));
-    assert_eq!(flat.domain.as_deref(), Some("um-chps.org"));
+    let flat = state.flat_view(None, Some("example.org".to_string()));
+    assert_eq!(flat.domain.as_deref(), Some("example.org"));
     assert!(flat.dns_configured);
     assert_eq!(flat.dns_configured_at.as_deref(), Some("2026-01-01T00:00:00Z"));
     assert_eq!(flat.cdn_status.as_deref(), Some("active"));
@@ -222,23 +222,23 @@ fn flat_view_derives_dns_fields_from_the_observation() {
 
 #[test]
 fn domain_reconcile_adopts_only_the_single_unambiguous_case() {
-    let one = vec!["um-chps.org".to_string()];
+    let one = vec!["example.org".to_string()];
     let two = vec!["a.org".to_string(), "b.org".to_string()];
 
     // The one silent case: nothing authored, exactly one server domain.
     assert_eq!(
         reconcile_domain(None, &one),
-        DomainReconciliation::Adopt("um-chps.org".to_string())
+        DomainReconciliation::Adopt("example.org".to_string())
     );
-    assert_eq!(reconcile_domain(Some("  "), &one), DomainReconciliation::Adopt("um-chps.org".to_string()));
+    assert_eq!(reconcile_domain(Some("  "), &one), DomainReconciliation::Adopt("example.org".to_string()));
 
     // Ambiguity or nothing to adopt: settled, no write.
     assert_eq!(reconcile_domain(None, &two), DomainReconciliation::Settled);
     assert_eq!(reconcile_domain(None, &[]), DomainReconciliation::Settled);
 
     // Agreement, or an authored domain the server hasn't heard of yet.
-    assert_eq!(reconcile_domain(Some("um-chps.org"), &one), DomainReconciliation::Settled);
-    assert_eq!(reconcile_domain(Some("um-chps.org"), &[]), DomainReconciliation::Settled);
+    assert_eq!(reconcile_domain(Some("example.org"), &one), DomainReconciliation::Settled);
+    assert_eq!(reconcile_domain(Some("example.org"), &[]), DomainReconciliation::Settled);
 
     // Disagreement surfaces; it is never auto-resolved.
     assert_eq!(
@@ -294,7 +294,7 @@ fn onion_host_accepts_only_onion_site_urls() {
     assert_eq!(cfg(Some("http://abcdef.onion")).onion_host().as_deref(), Some("abcdef.onion"));
     assert_eq!(cfg(Some("http://abcdef.onion/path")).onion_host().as_deref(), Some("abcdef.onion"));
     // A seta-hosted site_url must never masquerade as an onion address.
-    assert_eq!(cfg(Some("https://chps.mosspub.com")).onion_host(), None);
+    assert_eq!(cfg(Some("https://my-site.mosspub.com")).onion_host(), None);
     assert_eq!(cfg(Some(".onion")).onion_host(), None);
     assert_eq!(cfg(None).onion_host(), None);
 }

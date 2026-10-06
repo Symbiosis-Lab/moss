@@ -1,4 +1,4 @@
-//! #789 Phase-2 acceptance: a synthetic IIFE plugin exercises invoke + event.listen
+//! Phase-2 acceptance: a synthetic IIFE plugin exercises invoke + event.listen
 //! + fetch + setTimeout through QuickJsEngine end-to-end. Proves the host-binding
 //! shim WITHOUT github/matters auth (Phase 3).
 

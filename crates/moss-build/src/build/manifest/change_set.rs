@@ -41,6 +41,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::SealedManifest;
+use crate::build::manifest::is_page_source_key;
+use crate::build::served_path::{is_public_address, ServedPath};
 
 /// What was live on the site as of the last successful publish.
 ///
@@ -76,13 +78,13 @@ pub struct PublishedSnapshot {
     /// duplicate-uid resolution from rewriting a published note's identity
     /// (`manifest::live_baseline`). It lived in a second file — a byte copy of
     /// the whole article map, 4.8 MB on a real vault to carry ~7 KB — until
-    /// moss#1079.
+    /// the uid-remint fix landed.
     ///
     /// `#[serde(default)]`, so a record written before this field still loads.
     /// An empty map on a record that exists is NOT "nothing was published": the
     /// reader reports it as unreadable-for-this-purpose rather than guessing.
     ///
-    /// Superseded as the baseline's SOURCE by `triples` below (moss#1093) —
+    /// Superseded as the baseline's SOURCE by `triples` below (the triples migration) —
     /// kept only as the fallback `live_baseline` reads for a record that
     /// predates `triples`, and as the input `manifest::live_baseline::migrate`
     /// backfills `triples` FROM. Nothing new should read `uids` directly; read
@@ -101,8 +103,9 @@ pub struct PublishedSnapshot {
     /// and the join's `?` then drops the uid from the baseline ENTIRELY rather
     /// than just its URL — which is what let a duplicate-uid collision fall
     /// through to the date/birth-time heuristic and mint a fresh uid into a
-    /// live article's frontmatter (moss#1079, reopened one level up by the gap
-    /// moss#1089 closed for the one writer that could produce it). A triple
+    /// live article's frontmatter — the uid-remint bug, reopened one level up
+    /// by the gap the half-updated-shape fix closed for the one writer that
+    /// could produce it. A triple
     /// cannot be half-updated: it is written whole or not written at all.
     ///
     /// `Option`, not a bare `Vec` with `#[serde(default)]`, so "this record
@@ -111,12 +114,24 @@ pub struct PublishedSnapshot {
     /// cannot tell those apart once both deserialize to the same value.
     #[serde(default)]
     pub triples: Option<Vec<LiveEntry>>,
+    /// Folder-provided (non-page) source path → the public output path it was
+    /// published at: a PDF, an image, a stylesheet copied through. Outputs
+    /// under `_moss/` are not recorded.
+    ///
+    /// It is what lets a later build tell "the author deleted this file" from
+    /// "moss stopped generating it": an address in `files` that no source here
+    /// accounts for was generated. `Option` so a record written before this
+    /// field (`None`, unknown) stays distinct from a site that had no folder
+    /// assets (`Some` of an empty map); the removed-address check treats
+    /// unknown as unexplained.
+    #[serde(default)]
+    pub asset_source_to_output: Option<HashMap<String, String>>,
 }
 
 /// One live page: the uid that owns it, where it is served, and which source
 /// file produced it.
 ///
-/// Persisted as [`PublishedSnapshot::triples`] since moss#1093; also the type
+/// Persisted as [`PublishedSnapshot::triples`] since the triples migration; also the type
 /// `manifest::live_baseline` returns a baseline's entries as, re-exported from
 /// there as `live_baseline::LiveEntry`. One type for both roles because a
 /// triple needs no join to go from "on disk" to "in memory" — unlike the
@@ -193,8 +208,28 @@ impl PublishedSnapshot {
             // article map — see `deploy::landed`.
             uids: HashMap::new(),
             triples: None,
+            asset_source_to_output: Some(asset_sources_to_outputs(sealed)),
         }
     }
+}
+
+/// The non-page half of `sources` (what the asset walk found in the folder),
+/// each mapped to the public output the build shipped it as. Read off the
+/// sealed manifest, so recording it costs no extra walk.
+///
+/// A source with no shipped output is left out: it explains no address.
+fn asset_sources_to_outputs(sealed: &SealedManifest) -> HashMap<String, String> {
+    sealed
+        .sources()
+        .keys()
+        .filter(|src| !is_page_source_key(src) && !sealed.source_to_output().contains_key(*src))
+        .filter_map(|src| {
+            let out = ServedPath::from_source(src).ok()?;
+            let out = out.as_str();
+            (is_public_address(out) && sealed.files().contains_key(out))
+                .then(|| (src.clone(), out.to_string()))
+        })
+        .collect()
 }
 
 /// Source path → source-byte hash, for the page half of `sealed.sources()`
@@ -244,6 +279,97 @@ pub struct ChangedPage {
     pub verb: PageVerb,
 }
 
+/// Why a public address that was live is not in this build.
+#[derive(Clone, Copy, Debug, Serialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RemovalReason {
+    /// The source that produced it no longer exists in the site folder.
+    AuthorRemoved,
+    /// Anything else: a generated file nobody produces now, a source that
+    /// still exists whose address changed, or a record too old to say.
+    Unexplained,
+}
+
+/// A public address the last publish served that this build will not.
+#[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
+pub struct RemovedAddress {
+    /// Build output path, e.g. `feed.xml` or `a/index.html`.
+    pub path: String,
+    pub reason: RemovalReason,
+    /// Where the page whose address this was now publishes, when its source
+    /// still exists and moved (a slug or permalink change with no redirect).
+    /// Lets a later step offer the redirect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<String>,
+    /// The source file the last publish recorded for this address: a page's
+    /// or a folder file's. Absent for a generated file, and for a record too
+    /// old to name folder files. It is what tells "still in your folder but no
+    /// longer published" from "no longer produced".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// Why an unexplained removal happened, with the data a message needs. The
+/// one classification: the refusal text, the dry run and the build advisory
+/// are all worded from it, and a caller that wants its own language renders
+/// the enum itself.
+#[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RemovalCause {
+    /// A file moss generates that this build no longer produces (or a record
+    /// too old to say more).
+    Generated,
+    /// The page that lived here is now served at `to` (served form), and
+    /// nothing answers at the old address.
+    Moved { to: String },
+    /// The source file is still in the folder but is no longer published.
+    StillInFolder { source: String },
+}
+
+/// A removal that would refuse a publish: unexplained and not accepted.
+#[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
+pub struct PendingRemoval {
+    /// The build output path, e.g. `feed.xml` or `a/index.html`. What
+    /// `accept_unexplained_removals` takes.
+    pub path: String,
+    /// The same, as a visitor addresses it: `/feed.xml`, `/a/`.
+    pub address: String,
+    pub cause: RemovalCause,
+}
+
+impl RemovedAddress {
+    /// The one place a removal is classified into a [`RemovalCause`].
+    pub fn cause(&self) -> RemovalCause {
+        match (&self.moved_to, &self.source) {
+            (Some(to), _) => RemovalCause::Moved { to: crate::build::served_path::served_address(to) },
+            (None, Some(source)) => RemovalCause::StillInFolder { source: source.clone() },
+            (None, None) => RemovalCause::Generated,
+        }
+    }
+
+    pub fn pending(&self) -> PendingRemoval {
+        PendingRemoval {
+            path: self.path.clone(),
+            address: crate::build::served_path::served_address(&self.path),
+            cause: self.cause(),
+        }
+    }
+}
+
+/// The removals that would refuse a publish: unexplained, and not in
+/// `accepted`.
+pub fn pending_removals(
+    removed: &[RemovedAddress],
+    accepted: Option<&std::collections::BTreeSet<String>>,
+) -> Vec<PendingRemoval> {
+    removed
+        .iter()
+        .filter(|r| r.reason == RemovalReason::Unexplained)
+        .filter(|r| !accepted.is_some_and(|set| set.contains(&r.path)))
+        .map(RemovedAddress::pending)
+        .collect()
+}
+
 /// The resting answer to "what will publishing do?".
 #[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Default)]
 pub struct ChangeSet {
@@ -278,6 +404,11 @@ pub struct ChangeSet {
     /// Per-page detail, for the progress panel's second disclosure level.
     /// Empty in degraded mode.
     pub pages: Vec<ChangedPage>,
+    /// Public addresses (outside `_moss/`) the last publish on any target
+    /// served that this build does not, sorted by path. Unlike the verbs it is
+    /// filled in degraded mode too: it needs only a record to compare files
+    /// against, not a page-level baseline. See [`removed_addresses`].
+    pub removed: Vec<RemovedAddress>,
 }
 
 impl ChangeSet {
@@ -296,6 +427,15 @@ impl ChangeSet {
             && self.restyled == 0
             && self.assets == 0
             && self.removed_assets == 0
+            && self.removed.is_empty()
+    }
+
+    /// Attach the removed addresses to whatever set resulted, classified or
+    /// not. `removed_assets` is not touched: it is the own-target count the
+    /// desktop app already reads, set by [`classify`].
+    pub fn with_removed(mut self, removed: Vec<RemovedAddress>) -> Self {
+        self.removed = removed;
+        self
     }
 }
 
@@ -470,9 +610,84 @@ pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) 
     }
 
     set.assets = changed_unmapped_outputs(prev, cur_files, cur_map);
-    set.removed_assets = removed_unmapped_outputs(prev, cur_files);
+    set.removed_assets = vanished_outputs(prev, current).iter().filter(|(_, is_page)| !is_page).count() as u32;
     set.pages.sort_by(|a, b| a.source_path.cmp(&b.source_path));
     set
+}
+
+/// Every output the baseline served that `current` does not, flagged when it
+/// was a page's. The one definition of "vanished" behind both
+/// `removed_assets` (non-pages, own-target record, `_moss/` included) and
+/// [`removed_addresses`] (public addresses only, address baseline).
+fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SealedManifest) -> Vec<(&'a str, bool)> {
+    let page_outputs: std::collections::HashSet<&str> =
+        baseline.source_to_output.values().map(String::as_str).collect();
+    baseline
+        .files
+        .keys()
+        .filter(|out| !current.files().contains_key(*out))
+        .map(|out| (out.as_str(), page_outputs.contains(out.as_str())))
+        .collect()
+}
+
+/// Public addresses the baseline served that `current` does not, each with
+/// why, sorted by path. An old address the new build still serves (a redirect
+/// stub, an alias) is therefore not removed; anything under `_moss/` is not a
+/// public address.
+///
+/// `AuthorRemoved` needs evidence that the author deleted the source: the
+/// recorded source of the output (a page's, or a folder file's via
+/// `asset_source_to_output`) no longer exists. `source_exists` must answer
+/// from the site folder, not from this build's source lists: a page that
+/// could not be read (bad bytes, no permission) drops out of the build while
+/// its file is still there, and is not the author's removal. Without a recorded source — a
+/// generated file, or a baseline that predates `asset_source_to_output` — the
+/// answer is `Unexplained`, which is the cautious one. So is a source that
+/// still exists: the file is there but its address is gone, and `moved_to`
+/// says where the page went.
+///
+/// Pure, and independent of [`classify`]: the baseline may be another
+/// target's record, which must feed this and nothing else.
+pub fn removed_addresses(
+    baseline: &PublishedSnapshot,
+    current: &SealedManifest,
+    source_exists: impl Fn(&str) -> bool,
+) -> Vec<RemovedAddress> {
+    fn by_output(map: &HashMap<String, String>) -> HashMap<&str, Vec<&str>> {
+        let mut m: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (src, out) in map {
+            m.entry(out.as_str()).or_default().push(src.as_str());
+        }
+        for srcs in m.values_mut() {
+            srcs.sort_unstable();
+        }
+        m
+    }
+    let page_sources = by_output(&baseline.source_to_output);
+    let asset_sources = baseline.asset_source_to_output.as_ref().map(by_output);
+    let exists = |src: &&str| source_exists(src);
+
+    let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
+        .into_iter()
+        .filter(|(out, _)| is_public_address(out))
+        .map(|(out, is_page)| {
+            let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
+            let reason = match recorded {
+                Some(srcs) if !srcs.iter().any(exists) => RemovalReason::AuthorRemoved,
+                _ => RemovalReason::Unexplained,
+            };
+            let moved_to = recorded.and_then(|srcs| {
+                srcs.iter()
+                    .filter_map(|src| current.source_to_output().get(*src))
+                    .find(|now| now.as_str() != out)
+                    .cloned()
+            });
+            let source = recorded.and_then(|srcs| srcs.first()).map(|s| s.to_string());
+            RemovedAddress { path: out.to_string(), reason, moved_to, source }
+        })
+        .collect();
+    removed.sort_by(|a, b| a.path.cmp(&b.path));
+    removed
 }
 
 /// Did the output this page renders to change since the last publish?
@@ -491,21 +706,6 @@ fn output_moved(
         return true;
     }
     prev.files.get(prev_out) != cur_files.get(cur_out)
-}
-
-/// Outputs that were live at the last publish and are absent now.
-///
-/// Pages are excluded — a vanished page is a `Deleted` verb, and its output
-/// disappearing is the same event counted once. What remains is the asset
-/// half: variants, renditions, cards. `changed_unmapped_outputs` walks the
-/// CURRENT files and therefore cannot see any of this.
-fn removed_unmapped_outputs(prev: &PublishedSnapshot, cur_files: &HashMap<String, String>) -> u32 {
-    let prev_pages: std::collections::HashSet<&str> =
-        prev.source_to_output.values().map(String::as_str).collect();
-    prev.files
-        .keys()
-        .filter(|out| !prev_pages.contains(out.as_str()) && !cur_files.contains_key(*out))
-        .count() as u32
 }
 
 /// Outputs with no page behind them — variants, feeds, cards — counted only

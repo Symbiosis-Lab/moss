@@ -1,4 +1,6 @@
 use super::*;
+use crate::build::cache::TransformRecord;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -482,13 +484,13 @@ fn test_scan_folder_videos_in_subdirectory() {
 }
 
 // =========================================================================
-// MediaMetadata Extraction Tests (TDD - Phase B: ADR-002/006)
+// MediaMetadata Extraction Tests (TDD - Phase B)
 // =========================================================================
 
 #[test]
 fn test_media_metadata_extracts_image_dimensions() {
     // Test that extract_image_dimensions correctly reads image header
-    // ADR-006: Uses image_dimensions() which reads header only (~1ms per file)
+    // Uses image_dimensions() which reads header only (~1ms per file)
     let temp_dir = std::env::temp_dir().join(format!("moss_test_dims_{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -508,10 +510,39 @@ fn test_media_metadata_extracts_image_dimensions() {
     fs::remove_dir_all(&temp_dir).ok();
 }
 
+/// A file whose extension lies about its format — a PNG exported/saved with
+/// a `.jpg` extension, the real-world case this guards — must still yield
+/// its real dimensions instead of `None` (which the caller falls back to an
+/// 800x600 placeholder box for). `create_test_png` can't make this fixture:
+/// `ImageBuffer::save` picks the encoder from the path's extension, so
+/// saving to a `.jpg` path would silently write real JPEG bytes and defeat
+/// the point — `save_with_format` pins the encoder to PNG regardless of path.
+///
+/// Ablation: reverting `extract_image_dimensions` to call
+/// `image::image_dimensions(path)` (extension-only) makes this fail — the
+/// JPEG decoder rejects the PNG bytes and the function returns `None`.
+#[test]
+fn test_media_metadata_extracts_dimensions_from_a_mislabeled_extension() {
+    let temp_dir = std::env::temp_dir().join(format!("moss_test_mislabeled_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let jpg_path = temp_dir.join("mislabeled.jpg");
+    create_test_png_at_extension(&jpg_path, 1826, 4796);
+
+    let dims = extract_image_dimensions(&jpg_path);
+    assert_eq!(
+        dims,
+        Some((1826, 4796)),
+        "a PNG saved with a .jpg extension must still yield its real dimensions"
+    );
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
 #[test]
 fn test_media_metadata_handles_exif_rotation() {
     // Test that EXIF orientation 5-8 swaps dimensions
-    // ADR-006: Handle EXIF orientation (swap dims for orientations 5-8)
+    // Handle EXIF orientation (swap dims for orientations 5-8)
     let temp_dir = std::env::temp_dir().join(format!("moss_test_exif_{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -839,7 +870,7 @@ fn test_media_metadata_handles_corrupt_file() {
 #[test]
 fn test_extract_dominant_color_uses_thumbnail() {
     // Test that dominant color extraction works and uses thumbnail for speed
-    // ADR-006: Use 100x100 thumbnail for fast dominant color extraction
+    // Use 100x100 thumbnail for fast dominant color extraction
     let temp_dir = std::env::temp_dir().join(format!("moss_test_color_{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -1059,7 +1090,7 @@ fn test_video_scan_skips_hash_on_stat_miss() {
     fs::write(&video_path, b"fake video data for testing").unwrap();
 
     // Set up empty caches — simulates first-ever scan.
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1074,8 +1105,7 @@ fn test_video_scan_skips_hash_on_stat_miss() {
         &video_path,
         "big_video.mp4",
         "mp4",
-        27, // size of "fake video data for testing"
-        1234567890,
+        &FileStat::whole_second(27, 1234567890),
         None,
         None, // No FFmpeg — dimensions will be None (that's fine)
         &old_index,
@@ -1095,7 +1125,7 @@ fn test_video_scan_skips_hash_on_stat_miss() {
     // video, because we skipped hashing. This proves we avoided the
     // expensive SHA-256 computation.
     assert!(
-        new_index.lookup("big_video.mp4", 27, 1234567890).is_none(),
+        !new_index.entries.contains_key("big_video.mp4"),
         "Video file should NOT have been hashed on stat miss (first scan)"
     );
 
@@ -1117,7 +1147,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
     fs::write(&video_path, b"fake video").unwrap();
 
     // Set up caches.
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1129,7 +1159,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
     // Pre-populate hash index with a stat match.
     let fake_hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
     let mut old_index = HashIndex::new();
-    old_index.update(
+    old_index.update_whole_second(
         "cached_video.mov".to_string(),
         10,
         9999999,
@@ -1151,8 +1181,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
         &video_path,
         "cached_video.mov",
         "mov",
-        10,
-        9999999,
+        &FileStat::whole_second(10, 9999999),
         Some("2024-01-01".to_string()),
         None,
         &old_index,
@@ -1170,7 +1199,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
 
     // Hash should be propagated to new_index (stat match was found).
     assert!(
-        new_index.lookup("cached_video.mov", 10, 9999999).is_some(),
+        new_index.lookup_whole_second("cached_video.mov", 10, 9999999) == Some(fake_hash),
         "Hash should be propagated to new_index when hash index has a stat match"
     );
 
@@ -1200,7 +1229,7 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
     let file_size = fs::metadata(&png_path).unwrap().len();
 
     // Set up empty caches — simulates a first-ever (cold) scan.
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1215,8 +1244,7 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
         &png_path,
         "photo.png",
         "png",
-        file_size,
-        1234567890,
+        &FileStat::whole_second(file_size, 1234567890),
         None,
         None,
         &old_index,
@@ -1248,10 +1276,67 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
 
     // The full-file SHA-256 is DEFERRED too — no hash entry on the blocking scan.
     assert!(
-        new_index
-            .lookup("photo.png", file_size, 1234567890)
-            .is_none(),
+        !new_index.entries.contains_key("photo.png"),
         "image must NOT be SHA-256 hashed on the blocking scan (deferred to background)"
+    );
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
+/// The public entry point a warm build actually calls — `scan_folder_with_dedup_emit`,
+/// not `extract_media_metadata_cached` directly — must read the SAME store the
+/// background media phase writes to. Writes here go through `MossPaths::cache_objects`
+/// / `cache_transforms`, exactly like `convert_single_image` does after encoding;
+/// nothing about this test's cache setup is hand-rolled the way the sibling tests
+/// above build their `ObjectStore`/`TransformCache` from a bare path.
+#[test]
+fn test_second_scan_reads_the_lqip_the_background_phase_wrote() {
+    let temp_dir = std::env::temp_dir().join(format!("moss_test_warm_lqip_scan_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let png_path = temp_dir.join("photo.png");
+    create_solid_color_png(&png_path, 64, 48, [255, 0, 0]);
+    let file_meta = fs::metadata(&png_path).unwrap();
+    let file_size = file_meta.len();
+    let mtime = file_meta
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let dir_str = temp_dir.to_string_lossy().to_string();
+
+    // Cold scan through the real entry point: preview mode defers LQIP.
+    let cold = scan_folder_with_dedup_emit(&dir_str, None, None, true).unwrap();
+    assert_eq!(cold.image_files.len(), 1);
+    assert!(cold.image_files[0].lqip_data_uri.is_none(), "a cold scan must defer LQIP");
+
+    // Simulate the background media phase enriching that same stat-key entry
+    // with a real LQIP, via the accessors `convert_single_image` actually uses.
+    let mp = crate::moss_paths::MossPaths::new(&temp_dir);
+    let objects = ObjectStore::new(mp.cache_objects());
+    let transforms = TransformCache::new(mp.cache_transforms(), ObjectStore::new(mp.cache_objects()));
+    let stat_key = image_meta_stat_key("photo.png", file_size, mtime);
+    write_cached_meta(
+        &objects,
+        &transforms,
+        &stat_key,
+        file_size,
+        &CachedMediaMeta {
+            dimensions: Some((64, 48)),
+            dominant_color: Some("#ff0000".to_string()),
+            lqip_data_uri: Some("data:image/jpeg;base64,fake".to_string()),
+            is_animated: false,
+        },
+    );
+
+    // Warm scan through the same entry point must pick up the enrichment.
+    let warm = scan_folder_with_dedup_emit(&dir_str, None, None, true).unwrap();
+    assert_eq!(
+        warm.image_files[0].lqip_data_uri.as_deref(),
+        Some("data:image/jpeg;base64,fake"),
+        "a warm scan must read the LQIP the background phase wrote to the stat-key entry"
     );
 
     fs::remove_dir_all(&temp_dir).ok();
@@ -1293,7 +1378,7 @@ fn test_scan_carries_is_animated_for_animated_webp() {
     fs::write(&webp_path, animated_webp_bytes()).unwrap();
     let file_size = fs::metadata(&webp_path).unwrap().len();
 
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1309,8 +1394,7 @@ fn test_scan_carries_is_animated_for_animated_webp() {
         &webp_path,
         "loop.webp",
         "webp",
-        file_size,
-        1234567890,
+        &FileStat::whole_second(file_size, 1234567890),
         None,
         None,
         &old_index,
@@ -1331,8 +1415,7 @@ fn test_scan_carries_is_animated_for_animated_webp() {
         &webp_path,
         "loop.webp",
         "webp",
-        file_size,
-        1234567890,
+        &FileStat::whole_second(file_size, 1234567890),
         None,
         None,
         &old_index,
@@ -1367,7 +1450,7 @@ fn test_scan_static_webp_is_not_animated() {
     fs::write(&webp_path, &bytes).unwrap();
     let file_size = fs::metadata(&webp_path).unwrap().len();
 
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1382,8 +1465,7 @@ fn test_scan_static_webp_is_not_animated() {
         &webp_path,
         "still.webp",
         "webp",
-        file_size,
-        1234567890,
+        &FileStat::whole_second(file_size, 1234567890),
         None,
         None,
         &old_index,
@@ -1447,7 +1529,7 @@ fn test_video_scan_stat_cache_hit_on_second_call() {
     let video_path = temp_dir.join("repeat.mp4");
     fs::write(&video_path, b"fake video data").unwrap();
 
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1463,8 +1545,7 @@ fn test_video_scan_stat_cache_hit_on_second_call() {
         &video_path,
         "repeat.mp4",
         "mp4",
-        15,
-        5555555555,
+        &FileStat::whole_second(15, 5555555555),
         None,
         None,
         &old_index,
@@ -1480,8 +1561,7 @@ fn test_video_scan_stat_cache_hit_on_second_call() {
         &video_path,
         "repeat.mp4",
         "mp4",
-        15,
-        5555555555,
+        &FileStat::whole_second(15, 5555555555),
         None,
         None,
         &old_index,
@@ -1499,11 +1579,409 @@ fn test_video_scan_stat_cache_hit_on_second_call() {
 
     // Still no hash entry — both calls used the stat-key path.
     assert!(
-        new_index.lookup("repeat.mp4", 15, 5555555555).is_none(),
+        !new_index.entries.contains_key("repeat.mp4"),
         "Video should not have been hashed in either call"
     );
 
     fs::remove_dir_all(&temp_dir).ok();
+}
+
+// =========================================================================
+// The hash index across a scan: stat identity carried, never laundered
+// =========================================================================
+
+/// One image and the caches a scan reads and writes, for the tests below.
+struct ScanFixture {
+    dir: std::path::PathBuf,
+    png: std::path::PathBuf,
+    objects: ObjectStore,
+    transforms: TransformCache,
+}
+
+impl ScanFixture {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("moss_scan_{name}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = dir.join(".moss/build.nosync/cache");
+        fs::create_dir_all(cache.join("objects")).unwrap();
+        fs::create_dir_all(cache.join("transforms")).unwrap();
+        let png = dir.join("photo.png");
+        create_solid_color_png(&png, 8, 8, [255, 0, 0]);
+        Self {
+            dir,
+            png,
+            objects: ObjectStore::new(cache.join("objects")),
+            transforms: TransformCache::new(cache.join("transforms"), ObjectStore::new(cache.join("objects"))),
+        }
+    }
+
+    fn scan(
+        &self,
+        stat: &FileStat,
+        old_index: &HashIndex,
+        new_index: &mut HashIndex,
+        defer_placeholders: bool,
+    ) -> MediaMetadata {
+        self.scan_deduped(stat, old_index, new_index, defer_placeholders, None)
+    }
+
+    /// [`scan`](Self::scan) with the singleflight that shares one extraction between
+    /// concurrent scans of the same content, as the walk gives it.
+    fn scan_deduped(
+        &self,
+        stat: &FileStat,
+        old_index: &HashIndex,
+        new_index: &mut HashIndex,
+        defer_placeholders: bool,
+        dedup: Option<&crate::build::cache::Singleflight<MediaMetadata>>,
+    ) -> MediaMetadata {
+        extract_media_metadata_cached(
+            &self.png, "photo.png", "png", stat, None, None, old_index, new_index, &self.objects, &self.transforms, dedup,
+            defer_placeholders,
+        )
+    }
+
+    /// A video beside the image, scanned as a scan meets one: no hash, its metadata found by
+    /// the stat key. Without an ffmpeg there is nothing to read, so what is cached is a bare
+    /// entry, which is all the tests need of it.
+    fn scan_video(&self, stat: &FileStat) -> MediaMetadata {
+        fs::write(self.dir.join("clip.mp4"), b"not really a video").unwrap();
+        extract_media_metadata_cached(
+            &self.dir.join("clip.mp4"), "clip.mp4", "mp4", stat, None, None, &HashIndex::new(), &mut HashIndex::new(),
+            &self.objects, &self.transforms, None, false,
+        )
+    }
+
+    /// The placeholder metadata an earlier scan of this image, hydrated, cached under
+    /// `hash`.
+    fn cache_placeholder_under(&self, hash: &str) -> CachedMediaMeta {
+        let meta = CachedMediaMeta {
+            dimensions: Some((8, 8)),
+            dominant_color: Some("#ff0000".to_string()),
+            lqip_data_uri: Some("data:image/webp;base64,AAAA".to_string()),
+            is_animated: false,
+        };
+        write_cached_meta(&self.objects, &self.transforms, hash, 1, &meta);
+        meta
+    }
+}
+
+impl Drop for ScanFixture {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.dir).ok();
+    }
+}
+
+/// The background worker records each image with its full stat record and the next
+/// scan rewrites the index from scratch, so the scan has to hand the record on as it
+/// found it — or `collect_images_for_conversion` would miss on every image, every
+/// build, and the worker would hash them all again.
+#[test]
+fn a_scan_carries_a_full_stat_entry_forward_so_the_next_collect_still_matches() {
+    let fx = ScanFixture::new("carry_full");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let mut old_index = HashIndex::new();
+    old_index.update("photo.png".to_string(), &stat, "recorded-by-the-worker".to_string());
+    let mut new_index = HashIndex::new();
+
+    fx.scan(&stat, &old_index, &mut new_index, true);
+
+    assert_eq!(new_index.lookup("photo.png", &stat), Some("recorded-by-the-worker"));
+}
+
+/// An entry recorded for another instant of the file is not this file's hash, and the
+/// scan must not carry it — nor, by re-stamping it with the current stat, turn it into
+/// one that `lookup` would trust. A preview scan (which never hashes an image) leaves
+/// the file out of the new index; a build-mode scan hashes it afresh.
+#[test]
+fn a_scan_does_not_carry_forward_an_entry_recorded_for_a_different_instant() {
+    let fx = ScanFixture::new("carry_stale");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let earlier = FileStat { mtime_nanos: stat.mtime_nanos.map(|n| (n + 250_000_000) % 1_000_000_000), ..stat };
+    let mut old_index = HashIndex::new();
+    old_index.update("photo.png".to_string(), &earlier, "hash-of-the-previous-bytes".to_string());
+
+    let mut preview = HashIndex::new();
+    fx.scan(&stat, &old_index, &mut preview, true);
+    assert!(preview.entries.is_empty(), "preview scan carried forward {:?}", preview.entries);
+
+    let mut build = HashIndex::new();
+    fx.scan(&stat, &old_index, &mut build, false);
+    assert_eq!(build.lookup("photo.png", &stat), Some(ObjectStore::hash_file(&fx.png).unwrap().as_str()));
+}
+
+/// A build-mode scan hashes an image it has no entry for, and what it records must be
+/// the record `collect_images_for_conversion` will look for.
+#[test]
+fn a_build_mode_scan_records_the_hash_it_computed_with_the_files_full_stat() {
+    let fx = ScanFixture::new("record_full");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let mut new_index = HashIndex::new();
+
+    fx.scan(&stat, &HashIndex::new(), &mut new_index, false);
+
+    assert_eq!(new_index.lookup("photo.png", &stat), Some(ObjectStore::hash_file(&fx.png).unwrap().as_str()));
+}
+
+/// An entry the index recorded while the image was local, seen by a scan after the
+/// provider evicted it: the recorded ctime and inode no longer match, and nothing
+/// may read the file to find out whether the bytes still do.
+fn recorded_before_the_provider_touched_it(fx: &ScanFixture, hash: &str) -> (FileStat, HashIndex) {
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let recorded = FileStat { ctime: Some(1), inode: Some(1), ..stat };
+    let mut old_index = HashIndex::new();
+    old_index.update("photo.png".to_string(), &recorded, hash.to_string());
+    (stat, old_index)
+}
+
+/// An evicted image cannot be hashed, so its metadata is found by the hash the index
+/// recorded — under the whole-second rule, the only one it could be answered by
+/// before the index recorded more. The strict rule misses the moment the provider
+/// changes ctime or inode, and a build-mode scan (which bakes LQIP and dimensions
+/// into the page) would then find nothing and read an unreadable file for them.
+#[test]
+fn an_evicted_image_keeps_the_placeholder_metadata_cached_under_its_recorded_hash() {
+    let fx = ScanFixture::new("evicted_meta");
+    let cached = fx.cache_placeholder_under("hash-of-the-hydrated-bytes");
+    let (stat, old_index) = recorded_before_the_provider_touched_it(&fx, "hash-of-the-hydrated-bytes");
+    let _cloud = crate::build::icloud::pretend::evicted(&fx.png);
+
+    for defer_placeholders in [false, true] {
+        let mut new_index = HashIndex::new();
+        let meta = fx.scan(&stat, &old_index, &mut new_index, defer_placeholders);
+
+        assert_eq!(
+            (meta.dimensions, meta.dominant_color.clone(), meta.lqip_data_uri.clone()),
+            (cached.dimensions, cached.dominant_color.clone(), cached.lqip_data_uri.clone()),
+            "defer_placeholders={defer_placeholders}: the evicted image lost its placeholder"
+        );
+        // Carried as recorded: the strict lookup that names an encode must still miss.
+        assert_eq!(new_index.entries, old_index.entries, "defer_placeholders={defer_placeholders}");
+        assert!(new_index.lookup("photo.png", &stat).is_none());
+    }
+}
+
+/// The same answer is not given for an image that is on disk: a scan that defers its
+/// placeholder (preview) or hashes it (build) has no need of a hash it cannot vouch
+/// for, and a whole-second hit would carry it into an index the worker trusts.
+#[test]
+fn an_image_on_disk_is_not_matched_by_the_whole_second_rule() {
+    let fx = ScanFixture::new("hydrated_strict");
+    fx.cache_placeholder_under("hash-of-the-hydrated-bytes");
+    let (stat, old_index) = recorded_before_the_provider_touched_it(&fx, "hash-of-the-hydrated-bytes");
+
+    let mut preview = HashIndex::new();
+    let meta = fx.scan(&stat, &old_index, &mut preview, true);
+    assert!(preview.entries.is_empty(), "preview scan carried forward {:?}", preview.entries);
+    assert_ne!(meta.lqip_data_uri.as_deref(), Some("data:image/webp;base64,AAAA"), "used a hash the index does not vouch for");
+}
+
+/// What an evicted source yields is a non-answer, and cached under its hash — which
+/// its arrival does not change — it would be permanent. Reachable once an evicted
+/// file can hold a hash the index recorded while it was local, and the metadata was
+/// never cached under it (a preview scan hashes nothing). Both ways the scan extracts:
+/// directly, and through the singleflight that shares one extraction between concurrent
+/// scans of the same content, where an evicted file's non-answer would also be handed to
+/// a scan of a file that can be read.
+#[test]
+fn an_evicted_image_never_has_a_non_answer_cached_under_its_hash() {
+    let dedup = crate::build::cache::Singleflight::new();
+    for (how, dedup) in [("directly", None), ("through the singleflight", Some(&dedup))] {
+        let fx = ScanFixture::new("evicted_no_poison");
+        let (stat, old_index) = recorded_before_the_provider_touched_it(&fx, "hash-with-no-cached-metadata");
+        let _cloud = crate::build::icloud::pretend::evicted(&fx.png);
+
+        let meta = fx.scan_deduped(&stat, &old_index, &mut HashIndex::new(), false, dedup);
+
+        assert_eq!(meta.dimensions, None, "{how}: premise: an evicted image is read as nothing");
+        assert!(
+            read_cached_meta(&fx.transforms, &fx.objects, "hash-with-no-cached-metadata").is_none(),
+            "{how}: the scan cached dimensions: None under the hash of a file it could not read"
+        );
+    }
+}
+
+/// A preview scan reads an image's dimensions and caches them under a key made of its
+/// path, size and mtime. An evicted source cannot answer, its arrival preserves size and
+/// mtime, and so the key would serve a non-answer for as long as the file stays the
+/// same. The evicted image is read here (the seam marks it, it does not stop the read),
+/// so what the guard keeps out of the cache is a real answer and the control is the
+/// same scan of the image once it is on disk.
+#[test]
+fn a_preview_scan_caches_nothing_under_the_stat_key_of_an_evicted_image() {
+    let fx = ScanFixture::new("evicted_stat_key");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let key = image_meta_stat_key("photo.png", stat.size, stat.mtime);
+
+    let cloud = crate::build::icloud::pretend::evicted(&fx.png);
+    fx.scan(&stat, &HashIndex::new(), &mut HashIndex::new(), true);
+    assert!(
+        read_cached_meta(&fx.transforms, &fx.objects, &key).is_none(),
+        "the scan cached what it read of an evicted image under its stat key"
+    );
+
+    drop(cloud);
+    fx.scan(&stat, &HashIndex::new(), &mut HashIndex::new(), true);
+    assert!(
+        read_cached_meta(&fx.transforms, &fx.objects, &key).is_some(),
+        "control: the same scan of an image on disk caches its dimensions under the stat key"
+    );
+}
+
+/// A build-mode scan hashes an image the last index does not vouch for, after it has
+/// asked whether the image is in the cloud — and the provider can evict it in between.
+/// The scan's own hash read is guarded like every other, so the image is left unhashed
+/// (its worker defers it) instead of blocking the scan on a download.
+#[test]
+fn a_build_scan_does_not_hash_an_image_that_went_to_the_cloud_after_it_was_checked() {
+    let fx = ScanFixture::new("evicted_after_check");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let mut new_index = HashIndex::new();
+
+    let _cloud = crate::build::icloud::pretend::evicted_after(&fx.png, 1);
+    fx.scan(&stat, &HashIndex::new(), &mut new_index, false);
+
+    assert!(new_index.entries.is_empty(), "the scan hashed an image that was in the cloud: {:?}", new_index.entries);
+}
+
+/// The same for a video, which never enters the hash index: nothing but its stat key could
+/// ever find the entry, and the key survives the file's arrival.
+#[test]
+fn a_scan_caches_nothing_under_the_stat_key_of_an_evicted_video() {
+    let fx = ScanFixture::new("evicted_video_stat_key");
+    let stat = FileStat::whole_second(18, 1_700_000_000);
+    let key = image_meta_stat_key("clip.mp4", stat.size, stat.mtime);
+
+    let cloud = crate::build::icloud::pretend::evicted(&fx.dir.join("clip.mp4"));
+    fx.scan_video(&stat);
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, &key).is_none(), "the scan cached what it read of an evicted video under its stat key");
+
+    drop(cloud);
+    fx.scan_video(&stat);
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, &key).is_some(), "control: the same scan of a video on disk caches under the stat key");
+}
+
+/// A vault built before the mislabeled-extension fix cached "no dimensions,
+/// no color, no LQIP" for such a file under `media/meta` with the pre-fix
+/// `params: {}` shape (what `write_cached_meta` wrote before this change).
+/// `.moss/cache/transforms/` persists across moss upgrades, so without the
+/// `MEDIA_META_VERSION` bump this entry would be served as current forever —
+/// the content never changes, so nothing else would invalidate it.
+///
+/// Ablation: reverting the `params` in `read_cached_meta`/`write_cached_meta`
+/// back to `serde_json::json!({})` makes this fail — the stale entry's params
+/// then match current params, `find_cached_output` returns it, and
+/// `read_cached_meta` answers `Some` instead of `None`.
+#[test]
+fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
+    let fx = ScanFixture::new("stale_media_meta");
+    let hash = "hash-of-a-previously-mislabeled-file";
+
+    let stale = CachedMediaMeta {
+        dimensions: None,
+        dominant_color: None,
+        lqip_data_uri: None,
+        is_animated: false,
+    };
+    let json_bytes = serde_json::to_vec(&stale).unwrap();
+    let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
+    let old_entry = TransformEntry {
+        oid: meta_oid,
+        size: json_bytes.len() as u64,
+        params: serde_json::json!({}),
+    };
+    let record = TransformRecord {
+        source_oid: hash.to_string(),
+        source_size: 1,
+        transforms: HashMap::from([(MEDIA_META_TRANSFORM.to_string(), old_entry)]),
+    };
+    fx.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+
+    assert!(
+        read_cached_meta(&fx.transforms, &fx.objects, hash).is_none(),
+        "an entry cached under the pre-fix params must not be served as current"
+    );
+}
+
+// =========================================================================
+// What the walk feeds the hash index: the file's whole stat record
+// =========================================================================
+
+/// A vault with one image, scanned the way a build scans it (`defer_placeholders =
+/// false`, which hashes an image it has no trusted entry for). The persisted index is
+/// the observable: an entry the scan trusted comes back as it was, one it did not comes
+/// back re-hashed.
+struct ScannedVault {
+    dir: tempfile::TempDir,
+}
+
+impl ScannedVault {
+    fn new() -> Self {
+        // Not `tempdir()`'s dot-named directory: the walk skips hidden folders.
+        let dir = tempfile::Builder::new().prefix("moss_scan_vault_").tempdir().unwrap();
+        // Two solid colours whose PNGs are the same number of bytes, so the rewrite
+        // below is a same-size one.
+        create_solid_color_png(&dir.path().join("photo.png"), 24, 24, [200, 30, 30]);
+        Self { dir }
+    }
+
+    fn png(&self) -> std::path::PathBuf {
+        self.dir.path().join("photo.png")
+    }
+
+    fn index_path(&self) -> std::path::PathBuf {
+        self.dir.path().join(".moss/build.nosync/cache/hash-index.json")
+    }
+
+    /// Scan, and return `photo.png`'s entry in the index the scan persisted.
+    fn scan(&self) -> crate::build::cache::HashIndexEntry {
+        scan_folder_with_dedup_emit(self.dir.path().to_str().unwrap(), None, None, false).unwrap();
+        HashIndex::load(&self.index_path()).entries.remove("photo.png").expect("the scan recorded the image")
+    }
+
+    /// Leave an index that holds `hash` for `photo.png` as it stood at `recorded`.
+    fn record(&self, recorded: &FileStat, hash: &str) {
+        let mut index = HashIndex::new();
+        index.update("photo.png".to_string(), recorded, hash.to_string());
+        index.save(&self.index_path()).unwrap();
+    }
+}
+
+/// The walk hands each image's stat to the scan, and the scan trusts an entry only for
+/// that whole record. An entry recorded for another size, mtime, sub-second mtime,
+/// ctime or inode is not this file's, and the hash in it — planted here so a wrongly
+/// trusted entry is visible — must not come back. The exact record is the control.
+#[test]
+fn the_scan_trusts_an_entry_only_for_the_images_whole_stat_record() {
+    let vault = ScannedVault::new();
+    let real = FileStat::of(&fs::metadata(vault.png()).unwrap());
+    let hashed = ObjectStore::hash_file(&vault.png()).unwrap();
+
+    vault.record(&real, "planted");
+    assert_eq!(vault.scan().content_hash, "planted", "control: the exact record hits");
+
+    for (field, changed) in real.each_field_changed() {
+        vault.record(&changed, "planted");
+        assert_eq!(vault.scan().content_hash, hashed, "an entry recorded for another {field} was trusted");
+    }
+}
+
+/// Replace-via-rename with size and mtime kept: the scan must hash the new file, not
+/// carry the old one's hash into the index the image worker reads.
+#[cfg(unix)]
+#[test]
+fn an_image_replaced_by_rename_with_its_size_and_mtime_kept_is_hashed_again() {
+    let vault = ScannedVault::new();
+    let first = vault.scan().content_hash;
+
+    let replacement = vault.dir.path().join("replacement.png");
+    create_solid_color_png(&replacement, 24, 24, [30, 30, 200]);
+    FileStat::replace_by_rename_keeping_mtime(&vault.png(), &fs::read(&replacement).unwrap());
+    fs::remove_file(&replacement).unwrap();
+
+    let second = vault.scan().content_hash;
+    assert_ne!(second, first, "the scan kept the hash of the image that was replaced");
+    assert_eq!(second, ObjectStore::hash_file(&vault.png()).unwrap());
 }
 
 // =========================================================================
@@ -1519,6 +1997,17 @@ fn create_test_png(path: &std::path::Path, width: u32, height: u32) {
         Rgb([(x % 256) as u8, (y % 256) as u8, 128])
     });
     img.save(path).unwrap();
+}
+
+/// Write real PNG bytes at `path`, whatever `path`'s own extension says.
+/// `save_with_format` (unlike `save`, which picks the encoder from the path)
+/// pins the encoder to PNG — the fixture for "the extension lies" tests.
+fn create_test_png_at_extension(path: &std::path::Path, width: u32, height: u32) {
+    use image::{ImageBuffer, ImageFormat, Rgb};
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
+        Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+    });
+    img.save_with_format(path, ImageFormat::Png).unwrap();
 }
 
 /// Create a solid color PNG for testing dominant color extraction
@@ -2080,4 +2569,80 @@ fn scan_folder_prunes_nested_moss_sites() {
         "nested site dirs must not get outer index pages: {:?}",
         ps.dirs
     );
+}
+
+/// The scan rewrites the shared hash index from what it saw, but the parse cache
+/// records each page's hash in the same file. A scan that dropped those made every
+/// build re-hash every unchanged page; it must hand them on as recorded while the
+/// page exists, and still prune one that is gone.
+#[test]
+fn a_scan_keeps_the_page_hashes_the_parse_cache_recorded_and_prunes_deleted_pages() {
+    // Not tempfile's default ".tmp" prefix: the walk excludes a dot-named root.
+    let dir = tempfile::Builder::new().prefix("moss_test_page_hashes").tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("posts")).unwrap();
+    fs::write(root.join("index.md"), "# Home\n").unwrap();
+    fs::write(root.join("posts/first.md"), "# First\n").unwrap();
+    let index_path = crate::moss_paths::MossPaths::new(root).cache_hash_index();
+
+    // What a build's parse cache leaves behind: every page hashed and merged in.
+    let mut parsed = HashIndex::load(&index_path);
+    for page in ["index.md", "posts/first.md"] {
+        parsed.resolve(&root.join(page), page).unwrap();
+    }
+    parsed.save_merging(&index_path).unwrap();
+
+    scan_folder(&root.to_string_lossy()).unwrap();
+    let after = HashIndex::load(&index_path);
+    for page in ["index.md", "posts/first.md"] {
+        let stat = FileStat::of(&fs::metadata(root.join(page)).unwrap());
+        assert!(after.lookup(page, &stat).is_some(), "the next build would re-hash unchanged {page}");
+    }
+
+    fs::remove_file(root.join("posts/first.md")).unwrap();
+    scan_folder(&root.to_string_lossy()).unwrap();
+    let pruned = HashIndex::load(&index_path);
+    assert!(pruned.entries.contains_key("index.md"));
+    assert!(!pruned.entries.contains_key("posts/first.md"), "a deleted page's entry must still be pruned");
+}
+
+/// The scan records media metadata by merging into the source's record, which
+/// may also hold image or video outputs. When that record cannot be read the
+/// metadata goes unrecorded; the record is not replaced by a one-entry stub.
+#[test]
+fn media_metadata_is_not_written_over_a_record_that_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let objects = ObjectStore::new(dir.path().join("objects"));
+    let transform_cache = TransformCache::new(dir.path().join("transforms"), objects.clone());
+    let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+    transform_cache
+        .merge(hash, 10, crate::build::cache::RecordMode::Wait, |record| {
+            record.transforms.insert(
+                "image/webp".to_string(),
+                crate::build::cache::TransformEntry { oid: "w".into(), size: 1, params: serde_json::Value::Null },
+            );
+        })
+        .unwrap();
+    let record_file = transform_cache.root().join(&hash[..2]).join(&hash[2..4]).join(format!("{hash}.json"));
+    let before = fs::read(&record_file).unwrap();
+
+    crate::build::io_utils::fault::fail_reads(&record_file, libc::EACCES, 1);
+    let meta = CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: None, lqip_data_uri: None, is_animated: false };
+    write_cached_meta(&objects, &transform_cache, hash, 10, &meta);
+
+    assert_eq!(fs::read(&record_file).unwrap(), before);
+}
+
+#[test]
+fn a_dot_prefixed_page_is_not_published() {
+    let dir = tempfile::Builder::new().prefix("moss_test_dot_page").tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    fs::create_dir_all(dir.path().join("posts")).unwrap();
+    fs::write(dir.path().join("posts/.draft.md"), "# Draft").unwrap();
+    fs::write(dir.path().join("posts/shown.md"), "# Shown").unwrap();
+
+    let result = scan_folder(&dir.path().to_string_lossy()).unwrap();
+
+    let names: Vec<String> = result.markdown_files.iter().map(|f| f.path.clone()).collect();
+    assert!(names.iter().any(|p| p.ends_with("shown.md")), "{names:?}");
+    assert!(!names.iter().any(|p| p.contains(".draft")), "{names:?}");
 }

@@ -140,7 +140,7 @@ describe('Wikilink inline grammar', () => {
   });
 });
 
-// ── WikilinkEmbed (ADR-041) ──────────────────────────────────────────
+// ── WikilinkEmbed ──────────────────────────────────────────────────
 // `![[…]]` is its own node, not an `Image` in disguise. The consequence that
 // motivated the change is test 2: a real `Link` may now wrap an embed.
 
@@ -172,7 +172,7 @@ describe('WikilinkEmbed inline grammar', () => {
   });
 
   test('a Link may wrap an embed: [![[a.png]]](/awards/)', () => {
-    // The headline of ADR-041. Before, the `[a.png]` inside the Image tripped
+    // Before, the `[a.png]` inside the Image tripped
     // CommonMark's no-nested-links rule and destroyed the outer Link entirely.
     const doc = '[![[a.png]]](/awards/)';
     const ns = nodes(doc);

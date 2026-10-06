@@ -4,7 +4,7 @@
 
 Context for after_deploy hook (syndicator plugins)
 
-`trigger` is stamped by moss (ADR-015), same contract as
+`trigger` is stamped by moss, same contract as
 [ProcessContext.trigger](ProcessContext.md#trigger). Syndication has exactly one production
 caller — the Publish click — so this is always `"manual_one"`; absent
 (older moss) ⇒ treat as `"background"`.

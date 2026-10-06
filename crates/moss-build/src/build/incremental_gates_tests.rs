@@ -67,8 +67,8 @@ fn a_structural_markdown_batch_may_still_replay_the_parse_cache() {
 }
 
 /// The allowlist is the whole safety argument and outranks the trigger in
-/// both directions. An image baked dimensions and LQIP into parsed HTML
-/// (ADR-013), so it disables the cache no matter how it arrived.
+/// both directions. An image baked dimensions and LQIP into parsed HTML,
+/// so it disables the cache no matter how it arrived.
 #[test]
 fn an_image_disables_the_parse_cache_under_any_trigger() {
     assert!(!cfg(BuildTrigger::Structural(paths(&["a.md", "hero.png"]))).allows_parse_cache_reuse());
@@ -96,4 +96,12 @@ fn a_full_build_reuses_nothing() {
 fn an_empty_batch_carries_no_information_so_it_reuses_nothing() {
     assert!(!cfg(BuildTrigger::Structural(vec![])).allows_parse_cache_reuse());
     assert!(!cfg(BuildTrigger::ContentOnly(vec![])).allows_parse_cache_reuse());
+}
+
+#[test]
+fn every_page_extension_counts_as_markdown_for_the_gates() {
+    for ext in ["md", "markdown", "mdown", "mkd", "MD", "Mkd"] {
+        assert!(is_markdown_extension(ext), "{ext} is a page source");
+    }
+    assert!(!is_markdown_extension("txt"));
 }

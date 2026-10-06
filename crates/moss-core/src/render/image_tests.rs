@@ -673,8 +673,8 @@ fn missing_dimensions_fall_back_to_800x600() {
 // Phase 2E v5 PR5 (2026-05-26) retired the Stage 3 regex post-pass; the
 // image synthesizer in this module is now the sole emitter of width /
 // height / loading / LQIP / dominant-color attributes for moss-emitted
-// <img> tags. The three idempotency tests at
-// `src-tauri/tests/image_synth_regex_parity.rs` that guarded the
+// <img> tags. The three idempotency tests in the desktop app's
+// `image_synth_regex_parity.rs` that guarded the
 // regex+synth byte-shape parity were deleted alongside the regex.
 
 // --- TrackingPixel (Phase 2C, 2026-05-25) ---
@@ -1007,10 +1007,10 @@ fn unknown_dims_keep_legacy_shape() {
 
 #[test]
 fn portrait_below_first_rung_keeps_legacy_shape() {
-    // 1200×3600 portrait: the encoder caps the longest EDGE, so the
-    // deployed base is only 800 wide — no rung below it (strict `<`),
-    // legacy single-URL shape.
-    let assets = snapshot_dims("photo.jpg", 1200, 3600);
+    // 800×3000 portrait: its short edge is under the deploy floor, so it
+    // deploys whole and the base is exactly 800 wide — no rung below it
+    // (strict `<`), legacy single-URL shape.
+    let assets = snapshot_dims("photo.jpg", 800, 3000);
     let html = synthesize_image_html(
         "photo.jpg",
         "",
@@ -1160,7 +1160,7 @@ fn comma_named_webp_source_encodes_img_srcset_commas_but_not_base_src() {
 
 #[test]
 fn comma_named_raster_with_no_ladder_encodes_single_url_srcset() {
-    // Bug B (docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md):
+    // Bug B:
     // when dims are unknown (snapshot miss → `resolve_ladder` returns
     // `None`), `synthesize_inner` takes the LEGACY single-URL `<source
     // srcset="X.webp">` branch instead of the ladder branch. That branch
@@ -1229,8 +1229,7 @@ fn hero_context_uses_full_bleed_sizes() {
 //
 // `:::hero {.plate}` renders whole, never upscaled — the srcset `sizes=`
 // value has to say so or the ladder resolves against viewport width and
-// starves a wide plate into a blurry upscale (docs/archive/
-// 2026-09-11-hero-plate-variant.md). `hero_context_uses_full_bleed_sizes`
+// starves a wide plate into a blurry upscale. `hero_context_uses_full_bleed_sizes`
 // above is the same fixture shape with `plate: false`, so a diff of the
 // two tests is the whole behavioral delta this variant adds.
 
@@ -1288,7 +1287,7 @@ fn hero_plate_false_is_byte_identical_to_unit_hero() {
 
 #[test]
 fn markdown_standalone_width_wide_uses_wide_band_sizes() {
-    // ADR-021 Corollary 2 content-width escape (2026-07-30): site.css now
+    // Content-width escape (2026-07-30): site.css now
     // sizes data-width bands, so a wide figure declares the wide band —
     // min(63rem, 100vw) above the 48rem breakpoint — not the content
     // column. (Pre-escape this mapped to SIZES_BODY because the attribute
@@ -1343,9 +1342,8 @@ fn markdown_standalone_width_page_uses_page_band_sizes() {
 }
 
 #[test]
-fn explicit_sizes_option_overrides_context() {
-    // The options.sizes channel (figure data-width tokens and grid-cell
-    // scoping thread through it) must win over the context default.
+fn grid_cell_scope_sets_a_body_images_sizes() {
+    // An image inside a grid cell declares the cell, not the column.
     let s = snapshot_dims("photo.jpg", 2000, 1200);
     let html = synthesize_image_html(
         "photo.jpg",
@@ -1353,19 +1351,65 @@ fn explicit_sizes_option_overrides_context() {
         &s,
         ImageContext::MarkdownInline,
         &ImageRenderOptions {
-            sizes: Some("(min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw"),
+            grid_cell_sizes: Some("auto, calc(min(1200px, 100vw) / 3)"),
             ..Default::default()
         },
     );
     assert!(
-        html.contains(r#"sizes="(min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw""#),
-        "options.sizes must override the context default; got: {html}"
+        html.contains(r#"sizes="auto, calc(min(1200px, 100vw) / 3)""#),
+        "the grid cell scope must set sizes=; got: {html}"
     );
+}
+
+/// The vertical body value, for a body image in each shape it arrives in.
+fn vertical_body_html(context: ImageContext<'_>, data_width: Option<&str>, cell: Option<&str>) -> String {
+    let s = snapshot_dims("photo.jpg", 2400, 1771);
+    synthesize_image_html(
+        "photo.jpg",
+        "",
+        &s,
+        context,
+        &ImageRenderOptions {
+            vertical: true,
+            data_width,
+            grid_cell_sizes: cell,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn vertical_body_image_declares_the_column_height_times_its_aspect() {
+    let want = r#"sizes="calc(1.356 * (100vh - 4rem))""#;
+    let inline = vertical_body_html(ImageContext::MarkdownInline, None, None);
+    assert!(inline.contains(want), "got: {inline}");
+    // A width token is inert under vertical typesetting.
+    let wide = vertical_body_html(ImageContext::MarkdownInline, Some("wide"), None);
+    assert!(wide.contains(want), "got: {wide}");
+    let extras = empty_extras();
+    let standalone = vertical_body_html(
+        ImageContext::MarkdownStandalone {
+            caption: None,
+            width: Some("screen"),
+            align: None,
+            class_names: &[],
+            extra_attrs: &extras,
+        },
+        None,
+        None,
+    );
+    assert!(standalone.contains(want), "got: {standalone}");
+    // A grid cell has a definite box: its own scope still wins.
+    let cell = vertical_body_html(ImageContext::MarkdownInline, None, Some("auto, 100vw"));
+    assert!(cell.contains(r#"sizes="auto, 100vw""#), "got: {cell}");
+    // Only body images move: a hero keeps its value.
+    let hero = vertical_body_html(ImageContext::Hero { plate: false }, None, None);
+    assert!(hero.contains(r#"sizes="100vw""#), "got: {hero}");
 }
 
 #[test]
 fn markdown_standalone_width_screen_uses_full_bleed_sizes() {
-    // screen/full = the full container band (100cqw in site.css's
+    // screen/full = the full container band (100cqi in site.css's
     // content-width escape); 100vw is the closest sizes= can express.
     // Mirrors markdown_standalone_width_screen_emits_data_width
     // _on_figure but with ladder-triggering dims.
@@ -1531,7 +1575,7 @@ fn snapshot_dims_animated(path: &str, w: u32, h: u32, animated: bool) -> AssetSn
 
 #[test]
 fn webp_source_wide_emits_img_srcset_no_picture() {
-    // The yinlab.io case: a non-animated 1866×1866 webp original. Exact
+    // A real site's case: a non-animated 1866×1866 webp original. Exact
     // byte shape — srcset on the <img>, no <picture>, base descriptor is
     // `photo.webp` itself at the deployed width (1866, under the cap).
     let assets = snapshot_dims("photo.webp", 1866, 1866);
@@ -1593,6 +1637,130 @@ fn webp_source_animated_is_byte_identical_bare_img() {
     assert!(
         !html.contains("srcset"),
         "animated webp must not carry srcset: {html}"
+    );
+}
+
+#[test]
+fn scroll_shape_tags_only_when_option_and_ratio_both_say_so() {
+    // A 1600x58 handscroll (~27.6:1, this crate's own 河上花圖 fixture
+    // ratio) with `scroll_shape: true` (the body-image path,
+    // DefaultHooks::render_image): both the outer `<picture>` (the real
+    // DOM containment horizontal typesetting's scroll region needs) and
+    // the inner `<img>` (asset_paths::is_scroll_shape reads its own dims
+    // lookup independently in render_img_tag) get `data-aspect="scroll"`;
+    // the picture also gets `tabindex="0"` since options.vertical is false
+    // here — a keyboard stop for the scroll region horizontal typesetting
+    // needs, that vertical typesetting's own page-flow scroll does not.
+    let assets = snapshot_dims("scroll.jpg", 1600, 58);
+    let html = synthesize_image_html(
+        "scroll.jpg",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, ..Default::default() },
+    );
+    assert!(
+        html.contains(r#"<picture data-aspect="scroll" tabindex="0">"#),
+        "got: {html}"
+    );
+    assert!(
+        html.matches(r#"data-aspect="scroll""#).count() == 2,
+        "expected data-aspect=\"scroll\" on both picture and img: {html}"
+    );
+
+    // Same option, ordinary 1600x900 photo (~1.78:1): the option alone
+    // must not tag it — only past SCROLL_SHAPE_ASPECT does.
+    let ordinary = snapshot_dims("photo.jpg", 1600, 900);
+    let html_ordinary = synthesize_image_html(
+        "photo.jpg",
+        "alt",
+        &ordinary,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, ..Default::default() },
+    );
+    assert!(
+        !html_ordinary.contains("data-aspect"),
+        "got: {html_ordinary}"
+    );
+
+    // Same handscroll dims, option left at its Hero/GalleryThumb/
+    // FolderCardCover default (false, DefaultHooks never sets it there):
+    // never tagged, even though the ratio alone would qualify.
+    let html_untagged = synthesize_image_html(
+        "scroll.jpg",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions::default(),
+    );
+    assert!(
+        !html_untagged.contains("data-aspect"),
+        "got: {html_untagged}"
+    );
+}
+
+#[test]
+fn scroll_shape_skips_tabindex_under_vertical_typesetting() {
+    // Same handscroll, `vertical: true`: still tagged (vertical.css's own
+    // override needs the attribute to select on), but no `tabindex` — a
+    // vertically-typeset page has no nested scroller for it to be a
+    // keyboard stop for (render/image.rs's own reasoning: a second tab
+    // stop there would be a pointless one).
+    let assets = snapshot_dims("scroll.jpg", 1600, 58);
+    let html = synthesize_image_html(
+        "scroll.jpg",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, vertical: true, ..Default::default() },
+    );
+    assert!(html.contains(r#"<picture data-aspect="scroll">"#), "got: {html}");
+    assert!(!html.contains("tabindex"), "got: {html}");
+}
+
+#[test]
+fn scroll_shape_wraps_a_bare_webp_source_in_a_scroll_container() {
+    // A webp SOURCE never gets a `<picture>` of its own otherwise — Phase B
+    // rides the responsive ladder directly on the `<img>` (this file's own
+    // module doc) — but horizontal typesetting's scroll container needs
+    // real DOM containment an `<img>` alone doesn't have (nothing for a
+    // browser to scroll TO reveal more of, only clip/crop). A scroll-shaped
+    // one gets wrapped in a `<picture>` that exists for exactly that reason,
+    // same attributes as the raster-original path, and no `<source>` since
+    // there is no second candidate to offer.
+    let assets = snapshot_dims("scroll.webp", 1600, 58);
+    let html = synthesize_image_html(
+        "scroll.webp",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, ..Default::default() },
+    );
+    assert!(
+        html.starts_with(r#"<picture data-aspect="scroll" tabindex="0"><img"#),
+        "got: {html}"
+    );
+    assert!(html.ends_with("</picture>"), "got: {html}");
+    assert!(
+        !html.contains("<source"),
+        "a webp source never gets a <source>: {html}"
+    );
+
+    // Vertical typesetting needs no container at all: vertical.css sizes the
+    // bare `<img>` directly, as part of the page's own scroll — wrapping it
+    // would only add an inert element.
+    let html_vertical = synthesize_image_html(
+        "scroll.webp",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, vertical: true, ..Default::default() },
+    );
+    assert!(html_vertical.starts_with("<img"), "got: {html_vertical}");
+    assert!(!html_vertical.contains("<picture"), "got: {html_vertical}");
+    assert!(
+        html_vertical.contains(r#"data-aspect="scroll""#),
+        "got: {html_vertical}"
     );
 }
 
@@ -1788,4 +1956,39 @@ fn webp_source_in_email_body_never_leaks_srcset() {
         html.contains(r#"style="display:block;max-width:100%;height:auto;""#),
         "email <img> shape preserved: {html}"
     );
+}
+
+/// The vertical body `sizes=` values the `vertical-sizes` render gate fetches
+/// against the real CSS column in Chromium and WebKit. The gate cannot call
+/// Rust, so it reads this golden; this test keeps the golden equal to what
+/// the synthesizer emits. Regenerate with `SNAPSHOTS=overwrite`.
+#[test]
+fn vertical_sizes_render_gate_golden_matches_the_synthesizer() {
+    let cases: [(u32, u32); 4] = [(2400, 1771), (6000, 1500), (2000, 4000), (2400, 2400)];
+    let mut want = String::from("{\n");
+    for (i, (w, h)) in cases.iter().enumerate() {
+        let s = snapshot_dims("photo.jpg", *w, *h);
+        let html = synthesize_image_html(
+            "photo.jpg",
+            "",
+            &s,
+            ImageContext::MarkdownInline,
+            &ImageRenderOptions { vertical: true, ..Default::default() },
+        );
+        let sizes = html
+            .split(r#"sizes=""#)
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .unwrap_or_else(|| panic!("no sizes= for {w}x{h}: {html}"));
+        let sep = if i + 1 == cases.len() { "" } else { "," };
+        want.push_str(&format!("  \"{w}x{h}\": \"{sizes}\"{sep}\n"));
+    }
+    want.push_str("}\n");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/render-gates/site/vertical-sizes.golden.json");
+    if std::env::var("SNAPSHOTS").as_deref() == Ok("overwrite") {
+        std::fs::write(&path, &want).unwrap();
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(have, want, "stale {}: rerun with SNAPSHOTS=overwrite", path.display());
 }

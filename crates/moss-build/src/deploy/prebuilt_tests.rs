@@ -36,6 +36,33 @@ fn prebuilt_generation_id_is_real_hash_not_placeholder() {
     );
 }
 
+/// A prebuilt manifest and a normal build's sealed manifest are compared by the
+/// server as opaque strings, so for the same bytes the entry must be identical
+/// down to the hex formatting. A different digest marks every file as changed
+/// each time a site switches between the two paths.
+#[test]
+fn a_prebuilt_manifest_entry_equals_the_normal_builds_entry_for_the_same_bytes() {
+    let tmp = tmp_dir();
+    // The second file spans several streaming reads.
+    let big: Vec<u8> = (0u32..40_000).flat_map(|i| i.to_le_bytes()).collect();
+    let files: [(&str, &[u8]); 3] =
+        [("index.html", b"<html></html>"), ("empty.txt", b""), ("assets/big.bin", &big)];
+    for (name, bytes) in files {
+        let path = tmp.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    let manifest = build_manifest_from_dir(tmp.path()).expect("build_manifest_from_dir");
+
+    for (name, bytes) in files {
+        let normal_build_entry = crate::types::content::file_entry(
+            &crate::build::assets::paths::compute_binary_hash(bytes),
+        );
+        assert_eq!(manifest[name], normal_build_entry, "{name}");
+    }
+}
+
 /// Same manifest content produced in different ways (e.g. different HashMap
 /// insertion order) must yield the same generation_id.
 #[test]
@@ -67,12 +94,19 @@ fn prebuilt_generation_id_is_deterministic() {
 use crate::deploy::freeze::{with_publish_guard, PUBLISH_IN_PROGRESS_MSG};
 use crate::deploy::progress::silent;
 
-/// Serializes every test in THIS binary that touches the publish latch.
-///
-/// `moss_build::deploy::freeze` declares its own twin, and that is not
-/// duplication to fold: a `#[cfg(test)]` static compiles only into its own
-/// crate's test binary, so the two are never live in the same process.
-static PUBLISH_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Serializes every test in THIS binary that touches the publish latch — the
+// very lock `deploy::freeze`'s own latch tests take. The latch is one
+// process-global, so a lock per test module is no lock: these tests and
+// freeze's run in the same test binary, and a freeze test parking a publish
+// made `push_prebuilt` here answer "a publish is already running".
+//
+// A test that also sets `MOSS_SETA_URL` takes `crate::ENV_TEST_MUTEX` too,
+// always second, so the two can never be held in opposite orders. This file's
+// own lock used to guard the env var as well, while `deploy::push`'s tests
+// guard it with `ENV_TEST_MUTEX`: two locks, one variable, so a prebuilt test
+// and a push test running together each pointed the other's client at its
+// own mock server.
+use crate::deploy::freeze::single_flight_tests::TEST_LOCK as PUBLISH_TEST_LOCK;
 
 fn tmp_dir() -> tempfile::TempDir {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
@@ -131,6 +165,7 @@ async fn a_normal_publish_is_rejected_while_a_prebuilt_publish_is_in_flight() {
     use std::task::{Context, Poll, Waker};
 
     let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
     // Park the in-flight prebuilt publish on a connect to a dead local port:
     // it reaches its first await and stays there, and no traffic leaves the box.
@@ -203,4 +238,147 @@ async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
         .await
         .expect_err("a version-ahead config must refuse");
     assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
+}
+
+// ── Self-heal wiring: this call site, not the shared function ───────────────
+//
+// `upload_regular_file` (deploy/upload.rs) is proven to self-heal and to
+// return the actually-shipped hash by upload_tests.rs's own tests, called
+// directly with a stale hash handed in as a literal. None of that proves
+// `push_prebuilt_inner` (this file) does the right thing with what comes
+// back: `commit_sync` sends `manifest` verbatim as the server's new source of
+// truth, so a healed hash that never reaches `manifest` commits a permanently
+// wrong record for a file that was, in fact, uploaded correctly.
+// `push.rs`'s `a_self_healed_file_corrects_its_manifest_entry_before_commit`
+// proves this for the moss-format publish path; this is prebuilt's own,
+// independent fold-in loop (the `self_heal_corrections` block above
+// `push_prebuilt_inner`'s commit_sync call) and needs its own proof.
+//
+// Unlike `push.rs`, there is no separately-sealed manifest to hand a stale
+// hash to — `build_manifest_from_dir` hashes the file at call time, so the
+// drift has to be a real one: the mock server withholds its `sync_manifest`
+// response until the file has been rewritten on disk, which deterministically
+// places the rewrite between the manifest hash (already computed by then) and
+// the upload's own re-read (which only happens once that response arrives).
+
+#[tokio::test]
+async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit() {
+    use tokio::net::TcpListener;
+
+    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_url = std::env::var("MOSS_SETA_URL").ok();
+
+    let old_bytes = b"<html>content the manifest hash was computed from</html>";
+    let new_bytes: &[u8] =
+        b"<html>content actually on disk by upload time - a racing rebuild</html>";
+    let hash_of = crate::build::assets::paths::compute_binary_hash;
+    let old_hash = hash_of(old_bytes);
+    let new_hash = hash_of(new_bytes);
+    assert_ne!(old_hash, new_hash, "fixture sanity: the drift must be real");
+
+    let project = tmp_dir();
+    let prebuilt = tmp_dir();
+    let target = prebuilt.path().join("index.html");
+    std::fs::write(&target, old_bytes).expect("seed prebuilt file");
+
+    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
+    let rewrite_target = target.clone();
+    let new_bytes_owned = new_bytes.to_vec();
+
+    tokio::spawn(async move {
+        // conn 0: GET /api/sites/:id/generation -> 404 (get_live_generation
+        // short-circuit: no live generation known, proceed normally).
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            crate::test_drain_http_request(&mut stream).await;
+            crate::test_respond_and_close(
+                &mut stream,
+                b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            )
+            .await;
+        }
+        // conn 1: POST /api/sites/:id/sync — drain the request (built from
+        // OLD bytes), THEN rewrite the file on disk, THEN answer. Everything
+        // downstream of this response (the file-size stat, the upload's own
+        // read) happens only after the rewrite has landed.
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            crate::test_drain_http_request(&mut stream).await;
+            tokio::fs::write(&rewrite_target, &new_bytes_owned)
+                .await
+                .expect("rewrite mid-deploy");
+            crate::test_respond_and_close(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"need\":[\"index.html\"],\"remove\":[]}",
+            )
+            .await;
+        }
+        // conn 2: PUT /api/sites/:id/files/index.html — the upload itself.
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            crate::test_drain_http_request(&mut stream).await;
+            crate::test_respond_and_close(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            )
+            .await;
+        }
+        // conn 3: POST /api/sites/:id/commit — capture the body so the test
+        // can inspect which hash actually got committed.
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let raw = crate::test_drain_http_request(&mut stream).await;
+            crate::test_respond_and_close(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 104\r\n\r\n{\"url\":\"https://healed-prebuilt.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}",
+            )
+            .await;
+            commit_tx.send(raw).ok();
+        }
+    });
+
+    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+    let identity = Identity::generate().expect("generate identity");
+
+    let result = push_prebuilt(
+        project.path(),
+        prebuilt.path(),
+        "healed-prebuilt",
+        &identity,
+        &silent(),
+    )
+    .await;
+
+    match prev_url {
+        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+        None => std::env::remove_var("MOSS_SETA_URL"),
+    }
+
+    assert!(
+        result.is_ok(),
+        "a hash drift stable across the settle pause must self-heal a prebuilt deploy too: {result:?}"
+    );
+
+    let commit_request = commit_rx
+        .await
+        .expect("commit_sync must have been called for the publish to succeed");
+    let request_str = String::from_utf8_lossy(&commit_request);
+    let body = request_str
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or(&request_str);
+    assert!(
+        body.contains(&new_hash),
+        "commit_sync's manifest must carry the hash actually shipped for the self-healed file, \
+         not the one the manifest was built with before the drift: {body}"
+    );
+    assert!(
+        !body.contains(&old_hash),
+        "the stale pre-drift hash must not survive into the committed manifest: {body}"
+    );
 }

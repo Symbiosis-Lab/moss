@@ -1,5 +1,5 @@
 //! The desktop-shaped `MossEvent` payload vocabulary that crossed from the app
-//! crate at S1 of the ADR-067 relocation (2026-08-28, plan decision 4): these
+//! crate at S1 of the relocation (2026-08-28, plan decision 4): these
 //! types ride `MossEvent` variants, and the event contract lives crate-side so
 //! the SSE carrier can publish it. The machinery that PRODUCES each payload —
 //! the login probe, the updater, the publish-verification supervisor, the
@@ -51,8 +51,7 @@ pub struct ActionPanelOpened {
     /// Whether the browser-panel is showing a login URL (matters.town/matters.icu
     /// login path). When true, the shell renders the login chrome (identity +
     /// back + close) instead of the generic plugin-title strip. Always false for
-    /// non-browser occupants (editor, composer). Design: C1–C4 in
-    /// docs/archive/2026-06-23-matters-login-lifecycle-and-minimal-browser-design.md
+    /// non-browser occupants (editor, composer). Design: C1–C4.
     pub is_login_browser: bool,
 }
 
@@ -62,8 +61,8 @@ pub struct ActionPanelOpened {
 /// because `UpdateCheckResult` carries it.
 ///
 /// Serializes snake_case to match the hand-written `NetworkFailureClass` in
-/// `frontend/app/bindings.ts` (central `pnpm run bindings` regen is the source
-/// of truth and must reproduce this).
+/// the desktop app's bindings module (central `pnpm run bindings` regen is
+/// the source of truth and must reproduce this).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum NetworkFailureClass {
@@ -169,7 +168,21 @@ pub struct PublishVerdict {
     /// target at all until this field, so a moss-hosted `live`/`checking`
     /// fell into OnionPress's branches by default).
     pub target: PublishTarget,
+    /// The folder (site root) this verdict is about. A verification burst is
+    /// fire-and-forget and can land after the author has switched to a
+    /// different folder, so every listener that applies a verdict to visible
+    /// state must first check this against whatever folder it is currently
+    /// showing and ignore a mismatch — otherwise a stray verdict for the
+    /// folder just left behind is indistinguishable from one about the
+    /// folder now open.
+    pub folder: String,
     pub state: PublishVerdictState,
+    /// What produced this verdict: a publish that just landed, or moss
+    /// re-checking an already-published folder on open. A resume is not news
+    /// — the folder was already published, and this only reconfirms it — so
+    /// a listener may update state from it silently but must never toast or
+    /// otherwise interrupt on it; only a `Publish`-origin verdict may.
+    pub origin: PublishVerdictOrigin,
     pub generation: String,
     pub url: String,
     /// The receiver's last effective reachability code (`"200"`, `"takeover"`,
@@ -205,25 +218,26 @@ pub struct PageVerdict {
 }
 
 /// The verification state machine's announcable states. `Checking`/`Live`/
-/// `Unreachable` are OnionPress's; the other four are moss-hosting's,
-/// produced by `classify_moss_verification` (design
-/// `docs/archive/2026-09-10-publish-receipt-design.md` §4a's 5-row table —
-/// `Live` is that table's first row, shared rather than duplicated).
+/// `Unreachable` are OnionPress's; the other three are moss-hosting's,
+/// produced by `classify_moss_verification` — `Live` is shared rather than
+/// duplicated between the two.
 /// `rename_all` is `snake_case`, not the old `lowercase`, so `UnreachableHere`
 /// serializes as `"unreachable_here"`; every pre-existing variant is a single
 /// word, so its wire value is unchanged by the switch.
+///
+/// There is deliberately no "the public address is serving an older version"
+/// state. A CDN that rewrites HTML on the way out makes the served bytes
+/// differ from the published bytes on every request, so that state was
+/// unfalsifiable from the client and fired on healthy sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PublishVerdictState {
     Checking,
     Live,
     Unreachable,
-    /// Control probe confirms the new generation; the public fetch still
-    /// returns the previous version. moss keeps checking.
-    Stale,
     /// Control probe confirms the new generation; the public fetch itself
-    /// failed (timeout, DNS, TLS) — a connection problem on this computer,
-    /// not the site.
+    /// failed (timeout, DNS, TLS, a non-2xx answer) — a connection problem on
+    /// this computer, not the site.
     UnreachableHere,
     /// The control probe itself is unreachable: this computer looks offline,
     /// and nothing about the site can be concluded.
@@ -233,9 +247,23 @@ pub enum PublishVerdictState {
     Incomplete,
 }
 
+/// What armed the verification session a [`PublishVerdict`] reports on: a
+/// publish that just landed, or moss re-checking a folder that was already
+/// published, done on open so a hosted site's status survives a relaunch or
+/// a folder switch. Every transition announced while one arming stands
+/// carries that same origin — a `Live`/`Unreachable` that follows a `Resume`
+/// arm is itself a `Resume`, because it is answering the same "is this still
+/// true" question the resume asked, not a fresh publish event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishVerdictOrigin {
+    Publish,
+    Resume,
+}
+
 // ── The threshold screen's wire vocabulary ───────────────────────────────────
 // Crossed with `MossEvent::ThresholdPrompt`; mirrors
-// `frontend/app/preview/threshold/seam.ts` exactly. The rendezvous (PENDING,
+// the desktop app's threshold seam exactly. The rendezvous (PENDING,
 // the ack/decision commands) stays app-side in
 // `system/nested_site_guard/wire.rs`, which re-exports these shapes.
 
@@ -453,12 +481,12 @@ pub enum PublishReceiptPageKind {
 }
 
 /// `change_record::PageChangeKind` (the pure merge module's vocabulary) to
-/// this wire type. The single conversion both receipt-side consumers —
-/// `deploy.rs`'s `page_change_record_to_receipt_page` and `app_seam.rs`'s
-/// `PageVerdict` construction — call, so a third `PageChangeKind` variant
-/// only needs fixing here. Kept as its own impl rather than folded into one
-/// enum: `PageChangeKind` is moss-build's pure merge output and this is the
-/// receipt's specta-exported wire type, and collapsing them would let a
+/// this wire type. The single conversion both receipt-side consumers call:
+/// the one that turns a page change record into a receipt row, and the one
+/// that builds the post-publish check for each page. A third `PageChangeKind`
+/// variant only needs fixing here. Kept as its own impl rather than folded
+/// into one enum: `PageChangeKind` is moss-build's pure merge output and this
+/// is the receipt's specta-exported wire type, and collapsing them would let a
 /// receipt-shape change ripple into the pure merge module for no reason.
 impl From<crate::deploy::change_record::PageChangeKind> for PublishReceiptPageKind {
     fn from(kind: crate::deploy::change_record::PageChangeKind) -> Self {
@@ -486,8 +514,7 @@ pub struct PublishReceiptPage {
 /// this is a snapshot taken once, at receipt-build time — a moss-hosted
 /// publish starts at `Checking` (`PublishReceipt::from_moss_push`) and the
 /// frontend patches it in place from the `PublishVerdict` event task 3b's
-/// burst emits once the check settles (task 3c,
-/// `docs/archive/2026-09-10-publish-receipt-design.md` §4a). `Unverifiable`
+/// burst emits once the check settles (task 3c). `Unverifiable`
 /// is the only value a non-moss target (or a target step 3 never wires) ever
 /// carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
@@ -496,7 +523,6 @@ pub enum PublishReceiptLive {
     Unverifiable,
     Checking,
     Live,
-    Stale,
     UnreachableHere,
     Offline,
     Incomplete,
@@ -520,8 +546,8 @@ pub struct PublishReceiptDomain {
 
 /// The single record a finished publish hands to the frontend, replacing
 /// the `deploy_success_toast`/`announce_deploy_success` pair (step 2 of the
-/// publish-receipt plan, `docs/archive/2026-09-10-publish-receipt-design.md`).
-/// `generation_id` joins the receipt to the publish-history record (ADR-083)
+/// publish-receipt plan).
+/// `generation_id` joins the receipt to the publish-history record
 /// so the two never grow a second, competing "what did I just publish"
 /// answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Type)] // PartialEq only, not Eq — DeployAddress doesn't derive Eq
@@ -536,13 +562,26 @@ pub struct PublishReceipt {
     pub live: PublishReceiptLive,
     pub newsletter: Option<PublishReceiptNewsletter>,
     pub domain: Option<PublishReceiptDomain>,
+    /// Where the site is reachable (its URL forms, such as a gateway or an
+    /// identifier) — standing facts, not what this publish removed; see
+    /// `removed_public_addresses` for that.
     pub addresses: Vec<crate::config::deployment::DeployAddress>,
+    /// Public addresses (served form, e.g. `/feed.xml`) this publish stopped
+    /// serving that no removed or moved page row in `pages` already names:
+    /// files, and pages whose address went offline without the page being
+    /// deleted. Only the ones the receipt shows (they share the page rows'
+    /// cap); `hidden_rows` counts the rest. Empty until the page-change
+    /// summary is folded in.
+    pub removed_public_addresses: Vec<String>,
+    /// How many receipt rows, page rows and removed-address rows together,
+    /// did not fit the cap and are not shown.
+    pub hidden_rows: u32,
 }
 
 /// Derive a receipt's `host` from a publish URL — the same reading
-/// `deploy_success_toast` used (`src-tauri/src/system/feedback_router.rs:131-137`)
+/// `deploy_success_toast` used in the desktop app's feedback router,
 /// and shared by every `PublishReceipt` assembly site (moss-hosted push here,
-/// and `plugin_publish_receipt` in `src-tauri/src/preview/commands.rs`) so the
+/// and `plugin_publish_receipt` in the desktop app's preview commands) so the
 /// two never drift.
 pub fn host_from_url(url: &str) -> String {
     url.trim_start_matches("https://")
@@ -589,8 +628,68 @@ impl PublishReceipt {
             newsletter: None,
             domain: None,
             addresses: Vec::new(),
+            removed_public_addresses: Vec::new(),
+            hidden_rows: 0,
         }
     }
+}
+
+/// One starter's whole state in the desktop app's starter picker, emitted as
+/// `MossEvent::StarterState` on every change. `rev` rises with every emit
+/// across all starters, so a webview that also asked for every row on mount
+/// keeps whichever copy of a row is newer and needs no replay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+pub struct StarterStateRow {
+    pub id: String,
+    pub rev: u32,
+    pub state: StarterState,
+    /// "Use this starter" is copying this starter into a folder: its source
+    /// download's progress, `done == total` while it unpacks. Kept apart from
+    /// `state`, which goes on saying what the preview is doing.
+    pub applying: Option<StarterProgress>,
+}
+
+/// One download's progress in bytes, as `f64` for the reason [`StarterState`]
+/// gives.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Type)]
+pub struct StarterProgress {
+    pub done: f64,
+    pub total: f64,
+}
+
+/// What a starter is doing. One owner app-side holds these; nothing else
+/// decides whether a starter's preview is there.
+///
+/// Byte counts and the retry time are `f64`, as in [`UpdateDownloadProgress`]:
+/// specta renders 64-bit integers as JS strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StarterState {
+    /// Nothing fetched: the card and the frame show the bundled poster.
+    Poster,
+    /// A download is running. `done == total` while the archive unpacks.
+    Downloading { done: f64, total: f64 },
+    /// The preview is unpacked and can be served.
+    Ready,
+    /// The last attempt failed. `retry_after` (Unix milliseconds) is when a
+    /// fresh show of interest may try again on its own; `None` means only an
+    /// explicit retry does.
+    Failed { reason: StarterFailure, retry_after: Option<f64> },
+    /// The starter needs a newer moss than this one.
+    Unavailable { needs: String },
+}
+
+/// Why a starter download failed, as far as the person can act on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum StarterFailure {
+    /// The registry could not be reached.
+    Connection,
+    /// Not enough free disk space.
+    Disk,
+    /// The bytes did not match the published hash.
+    Verify,
+    Other,
 }
 
 #[cfg(test)]
@@ -600,15 +699,15 @@ mod publish_receipt_tests {
     #[test]
     fn from_moss_push_derives_host_from_url() {
         let receipt = PublishReceipt::from_moss_push(
-            "https://okagaki.mosspub.com/some/page?x=1",
+            "https://sample-site.mosspub.com/some/page?x=1",
             3,
             1,
             true,
             "gen-42".to_string(),
         );
 
-        assert_eq!(receipt.host, "okagaki.mosspub.com");
-        assert_eq!(receipt.url, "https://okagaki.mosspub.com/some/page?x=1");
+        assert_eq!(receipt.host, "sample-site.mosspub.com");
+        assert_eq!(receipt.url, "https://sample-site.mosspub.com/some/page?x=1");
         assert_eq!(receipt.uploaded.files_uploaded, 3);
         assert_eq!(receipt.uploaded.files_removed, 1);
         assert!(receipt.first_publish);
@@ -618,5 +717,21 @@ mod publish_receipt_tests {
         // successful commit, so nothing is left permanently unverifiable.
         assert_eq!(receipt.live, PublishReceiptLive::Checking);
         assert!(receipt.pages.is_empty());
+        assert!(receipt.removed_public_addresses.is_empty());
+        assert_eq!(receipt.hidden_rows, 0);
+    }
+
+    /// The new field is additive: it serializes beside the existing ones and
+    /// leaves their shape alone.
+    #[test]
+    fn removed_public_addresses_serialize_beside_the_existing_fields() {
+        let mut receipt = PublishReceipt::from_moss_push("https://example.test", 1, 0, false, "g".to_string());
+        receipt.removed_public_addresses = vec!["/feed.xml".to_string()];
+        receipt.hidden_rows = 2;
+        let json = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(json["removed_public_addresses"], serde_json::json!(["/feed.xml"]));
+        assert_eq!(json["hidden_rows"], 2);
+        assert_eq!(json["pages"], serde_json::json!([]));
+        assert_eq!(json["addresses"], serde_json::json!([]));
     }
 }

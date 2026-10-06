@@ -1,6 +1,6 @@
-//! The P1 math fallback node and its inverse.
+//! The math fallback node and its inverse.
 //!
-//! P1's contract is that math is **never silently deleted**. Two shapes
+//! The contract is that math is **never silently deleted**. Two shapes
 //! carry an equation through the AST, and this module owns both plus the
 //! conversion between them, so the format and its parser cannot drift:
 //!
@@ -37,17 +37,17 @@ const PREFIX_INLINE: &str = r#"<code class="moss-math" data-moss-math="inline">"
 const PREFIX_DISPLAY: &str = r#"<code class="moss-math" data-moss-math="display">"#;
 const SUFFIX: &str = "</code>";
 
-/// Build the P1 math fallback node: the equation's own markdown source —
+/// Build the math fallback node: the equation's own markdown source —
 /// delimiters included — HTML-escaped, in a marked `<code>` span.
 ///
-/// The `data-moss-math` attribute carries display-vs-inline so a later
-/// phase's renderer can typeset from the AST without re-deriving it, and so
+/// The `data-moss-math` attribute carries display-vs-inline so a
+/// typesetting renderer can work from the AST without re-deriving it, and so
 /// the CSS can size display math differently without a second class.
 ///
-/// **Why the `$` delimiters are kept.** P1 ships no typesetting engine, so
+/// **Why the `$` delimiters are kept.** No typesetting engine runs, so
 /// this span is what the reader actually sees. Emitting the bare inner TeX
 /// would silently swallow two characters of the author's prose, which is the
-/// same content-loss P1 exists to prevent — just moved from "equation
+/// same content-loss this contract exists to prevent — just moved from "equation
 /// deleted" to "delimiters deleted". It is invisible for a real equation and
 /// destructive for a false positive:
 ///
@@ -62,9 +62,6 @@ const SUFFIX: &str = "</code>";
 /// optimize for. Keeping the delimiters also makes this node agree with
 /// [`math_source`], so an equation has ONE spelling across the body, image
 /// alt text, heading slugs and meta descriptions instead of two.
-///
-/// P2/P3 replace this span with typeset SVG, at which point the delimiters
-/// disappear along with the fallback.
 pub(crate) fn math_inline(tex: &str, display: bool) -> Inline {
     let prefix = if display { PREFIX_DISPLAY } else { PREFIX_INLINE };
     Inline::Other(format!("{prefix}{}{SUFFIX}", escape_text(&math_source(tex, display))))
@@ -121,13 +118,13 @@ pub(crate) fn math_source_from_other(html: &str) -> Option<String> {
 ///
 /// This is what lets the renderer route a math node through
 /// [`RenderHooks::render_math`](crate::ast::RenderHooks::render_math) without a
-/// dedicated `Inline::Math` AST variant (ADR-030 D3): the P1 node already
+/// dedicated `Inline::Math` AST variant: the P1 node already
 /// carries the source verbatim, so P2's typesetter recovers the exact bytes the
 /// engine needs. Round-tripping `math_inline` → this is pinned by
 /// `node_parts_round_trips` below.
 ///
 /// `pub` for the same reason as [`math_source`]: the email HTML renderer in
-/// `moss::infra::newsletter` walks `Document` directly (ADR-036) rather than
+/// `moss::infra::newsletter` walks `Document` directly rather than
 /// going through `RenderHooks`, so it decodes `Inline::Other` math nodes here
 /// to route them through its own hosted-PNG math path, falling back to the
 /// escaped source on refusal — the same three-question gate `render_math`

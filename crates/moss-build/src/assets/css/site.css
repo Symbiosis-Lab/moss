@@ -6,7 +6,7 @@
 
 /* Token definitions (@layer tokens { :root { ... } }) are generated at build
    time from crates/moss-core/src/contract/tokens.json and prepended to this
-   file before minification in src-tauri/src/build/render/blocking.rs.
+   file before minification in `build::render::blocking`.
    The @layer order declaration is also part of that generated prefix.
    Do NOT add --moss-* custom property definitions here. */
 
@@ -100,7 +100,7 @@
   /* border-strong, not border-medium: with `border: none` and a transparent
      background, this underline is the ONLY thing showing a text field is here,
      which makes it a component boundary under WCAG 1.4.11 rather than a
-     decorative hairline. It measured 1.50:1 (moss#1047). The hairline tokens
+     decorative hairline. It measured 1.50:1. The hairline tokens
      stay as they are — they ARE decorative and are exempt. */
   /* Logical, not `border-bottom`: under vertical typesetting the field is
      genuinely vertical-rl (no horizontal exception), and block-end is the
@@ -269,12 +269,10 @@ html[lang="zh-Hant"] {
    EVERY element of every page. It was labelled "smooth transitions for theme
    changes", but smoothing is the wrong answer there: a theme swap repaints the
    whole document, and tweening it element by element is exactly what makes the
-   switch look broken rather than instant (interfaces.dev, recorded in
-   docs/reference/design/references/accessibility.md). It also escaped all
+   switch look broken rather than instant (interfaces.dev). It also escaped all
    seven of this file's reduced-motion blocks, so a visitor who asked for
    reduced motion got
-   the fade anyway — against moss's own rule that reduced motion jump-cuts
-   (docs/reference/design-vocabulary.md).
+   the fade anyway — against moss's own rule that reduced motion jump-cuts.
 
    What genuinely depended on it was hover feedback: most link and button hover
    rules here change only a colour and declare no transition of their own. So
@@ -322,7 +320,7 @@ body {
   font-family: var(--moss-font-body);
   font-size: var(--moss-reading-size);
   font-weight: var(--moss-font-weight-body);
-  line-height: 1.75;
+  line-height: var(--moss-read-leading);
   color: var(--moss-color-text);
   background: var(--moss-color-bg);
   margin: 0;
@@ -339,9 +337,7 @@ body {
      gives up on the right so that gutter fits on screen — and every centred
      block then moves HALF the inset, since it re-centres in what is left.
      Usually it gives up nothing: a centred column already has margin enough at
-     a 1440px window, so the notes hang in space the page already had
-     (docs/archive/2026-09-01-sidenote-gutter-shift-amount.md, whose tables
-     call the half-value the "shift").
+     a 1440px window, so the notes hang in space the page already had.
 
      The middle term is `2 * reserve + column - 100vw` because the aside is
      pulled right by exactly one reserve from the container's CONTENT edge
@@ -384,6 +380,25 @@ b {
   font-weight: 480;
 }
 
+/* Clips an element to a 1px box while keeping it in the accessibility tree
+   and the tab order — content meant for assistive tech only, never sighted
+   readers (a page's own `<h1>` on a layout whose visible heading is drawn
+   some other way, a form label standing in for a visible placeholder). Moved
+   here from comments.css (2026-10) so a page with no synced comments still
+   loads it: that sheet is a feature partial, linked only when comments are
+   present, and this rule has nothing to do with comments. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ==========================================================================
    3. Typography
    ========================================================================== */
@@ -403,23 +418,23 @@ h6 {
   margin-inline: 0;
 }
 
-/* Ma 間: asymmetric margins per heading level. Large above = section break signal.
-   Small below = heading gravitates toward its content. The ladder is 64/48/32, and
-   the floor is load-bearing: `p` carries `margin-bottom: var(--moss-space-md)` (24px),
-   so a heading given 24px above it collapses to exactly a paragraph gap and reads as
-   body text with no separation at all. h3 sat there until 2026-08-31. Every level's
-   top margin must exceed 24px or the level has no space cue, which matters most in
-   Han text, where there is no capitalisation or ascender to carry the hierarchy.
-   h4–h6 keep the shared rule above (they appear rarely in prose). */
+/* Ma 間: asymmetric margins per heading level — large above (section break signal),
+   small below (heading gravitates toward its content). Fixed --moss-space-* chrome
+   geometry, for a heading outside <article> (footer.md, and anywhere else without
+   its own margin rule) with no reading size of its own to measure a line against.
+   Prose gets the same ladder expressed in lines of body text instead — see the
+   article-scoped rules by the reading-scale block below (~line 500), which is
+   also where this ladder's provenance (h3's 2026-08-31 fix, the paragraph-floor
+   reasoning) now lives. */
 h1:not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) { margin-block: var(--moss-space-2xl) var(--moss-space-sm); }
 h2:not(.moss-card-title) { margin-block: var(--moss-space-xl) var(--moss-space-sm); }
 h3:not(.moss-card-title) { margin-block: var(--moss-space-lg) var(--moss-space-xs); }
 
-/* Hero-led pages: the hero acts as the visual H1, so top-level `## section`
-   headings (rendered as h2) should read as chapter breaks, not mid-section
-   sub-headings. Bump their top margin to H1 scale. The hero is emitted as a
-   preceding sibling of <main> in the index template. */
-.moss-hero ~ main article h2:not(.moss-card-title) { margin-block-start: var(--moss-space-2xl); }
+/* Hero-led pages: the hero acts as the visual H1, so a `## section` heading
+   reads as a chapter break, not a mid-section sub-heading — top margin
+   matches h1's own scale. The hero sits as a preceding sibling of <main>
+   in the index template. */
+.moss-hero ~ main article h2:not(.moss-card-title) { margin-block-start: calc(var(--moss-read-line) * 2); }
 
 /* Section-header h1s (from `# heading` markdown) inherit the default top margin
    from the `h1,h2,...h6` rule above. The auto-injected article-title h1 zeroes
@@ -483,8 +498,7 @@ h6 {
  * h4 sat below CJK body at every viewport, `###` sank below body the moment the
  * reader pressed Aa once (only body moved), and on phones the page title landed
  * below a `#`. Nobody chose those ratios; they fell out of dividing one base by
- * another. Audit: the 2026-08-31 CJK typography audit in the desktop repo's
- * docs/archive.
+ * another. Audit: a 2026-08-31 CJK typography audit of the desktop app.
  *
  * Ratios, in px at the 18px default: 40 title / 30 / 24 / 19 / 18.5 / 16 / 14,
  * body 18, caption 13. `###` and below deliberately stop competing on size —
@@ -503,6 +517,58 @@ article h3 { font-size: var(--moss-read-h3); }
 article h4 { font-size: var(--moss-read-h4); }
 article h5 { font-size: var(--moss-read-h5); }
 article h6 { font-size: var(--moss-read-h6); }
+
+/* The reading RHYTHM, for ARTICLE PROSE only — the vertical-spacing counterpart
+ * to the reading scale above, and article-scoped for the same reason: chrome
+ * (footer.md, cards, and anywhere else without its own margin rule) keeps the
+ * fixed --moss-space-* ladder above; only prose measures against the text it
+ * separates. --moss-read-line (tokens.json) is one line of body text — reading
+ * size times leading — so a gap expressed as a multiple of it holds steady
+ * relative to the text at every reader font-scale step and script, where a
+ * fixed rem gap didn't: the paragraph gap used to be 0.78 of a line at the
+ * smallest Aa step and 0.56 at the largest, and the gap above a `##` (48px)
+ * tied the figure gap (48px) instead of standing apart from it. `p`'s own
+ * rule is further below; duplicated here rather than converted in place
+ * because footer.md content sits outside <article> with no font-size of its
+ * own to size a line against — see `p`'s comment for the p+p history this
+ * mirrors. */
+article p { margin-block: 0 calc(var(--moss-read-line) * 0.75); }
+article p + p { margin-block-start: calc(var(--moss-read-line) * 0.75); }
+
+article h4, article h5, article h6 {
+  margin-block: calc(var(--moss-read-line) * 1.5) calc(var(--moss-read-line) * 0.75);
+}
+
+/* Ma 間: asymmetric margins per heading level, in lines of body text (L =
+   --moss-read-line) rather than fixed px — large above (section break signal),
+   small below (heading gravitates toward its content). h1 2L/0.5L, h2 1.5L/0.5L,
+   h3 1L/0.25L; h4–h6 keep the shared rule above (they appear rarely in prose).
+   Every level's top margin still clears the paragraph gap (0.75L) — h3 sat at
+   the floor until 2026-08-31 — which matters most in Han text, where there is
+   no capitalisation or ascender to carry the hierarchy. */
+article h1:not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+  margin-block: calc(var(--moss-read-line) * 2) calc(var(--moss-read-line) * 0.5);
+}
+article h2:not(.moss-card-title) {
+  margin-block: calc(var(--moss-read-line) * 1.5) calc(var(--moss-read-line) * 0.5);
+}
+article h3:not(.moss-card-title) {
+  margin-block: var(--moss-read-line) calc(var(--moss-read-line) * 0.25);
+}
+
+/* Two headings back to back, with no prose between them: the ladder above
+ * assumes a heading is closing out a block of prose above it, which doubles
+ * up awkwardly when the "prose" is really just the previous heading. The
+ * second heading's top margin drops to a flat 0.5L regardless of level.
+ * Needs more specificity than the :not() rules just above to win for h1–h3 —
+ * the same .moss-card-title/.moss-folder-title/.moss-article-title exclusions
+ * repeated on both sides of the `+` get it there, and are also correct on
+ * their own terms (an embedded card's title, or the masthead, should never
+ * pick up this rule either). */
+article :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title)
+  + :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+  margin-block-start: calc(var(--moss-read-line) * 0.5);
+}
 
 /* Face + weight for article prose SECTION headings ("serif-title-only" model).
  *
@@ -626,7 +692,7 @@ html {
 /* Paragraphs. The measure is an inline-axis limit, so every consumer of
    --moss-content-width caps `max-inline-size`, never `max-width`: under
    `writing-mode: vertical-rl` a physical max-width binds the BLOCK axis and
-   a listing's cards overflow leftward through the footer (zhu-da, 2026-09-05).
+   a listing's cards overflow leftward through the footer (2026-09-05).
    Horizontally the two names are the same property. */
 p {
   margin-block: 0 var(--moss-space-md);
@@ -634,6 +700,14 @@ p {
   max-inline-size: var(--moss-content-width);
 }
 
+/* Not redundant with `p`'s own bottom margin, even though adjoining block-flow
+   margins already collapse to their max: a flex/grid parent doesn't collapse
+   margins at all, so without this rule a second paragraph there would sit flush
+   against the first (`p`'s own top margin is 0). `.moss-grid-card p + p` (below)
+   overrides this down to space-xs for exactly that reason — it only has
+   anything to override because this rule exists. Prose has its own copy in L
+   units, `article p + p` (by the reading-rhythm block above), for the same
+   reason `p` itself does. */
 p + p {
   margin-block-start: var(--moss-space-md);
 }
@@ -662,7 +736,7 @@ li > ol {
    `1. / a. / i.`. Declaring both ramps explicitly makes the UL ramp robust
    against any future reset and fixes the OL gap. Descendant combinators with
    plain element names (no leading space + `:`), so they survive the CSS
-   minifier (see the figure-rule note re issue #631). */
+   minifier (see the figure-rule note below). */
 ul { list-style-type: disc; }
 ul ul { list-style-type: circle; }
 ul ul ul { list-style-type: square; }
@@ -671,7 +745,7 @@ ol { list-style-type: decimal; }
 ol ol { list-style-type: lower-latin; }
 ol ol ol { list-style-type: lower-roman; }
 
-/* Task lists (ADR-034 § Task lists). The renderer emits a bare disabled
+/* Task lists. The renderer emits a bare disabled
    `<input type="checkbox">` as the item's first inline — no class, because the
    checkbox itself is the selector. Dropping the marker keeps the box from
    sitting next to a redundant bullet; the negative indent pulls the row back
@@ -718,7 +792,7 @@ a:where(:not(.moss-btn)):focus {
    colophon all inherit this padding, so under vertical-rl every band shares
    the same y extent by construction; a physical `padding: 0 X` here became a
    block-axis inset on a vertical page and left the nav rule, the cards and
-   the footer rule each starting at a different height (zhu-da, 2026-09-05). */
+   the footer rule each starting at a different height (2026-09-05). */
 .container {
   max-inline-size: var(--moss-site-max-width);
   margin-inline: auto;
@@ -730,12 +804,12 @@ header {
   padding-block-end: var(--moss-space-sm);
 }
 
-/* Chrome clearance is NOT applied here (ADR-039). The moss app shell insets its
+/* Chrome clearance is NOT applied here. The moss app shell insets its
    preview iframe below the floating titlebar, so the previewed document never
    paints under the chrome and needs no compensating padding. site.css therefore
    carries no shell-only rules, and the served document is byte-identical for a
    preview and a real web visit — which is the property that ends the recurring
-   "48px of dead space" family of bugs (issue #926).
+   "48px of dead space" family of bugs.
    Do NOT reintroduce a padding-top rule scoped to .moss-shell-frame body: with
    the shell already subtracting the titlebar height, it would double the offset. */
 
@@ -923,14 +997,15 @@ footer.container > :last-child {
   margin-block-end: 0;
 }
 
-/* The footer's ::before divider is the single bottom-matter divider and must
-   always render — including on pages with no authored footer content. So the
-   footer is never hidden; when it has no visible content we instead collapse
-   its body bottom padding so the colophon ("Published with moss") sits directly
-   under the divider rather than below an empty gap. */
-footer.container:not(:has(a, p, form, .moss-subscribe-form, .moss-grid)) {
-  padding-block-end: 0;
-}
+/* A page whose footer has nothing to show — no footer.md, no `footer: true`
+   links, no feed link, no subscribe form, no plugin footer HTML — gets no
+   `<footer>` element at all (`build::enhance::strip_empty_footer`), so its
+   divider disappears with it and the colophon ("Published with moss") sits
+   directly below the article instead of under an empty band. There is
+   therefore no `footer.container` on the page for CSS to collapse padding
+   on; a `:not(:has(...))` rule used to do exactly that and is gone along
+   with the case it existed for.
+*/
 
 /*
  * Footer flex layout when it contains a moss subscribe form.
@@ -979,7 +1054,7 @@ footer.container:has(> .moss-subscribe)::before {
 
 /* ==========================================================================
    moss-hosted subscribe form — inline state transitions
-   Driven by frontend/site/subscribe/subscribe.ts via `data-state` attribute.
+   Driven by js-src/site/subscribe/subscribe.ts via `data-state` attribute.
    ========================================================================== */
 
 .moss-subscribe-form[data-moss-hosted="true"] {
@@ -1016,6 +1091,22 @@ footer.container:has(> .moss-subscribe)::before {
 .moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
   box-sizing: border-box;
   block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
+}
+
+/* Touch floor: one reading-size line is 30px at the default 1.125rem — a
+   real WCAG 2.5.8 AA violation as a tap target, measured on a real build.
+   `max()` keeps the one-line-of-text reasoning above as the shape (it
+   already clears 44px past about 1.4rem of reading size) and raises only
+   the common case, rather than a fixed control height that would fight it.
+   Desktop with a mouse is untouched above the same 48rem boundary the hero
+   and place-locator already treat as the mobile/desktop split; `(pointer:
+   coarse)` also reaches a touch device wider than 48rem, e.g. a tablet in
+   landscape. */
+@media (max-width: 48rem), (pointer: coarse) {
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
+    block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
+  }
 }
 
 .moss-subscribe-form[data-moss-hosted="true"] .moss-input {
@@ -1262,6 +1353,74 @@ footer.container:has(> .moss-subscribe)::before {
   text-underline-offset: 3px;
 }
 
+/* Touch floor: `footer.container a`, not `.footer-link` — the generated
+   fallback list is `.footer-link`, but an author's own `footer.md` renders
+   through the ordinary markdown pipeline into plain, classless anchors
+   (`<ul><li><a>…</a></li></ul>`, or `<a>…</a>` inline in a sentence), so a
+   class-scoped rule reaches only the fallback and misses exactly the
+   reported case — a footer.md link list beside a subscribe form. This reaches
+   every anchor moss can put in a footer, whatever its class or wrapper.
+   Measured 20 to 27px tall on a real build, well under the 44px WCAG 2.5.8
+   AA floor.
+
+   A `::after` sized via `inset`, not `min-block-size` on the anchor itself:
+   the anchor stays exactly the box and flow it already had — an inline link
+   inside a sentence must not become a block or force a line break, and a
+   list item's own line spacing must not shift. `position: relative` on the
+   anchor only changes its stacking/positioning context, not its display type
+   or box size, so this holds for both the `<li>` and the running-text shape.
+
+   A cap alone cannot reach 44px on the block axis against the list's own
+   8px rhythm (`li { margin-bottom: var(--moss-space-xs) }`) — half of 8 is
+   4, giving a 28px hit box against a 20px real one. So the rhythm itself
+   widens here, scoped to the footer's own list (not `li` sitewide, which
+   would loosen every article list too): `footer.container li` reaches
+   `--moss-space-lg` (2rem, 32px), and each link's cap becomes exactly half
+   of that, 16px — a 52px hit box, edge to edge with its neighbor's own cap,
+   never overlapping it. Eight-to-32px is the same honest cost `.nav-links`
+   pays below for the same reason: there is no floor short of it that still
+   clears 44px against a real 20px box. A list's own first and last item have
+   no neighbor on their one outward side, so extending them there is
+   harmless (unlike `.nav-links`, nothing here scrolls) — no first/last
+   exclusion is needed. The same block cap serves a sentence link, whose
+   ordinary case (a short byline, not wrapped) has line-height alone for
+   clearance and is well inside it; a sentence long enough to wrap the link
+   onto an adjacent line of the same paragraph is not defended against here,
+   the same scope limit the original fix accepted.
+
+   The inline axis is NOT extended by this base rule — a sentence link's
+   width must stay exactly its own text, or the reach would spill into the
+   surrounding words and widen what looks clickable mid-sentence. A list
+   link gets its own, more specific rule below instead: list items stack
+   with nothing beside them horizontally (unlike a nav row), so widening is
+   free there, and a short label needs it — "FAQ" at the default reading
+   size is under 30px wide, nowhere near 44, with no neighbor to overlap by
+   reaching for it.
+
+   Desktop with a mouse is untouched; `(pointer: coarse)` also reaches a
+   touch device wider than 48rem (e.g. a tablet in landscape). */
+@media (max-width: 48rem), (pointer: coarse) {
+  footer.container li {
+    margin-bottom: var(--moss-space-lg);
+  }
+  footer.container a {
+    position: relative;
+  }
+  footer.container a::after {
+    content: "";
+    position: absolute;
+    inset-block: -16px;
+    inset-inline: 0;
+  }
+  /* List links only (see above): the inline axis has no neighbor to
+     overlap, so it reaches the same 16px as the block axis on both sides —
+     a short label's real width plus 32px, comfortably past 44px even for
+     a single short word. */
+  footer.container li a::after {
+    inset-inline: -16px;
+  }
+}
+
 .footer-link:hover {
   color: var(--moss-color-ui-accent);
   text-decoration-color: var(--moss-color-ui-accent);
@@ -1378,7 +1537,7 @@ footer.container:has(> .moss-subscribe)::before {
    Logical properties throughout, because vertical typesetting rotates this
    whole strip and the wording has to arrive along the rotated axis
    (see site/vertical.css). */
-/* Skip link (WCAG 2.4.1, moss#1047): the first focusable element in <body>,
+/* Skip link (WCAG 2.4.1): the first focusable element in <body>,
    before the nav island and header. Off-screen at rest via `top: -100%`
    inside a `hidden` overflow context of its own making — `position: fixed`
    plus a large negative offset, not `display: none`/`visibility: hidden`,
@@ -1474,8 +1633,8 @@ footer.container:has(> .moss-subscribe)::before {
    the reduced-motion block below.
 
    One `:is()` where the label's reveal writes hover and focus out separately
-   and gates hover on `(hover: hover)`. The label's two arms differ — in their
-   delays — and these do not. Nor is the gate owed: the label is an affordance
+   and gates hover on `(any-hover: hover)`. The label's two arms differ — in
+   their delays — and these do not. Nor is the gate owed: the label is an affordance
    a stray touch should not fire, while the ink is only the mark's own colour,
    and a tap that opens mosspub.com in a new tab may as well show it. */
 .moss-colophon-icon {
@@ -1513,24 +1672,54 @@ footer.container:has(> .moss-subscribe)::before {
   white-space: nowrap;
   /* The rise is the drift away from the mark. It is a property rather than a
      number because `translate` is physical: vertical.css rotates the same
-     drift onto the other axis and the three reveal states below only ever
-     set the rise. The unit is load-bearing — inside `calc()` a bare `0` is a
-     <number>, and `calc(-1 * 0)` is invalid for `translate`. */
-  --moss-colophon-rise: 0.55em;
+     drift onto the other axis, and every state below only ever sets the
+     rise, never `translate` itself. The unit is load-bearing — inside
+     `calc()` a bare `0` is a <number>, and `calc(-1 * 0)` is invalid for
+     `translate`.
+
+     Settled, not hidden: a device with no hover-capable pointer — or a UA
+     old enough not to recognise `any-hover` at all — has no gesture to
+     reveal a hidden label with, so this has to be the direction that fails
+     safe. Hiding is the exception below, gated on hover capability; showing
+     is the unconditional default here. */
+  --moss-colophon-rise: 0px;
   translate: -50% var(--moss-colophon-rise);
-  opacity: 0;
-  /* Leaving: the words dissolve in place. The rise is re-armed only once they
-     are invisible (1ms, delayed past the fade), so nothing is seen to retract. */
-  transition:
-    opacity 240ms cubic-bezier(0.37, 0, 0.63, 1),
-    translate 1ms linear 240ms;
+  opacity: 1;
 }
 
-/* Arriving. Hover intent applies to the pointer only: `:focus-visible` is
-   deliberate by definition and gets the same reveal with no delay. The two are
-   written out separately rather than grouped because they differ in exactly
-   that — the delays. */
-@media (hover: hover) {
+/* Quiet until reached for — only on a device that can actually reach for it.
+   `any-hover`, not `hover`: `hover` reports the PRIMARY pointer only, so a
+   touchscreen laptop, or an Android tablet with a mouse attached, reports
+   `hover: none` even though it has a real hover-capable pointer — the same
+   misclassification this file already documents for the hint pill's tooltip
+   query (~line 1920, Tailwind #11109). Narrowed to plain `hover`, this block
+   would simply not apply there and the label would sit at its visible
+   default: not broken, but a device perfectly able to do the quiet reveal
+   would never be offered it. `any-hover: hover` passes whenever ANY attached
+   pointer can hover, so it gets the designed treatment via its mouse.
+
+   The mirror cost is real and accepted: that same laptop used by FINGER also
+   matches this query, so the wording is hidden with no touch gesture to
+   reveal it. The hint pill closes its version of that at runtime
+   (hint-place.ts, on a `pointerType === "touch"` press); the colophon ships
+   no script and takes the hit, because the words are a credit rather than an
+   affordance the reader needs to operate anything. */
+@media (any-hover: hover) {
+  .moss-colophon-label {
+    --moss-colophon-rise: 0.55em;
+    opacity: 0;
+    /* Leaving: the words dissolve in place. The rise is re-armed only once
+       they are invisible (1ms, delayed past the fade), so nothing is seen to
+       retract. */
+    transition:
+      opacity 240ms cubic-bezier(0.37, 0, 0.63, 1),
+      translate 1ms linear 240ms;
+  }
+
+  /* Arriving. Hover intent applies to the pointer only: `:focus-visible`
+     below is deliberate by definition and gets the same reveal with no
+     delay — the two are written out separately because they differ in
+     exactly that, the delay. */
   .moss-colophon a:hover .moss-colophon-label {
     --moss-colophon-rise: 0px;
     opacity: 1;
@@ -1548,12 +1737,21 @@ footer.container:has(> .moss-subscribe)::before {
     translate 560ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
-/* A fade is not vestibular motion, so it stays; the rise goes. */
+/* A fade is not vestibular motion, so it stays; the rise goes. Only the first
+   selector still does real work: it cancels the 0.55em rise the block above
+   sets while a hover-capable device has the label hidden (on a device that
+   can't hover the rise is already 0 from the unconditional default, so it's
+   a harmless restatement there). The other two selectors' own reveal rules
+   already set `--moss-colophon-rise: 0px` unconditionally, so restating it
+   here would be dead weight — only their transition needs simplifying. */
 @media (prefers-reduced-motion: reduce) {
-  .moss-colophon-label,
+  .moss-colophon-label {
+    --moss-colophon-rise: 0px;
+    transition: opacity 200ms linear;
+  }
+
   .moss-colophon a:hover .moss-colophon-label,
   .moss-colophon a:focus-visible .moss-colophon-label {
-    --moss-colophon-rise: 0px;
     transition: opacity 200ms linear;
   }
 }
@@ -1637,8 +1835,8 @@ header:has(+ .moss-hero) .main-nav {
    before anything else. Never wraps to a second line internally (that would
    produce a 3-row nav: site-name+partial-breadcrumb / rest-of-breadcrumb /
    nav-links). The clip removes residue after `flex-shrink` has done its job —
-   e.g., when the parent-page segment (last-child, min-width: 5em) still can't
-   fit. Below ~320px the site name itself may be clipped.
+   e.g., when the parent-page segment (the last ancestor anchor, min-width:
+   5em) still can't fit. Below ~320px the site name itself may be clipped.
 
    `clip` rather than `hidden` for the same reason as
    `.moss-nav-island-trail`: `hidden` makes a scroll container, and a hover
@@ -1684,7 +1882,7 @@ header:has(+ .moss-hero) .main-nav {
    toggle cluster always reads as a group break rather than as one long run of
    items.
 
-   The hierarchy is stated in INK, not in `gap` — ADR-042. `gap` measures box edges, and
+   The hierarchy is stated in INK, not in `gap`. `gap` measures box edges, and
    every toggle box is padded — so box gap ≠ perceived gap, and a hierarchy that
    looks right in the `gap` values can read as flat on screen. This comment used
    to claim "16px inside the toggle cluster ≤ 16–24px between links < 24–32px
@@ -1741,7 +1939,7 @@ header:has(+ .moss-hero) .main-nav {
 }
 
 .site-logo {
-  height: 1em;
+  height: 1.15em;
   width: auto;
   vertical-align: middle;
   margin: 0 0.3em 0 0;
@@ -1760,7 +1958,13 @@ header:has(+ .moss-hero) .main-nav {
      minimally truncated — most contextual piece of info
    - Middle segments shrink first with ellipsis — less contextual
    moss skips the current page in segments (see nav.rs:106-108), so the
-   last .breadcrumb-segment IS the parent page. */
+   last .breadcrumb-segment anchor IS the parent page — EXCEPT on an
+   explorer root (places-explorer), where breadcrumb.rs forces the current
+   page back on as an extra, unlinked `<span class="breadcrumb-segment
+   breadcrumb-current">` crumb after it. That span, not the parent-page
+   anchor, is then the trail's actual last child — see
+   `a.breadcrumb-segment:last-of-type` below for how the rules still find
+   the right one. */
 .breadcrumb-separator {
   flex-shrink: 0;
   margin: 0 0.35em;
@@ -1782,7 +1986,7 @@ header:has(+ .moss-hero) .main-nav {
      the way: the 1.4em floor is the width `text-overflow: ellipsis` needs to
      paint its "…". Without it a squeezed segment shrank toward zero, the
      ellipsis had nowhere to go, and the trail rendered as bare slashes with
-     nothing between them — 潮汐 · 週報 / / / / 戰火下的… — which reads as a
+     nothing between them — 河灣 · 週刊 / / / / 雨季裡的… — which reads as a
      rendering fault rather than as "there are folders here". Now every dropped
      ancestor keeps one "…" token that is still a link and still carries its
      full name in the hover hint. */
@@ -1797,10 +2001,9 @@ header:has(+ .moss-hero) .main-nav {
   white-space: nowrap;
 }
 
-/* Parent-page segment (last): shrinks 5× slower than the middle segments so it
-   stays legible; it only truncates once they have collapsed to their "…".
-   :last-child is safe because nav.rs always emits breadcrumb-segment as
-   the trailing element (parts joined with separator).
+/* Parent-page segment (last ANCESTOR, not necessarily the last child — see
+   above): shrinks 5× slower than the middle segments so it stays legible;
+   it only truncates once they have collapsed to their "…".
    min-inline-size: 5em ≈ 5 characters: preserves a recognizable fragment of the
    parent page name even when the segment is squeezed to its minimum.
 
@@ -1810,8 +2013,26 @@ header:has(+ .moss-hero) .main-nav {
    items sum to at least 1; once the middles freeze at their floor the parent is
    the only one left, and a lone 0.2 made the browser absorb 20% of the overflow
    and let the rest run off the edge — the parent segment stayed full width and
-   spilled past the viewport instead of ellipsizing. A lone 1 absorbs all of it. */
-.breadcrumb-segment:last-child {
+   spilled past the viewport instead of ellipsizing. A lone 1 absorbs all of it.
+
+   `a.breadcrumb-segment:last-of-type`, not a bare `:last-child`: every
+   ancestor/home segment is an `<a>`, but an explorer root's forced-visible
+   current crumb is an unlinked `<span class="breadcrumb-segment
+   breadcrumb-current">` appended after it (breadcrumb.rs) — a real last
+   CHILD sharing the same class, but a different TAG. `:last-of-type`
+   counts siblings of the same tag name, so it finds the last `<a>`
+   regardless of a trailing `<span>`; a bare `:last-child` would instead
+   match that span (or nothing at all), leaving the actual parent-page
+   segment with no legibility floor — the invariant this rule exists for.
+
+   Scoped to `.nav-left` (the masthead trail only): `.breadcrumb-segment`
+   is also the class the island's own trail reuses, and a bare
+   `a.breadcrumb-segment:last-of-type` would newly out-specify that trail's
+   own "ancestors never truncate" rule (`.moss-nav-island-trail
+   .breadcrumb-segment`) for ITS last ancestor `<a>` too — a regression the
+   old `:last-child` form never risked, since the island's last CHILD is
+   always its own current `<span>`, never an ancestor. */
+.nav-left a.breadcrumb-segment:not(.breadcrumb-current):last-of-type {
   flex-shrink: 1;
   min-inline-size: 5em;
 }
@@ -1825,15 +2046,15 @@ header:has(+ .moss-hero) .main-nav {
   font-weight: 500;
 }
 
-/* Phone (≤ 32rem): a deep trail — 潮汐 · 週報 / 獎項 / 寫作獎 / 第四季 /
-   戰火下的文學抉擇… — has no room left for a 5-character parent segment once
+/* Phone (≤ 32rem): a deep trail — 河灣 · 週刊 / 評選 / 小說組 / 第二屆 /
+   雨季裡的一封信… — has no room left for a 5-character parent segment once
    the site name (which never shrinks) and four separators have taken their
    share, so the floor drops to 3em and the separators tighten. Everything else
    about the collapse is width-driven, not breakpoint-driven: the middles reach
    their "…" through the same `min-inline-size: 1.4em` that governs them on a laptop
    window narrowed to the same measure. */
 @media (max-width: 32rem) {
-  .breadcrumb-segment:last-child {
+  .nav-left a.breadcrumb-segment:not(.breadcrumb-current):last-of-type {
     min-inline-size: 3em;
   }
 
@@ -1846,11 +2067,16 @@ header:has(+ .moss-hero) .main-nav {
    its first measurement), the masthead folds like the island instead of
    ellipsising: a middle segment either fits whole or folds whole into the
    `…` levels button — half an ancestor name tells the reader nothing. Only
-   the last segment (the parent page) keeps its ellipsis ladder above, floor
-   and all. Everything above this block is therefore the no-script base
-   state, not dead code: with JS off the attribute is never set and the
-   shipped ellipsis behaviour is exactly what renders. */
-.nav-left[data-fold-managed] .breadcrumb-segment:not(:last-child) {
+   the last ANCESTOR segment (the parent page) keeps its ellipsis ladder
+   above, floor and all. Everything above this block is therefore the
+   no-script base state, not dead code: with JS off the attribute is never
+   set and the shipped ellipsis behaviour is exactly what renders.
+
+   `a.breadcrumb-segment:not(:last-of-type)` — same reasoning as the
+   legibility rule above: an explorer root's unlinked current-page crumb is
+   a trailing `<span>`, excluded here by tag (`a.`) rather than position, so
+   it never gets folded as if it were a middle ancestor either. */
+.nav-left[data-fold-managed] a.breadcrumb-segment:not(.breadcrumb-current):not(:last-of-type) {
   flex-shrink: 0;
   min-inline-size: 0;
 }
@@ -1860,12 +2086,33 @@ header:has(+ .moss-hero) .main-nav {
   display: none;
 }
 
+/* A place page's direct children, each already carrying its roll-up-
+   inclusive count in the link text (`Kyoto (3)`) — no separate markup to
+   mute just the count against, so the whole entry gets the same muted,
+   underlined-on-hover treatment as a byline credit. */
+.moss-place-children {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--moss-space-xs) var(--moss-space-sm);
+  margin-block: var(--moss-space-sm) 0;
+  padding: 0;
+  list-style: none;
+}
+.moss-place-children a {
+  color: var(--moss-color-text-secondary);
+  text-decoration: none;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-place-children a:hover {
+  color: var(--moss-color-text);
+  border-bottom-color: currentColor;
+}
+
 /* ---------------------------------------------------------------------------
    Hover hint (`data-tooltip`)
    ---------------------------------------------------------------------------
-   The published site's counterpart to the app shell's portal tooltip
-   (frontend/app/components/tooltip.ts + styles/shared/tooltip.css). Same
-   visual language deliberately — inverted pill, 4px radius, 11px/500 — so a
+   The published site's counterpart to the app shell's own portal tooltip.
+   Same visual language deliberately — inverted pill, 4px radius, 11px/500 — so a
    hint reads the same whether the page is in the moss preview or on the web.
 
    CSS-only, because the site cannot have the app's version: that one delegates
@@ -1916,7 +2163,6 @@ header:has(+ .moss-hero) .main-nav {
    strand a pill; hint-place.ts closes that at runtime by clearing the
    placement on a `pointerType === "touch"` press, which is the only signal
    that reports the pointer actually in use rather than the ones attached.
-   Design: docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md
    ------------------------------------------------------------------------ */
 [data-tooltip] {
   position: relative;
@@ -1977,7 +2223,7 @@ header:has(+ .moss-hero) .main-nav {
 /* A shown pill must be reachable: a `::after` is hit-tested as part of its
    originating element, so the pointer crossing onto the pill keeps the host's
    `:hover` alive rather than the pill vanishing the moment the pointer leaves
-   the (usually much smaller) host box — WCAG 1.4.13 "hoverable" (moss#1047).
+   the (usually much smaller) host box — WCAG 1.4.13 "hoverable".
    Together with the transparent top border above, the whole trip from host to
    pill is continuous. Nothing inside the pill is interactive, so this grants
    no new click target. */
@@ -2123,8 +2369,7 @@ header:has(+ .moss-hero) .main-nav {
    which anchors row 2's links at the start edge and toggles at the end edge.
    Both layouts land the same invariant: every masthead row is anchored at
    both container edges. With JS off the attribute never appears and the wrap
-   above is the fallback. Design:
-   docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md
+   above is the fallback.
 
    `display: contents` lifts .nav-links and .nav-icons to direct flex items of
    .nav-content; .nav-icons's existing `margin-inline-start: auto` plus
@@ -2151,6 +2396,7 @@ header:has(+ .moss-hero) .main-nav {
    must not differ in height or in resting weight — a bare glyph beside a
    filled disc reads as two unrelated things. */
 .nav-theme-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2171,8 +2417,49 @@ header:has(+ .moss-hero) .main-nav {
   color: var(--moss-color-ui-accent);
   background: color-mix(in srgb, var(--moss-color-ui-accent) 8%, var(--moss-color-surface));
 }
-.nav-theme-btn:focus { outline: none; }
-.nav-theme-btn:focus-visible { outline: 2px solid var(--moss-color-ui-accent); outline-offset: 2px; }
+.nav-theme-btn:focus,
+.font-trigger:focus,
+.font-pill button:focus,
+.github-link:focus { outline: none; }
+.nav-theme-btn:focus-visible,
+.font-trigger:focus-visible,
+.font-pill button:focus-visible,
+.github-link:focus-visible { outline: 2px solid var(--moss-color-ui-accent); outline-offset: 2px; }
+
+/* Every CORE header control's invisible hit area is the same two
+   declarations plus its own `inset` — content/position live once here, and
+   the other three insets follow this one below. `.nav-search-btn::before`
+   (search.css) can't join this group: `search` is a gated partial, and
+   `stylesheet_tests::a_partial_only_styles_elements_it_owns` enforces that
+   core never styles a selector a partial also styles, or appending the
+   partial could change which rule wins — that guard doesn't know a pseudo-
+   element variant is "the same enough" to fold, only that `.nav-search-btn`
+   would stop being a token unique to the partial. It keeps its own,
+   identical two lines instead. */
+.nav-theme-btn::before,
+.nav-lang-link::before,
+.moss-nav-island-sections::before,
+.font-trigger::before,
+.mobile-menu-button::before {
+  content: "";
+  position: absolute;
+}
+
+/* Invisible 44px hit area, no change to the 36px visible pill. .nav-theme-btn
+   is the LAST of the three .nav-icons toggles (search, language, theme — see
+   the cluster-order test) — its own inline-end is free (the group's edge, out
+   toward the container padding) but its inline-start faces .nav-lang-toggle
+   (or, on a single-language site, .nav-search-btn directly) across the
+   cluster's fixed 4px gap. Both of that gap's occupants ask for hit-area
+   here, so it is split down the middle — 2px in, not the 4px a lone edge
+   gets — or the two expansions would overlap by design. Logical (not
+   left/right) because vertical.css rotates this row so the "row" runs
+   top-to-bottom instead: inline-start/end tracks whichever physical edge
+   that actually is. */
+.nav-theme-btn::before {
+  inset-block: -4px;
+  inset-inline: -2px -4px;
+}
 
 
 /* Theme toggle — "classic" animated SVG (https://toggles.dev/classic) */
@@ -2247,6 +2534,7 @@ header:has(+ .moss-hero) .main-nav {
 }
 
 .nav-lang-link {
+  position: relative;
   color: var(--moss-color-text-secondary);
   text-decoration: none;
 }
@@ -2265,6 +2553,32 @@ header:has(+ .moss-hero) .main-nav {
 .nav-lang-link:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: 2px;
+}
+
+/* Invisible 44px hit area. `.nav-lang-link` (the other-language glyph, e.g.
+   "简") is the smallest control in the cluster — 13x22.75px at the default
+   reading size — so both axes need reach, and unlike the other four
+   controls the reach can stay entirely inside `.nav-lang-toggle`'s own
+   58.5x36px box, never touching the shared .nav-icons gaps its neighbours
+   reach into — so neither `.nav-search-btn`'s nor `.nav-theme-btn`'s own
+   inset needs to change for this case, and this rule cannot overlap either
+   one regardless of what they claim.
+
+   Block: `.nav-lang-toggle` is the same 36px tall box as its two button
+   siblings, and `.nav-lang-link` sits centered inside it (6.625px of
+   clearance above and below, half of 36 - 22.75) — -10.625px reaches
+   4px beyond the TOGGLE's own edge, matching how far the siblings' own
+   -4px reaches beyond their identical 36px box.
+
+   Inline is asymmetric because `.nav-lang-link` is the toggle's LAST
+   child. Inline-start crosses `.nav-lang-current` ("EN") and the " / "
+   separator — both inert text, safe to cover — using 35 of the ~37.5px
+   between this link and the toggle's own start edge, well clear of it.
+   Inline-end has far less room before the toggle's own end edge (8px) and
+   needs far less: 7px, through the toggle's own end-padding alone. */
+.nav-lang-link::before {
+  inset-block: -10.625px;
+  inset-inline: -35px -7px;
 }
 
 /* Article Header */
@@ -2286,19 +2600,33 @@ header:has(+ .moss-hero) .main-nav {
 /*
  * Morphing font control
  *
- * A single glyph next to the date morphs into a 4-button pill on click.
- * The trigger (lone glyph) and the pill are never both visible — they swap
- * at the moment of overlap so the user perceives one continuous element.
+ * A single glyph next to the date opens a 4-button size picker that grows
+ * out of it. The trigger is the fixed anchor — it never
+ * moves and carries no runtime position. `.font-pill` is the
+ * second, differently-sized object that grows from the anchor's point: it
+ * has no offset of its own, so its FIRST button's inline-start edge always
+ * lands at the pill's own padding — which is the same 3px the trigger sits
+ * at (`.font-trigger`'s `inset-inline-start` below) — regardless of which
+ * size is active. Every size option therefore lives in the same physical
+ * slot every time the pill opens; picking one doesn't move the others.
+ * Trigger and pill are never both visible — trigger hides, pill shows —
+ * but because the pill's first slot coincides with the trigger's, this
+ * reads as one glyph unfolding rather than two nodes swapping.
  *
- * Open:  trigger slides to its slot in the pill → pill fades in
- * Close: pill fades out → trigger appears at active slot → slides home
+ * The reader's chosen scale (`html.scale-*`) reflows the page around this
+ * control (the title and column resize, the date row shifts), so theme.ts's
+ * `selectScale()` holds the anchor in place while the pill is open: it
+ * measures the pill's rect before and after the scale class swaps, and
+ * writes the accumulated delta as `.font-anchor`'s inline `translate` —
+ * instantly, no transition. Closing releases the hold (removes the inline
+ * translate) and that release alone animates.
  *
  * Structure:
  *   .date-line
  *     .date
- *     .font-anchor            position: relative wrapper
- *       .font-trigger         position: absolute, overlays first pill button
- *       .font-pill#fontPill   always in layout (visibility:hidden when closed)
+ *     .font-anchor            position: relative wrapper, fixed font-size
+ *       .font-trigger         position: absolute, static inline-start
+ *       .font-pill#fontPill   normal flex item, grows via transform
  */
 .date-line {
   display: flex;
@@ -2306,8 +2634,8 @@ header:has(+ .moss-hero) .main-nav {
   /* Date row sits BELOW the title block (H1 + optional blockquote-deck)
      and ABOVE the article body. Compact spacing — the date reads as
      subtle metadata under the title, not a heavy section break. */
-  margin-top: var(--moss-space-xs);
-  margin-bottom: var(--moss-space-md);
+  margin-block-start: var(--moss-space-xs);
+  margin-block-end: var(--moss-space-md);
 }
 
 /*
@@ -2329,7 +2657,7 @@ header:has(+ .moss-hero) .main-nav {
  * the whole signal; a rule would re-assert the weight we just removed.
  *
  * moss cannot style the role apart from the name: `byline:` is a display
- * string, so `作者　糜緒洋` is one run of text with nothing marking which
+ * string, so `作者　陳遠山` is one run of text with nothing marking which
  * half is the label. Themes that want the label tracked out (the CJK stand-in
  * for small caps) write that themselves, or the author writes the label in
  * markdown emphasis.
@@ -2342,13 +2670,13 @@ header:has(+ .moss-hero) .main-nav {
   /* No top margin — whatever sits above owns the gap: the date row on an
      article, the .moss-folder-title h1 on a folder index (both end in
      --moss-space-md, so the two page kinds match). */
-  margin: 0 0 var(--moss-space-md);
+  margin-block: 0 var(--moss-space-md);
 }
 
 /* Date and byline are one masthead unit: when both are present the date row
    stops holding the body's worth of space between them. */
 .date-line:has(+ .moss-byline) {
-  margin-bottom: var(--moss-space-xs);
+  margin-block-end: var(--moss-space-xs);
 }
 
 /* Links carry the row's colour; a hairline is enough to mark them as links
@@ -2360,6 +2688,220 @@ header:has(+ .moss-hero) .main-nav {
 }
 .moss-byline a:hover {
   border-bottom-color: currentColor;
+}
+
+/* The automatic place line (generated from `location:`) — same font, colour
+   and link treatment as the byline just above, since it sits in the same
+   credit-line role, just machine-generated rather than authored. A separate
+   class rather than reusing `.moss-byline` because it is not one of that
+   block's rows (see `render_byline_html`, which resolves the two pieces
+   independently). */
+.moss-place-line {
+  font-size: 0.82em;
+  line-height: 1.75;
+  font-weight: 400;
+  color: var(--moss-color-text-secondary);
+  margin-block: 0 var(--moss-space-md);
+}
+.moss-place-line a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-place-line a:hover {
+  border-bottom-color: currentColor;
+}
+
+/* Offline, self-contained place maps. The SVG owns geometry; this layer owns
+   only presentation and theme tokens, so custom themes can recolour it without
+   depending on generated IDs. */
+.moss-place-map {
+  /* Cut-paper + soft-light basemap palette, 2026-09-21. Sea darker than land
+     in the dark theme; land lightens with height and never goes green. Relief
+     tints run land -> land-mid -> land-high and sea-floor tints water ->
+     sea-deep; the renderer places each band on that ramp stretched to the
+     bands present in the frame (gamma 0.45 on the sea side, so shelf steps
+     stay distinct). */
+  --moss-place-water: #dbe7ea;
+  --moss-place-globe-water: #dbe7ea;
+  --moss-place-land: #e3e6d5;
+  --moss-place-land-mid: #ece4cc;
+  --moss-place-land-high: #f7f2e6;
+  --moss-place-sea-deep: #b9cdd6;
+  --moss-place-globe-land: #e3e6d5;
+  --moss-place-coast: #f5f6f4;
+  --moss-place-coast-opacity: 0.6;
+  --moss-place-globe-coast: #f5f6f4;
+  --moss-place-globe-edge: #e3e6d5;
+  /* The site's own accent, not a second hardcoded green — a marker must
+     outrank terrain regardless of what a custom theme does to
+     --moss-color-accent. */
+  --moss-place-marker: var(--moss-color-accent, #2d5a2d);
+  --moss-place-marker-casing: #ffffff;
+  /* A route's dashed line, its leaders, and its hollow (region-precision)
+     badge — the same muted slate-blue --moss-place-shadow already uses for
+     the filled badge's own chip, so a route's line, leaders and both badge
+     styles read as one quiet hue. A first, more vivid clay tone sat well
+     outside every other --moss-place-* token's low saturation. In light
+     mode this value matches --moss-place-shadow exactly; the dark value
+     below does not (see its own comment). */
+  --moss-place-route: #5a6488;
+  --moss-place-shadow: #5a6488;
+  --moss-place-relief-edge-opacity: 0;
+  --moss-place-light-warm: #fff3d0;
+  --moss-place-light-cool: #5a6488;
+  /* The lighting's highlight and shadow strength, as a share of the
+     filter's gains, which are the larger of the two themes'. */
+  --moss-place-light-warm-strength: 1;
+  --moss-place-light-cool-strength: 0.8889;
+  --moss-place-rivers: #7fa6bd;
+  --moss-place-lakes: #bcd3de;
+  --moss-place-ice: #fbfcfd;
+  --moss-place-built-up: #c9bdb4;
+  --moss-place-salt: #e3dcc8;
+  --moss-place-reefs: #b9d6cf;
+  /* Reset the UA stylesheet's own `figure { margin: 1em 40px }` — its
+     40px inline sides survive `margin-block` alone and silently shrink
+     the visible map by 80px inside whatever column or locator width it's
+     given, worst on a mobile locator meant to run full width. */
+  margin-block: var(--moss-space-md);
+  margin-inline: 0;
+  max-inline-size: 100%;
+  /* Offline cartography: north stays up regardless of the page's own
+     typesetting. Unconditional (not a vertical.css override) because it is a
+     no-op under the default `horizontal-tb`, and this figure's own
+     `max-inline-size` needs it regardless of what wraps it — a bare map (the
+     `/places/` world map, a place term page, a `style:map` embed with no
+     width token) carries no other wrapper to fix this on. Left unset under
+     `vertical-rl`, this same `max-inline-size` binds the figure's physical
+     HEIGHT instead, and the inner svg's `aspect-ratio` backs a physical width
+     out of that height with no relation to the column at all — measured live
+     on a vertically-typeset locator at 390px: the figure rendered 866px wide.
+     `.moss-place-locator`/`.moss-place-map-frame` carry the same reset for
+     the same reason on their OWN `inline-size` caps — a wrapper's cap does
+     not travel down to a child this fixes, any more than a child's travels up
+     to a wrapper this doesn't. */
+  writing-mode: horizontal-tb;
+}
+.moss-place-map svg {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  aspect-ratio: 3 / 2;
+  writing-mode: horizontal-tb;
+}
+[data-theme="dark"] .moss-place-map {
+  --moss-place-water: #1b242c;
+  --moss-place-globe-water: #1b242c;
+  --moss-place-land: #23272a;
+  --moss-place-land-mid: #33383a;
+  --moss-place-land-high: #565b57;
+  --moss-place-sea-deep: #10161c;
+  --moss-place-globe-land: #23272a;
+  --moss-place-coast: #243542;
+  --moss-place-coast-opacity: 0.55;
+  --moss-place-globe-coast: #243542;
+  --moss-place-globe-edge: #23272a;
+  --moss-place-shadow: #4d5f8f;
+  --moss-place-marker-casing: #0e1210;
+  /* Not --moss-place-shadow's own dark value (#4d5f8f): that is a
+     background fill in the filled badge, not a stroke/text colour, and is
+     too dark to read as either against this theme's near-black casing. A
+     lighter tint of the same slate-blue hue instead. */
+  --moss-place-route: #9aa8d9;
+  --moss-place-relief-edge-opacity: 0.18;
+  --moss-place-light-warm: #d9cfa6;
+  --moss-place-light-cool: #4d5f8f;
+  --moss-place-light-warm-strength: 0.8182;
+  --moss-place-light-cool-strength: 1;
+  --moss-place-rivers: #6fa6cc;
+  --moss-place-lakes: #2b4a5e;
+  --moss-place-ice: #4a5258;
+  --moss-place-built-up: #4a4440;
+  --moss-place-salt: #33383a;
+  --moss-place-reefs: #1d3a3a;
+  /* --moss-place-marker is not redefined: var(--moss-color-accent) already
+     carries its own [data-theme="dark"] override. */
+}
+.moss-place-locator {
+  inline-size: min(50%, 22rem);
+  /* Unconditional, like `.moss-place-map`'s own reset above: a no-op under
+     the default horizontal-tb, and needed under vertical-rl for a reason the
+     map's own reset doesn't cover. This wrapper carries its OWN `inline-size`
+     cap (this declaration, and the phone collapse below) — inheriting
+     `vertical-rl` from body would bind that cap to the wrapper's physical
+     HEIGHT, not its width, leaving the wrapper's actual width to whatever a
+     floated box with an auto block-size shrinks to fit. Measured live: 720px
+     on a 1280px page, ignoring the 22rem cap entirely, until this line. */
+  writing-mode: horizontal-tb;
+}
+.moss-place-locator .moss-place-map {
+  margin-block-start: 0;
+}
+/* The locator's own top margin is 0 (nothing sets one), and it now sits
+ * immediately before the body's first TEXT block (build/markdown/body_plan.rs
+ * `first_text_block`: a paragraph, list or blockquote) rather than always
+ * right after the place line. A heading, rule or figure that would have
+ * needed its own clearing or margin-matching now simply comes first in the
+ * emitted HTML, above the float, so no rule here has to push it out of the
+ * way. A float never collapses its own top margin with a preceding sibling's
+ * — the paragraph and list cases need no help from this rule because their
+ * own top margin (0, and `--moss-space-md`) is already at or below the
+ * place line's own `margin-block-end`, the float's actual starting point.
+ * A blockquote's is larger (`--moss-space-lg`), so it clears the collapsed
+ * edge a heading or hr would and needs the same treatment. Desktop-only:
+ * below the 48rem breakpoint the locator un-floats and stacks above the
+ * text, where this does not apply.
+ *
+ * `article.container >`, not a bare `.moss-place-locator`: `:has(+ blockquote)`'s
+ * own specificity is that of its argument, a bare type selector — (0,0,1),
+ * the same as `blockquote` alone — not a pseudo-class's usual (0,1,0). Without
+ * the prefix this ties with `article .moss-align-right`'s `margin:` shorthand
+ * (also (0,1,1) total) and loses on source order, since that rule comes
+ * later in the file; verified by inspecting both rules' resolved specificity
+ * in a real browser before adding the prefix. */
+@media (min-width: 48rem) {
+  article.container > .moss-place-locator:has(+ blockquote) {
+    margin-block-start: calc(var(--moss-space-lg) - var(--moss-space-md));
+  }
+  /* An authored float marks the start of the following content. Keep a
+     quotation on that same edge; preceding heading margins still apply. */
+  article.container > .moss-place-map-frame:is(.moss-align-left, .moss-align-right) + blockquote {
+    margin-block-start: 0;
+  }
+}
+.moss-place-map-frame {
+  /* Same reason as `.moss-place-locator` just above: this wrapper's own
+     `inline-size: 50%` cap and phone collapse (below) need the wrapper
+     itself on the physical axis, not just the map figure it carries. */
+  writing-mode: horizontal-tb;
+}
+.moss-place-map-frame .moss-place-map {
+  margin-block-start: 0;
+  margin-block-end: var(--moss-space-xs);
+}
+.moss-place-map-caption {
+  color: var(--moss-color-text-secondary);
+  font-size: var(--moss-read-caption);
+  font-style: italic;
+  text-align: center;
+}
+article .moss-place-map-frame:is(.moss-align-left, .moss-align-right):not([data-width]) {
+  inline-size: 50%;
+}
+@media (max-width: 48rem) {
+  article .moss-place-map-frame:is(.moss-align-left, .moss-align-right) {
+    float: none;
+    inline-size: 100% !important;
+    max-inline-size: 100%;
+    margin-inline: 0;
+  }
+  article .moss-place-locator.moss-align-right {
+    float: none;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    margin-inline: 0;
+  }
 }
 
 /*
@@ -2392,9 +2934,24 @@ header:has(+ .moss-hero) .main-nav {
 
 .font-anchor {
   position: relative;
-  margin-left: 0.75em;
+  margin-inline-start: 0.75em;
   display: flex;
   align-items: center;
+  /* Fixed at the DEFAULT reading size regardless of html.scale-* — matches
+     --moss-reading-size's own unscaled formula, so the control doesn't
+     compound with the size it's choosing (trigger, pill and the per-button
+     glyph ratios below stay one constant ratio apart at every scale step)
+     while still matching `.date-line .date` at the default scale.
+     vertical.css overrides this to `--moss-vertical-font-size` under
+     vertical typesetting, where body's own font-size already isn't
+     `--moss-reading-size` — see that file. */
+  font-size: calc(var(--moss-reading-size-base) * var(--moss-reading-script-scale));
+  /* Always on: theme.ts's selectScale() writes `translate` + `transition:
+     none` together for an instant hold, and close() clears both together so
+     THIS transition animates the release — a transition is decided by the
+     after-change style, so which one applies depends only on whether JS set
+     `transition: none` in the same step as the translate. */
+  transition: translate 280ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .font-trigger {
@@ -2403,7 +2960,12 @@ header:has(+ .moss-hero) .main-nav {
   color: var(--moss-color-muted);
   cursor: pointer;
   font-family: inherit;
-  padding: 4px 10px;
+  /* A `<button>`'s UA stylesheet sets its own font-size (not `inherit`), so
+     without this the trigger's glyph would fall back to the browser's
+     control font instead of matching `.font-anchor`'s fixed size. */
+  font-size: 1em;
+  padding-block: 4px;
+  padding-inline: 10px;
   border-radius: 16px;
   position: absolute;
   /* Inline-axis offset only — `left` under horizontal-tb, `top` under
@@ -2411,26 +2973,38 @@ header:has(+ .moss-hero) .main-nav {
      resolves to. The cross axis is left unset (both `inset-block-*` stay
      auto) so `.font-anchor`'s `align-items: center` places it there instead:
      an absolutely positioned flex child with an auto cross-axis inset is
-     still aligned by the flex container. That is what used to be
-     `top: 50%; transform: translateY(-50%)` — a physical-axis fix for what
-     is actually a flex-alignment job, and one CSS was already able to do
-     without either property once it was stated in logical terms. */
+     still aligned by the flex container. This is the fixed anchor: no JS
+     ever writes to it, so it needs no transition either. */
   inset-inline-start: 3px; /* = font-pill padding, aligns with first button */
   z-index: 3;
   white-space: nowrap;
 }
 .font-trigger:hover { color: var(--moss-color-text); }
 .font-trigger.hidden { opacity: 0; pointer-events: none; }
-.font-trigger.sliding {
-  transition: inset-inline-start 280ms cubic-bezier(0.4, 0, 0.2, 1);
+
+/* Invisible 44px hit area over the ~41×29px pill. `.font-trigger` already
+   uses `::after` for its 'Aa'/'字' glyph (below), so the hit area is a
+   `::before` instead — it would otherwise clobber the glyph's `content`.
+   The short axis (height) needs the reach; the trigger sits centered in
+   `.date-line`'s row with 24px clear to the heading above and well over
+   100px to the first paragraph below, so -8px block is well inside that
+   margin. The long axis (width) is already close to 44px, and the space
+   `.font-anchor` reserves for the OPEN pill sits empty on the inline-end
+   side whenever the trigger itself is showing, so -4px inline costs
+   nothing there either. Inline-start reaches toward `.date` — the previous
+   flex item in `.date-line` — but only across part of `.font-anchor`'s own
+   `margin-inline-start: 0.75em` gap to it (13.5px at the anchor's fixed
+   1.125rem font-size): -4px spends under a third of that margin, leaving
+   roughly 9.5px still clear of the date text. When the pill opens, `.hidden`
+   drops this button's
+   `pointer-events` (above) along with everything else on it. */
+.font-trigger::before {
+  inset-block: -8px;
+  inset-inline: -4px;
 }
 
-/* Trigger size variants — match pill button sizes */
-.font-trigger.size-small  { font-size: 0.85em; }
-.font-trigger.size-std    { font-size: 1em; }
-.font-trigger.size-large  { font-size: 1.12em; }
-.font-trigger.size-xlarge { font-size: 1.25em; }
-
+/* Every size option lives in the same place regardless of which is active
+   — see the "Morphing font control" comment above for why. */
 .font-pill {
   display: inline-flex;
   align-items: center;
@@ -2438,13 +3012,29 @@ header:has(+ .moss-hero) .main-nav {
   border-radius: 20px;
   padding: 3px;
   gap: 2px;
+  /* The trigger's fixed inset-inline-start: 3px point IS this pill's own
+     inline-start edge (see the comment above) — transform-origin needs no
+     runtime value to pivot there. Logical `inline-start` is invalid for
+     transform-origin (no logical keyword form); vertical.css carries
+     vertical-rl's physical equivalent. */
+  transform-origin: left center;
   visibility: hidden;
   opacity: 0;
-  transition: opacity 150ms ease, visibility 150ms ease;
+  transform: scaleX(0.001);
+  transition: opacity 150ms ease, visibility 150ms ease, transform 280ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .font-pill.visible {
   visibility: visible;
   opacity: 1;
+  transform: scaleX(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .font-trigger,
+  .font-pill,
+  .font-anchor {
+    transition: none;
+  }
 }
 
 .font-pill button {
@@ -2452,7 +3042,8 @@ header:has(+ .moss-hero) .main-nav {
   border: none;
   color: var(--moss-color-muted);
   cursor: pointer;
-  padding: 4px 10px;
+  padding-block: 4px;
+  padding-inline: 10px;
   border-radius: 16px;
   font-family: inherit;
   transition: color 0.15s ease, background 0.15s ease;
@@ -2478,21 +3069,37 @@ header:has(+ .moss-hero) .main-nav {
 :lang(ko) .font-trigger::after,
 :lang(ko) .font-pill button::after { content: '\AE00'; }
 
-/* Progressive sizing — same scale for both trigger and pill buttons */
+/* Progressive sizing — each pill button's own glyph previews the size it
+   picks, ratios of `.font-anchor`'s fixed font-size above so they hold
+   steady across `html.scale-*` rather than compounding with it. The closed
+   trigger is one size in moss's own theme (no matching `.font-trigger.size-*`
+   rule) — theme.ts still toggles that co-class on it (contract: `size-std`
+   et al. in moss-core's component list) purely as a hook for a theme that
+   wants to size the closed glyph itself. */
 .font-pill button[data-scale="small"] { font-size: 0.85em; }
 .font-pill button[data-scale=""]      { font-size: 1em; }
 .font-pill button[data-scale="large"] { font-size: 1.12em; }
 .font-pill button[data-scale="xlarge"]{ font-size: 1.25em; }
 
-/* Font scale classes — multiply the viewport-specific base, not a hardcoded
-   value, and keep the per-script multiplier the base is combined with in
-   :root (--moss-reading-script-scale). Dropping it here would make the reader's
-   Aa control cancel the CJK size bump. */
-html.scale-small  { --moss-reading-size: calc(var(--moss-reading-size-base) * var(--moss-reading-script-scale) * 0.89); }
-html.scale-large  { --moss-reading-size: calc(var(--moss-reading-size-base) * var(--moss-reading-script-scale) * 1.12); }
-html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * var(--moss-reading-script-scale) * 1.25); }
+/* Font scale classes — write only --moss-reading-step (tokens.json), the
+   bare multiplier --moss-reading-size's own formula combines with the base
+   and the per-script scale. Re-deriving the whole formula here (as these
+   three rules used to) meant a second base — vertical typesetting's own body
+   text, sized from --moss-vertical-font-size rather than
+   --moss-reading-size-base (vertical.css) — had no shared variable left to
+   read the reader's step from at all; multiplying by this one instead lets
+   it opt in the same way. */
+html.scale-small  { --moss-reading-step: 0.89; }
+html.scale-large  { --moss-reading-step: 1.12; }
+html.scale-xlarge { --moss-reading-step: 1.25; }
 
-/* GitHub Link */
+/* GitHub Link. The mark it carries (an author's own <svg>/<img>, not
+   something moss draws) reads as a circle — GitHub's own octocat glyph does
+   — so the hover fill needs a radius or it paints a square card around a
+   round mark, the state-region-doesn't-match-the-control bug this family of
+   icon buttons exists to avoid everywhere else (.nav-theme-btn and
+   .nav-search-btn two sections up carry the same 18px on a similar small
+   box). */
 .github-link {
   display: inline-flex;
   align-items: center;
@@ -2500,7 +3107,14 @@ html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * va
   padding: 0.375rem;
   color: var(--moss-color-text-secondary);
   border-bottom: none;
-  transition: all 0.2s ease;
+  border-radius: 18px;
+  /* Named properties, not `all`: `all` was also animating `outline-color`/
+     `-width`/`-offset` on focus, which meant a keyboard user's first frame
+     after Tab read the CSS initial outline (currentColor, the browser's
+     ~3px "medium", 0 offset) and only eased into the real 2px accent ring
+     over the next 200ms — the one header control whose ring didn't snap in
+     immediately like every sibling's. */
+  transition: color 0.2s, background-color 0.2s;
 }
 
 .github-link:hover {
@@ -2514,6 +3128,7 @@ html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * va
 
 /* Mobile Menu Button */
 .mobile-menu-button {
+  position: relative;
   display: none;
   background: none;
   border: none;
@@ -2528,12 +3143,22 @@ html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * va
   color: var(--moss-color-text);
 }
 
+/* Invisible 44px hit area over the 32px icon. Only ever shown below the
+   20rem hamburger breakpoint (below), where it sits at least 24px from both
+   .nav-left and .nav-icons (the row's own `gap: var(--moss-space-md)`), so a
+   uniform -6px never reaches a neighbour. Vertical typesetting drops this
+   button entirely (site/vertical.css), so there is no rotated-row case to
+   split for. */
+.mobile-menu-button::before {
+  inset: -6px;
+}
+
 .mobile-menu-button svg {
   display: block;
 }
 
 /* ==========================================================================
-   5b. Floating nav island (ADR-049)
+   5b. Floating nav island
    --------------------------------------------------------------------------
    Read a long article and the masthead scrolls away, leaving no way back up
    the site without scrolling to the top first. Scroll back UP past the
@@ -2717,8 +3342,10 @@ html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * va
    how wide the trail WOULD be before deciding what to drop.
 
    Selector depth is load-bearing: the current crumb also carries
-   `.breadcrumb-segment`, so this has to out-specify both the rule right above
-   and the masthead's `.breadcrumb-segment:last-child`. */
+   `.breadcrumb-segment`, so this has to out-specify the rule right above.
+   (It no longer also has to out-specify a masthead rule: the masthead's own
+   last-ancestor legibility rule is scoped to `.nav-left`, which this trail
+   is not inside.) */
 .moss-nav-island-trail .moss-nav-island-current {
   color: var(--moss-color-text);
   font-weight: 600;
@@ -2773,6 +3400,7 @@ html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * va
 }
 
 .moss-nav-island-sections {
+  position: relative;
   background: none;
   border: 0;
   padding: 6px;
@@ -2782,6 +3410,15 @@ html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * va
   display: grid;
   place-items: center;
   font-size: var(--moss-size-lg);
+}
+
+/* Invisible 44px hit area over the 32px icon. .moss-nav-island-actions holds
+   this button alone (no neighbour to split with), and the bar's own
+   min-height: 2.75rem (44px, see .moss-nav-island-bar) plus its 6px/8px
+   padding both measure out to exactly 6px of slack around the icon on every
+   side, so a uniform -6px reaches 44px without crossing the bar's own edge. */
+.moss-nav-island-sections::before {
+  inset: -6px;
 }
 
 .moss-nav-island-sections:hover,
@@ -2887,6 +3524,12 @@ html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * va
   height: 2px;
   border-radius: 2px;
   overflow: hidden;
+  /* Decorative only — no click handler ever reads it — but it sits right
+     across .moss-nav-island-sections's bottom edge, and without this it
+     wins that button's expanded hit area (below) for any point in its
+     bottom couple of pixels, exactly the "decorative element swallows a
+     control's click" case. */
+  pointer-events: none;
 }
 
 .moss-nav-island-progress-fill {
@@ -3004,8 +3647,9 @@ article .moss-cards[data-layout="minimal"] .moss-card a,
    from the next one or a heading from its rows — both BLOCK-axis jobs, which
    under vertical-rl run horizontally. Written physically they did neither: the
    heading hung 24px down the column off its rows' head line, and successive
-   year groups touched, so a 21-year 年表 read as one undivided run (zhu-da
-   home, 2026-09-11). Horizontally the two spellings are the same property. */
+   year groups touched, so a 21-year 年表 read as one undivided run (a
+   vertical site's home, 2026-09-11). Horizontally the two spellings are the
+   same property. */
 .moss-cards-minimal-year-group {
   margin-block-end: var(--moss-space-md);
 }
@@ -3048,7 +3692,7 @@ article .moss-cards[data-layout="minimal"] .moss-card a,
    cards separate at the larger gap (--moss-space-lg, 32px) — so the eye reads "this
    list belongs to this heading." Symmetric per-card padding CANNOT do this: the
    first card's leading padding always adds to the heading gap, forcing
-   heading→first ≥ item→item. See docs/reference/design/spacing.md. */
+   heading→first ≥ item→item. */
 .moss-cards[data-layout="list"] {
   max-inline-size: var(--moss-content-width);
   display: flex;
@@ -3182,7 +3826,7 @@ html[lang^="zh"] article :is(p, li, blockquote) {
    rule above, because the exclusions are ancestors: the extra class puts this
    at (0,2,1) against (0,1,2), so it wins wherever it applies. The `:is()` sits
    after a class, never straight after `html[lang^="zh"]` — see the heading
-   note below re #631 for why that position is unsafe. */
+   note below for why that position is unsafe. */
 html[lang^="zh"] .moss-cards-container :is(p, li, blockquote),
 html[lang^="zh"] .moss-grid :is(p, li, blockquote) {
   text-align: start;
@@ -3193,7 +3837,7 @@ html[lang^="zh"] .moss-grid :is(p, li, blockquote) {
    h1–h3) so a wrapped h4–h6 in Chinese gets the same leading care as the body
    copy below. Comma-expanded rather than `html[lang^="zh"] :is(h1,…)` — the CSS
    minifier strips the space before `:`, which would fold the descendant space
-   and change the selector's meaning (see the figure-rule note re issue #631). */
+   and change the selector's meaning (see the figure-rule note below). */
 html[lang^="zh"] h1,
 html[lang^="zh"] h2,
 html[lang^="zh"] h3,
@@ -3211,14 +3855,14 @@ html[lang^="zh"] h6 {
    body copy, and the whole hierarchy compressed by 6% on exactly the script
    least able to show a small size step. It stays proportional at every
    reader-toggle step and on both viewports, so it survives browser zoom (WCAG).
-   Latin body line-height (1.75) is deliberately left untouched; only CJK gets
-   the looser 1.8 leading. */
+   Latin body line-height stays the --moss-read-leading default (1.75); CJK
+   overrides the token to 1.8 here rather than setting `body { line-height }`
+   directly, so --moss-read-line (one line of body text, the prose spacing
+   unit — see the article margin rules below) picks up the looser CJK leading
+   from this one place instead of needing its own per-script branch. */
 html[lang^="zh"] {
   --moss-reading-script-scale: 1.06;
-}
-
-html[lang^="zh"] body {
-  line-height: 1.8;
+  --moss-read-leading: 1.8;
 }
 
 
@@ -3409,26 +4053,7 @@ pre:has(code.language-ascii) {
   letter-spacing: 0;
 }
 
-/* Syntax highlighting (build-time, via syntect + moss tokenizer) */
-pre code .keyword { color: var(--moss-hl-keyword); }
-pre code .keyword.operator { color: var(--moss-hl-operator); }
-pre code .string { color: var(--moss-hl-string); }
-pre code .comment { color: var(--moss-hl-comment); font-style: italic; }
-pre code .constant.numeric { color: var(--moss-hl-number); }
-pre code .entity.name { color: var(--moss-hl-function); font-weight: 600; }
-pre code .storage { color: var(--moss-hl-keyword); }
-pre code .support { color: var(--moss-hl-type); }
-pre code .variable { color: var(--moss-hl-builtin); }
-pre code .punctuation { color: var(--moss-hl-operator); }
-
-/* moss shortcode tokenizer classes */
-pre code .hl-punct { color: var(--moss-hl-comment); }
-pre code .hl-tag { color: var(--moss-hl-keyword); font-weight: 600; }
-pre code .hl-attr { color: var(--moss-hl-attr); }
-pre code .hl-val { color: var(--moss-hl-string); }
-pre code .hl-brace { color: var(--moss-hl-operator); }
-
-/* LaTeX math (ADR-030) — sizing & overflow only.
+/* LaTeX math — sizing & overflow only.
    P1 emits the escaped LaTeX source in `<code class="moss-math">`. P2 replaces
    that element with a typeset `<svg class="moss-math">` in the served bytes,
    keeping the class + `data-moss-math` stable across the upgrade (see
@@ -3519,12 +4144,13 @@ article img {
   max-inline-size: 100%;
   block-size: auto;
   border-radius: 6px;
-  /* Match the figure gap (space-xl) so a bare, uncaptioned image gets the same
+  /* Match the figure gap (1.25 lines of body text, --moss-read-line — see that
+     rule's comment below) so a bare, uncaptioned image gets the same
      full-bandwidth breathing room as a captioned figure. Consecutive-image
      rules (.moss-image + .moss-image, and the p:has(> img:only-child) rules
      below) still collapse gallery stacks, so this only widens the gap around a
      lone standalone image. */
-  margin-block: var(--moss-space-xl);
+  margin-block: calc(var(--moss-read-line) * 1.25);
 }
 
 /* Standalone images — Step 8 of the structural-html-emission migration.
@@ -3537,8 +4163,7 @@ article img {
    The `.moss-image` rules handle the figure-wrapped shape; the legacy
    `p:has(> img:only-child)` rules below handle the bare-paragraph shape
    so sites that don't opt into `implicit_figure` still get compact
-   margins between consecutive standalone images.
-   See docs/reference/structural-html-emission.md. */
+   margins between consecutive standalone images. */
 article .moss-image {
   margin-block: var(--moss-space-xs);
 }
@@ -3573,14 +4198,26 @@ article .moss-image img {
      caption is. (`fit-content` tracked the caption's width and left-aligned the
      image under long captions — visually verified 2026-06-04.) */
 /* :not([data-width]): a figure carrying a width token is sized by the
-   content-width escape rules below (ADR-021 Corollary 2) — this 100% cap
+   content-width escape rules below — this 100% cap
    would out-specificity the escape's `max-width: none` and pin the band
-   to the column. */
-article figure.moss-image:not(:has(.moss-align-left)):not(:has(.moss-align-right)):not([data-width]) {
+   to the column.
+
+   Excluded both ways — `:not(.moss-align-left)` AND `:not(:has(.moss-align-
+   left))` — because the renderer puts the align class on the figure itself
+   (ast/render.rs's `Block::Figure` arm), never on a descendant, so the
+   `:has()`-only form this comment used to name never actually excluded an
+   aligned figure: `:not(:has(.moss-align-left))` was vacuously true for
+   EVERY figure, aligned or not, and at (0,4,2) this rule outranked the
+   float-cap rule's (0,3,2) `:not([data-width])` form above, so every
+   unsized aligned figure got centered at 100% width instead of floated and
+   capped at 50% — verified empirically (`tests/render-gates/site/float-
+   mobile-collapse.spec.ts`). Kept both forms, as above, for a hypothetical
+   descendant-carried class. */
+article figure.moss-image:not(.moss-align-left):not(.moss-align-right):not(:has(.moss-align-left)):not(:has(.moss-align-right)):not([data-width]) {
   margin-inline: auto;
   max-width: 100%;
 }
-article figure.moss-image:not(:has(.moss-align-left)):not(:has(.moss-align-right)) img {
+article figure.moss-image:not(.moss-align-left):not(.moss-align-right):not(:has(.moss-align-left)):not(:has(.moss-align-right)) img {
   margin-inline: auto;
 }
 /* Bare-paragraph (uncaptioned) standalone image: center the lone img. */
@@ -3614,15 +4251,14 @@ article .moss-image figcaption {
    intent vs incidental layout), so different selectors are correct
    end-state architecture. Do not delete these rules in a future step
    assuming the figure wrapper will eventually cover both — it won't,
-   by spec. See docs/reference/structural-html-emission.md and the
-   Step-8 arch review (2026-05-17, finding 3).
+   by spec.
 
    `margin-block-end`/`margin-block-start`, not `margin-bottom`/`margin-top`:
    the intent is rhythm BETWEEN paragraphs in reading order — the block axis
    — and physical top/bottom only spells that correctly in horizontal-tb.
    Under vertical-rl the block axis is horizontal, so a physical bottom
    margin lands on the INLINE axis instead: the very axis the column's
-   height comes from, so a bare inline plate (zhu-da's album leaves, no
+   height comes from, so a bare inline plate (a site's album leaves, no
    figure wrap since `implicit_figure = false`) rendered short of the full
    column height the hero plate already reaches. Identical in horizontal-tb
    — this is a bug fix, not a behavior change there. */
@@ -3691,22 +4327,79 @@ article figure.moss-image:has(.moss-align-right) {
 
 /* Default max-width when no data-width is set on the wrapping figure.
  * The standalone img form (no figure) and the figure-without-data-width
- * form both cap at 50% — a half-column. */
+ * form both cap at 50% — a half-column.
+ *
+ * The figure form is listed twice: the plain compound (`figure.moss-image.
+ * moss-align-*`) is what the renderer actually emits — align is appended to
+ * the figure's OWN class list (ast/render.rs's `Block::Figure` arm, and
+ * render/image.rs's `wrap_in_figure_full`; both agree) — while `:has(.moss-
+ * align-*)` would only match a DESCENDANT carrying the class, which no
+ * current renderer does. Verified empirically: before this line was added,
+ * a real `<figure class="moss-image moss-align-right">` rendered at full
+ * column width on desktop, uncapped, because the `:has()`-only rule never
+ * matched it. Kept alongside rather than replaced, in case a future/plugin
+ * renderer ever does put the class on a descendant. */
 article img.moss-align-left,
 article img.moss-align-right,
+article figure.moss-image.moss-align-left:not([data-width]),
+article figure.moss-image.moss-align-right:not([data-width]),
 article figure.moss-image:has(.moss-align-left):not([data-width]),
 article figure.moss-image:has(.moss-align-right):not([data-width]) {
   max-width: 50%;
 }
 
+/* The same half-column cap for every other floated embed: a bare embed
+ * element, the figure wrapping a captioned one, and a folder listing. The
+ * float itself needs no rule — `article .moss-align-*` above already matches
+ * any element. The image block keeps its own `:has()` escalation because a
+ * bare `<img>` can float without a figure; these kinds never do, so the
+ * class is always on the outermost element and no `:has()` is needed. */
+article .moss-embed.moss-align-left:not([data-width]),
+article .moss-embed.moss-align-right:not([data-width]),
+article .moss-embed-figure.moss-align-left:not([data-width]),
+article .moss-embed-figure.moss-align-right:not([data-width]),
+article .moss-cards-container.moss-align-left:not([data-width]),
+article .moss-cards-container.moss-align-right:not([data-width]) {
+  max-width: 50%;
+}
+
+/* `.moss-cards-container` carries `container-type: inline-size` (below, so
+ * `.moss-cards` can use `@container` instead of `@media`), which makes its
+ * own inline-size intrinsically indeterminate for layout purposes:
+ * containment tells the float's shrink-to-fit algorithm to size the box AS
+ * IF it had no content, so an unsized, floated listing's shrink-to-fit
+ * input is 0 regardless of what is actually inside it — verified with real
+ * `.moss-cards[data-layout]` card markup, not an empty box. `max-width`
+ * above never binds when the value it would cap never grows past it. A
+ * definite `width` sidesteps shrink-to-fit for this one kind instead of
+ * capping it. `.moss-embed` / `.moss-embed-figure` / the image figure don't
+ * need this: none of them is size-contained, so their own content still
+ * drives shrink-to-fit normally, and giving them a forced 50% too would
+ * stop a narrower embed from sizing to its actual content. An inline
+ * `style="width:NN%"` (the sized case) still wins over this — inline beats
+ * any non-`!important` stylesheet rule regardless of specificity. */
+article .moss-cards-container.moss-align-left:not([data-width]),
+article .moss-cards-container.moss-align-right:not([data-width]) {
+  width: 50%;
+}
+
+/* A captioned non-image embed's width, data-width and float all move to
+ * the `.moss-embed-figure` wrapper (see `wrap_embed_with_caption`) — the
+ * inner element carries none of its own. Fill it to the figure's width,
+ * whatever set it: the align cap above, the data-width escape below, or
+ * the figure's own inline `style="width:NN%"`. */
+article .moss-embed-figure > :is(.moss-embed, .moss-cards-container) {
+  width: 100%;
+}
+
 /* When the figure carries data-width, drop the align 50% cap so the align
  * contributes only float behavior. The data-width *width* rules live just
- * below (the ADR-021 Corollary 2 content-width escape). */
+ * below (the content-width escape). */
 article figure.moss-image[data-width] :is(.moss-align-left, .moss-align-right) {
   max-width: none;
 }
 
-/* Content-width escape (ADR-021 Corollary 2): a direct article child carrying
+/* Content-width escape: a direct article child carrying
  * data-width breaks out of the --moss-content-width column.
  *
  *   wide   → min(56 × reading-size, site-max)  (--moss-width-wide)
@@ -3714,18 +4407,20 @@ article figure.moss-image[data-width] :is(.moss-align-left, .moss-align-right) {
  *            width so the band aligns with the nav/footer chrome
  *   screen → the full container width
  *
- * `main` is the container: container query units (100cqw) resolve against its
+ * `main` is the container: container query units (100cqi) resolve against its
  * CONTENT box, which excludes a classic scrollbar's gutter — the reason this
- * is not `100vw` + negative margin (100vw includes the gutter; with
- * body{overflow-x:hidden} the ~15px excess is clipped silently and the band
- * sits off-centre on Windows/Linux classic-scrollbar platforms).
+ * is not `100vw` (100vw includes the gutter; with body{overflow-x:hidden}
+ * the ~15px excess is clipped silently and the band sits off-centre on
+ * Windows/Linux classic-scrollbar platforms).
  *
  * `container-type: inline-size` implies `contain: layout`, which makes `main`
  * the containing block for position:fixed descendants — and immersive
  * fullscreen (.immersive-iframe-wrapper, further down) is exactly that. The
  * one-line override below turns the container off for that state so the
- * iframe sizes to the viewport again. If you touch either line, re-run the
- * immersive check in tests/render-gates/site/content-width-escape.spec.js.
+ * iframe sizes to the viewport again. No render gate exercises immersive
+ * fullscreen; both lines are pinned as text by
+ * `test_css_content_width_escape_rules` (build/page/shell_tests.rs), so
+ * check fullscreen by hand if you change either.
  *
  * `.moss-hero` needs none of this: it escapes by DOM position (emitted
  * outside <main>), which these article-scoped rules cannot reach. */
@@ -3739,26 +4434,46 @@ main {
 
 article.container > [data-width="wide"]   { --moss-escape: var(--moss-width-wide); }
 article.container > [data-width="page"]   { --moss-escape: var(--moss-site-max-width); }
-article.container > [data-width="screen"] { --moss-escape: 100cqw; }
+article.container > [data-width="screen"] { --moss-escape: 100cqi; }
 
-/* min(…, 100cqw) keeps narrow viewports safe without a width media query —
- * the band can never exceed the container. left:50% + translateX(-50%)
- * centres the band on the (page-centred) article content box. */
+/* min(…, 100cqi) keeps narrow viewports safe without a width media query —
+ * the band can never exceed the container. Equal negative inline margins
+ * centre it on the article content box: a percentage margin resolves
+ * against the containing block's inline size in every writing mode and
+ * direction, so the band moves in layout, along the line. It used to be
+ * centred with `position: relative; left: 50%` + `translateX(-50%)`, which
+ * moves only the paint and only along x: under vertical-rl x is the block
+ * axis, so the figure was painted over the text that follows it, and under
+ * `dir="rtl"` the band sat off-centre. */
 article.container > [data-width] {
-  width: min(var(--moss-escape, 100%), 100cqw);
-  max-width: none;
-  margin-inline: auto;
-  position: relative;
-  left: 50%;
-  transform: translateX(-50%);
+  inline-size: min(var(--moss-escape, 100%), 100cqi);
+  max-inline-size: none;
+  margin-inline: calc((100% - min(var(--moss-escape, 100%), 100cqi)) / 2);
+}
+
+/* A full-width band reaches the window's edge, not `main`'s: body's
+ * padding-right (--moss-sidenote-inset, the sidenote gutter's reserve) makes
+ * `main` that much narrower than the window, so the band adds the inset back
+ * on its far side, the contract body's own comment states. The near edge does
+ * not move: the start margin stays as above and the end margin gives up the
+ * inset. The margins are physical, not logical, because the inset is a
+ * physical padding-right: an over-constrained box drops its end-side margin,
+ * so left-to-right pages position from the left and right-to-left pages from
+ * the right, and the extra width reaches the window's right edge in both. */
+article.container > [data-width="screen"] {
+  inline-size: calc(100cqi + var(--moss-sidenote-inset, 0px));
+  margin-left: calc((100% - 100cqi) / 2);
+  margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));
 }
 
 @media (max-width: 48rem) {
   article.container > [data-width] {
-    /* collapse to the column */
-    width: auto;
-    left: auto;
-    transform: none;
+    /* collapse to the column. `auto` rather than 0: a hand-written band
+       that also carries an inline width is centred here, below 48rem only —
+       above it the escape's margins assume the token's width. The renderer
+       never emits a token and a percent together. */
+    inline-size: auto;
+    margin-inline: auto;
   }
 }
 
@@ -3771,18 +4486,68 @@ article.container > hr {
   clear: both;
 }
 
-/* Mobile collapse: match the default rule's specificity (`article
- * img.moss-align-*`) so this override actually wins. A bare `article
- * .moss-align-*` selector here has lower specificity than the default's
- * `article img.moss-align-*` and silently loses regardless of source
- * order or @media wrapping. */
+/* Mobile collapse: every one of these mirrors its desktop 50%-cap
+ * counterpart's selector text exactly, `:not([data-width])` included, so
+ * the specificity ties and the later (mobile) declaration wins on source
+ * order. Dropping `:not([data-width])` here — as the figure-form image
+ * selectors and the whole embed block used to — under-specifies against
+ * the desktop rule, which still wins on phones regardless of source order
+ * or @media wrapping: the bare-img selectors happened to tie already (a
+ * bare `<img>` never carries `data-width`), which is what made the bug
+ * invisible in the one case this comment used to describe. The align+
+ * data-width combination this excludes (float contributing runaround
+ * while data-width's own escape governs width — see the "drop the align
+ * 50% cap" rule above) is unreached by any fixture or test today, so
+ * narrowing to it costs nothing tested. The figure-form image selector is
+ * listed both ways (plain compound AND `:has()`) for the same reason the
+ * desktop rule now is: real markup carries align on the figure itself. */
 @media (max-width: 48rem) {
   article img.moss-align-left,
   article img.moss-align-right,
-  article figure.moss-image:has(.moss-align-left),
-  article figure.moss-image:has(.moss-align-right) {
+  article figure.moss-image.moss-align-left:not([data-width]),
+  article figure.moss-image.moss-align-right:not([data-width]),
+  article figure.moss-image:has(.moss-align-left):not([data-width]),
+  article figure.moss-image:has(.moss-align-right):not([data-width]) {
     float: none;
     max-width: 100%;
+    margin-inline: 0;
+  }
+
+  article .moss-embed.moss-align-left:not([data-width]),
+  article .moss-embed.moss-align-right:not([data-width]),
+  article .moss-embed-figure.moss-align-left:not([data-width]),
+  article .moss-embed-figure.moss-align-right:not([data-width]),
+  article .moss-cards-container.moss-align-left:not([data-width]),
+  article .moss-cards-container.moss-align-right:not([data-width]) {
+    float: none;
+    max-width: 100%;
+    margin-inline: 0;
+  }
+
+  /* A sized float carries its percent as an inline `style="width:NN%"`
+   * on its outermost element (render/placement.rs's `size_style_attr`;
+   * images via ast/render.rs's `Block::Figure` renderer) — no stylesheet
+   * specificity beats an inline style, `:not([data-width])` included, so
+   * the rules above cap `max-width` but never touch a `width` the author
+   * set. `!important` is the narrow tool for that here. Threading a
+   * `--moss-float-size` custom property through instead — read by a
+   * `width: var(...)` rule scoped the same way, with the Rust side
+   * emitting the property rather than a literal width — would avoid the
+   * `!important`, but touches every embed renderer that calls
+   * `placement_attrs` (audio/video/iframe/pdf/model) plus the image
+   * figure renderer, and rewrites every snapshot fixture that exercises a
+   * sized float, for a mobile-only concern. Keyed off the align class so
+   * a centered (unfloated) `data-width` band is never touched. */
+  article figure.moss-image.moss-align-left,
+  article figure.moss-image.moss-align-right,
+  article .moss-embed.moss-align-left,
+  article .moss-embed.moss-align-right,
+  article .moss-embed-figure.moss-align-left,
+  article .moss-embed-figure.moss-align-right,
+  article .moss-cards-container.moss-align-left,
+  article .moss-cards-container.moss-align-right {
+    float: none;
+    width: 100% !important;
     margin-inline: 0;
   }
 }
@@ -3790,8 +4555,7 @@ article.container > hr {
 /* Tables — booktabs-inspired: three horizontal rules, never a grid or a filled
    header. Numbers right-align on tabular figures; the renderer wraps every
    table in `.moss-table-scroll` and tags numeric / GFM-aligned columns with
-   `.moss-col-right` / `.moss-col-center`.
-   Design: docs/archive/2026-07-27-table-rendering-design.md */
+   `.moss-col-right` / `.moss-col-center`. */
 
 /* Accessible horizontal-scroll wrapper (replaces the old `display:block` mobile
    hack, which broke column layout and table semantics). Pure-CSS scroll shadows
@@ -3799,11 +4563,23 @@ article.container > hr {
    painted on the content (local) and slide away as you scroll, revealing the
    edge shadows painted on the container (scroll) — so the hint shows only when
    there is more table to see. */
-.moss-table-scroll {
+/* The scroll-shadow technique itself, shared with any other horizontally-
+   scrollable region that wants the same "hint only when there's more to
+   see" affordance — currently `data-aspect="scroll"` (render::image::
+   is_scroll_shape, a handscroll/hanging-scroll body image past 3x its
+   short edge; see that rule for the picture-specific structural properties
+   this doesn't cover). `.moss-grid[data-scroll]`'s own scroll row uses a
+   different cue (a peeking next card) and doesn't join this one.
+   Ordered BEFORE the table-only margin rule below: `get_css_rule`
+   (shell_tests.rs) hands back the body of the FIRST rule whose prelude
+   names a selector, and `test_css_table_mobile_overflow` looks up
+   `.moss-table-scroll` expecting to find `overflow-x` — it would silently
+   get the margin-only rule's body instead were the order reversed. */
+.moss-table-scroll,
+article picture[data-aspect="scroll"] {
   /* Edge scroll-shadow tint. Kept theme-local: a black wash is invisible on
      the dark ground, so dark mode deepens it (see the override below). */
   --moss-table-shadow: rgba(0, 0, 0, 0.1);
-  margin: var(--moss-space-lg) 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   background:
@@ -3814,17 +4590,30 @@ article.container > hr {
   background-attachment: local, local, scroll, scroll;
 }
 
-[data-theme="dark"] .moss-table-scroll {
+[data-theme="dark"] .moss-table-scroll,
+[data-theme="dark"] article picture[data-aspect="scroll"] {
   --moss-table-shadow: rgba(0, 0, 0, 0.55);
 }
 
-.moss-table-scroll:focus-visible {
+.moss-table-scroll:focus-visible,
+.moss-grid[data-scroll]:focus-visible,
+article picture[data-aspect="scroll"]:focus-visible {
   /* ui-accent, like every other focus ring in this file. accent-quiet is an
      ambient hairline color: in dark mode it composites to 1.19:1 against the
      page, so the one indicator telling a keyboard user they are inside a
-     scrollable table was effectively invisible (WCAG 1.4.11, moss#1047). */
+     scrollable table was effectively invisible (WCAG 1.4.11).
+     Shared verbatim with `:::grid N {scroll}`'s scrolling row and
+     `data-aspect="scroll"`'s scrolling picture — same affordance, same
+     ring, one declaration. */
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: 2px;
+}
+
+/* The wrapper's own spacing: a table-specific margin, not part of the
+   shared shadow technique above (a `data-aspect="scroll"` picture uses the
+   figure-image margin-block instead — see its own rule further down). */
+.moss-table-scroll {
+  margin: var(--moss-space-lg) 0;
 }
 
 table {
@@ -4028,8 +4817,6 @@ hr::before {
 .moss-cards-minimal-year-group.minimal .moss-card .title {
   flex: 1;
   color: var(--moss-color-text);
-  font-size: var(--moss-size-md);
-  font-weight: var(--moss-font-heading-weight);
   transition: color 0.2s ease;
 }
 
@@ -4060,8 +4847,7 @@ hr::before {
 
 /* Article title styling.
    .moss-article-title is the auto-injected H1 added by the markdown pipeline
-   when an article has no body # H1 (see
-   docs/archive/2026-04-28-auto-h1-injection-design.md). Sites can override it
+   when an article has no body # H1. Sites can override it
    per page (e.g. `display: none` on a hero-led landing) or globally.
    .article-title is retained for any pre-existing themes that target the
    un-prefixed class. */
@@ -4099,10 +4885,12 @@ hr::before {
   margin-block: 0 var(--moss-space-md);
 }
 
-/* Defensive: hide empty folder-title h1s. The render helpers always pass
-   non-empty labels (filename or title cascade), but treating empty as
-   invisible avoids reserving heading typography space if a future code
-   path ever passes an empty string. */
+/* Hide empty folder-title h1s. Most callers pass a non-empty label (filename
+   or title cascade); a claimed leaf page rendering its cover through the same
+   book-open layout passes "" instead, because that shell's own visible <h1>
+   is already the head of its content — this rule is what keeps the page down
+   to one visible title instead of an empty heading reserving typography
+   space above it. */
 .moss-folder-title:empty {
   display: none;
 }
@@ -4259,14 +5047,96 @@ article a:where(:not(.moss-btn)):focus {
    The footer subscribe form's mobile edge-align (drop the right-anchor, go
    full-width column) lives in email.css @layer plugins alongside the
    right-anchor it undoes — see `footer .moss-subscribe` there.
-
-   Rationale: ADR-042 (docs/decisions/ADR-042-nav-spacing-is-measured-in-ink.md).
-   History: docs/archive/2026-05-07-mobile-edge-alignment.md
    ========================================================================== */
 
 /* Mobile menu button - hidden by default, shown only on narrow screens */
 .mobile-menu-button {
   display: none;
+}
+
+/* ==========================================================================
+   12a. Responsive - Touch targets (<=48rem, or any coarse pointer)
+   --------------------------------------------------------------------------
+   Only `.nav-links a` needs a rule here: the theme toggle, language toggle
+   and mobile menu button already got their own 44px invisible hit area from
+   the header-controls audit (`.nav-theme-btn::before` etc., above) — that
+   work covers every OTHER header control in the same `::before` +
+   gap-splitting idiom this follows, so nothing here duplicates it.
+
+   Below the 20rem hamburger threshold `.nav-links` is a hidden overlay panel
+   (12b, below), but from 20rem up to this 48rem mobile/desktop boundary — the
+   same one the hero and place-locator already treat as the split — its links
+   render inline with no padding at all: 39 by 24.5px on a real build, under
+   the 44px WCAG 2.5.8 AA floor.
+
+   An absolutely positioned, invisible `::after` around the link, not a
+   bigger real box. `position: relative` on the link changes only its
+   positioning context — not its own size, not the line-height around it,
+   not the row it sits in — so a link's underline (`.main-nav a.active`'s
+   `border-block-end`) and every other control's rendered box are identical
+   to the base commit's. A first attempt grew `.nav-links a` itself
+   (`min-block-size` + flex), which DID take part in layout: at 390px an
+   eight-link wrapped nav grew from 109 to 163px tall, and an active link's
+   underline ended up ~23px below its label because `border-block-end` sits
+   at the bottom of the now-taller box.
+
+   `(pointer: coarse)` is the OR partner to the width query, not a
+   replacement: a touch device wider than 48rem (a tablet in landscape) still
+   needs this, and a desktop with a mouse at any width, including exactly
+   48rem, matches neither.
+
+   Neither axis reaches 44px on a cap alone against this rule's own gaps
+   (`gap: var(--moss-space-xs) clamp(--moss-space-sm, 2vw, --moss-space-md)`,
+   above): at 390px the column half of that clamp is already past its own
+   2vw preferred value (7.8px) against a 16px floor, so it resolves to the
+   floor, not the ceiling — row 8px, column 16px, not 8 to 24. Half of 8 is
+   4, giving a 25px-tall hit box against a 17px real one on the block axis.
+   Half of 16 is 8, and a short label ("Blog", ~27px real width at 390px)
+   lands at 43px — a single pixel short. No cap can clear 44px on either
+   axis without the gap itself growing to make room. So both gaps grow here,
+   by different amounts for different reasons:
+
+   Row-gap to `--moss-space-lg` (2rem, 32px) — the honest cost, paid only
+   where wrapping actually happens: a single-row nav never renders it at
+   all, so its height is unaffected there. Measured on a real build, an
+   eight-link nav wrapping to two rows at 390px grows from 109 to 135px.
+
+   Column-gap to a flat 19px — not a token, because no token sits usefully
+   between the clamp's own 16px floor and 24px ceiling. The gap only needs
+   to clear the shortest real label's one-pixel shortfall, so it moves by
+   the smallest amount that does: 16 to 19px lets "Blog"'s hit area clear 44
+   with a pixel of headroom against rounding. 20px was tried and rejected:
+   at 390px the extra pixel per gap is enough to push the eight-link case
+   from two wrapped rows to three (135px to 184px) — a second, unwanted
+   wrap this fix must not cause on top of the row-gap's own honest one.
+   19px does not, on any label length measured, and neither does it affect
+   the plain four-link row, which never reaches its own container's width
+   at any column-gap tried here.
+
+   Each link's cap is half its own axis's new gap, rounded down by a pixel
+   on the inline axis for overlap safety — 16px block, 9px inline against a
+   19px gap — so a wrapped row's own hit area, or an adjacent link's, is met
+   edge to edge (block axis) or with a pixel to spare (inline axis) and
+   never overlapped. Applied to every link, first and last included: the
+   outer edge of the whole list reaches into `.nav-content`'s own ambient
+   space (ordinary page background above and to the sides, the content
+   column's own padding below), not a neighbor. */
+@media (max-width: 48rem), (pointer: coarse) {
+  .nav-links {
+    row-gap: var(--moss-space-lg);
+    column-gap: 19px;
+  }
+
+  .nav-links a {
+    position: relative;
+  }
+
+  .nav-links a::after {
+    content: "";
+    position: absolute;
+    inset-block: -16px;
+    inset-inline: -9px;
+  }
 }
 
 /* ==========================================================================
@@ -4347,8 +5217,34 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   .nav-links a {
+    /* Real padding, not just 12a's pseudo-element, because this link is
+       inside the open panel: `position: absolute` on `.nav-links` (above)
+       already takes the whole panel out of flow, so growing a real box here
+       costs nothing outside the panel's own (already unbounded) height —
+       none of 12a's "must not change the row it sits in" reasoning applies.
+       Combined with 12a's ::after, the panel's links clear the 44px floor
+       with room to spare (17px text + 32px padding = 49px real box, before
+       12a's own ±16px cap even applies). */
     padding: var(--moss-space-sm) 0;
     border-bottom: none;
+  }
+
+  /* Cancels 12a's `::after` extension entirely here — not just at the
+     panel's own edges, on every link. Two reasons, both about this panel's
+     own shape: (1) `.nav-links` here is the open panel's own scroll
+     container (`overflow-y: auto`, above), and any descendant box — even an
+     invisible one — that reaches past its content edge counts toward its
+     scrollable overflow, which is exactly the "does it scroll when it
+     should not" failure nav-mobile.spec.ts exists to catch; (2) this same
+     rule sets `gap: 0` between stacked links (a vertical column, "Vertical
+     stack" above), so 12a's row-gap increase does not reach this panel at
+     all — a ±16px cap sized for a 32px gap would overlap a 0px one by
+     32px between every pair of stacked links. Nothing is lost: the real
+     padding just above already gives every link in the panel a 49px box
+     (17px text + 32px padding), comfortably past the 44px floor on its
+     own. */
+  .nav-links a::after {
+    inset-block: 0;
   }
 
   .nav-links a:hover {
@@ -4469,8 +5365,7 @@ article a:where(:not(.moss-btn)):focus {
  * (24+24=48px) instead of collapsing with it the way `.moss-gallery`'s does
  * (max(24,24)=24px). The container's OWN margin collapses normally with its
  * siblings, same as `.moss-gallery`; zeroing the inner element's margin
- * here stops it from also contributing.
- * docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §6. */
+ * here stops it from also contributing. */
 .moss-cards-container[data-embed]:has(> .moss-cards[data-layout="grid"]) {
   margin: var(--moss-space-md) 0;
 }
@@ -4500,14 +5395,12 @@ article a:where(:not(.moss-btn)):focus {
  * comment on the grid-shape rules below).
  *
  * The `11em` floor is measured, not chosen: it is what keeps the longest real
- * name in the reference vault ("Hongyu Jasmine Zhu", ~201px) inside one track.
+ * name seen in testing (~201px) inside one track.
  * It is a FLOOR — `auto-fill` + `1fr` realize wider tracks as the container
  * allows. `em` follows the reader's font-scale control and the
  * `html[lang^="zh"]` reading bump, so a CJK roster gets proportionally more
  * room. Near-equal row and column gaps make the block read as one even field
- * of peers rather than as columns or as rows.
- *
- * Design: docs/archive/2026-09-06-authors-index-design-decision.md */
+ * of peers rather than as columns or as rows. */
 /* The selector is the Rust predicate, spelled in CSS. `resolve_children_config`
    auto-selects this layout when NO child is rich — `has_rich` is cover OR
    resolvable description — so both halves have to be matched here, or an
@@ -4561,7 +5454,7 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* `keep-all` forbids the implicit break BETWEEN Han characters, which is what
-   would split a name like 呂適之 down the middle; Latin still breaks at its
+   would split a name like 沈知遠 down the middle; Latin still breaks at its
    spaces, so a long Latin name rags onto a second line rather than being
    truncated. Never `nowrap` with an ellipsis here — clipping a person's name
    to tidy a roster is the wrong trade.
@@ -4618,7 +5511,7 @@ article a:where(:not(.moss-btn)):focus {
  * Scope: BOTH the listing-grid (`.moss-cards[data-layout="grid"]`) and the
  * free-form author grid (`.moss-grid`). The grid-cell pass substitutes
  * resolved `<a class="moss-card">` cells INTO `.moss-grid`
- * (see src-tauri/src/build/render/grid_cells.rs:apply_collection_cards).
+ * (see `build::render::grid_cells::apply_collection_cards`).
  * Without the `.moss-grid` ancestor selector here, those cells would inherit
  * only the bare-`.moss-card` anchor-reset rules above and miss the grid-shape
  * chrome — no rounded clip, no cover stack, no hover lift.
@@ -4675,8 +5568,7 @@ article a:where(:not(.moss-btn)):focus {
  *
  * Scope is the listing grid only. `.moss-grid` is author-composed prose whose
  * `align-items: flex-start` is a deliberate different intent, and its cells
- * are chosen by a human rather than generated from arbitrary notes.
- * Design: docs/archive/2026-09-07-card-media-track-subgrid.md */
+ * are chosen by a human rather than generated from arbitrary notes. */
 @supports (grid-template-rows: subgrid) {
   .moss-cards[data-layout="grid"] {
     grid-auto-rows: auto auto;
@@ -4692,8 +5584,7 @@ article a:where(:not(.moss-btn)):focus {
    * on the subgrid item overrides the gap ONLY for the boundary within
    * its own span (cover↔content); the gap between this card's content
    * track and the NEXT row's media track is outside that span, so it
-   * stays governed by the parent and is untouched.
-   * docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §5. */
+   * stays governed by the parent and is untouched. */
   .moss-cards[data-layout="grid"] .moss-card {
     display: grid;
     grid-template-rows: subgrid;
@@ -4736,22 +5627,25 @@ article a:where(:not(.moss-btn)):focus {
    unless it is redeclared here.
 
    The cover's own ratio changes here too — 3/4, a portrait plate, below the
-   same 36rem breakpoint. That is research, not a hunch:
-   docs/archive/2026-09-14-phone-card-composition-fix.md measured cover
-   legibility at phone width and found a taller plate reads better once the
-   caption band has little room to spare. a9db42542d6 (2026-09-15) briefly
-   extended that phone-only finding into the unscoped default above — every
-   width, not just narrow ones — which is the regression
-   docs/archive/2026-09-15-card-cover-ratio-scope.md reverses; the research
-   itself still stands, scoped to where it was measured. `.moss-grid` carries
-   no writing-mode guard, and needs none: a `@container (max-width: …)`
-   condition queries physical width, which under vertical-rl is main's
-   uncontained BLOCK axis (`container-type: inline-size` on `main` contains
-   only its INLINE axis — physical height there), so this query structurally
-   cannot match for vertical-rl content and the rule is inert for it —
-   confirmed by measurement, see `site/vertical.css`'s comment on its own
-   unscoped rule, which carries the only literal vertical-rl ever reads.
-   docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §2. */
+   same 36rem breakpoint, but ONLY for this generated listing grid. That is
+   research, not a hunch: measured cover legibility at phone width found a
+   taller plate reads better once the caption band has little room to
+   spare. a9db42542d6 (2026-09-15) briefly extended that phone-only finding
+   into the unscoped default above — every width, not just narrow ones — a
+   regression this rule reverts; the research itself still stands, scoped to
+   where it was measured. `.moss-grid` (a hand-picked `:::grid` cover) is
+   deliberately NOT in this selector: b47a55ed (2026-09-25) removed it after
+   the unscoped-default regression above had briefly made it portrait too —
+   an author's own choice of image is not the generated listing's uniform
+   box, so it keeps the shared landscape default (below) at every width,
+   narrow container or not. This rule carries no writing-mode guard, and
+   needs none: a `@container (max-width: …)` condition queries physical
+   width, which under vertical-rl is main's uncontained BLOCK axis
+   (`container-type: inline-size` on `main` contains only its INLINE axis —
+   physical height there), so this query structurally cannot match for
+   vertical-rl content and the rule is inert for it — confirmed by
+   measurement, see `site/vertical.css`'s comment on its own unscoped rule,
+   which carries the only literal vertical-rl ever reads. */
 @container (max-width: 36rem) {
   .moss-cards[data-layout="grid"] {
     grid-auto-rows: auto;
@@ -4763,8 +5657,7 @@ article a:where(:not(.moss-btn)):focus {
     grid-row: auto;
   }
 
-  .moss-cards[data-layout="grid"] .moss-card-cover,
-  .moss-grid .moss-card-cover {
+  .moss-cards[data-layout="grid"] .moss-card-cover {
     aspect-ratio: var(--moss-card-cover-ratio, 3 / 4);
   }
 
@@ -4828,9 +5721,8 @@ article a:where(:not(.moss-btn)):focus {
  * `.moss-card-content` to close the seam from the other side. */
 /* `> picture > img` variants: the WebP post-pass wraps eligible <img> in
    <picture><source><img></picture>, so the direct-child selector alone
-   would miss covers whose source image has a webp variant. See
-   docs/reference/structural-html-emission.md for the migration plan
-   that will retire this duplication. */
+   would miss covers whose source image has a webp variant, pending a
+   migration that will retire this duplication. */
 .moss-card-cover > img,
 .moss-card-cover > picture > img,
 .moss-card-cover > video,
@@ -4879,8 +5771,7 @@ article a:where(:not(.moss-btn)):focus {
    have one (grid_card.rs — `data-cover="quote"` on the same `.moss-card-cover`
    box, no new class). Keeps the box every sibling has (aspect-ratio,
    background) but sets the description (or the title, with none) as a print
-   in its mat: top-aligned, more room below the text than above.
-   docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §1. */
+   in its mat: top-aligned, more room below the text than above. */
 .moss-card-cover[data-cover="quote"] {
   display: flex;
   align-items: flex-start;
@@ -5019,14 +5910,6 @@ article a:where(:not(.moss-btn)):focus {
   margin-block-start: var(--moss-space-xl);
 }
 
-/* Sits directly under a video that ships an adaptive ladder. Quiet and tight
- * to the player: it is the fallback for a viewer whose browser plays nothing,
- * not a call to action competing with the video itself. */
-.moss-embed-video-download {
-  margin-top: var(--moss-space-xs);
-  font-size: var(--moss-size-sm);
-}
-
 /* Body and cover start together: the first line of the body (date, kicker
    or title) and the cover share the row's block-start edge; `stretch` keeps
    that shared start edge (same as flex-start would) and additionally sizes
@@ -5116,20 +5999,38 @@ article a:where(:not(.moss-btn)):focus {
   color: var(--moss-color-text-secondary);
   margin: 0;
   margin-block-start: 0.25em;
-  /* Was `display: -webkit-box` + `-webkit-box-orient: vertical` +
-     `-webkit-line-clamp: 2`. That legacy flexbox model lays its content out
-     horizontally regardless of the ancestor's own writing mode — inside a
-     vertical-rl card (a `:::grid` cell has no vertical-mode override, unlike
-     the list card below) it forced the description into
-     `writing-mode: horizontal-tb`, rotating the artist's own inscription
-     sideways while the title beside it stayed correctly vertical. The
-     unprefixed standard `line-clamp` property is not yet supported by either
-     shipping engine (Chromium 149 or the WebKit moss ships), so this caps
-     the block-size to two line-heights instead: a logical property, it caps
-     block-progression regardless of which physical axis that is, and plain
-     block layout never touches `writing-mode`. */
+  /* The block-size cap is the ONE clamp every card gets, in every writing
+     mode: a logical property, it caps block-progression regardless of which
+     physical axis that is, and plain block layout never touches
+     `writing-mode`. It is the fallback the rule below still leans on (its
+     own clip has no ellipsis, so a browser that ignored `-webkit-line-clamp`
+     would at least still clip at two lines) and it is also the ONLY clamp a
+     vertical-typesetting site keeps — see site/vertical.css, which undoes the
+     rule below for exactly that reason. */
   overflow: hidden;
   max-block-size: calc(1.5em * 2);
+  /* Ellipsis for the common case: `display: -webkit-box` + `-webkit-box-
+     orient: vertical` + `-webkit-line-clamp: 2` paints the ellipsis natively
+     in both engines, but that legacy multi-line-truncation box lays its
+     content out along the PHYSICAL horizontal axis regardless of the
+     element's own writing-mode — inside a vertical-rl card it forced the
+     description into `writing-mode: horizontal-tb`, rotating the artist's
+     own inscription sideways while the title beside it stayed correctly
+     vertical. Core CSS never references `data-typesetting` (gates_change_-
+     what_ships/gates_are_independent below rely on that being true for every
+     horizontal site, so the string cannot appear here even inside a `:not()`
+     — a horizontal-only build must not carry the substring at all), so the
+     undo lives in site/vertical.css instead, the one file that already knows
+     about vertical typesetting and is the gated partial a horizontal site
+     never even ships. `line-clamp: 2` is set alongside the prefixed property
+     for whichever engine ships the unprefixed standard version first — inert
+     today (Chromium 149 and the WebKit moss ships both ignore it), but it
+     would not need `display: -webkit-box` or vertical.css's undo at all, so
+     it costs nothing to have it ready. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .moss-child-section-divider {
@@ -5162,10 +6063,12 @@ article a:where(:not(.moss-btn)):focus {
   overflow: hidden;
 }
 
+/* No object-fit here: the shared `.moss-card-cover > img` rule reads
+   --moss-card-cover-fit, and re-declaring `cover` at this specificity made
+   list listings ignore the token (2026-09-23). */
 .moss-cards[data-layout="list"] .moss-card-cover img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   margin: 0;
   border-radius: 0;
 }
@@ -5176,7 +6079,6 @@ article a:where(:not(.moss-btn)):focus {
 .moss-cards[data-layout="list"] .moss-card-cover video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   margin: 0;
   border-radius: 0;
 }
@@ -5212,84 +6114,23 @@ article a:where(:not(.moss-btn)):focus {
   background: linear-gradient(135deg, var(--moss-color-surface) 0%, rgba(255, 255, 255, 0.05) 100%);
 }
 
-/* Link previews — bare-URL cells in grid render as compact cards.
+/* External grid-cell links render through the same `.moss-card` shell an
+ * internal page card uses (see `.moss-grid .moss-card` above) — the owner's
+ * "one card kind" decision. The retired `.link-preview*` shell (a
+ * differently-shaped compact row: title + favicon/domain, no cover) lived
+ * here until that unification; its markup is gone
+ * (`build::components::grid_card::render_external_card`), but the classes
+ * stay in the contract table as `Retired` since a theme in the wild may
+ * still reference them.
  *
- * Anatomy: title row (optional) + favicon/domain row. No description, no hero
- * image. If only the domain is known, the card collapses to a single row.
- *
- * The favicon uses an `img.link-preview-favicon` selector so it beats any
- * loose `img` rule on specificity — defends against future global image
- * styles that would otherwise stretch a 192×192 favicon to fill the row. */
-.link-preview {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: var(--moss-space-md) var(--moss-space-md);
-  background: var(--moss-color-surface);
-  /* The 1px border is what makes the card legible in dark mode where
-   * `--moss-color-surface` (#252017) sits within ~10% luminance of
-   * `--moss-color-bg` (#1c1914). Without this, cards with only a muted
-   * domain row become near-invisible against the page. The border uses
-   * `--moss-border-light` so it tracks the theme. */
-  border: 1px solid var(--moss-border-light);
-  border-radius: 6px;
-  text-decoration: none;
-  color: inherit;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-}
-
-.link-preview:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--moss-elevation-1);
-  border-color: var(--moss-border-medium);
-}
-
-.link-preview-title {
-  font-weight: 500;
-  /* No font-size: `--moss-font-base` was never a defined token, so this read
-     was invalid at computed-value time and the size has always inherited.
-     Dropping the declaration keeps that exact behavior and stops advertising
-     a custom property that nothing honors. */
-  line-height: 1.3;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  /* Long unbroken tokens (rare URLs-as-titles, no-space CJK page titles) must
-   * wrap rather than push the card wider than its grid cell. */
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
-.link-preview-domain {
-  font-size: var(--moss-size-xs);
-  color: var(--moss-color-muted);
-  margin-top: 0.15em;
-  display: flex;
-  align-items: center;
-  gap: 0.3em;
-}
-
-/* Title-less variant: domain row stands alone, drop the small offset. */
-.link-preview-title + .link-preview-domain {
-  margin-top: 0.15em;
-}
-
-.link-preview > .link-preview-domain:first-child {
-  margin-top: 0;
-}
-
-/* Specificity matters: `.moss-grid-card img` (0,1,1) sits later in this file
- * and would otherwise win on equal specificity, leaking `aspect-ratio: 1/1`,
- * `object-fit: cover`, and `border-radius: 8px` onto the favicon. The
- * `.link-preview img.link-preview-favicon` selector (0,2,1) beats it
- * cleanly so the favicon is governed entirely by this block. */
-.link-preview img.link-preview-favicon {
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
-  aspect-ratio: auto;
+ * The one thing an external card needs beyond what `.moss-card` already
+ * styles: the favicon inline before the domain in `.moss-card-kicker`. */
+.moss-card-kicker-favicon {
+  width: 14px;
+  height: 14px;
   margin: 0;
+  margin-inline-end: 0.35em;
+  vertical-align: -2px;
   border-radius: 2px;
   object-fit: contain;
 }
@@ -5326,7 +6167,7 @@ article a:where(:not(.moss-btn)):focus {
    width/height attributes, and under vertical-rl `inline-size` only beats the
    `height` one — with `width="2339"` still standing both dimensions are set,
    `aspect-ratio` is ignored, and the plate renders 2339px wide, cropped to a
-   landscape strip (zhu-da 畫/, 2026-09-05). */
+   landscape strip (a vertical site's paintings folder, 2026-09-05). */
 .moss-collection-cover img {
   inline-size: 100%;
   block-size: auto;
@@ -5391,37 +6232,26 @@ article a:where(:not(.moss-btn)):focus {
 
 .moss-hero {
   position: relative;
-  /* Full-bleed by DOM position: a body-level flex item, outside <main>. The
-     shift term is what escapes the sidenote gutter — body's padding-right
-     narrows this element's containing block by exactly that much, so adding it
-     back lands the banner on the viewport's right edge. `body { overflow-x:
-     clip }` absorbs the overhang without a scrollbar. On a page or site with no
-     reserve declared the inset clamps to 0px and this is plain 100%.
-
-     The inset, NOT the reserve: the inset is what body actually gave up, and
-     it is much less — 0px from 1316px up. Adding the reserve back here would
-     overshoot the window by the difference, up to 280px, and `overflow-x:
-     clip` would hide it while `object-fit: cover` cropped against a box wider
-     than the screen and .moss-hero-caption centred 140px right of where it
-     belongs.
-
-     No fallback, deliberately, in both reads of the property: `body` declares
-     it unconditionally, and a `var(--moss-x, …)` read WITH a fallback is what
-     components_sync_test.rs's `every_escape_hatch_is_declared` treats as a
-     theme hook needing a CUSTOM_PROPS row. This is plumbing, not a hook.
-
-     NOT a negative margin. That was the first attempt, and it silently did
-     nothing: a negative margin widens a flex item only while its cross size
-     comes from `align-items: stretch`, and the `width` here is an explicit
-     size, which turns stretch off. The banner sat 280px short of the right
-     edge on every wide viewport of a footnoted site
-     (docs/archive/2026-08-30-sidenote-gutter-page-kind.md). */
+  /* `position: relative` alone does NOT create a stacking context (that
+     needs an explicit z-index too) — so without this, the overlay-growth
+     block's `z-index: -1` media escapes past this element entirely and
+     stacks against whatever else is in the BODY's context, which can
+     paint it behind an opaque theme layer instead of just behind this
+     hero's own text. */
+  isolation: isolate;
+  /* Full-bleed by DOM position: a body-level flex item, outside <main>.
+     body's padding-right narrows this element's containing block, so
+     adding the INSET back (not the reserve — much less, 0px from 1316px
+     up) lands the banner on the viewport's right edge; `overflow-x: clip`
+     on body absorbs the overhang. No fallback: `body` always declares it.
+     Not a negative margin — that silently did nothing, since an explicit
+     width turns off the `align-items: stretch` a negative margin needs. */
   inline-size: calc(100% + var(--moss-sidenote-inset));
   /* Reads the same hook as the media cap below, with its own (looser) fallback:
      the wrapper clips, the media scales, so they want different defaults but the
      same off switch. Without this, `--moss-hero-max-height: none` lifted the
-     media cap and left the wrapper still clipping — which is what okagaki hit,
-     and why it ended up fighting three selectors by hand instead. */
+     media cap and left the wrapper still clipping — a site hit exactly this,
+     and ended up fighting three selectors by hand instead. */
   max-block-size: var(--moss-hero-max-height, min(80vb, 800px));
   overflow: hidden;
   margin-block-end: var(--moss-space-lg);
@@ -5443,20 +6273,12 @@ article a:where(:not(.moss-btn)):focus {
   z-index: 0;
 }
 
-/* A hero that carries a caption is a photograph being shown, not a backdrop
-   for overlay text — and a caption that names a subject («the memorial wall at
-   the monastery gate») is a promise that the subject is in the frame. The
-   default `object-fit: cover` crops to fill, which can cut that subject out,
-   so a captioned hero shows the whole image and the frame grows to fit it.
-   An author who wants the crop back writes it on the image itself
-   (`image=cover.jpg|cover top`) — media attrs land as an inline style and
-   beat this.
-
-   `[data-fit="plate"]` (`:::hero {.plate}`, 2026-09-11) shares this block:
-   an artwork/manuscript/photograph reproduction that must render WHOLE and
-   at no more than its own delivered pixels — same "don't crop, don't force
-   the frame" shape as a captioned hero, just without requiring a caption.
-   See `docs/archive/2026-09-11-hero-plate-variant.md`. */
+/* A captioned hero names its subject, a promise the subject is in frame —
+   so unlike the default crop-to-fill, it shows the whole image and the
+   frame grows to fit it. The crop comes back via `image=cover.jpg|cover
+   top` (an inline style, beats this). `[data-fit="plate"]` (`.plate`)
+   shares this block: same "don't crop, don't force the frame" shape, for
+   an artwork/manuscript reproduction rather than a caption's promise. */
 .moss-hero[data-captioned],
 .moss-hero[data-fit="plate"] {
   max-block-size: none;
@@ -5480,7 +6302,7 @@ article a:where(:not(.moss-btn)):focus {
      specificity (0,2,1) beats the mobile reset below (`.moss-hero img`,
      0,1,1) at every viewport without depending on a `--moss-hero-max-height`
      custom-property fallback the way a plain theme override would — the
-     zhu-da `.plate` class hack this replaces relied on exactly that
+     site-theme `.plate` class hack this replaces relied on exactly that
      fallback and mobile silently defeated it (see the archive note). */
   inline-size: auto;
   max-inline-size: 100%;
@@ -5541,26 +6363,34 @@ article a:where(:not(.moss-btn)):focus {
   max-block-size: var(--moss-hero-max-height, 70vb);
 }
 
-/* Legibility scrim.
-   Painted ONLY under a hero that actually carries overlay text: on an
-   image-only hero there is nothing to make legible, so darkening the
-   author's chosen image is pure damage. This rule used to be ungated, which
-   is how image-only heroes ended up dimmed; render_hero_html_typed omits
-   .moss-hero-content entirely when there is no overlay, so `:has()` is
-   enough to tell the two apart.
-   Aimed at the bottom-left, where .moss-hero-content is anchored. The old
-   135deg ramp put its 0.6 maximum in the top-left corner, which by
-   construction never holds text, and left the text zone at ~0.36 — too
-   weak to carry white type over a mid-tone photo. */
+/* Legibility scrim. Gated on `:has()` so an image-only hero stays undimmed.
+   Darkens the START side by default; `align=end` moves the panel to the
+   opposite side, so the ramp moves with it. Mirrored under :dir(rtl) too. */
 .moss-hero::before {
   content: none;
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(to top,   rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
     linear-gradient(to right, rgba(0,0,0,0.30) 0%, transparent 55%);
   z-index: 1;
   pointer-events: none;
+}
+
+.moss-hero[data-align="end"]::before {
+  background:
+    linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to left, rgba(0,0,0,0.30) 0%, transparent 55%);
+}
+:dir(rtl) .moss-hero::before {
+  background:
+    linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to left, rgba(0,0,0,0.30) 0%, transparent 55%);
+}
+:dir(rtl) .moss-hero[data-align="end"]::before {
+  background:
+    linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to right, rgba(0,0,0,0.30) 0%, transparent 55%);
 }
 
 .moss-hero:has(.moss-hero-content)::before { content: ''; }
@@ -5598,6 +6428,7 @@ article a:where(:not(.moss-btn)):focus {
      the photo. */
   color: #ffffff;
   text-shadow: 0 1px 3px rgba(0,0,0,0.35);
+  background: var(--moss-hero-panel-bg, rgba(20, 16, 12, 0.82)); /* tinted panel; see color_extract::panel_background */
 }
 
 /* Elements that carry their OWN colour from the base stylesheet have to hand
@@ -5655,15 +6486,10 @@ article a:where(:not(.moss-btn)):focus {
   background: rgba(255,255,255,0.15);
 }
 
-/* Multi-image hero: ambient crossfade. One slide visible at a time, no
-   controls — no slide may carry information the others don't (design:
-   docs/archive/2026-07-27-import-conventions-engine-design.md). The
-   .moss-hero-slides wrapper is the positioning context: the first slide
-   keeps normal flow (the wrapper takes its height), the rest stack inside
-   the wrapper — never over stacked mobile content. Timing: 7s per slide,
-   1.5s dissolve; keyframe percentages depend on the slide count, hence the
-   per-count blocks (the renderer caps at 6). An unmatched count degrades
-   to the static first slide. */
+/* Multi-image hero: ambient crossfade, one slide visible at a time; pausable
+   (see the pause control below). `.moss-hero-slides` is the positioning context for the rest to
+   stack inside. Timing: 7s/slide, 1.5s dissolve; per-count keyframe blocks
+   (capped at 6). An unmatched count degrades to the static first slide. */
 .moss-hero .moss-hero-slides {
   position: relative;
 }
@@ -5705,11 +6531,140 @@ article a:where(:not(.moss-btn)):focus {
   0% { opacity: 0; } 3.6% { opacity: 1; } 16.7% { opacity: 1; }
   20.3% { opacity: 0; } 100% { opacity: 0; }
 }
+/* Pause control (WCAG 2.2.2), script-free: a checkbox read via `:has()`.
+   Keyboard focus anywhere in the hero except the control itself pauses too
+   (the control's own focus must not hold the slides still once it is
+   unchecked), and so does hover, but only where hover is real: on touch it
+   would stay stuck after a tap. Block-end inline-end corner, opposite the
+   default panel (inline-start with `align=end`). */
+.moss-hero[data-slides]:has(.moss-hero-pause input:checked) .moss-hero-slide,
+.moss-hero[data-slides]:has(:focus-visible:not(.moss-hero-pause input)) .moss-hero-slide {
+  animation-play-state: paused;
+}
+@media (hover: hover) {
+  .moss-hero[data-slides]:hover .moss-hero-slide {
+    animation-play-state: paused;
+  }
+}
+.moss-hero-pause {
+  position: absolute;
+  inset-block: auto 0.5rem;
+  inset-inline: auto 0.5rem;
+  z-index: 2; /* above the scrim (1) */
+  display: grid;
+  place-items: center;
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  opacity: 0.7;
+}
+.moss-hero[data-align="end"] .moss-hero-pause {
+  inset-inline: 0.5rem auto;
+}
+@media (width < 48rem) { /* the panel spans the block end (stacked or overlaid): keep the control on the picture */
+  .moss-hero .moss-hero-pause {
+    inset-block: 0.5rem auto;
+  }
+}
+.moss-hero-pause:is(:hover, :has(input:focus-visible)) {
+  opacity: 1;
+}
+.moss-hero-pause:has(input:focus-visible) {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+.moss-hero-pause input {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.moss-hero-pause span {
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
+  background: linear-gradient(to right, currentColor 0 35%, transparent 35% 65%, currentColor 65%);
+  pointer-events: none;
+}
+.moss-hero-pause:has(input:checked) span {
+  background: currentColor;
+  clip-path: polygon(15% 0, 100% 50%, 15% 100%);
+}
+/* Forced colours drop backgrounds and gradients: draw the edge and the glyph
+   in system colours so the control and its focus ring stay visible. */
+@media (forced-colors: active) {
+  .moss-hero-pause {
+    forced-color-adjust: none;
+    background: Canvas;
+    color: CanvasText;
+    border: 2px solid CanvasText;
+    opacity: 1;
+  }
+  .moss-hero-pause:has(input:focus-visible) {
+    outline-color: Highlight;
+  }
+}
 /* Ambient motion is atmosphere, not information: honor reduced motion by
-   pinning the first slide. */
+   pinning the first slide. Nothing moves, so the control goes too. */
 @media (prefers-reduced-motion: reduce) {
   .moss-hero[data-slides] .moss-hero-slide { animation: none; }
   .moss-hero[data-slides] .moss-hero-slide:not(:first-child) { opacity: 0; }
+  .moss-hero-pause { display: none; }
+}
+
+/* Grow to fit overlay text instead of clipping it: media goes absolute and
+   fills via inset (mirrors `.moss-card-cover > picture`'s sizing idiom, not
+   its stacking — that one has no in-flow sibling to stay behind). Content
+   flows and sets the height; `min-block-size` is the old cap as a FLOOR.
+   Mirrored below for mobile-overlay, which also adds a reserved image band
+   above the panel (`padding-block-start`, --moss-hero-mobile-band) and uses
+   range syntax rather than min/max-width, which tied with this block at
+   exactly 768px. `:not([data-fit="plate"])`: a plate's own rules promise
+   never to crop or upscale, which this would break. */
+@media (width >= 48rem) {
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    min-block-size: var(--moss-hero-max-height, min(80vb, 800px));
+    max-block-size: none;
+  }
+
+  /* `align=end` moves the panel to the inline-end (flex-end resolves per direction). */
+  .moss-hero[data-align="end"]:has(.moss-hero-content):not([data-fit="plate"]) {
+    align-items: flex-end;
+  }
+
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > picture,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > img,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > video,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > .moss-ambient-video,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > .moss-hero-slides {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    z-index: -1; /* not 0/auto: that still paints above flow content */
+  }
+
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) img,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) video,
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-ambient-video video[data-loop] {
+    max-block-size: none;
+    object-position: var(--moss-hero-object-position, top);
+  }
+
+  .moss-hero:has(.moss-hero-content) .moss-hero-content {
+    position: static;
+    inset-block-end: auto;
+    inset-inline-start: auto;
+    z-index: 2; /* not auto: else this flex item paints below the scrim */
+    flex: none; /* hugs its own content; never stretch to the hero's height */
+  }
 }
 
 /* Responsive — tablet */
@@ -5740,7 +6695,7 @@ article a:where(:not(.moss-btn)):focus {
    With overlay text: stack layout — image full-width at natural ratio on top,
    text in a solid block below. No crop, no forced aspect ratio. Gradient
    overlay is hidden since text is no longer on the image. */
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .moss-hero img,
   .moss-hero video,
   .moss-hero .moss-ambient-video video[data-loop] {
@@ -5834,19 +6789,26 @@ article a:where(:not(.moss-btn)):focus {
    NOTE: `.moss-hero[data-mobile="overlay"] img` overrides the stacking block's
    `.moss-hero:has(.moss-hero-content) img { position: static }` by
    source order. This block MUST remain after that block. */
-@media (max-width: 48rem) {
-  .moss-hero[data-mobile="overlay"] {
-    block-size: min(60vb, 480px);
-    max-block-size: min(60vb, 480px);
-    display: block;
+@media (width < 48rem) {
+  /* Same grow-to-fit shape as the >= 48rem block above: a FLOOR, not a cap.
+     Same `:not([data-fit="plate"])` guard too — see that block's comment. */
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    min-block-size: min(60vb, 480px);
+    max-block-size: none;
+    padding-block-start: var(--moss-hero-mobile-band, min(45vb, 320px));
   }
 
-  .moss-hero[data-mobile="overlay"] img,
-  .moss-hero[data-mobile="overlay"] video {
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) img,
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) video {
     position: absolute;
+    inset: 0;
     inline-size: 100%;
     block-size: 100%;
     object-fit: cover;
+    z-index: -1; /* else paints above the now in-flow content */
   }
 
   .moss-hero[data-mobile="overlay"]::before {
@@ -5854,8 +6816,8 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content {
-    position: absolute;
-    background: none;
+    position: static;
+    background: var(--moss-hero-panel-bg, rgba(20, 16, 12, 0.82)); /* see "Backing panel" above */
     /* Back over the image, so back to white — and the children inherit it
        via the `:is(h1…blockquote)` rule in the base block. */
     color: #fff;
@@ -5864,22 +6826,22 @@ article a:where(:not(.moss-btn)):focus {
     max-inline-size: none;
   }
 
-  /* Multi-image hero in overlay mode: the section has an explicit height
-     and imgs are absolute — size the wrapper and every slide to the
-     section so the first slide can't collapse to zero height. */
-  .moss-hero[data-mobile="overlay"] .moss-hero-slides,
-  .moss-hero[data-mobile="overlay"] .moss-hero-slide {
+  /* Multi-image: slides wrapper fills and sits behind, same as a single image. */
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) .moss-hero-slides {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+  }
+  .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) .moss-hero-slide {
     position: absolute;
     inset: 0;
   }
 
-  /* Overlay mode keeps the text ON the image, so the shadow has to come back.
-     It carries the same three-`:not()` specificity brace as the stacked block
-     above for a sharper reason than custom.css: without it this rule is
-     (0,3,1) and the stacked block's (0,4,1) `text-shadow: none` beat it on
-     specificity regardless of source order — an overlay hero's heading was
-     rendering white on a photograph with no shadow at all. Braced, this is
-     (0,6,1) and wins. */
+  /* Shadow comes back since text is ON the image here. Needs the same
+     three-`:not()` brace as the stacked block above — without it this is
+     (0,3,1), losing the tie to the stacked block's (0,4,1) `text-shadow:
+     none` regardless of source order, which rendered white-on-photo with
+     no shadow at all. Braced, this is (0,6,1) and wins. */
   .moss-hero[data-mobile="overlay"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
     font-size: 1.2rem;
     text-shadow: 0 2px 4px rgba(0,0,0,0.4);
@@ -5894,33 +6856,19 @@ article a:where(:not(.moss-btn)):focus {
   }
 }
 
-/* Pale cover — the rules. The reasoning is up at the scrim block (search
-   data-hero-tone); this is where it takes effect, and it must stay LAST.
-
-   Off comes the scrim, at every width. `.moss-hero[data-mobile="overlay"]
-   ::before { content: '' }` above is (0,2,1) and so is this, so the only thing
-   between a pale overlay hero and its scrim is these lines being later.
-
-   The text colour is written in the two OVERLAID contexts only — desktop, and
-   mobile in overlay mode. The third context, mobile stacked, must not be
-   touched: there the text sits below the image on a `--moss-cover-color` band,
-   which is the WCAG-darkened extract, so it already carries white type
-   correctly. A blanket
-   `[data-hero-tone="light"] .moss-hero-content { color: dark }` would out-
-   specify `[data-cover-color] .moss-hero-content` and paint dark text on that
-   dark band.
-
-   Placed after the mobile-overlay block on purpose. Every rule here ties on
-   specificity with the overlay rule it replaces — (0,3,0) against (0,3,0) for
-   the container, (0,6,1) against (0,6,1) for the headings, which carry the
-   same three-`:not()` brace for the same reason documented there. Source order
-   is what decides the tie, so this block must stay last. */
+/* Pale cover — the rules (reasoning at the scrim block, search
+   data-hero-tone). MUST STAY LAST: ties on specificity with the rule it
+   replaces, source order is the only tiebreak. Scoped to the two OVERLAID
+   contexts only: mobile stacked text sits on `--moss-cover-color`, already
+   WCAG-correct white. `--moss-hero-tone-color` (custom_props.rs), not the
+   text token — pale in dark mode, landing back on this same pale image. */
 .moss-hero[data-hero-tone="light"]::before { content: none; }
 
-@media (min-width: 48rem) {
+@media (width >= 48rem) {
   .moss-hero[data-hero-tone="light"] .moss-hero-content {
-    color: var(--moss-color-text);
+    color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
+    background: var(--moss-hero-panel-bg, rgba(250, 248, 244, 0.82)); /* pale panel for dark text */
   }
 
   .moss-hero[data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
@@ -5928,10 +6876,11 @@ article a:where(:not(.moss-btn)):focus {
   }
 }
 
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content {
-    color: var(--moss-color-text);
+    color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
+    background: var(--moss-hero-panel-bg, rgba(250, 248, 244, 0.82));
   }
 
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
@@ -5959,10 +6908,13 @@ article a:where(:not(.moss-btn)):focus {
   gap: clamp(var(--moss-space-sm), 1.25lh, var(--moss-space-lg))
        var(--moss-space-md);
   align-items: flex-start;
-  /* --moss-space-md (24px), NOT lg. See "Block rhythm" below .moss-gallery.
-     Logical: the rhythm is against the prose before and after the grid, which
-     a vertical page reads along its own block axis. */
-  margin-block: var(--moss-space-md);
+  /* Asymmetric: top stays --moss-space-md (24px, NOT lg — see "Block rhythm"
+     below .moss-gallery, which stays symmetric md/md), bottom is
+     --moss-space-lg (32px) — the grid's trailing edge is still a real
+     section break, even though its leading edge reads as inside the
+     section it follows. Logical: the rhythm is against the prose before and
+     after the grid, which a vertical page reads along its own block axis. */
+  margin-block: var(--moss-space-md) var(--moss-space-lg);
   margin-inline: 0;
   /* An author ratio applies whatever the column count is — the per-count rules
      below only enumerate 1–4. `initial` (= none) keeps a ratio-less grid on the
@@ -5971,15 +6923,17 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* Ma 間: a heading BINDS to the grid it owns at `sm` (16px) — tighter than the
-   `lg` (32px) that separates the grid from ordinary prose peers. The symmetric
-   `margin: lg 0` above puts 32px into the heading-bind slot, which is exactly
-   the inter-card gap, so the grouping signal is lost: the heading reads as
-   floating between two sections rather than owning the grid beneath it.
-   See docs/reference/design/spacing.md — the documented 16:32:64 cadence, and
-   its warning that separation-space must never be baked symmetrically into an
-   element. `.moss-cards-container` already binds at 16px (site.css ~1757);
+   `lg` (32px) that separates the grid from ordinary prose peers. The grid's
+   own base top margin is `md` (24px, see above): still too loose to read as
+   owned by the heading directly above it, so this rule overrides just the
+   top to `sm` when a heading precedes. It touches only margin-block-START —
+   the grid's own `lg` bottom margin (the section-break edge) is untouched by
+   this rule either way.
+   The documented 16:32:64 cadence warns that separation-space must never be
+   baked symmetrically into an element. `.moss-cards-container` already binds
+   at 16px (site.css ~1757);
    the shortcode grid never got the same treatment. Scoped to heading adjacency
-   so a grid following prose keeps its full 32px peer gap. */
+   so a grid following prose keeps its full 24px peer top gap. */
 :is(h1, h2, h3, h4, h5, h6) + .moss-grid {
   margin-block-start: var(--moss-space-sm);
 }
@@ -6035,9 +6989,9 @@ article a:where(:not(.moss-btn)):focus {
    whose edges carry meaning (typographic posters); `cover` suits photography.
 
    Note `.link-preview img.link-preview-favicon` (0,2,1) already overrides this
-   rule for favicons and resets aspect-ratio to auto — unaffected by the hooks. */
+   rule for favicons and resets aspect-ratio to auto — unaffected by the hooks.
+   The image's inline size is set by the `:is()` rule below, not here. */
 .moss-grid-card img {
-  width: 100%;
   aspect-ratio: var(--moss-grid-image-ratio, 1 / 1);
   border-radius: var(--moss-grid-image-radius, 8px);
   object-fit: var(--moss-grid-image-fit, cover);
@@ -6058,6 +7012,17 @@ article a:where(:not(.moss-btn)):focus {
    any one-class-plus-type-selectors competitor) resets it. */
 .moss-grid-card .moss-image {
   margin: 0;
+}
+
+/* The card settles its image's inline size. A lazy image's `sizes="auto, …"`
+   (contract/sizes.rs) sizes the source from the image's own layout width, and
+   an external-link card is a flex column whose figure carries
+   `margin-inline: auto`, so nothing else stretches it: the figure shrank to
+   its caption's width and the image followed. One `:is()` rule (0,2,0) so it
+   outranks `article figure:not(.video-figure) img` (0,1,3), which only caps
+   the inline size and never stretches it. */
+.moss-grid-card :is(.moss-image, picture, img) {
+  inline-size: 100%;
 }
 
 .moss-grid-card h1,
@@ -6087,10 +7052,14 @@ article a:where(:not(.moss-btn)):focus {
 /* LINK-card inner text — cards are navigational, not inline text links, so
    strip the underline and use a subtle hover instead of the article link
    style. SCOPED to `[data-kind="link"]`: that attribute marks a cell whose
-   content IS a single link. It is emitted at exactly two sites — the post-pass
-   `render_link_card` (re-wraps the cell's original link, so a nested <a>
-   remains and this rule strips ITS underline) and the typed Block::LinkCard
-   (a clean anchor, no nested <a>). Both are card text, never prose.
+   content IS a single link, emitted at exactly one site — the typed
+   `Block::LinkCard` render arm. Its own body can still carry a descendant
+   <a>: a compound cell's caption can hold an ordinary link or a plain
+   wikilink reference (e.g. "Translated by [[Name]]"), and a wikilink embed
+   whose renderer falls back to a link, e.g. `![[file.pdf]]` →
+   `<object>…<a href="…">Download name</a></object>` — video/audio/3D embeds
+   resolve to a clean tag with no such fallback. This rule strips THEIR
+   underline too; it is card text, never prose.
    PROSE cells (`<div class="moss-grid-card">` with no data-kind — e.g. a bio
    paragraph with a `[CV](…)` link) are intentionally NOT matched, so their
    inline links keep the standard `article a` underline.
@@ -6118,13 +7087,289 @@ a.moss-grid-card:hover {
   text-decoration: underline;
 }
 
-/* Deliberately no mobile collapse: `:::grid N` names how many cards sit on
-   one line, and that line runs along the INLINE axis in either writing
-   mode — horizontal-tb wraps it across the page, vertical-rl stacks it down
-   the column — at every viewport width. See preview-cards.md. (A ratio grid,
-   `:::grid 2 1:2`, follows the same rule: the ratio is a column-WIDTH
-   split, not a track count, and per-count widths are meaningless to
-   collapse independently of the count itself.) */
+/* Collapses `:::grid N` to 1 column below 768px: the default (horizontal)
+   inline axis is viewport WIDTH, which shrinks sharply on mobile, so N
+   side-by-side cards get too narrow to read. Unconditional here — vertical
+   typesetting counters it in vertical.css (its inline axis is HEIGHT,
+   which barely shrinks, so it never needed to collapse) rather than this
+   rule excluding it, so core never has to name the `vertical` partial's
+   own `data-typesetting` token. See preview-cards.md. */
+@media (max-width: 768px) {
+  .moss-grid[data-columns] {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Scrolling row (`:::grid N {scroll}`): the row stays on ONE line and the
+   reader drags it sideways, with a slice of the next card as the cue —
+   `data-columns` reads as "how many fit in view" rather than "how many per
+   row". Keyed on `.moss-grid[data-scroll]` alone, never a parent selector
+   or `article.container >`: a scroll grid can sit nested inside a fenced
+   div or an embed wrapper, and the mechanics must not depend on what
+   contains it. The row scrolls without JS; `scroll-row.js` adds dots and
+   wheel scrolling on top. No `scroll-behavior: smooth`, no hidden scrollbar. */
+.moss-grid[data-scroll] {
+  /* Containing block for an absolutely positioned descendant (e.g. a
+     theme's visually-hidden `figcaption`), so this row clips it. */
+  position: relative;
+  grid-auto-flow: column;
+  overflow-x: auto;
+  scroll-snap-type: inline proximity;
+  overscroll-behavior-inline: contain;
+  /* CSS Overflow §3: once one axis is non-`visible`, the other computes to
+     `auto` too — so this box clips the BLOCK axis as a side effect of
+     scrolling the inline one. Without this, a card's focus ring near the
+     row's top/bottom edge would be cut by the same box that clips the
+     scroll. */
+  padding-block: 4px;
+}
+
+/* The visible indicator belongs 8px below the cards, not below the grid's
+   normal section margin. The row keeps 4px block padding for lifted cards and
+   focus rings; the indicator's -4px start margin cancels that padding, while
+   the 8px dot centered in its 24px target supplies the visual gap. Keep the
+   margin when the runtime hides the indicator because the row fits. */
+.moss-grid[data-scroll]:has(+ .moss-scroll-dots:not([hidden])) {
+  margin-block-end: 0;
+}
+
+/* `[data-columns]` (present, any value) matches the same specificity as the
+   per-count `.moss-grid[data-columns="N"]` rules above (one class + two
+   attributes each) and sits later in the file, so it wins regardless of N —
+   an ordinary `.moss-grid[data-scroll]` selector is one attribute lighter
+   and would lose every one of them. Sizing comes from `grid-auto-columns`
+   below instead. */
+.moss-grid[data-scroll][data-columns] {
+  grid-template-columns: none;
+}
+
+/* `min-inline-size`, not `min-width`: a grid item's automatic minimum size
+   only needs overriding on the axis a track actually sizes it on — the
+   column axis, i.e. the INLINE axis, physical width under horizontal-tb but
+   physical HEIGHT under vertical-rl (vertical.css transposes this same
+   scrolling row to stack cards down the line instead of across it). A
+   physical `min-width: 0` would do nothing there, and a card with an
+   unbreakable long line or a tall image could then push its `grid-
+   auto-columns` track taller than the calc() below intends, the vertical
+   twin of the wide-image bug this line was written to stop.
+
+   `> *`, not `> .moss-grid-card`: a cell is only sometimes that wrapper. A
+   whole-cell link card and an external link preview render their OWN
+   `<a class="moss-grid-card …">` (no wrapper div — see grid_parts.rs), and a
+   cell whose link names a page in the build is replaced wholesale by that
+   page's own `<a class="moss-card">`, carrying no `moss-grid-card` class at
+   all. All three still land as `.moss-grid`'s direct children — nothing
+   else does — so the untyped selector is what actually covers every card a
+   scroll row can hold. */
+.moss-grid[data-scroll] > * {
+  min-inline-size: 0;
+  scroll-snap-align: start;
+}
+
+/* Every track is the same size, including the one peeking past the edge, so
+   `.moss-grid-card` widths stay uniform whether a card is fully visible or
+   half cut off: `grid-auto-columns` applies to ALL columns alike under
+   `grid-auto-flow: column`, not just the ones a fixed template would have
+   named. Discrete per-count rules — not a `calc()` division reading
+   `data-columns` through a custom property — to match the existing
+   `.moss-grid[data-columns="N"]` rules this counters.
+
+   N visible cards need N gaps subtracted, not N-1: one between each pair of
+   the N cards, PLUS one more between the Nth card and the peeking card after
+   it. Solving N·card + N·gap + peek = 100% for card gives
+   `card = (100% - peek - N·gap) / N` — drop a gap and the peek promised by
+   `--moss-grid-scroll-peek` silently shrinks by one gap's width, because the
+   peeking card starts a whole gap earlier than the formula assumed. */
+.moss-grid[data-scroll][data-columns="1"] {
+  grid-auto-columns: calc(
+    100% - var(--moss-grid-scroll-peek, 2.5rem) - var(--moss-space-md)
+  );
+}
+.moss-grid[data-scroll][data-columns="2"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 2 * var(--moss-space-md)) / 2
+  );
+}
+.moss-grid[data-scroll][data-columns="3"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 3 * var(--moss-space-md)) / 3
+  );
+}
+.moss-grid[data-scroll][data-columns="4"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 4 * var(--moss-space-md)) / 4
+  );
+}
+
+/* The wrapping-grid collapse above is wrong for a scroll row — collapsing to
+   `1fr` would leave one full-width card per implicit column, so a keyboard
+   or trackpad drag away from it. It stays a scroller, just showing less: a
+   card and a third, the same "there's more" cue at a size a phone can read.
+   `[data-scroll][data-columns]` (presence) ties the desktop per-count rules'
+   specificity and sits later in the file, so it overrides all four. */
+@media (max-width: 768px) {
+  .moss-grid[data-scroll][data-columns] {
+    grid-auto-columns: calc(100% / 1.3);
+  }
+}
+
+/* A `{scroll}` row whose cells already fit its column count (`data-fits`,
+   from `GridShortcode::fits_without_scrolling` — moss-core) renders exactly
+   like the plain wrapping grid above 768px: N equal tracks, no drag, no
+   peek. It only becomes the scroller the rest of this section builds once
+   the viewport narrows past the SAME breakpoint the plain grid collapses
+   at (`min-width: 769px` here is that breakpoint's complement, not a
+   second number to keep in sync by hand) — `scroll-row.js` still attaches
+   at every width (`data-scroll` is unconditional, `is_scroll_row` is what
+   gates the script), so the reader gets the dots and the keyboard affordance
+   the moment the row actually starts scrolling, with no reload needed.
+   `grid-auto-flow: row` un-does the column-flow the always-scrolling rule
+   above sets — with an explicit `grid-template-columns` restored below,
+   row-flow is what makes N cards wrap into N tracks instead of one long row.
+   `.moss-grid[data-scroll][data-fits][data-columns="N"]` (one class + 3
+   attributes) outranks the always-scrolling `[data-scroll][data-columns]`
+   rule above (one class + 2 attributes) regardless of source order, so this
+   media query doesn't need `!important` or a rewrite of that rule.
+
+   The other three declarations undo box-model residue the always-scrolling
+   rule leaves behind once its own reason for each is gone at this width:
+   `padding-block: 4px` there exists only to keep the row's overflow clip
+   from cutting a focus ring, a concern that stops applying the moment
+   `overflow-x` goes back to `visible` two lines up — left alone, a plain
+   `.moss-grid` carries no padding at all, so a fitting row would sit 8px
+   taller than its plain twin and inset every card 4px further from the top
+   and bottom edges. `grid-auto-columns` only ever sized an IMPLICIT track,
+   which `grid-auto-flow: row` plus the explicit per-count
+   `grid-template-columns` below never create, so it is already inert here —
+   reset anyway so a later change to either can't silently wake a stale
+   peek-sized value back up. `overscroll-behavior-inline` is likewise inert
+   on a box that isn't a scroll container once `overflow-x: visible` applies,
+   same reasoning, same anyway. */
+@media (min-width: 769px) {
+  .moss-grid[data-scroll][data-fits] {
+    grid-auto-flow: row;
+    overflow-x: visible;
+    scroll-snap-type: none;
+    grid-auto-columns: auto;
+    overscroll-behavior-inline: auto;
+    padding-block: 0;
+  }
+  .moss-grid[data-scroll][data-fits][data-columns="1"] {
+    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
+  }
+  .moss-grid[data-scroll][data-fits][data-columns="2"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
+  }
+  .moss-grid[data-scroll][data-fits][data-columns="3"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
+  }
+  .moss-grid[data-scroll][data-fits][data-columns="4"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+  }
+}
+
+/* Position the indicator under a scroll row (`scroll-row.js` adds it; without the
+   script the row still scrolls). The dot is drawn 8px but the button is a
+   24px target, the WCAG 2.5.8 minimum. Cards in view are lit; the first of
+   them is also `aria-current` and larger. Long rows clip a stable dot track to
+   seven slots; smaller edge dots signal cards beyond the viewport. `currentColor`
+   keeps the dots right on any theme's ground. */
+.moss-scroll-dots {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  margin-block-start: -4px;
+  color: var(--moss-color-text);
+  direction: ltr;
+  writing-mode: horizontal-tb;
+}
+.moss-scroll-dots-viewport {
+  overflow: hidden;
+  touch-action: pan-y;
+}
+.moss-scroll-dots[data-indicator="dynamic"] .moss-scroll-dots-viewport {
+  inline-size: calc(7 * 24px);
+}
+.moss-scroll-dots-track {
+  display: flex;
+  inline-size: max-content;
+  transform: translateX(calc(var(--moss-scroll-dot-start, 0) * -24px));
+  transition: transform 0.22s ease-out;
+}
+.moss-scroll-dots[data-scrubbing] .moss-scroll-dots-track {
+  transition: none;
+}
+
+/* `scroll-row.ts`'s `fit()` sets the `hidden` IDL property, not just a class,
+   when the row it belongs to isn't actually scrollable — but `display: flex`
+   above is an AUTHOR rule, and the UA stylesheet's `[hidden] { display: none
+   }` is a lower-priority origin, not a losing specificity: an author rule
+   with no `!important` still wins over it. Same fix already applied to
+   `.lightbox[hidden]` and the nav-island rules elsewhere in this file. */
+.moss-scroll-dots[hidden] {
+  display: none;
+}
+.moss-scroll-dots button {
+  display: grid;
+  place-items: center;
+  inline-size: 24px;
+  block-size: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.moss-scroll-dots button::before {
+  content: "";
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  /* Sizes, not transform: scale(): WebKit rasterizes a transformed dot at
+     its unscaled size and resamples the bitmap, so a 5px dot at scale(0.7)
+     came out lumpy on Retina. Even pixel sizes also center on whole pixels
+     in the 24px cell. */
+  transition: opacity 0.2s, inline-size 0.2s, block-size 0.2s;
+}
+.moss-scroll-dots button.is-visible::before {
+  opacity: 0.85;
+}
+.moss-scroll-dots button[aria-current="true"]::before {
+  inline-size: 10px;
+  block-size: 10px;
+}
+.moss-scroll-dots[data-indicator="dynamic"] button::before {
+  inline-size: 6px;
+  block-size: 6px;
+  opacity: 0.45;
+}
+.moss-scroll-dots[data-indicator="dynamic"] button.is-edge-start::before,
+.moss-scroll-dots[data-indicator="dynamic"] button.is-edge-end::before {
+  inline-size: 4px;
+  block-size: 4px;
+  opacity: 0.3;
+}
+.moss-scroll-dots[data-indicator="dynamic"] button.is-visible::before {
+  opacity: 0.85;
+}
+.moss-scroll-dots[data-indicator="dynamic"] button[aria-current="true"]::before {
+  inline-size: 10px;
+  block-size: 10px;
+  opacity: 0.95;
+}
+.moss-scroll-dots button:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: -2px;
+  border-radius: 50%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-scroll-dots-track,
+  .moss-scroll-dots button::before {
+    transition: none;
+  }
+}
 
 /* Gallery Shortcode
  *
@@ -6142,7 +7387,7 @@ a.moss-grid-card:hover {
  * Folding both into `repeat(var(--moss-gallery-columns, auto-fill), minmax(200px,
  * 1fr))` is correct only for auto-fill. With an explicit N the 200px floor
  * becomes a hard `N × 200px + gaps` minimum that the container never agreed
- * to: harbor's `:::gallery 8` of fellow portraits demanded 1712px inside a
+ * to: riverbend's `:::gallery 8` of fellow portraits demanded 1712px inside a
  * 692px text column and spilled the whole document sideways at EVERY viewport,
  * desktop included. Same bug class as the `minmax(0, 1fr)` note on
  * `.moss-grid`'s tracks above. */
@@ -6178,6 +7423,13 @@ a.moss-grid-card:hover {
    next, so it read as its own section and detached from the heading that owns
    it, and the page lost its strongest structural signal. `md` puts them back
    inside their section, level with the paragraph rhythm they interrupt.
+
+   The two are no longer twins: `.moss-gallery` stays symmetric md/md (24px
+   both sides) exactly as above, but `.moss-grid`'s BOTTOM margin moved back
+   to lg (32px, its own `margin-block` declaration above) — its trailing edge
+   is still a real section break, so only the edge that reads as "inside the
+   section" (the top, against the paragraph or heading introducing it) stays
+   compressed to md/sm.
 
    The alternative — leave blocks at 32 and raise the section break to
    --moss-space-xl (48) — reads well on media-heavy landing pages but changes
@@ -6232,7 +7484,7 @@ a.moss-grid-card:hover {
 
      Left in, that is 96px of dead space per gallery ROW. Desktop hides it: a
      one-row strip just looks loosely spaced. Every wrap multiplies it — the
-     8-up on harbor's homepage reflows to 3 columns at 390px, and the block
+     8-up on riverbend's homepage reflows to 3 columns at 390px, and the block
      measured 630px tall for 341px of avatars. 12-up partner logos: 845px for
      460px of content.
 
@@ -6538,10 +7790,30 @@ main.has-sidebar > .moss-series-nav {
   text-decoration: underline;
 }
 
+/* 48x48 — a square, not the glyph's own narrow inline box (34.7px on this
+   "×" in Chrome, 35.75px in WebKit; the height was already 48 thanks to the
+   explicit line-height:1 below). `display:flex` centering means the glyph
+   lands at the box's own geometric center regardless of engine-specific
+   advance width, so the box can be resized freely; only the POSITION needs
+   to compensate, because `right`/`top` anchor an EDGE, and widening the box
+   from ~35px to 48px while keeping that edge fixed would drag the glyph
+   ~6.5px off its old spot. `right` below is nudged by (old avg width 35.22
+   - new 48) / 2 = -6.39px so the box's new center lands where the old one
+   was (measured, then verified within 1px in Chrome and WebKit at both
+   1440px and 390px — see header-hit-areas... lightbox-github-shapes.spec.ts).
+   `top` needs no such nudge: the old height (48) equals the new one, so the
+   existing top offset already puts the new center where the old one was. */
 .lightbox-close {
   position: absolute;
   top: var(--moss-space-md);
-  right: var(--moss-space-md);
+  right: calc(var(--moss-space-md) - 6.390625px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  box-sizing: border-box;
+  border-radius: 50%;
   background: none;
   border: none;
   color: #fff;
@@ -6550,17 +7822,33 @@ main.has-sidebar > .moss-series-nav {
   opacity: 0.7;
   transition: opacity 0.2s;
   line-height: 1;
-  padding: var(--moss-space-xs);
 }
 
 .lightbox-close:hover {
   opacity: 1;
 }
 
+/* Same 48x48 square and the same reasoning as .lightbox-close above, but
+   both axes need the position nudge here: .lightbox-nav's old box (padding
+   alone, no fixed size) measured ~61-64px wide and ~93-95px tall — already
+   past 44px on both axes, just not SQUARE, which is the actual bug (a
+   200:305 aspect box with border-radius:50% draws an oval). Vertical needs
+   no nudge regardless: `top:50%` + `translateY(-50%)` centers on the
+   lightbox's own mid-height however tall this box is. Horizontal is nudged
+   the same way as .lightbox-close, using each glyph's own measured old
+   width (avg ~62.9px for "‹"/"›" in Chrome/WebKit): (62.9 - 48) / 2 =
+   7.45px, added inward on .lightbox-prev/.lightbox-next below. */
 .lightbox-nav {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  box-sizing: border-box;
+  border-radius: 50%;
   background: none;
   border: none;
   color: #fff;
@@ -6568,19 +7856,37 @@ main.has-sidebar > .moss-series-nav {
   cursor: pointer;
   opacity: 0.7;
   transition: opacity 0.2s;
-  padding: var(--moss-space-md);
 }
 
 .lightbox-nav:hover {
   opacity: 1;
 }
 
+/* Neither button carries a background at rest, so with no rule of its own
+   each fell back to the browser's default focus ring — before the square
+   box above, a bulky rounded-rectangle far larger than the bare glyph it
+   surrounded, and the one shape in the whole lightbox nothing here drew on
+   purpose; now that each button's own box is a true 48px circle, `outline`
+   (which follows `border-radius`) draws a round ring on that circle
+   directly — no separate pseudo-element needed. White, not
+   `--moss-color-ui-accent`: this overlay is `rgba(0,0,0,0.95)` regardless
+   of site theme, the same reasoning the immersive iframe's own
+   fullscreen/new-window buttons (also chrome floating over unpredictable
+   dark content) already used for their ring. */
+.lightbox-close:focus,
+.lightbox-nav:focus { outline: none; }
+.lightbox-close:focus-visible,
+.lightbox-nav:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 2px;
+}
+
 .lightbox-prev {
-  left: var(--moss-space-sm);
+  left: calc(var(--moss-space-sm) + 7.449px);
 }
 
 .lightbox-next {
-  right: var(--moss-space-sm);
+  right: calc(var(--moss-space-sm) + 7.449px);
 }
 
 /* Video figure styling */
@@ -6606,40 +7912,110 @@ main.has-sidebar > .moss-series-nav {
    center alignment) while image figures get conventional caption polish.
    Note: this rule applies to figures from ALL three detectors, not just the
    new Pandoc rule — pre-existing image figures gain italic-centered captions
-   on upgrade. This is intentional theme polish, not strictly "preserve
-   visual behavior" as the implicit_figure migration suggests. See the
-   Pandoc-derived rules section in docs/reference/obsidian-compatibility.md. */
-article figure:not(.video-figure) {
+   on upgrade. Floated figures keep the runaround rule's own rhythm; this
+   rule sets only block spacing so width-token figures keep their centering.
+   `:not(.moss-place-map)` — a place map is not a photo and keeps its own
+   margin story (the base `.moss-place-map` rule plus the locator's
+   zeroed top and the map-frame embed's tight bottom); this rule's four
+   :not()s already out-specify that story (0,4,2 against the locator
+   reset's 0,2,0), which silently gave every place map this rule's 1.25L
+   top AND bottom regardless — inside a locator that meant the actual
+   `<figure>` sat 1.25L below the float's own (correctly aligned) top
+   edge, no matter what margin the locator itself carried. */
+article figure:not(.video-figure):not(.moss-align-left):not(.moss-align-right):not(.moss-place-map):not(:has(.moss-align-left, .moss-align-right)) {
   /* Figures are full-bandwidth objects and get the largest gap in the reading
-     rhythm — ~2× the paragraph break (space-xl/48px vs the md/24px between
-     paragraphs) — so an image reads as a deliberate pause, not another line of
-     prose. Was space-lg/32px, only 8px more than a paragraph, so images didn't
-     stand apart. Bare <img> (below) tracks the same margin to stay in step.
-     This top margin IS the pre-figure gap: <article> is normal block flow, so
-     it margin-collapses with the preceding block's bottom margin to max(the
-     two) = 48px. (An earlier `:has(+ figure)` lead-in bump on the preceding
-     block was removed as a no-op — 32px < 48px never changes the collapsed
-     max; only a value >48px would, which would over-space.) */
-  margin: var(--moss-space-xl) 0;
+     rhythm — 1.25 lines of body text (--moss-read-line) vs the paragraph
+     break's 0.75 — so an image reads as a deliberate pause, not another line
+     of prose. Was a fixed space-xl/48px (space-lg/32px before that, only 8px
+     more than a paragraph, so images didn't stand apart); moving to a line
+     multiple holds that ratio to the surrounding text at every reader
+     font-scale step and script instead of only coincidentally matching one
+     fixed number — at the 18px Latin default that's ~39px, deliberately
+     tighter than the old 48 (see the CHANGELOG entry), not a preserved value.
+     Bare <img> (below) tracks the same margin to stay in step. This top
+     margin IS the pre-figure gap:
+     <article> is normal block flow, so it margin-collapses with the preceding
+     block's bottom margin to max(the two) — always this figure's own margin,
+     since every other prose block's own bottom margin (the paragraph gap,
+     0.75L) is smaller than 1.25L by construction. (An earlier `:has(+ figure)`
+     lead-in bump on the preceding block was removed as a no-op on that same
+     basis, back when both were fixed px; a value ever exceeding 1.25L would
+     change that and over-space.) */
+  margin-block: calc(var(--moss-read-line) * 1.25);
 }
 
 /* Reset margins inside captioned figures so the gap below the image is
    determined entirely by the figcaption's margin-top (no `article img` 32px
    leak, no inline line-box leading). Comma-expanded with descendant
    combinators on plain element names: `:is(img, video, picture)` would be
-   shorter, but the moss CSS minifier strips the space before `:` (issue #631),
+   shorter, but the moss CSS minifier strips the space before `:`,
    so any `selector :pseudo` form collapses to a compound selector that matches
    nothing. Plain element names after a space survive minification. The
    descendant (not child) combinator is required because moss wraps `<img>`
    in `<picture>` for webp variants — the IMG is then a grandchild of the
-   `<figure>`, not a direct child. */
+   `<figure>`, not a direct child.
+
+   The size caps are logical. Written physically (`max-width` + `height:
+   auto`), `height: auto` lands on the INLINE axis under vertical-rl and
+   cancels the `height=` presentational hint, leaving the physical width to
+   the image's intrinsic size — which for a srcset image is the `sizes=`
+   value. Every vertical figure then rendered exactly `sizes=` wide (756px
+   for a body image) instead of filling its column (2026-09-23). `block-size:
+   auto` releases the width to the aspect ratio instead; horizontally the two
+   spellings are the same properties. */
 article figure:not(.video-figure) img,
 article figure:not(.video-figure) video,
 article figure:not(.video-figure) picture {
   display: block;
-  max-width: 100%;
-  height: auto;
+  max-inline-size: 100%;
+  block-size: auto;
   margin: 0;
+}
+
+/* `data-aspect="scroll"` (render::image::is_scroll_shape, long edge past
+   3x the short edge — a handscroll or hanging scroll) — horizontal
+   typesetting only; vertical.css overrides this for a vertically-typeset
+   page, where the same source needs the opposite treatment (see there). The
+   shared scroll-shadow/focus-ring declarations live on `.moss-table-scroll`
+   above, this rule's selector folded in there; only the properties that
+   don't generalize to that div stay here. `article` specifically to OUTRANK
+   the figure rule above (`article figure:not(…) picture`, three type
+   selectors plus the `:not()` argument's specificity) regardless of whether
+   a `<figure>` wraps the picture — a bare `picture[data-aspect]` is one type
+   selector short and silently loses that tie (found live: the figure rule's
+   `max-inline-size: 100%` kept winning on `<img>` until this was added).
+
+   In-column sizing (either rule above) fits a handscroll to the column
+   WIDTH and squashes it to a sliver a few dozen px tall — the bug this
+   attribute exists to route around. Instead: a fixed-height strip that
+   keeps its own width (no upscale past natural size), in its own
+   horizontally-scrollable region. `<picture>` is the scroll region (real
+   DOM containment an `<img>` alone lacks — nothing to scroll TO otherwise;
+   `synthesize_inner`'s `wrap_scroll_container` adds one even around a bare
+   webp-source or non-raster `<img>`, which never gets a `<picture>`
+   otherwise); the inner `<img>` is exempted from the ordinary width cap so
+   it can be wider than its column and still readable. `tabindex="0"`
+   (render/image.rs) makes it a keyboard scroll stop, same affordance as
+   `.moss-table-scroll`. */
+article picture[data-aspect="scroll"] {
+  display: block;
+  max-inline-size: 100%;
+  margin-block: calc(var(--moss-read-line) * 1.25);
+}
+
+/* No upscale past natural size (`inline-size: auto`, the same never-
+   upscale pattern the hero-plate rules below use): a source shorter than
+   60vh already just shows at its own height. `max-block-size` is the
+   whole point of this rule — either rule above would otherwise fit this
+   `<img>` to the SCROLLING `<picture>`'s own (column) width, undoing the
+   scroll region entirely. */
+article picture[data-aspect="scroll"] img {
+  display: block;
+  inline-size: auto;
+  max-inline-size: none;
+  block-size: auto;
+  max-block-size: 60vh;
+  border-radius: 6px;
 }
 
 /* A figure carrying an explicit |NN% width (inline style="width:…", emitted
@@ -6678,24 +8054,20 @@ article p:has(> video:only-child) {
   margin: var(--moss-space-lg) 0;
 }
 
-/* Video element styling */
+/* Video element styling. `auto 16 / 9`: once the browser knows the video's
+   real dimensions (poster or metadata), the box takes its natural ratio —
+   the 16/9 half is only the pre-metadata placeholder, so a portrait or
+   square clip doesn't sit pillarboxed in a landscape box forever, and layout
+   still doesn't jump from a 300x150 default before metadata arrives. */
 article p > video,
 article video {
   max-width: 100%;
   width: 100%;
   height: auto;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: auto 16 / 9;
   border-radius: 6px;
   background: var(--moss-color-surface);
   object-fit: contain;
-}
-
-/* Override inline height attribute for percentage-width videos.
-   !important: beats the HTML `height` attribute which becomes inline style specificity. */
-article p > video[height],
-article video[height] {
-  height: auto !important;
-  aspect-ratio: 16 / 9;
 }
 
 /* ==========================================================================
@@ -7019,7 +8391,16 @@ main > article.container > .immersive-iframe-wrapper > iframe {
   overflow: hidden;
 }
 
-.immersive-fs-active main > article.container > .immersive-iframe-wrapper {
+/* `main article.container .immersive-iframe-wrapper` (a descendant
+   combinator, not `main > article.container > .immersive-iframe-wrapper`'s
+   direct-child chain): most wrapped iframes ARE a direct child of the
+   article, but the places explorer's own embed wraps one several levels
+   deeper (`article.container > .moss-place-locator > figure > wrapper`, or
+   `> .moss-place-map-frame > figure > wrapper` for a style:map embed) —
+   `setupImmersiveIframe` is exported precisely so that reuse works, and a
+   direct-child-only selector would leave its wrapper never actually
+   reaching fixed/fullscreen positioning below. */
+.immersive-fs-active main article.container .immersive-iframe-wrapper {
   position: fixed;
   inset: 0;
   z-index: 10000;
@@ -7033,7 +8414,7 @@ main > article.container > .immersive-iframe-wrapper > iframe {
 
 /* !important: beats HTML width/height/border attributes on the <iframe> element,
    which become inline-style-equivalent and cannot be overridden otherwise. */
-.immersive-fs-active main > article.container > .immersive-iframe-wrapper > iframe {
+.immersive-fs-active main article.container .immersive-iframe-wrapper > iframe {
   position: absolute;
   inset: 0;
   width: 100% !important;
@@ -7052,7 +8433,14 @@ main > article.container > .immersive-iframe-wrapper > iframe {
   transition: opacity 200ms ease;
 }
 
-.immersive-fs-active main > article.container > *:not(.immersive-iframe-wrapper) {
+/* `:not(.immersive-iframe-wrapper):not(:has(.immersive-iframe-wrapper))`:
+   hide a direct child of the article UNLESS it either IS the wrapper (the
+   common case) or CONTAINS it somewhere inside (the places embed's own
+   deeper nesting, same reasoning as the wrapper's own rule above) — a bare
+   `:not(.immersive-iframe-wrapper)` only ever excluded the first case, so
+   the embed's whole containing figure (not equal to, but holding, the
+   wrapper) was hidden right along with the rest of the article. */
+.immersive-fs-active main > article.container > *:not(.immersive-iframe-wrapper):not(:has(.immersive-iframe-wrapper)) {
   opacity: 0;
   pointer-events: none;
   transition: opacity 200ms ease;
@@ -7065,7 +8453,7 @@ body:not(.immersive-fs-active) > .moss-colophon {
   transition: opacity 200ms ease 100ms;
 }
 
-body:not(.immersive-fs-active) main > article.container > *:not(.immersive-iframe-wrapper) {
+body:not(.immersive-fs-active) main > article.container > *:not(.immersive-iframe-wrapper):not(:has(.immersive-iframe-wrapper)) {
   transition: opacity 200ms ease 100ms;
 }
 
@@ -7077,11 +8465,25 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   top: auto;
   left: auto;
   z-index: 10001;
-  background: rgba(128, 128, 128, 0.3);
+  /* The exit control sits over whatever the map shows, including white ice,
+     so it is a solid surface with the same circle and shadow as the map's own
+     zoom controls instead of a translucent tint. */
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--moss-color-surface);
+  box-shadow: var(--moss-elevation-1);
+  color: var(--moss-color-text);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .immersive-fs-active .immersive-fullscreen-btn:hover {
-  background: rgba(128, 128, 128, 0.5);
+  background: var(--moss-color-surface);
+}
+
+.immersive-fs-active .immersive-fullscreen-btn:focus-visible {
+  outline-color: var(--moss-color-ui-accent);
 }
 
 .immersive-fs-active .immersive-new-window-btn {
@@ -7162,7 +8564,7 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   .immersive-fs-active > header,
   .immersive-fs-active > footer,
   .immersive-fs-active > .moss-colophon,
-  .immersive-fs-active main > article.container > *:not(.immersive-iframe-wrapper) {
+  .immersive-fs-active main > article.container > *:not(.immersive-iframe-wrapper):not(:has(.immersive-iframe-wrapper)) {
     transition: none !important;
   }
 
@@ -7194,6 +8596,30 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   .moss-colophon {
     display: none;
   }
+
+  /* `scroll` has no reader to drag it on paper: unwrap to the ordinary
+     wrapping grid so cards flow onto as many printed pages as they need,
+     rather than being cropped to whatever was on screen when print fired. */
+  .moss-grid[data-scroll] {
+    grid-auto-flow: row;
+    overflow: visible;
+  }
+
+  .moss-scroll-dots {
+    display: none;
+  }
+  .moss-grid[data-scroll][data-columns="1"] {
+    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
+  }
+  .moss-grid[data-scroll][data-columns="2"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
+  }
+  .moss-grid[data-scroll][data-columns="3"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
+  }
+  .moss-grid[data-scroll][data-columns="4"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+  }
 }
 
 
@@ -7205,7 +8631,7 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
    be a `transform: translateX(-50%)` here, and a transform is invisible to the
    script that sets `left`, so a selection near the left margin sent half the bar
    off-screen with nothing able to notice. `selection-actions.ts` now subtracts
-   half the measured width itself and clamps the result — see `frontend/site/
+   half the measured width itself and clamps the result — see `js-src/site/
    viewport.ts`. Do not reintroduce a transform on this element. */
 .sel-popover {
   display: none;
@@ -7398,28 +8824,3 @@ body[data-moss-preview] .moss-service-inactive {
 }
 
 } /* @layer shortcodes */
-
-/* Footer file content (footer.md): when the site has a footer file, tighten
-   the spacing to the divider and apply muted attribution typography. Sites
-   without footer content keep their existing spacing — :has() ensures
-   opt-in behavior. Pre-existing top-level @layer base intentionally kept
-   outside @layer shortcodes so its cascade position (base < shortcodes)
-   is preserved. */
-@layer base {
-  .footer-left p {
-    margin: 0;
-    font-size: var(--moss-size-xs);
-    color: var(--moss-color-muted);
-  }
-
-  .footer-left a {
-    color: inherit;
-    text-decoration: underline;
-    text-decoration-color: var(--moss-border-light);
-    text-underline-offset: 0.2em;
-  }
-
-  .footer-left a:hover {
-    text-decoration-color: currentColor;
-  }
-}

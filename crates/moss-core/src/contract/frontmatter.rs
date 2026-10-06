@@ -130,7 +130,7 @@ mod tests {
     /// `skip_schema` fields are filtered out of `moss describe`'s HUMAN
     /// output but not out of `--json`, so this description is a published,
     /// machine-readable contract string — and it is the SSOT that
-    /// `docs/reference/contract.md` and the hooks-site contract fixture are
+    /// the generated contract documentation and the hooks-site contract fixture are
     /// generated from. It described the uid as derivable for five separate
     /// surfaces' worth of corrections; `generate_uid` ignores its path
     /// argument and returns random bytes, so a plugin author who recomputed a

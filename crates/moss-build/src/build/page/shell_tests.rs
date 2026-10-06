@@ -152,7 +152,7 @@ fn test_substitute_known_token_and_drops_unknown_in_same_pass() {
 #[test]
 fn test_substitute_never_rescans_substituted_values() {
     // A value containing a known token literal must be emitted verbatim —
-    // single pass over template text only (#847).
+    // single pass over template text only.
     let values = std::collections::HashMap::from([
         (
             "content",
@@ -656,7 +656,6 @@ fn test_css_nav_split_keeps_toggles_on_row_one() {
     // alone on row 2 spread edge to edge. `display: contents` is what lifts
     // the two groups out of .nav-right so they can land on different rows —
     // flex wrapping alone can never float the later sibling back up.
-    // Design: docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md
     let right = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-right")
         .expect("split .nav-right rule should exist");
     let links = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-links")
@@ -686,7 +685,7 @@ fn test_css_nav_split_keeps_toggles_on_row_one() {
 fn test_css_hover_hints_are_gated_on_a_hover_capable_device() {
     // Touch has no un-hover: a tapped element keeps `:hover` until the next
     // tap, so an ungated hint pill just hangs there (the stuck theme-toggle
-    // hint, okagaki 2026-08). Both hover-triggered rules — the pill itself
+    // hint, a large live site, 2026-08). Both hover-triggered rules — the pill itself
     // and the .nav-left overflow lift that lets it escape the clip — sit
     // behind `@media (any-hover: hover)`; `:focus-visible` stays ungated
     // because keyboards exist on touch devices too. This is a text property
@@ -1111,8 +1110,7 @@ fn test_css_footer_container_provides_default_chrome() {
     // nested `.footer-content` wrapper. This keeps the HTML flat:
     // authored content (footer.md HTML or default link list) sits as
     // direct children of <footer>, allowing site CSS to use
-    // `body > footer.container > selector` rules for custom designs
-    // (the SoCiviC pattern).
+    // `body > footer.container > selector` rules for custom designs.
     //
     // Footer renders at the default body font-size; sites that want a
     // smaller footer override `footer.container > * { font-size: ... }`
@@ -1254,9 +1252,8 @@ fn test_css_root_content_width_is_font_stable() {
     // not a `ch` value, so text, inline images, and figures resolve to the
     // same column at any element font-size. A `ch` cap drifts per element
     // font and desyncs text from figures when a theme lowers the prose font.
-    // See docs/archive/2026-06-04-content-column-measure-consistency-design.md.
     //
-    // Task 1.3: token definitions live in tokens.json (not DEFAULT_CSS), so
+    // Token definitions live in tokens.json (not DEFAULT_CSS), so
     // we check the full assembled CSS (generated prefix + DEFAULT_CSS).
     let css = full_site_css();
     assert!(
@@ -1410,8 +1407,10 @@ fn test_css_cjk_body_size_and_leading_bump() {
     // --moss-reading-size, not on `body { font-size }`: everything built on
     // that size — headings, captions, the content column — takes it too, which
     // is what keeps the hierarchy from compressing by 6% on the one script that
-    // cannot show a small size step. Latin body line-height (1.75) is left
-    // untouched — only CJK gets 1.8 here.
+    // cannot show a small size step. Leading now lives on the --moss-read-leading
+    // token (body reads it, and --moss-read-line — the prose spacing unit —
+    // is built on it too) rather than on a separate `html[lang^="zh"] body`
+    // rule: Latin stays the token's 1.75 default, CJK overrides it to 1.8 here.
     let bump = get_css_rule(DEFAULT_CSS, "html[lang^=\"zh\"]")
         .expect("html[lang^=\"zh\"] CSS rule should exist");
     assert!(
@@ -1420,19 +1419,15 @@ fn test_css_cjk_body_size_and_leading_bump() {
              reading scale and survives browser zoom, got: {}",
         bump
     );
-
-    let rule = get_css_rule(DEFAULT_CSS, "html[lang^=\"zh\"] body")
-        .expect("html[lang^=\"zh\"] body CSS rule should exist");
     assert!(
-        rule.contains("line-height: 1.8"),
-        "CJK body should use looser 1.8 leading, got: {}",
-        rule
+        bump.contains("--moss-read-leading: 1.8"),
+        "CJK should override --moss-read-leading to the looser 1.8 leading, got: {}",
+        bump
     );
     assert!(
-        !rule.contains("font-size"),
-        "CJK body must NOT re-declare a font-size — that is the collision the \
-             reading scale removed, got: {}",
-        rule
+        get_css_rule(DEFAULT_CSS, "html[lang^=\"zh\"] body").is_none(),
+        "the leading bump lives on the --moss-read-leading token now, not a separate \
+             `html[lang^=\"zh\"] body` rule"
     );
 }
 
@@ -1476,7 +1471,7 @@ fn test_css_hero_mobile_stacks_overlay_below_image() {
     // below the image in a solid block; the image shows at full natural
     // width.
     //
-    // Hero-responsive fix (#508) earlier narrowed the rule from bare
+    // An earlier hero-responsive fix narrowed the rule from bare
     // `.moss-hero` to `.moss-hero:has(.moss-hero-content)` so image-only
     // heroes keep their natural aspect ratio. That narrowing still
     // applies; only the with-overlay arm changed from crop to stack.
@@ -1484,9 +1479,13 @@ fn test_css_hero_mobile_stacks_overlay_below_image() {
     // Keep the selector at exactly this specificity (0-2-0): the mobile
     // overlay-mode block below relies on `.moss-hero[data-mobile="overlay"]`
     // tying with it and winning on source order.
+    //
+    // Range syntax, not `max-width`: the hero's mobile/desktop boundary
+    // moved to `(width < 48rem)` / `(width >= 48rem)` so the two can never
+    // both match the same width (see site.css's comment at that rule).
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
-        "@media (max-width: 48rem)",
+        "@media (width < 48rem)",
         ".moss-hero:has(.moss-hero-content)",
     )
     .expect(".moss-hero:has(.moss-hero-content) mobile CSS rule should exist");
@@ -1508,10 +1507,11 @@ fn test_css_grid_card_link_no_underline() {
     // underline from their inner text: cards are navigational, not inline
     // text links. This is SCOPED to `[data-kind="link"]` so that PROSE
     // cells (`<div class="moss-grid-card">` with no data-kind, e.g. a bio
-    // paragraph containing a `[CV](…)` link) keep the standard `article a`
-    // underline. Internal link-cards (render_link_card) and Block::LinkCard
-    // both carry `data-kind="link"`, so their card affordance is preserved;
-    // external link-previews have no nested <a> and use `.link-preview`.
+    // paragraph containing a `[CV](…)` link, or a lone link cell with a
+    // separate caption) keep the standard `article a` underline. Only
+    // `Block::LinkCard` carries `data-kind="link"`, so its card affordance
+    // is preserved; external link-previews have no nested <a> and use
+    // `.link-preview`.
     let rule = get_css_rule(DEFAULT_CSS, ".moss-grid-card[data-kind=\"link\"] a")
         .expect(".moss-grid-card[data-kind=\"link\"] a CSS rule should exist");
     assert!(
@@ -1638,11 +1638,11 @@ fn test_template_has_sidebar_layout_false_no_class() {
 fn test_homepage_template_includes_description_and_og_tags() {
     let processor = ShellProcessor::new();
     let mut vars = make_test_vars(false);
-    vars.description = Some("看星星，食烟火。".to_string());
+    vars.description = Some("第一段。".to_string());
     vars.og_tags = Some(r#"<meta property="og:type" content="website">"#.to_string());
     let result = processor.process(ShellType::Page, vars);
     assert!(
-        result.contains(r#"<meta name="description" content="看星星，食烟火。">"#),
+        result.contains(r#"<meta name="description" content="第一段。">"#),
         "Homepage should contain meta description when provided"
     );
     assert!(
@@ -1878,12 +1878,12 @@ fn test_css_content_width_full_preset() {
 }
 
 // =========================================================================
-// CSS: content-width escape (ADR-021 Corollary 2, data-width bands)
+// CSS: content-width escape (data-width bands)
 // =========================================================================
 
 #[test]
 fn test_css_content_width_escape_rules() {
-    // main is the query container the escape resolves 100cqw against.
+    // main is the query container the escape resolves 100cqi against.
     assert!(
         DEFAULT_CSS.contains("main {\n  container-type: inline-size;\n}"),
         "main must be an inline-size query container for the data-width escape"
@@ -1891,8 +1891,8 @@ fn test_css_content_width_escape_rules() {
     // container-type implies contain:layout, which would make `main` the
     // containing block for the position:fixed immersive iframe — this
     // override is the single highest-risk line of the escape; see the
-    // comment block above the rule and the immersive check in
-    // tests/render-gates/site/content-width-escape.spec.js.
+    // comment block above the rule. No render gate exercises immersive
+    // fullscreen, so this text pin is the only guard it has.
     assert!(
         DEFAULT_CSS.contains(".immersive-fs-active main {\n  container-type: normal;\n}"),
         "immersive fullscreen must turn the query container off"
@@ -1911,21 +1911,30 @@ fn test_css_content_width_escape_rules() {
     );
     assert!(
         DEFAULT_CSS
-            .contains(r#"article.container > [data-width="screen"] { --moss-escape: 100cqw; }"#),
+            .contains(r#"article.container > [data-width="screen"] { --moss-escape: 100cqi; }"#),
         "screen band missing"
     );
-    // The shared rule clamps to the container: cqw, never vw (100vw
+    // The shared rule clamps to the container: cqi, never vw (100vw
     // includes a classic scrollbar's gutter and clips silently under
     // body{overflow-x:hidden} — the rejected option B failure mode).
+    // The band's geometry, in both writing modes, is checked by
+    // tests/render-gates/site/content-width-escape.spec.ts.
     let rule = get_css_rule(DEFAULT_CSS, "article.container > [data-width]")
         .expect("shared data-width escape rule must exist");
     assert!(
-        rule.contains("width: min(var(--moss-escape, 100%), 100cqw)"),
-        "escape width must clamp to 100cqw, got: {rule}"
+        rule.contains("inline-size: min(var(--moss-escape, 100%), 100cqi)"),
+        "escape width must clamp to 100cqi, got: {rule}"
     );
     assert!(
         !rule.contains("100vw"),
         "the escape must never size against 100vw (scrollbar gutter), got: {rule}"
+    );
+    // A relative offset or a transform moves only the paint, and only along
+    // x: under vertical-rl that is the block axis, where it paints the band
+    // over the text after it.
+    assert!(
+        !rule.contains("left:") && !rule.contains("transform"),
+        "the escape must centre with inline margins, not a paint offset, got: {rule}"
     );
 }
 
@@ -1952,7 +1961,7 @@ fn test_css_content_width_escape_collapses_on_mobile() {
     )
     .expect("data-width escape must collapse below 48rem");
     assert!(
-        rule.contains("width: auto") && rule.contains("transform: none"),
+        rule.contains("inline-size: auto") && rule.contains("margin-inline: auto"),
         "mobile collapse must undo the escape, got: {rule}"
     );
 }
@@ -2228,7 +2237,7 @@ fn process_does_not_resplice_main_content_from_a_var_value() {
     let out = ShellProcessor::new().process(ShellType::Article, vars);
     // The shell splice runs ONCE over pure template text; a var value
     // containing the token must not cause a re-splice AND must survive
-    // verbatim — substituted values are never rescanned (#847).
+    // verbatim — substituted values are never rescanned.
     assert!(
         out.contains("see {main_content} marker"),
         "literal {{main_content}} in author content must survive verbatim"
@@ -2236,7 +2245,7 @@ fn process_does_not_resplice_main_content_from_a_var_value() {
 }
 
 // =========================================================================
-// #847: literal {token} text in AUTHOR content must never be eaten
+// literal {token} text in AUTHOR content must never be eaten
 // =========================================================================
 
 #[test]
@@ -2244,7 +2253,7 @@ fn process_preserves_literal_tokens_in_article_content() {
     // Real-world shapes from the live docs site: inline code and prose
     // containing {name}, {title}, {value}, {main_content}. All four must
     // render literally — substituted values are never rescanned for
-    // placeholders or stripped (#847).
+    // placeholders or stripped.
     let body = concat!(
         "<p>Plugins live in <code>.moss/plugins/{name}/</code>.</p>",
         "<p>Use {title} in your template, and set {value} in the manifest.</p>",
@@ -2257,7 +2266,7 @@ fn process_preserves_literal_tokens_in_article_content() {
     let out = ShellProcessor::new().process(ShellType::Article, vars);
     assert!(
         out.contains(".moss/plugins/{name}/"),
-        "inline-code {{name}} must survive (rendered as .moss/plugins//: the #847 bug)"
+        "inline-code {{name}} must survive (rendered as .moss/plugins//: a real regression)"
     );
     assert!(
         out.contains("Use {title} in your template"),
@@ -2285,7 +2294,7 @@ fn process_preserves_literal_tokens_in_homepage_content() {
     assert!(out.contains("strings like {name} and {value} interpolate"));
 }
 
-/// #1013: the Page template used to drop both halves of the comment
+/// The Page template used to drop both halves of the comment
 /// contract on the floor — no `{comments_attr}`, no `<!-- slot:after-article
 /// -->` — so moss accepted `comments:` on a folder page, computed the value,
 /// and rendered nothing. Both templates must carry both, exactly once: a
@@ -2651,7 +2660,7 @@ fn minify_css_is_smaller() {
 
 #[test]
 fn minify_css_preserves_descendant_combinator_before_pseudo_class() {
-    // Regression (#631): the minifier was stripping the space before ':' in
+    // Regression: the minifier was stripping the space before ':' in
     // pseudo-classes when the pseudo-class was preceded by whitespace in the source.
     // ".foo :hover" (all :hover descendants of .foo) must NOT become ".foo:hover"
     // (.foo itself when hovered — a completely different set of elements).
@@ -2716,6 +2725,50 @@ fn test_css_vertical_block_code_stays_horizontal() {
 }
 
 #[test]
+fn test_css_place_map_stays_horizontal_under_vertical_typesetting() {
+    // Every element that carries its own logical `inline-size`/`max-inline-size`
+    // cap in the place-map family needs its own `writing-mode: horizontal-tb`
+    // reset, unconditionally (a no-op under the default horizontal-tb): the
+    // reset does not travel from a wrapper to the map figure it contains, or
+    // from the figure back up to a wrapper around it. Left inheriting
+    // `vertical-rl` from body, each of these three `inline-size` declarations
+    // binds physical HEIGHT instead of width. Measured live on a
+    // vertically-typeset article locator: without `.moss-place-map`'s own
+    // reset, the figure rendered 866px wide at 390px viewport width (the
+    // inner svg's aspect-ratio backing a physical width out of the wrong
+    // axis); without `.moss-place-locator`'s own reset, the wrapper's 22rem
+    // desktop cap was ignored entirely and it rendered 720px wide at 1280px.
+    for (selector, label) in [
+        (".moss-place-map", ".moss-place-map"),
+        (".moss-place-map svg", ".moss-place-map svg"),
+        (".moss-place-locator", ".moss-place-locator"),
+        (".moss-place-map-frame", ".moss-place-map-frame"),
+    ] {
+        let rule = get_css_rule(DEFAULT_CSS, selector)
+            .unwrap_or_else(|| panic!("{label} CSS rule should exist"));
+        assert!(
+            rule.contains("writing-mode: horizontal-tb"),
+            "{label} must reset to horizontal-tb so its own inline-size rules bind width, not height: {rule}"
+        );
+    }
+}
+
+#[test]
+fn test_css_vertical_locator_is_a_block_not_a_float() {
+    // site.css floats the locator right, which in a vertical-rl column is the
+    // inline END: the bottom of the column, reaching sideways over the next
+    // columns. The vertical partial must unfloat it, and keep it at the
+    // columns' head inside a flex wrapper that centres its children.
+    let rule = get_css_rule(
+        &site_css_with_partials(),
+        r#"body[data-typesetting="vertical"] .moss-place-locator.moss-align-right"#,
+    )
+    .expect("vertical locator rule should exist");
+    assert!(rule.contains("float: none"), "locator must not float in vertical mode: {rule}");
+    assert!(rule.contains("align-self: flex-start"), "locator must stay at the columns' head: {rule}");
+}
+
+#[test]
 fn test_css_vertical_hides_mobile_menu() {
     let rule = get_css_rule(
         &site_css_with_partials(),
@@ -2767,7 +2820,7 @@ fn test_template_includes_colophon_text_placeholder() {
 
 #[test]
 fn test_template_skip_link_is_first_in_body_and_localized() {
-    // Skip link (WCAG 2.4.1, moss#1047): must be the very first thing after
+    // Skip link (WCAG 2.4.1): must be the very first thing after
     // <body ...>, before {nav_island}, and localized via {skip_link_label}
     // rather than hardcoded — same reasoning as the colophon text above.
     let body_open = SHELL_TEMPLATE
@@ -2803,7 +2856,7 @@ fn test_template_skip_link_is_first_in_body_and_localized() {
 #[test]
 fn test_template_main_has_id_for_skip_link_target() {
     // Both content fragments emit <main id="main-content" tabindex="-1"> — the
-    // skip link's href target (WCAG 2.4.1, moss#1047).
+    // skip link's href target (WCAG 2.4.1).
     //
     // The tabindex is not decoration. WebKit moves the SCROLL position to a
     // fragment target but only moves FOCUS if the target can hold it, so
@@ -2824,27 +2877,89 @@ fn test_template_main_has_id_for_skip_link_target() {
 
 #[test]
 fn test_css_colophon_label_is_hidden_by_opacity_not_display_none() {
-    // The wording is invisible at rest and fades in on hover/focus. It must
-    // hide by going transparent, which keeps the text in the accessibility
-    // tree; `display: none` or `visibility: hidden` would remove it and take
-    // the link's accessible name with it.
+    // Hover-capable devices hide the wording until it's reached for, inside
+    // `@media (any-hover: hover)`. It must hide by going transparent, which
+    // keeps the text in the accessibility tree; `display: none` or
+    // `visibility: hidden` would remove it and take the link's accessible
+    // name with it.
     let css = site_css_with_partials();
-    let rest = get_css_rule(&css, ".moss-colophon-label").expect("Colophon label CSS rule should exist");
+    let hidden = get_css_rule_in_media(&css, "@media (any-hover: hover)", ".moss-colophon-label")
+        .expect("A (any-hover: hover) rule hiding the colophon label should exist");
     assert!(
-        rest.contains("opacity: 0"),
-        "Label should hide by going transparent, got: {rest}"
+        hidden.contains("opacity: 0"),
+        "Label should hide by going transparent, got: {hidden}"
     );
     assert!(
-        !rest.contains("display: none") && !rest.contains("visibility: hidden"),
-        "Label must stay in the accessibility tree, got: {rest}"
+        !hidden.contains("display: none") && !hidden.contains("visibility: hidden"),
+        "Label must stay in the accessibility tree, got: {hidden}"
     );
     // Keyboard users get the reveal too, not just pointer users — and because
-    // the pointer's rules are gated behind `@media (hover: hover)`, focus has
-    // to be written outside that gate or a touch device with a keyboard
+    // the pointer's rules are gated behind `@media (any-hover: hover)`, focus
+    // has to be written outside that gate or a touch device with a keyboard
     // attached loses the reveal entirely.
     assert!(
         css.contains(".moss-colophon a:focus-visible .moss-colophon-label"),
         "Colophon label should reveal on keyboard focus, not hover alone"
+    );
+}
+
+#[test]
+fn test_css_colophon_label_visible_by_default_and_hiding_rule_wins_by_order() {
+    // The label's settled state must be the VISIBLE one: a device that can't
+    // hover -- or a UA old enough not to recognise `any-hover` at all -- has
+    // no gesture to reveal a hidden label with, so the direction that fails
+    // safe is showing it, not hiding it. Hiding is the exception, gated
+    // behind hover capability.
+    //
+    // A substring check that the hiding rule merely exists can't see the
+    // cascade: the base rule and the hiding rule target the same selector at
+    // equal specificity, so which one wins is decided entirely by SOURCE
+    // ORDER. Move the `@media (any-hover: hover)` block above the base rule
+    // -- e.g. while relocating partials or during a merge -- and every
+    // string this test's predecessor checked is still present, but the
+    // label is permanently hidden on touch again. So this asserts the order
+    // directly, not just presence.
+    let css = site_css_with_partials();
+
+    let base_index = css
+        .find(".moss-colophon-label {")
+        .expect("Colophon label CSS rule should exist");
+    let hiding_media_index = css
+        .find("@media (any-hover: hover)")
+        .expect("The colophon label's hiding rule should be gated on any-hover, not hover");
+    assert!(
+        hiding_media_index > base_index,
+        "The (any-hover: hover) hiding rule must appear AFTER the unconditional base rule -- \
+         same specificity means source order decides, and the base rule is only a real \
+         fallback if it loses that tie on hover-capable devices and wins it everywhere else"
+    );
+
+    let base_rule =
+        get_css_rule(&css, ".moss-colophon-label").expect("Colophon label CSS rule should exist");
+    assert!(
+        base_rule.contains("opacity: 1") && !base_rule.contains("opacity: 0"),
+        "The unconditional base rule must be the visible/settled state, got: {base_rule}"
+    );
+
+    let hidden_rule = get_css_rule_in_media(&css, "@media (any-hover: hover)", ".moss-colophon-label")
+        .expect("A (any-hover: hover) rule hiding the colophon label should exist");
+    assert!(
+        hidden_rule.contains("opacity: 0"),
+        "Hover-capable devices should hide the label until reached for, got: {hidden_rule}"
+    );
+
+    // `hover` (primary pointer only) is the wrong gate: a touchscreen laptop
+    // or an Android tablet with a mouse attached reports `hover: none` even
+    // though a real hover-capable pointer is attached, so a narrower query
+    // would leave that device at the visible default and never offer it the
+    // quiet reveal it is perfectly able to perform -- the same
+    // misclassification this file documents for the hint pill's tooltip
+    // query. And the superseded `(hover: none)` special case must not come
+    // back alongside it: two hand-maintained mirror queries are what this
+    // inversion deleted.
+    assert!(
+        get_css_rule_in_media(&css, "@media (hover: none)", ".moss-colophon-label").is_none(),
+        "The (hover: none) special case should stay deleted, not reappear alongside any-hover"
     );
 }
 
@@ -2969,7 +3084,7 @@ fn test_css_vertical_grid_card_layout_is_site_css() {
     // The measure-and-plate geometry that lived here for one day on
     // 2026-09-11 — a 13em card along the scroll, a plate 0.75 of it, a
     // `display: none` on the coverless card — is what this forbids coming
-    // back (docs/archive/2026-09-11-vertical-cards-design.md).
+    // back.
     let css = site_css_with_partials();
     assert!(
         !css.contains("--moss-vertical-card-measure"),
@@ -3038,6 +3153,33 @@ fn parse_card_cover_ratio_fallback(rule: &str) -> (u32, u32) {
 }
 
 #[test]
+fn test_css_mobile_portrait_ratio_is_scoped_to_listing_cards() {
+    let css = site_css_with_partials();
+    let mobile = "@container (max-width: 36rem)";
+    let listing = get_css_rule_in_media(
+        &css,
+        mobile,
+        r#".moss-cards[data-layout="grid"] .moss-card-cover"#,
+    )
+    .expect("mobile listing cover rule should exist");
+    assert_eq!(
+        parse_card_cover_ratio_fallback(&listing),
+        (3, 4),
+        "mobile listing cards keep their portrait plate"
+    );
+    assert!(
+        get_css_rule_in_media(&css, mobile, ".moss-grid .moss-card-cover").is_none(),
+        "mobile shortcode grids must not inherit the listing-only portrait override"
+    );
+    let shared = get_css_rule(&css, ".moss-card-cover").expect("shared cover rule should exist");
+    assert_eq!(
+        parse_card_cover_ratio_fallback(&shared),
+        (4, 3),
+        "shortcode grids fall back to the shared landscape ratio"
+    );
+}
+
+#[test]
 fn test_css_vertical_card_cover_ratio_is_reciprocal_of_horizontal_default() {
     // The horizontal default (site.css, `4 / 3`) and the vertical override
     // (vertical.css, `3 / 4`) are independent hand-written literals with
@@ -3069,8 +3211,8 @@ fn test_css_vertical_list_card_layout_is_site_css() {
     // all — not even an `order` or `display: contents` reorder. The 140×140
     // square, the per-card hairline, the head-column flex, and
     // (2026-09-10 – 2026-09-11) the cover-leads-column and title-first
-    // reorders all lived here once; a rule reappearing is the compensation
-    // §1 forbids (docs/archive/2026-09-05-vertical-layout-design.md).
+    // reorders all lived here once; a rule reappearing is exactly the
+    // compensation this design forbids.
     let css = site_css_with_partials();
     for part in ["moss-card-cover", "moss-card-body", "moss-card-head"] {
         let sel = format!(r#"[data-typesetting="vertical"] .moss-cards[data-layout="list"] .{part}"#);
@@ -3225,7 +3367,7 @@ fn test_css_list_layout_container_has_section_break_margin() {
     .expect("List-layout container should carry a section-break margin rule");
     // Block-start, not top: under vertical-rl the section break is the gap to
     // the RIGHT of the listing, and a physical `margin-top` pushed the cards
-    // 96px down the column instead (zhu-da home, 2026-09-05).
+    // 96px down the column instead (a vertical site's home, 2026-09-05).
     assert!(
         rule.contains("margin-block-start: var(--moss-space-2xl)"),
         "List-layout container should add a 2xl block-start margin (section break), got: {}",
@@ -3375,8 +3517,7 @@ fn a_built_page_ships_no_blueprint_placeholder() {
 /// and clamps the result against the visible band. A `transform:
 /// translateX(-50%)` here would silently re-introduce the centring the script
 /// already applied AND hide the true left edge from it — which is exactly how
-/// half the share/copy bar ended up off the left of a phone screen. See
-/// docs/reference/design/floating-surfaces.md.
+/// half the share/copy bar ended up off the left of a phone screen.
 #[test]
 fn the_selection_popover_is_not_centred_by_a_transform() {
     let rule = get_css_rule(DEFAULT_CSS, ".sel-popover")
@@ -3454,6 +3595,254 @@ fn a_hint_pill_is_reachable_when_shown_and_inert_when_not() {
         assert!(
             shown.contains("pointer-events: auto"),
             "a shown hint pill must be hoverable (WCAG 1.4.13):\n{selector} {{{shown}}}"
+        );
+    }
+}
+
+// ── `:::grid N {scroll}` — horizontally scrolling row ──────────────
+
+#[test]
+fn grid_scroll_lays_out_as_a_single_scrolling_line() {
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll]")
+        .expect(".moss-grid[data-scroll] CSS rule should exist");
+    assert!(rule.contains("grid-auto-flow: column"), "got: {rule}");
+    assert!(rule.contains("overflow-x: auto"), "got: {rule}");
+    assert!(
+        rule.contains("scroll-snap-type: inline proximity"),
+        "got: {rule}"
+    );
+    assert!(
+        rule.contains("overscroll-behavior-inline: contain"),
+        "got: {rule}"
+    );
+}
+
+#[test]
+fn grid_scroll_carries_no_template_columns() {
+    // Sizing comes from `grid-auto-columns`, keyed on `[data-columns]`
+    // rather than a fixed template — see the per-count rules below.
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll][data-columns]")
+        .expect(".moss-grid[data-scroll][data-columns] CSS rule should exist");
+    assert!(
+        rule.contains("grid-template-columns: none"),
+        "got: {rule}"
+    );
+}
+
+#[test]
+fn grid_scroll_cards_snap_and_do_not_floor_at_content_width() {
+    // `min-inline-size`, not `min-width`: the automatic minimum needs
+    // overriding on whichever axis a track actually sizes cards on — the
+    // column axis, i.e. the INLINE axis, physical width under horizontal-tb
+    // but physical height under vertical-rl (vertical.css transposes this
+    // same row to stack cards down the line there).
+    // `> *`, not `> .moss-grid-card`: a scroll row's direct children are not
+    // all that wrapper — a page-card cell renders `a.moss-card` with no
+    // `.moss-grid-card` class at all (see grid_cells.rs's `card_markup`).
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll] > *")
+        .expect(".moss-grid[data-scroll] > * CSS rule should exist");
+    assert!(rule.contains("min-inline-size: 0"), "got: {rule}");
+    assert!(rule.contains("scroll-snap-align: start"), "got: {rule}");
+}
+
+#[test]
+fn grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek() {
+    for n in 1..=4u32 {
+        let selector = format!(r#".moss-grid[data-scroll][data-columns="{n}"]"#);
+        let rule = get_css_rule(DEFAULT_CSS, &selector)
+            .unwrap_or_else(|| panic!("{selector} CSS rule should exist"));
+        assert!(
+            rule.contains("grid-auto-columns:") && rule.contains("--moss-grid-scroll-peek"),
+            "{selector} must size tracks off the peek custom property: {rule}"
+        );
+        // Every count divides by itself, so its own digit must appear in the
+        // calc (guards against a copy-pasted rule for the wrong count).
+        assert!(
+            rule.contains(&format!("/ {n}")) || n == 1,
+            "{selector} should divide by {n}: {rule}"
+        );
+        // N cards need N gaps subtracted before the peek — one between each
+        // pair of the N cards, plus one more before the card that peeks past
+        // the edge. An (N-1)-gap version quietly eats part of the peek: a
+        // 2026-09-21 measurement at data-columns=3 found only ~16px of the
+        // next card visible instead of the promised 2.5rem (40px), because
+        // that gap was missing from the subtraction.
+        let expected_gap_term = if n == 1 {
+            "var(--moss-space-md)".to_string()
+        } else {
+            format!("{n} * var(--moss-space-md)")
+        };
+        assert!(
+            rule.contains(&expected_gap_term),
+            "{selector} should subtract {n} gap(s) before the peek, got: {rule}"
+        );
+    }
+}
+
+#[test]
+fn grid_scroll_survives_the_mobile_collapse_but_shrinks_its_track() {
+    // The general `.moss-grid[data-columns]` collapse (`grid-template-columns:
+    // 1fr`) is for the wrapping layout; a scroll row keeps scrolling but
+    // shows less of it on a phone.
+    let rule = get_css_rule_in_media(
+        DEFAULT_CSS,
+        "@media (max-width: 768px)",
+        ".moss-grid[data-scroll][data-columns]",
+    )
+    .expect("narrow-screen .moss-grid[data-scroll][data-columns] rule should exist");
+    assert!(
+        rule.contains("grid-auto-columns:"),
+        "narrow screens should still size by grid-auto-columns, not collapse: {rule}"
+    );
+}
+
+#[test]
+fn grid_scroll_unwraps_for_print() {
+    let rule = get_css_rule_in_media(DEFAULT_CSS, "@media print", ".moss-grid[data-scroll]")
+        .expect("print .moss-grid[data-scroll] rule should exist");
+    assert!(rule.contains("overflow: visible"), "got: {rule}");
+}
+
+#[test]
+fn grid_scroll_reuses_the_table_scrollers_focus_ring() {
+    // Reuse, not a duplicate rule: `get_css_rule` matches a single member of
+    // a comma-separated selector list, so asking for either selector proves
+    // both share the one declaration block in site.css.
+    for selector in [".moss-table-scroll:focus-visible", ".moss-grid[data-scroll]:focus-visible"] {
+        let rule = get_css_rule(DEFAULT_CSS, selector)
+            .unwrap_or_else(|| panic!("{selector} CSS rule should exist"));
+        assert!(
+            rule.contains("outline: 2px solid var(--moss-color-ui-accent)"),
+            "{selector} got: {rule}"
+        );
+    }
+}
+
+#[test]
+fn grid_scroll_indicator_spacing_only_neutralizes_visible_indicator_margin() {
+    let rule = get_css_rule(
+        DEFAULT_CSS,
+        ".moss-grid[data-scroll]:has(+ .moss-scroll-dots:not([hidden]))",
+    )
+    .expect("visible scroll indicator spacing rule should exist");
+    assert!(rule.contains("margin-block-end: 0"), "got: {rule}");
+
+    let base = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll]")
+        .expect("scroll grid rule should exist");
+    assert!(
+        !base.contains("margin-block-end: 0"),
+        "the normal scroll-grid margin must remain for hidden/data-fits indicators: {base}"
+    );
+    let row = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll]")
+        .expect("scroll grid rule should exist");
+    assert!(row.contains("padding-block: 4px"), "got: {row}");
+    let indicator = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots")
+        .expect("scroll indicator rule should exist");
+    assert!(indicator.contains("margin-block-start: -4px"), "got: {indicator}");
+    assert!(indicator.contains("flex-wrap: nowrap"), "got: {indicator}");
+    let button = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots button")
+        .expect("scroll indicator button rule should exist");
+    assert!(button.contains("inline-size: 24px"), "got: {button}");
+    assert!(button.contains("block-size: 24px"), "got: {button}");
+    let dot = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots button::before")
+        .expect("scroll indicator dot rule should exist");
+    assert!(dot.contains("inline-size: 8px"), "got: {dot}");
+    assert!(dot.contains("block-size: 8px"), "got: {dot}");
+    // 4px row padding + -4px indicator compensation + 8px inset in a 24px
+    // target around an 8px dot = the intended 8px visual gap.
+    assert_eq!(4 - 4 + (24 - 8) / 2, 8);
+}
+
+#[test]
+fn long_scroll_indicator_uses_bounded_dynamic_dots() {
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots[data-indicator=\"dynamic\"] button::before")
+        .expect("dynamic scroll indicator CSS rule should exist");
+    assert!(rule.contains("inline-size: 6px"), "got: {rule}");
+    assert!(rule.contains("block-size: 6px"), "got: {rule}");
+    let edge = get_css_rule(
+        DEFAULT_CSS,
+        ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-edge-start::before",
+    )
+    .expect("dynamic edge-dot CSS rule should exist");
+    assert!(edge.contains("inline-size: 4px"), "got: {edge}");
+    assert!(edge.contains("block-size: 4px"), "got: {edge}");
+    let visible = get_css_rule(
+        DEFAULT_CSS,
+        ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-visible::before",
+    )
+    .expect("dynamic visible-dot CSS rule should exist");
+    assert!(visible.contains("opacity: 0.85"), "got: {visible}");
+    let current = get_css_rule(
+        DEFAULT_CSS,
+        ".moss-scroll-dots[data-indicator=\"dynamic\"] button[aria-current=\"true\"]::before",
+    )
+    .expect("dynamic current-dot CSS rule should exist");
+    assert!(current.contains("inline-size: 10px"), "got: {current}");
+    assert!(current.contains("block-size: 10px"), "got: {current}");
+    // WebKit rasterizes a scale()d dot at its unscaled size and resamples it,
+    // so small dots came out lumpy on Retina: sizes must be exact, not scaled.
+    for r in [&rule, &edge, &current] {
+        assert!(!r.contains("transform"), "dot sized by transform: {r}");
+    }
+}
+
+#[test]
+fn external_card_favicon_resets_image_margins_and_uses_logical_gap() {
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-card-kicker-favicon")
+        .expect("external-card favicon CSS rule should exist");
+    assert!(rule.contains("margin: 0"), "got: {rule}");
+    assert!(rule.contains("margin-inline-end: 0.35em"), "got: {rule}");
+    assert!(!rule.contains("margin-right"), "physical margin leaked into favicon rule: {rule}");
+    assert!(!rule.contains("margin-block"), "block margin leaked into favicon rule: {rule}");
+}
+
+#[test]
+fn grid_scroll_scrolls_along_the_line_under_vertical_typesetting() {
+    // Transposed, not disabled: a grid's columns are both sized and
+    // positioned along the INLINE axis, which vertical-rl points down the
+    // page, so the base rule's unmodified `grid-auto-flow: column` already
+    // stacks cards top to bottom there — only the overflow axis is
+    // physical, so it is the only one swapped by hand.
+    let css = site_css_with_partials();
+    let rule = get_css_rule(&css, r#"[data-typesetting="vertical"] .moss-grid[data-scroll]"#)
+        .expect(r#"[data-typesetting="vertical"] .moss-grid[data-scroll] rule should exist"#);
+    assert!(rule.contains("overflow-y: auto"), "got: {rule}");
+    assert!(rule.contains("overflow-x: visible"), "got: {rule}");
+    assert!(
+        !rule.contains("grid-auto-flow"),
+        "must not re-disable the column flow the base rule already sets: got: {rule}"
+    );
+}
+
+#[test]
+fn grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek_under_vertical_typesetting() {
+    // Same formulas as `grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek`
+    // (site.css) — the calc() is a fraction of the container's own inline
+    // size either way — restated here because they need to win a
+    // specificity race the wrapping per-count rules above already run,
+    // against the `@media (max-width: 768px)` phone collapse: the wrong
+    // reason to shrink a card under vertical typesetting, whose
+    // constraining dimension is the row's own SVH-derived height, not
+    // viewport width.
+    let css = site_css_with_partials();
+    let template = get_css_rule(&css, r#"[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns]"#)
+        .expect("vertical [data-scroll][data-columns] rule should exist");
+    assert!(
+        template.contains("grid-template-columns: none"),
+        "got: {template}"
+    );
+    for n in 1..=4u32 {
+        let selector =
+            format!(r#"[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="{n}"]"#);
+        let rule = get_css_rule(&css, &selector)
+            .unwrap_or_else(|| panic!("{selector} CSS rule should exist"));
+        assert!(
+            rule.contains("grid-auto-columns:") && rule.contains("--moss-grid-scroll-peek"),
+            "{selector} must size tracks off the peek custom property: {rule}"
+        );
+        assert!(
+            rule.contains(&format!("/ {n}")) || n == 1,
+            "{selector} should divide by {n}: {rule}"
         );
     }
 }

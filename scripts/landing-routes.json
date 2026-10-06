@@ -1,0 +1,24 @@
+{
+  "required": [
+    "/docs/",
+    "/docs/design/",
+    "/docs/extend/",
+    "/docs/writing/media/",
+    "/get-started/",
+    "/get-started/editor/",
+    "/get-started/design/",
+    "/get-started/extend/",
+    "/get-started/links/",
+    "/zh-hans/开始使用/",
+    "/zh-hans/开始使用/editor/",
+    "/zh-hant/開始使用/",
+    "/zh-hant/開始使用/editor/",
+    "/zh-hans/开始使用/design/",
+    "/zh-hans/开始使用/links/",
+    "/zh-hans/开始使用/extend/",
+    "/zh-hant/開始使用/design/",
+    "/zh-hant/開始使用/links/",
+    "/zh-hant/開始使用/extend/"
+  ],
+  "pending_docs_merge": []
+}

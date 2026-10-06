@@ -31,6 +31,11 @@ const IDENTITY_VERSION: u32 = 3;
 // ---------------------------------------------------------------------------
 
 /// Returns the path to the identity key file: `<project_path>/.moss/identity/secret-key`
+/// The legacy (v1) identity file carries the private key itself.
+fn holds_legacy_private_key(raw: &serde_json::Value) -> bool {
+    raw.get("privkey").is_some()
+}
+
 pub(crate) fn key_file_path(project_path: &Path) -> PathBuf {
     project_path.join(".moss").join("identity").join("secret-key")
 }
@@ -86,14 +91,14 @@ pub(crate) fn save_key_to_file(path: &Path, key_bytes: &[u8]) -> Result<(), Iden
 /// case `ensure_signing_key()`'s caller must NOT treat as license to
 /// regenerate and overwrite the site's identity. A dataless-fail-fast
 /// `EDEADLK` (Sonoma+) is a *different* error kind and always maps to
-/// [`IdentityError::Read`], never to `PrivateKeyNotFound` — see design doc
-/// docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-cloud-gate.md §4.
+/// [`IdentityError::Read`], never to `PrivateKeyNotFound`.
 ///
 /// Reads through [`cloud_readiness::read_to_string_with_materialize_wait`], not
 /// `fs::read_to_string`. The key lives at `.moss/identity/secret-key` — inside
 /// the synced vault, so Google Drive and iCloud both evict it — and under the
 /// process-wide fail-fast policy a plain read of an evicted key returns
-/// `EDEADLK` immediately. That is what killed publish outright in moss#986:
+/// `EDEADLK` immediately. That is what killed publish outright in the
+/// identity-file bug:
 /// "Identity error: Failed to read identity file: Resource deadlock avoided
 /// (os error 11)", with nothing in the system that would ever fix the state on
 /// its own. Asking for the file back is the missing half of failing fast.
@@ -241,7 +246,7 @@ impl Identity {
         // `read_to_string_with_materialize_wait` the way the key file does: the
         // handle is held open, locked, and — for a v1/v2 identity — migrated in
         // place, so the file must be opened once and kept. `materialize_input`
-        // is the same bounded wait expressed as a pre-flight (moss#986). A
+        // is the same bounded wait expressed as a pre-flight (the identity-file bug). A
         // timeout falls through deliberately: the open below then produces the
         // real `EDEADLK`, which `IdentityError::Read` carries, and NOTHING on
         // this path may look like `PrivateKeyNotFound` — that is what would let
@@ -268,7 +273,7 @@ impl Identity {
 
         // Detect format: v1 has "privkey" field
         let raw: serde_json::Value = serde_json::from_str(&contents)?;
-        let has_privkey = raw.get("privkey").is_some();
+        let has_privkey = holds_legacy_private_key(&raw);
         let file_version = raw.get("version").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
 
         let identity: Identity = if has_privkey {
@@ -424,6 +429,38 @@ impl Identity {
     pub fn exists(project_path: &Path) -> bool {
         let path = Self::identity_path(project_path);
         path.exists() || crate::build::icloud::is_still_in_the_cloud(&path)
+    }
+
+    /// Does this project have a signing key a publish can use, as
+    /// [`load`](Self::load) plus `signing_key()` would find one? The key file,
+    /// or the legacy form that keeps the private key inside `public.json` and
+    /// that `load` migrates. Read-only: nothing is migrated or written, so a
+    /// dry run can ask what `IdentityService::ensure_signing_key` would find
+    /// before it would regenerate.
+    pub fn has_usable_signing_key(project_path: &Path) -> bool {
+        if key_file_path(project_path).exists() {
+            return true;
+        }
+        crate::build::cloud_readiness::read_to_string_with_materialize_wait(
+            &Self::identity_path(project_path),
+            crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+        )
+        .ok()
+            .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
+            .is_some_and(|raw| holds_legacy_private_key(&raw))
+    }
+
+    /// The project's public key, read without touching anything on disk: no
+    /// lock, no migration of an older file format, no key file. For read-only
+    /// callers; `None` when there is no readable identity.
+    pub fn read_pubkey(project_path: &Path) -> Option<String> {
+        let contents = crate::build::cloud_readiness::read_to_string_with_materialize_wait(
+            &Self::identity_path(project_path),
+            crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+        )
+        .ok()?;
+        let raw: serde_json::Value = serde_json::from_str(&contents).ok()?;
+        raw.get("pubkey")?.as_str().map(str::to_string)
     }
 
     /// Get the path to the identity file.

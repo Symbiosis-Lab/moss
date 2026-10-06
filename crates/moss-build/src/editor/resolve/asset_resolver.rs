@@ -4,7 +4,9 @@
 //! no dependency on the build's AssetRegistry or WebP/LQIP pipeline.
 //! The editor renders source images directly via `moss-source://`.
 
-use moss_core::resolve::asset_class::{AssetIndex, AssetProvenance, AssetResolution, resolve_asset_ref};
+use crate::build::scan::classify::{left_out, left_out_of_site};
+use moss_core::content_graph::{normalize_path, ContentGraph, ContentGraphBuilder, PathMatch};
+use moss_core::resolve::asset_class::{AssetProvenance, AssetResolution, resolve_file_target};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -16,7 +18,7 @@ pub struct ResolvedAsset {
     pub height: Option<u32>,
     pub size_bytes: u64,
     /// How the path was resolved: literal, bare-fuzzy, separator-fallback, or
-    /// case-mismatch. Carried from the shared engine (ADR-018).
+    /// case-mismatch. Carried from the shared engine.
     ///
     /// Read directly by the editor's asset-advisory lint (cm-asset-lint.ts),
     /// which pulls `env.resolved.provenance` off the unified reference envelope
@@ -25,98 +27,25 @@ pub struct ResolvedAsset {
     pub provenance: AssetProvenance,
 }
 
-/// Filesystem-backed `AssetIndex` implementation for the editor resolver.
+/// Every file of the site as a [`ContentGraph`], read from disk now.
 ///
-/// All three methods operate on forward-slash, project-root-relative paths.
-///
-/// CRITICAL macOS / APFS note:
-/// `contains` uses `read_dir` + exact byte comparison — NOT `Path::exists()` —
-/// because APFS is case-insensitive: `Path::exists("assets/hoon.jpg")` returns
-/// true even when the real file is `assets/Hoon.JPG`. Exact-case is necessary
-/// so `CaseMismatch` provenance is produced for the Hoon scenario.
-pub struct FsAssetIndex {
-    project_root: PathBuf,
-}
-
-impl FsAssetIndex {
-    pub fn new(project_root: &Path) -> Self {
-        Self { project_root: project_root.to_path_buf() }
-    }
-
-    /// Convert a root-relative forward-slash path to an absolute path.
-    fn abs(&self, root_rel: &str) -> PathBuf {
-        self.project_root.join(root_rel.replace('/', std::path::MAIN_SEPARATOR_STR))
-    }
-}
-
-impl AssetIndex for FsAssetIndex {
-    /// Exact-case check: split root_rel into parent dir + filename,
-    /// read_dir the parent, and compare filename byte-for-byte.
-    fn contains(&self, root_rel: &str) -> bool {
-        let path = self.abs(root_rel);
-        let parent = match path.parent() {
-            Some(p) => p,
-            None => return false,
-        };
-        let file_name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => return false,
-        };
-        let entries = match std::fs::read_dir(parent) {
-            Ok(e) => e,
-            Err(_) => return false,
-        };
-        for entry in entries.flatten() {
-            if entry.file_name().to_str() == Some(file_name) {
-                return true;
-            }
+/// This is the editor's file set for [`resolve_file_target`]: the same
+/// resolver the build runs, over the same files. The walk reads exactly what
+/// the build's scan reads ([`left_out_of_site`]: no `.moss/build.nosync`
+/// shadow copies, no nested site, no root agent instructions) and, like it,
+/// does not follow symlinks, so a symlink cycle cannot recurse or produce
+/// duplicate paths. Built once per call or batch.
+pub fn project_graph(project_root: &Path) -> ContentGraph {
+    #[cfg(test)]
+    tests::SITE_WALKS.with(|n| n.set(n.get() + 1));
+    let mut builder = ContentGraphBuilder::new();
+    let walk = walkdir::WalkDir::new(project_root).into_iter().filter_entry(|e| left_out_of_site(e).is_none());
+    for entry in walk.flatten().filter(|e| e.file_type().is_file()) {
+        if let Ok(rel) = entry.path().strip_prefix(project_root) {
+            builder.add_file(&rel.to_string_lossy().replace('\\', "/"), "");
         }
-        false
     }
-
-    /// Case-insensitive check: read_dir the parent, find an entry whose name
-    /// equals `root_rel`'s filename case-insensitively, and return the
-    /// canonical root-relative path using the entry's REAL on-disk name.
-    fn contains_ci(&self, root_rel: &str) -> Option<String> {
-        let path = self.abs(root_rel);
-        let parent = path.parent()?;
-        let file_name = path.file_name()?.to_str()?;
-        let file_name_lower = file_name.to_lowercase();
-
-        // Determine the parent's root-relative forward-slash prefix.
-        let parent_rel = parent
-            .strip_prefix(&self.project_root)
-            .ok()?
-            .to_string_lossy()
-            .replace('\\', "/");
-
-        let entries = std::fs::read_dir(parent).ok()?;
-        for entry in entries.flatten() {
-            let entry_name = entry.file_name();
-            let entry_str = entry_name.to_str()?;
-            if entry_str.to_lowercase() == file_name_lower && entry_str != file_name {
-                // Found a case-insensitive match with a DIFFERENT real case.
-                let canonical = if parent_rel.is_empty() {
-                    entry_str.to_string()
-                } else {
-                    format!("{}/{}", parent_rel, entry_str)
-                };
-                return Some(canonical);
-            }
-        }
-        None
-    }
-
-    /// Walk the WHOLE project tree collecting real-case root-relative paths whose
-    /// suffix matches `suffix`. Breadth + exclusions match the BUILD scan
-    /// (`crate::build::scan::classify::is_excluded_dir_name`, applied inside `walk_collect`) so the editor
-    /// and build resolve the same source-file set — no depth cap, no hardcoded
-    /// asset-folder allow-list. (Parity: see plan-b / ADR-020.)
-    fn find_by_suffix(&self, suffix: &str) -> Vec<String> {
-        let mut results = Vec::new();
-        walk_collect(&self.project_root, suffix, &self.project_root, usize::MAX, &mut results);
-        results
-    }
+    builder.build()
 }
 
 /// Compute the project-root-relative forward-slash source path from `from_file`.
@@ -223,11 +152,10 @@ pub fn enrich_root_rel(
 /// Resolve a single reference. Returns None when the path doesn't resolve
 /// to a known asset.
 ///
-/// Path resolution is delegated to the shared engine (`resolve_asset_ref` in
-/// moss-core, ADR-018). The engine drives an `FsAssetIndex` that does exact-case
-/// `read_dir` checks — bypassing `Path::exists()` which is case-blind on macOS
-/// APFS — so `CaseMismatch` provenance is correctly produced when the authored
-/// path differs only in case from the real file.
+/// Path resolution is delegated to the one resolver (`resolve_file_target` in
+/// moss-core, over [`project_graph`]), so `CaseMismatch` provenance is
+/// produced when the authored path differs only in case from the real file,
+/// and the file picked is the one the build links.
 ///
 /// Used by the singular `editor_resolve_asset` Tauri command (chip-bar asset
 /// widget) which needs a bare `Option<ResolvedAsset>`. Editor lint diagnostics
@@ -245,14 +173,15 @@ pub fn resolve_asset(
     let canonical_root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
 
     let from_source = compute_from_source(from_file, &canonical_root);
-    let index = FsAssetIndex::new(&canonical_root);
     let target_norm = target.replace('\\', "/");
+    let picked = spelled_out_file(&target_norm, &from_source, &canonical_root)
+        .unwrap_or_else(|| resolve_file_target(&target_norm, &from_source, &project_graph(&canonical_root)));
 
-    let (root_rel, provenance) = match resolve_asset_ref(&target_norm, &from_source, &index) {
+    let (root_rel, provenance) = match picked {
         AssetResolution::Resolved { root_rel, provenance } => (root_rel, provenance),
         AssetResolution::Ambiguous { chosen, .. } => {
-            // Multiple candidates found — use the shortest-path winner chosen by the
-            // engine. Treat as SeparatorFallback provenance (non-literal resolution).
+            // Equally near candidates — use the one the build links. Treat as
+            // SeparatorFallback provenance (non-literal resolution).
             // The unified reference resolver models Ambiguous properly in its envelope
             // (kind:ambiguous + candidates); this singular path just picks the winner.
             (chosen, AssetProvenance::SeparatorFallback)
@@ -263,57 +192,79 @@ pub fn resolve_asset(
     enrich(&root_rel, provenance, &canonical_root)
 }
 
-/// Recursively walk `dir` up to `max_depth` levels deep, collecting ALL files
-/// whose project-root-relative forward-slash path ends with `suffix`.
-///
-/// Results are appended to `out` as real-case root-relative paths (no leading slash).
-/// Excluded dirs (`.moss`, `node_modules`, etc.) are skipped — same rule as the build
-/// pipeline — so `.moss/build/staging` shadow copies are never returned.
-fn walk_collect(dir: &Path, suffix: &str, project_root: &Path, max_depth: usize, out: &mut Vec<String>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // Use the dirent's own type — it does NOT follow symlinks (unlike
-        // `path.is_file()` / `path.is_dir()`, which stat the target). A directory
-        // symlink is therefore neither file nor dir here and is skipped, matching
-        // the build's `walkdir::WalkDir` (no-follow by default). This prevents a
-        // dir-symlink cycle from causing unbounded recursion (max_depth = usize::MAX)
-        // and keeps editor↔build parity (no symlinked-duplicate paths).
-        let ft = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
-        };
-        if ft.is_file() {
-            // Compute real-case root-relative path.
-            if let Ok(rel) = path.strip_prefix(project_root) {
-                let rel_str = rel.to_string_lossy().replace('\\', "/");
-                // Match case-INSENSITIVELY (mirrors the build's
-                // ContentGraph::asset_find_by_suffix) so a bare `hoon.jpg` whose
-                // real file is `assets/Hoon.JPG` resolves on BOTH adapters — the
-                // editor must never be redder than the build (review S1). The
-                // pushed value stays real-case (`rel_str`) for the canonical URL.
-                let rel_lower = rel_str.to_lowercase();
-                let suffix_lower = suffix.to_lowercase();
-                if rel_lower == suffix_lower || rel_lower.ends_with(&format!("/{}", suffix_lower)) {
-                    // Avoid duplicates (root walk and asset-dir walk may overlap).
-                    if !out.contains(&rel_str) {
-                        out.push(rel_str);
-                    }
-                }
-            }
-        } else if ft.is_dir() && max_depth > 0 {
-            // Mirror the build pipeline's exclusion rule: skip .moss, node_modules,
-            // .git, etc. Critically skips `.moss/build/staging` shadow copies.
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if crate::build::scan::classify::is_excluded_dir_name(name) {
-                continue;
-            }
-            walk_collect(&path, suffix, project_root, max_depth - 1, out);
-        }
+/// What [`resolve_file_target`] answers for a `target` that spells out a path
+/// to an existing file, from the page's folder or from the site root, read
+/// from those two folders instead of a walk of the whole site (a completion
+/// preview asks this once per row). It is exact: the resolver's first two
+/// steps look at nothing but those two paths, so when one of them matches, no
+/// other file can change the answer. `None` when the target is
+/// percent-encoded (a decoded retry could follow a search of the whole site),
+/// when a name is ambiguous on disk (two folders, or two files, that differ
+/// only in letter case), or when neither step matched; the caller then asks
+/// the whole site.
+fn spelled_out_file(target: &str, from_source: &str, root: &Path) -> Option<AssetResolution> {
+    if target.contains('%') {
+        return None;
     }
+    let folder_of = |path: &str| path.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_string());
+    let rel = target.trim_start_matches('/');
+    let mut folders = vec![folder_of(rel)];
+    if !target.starts_with('/') {
+        folders.push(format!("{}/{}", folder_of(from_source), folder_of(rel)));
+    }
+    let mut files = std::collections::BTreeSet::new();
+    for folder in &folders {
+        files.extend(site_files_in(root, folder)?);
+    }
+    let keys: std::collections::HashSet<String> = files.iter().map(|f| normalize_path(f)).collect();
+    if keys.len() != files.len() {
+        return None;
+    }
+    let mut builder = ContentGraphBuilder::new();
+    for f in &files {
+        builder.add_file(f, "");
+    }
+    let graph = builder.build();
+    let found = graph.resolve_path_with_ties(target, from_source)?;
+    (found.matched != PathMatch::Searched).then(|| resolve_file_target(target, from_source, &graph))
+}
+
+/// The site files directly in `folder` (written relative to the site root,
+/// `.` and `..` allowed, any letter case), as root-relative paths in their
+/// real case: the files [`project_graph`] would hold there. Empty when no such
+/// folder belongs to the site; `None` when the folder cannot be read or its
+/// name matches more than one folder on disk.
+fn site_files_in(root: &Path, folder: &str) -> Option<Vec<String>> {
+    let Some(joined) = moss_core::content_graph::join_written("", folder) else { return Some(Vec::new()) };
+    let written: Vec<&str> = joined.split('/').filter(|s| !s.is_empty()).collect();
+    let mut dir = root.to_path_buf();
+    let mut real: Vec<String> = Vec::new();
+    for (depth, seg) in written.iter().enumerate() {
+        let key = normalize_path(seg);
+        let mut same: Vec<std::fs::DirEntry> = std::fs::read_dir(&dir)
+            .ok()?
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter(|e| normalize_path(&e.file_name().to_string_lossy()) == key)
+            .collect();
+        let Some(entry) = same.pop() else { return Some(Vec::new()) };
+        if !same.is_empty() {
+            return None;
+        }
+        if left_out(&entry.path(), true, depth + 1).is_some() {
+            return Some(Vec::new());
+        }
+        real.push(entry.file_name().to_string_lossy().into_owned());
+        dir = entry.path();
+    }
+    let prefix: String = real.iter().map(|s| format!("{s}/")).collect();
+    let files = std::fs::read_dir(&dir).ok()?.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file()));
+    Some(
+        files
+            .filter(|e| left_out(&e.path(), false, real.len() + 1).is_none())
+            .map(|e| format!("{prefix}{}", e.file_name().to_string_lossy()))
+            .collect(),
+    )
 }
 
 fn absolute_to_request_url(absolute: &Path, project_root: &Path) -> Option<String> {
@@ -363,9 +314,6 @@ pub fn mime_for_path(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moss_core::ast::GraphAssetIndex;
-    use moss_core::content_graph::ContentGraph;
-    use moss_core::resolve::asset_class::{resolve_asset_ref, AssetResolution};
 
     fn scratch_root() -> tempfile::TempDir {
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
@@ -375,19 +323,19 @@ mod tests {
 
     #[test]
     fn walk_skips_dot_moss_build_staging_shadow() {
-        // Exact replica of the Yi-website resolve-not-found repro: a bare-filename
+        // Exact replica of a real site's resolve-not-found repro: a bare-filename
         // image reference (`![](forest.jpg)`) with the real source under `assets/`
-        // and TWO build-output shadows under `.moss/build/{staging,current}/assets/`.
+        // and TWO build-output shadows under `.moss/build.nosync/{staging,current}/assets/`.
         // Both shadows live below `.moss`, which the walker now skips, so the real
         // `assets/forest.jpg` is the only candidate returned.
         let dir = scratch_root();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("assets/forest.jpg"), b"real").unwrap();
-        std::fs::create_dir_all(root.join(".moss/build/staging/assets")).unwrap();
-        std::fs::write(root.join(".moss/build/staging/assets/forest.jpg"), b"shadow").unwrap();
-        std::fs::create_dir_all(root.join(".moss/build/current/assets")).unwrap();
-        std::fs::write(root.join(".moss/build/current/assets/forest.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(root.join(".moss/build.nosync/staging/assets")).unwrap();
+        std::fs::write(root.join(".moss/build.nosync/staging/assets/forest.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(root.join(".moss/build.nosync/current/assets")).unwrap();
+        std::fs::write(root.join(".moss/build.nosync/current/assets/forest.jpg"), b"shadow").unwrap();
 
         let from_file = root.join("main.md");
         let result = resolve_asset("forest.jpg", &from_file, root).expect("resolves");
@@ -457,9 +405,9 @@ mod tests {
         assert!(result.is_none());
     }
 
-    /// Task 8 — engine integration: subfolder `./`-prefix reference that
+    /// Through the shared resolver: a subfolder `./`-prefix reference that
     /// needs SeparatorFallback (file is at root `assets/`, authored path is
-    /// `./assets/AGU2025.jpg` from a `News/` subdirectory).
+    /// `./assets/Summit2099.jpg` from a `News/` subdirectory).
     #[test]
     fn editor_resolves_subfolder_dotslash_via_engine() {
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
@@ -467,44 +415,43 @@ mod tests {
         let dir = tempfile::TempDir::new_in(&base).unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        std::fs::write(root.join("assets/AGU2025.jpg"), b"x").unwrap();
+        std::fs::write(root.join("assets/Summit2099.jpg"), b"x").unwrap();
         std::fs::create_dir_all(root.join("News")).unwrap();
-        let r = resolve_asset("./assets/AGU2025.jpg", &root.join("News/post.md"), root).unwrap();
-        assert!(r.request_url.ends_with("/assets/AGU2025.jpg"),
-            "expected /assets/AGU2025.jpg, got {}", r.request_url);
+        let r = resolve_asset("./assets/Summit2099.jpg", &root.join("News/post.md"), root).unwrap();
+        assert!(r.request_url.ends_with("/assets/Summit2099.jpg"),
+            "expected /assets/Summit2099.jpg, got {}", r.request_url);
         assert_eq!(r.provenance, AssetProvenance::SeparatorFallback,
             "expected SeparatorFallback provenance, got {:?}", r.provenance);
     }
 
-    /// Task 8 — engine integration + APFS exact-case: the authored path
-    /// `./assets/Hoon.jpg` (lowercase ext) must resolve to the real file
-    /// `assets/Hoon.JPG` (uppercase ext) with CaseMismatch provenance.
+    /// Through the shared resolver, with the file's real case: the authored path
+    /// `./assets/Fern.jpg` (lowercase ext) must resolve to the real file
+    /// `assets/Fern.JPG` (uppercase ext) with CaseMismatch provenance.
     ///
-    /// On macOS APFS this proves that `FsAssetIndex::contains` is exact-case
-    /// (uses read_dir, not Path::exists which is case-blind) so the engine
-    /// falls through to `contains_ci` and returns the canonical real-case path.
+    /// On macOS APFS this proves the picked path carries the file's real
+    /// on-disk case, not the authored one (`Path::exists` is case-blind there).
     #[test]
-    fn editor_resolves_case_mismatch_hoon_jpg() {
+    fn editor_resolves_case_mismatch_fern_jpg() {
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
         std::fs::create_dir_all(&base).expect("create test-tmp base");
         let dir = tempfile::TempDir::new_in(&base).unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        // Real file has uppercase extension: Hoon.JPG
-        std::fs::write(root.join("assets/Hoon.JPG"), b"x").unwrap();
+        // Real file has uppercase extension: Fern.JPG
+        std::fs::write(root.join("assets/Fern.JPG"), b"x").unwrap();
         std::fs::create_dir_all(root.join("team")).unwrap();
-        // Authored with lowercase extension: Hoon.jpg
-        let r = resolve_asset("./assets/Hoon.jpg", &root.join("team/Team.md"), root).unwrap();
-        // request_url must use the REAL on-disk case (Hoon.JPG)
-        assert!(r.request_url.ends_with("/assets/Hoon.JPG"),
-            "expected /assets/Hoon.JPG (real case), got {}", r.request_url);
+        // Authored with lowercase extension: Fern.jpg
+        let r = resolve_asset("./assets/Fern.jpg", &root.join("team/Team.md"), root).unwrap();
+        // request_url must use the REAL on-disk case (Fern.JPG)
+        assert!(r.request_url.ends_with("/assets/Fern.JPG"),
+            "expected /assets/Fern.JPG (real case), got {}", r.request_url);
         assert_eq!(r.provenance, AssetProvenance::CaseMismatch,
             "expected CaseMismatch provenance, got {:?}", r.provenance);
     }
 
     #[test]
     fn editor_bare_case_mismatch_resolves_not_red() {
-        // Parity S1: a BARE `hoon.jpg` whose real file is assets/Hoon.JPG must
+        // A BARE `fern.jpg` whose real file is assets/Fern.JPG must
         // resolve in the editor (case-insensitive fuzzy walk), matching the
         // build — otherwise the editor shows a spurious red lint on an asset the
         // build ships fine (editor must never be redder than the build).
@@ -513,152 +460,173 @@ mod tests {
         let dir = tempfile::TempDir::new_in(&base).unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        std::fs::write(root.join("assets/Hoon.JPG"), b"x").unwrap();
+        std::fs::write(root.join("assets/Fern.JPG"), b"x").unwrap();
         std::fs::create_dir_all(root.join("team")).unwrap();
-        // bare lowercase ref, not adjacent; only assets/Hoon.JPG exists on disk
-        let r = resolve_asset("hoon.jpg", &root.join("team/Team.md"), root)
+        // bare lowercase ref, not adjacent; only assets/Fern.JPG exists on disk
+        let r = resolve_asset("fern.jpg", &root.join("team/Team.md"), root)
             .expect("bare case-mismatched ref must resolve (not NotFound)");
-        assert!(r.request_url.ends_with("/assets/Hoon.JPG"),
-            "expected /assets/Hoon.JPG (real case), got {}", r.request_url);
+        assert!(r.request_url.ends_with("/assets/Fern.JPG"),
+            "expected /assets/Fern.JPG (real case), got {}", r.request_url);
     }
 
-    // -----------------------------------------------------------------------
-    // Task 13 — editor↔build no-false-green parity test (R1)
-    //
-    // Asserts that `resolve_asset_ref` returns IDENTICAL `AssetResolution` when
-    // backed by `GraphAssetIndex` (build) vs `FsAssetIndex` (editor) over the
-    // SAME file set. This is the "no-false-green" guarantee: the editor must
-    // never report a reference as Resolved when the build would not, and vice
-    // versa. Any divergence on the corpus below is a real parity bug.
-    //
-    // Invariant asserted: FULL EQUALITY — same variant, same canonical path,
-    // same candidates list. This is stronger than one-directional (editor ⊆
-    // build) and appropriate for a flat corpus that both adapters can fully
-    // index. The `deep/dir/photo.jpg` file (depth 2) is within the editor
-    // walker's depth-4 limit and within the root walk starting from the project
-    // root, so both backends see it.
-    // -----------------------------------------------------------------------
+    // The editor's file set (read from disk) and the build's (its own scan)
+    // must be the same files and give the same answer for every target, so
+    // the editor is never greener or redder than the build.
     #[test]
-    fn no_false_green_parity_graph_vs_fs() {
-        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
-        std::fs::create_dir_all(&base).expect("create test-tmp base");
-        let dir = tempfile::TempDir::new_in(&base).expect("tmp dir");
-        let root = dir.path();
+    fn editor_and_build_file_sets_resolve_alike() {
+        let dir = scratch_root();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
 
-        // ---- Create the shared file corpus on disk -------------------------
-        // Every path here is also registered in the ContentGraph so both
-        // adapters see exactly the same set.
         let corpus_paths: &[&str] = &[
-            "assets/AGU2025.jpg",
-            "assets/Hoon.JPG",   // uppercase extension — tests case-insensitive suffix match
+            "assets/Summit2099.jpg",
+            "assets/Fern.JPG",
             "News/post.md",
             "team/Team.md",
             "a/photo.jpg",
             "deep/dir/photo.jpg",
+            // Not part of this site: a nested site, agent instructions at the
+            // root, and folders the build never reads.
+            "shop/.moss/config.toml",
+            "shop/only-here.jpg",
+            "AGENTS.md",
+            "node_modules/pkg/logo.png",
+            ".obsidian/icon.png",
         ];
         for p in corpus_paths {
             let full = root.join(p.replace('/', std::path::MAIN_SEPARATOR_STR));
             std::fs::create_dir_all(full.parent().unwrap()).unwrap();
             std::fs::write(&full, b"x").unwrap();
         }
+        let scanned = crate::build::scan::scan::scan_folder(&root.to_string_lossy()).expect("scan");
+        let build_graph = crate::build::scan::scan::build_content_graph(&scanned);
+        let editor_graph = project_graph(&root);
 
-        // ---- Build ContentGraph (build adapter) ----------------------------
-        let graph = ContentGraph::from_paths(corpus_paths);
-        let graph_index = GraphAssetIndex(&graph);
+        let sorted = |g: &ContentGraph| {
+            let mut v = g.all_files().to_vec();
+            v.sort();
+            v
+        };
+        assert_eq!(sorted(&editor_graph), sorted(&build_graph));
 
-        // ---- Build FsAssetIndex (editor adapter) --------------------------
-        // Canonicalize so strip_prefix works correctly on macOS (/tmp symlink).
-        let canonical_root = std::fs::canonicalize(root)
-            .unwrap_or_else(|_| root.to_path_buf());
-        let fs_index = FsAssetIndex::new(&canonical_root);
-
-        // ---- Corpus of (target, from_source) references -------------------
-        // from_source is root-relative (as the engine expects).
-        let cases: &[(&str, &str, &str)] = &[
-            // (description, target, from_source)
-            ("relative dotslash to assets from News/",
-             "./assets/AGU2025.jpg", "News/post.md"),
-            ("relative dotslash with case mismatch (Hoon.jpg vs Hoon.JPG)",
-             "./assets/Hoon.jpg", "team/Team.md"),
-            ("bare filename case mismatch (hoon.jpg → assets/Hoon.JPG)",
-             "hoon.jpg", "team/Team.md"),
-            ("bare filename exact (AGU2025.jpg)",
-             "AGU2025.jpg", "News/post.md"),
-            ("root-absolute path",
-             "/assets/AGU2025.jpg", "News/post.md"),
-            ("ambiguous bare filename (photo.jpg has two candidates)",
-             "photo.jpg", "News/post.md"),
-            ("containment escape — must be NotFound",
-             "../../etc/x.jpg", "News/post.md"),
+        let cases: &[(&str, &str)] = &[
+            ("./assets/Summit2099.jpg", "News/post.md"),
+            ("./assets/Fern.jpg", "team/Team.md"),
+            ("fern.jpg", "team/Team.md"),
+            ("Summit2099.jpg", "News/post.md"),
+            ("/assets/Summit2099.jpg", "News/post.md"),
+            ("photo.jpg", "News/post.md"),
+            ("photo.jpg", "deep/page.md"),
+            ("../../etc/x.jpg", "News/post.md"),
+            ("only-here.jpg", "News/post.md"),
+            ("AGENTS", "News/post.md"),
+            ("logo.png", "News/post.md"),
         ];
-
-        for (desc, target, from_source) in cases {
-            let graph_result = resolve_asset_ref(target, from_source, &graph_index);
-            let fs_result    = resolve_asset_ref(target, from_source, &fs_index);
-
-            // Normalize candidate lists: the engine already sorts by depth then
-            // lexical order in both paths, but sort again defensively so any
-            // ordering difference in the backing adapter doesn't produce a false
-            // divergence report.
-            let graph_norm = normalize_resolution(graph_result);
-            let fs_norm    = normalize_resolution(fs_result);
-
+        for (target, from_source) in cases {
             assert_eq!(
-                graph_norm, fs_norm,
-                "parity divergence on [{desc}] target={target:?} from={from_source:?}\n  graph: {graph_norm:?}\n  fs:    {fs_norm:?}"
+                resolve_file_target(target, from_source, &build_graph),
+                resolve_file_target(target, from_source, &editor_graph),
+                "build and editor file sets disagree on {target:?} from {from_source:?}"
             );
         }
     }
 
-    /// Normalize an `AssetResolution` for comparison: sort the `candidates`
-    /// list inside `Ambiguous` so ordering differences between adapters don't
-    /// produce spurious divergences.
-    fn normalize_resolution(r: AssetResolution) -> AssetResolution {
-        match r {
-            AssetResolution::Ambiguous { chosen, mut candidates } => {
-                candidates.sort();
-                AssetResolution::Ambiguous { chosen, candidates }
-            }
-            other => other,
+    // A path spelled out from the page or the root is answered from two
+    // folder listings, and that answer is the whole site's answer.
+    #[test]
+    fn a_spelled_out_path_is_answered_from_its_folders_as_the_whole_site_would() {
+        let dir = scratch_root();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        for p in [
+            "assets/x.png", "News/assets/x.png", "News/post.md", "Team/Photo.JPG", "a/b/c.png",
+            "a/b/c.png.md", "shop/.moss/config.toml", "shop/y.png", "zh-hans/p.md", "uk/z.png", "q.png.md",
+        ] {
+            let full = root.join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(&full, b"x").unwrap();
+        }
+        let site = project_graph(&root);
+        let answered = [
+            ("assets/x.png", "News/post.md"),
+            ("/assets/x.png", "News/post.md"),
+            ("../assets/x.png", "News/post.md"),
+            ("team/photo.jpg", "post.md"),
+            ("TEAM/Photo.JPG", "News/post.md"),
+            ("a/b/c.png", "x/y.md"),
+            ("uk/z.png", "zh-hans/p.md"),
+        ];
+        for (target, from) in answered {
+            let fast = spelled_out_file(target, from, &root);
+            assert_eq!(fast, Some(resolve_file_target(target, from, &site)), "{target:?} from {from:?}");
+        }
+        // Anything the first two steps do not settle goes to the whole site.
+        let rest = [("x.png", "Team/p.md"), ("shop/y.png", "post.md"), ("assets/x", "News/post.md"), ("q.png", "News/post.md")];
+        for (target, from) in rest {
+            assert_eq!(spelled_out_file(target, from, &root), None, "{target:?} from {from:?}");
         }
     }
 
+    thread_local! {
+        /// How many times [`project_graph`] walked a site on this thread.
+        pub(super) static SITE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
     #[test]
-    fn find_by_suffix_reaches_deep_non_hardcoded_folder() {
-        // A bare-basename reference whose source lives 5 levels deep in a folder
-        // NOT in the old hardcoded allow-list (`docs/...`, not `assets/...`).
-        // The pre-fix depth-4 + hardcoded-dir walk missed this; the build graph
-        // always found it. Parity requires the editor to find it too.
+    fn a_spelled_out_path_is_resolved_without_walking_the_site() {
+        let dir = scratch_root();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/x.png"), b"x").unwrap();
+        let walks = || SITE_WALKS.with(|n| n.get());
+        let before = walks();
+        assert!(resolve_asset("assets/x.png", &root.join("News/post.md"), &root).is_some());
+        assert_eq!(walks(), before, "a path from the root must not walk the site");
+        assert!(resolve_asset("x.png", &root.join("News/post.md"), &root).is_some());
+        assert_eq!(walks(), before + 1, "a bare name is found by searching the whole site");
+    }
+
+    #[test]
+    fn case_twins_in_one_folder_send_the_fast_route_to_the_whole_site() {
+        // Only a case-sensitive disk can hold both names.
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::write(root.join("a/photo.jpg"), b"lower").unwrap();
+        std::fs::write(root.join("a/Photo.jpg"), b"upper").unwrap();
+        if std::fs::read(root.join("a/photo.jpg")).unwrap() != b"lower" {
+            eprintln!("skipped: this disk is case-insensitive, so it cannot hold case twins");
+            return;
+        }
+        assert_eq!(spelled_out_file("a/photo.jpg", "p.md", &root), None);
+    }
+
+    #[test]
+    fn project_graph_reaches_deep_non_hardcoded_folder() {
+        // A source 5 levels deep in an arbitrary folder is in the editor's file
+        // set, and an excluded dir (parity with the build scan) is not.
         let root = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let p = root.path();
         std::fs::create_dir_all(p.join("docs/a/b/c/d")).unwrap();
         std::fs::write(p.join("docs/a/b/c/d/photo.jpg"), b"x").unwrap();
-        // And an excluded dir that must STILL be skipped (parity with build scan).
-        std::fs::create_dir_all(p.join(".moss/build/current")).unwrap();
-        std::fs::write(p.join(".moss/build/current/photo.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(p.join(".moss/build.nosync/current")).unwrap();
+        std::fs::write(p.join(".moss/build.nosync/current/photo.jpg"), b"shadow").unwrap();
 
-        let idx = FsAssetIndex::new(p);
-        let hits = idx.find_by_suffix("photo.jpg");
-        assert_eq!(hits, vec!["docs/a/b/c/d/photo.jpg".to_string()],
+        let graph = project_graph(p);
+        assert_eq!(graph.all_files(), ["docs/a/b/c/d/photo.jpg".to_string()],
             "must find the deep source file and skip the .moss shadow");
     }
 
     #[test]
-    fn find_by_suffix_does_not_follow_dir_symlinks() {
-        // A directory symlink that points back at the root forms a cycle. The
-        // build's WalkDir does NOT follow symlinks (its default), so the editor
-        // walker must not either — else a cycle = unbounded recursion / stack
-        // overflow (max_depth = usize::MAX) AND a parity divergence (the editor
-        // would surface symlinked duplicates the build never sees).
+    fn project_graph_does_not_follow_dir_symlinks() {
+        // A directory symlink back at the root forms a cycle. The build's
+        // WalkDir does not follow symlinks, so the editor walk must not either:
+        // else unbounded recursion and symlinked duplicates the build never sees.
         let root = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let p = root.path();
         std::fs::create_dir_all(p.join("real")).unwrap();
         std::fs::write(p.join("real/photo.jpg"), b"x").unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink(p, p.join("loop")).unwrap(); // cycle if followed
-        let idx = FsAssetIndex::new(p);
-        let hits = idx.find_by_suffix("photo.jpg");
-        assert_eq!(hits, vec!["real/photo.jpg".to_string()]); // found once, no hang, no dup
+        std::os::unix::fs::symlink(p, p.join("loop")).unwrap();
+        assert_eq!(project_graph(p).all_files(), ["real/photo.jpg".to_string()]);
     }
 
     #[test]
@@ -743,11 +711,11 @@ mod tests {
         let dir = tempfile::TempDir::new_in(&base).unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        std::fs::write(root.join("assets/AGU2025.jpg"), b"x").unwrap();
+        std::fs::write(root.join("assets/Summit2099.jpg"), b"x").unwrap();
         std::fs::create_dir_all(root.join("News")).unwrap();
         // RELATIVE from_file, exactly as the editor passes it via getCurrentEntry().path
         let r = resolve_asset(
-            "./assets/AGU2025.jpg",
+            "./assets/Summit2099.jpg",
             std::path::Path::new("News/post.md"),
             root,
         )

@@ -15,8 +15,7 @@ use crate::build::types::SourceMetadata;
 use crate::config::deployment::DeploymentConfig;
 
 /// Manifest entry mode tags. POSIX file-mode octal strings, matching
-/// `git ls-tree` and POSIX tar typeflag conventions. See
-/// `docs/reference/deploy-upload-contract.md` for the full wire spec.
+/// `git ls-tree` and POSIX tar typeflag conventions.
 pub const MODE_FILE: &str = "100644";
 pub const MODE_SYMLINK: &str = "120000";
 
@@ -163,8 +162,8 @@ pub struct FileInfo {
 
 /// Metadata for media files (images/videos) including dimensions for placeholder generation.
 ///
-/// ADR-006: Thumbnail-based extraction for performance
-/// ADR-002: Dynamic SVG placeholders with dominant color
+/// Thumbnail-based extraction for performance, and dynamic SVG placeholders
+/// with dominant color.
 ///
 /// This struct extends FileInfo with media-specific metadata that enables:
 /// - Generating properly-sized placeholder SVGs before images load
@@ -180,10 +179,10 @@ pub struct MediaMetadata {
     pub size: u64,
     /// Unix timestamp as string, if available
     pub modified: Option<String>,
-    /// Image/video dimensions (width, height) - ADR-002: for placeholder SVG generation
+    /// Image/video dimensions (width, height) - for placeholder SVG generation
     pub dimensions: Option<(u32, u32)>,
     /// Dominant color (raw scan format — see below) for placeholder
-    /// backgrounds and folder-card colors. ADR-002.
+    /// backgrounds and folder-card colors.
     ///
     /// The scan layer stores this in two formats depending on file type:
     /// - Image scan (`extract_color_and_lqip`) → `#RRGGBB` raw average.
@@ -204,11 +203,10 @@ pub struct MediaMetadata {
     /// ≤4 KB read, gif/webp extensions only — every other extension is
     /// `false` without touching the file). Animated sources must never be
     /// resized/re-encoded, so this flag gates the responsive ladder
-    /// (Phase B of docs/archive/2026-07-22-responsive-image-variants-plan.md).
+    /// (Phase B of the responsive image variants plan).
     #[serde(default)]
     pub is_animated: bool,
-    // `webp_variant` field deleted 2026-05-20 — see
-    // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 4).
+    // `webp_variant` field deleted 2026-05-20.
     // The snapshot mechanism was the parallel-oracle root cause of the
     // broken-hero bug. Synthesizer now always emits <picture>, AssetRegistry
     // handles placeholder lifecycle at request time.
@@ -219,7 +217,7 @@ pub struct MediaMetadata {
 /// Contains categorized file listings and inferred project characteristics
 /// used to determine the optimal site generation strategy.
 ///
-/// ADR-006: Media files use MediaMetadata to include dimensions and dominant color
+/// Media files use MediaMetadata to include dimensions and dominant color
 /// for placeholder SVG generation during page load.
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct ProjectStructure {
@@ -267,7 +265,7 @@ pub struct ProjectStructure {
     /// Same classification as `evicted_count`, kept as a list (not just a
     /// count) so the home-page bounded wait and the cloud-sync progress
     /// counter (`pipeline::build_inner`) can re-check materialization
-    /// per-file. See docs/archive/2026-07-31-cloud-download-waiting-mode.md.
+    /// per-file.
     #[serde(skip)]
     #[specta(skip)]
     pub evicted_paths: Vec<std::path::PathBuf>,
@@ -281,15 +279,14 @@ pub struct ProjectStructure {
     /// with a known language code, e.g. `en/`, `zh-hans/`). Used to gate the root
     /// homepage's default-language-tree listing scope: when true, the root home lists
     /// only the default tree (docs not under a language-prefix folder). Computed once
-    /// at scan, parallel to `has_content_folders`. See
-    /// docs/archive/2026-06-06-multilingual-children-scoping-design.md.
+    /// at scan, parallel to `has_content_folders`.
     #[serde(skip)]
     #[specta(skip)]
     pub has_language_trees: bool,
-    /// Passthrough subtree roots (source-relative, trailing-slash-terminated).
-    /// Files inside these directories are copied verbatim — no WebP/video conversion,
-    /// no SPA meta injection. Auto-detected from `index.html` presence; overridable
-    /// via `[build].passthrough` in `.moss/config.toml`.
+    /// Passthrough directory roots (trailing-slash-terminated) and exact HTML files.
+    /// Matching sources are copied verbatim — no WebP/video conversion or SPA meta
+    /// injection. Directories are auto-detected from `index.html` presence; either
+    /// form can be declared via `[build].passthrough` in config.toml.
     #[serde(skip)]
     #[specta(skip)]
     pub passthrough_roots: std::collections::HashSet<String>,
@@ -349,7 +346,7 @@ pub struct SiteResult {
     pub site_build_dir: String,
     /// Site metadata extracted from content
     pub site_title: String,
-    /// Hash map of all generated files (path -> SHA-256 hash)
+    /// Hash map of all generated files (path -> mode-tagged content hash)
     /// Used for change detection in preview refresh
     #[specta(skip)]
     pub hashes: SiteHashes,
@@ -357,20 +354,19 @@ pub struct SiteResult {
     /// them) were cloud-dataless placeholders. Non-empty means this build is
     /// incomplete — `pipeline::build_inner` uses it to skip
     /// `remove_stale_html` and to suppress a false cloud-sync "done" event.
-    /// See docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3.
     #[serde(skip)]
     #[specta(skip)]
     pub deferred_paths: Vec<std::path::PathBuf>,
-    /// Media references in this site that point at no file on disk. A publish
-    /// is refused while this is non-empty — see [`crate::missing_media`].
+    /// Missing authored asset references in this site. A publish is refused
+    /// while this is non-empty.
     #[serde(skip)]
     #[specta(skip)]
-    pub missing_media: Vec<crate::build::types::MissingMedia>,
+    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
 }
 
 /// Hash map of generated site files for change detection.
 ///
-/// Maps output file paths (relative to the active generation `.moss/build/current/`) to their SHA-256 content hashes.
+/// Maps output file paths (relative to the active generation `.moss/build.nosync/current/`) to their mode-tagged content hashes (xxh3_64 for regular files).
 /// Used for:
 /// 1. Smart preview refresh - only refresh if current page's hash changed
 /// 2. Future incremental uploads - only upload files whose hash changed
@@ -380,9 +376,10 @@ pub struct SiteResult {
 pub struct SiteHashes {
     /// Map of output path to mode-tagged content hash.
     ///
-    /// Wire format (see [docs/reference/deploy-upload-contract.md]):
-    ///   `<octal-mode>:<sha256>`
-    ///   - `100644:<hash>` — regular file, hash of bytes
+    /// Wire format:
+    ///   `<octal-mode>:<hash>`
+    ///   - `100644:<hash>` — regular file, xxh3_64 of the bytes (16 hex chars); the
+    ///     manifest `moss deploy --prebuilt` builds uses the same
     ///   - `120000:<hash>` — symlink, hash of the target path string
     ///
     /// Legacy bare-hash values (no colon) deserialize as `100644:<hash>`
@@ -402,9 +399,12 @@ pub struct SiteHashes {
     /// rewritten *after* it was hashed without moving its mtime (1–2s
     /// filesystems: exFAT, SMB), so the sweep treats such entries as
     /// suspect and routes them to the hash tier instead of trusting the
-    /// size+mtime fast path. `None` in manifests that predate the field —
-    /// fail open (no racy demotion), never fail closed.
-    /// See `crate::build::watch::mtime_is_racy`.
+    /// size+mtime fast path; an exact-zero sub-second mtime is trusted only
+    /// when comfortably older than it. `None` in manifests that predate the
+    /// field: no racy demotion, and no trust in a zero sub-second mtime.
+    /// Per manifest, not per entry, so `PendingManifest::new` drops the zero
+    /// sub-second reading from every carried entry this clock cannot vouch
+    /// for. See `crate::build::stat::FileStat::vouches_for`.
     #[serde(default)]
     pub captured_at: Option<u64>,
     /// The site URL this generation was built with — canonical links,
@@ -432,7 +432,7 @@ pub struct SiteHashes {
     #[serde(default)]
     pub image_outputs: HashSet<String>,
     /// Variants a COMPLETE ship-time reference scan judged unreferenced, so
-    /// the next build's producers do not make them again (moss#1085).
+    /// the next build's producers do not make them again.
     ///
     /// The prune is the only pass that knows what "referenced" means with full
     /// information — it runs after every plugin, notebook and feed has written
@@ -451,7 +451,7 @@ pub struct SiteHashes {
     /// `media::pipeline::remove_stale_html`, and
     /// `media::pipeline::compute_expected_dirs`.
     ///
-    // TODO(#524): unify with video_outputs/image_outputs into a single
+    // TODO: unify with video_outputs/image_outputs into a single
     // background_outputs set (or absorb into BuildContext::emit_artifact).
     #[serde(default)]
     pub notebook_outputs: HashSet<String>,
@@ -467,7 +467,7 @@ pub struct SiteHashes {
     /// builder version, so those remain unaffected.
     ///
     /// The `alias` accepts the legacy `compiler_fingerprint` field name so
-    /// existing `.moss/build/hashes.json` files from pre-rename moss
+    /// existing `.moss/build.nosync/hashes.json` files from pre-rename moss
     /// deserialize cleanly; write always emits `builder_fingerprint`.
     #[serde(default, alias = "compiler_fingerprint")]
     pub builder_fingerprint: Option<String>,
@@ -497,12 +497,39 @@ pub struct SiteHashes {
     ///   OG cards) — no `source_path`.
     /// - Notebook (`.ipynb`) sources — emitted via `HashBucket::NotebookOutputs`,
     ///   not through `ParsedDocument`. In-app `.ipynb` renames fall through
-    ///   to the deletion path (iframe redirects home). See plan
-    ///   `docs/archive/2026-05-06-rename-event-propagation.md` "Out of scope".
+    ///   to the deletion path (iframe redirects home) — out of scope here.
     /// - Asset/media files (`.jpg`, `.mp4`, etc.) — same emission path,
     ///   same fall-through behavior.
     #[serde(default)]
     pub source_to_output: HashMap<String, String>,
+    /// Source-path → title/date index for markdown pages, keyed identically
+    /// to `source_to_output`.
+    ///
+    /// Exists for one consumer: `PendingManifest::carry_forward_deferred_page`
+    /// reinstates a deferred page's OUTPUT (the previous build's HTML survives
+    /// on disk), but had nothing to give the nav/listing pass, which reads a
+    /// page's title and date from `ParsedDocument` — and a page this build
+    /// could not read never produces one. Without this, a carried-forward
+    /// page's URL kept resolving while it silently dropped out of every nav
+    /// menu and listing page. Populated alongside `source_to_output` at every
+    /// registration site (the HTML write loop, the homepage, and the carried
+    /// set); read back by `carry_forward_deferred_page`.
+    ///
+    /// `#[serde(default)]` — old `hashes.json` files without this field
+    /// deserialize to an empty map, so a deferred page carried forward under
+    /// an old manifest simply has no nav/listing entry until the next build
+    /// that can read it, same as before this field existed.
+    #[serde(default)]
+    pub page_meta: HashMap<String, PageMeta>,
+}
+
+/// A page's nav/listing-relevant metadata, carried alongside
+/// `SiteHashes::source_to_output` so a carried-forward page keeps its title
+/// and date. See `SiteHashes::page_meta`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct PageMeta {
+    pub title: String,
+    pub date: Option<String>,
 }
 
 impl SiteHashes {
@@ -519,6 +546,7 @@ impl SiteHashes {
             notebook_outputs: HashSet::new(),
             builder_fingerprint: None,
             source_to_output: HashMap::new(),
+            page_meta: HashMap::new(),
         }
     }
 
@@ -614,9 +642,9 @@ mod tests {
 
     // DO NOT REMOVE the `alias = "compiler_fingerprint"` on SiteHashes
     // without also bumping a major version and accepting that every
-    // pre-rename `.moss/build/hashes.json` will trigger a silent full
+    // pre-rename `.moss/build.nosync/hashes.json` will trigger a silent full
     // rebuild on first load. The alias can be dropped once all active
-    // sites have rebuilt post-rename (see issue #554).
+    // sites have rebuilt post-rename.
     #[test]
     fn site_hashes_deserializes_legacy_compiler_fingerprint() {
         let legacy = r#"{

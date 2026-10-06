@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::stat::{mtime_is_racy, RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
 use std::io::Write;
 
 /// Helper: create a unique temp directory for each test.
@@ -66,7 +67,7 @@ fn test_store_file_creates_sharded_path() {
     let store = ObjectStore::new(objects_dir.clone());
 
     let src = write_temp_file(&dir, "data.bin", b"some content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let expected = objects_dir.join(&oid[..2]).join(&oid[2..4]).join(&oid);
     assert!(expected.exists(), "blob should exist at sharded path");
@@ -78,8 +79,8 @@ fn test_store_file_idempotent() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"idempotent content");
-    let oid1 = store.store_file(&src).expect("first store");
-    let oid2 = store.store_file(&src).expect("second store");
+    let oid1 = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("first store");
+    let oid2 = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("second store");
 
     assert_eq!(oid1, oid2, "same content should produce the same OID");
 }
@@ -99,7 +100,7 @@ fn test_get_path_exists() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"get_path test");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let path = store.get_path(&oid);
     assert!(path.is_some(), "get_path should return Some after store");
@@ -112,7 +113,7 @@ fn test_get_path_rejects_zero_byte_blob() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"non-empty content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     // Simulate iCloud eviction: zero out the blob's content.
     // iCloud Drive can silently zero out file data to reclaim disk space.
@@ -137,7 +138,7 @@ fn test_link_to_creates_independent_copy() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"independent copy test content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let target = dir.join("output").join("linked_file");
     store.link_to(&oid, &target).expect("link_to");
@@ -170,7 +171,7 @@ fn test_link_to_replaces_existing_target() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"replace test content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     // Create a pre-existing file at the target location.
     let target = dir.join("existing_file.txt");
@@ -188,7 +189,7 @@ fn test_link_to_creates_parent_dirs() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"parent dir test");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     // Target is nested in directories that don't exist yet.
     let target = dir.join("a").join("b").join("c").join("output.bin");
@@ -207,7 +208,7 @@ fn test_link_to_writes_full_blob_no_tmp_leak() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"hello world payload");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let target = dir.join("out").join("hello.bin");
     store.link_to(&oid, &target).expect("link_to");
@@ -233,7 +234,7 @@ fn test_link_to_overwrites_existing_zero_byte_target() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "data.bin", b"full content");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let target = dir.join("out").join("stub.bin");
     fs::create_dir_all(target.parent().unwrap()).expect("mkdir");
@@ -242,34 +243,6 @@ fn test_link_to_overwrites_existing_zero_byte_target() {
 
     store.link_to(&oid, &target).expect("link_to");
     assert_eq!(fs::read(&target).expect("read target"), b"full content");
-}
-
-#[test]
-fn test_link_to_sweeps_stale_tmp_siblings_on_entry() {
-    // Killed prior link_to calls leak `.tmp.<uuid>` siblings. The next
-    // link_to to the same target sweeps them so iCloud Drive doesn't
-    // accumulate visible orphans.
-    let dir = make_test_dir("link_sweep_stale");
-    let store = ObjectStore::new(dir.join("objects"));
-
-    let src = write_temp_file(&dir, "data.bin", b"payload");
-    let oid = store.store_file(&src).expect("store_file");
-
-    let target_dir = dir.join("out");
-    fs::create_dir_all(&target_dir).expect("mkdir target dir");
-    let target = target_dir.join("video.mp4");
-
-    // Two leaked tmps from prior killed link_to calls.
-    let stale1 = target_dir.join("video.mp4.tmp.deadbeef-1234-5678-9abc-def012345678");
-    let stale2 = target_dir.join("video.mp4.tmp.cafebabe-9876-5432-10fe-dcba98765432");
-    fs::write(&stale1, b"junk1").expect("write stale1");
-    fs::write(&stale2, b"junk2").expect("write stale2");
-
-    store.link_to(&oid, &target).expect("link_to");
-
-    assert_eq!(fs::read(&target).expect("read target"), b"payload");
-    assert!(!stale1.exists(), "stale1 should be swept");
-    assert!(!stale2.exists(), "stale2 should be swept");
 }
 
 #[test]
@@ -292,7 +265,7 @@ fn test_validate_blob_removes_zero_byte_blob() {
     let dir = make_test_dir("validate_zero");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "photo.jpg", b"real image data");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
     let blob_path = store.blob_path(&oid);
 
     // Corrupt the blob to 0 bytes (simulating iCloud race).
@@ -309,7 +282,7 @@ fn test_validate_blob_accepts_healthy_blob() {
     let dir = make_test_dir("validate_healthy");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "photo.jpg", b"real image data");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let result = store.validate_blob(&oid, 15);
     assert!(result.is_ok(), "healthy blob should validate");
@@ -321,7 +294,7 @@ fn test_validate_blob_accepts_zero_source_zero_blob() {
     let dir = make_test_dir("validate_zero_source");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "empty.txt", b"");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     // source_size=0 and blob_size=0 is valid (genuinely empty file).
     let result = store.validate_blob(&oid, 0);
@@ -337,7 +310,7 @@ fn test_store_file_self_heals_zero_byte_blob() {
     let dir = make_test_dir("store_self_heal");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "photo.jpg", b"real image data");
-    let oid = store.store_file(&src).expect("first store");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("first store");
     let blob_path = store.blob_path(&oid);
 
     // Corrupt the blob to 0 bytes.
@@ -345,7 +318,7 @@ fn test_store_file_self_heals_zero_byte_blob() {
     assert_eq!(fs::metadata(&blob_path).unwrap().len(), 0);
 
     // Re-storing should self-heal: detect corrupt, remove, re-copy.
-    let oid2 = store.store_file(&src).expect("re-store should succeed");
+    let oid2 = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("re-store should succeed");
     assert_eq!(oid, oid2, "OID should be the same");
     let blob_size = fs::metadata(&blob_path).unwrap().len();
     assert_eq!(blob_size, 15, "blob should be re-stored with correct size");
@@ -356,7 +329,7 @@ fn test_store_file_genuinely_empty_is_fine() {
     let dir = make_test_dir("store_zero_copy");
     let store = ObjectStore::new(dir.join("objects"));
     let empty_src = write_temp_file(&dir, "empty.txt", b"");
-    let result = store.store_file(&empty_src);
+    let result = store.store_file(&empty_src, crate::build::cache::RecordMode::Request);
     assert!(result.is_ok(), "genuinely empty file should store fine");
 }
 
@@ -369,7 +342,7 @@ fn test_link_to_rejects_zero_byte_blob() {
     let dir = make_test_dir("link_zero");
     let store = ObjectStore::new(dir.join("objects"));
     let src = write_temp_file(&dir, "photo.jpg", b"real image data");
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
     let blob_path = store.blob_path(&oid);
 
     // Corrupt the blob to 0 bytes.
@@ -394,7 +367,7 @@ fn test_link_to_verifies_copy_size() {
     let store = ObjectStore::new(dir.join("objects"));
     let content = b"content that should be fully copied";
     let src = write_temp_file(&dir, "data.bin", content);
-    let oid = store.store_file(&src).expect("store_file");
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store_file");
 
     let target = dir.join("output").join("data.bin");
     store
@@ -436,9 +409,9 @@ fn test_transform_cache_roundtrip() {
         transforms,
     };
 
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
-    let loaded = cache.get(&record.source_oid);
+    let loaded = cache.get_with(&record.source_oid, crate::build::cache::RecordMode::Request);
     assert!(loaded.is_some(), "get should return the record we put");
     assert_eq!(loaded.unwrap(), record);
 }
@@ -472,7 +445,7 @@ fn test_find_cached_output_hit() {
 
     // Store a file so there's a real blob for the output OID.
     let src = write_temp_file(&dir, "output.bin", b"transformed output");
-    let output_oid = store.store_file(&src).expect("store output");
+    let output_oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store output");
 
     // Store the source file too.
     let source_src = write_temp_file(&dir, "source.bin", b"original source");
@@ -499,9 +472,9 @@ fn test_find_cached_output_hit() {
         source_size: 15,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
-    let result = cache.find_cached_output(&source_oid, "thumbnail", &params);
+    let result = cache.find_cached_output(&source_oid, "thumbnail", &params, crate::build::cache::RecordMode::Wait);
     assert_eq!(result, Some(output_oid));
 }
 
@@ -511,7 +484,7 @@ fn test_find_cached_output_params_mismatch() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let src = write_temp_file(&dir, "output.bin", b"transformed output");
-    let output_oid = store.store_file(&src).expect("store output");
+    let output_oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store output");
 
     let source_src = write_temp_file(&dir, "source.bin", b"original source");
     let source_oid = ObjectStore::hash_file(&source_src).expect("hash source");
@@ -539,9 +512,9 @@ fn test_find_cached_output_params_mismatch() {
         source_size: 15,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
-    let result = cache.find_cached_output(&source_oid, "thumbnail", &query_params);
+    let result = cache.find_cached_output(&source_oid, "thumbnail", &query_params, crate::build::cache::RecordMode::Wait);
     assert!(result.is_none(), "different params should not match");
 }
 
@@ -576,9 +549,9 @@ fn test_find_cached_output_blob_missing() {
         source_size: 15,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
-    let result = cache.find_cached_output(&source_oid, "thumbnail", &params);
+    let result = cache.find_cached_output(&source_oid, "thumbnail", &params, crate::build::cache::RecordMode::Wait);
     assert!(
         result.is_none(),
         "should return None when blob is missing from object store"
@@ -592,7 +565,7 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
 
     // Store a real blob, then zero it out to simulate iCloud eviction.
     let output_src = write_temp_file(&dir, "output.mp4", b"video data here");
-    let output_oid = store.store_file(&output_src).expect("store output");
+    let output_oid = store.store_file(&output_src, crate::build::cache::RecordMode::Request).expect("store output");
 
     let source_src = write_temp_file(&dir, "source.mov", b"source video");
     let source_oid = ObjectStore::hash_file(&source_src).expect("hash source");
@@ -615,12 +588,12 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
         source_size: 12,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // Verify cache hit works before eviction.
     assert!(
         cache
-            .find_cached_output(&source_oid, "video/mp4", &params)
+            .find_cached_output(&source_oid, "video/mp4", &params, crate::build::cache::RecordMode::Wait)
             .is_some(),
         "should find cached output before eviction"
     );
@@ -630,7 +603,7 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
     fs::write(&blob_path, b"").expect("truncate to simulate eviction");
 
     // After eviction, find_cached_output must return None (not a stale hit).
-    let result = cache.find_cached_output(&source_oid, "video/mp4", &params);
+    let result = cache.find_cached_output(&source_oid, "video/mp4", &params, crate::build::cache::RecordMode::Wait);
     assert!(
         result.is_none(),
         "find_cached_output must reject 0-byte blobs (iCloud eviction)"
@@ -648,7 +621,7 @@ fn test_find_cached_output_no_record() {
     let fake_oid = "dddd".repeat(16);
     let params = serde_json::json!({"width": 200});
 
-    let result = cache.find_cached_output(&fake_oid, "thumbnail", &params);
+    let result = cache.find_cached_output(&fake_oid, "thumbnail", &params, crate::build::cache::RecordMode::Wait);
     assert!(result.is_none(), "should return None when no record exists");
 }
 
@@ -659,7 +632,7 @@ fn test_transform_cache_remove() {
 
     // Store a file so there's a real blob for the output OID.
     let src = write_temp_file(&dir, "output.bin", b"remove test output");
-    let output_oid = store.store_file(&src).expect("store output");
+    let output_oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("store output");
 
     // Hash a source file.
     let source_src = write_temp_file(&dir, "source.bin", b"remove test source");
@@ -686,11 +659,11 @@ fn test_transform_cache_remove() {
         source_size: 18,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // Verify the record exists before removal.
     assert!(
-        cache.get(&source_oid).is_some(),
+        cache.get_with(&source_oid, crate::build::cache::RecordMode::Request).is_some(),
         "record should exist after put"
     );
 
@@ -699,7 +672,7 @@ fn test_transform_cache_remove() {
 
     // Verify get() returns None after removal.
     assert!(
-        cache.get(&source_oid).is_none(),
+        cache.get_with(&source_oid, crate::build::cache::RecordMode::Request).is_none(),
         "record should be gone after remove"
     );
 
@@ -720,7 +693,7 @@ fn test_store_bytes_roundtrip() {
     let store = ObjectStore::new(dir.join("objects"));
 
     let data = b"hello from store_bytes";
-    let oid = store.store_bytes(data).expect("store_bytes");
+    let oid = store.store_bytes(data, crate::build::cache::RecordMode::Request).expect("store_bytes");
     assert_eq!(oid.len(), 64, "OID should be 64 hex chars");
 
     // Blob should exist and match content.
@@ -729,14 +702,48 @@ fn test_store_bytes_roundtrip() {
     assert_eq!(on_disk, data);
 }
 
+/// A pending write the filesystem refuses must say what state the shard
+/// directory is in: the warning that prints this error is the only place a
+/// failed store is diagnosed.
+#[cfg(unix)]
+#[test]
+fn a_refused_pending_write_names_the_shard_directory_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Gives the directory its write bit back so the temp tree can be removed.
+    struct Unlock(PathBuf);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let dir = make_test_dir("refused_pending_write");
+    let store = ObjectStore::new(dir.join("objects"));
+    let shard = store.blob_path(&format!("{:x}", Sha256::digest(b"refused bytes"))).parent().unwrap().to_path_buf();
+    fs::create_dir_all(&shard).unwrap();
+    fs::set_permissions(&shard, fs::Permissions::from_mode(0o555)).unwrap();
+    let _unlock = Unlock(shard);
+
+    let from_bytes = store.store_bytes(b"refused bytes", crate::build::cache::RecordMode::Request).expect_err("the write is refused");
+    let source = write_temp_file(&dir, "src.bin", b"refused bytes");
+    let from_file = store.store_file(&source, crate::build::cache::RecordMode::Request).expect_err("the write is refused");
+
+    for err in [from_bytes, from_file] {
+        assert!(err.contains("pending"), "still says what failed: {err}");
+        assert!(err.contains("shard dir exists=true"), "carries the shard state: {err}");
+        assert!(err.contains("dataless=false"), "carries the shard state: {err}");
+    }
+}
+
 #[test]
 fn test_store_bytes_idempotent() {
     let dir = make_test_dir("store_bytes_idemp");
     let store = ObjectStore::new(dir.join("objects"));
 
     let data = b"same content twice";
-    let oid1 = store.store_bytes(data).expect("first");
-    let oid2 = store.store_bytes(data).expect("second");
+    let oid1 = store.store_bytes(data, crate::build::cache::RecordMode::Request).expect("first");
+    let oid2 = store.store_bytes(data, crate::build::cache::RecordMode::Request).expect("second");
     assert_eq!(oid1, oid2);
 }
 
@@ -752,7 +759,7 @@ fn test_store_bytes_json_blob() {
         is_animated: false,
     };
     let json = serde_json::to_vec(&meta).expect("serialize");
-    let oid = store.store_bytes(&json).expect("store");
+    let oid = store.store_bytes(&json, crate::build::cache::RecordMode::Request).expect("store");
 
     // Read back and deserialize.
     let blob = store.get_path(&oid).expect("blob exists");
@@ -765,6 +772,11 @@ fn test_store_bytes_json_blob() {
 // HashIndex tests
 // -----------------------------------------------------------------------
 
+/// A full stat record, as `FileStat::of` builds one on unix: every field present.
+fn stat(size: u64, mtime: u64) -> FileStat {
+    FileStat { size, mtime, mtime_nanos: Some(250_000_000), ctime: Some(1_700_000_005), inode: Some(77) }
+}
+
 #[test]
 fn test_hash_index_new_is_empty() {
     let idx = HashIndex::new();
@@ -774,50 +786,206 @@ fn test_hash_index_new_is_empty() {
 #[test]
 fn test_hash_index_update_and_lookup_hit() {
     let mut idx = HashIndex::new();
-    idx.update(
-        "photo.jpg".to_string(),
-        1024,
-        1700000000,
-        "abcd1234".to_string(),
-    );
+    idx.update("photo.jpg".to_string(), &stat(1024, 1700000000), "abcd1234".to_string());
 
-    // Same stat fields → cache hit.
-    let hash = idx.lookup("photo.jpg", 1024, 1700000000);
-    assert_eq!(hash, Some("abcd1234"));
-}
-
-#[test]
-fn test_hash_index_lookup_miss_size_changed() {
-    let mut idx = HashIndex::new();
-    idx.update(
-        "photo.jpg".to_string(),
-        1024,
-        1700000000,
-        "abcd1234".to_string(),
-    );
-
-    // Size differs → cache miss.
-    assert!(idx.lookup("photo.jpg", 2048, 1700000000).is_none());
-}
-
-#[test]
-fn test_hash_index_lookup_miss_mtime_changed() {
-    let mut idx = HashIndex::new();
-    idx.update(
-        "photo.jpg".to_string(),
-        1024,
-        1700000000,
-        "abcd1234".to_string(),
-    );
-
-    // Mtime differs → cache miss.
-    assert!(idx.lookup("photo.jpg", 1024, 1700000001).is_none());
+    // Same stat record → cache hit.
+    assert_eq!(idx.lookup("photo.jpg", &stat(1024, 1700000000)), Some("abcd1234"));
 }
 
 #[test]
 fn test_hash_index_lookup_miss_not_present() {
     let idx = HashIndex::new();
-    assert!(idx.lookup("nonexistent.jpg", 0, 0).is_none());
+    assert!(idx.lookup("nonexistent.jpg", &stat(0, 0)).is_none());
+}
+
+/// Every field of the record is part of the key: a file that differs from what was
+/// hashed in ANY of them — a same-size rewrite in the same second differs in the
+/// sub-second mtime alone — must miss.
+#[test]
+fn a_lookup_misses_when_any_one_field_of_the_stat_record_differs() {
+    let recorded = stat(1024, 1700000000);
+    let mut idx = HashIndex::new();
+    idx.update("photo.jpg".to_string(), &recorded, "abcd1234".to_string());
+    assert_eq!(idx.lookup("photo.jpg", &recorded), Some("abcd1234"), "premise: the record itself hits");
+
+    let variants = [
+        ("size", FileStat { size: 1025, ..recorded }),
+        ("mtime", FileStat { mtime: 1700000001, ..recorded }),
+        ("sub-second mtime", FileStat { mtime_nanos: Some(250_000_001), ..recorded }),
+        ("ctime", FileStat { ctime: Some(1_700_000_006), ..recorded }),
+        ("inode", FileStat { inode: Some(78), ..recorded }),
+    ];
+    for (field, changed) in variants {
+        assert!(
+            idx.lookup("photo.jpg", &changed).is_none(),
+            "a file whose {field} differs from the hashed one must not reuse its hash"
+        );
+    }
+}
+
+/// Missing precision fails OPEN: a fact the entry never recorded, or the file no
+/// longer reports, is a miss — never a hit on what remains. ctime and inode are the
+/// exception the crate already makes (`identity_disagrees`): a platform that has
+/// neither, on either side, must not lose the index for good.
+#[test]
+fn a_missing_subsecond_mtime_never_hits_but_a_missing_ctime_or_inode_does() {
+    let full = stat(1024, 1700000000);
+    let mut idx = HashIndex::new();
+    idx.update("photo.jpg".to_string(), &full, "abcd1234".to_string());
+
+    // The file reports no sub-second mtime: nothing to compare, so nothing to trust.
+    assert!(idx.lookup("photo.jpg", &FileStat { mtime_nanos: None, ..full }).is_none());
+
+    // The entry has none (recorded by a caller that had only whole seconds): None on
+    // both sides is not agreement.
+    idx.update_whole_second("clip.mov".to_string(), 1024, 1700000000, "abcd1234".to_string());
+    assert!(idx.lookup("clip.mov", &FileStat::whole_second(1024, 1700000000)).is_none());
+    assert!(idx.lookup("clip.mov", &full).is_none());
+
+    // ctime / inode: absence on either side is agreement.
+    assert_eq!(idx.lookup("photo.jpg", &FileStat { ctime: None, inode: None, ..full }), Some("abcd1234"));
+}
+
+/// A coarse-timestamp filesystem (exFAT/FAT, older SMB/NFS, some FUSE mounts) reports
+/// a sub-second mtime field but always rounds it to zero — `Some(0)`, not `None` — so
+/// an entry that does not say when it was read must treat an exact-zero reading as
+/// "resolution unknown" and fail open, the same as a missing one, rather than trusting
+/// `0 == 0` as proof of the same instant.
+#[test]
+fn a_zero_subsecond_mtime_fails_open_like_a_missing_one() {
+    let recorded = FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) };
+    let mut idx = HashIndex::new();
+    idx.update("photo.jpg".to_string(), &recorded, "abcd1234".to_string());
+
+    // A same-size rewrite within the same coarse tick: size, whole-second mtime, ctime
+    // and inode may all still agree (or be absent), but the sub-second field on both
+    // sides is exact zero — a re-hash, not a hit.
+    let rewritten = FileStat { mtime_nanos: Some(0), ..recorded };
+    assert!(idx.lookup("photo.jpg", &rewritten).is_none(), "exact-zero nanos on both sides must miss, not hit");
+}
+
+/// The counterpart to the zero-nanos guard: a genuine non-zero sub-second reading
+/// (what APFS, ext4 and NTFS normally report) still hits exactly as before.
+#[test]
+fn a_nonzero_subsecond_mtime_still_hits() {
+    let recorded = stat(1024, 1700000000);
+    assert_ne!(recorded.mtime_nanos, Some(0), "premise: the shared fixture uses a non-zero nanos value");
+    let mut idx = HashIndex::new();
+    idx.update("photo.jpg".to_string(), &recorded, "abcd1234".to_string());
+
+    assert_eq!(idx.lookup("photo.jpg", &recorded), Some("abcd1234"));
+}
+
+/// The shared rule's clock boundaries, pinned for both kinds of stamp: a real
+/// sub-second mtime needs no clock; an exact-zero one is trusted only when more than
+/// the skew margin older than the read, never at the boundary, never with no clock,
+/// and never when dated in the future. The racy window is two-sided and inclusive.
+#[test]
+fn the_stat_rule_trusts_a_zero_subsecond_mtime_only_well_before_its_recording() {
+    const E: u64 = RACY_WRITE_EPSILON_SECS;
+    const M: u64 = ZERO_NANOS_TRUST_AGE_SECS;
+    let precise = stat(1024, 10_000);
+    let coarse = FileStat { mtime_nanos: Some(0), ..precise };
+    let vouches = |s: FileStat, at| s.vouches_for(&s, at);
+
+    for at in [None, Some(10_000), Some(10_000 + E), Some(10_000 - E), Some(50_000)] {
+        assert!(vouches(precise, at), "a real sub-second match needs no clock ({at:?})");
+    }
+    assert!(!vouches(coarse, None), "no clock: the gap cannot be shown");
+    assert!(!vouches(coarse, Some(10_000)), "read in the same tick");
+    assert!(!vouches(coarse, Some(10_000 + E + 1)), "past the racy window, but inside a skewed server clock's reach");
+    assert!(!vouches(coarse, Some(10_000 + M)), "the boundary is inclusive");
+    assert!(vouches(coarse, Some(10_000 + M + 1)), "older than the read by more than the margin");
+    assert!(!vouches(coarse, Some(10_000 - E - 1)), "a future stamp the clock could still reach");
+
+    assert!(!mtime_is_racy(1000, None), "no clock, nothing suspect");
+    assert!(mtime_is_racy(1000, Some(1000 + E)), "inclusive after");
+    assert!(mtime_is_racy(1000 + E, Some(1000)), "inclusive before: a write just after the read");
+    assert!(!mtime_is_racy(1000, Some(1000 + E + 1)));
+    assert!(!mtime_is_racy(2000, Some(1000)), "far in the future is not racy");
+}
+
+/// The case the zero-nanos guard exists for, kept: a file read within the window of
+/// its own mtime, then rewritten same-size in the same coarse tick, reads identically
+/// on every field — it must be re-hashed, clock or no clock.
+#[test]
+fn a_same_tick_rewrite_of_a_zero_subsecond_mtime_read_inside_the_window_misses() {
+    let recorded = FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) };
+    let mut idx = HashIndex::new();
+    idx.update_read_at("photo.jpg".to_string(), &recorded, "abcd1234".to_string(), Some(1700000001));
+
+    let rewritten = FileStat { mtime_nanos: Some(0), ..recorded };
+    assert!(idx.lookup("photo.jpg", &rewritten).is_none(), "read one second after the mtime: racy, re-hash");
+}
+
+/// A ZIP extraction or `rsync -a` leaves exact-zero sub-second mtimes on a filesystem
+/// that could record real ones. An entry read long after such a stamp can never be
+/// matched by a later write, so it hits — the fast path the zero-nanos guard alone
+/// took away from every such file on every build.
+#[test]
+fn a_zero_subsecond_mtime_read_well_after_it_hits() {
+    let recorded = FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) };
+    let mut idx = HashIndex::new();
+    idx.update_read_at("photo.jpg".to_string(), &recorded, "abcd1234".to_string(), Some(1700000000 + ZERO_NANOS_TRUST_AGE_SECS + 1));
+
+    assert_eq!(idx.lookup("photo.jpg", &recorded), Some("abcd1234"));
+}
+
+/// An index written before entries carried a recording time loads, keeps its fast
+/// path for real sub-second stamps, and fails open on exact-zero ones — the behaviour
+/// it had before the field existed, never an upgrade to trusting.
+#[test]
+fn an_index_without_recording_times_never_trusts_a_zero_subsecond_mtime() {
+    let dir = make_test_dir("hash_idx_no_recorded_at");
+    let path = dir.join("hash-index.json");
+    let entry = |nanos: u32| serde_json::json!({
+        "size": 1024, "mtime": 1700000000u64, "mtime_nanos": nanos, "ctime": 1_700_000_005i64, "inode": 77, "content_hash": "abcd1234"
+    });
+    fs::write(&path, serde_json::json!({ "entries": { "coarse.jpg": entry(0), "precise.jpg": entry(250_000_000) } }).to_string()).unwrap();
+
+    let idx = HashIndex::load(&path);
+    assert_eq!(idx.entries["coarse.jpg"].recorded_at, None, "premise: the old format has no recording time");
+    assert!(idx.lookup("coarse.jpg", &FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) }).is_none());
+    assert_eq!(idx.lookup("precise.jpg", &stat(1024, 1700000000)), Some("abcd1234"));
+}
+
+/// `resolve` is what records the clock: a local file whose mtime carries exact-zero
+/// nanoseconds and is long past is hashed once, then answered from the index.
+#[test]
+fn resolve_records_its_clock_so_an_old_zero_subsecond_stamp_is_hashed_once() {
+    let dir = make_test_dir("hash_idx_resolve_coarse");
+    let file = write_temp_file(&dir, "pic.png", b"extracted from an archive");
+    let old = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 3 * ZERO_NANOS_TRUST_AGE_SECS;
+    fs::File::options().write(true).open(&file).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(old)).unwrap();
+
+    let reads = std::cell::Cell::new(0);
+    let hash = |p: &Path| { reads.set(reads.get() + 1); ObjectStore::hash_file(p) };
+    let mut idx = HashIndex::new();
+    let first = idx.resolve_with(&file, "pic.png", &hash, |_| false).unwrap();
+    let second = idx.resolve_with(&file, "pic.png", &hash, |_| false).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(reads.get(), 1, "an old exact-zero stamp read now must be trusted the second time");
+}
+
+/// The video path's rule is unchanged: size + whole-second mtime, blind to the rest,
+/// and what it records carries no sub-second field for `lookup` to trust.
+#[test]
+fn the_whole_second_pair_keeps_its_old_rule_and_its_old_serialized_form() {
+    let mut idx = HashIndex::new();
+    idx.update_whole_second("clip.mov".to_string(), 4096, 1700000000, "vvvv".to_string());
+
+    assert_eq!(idx.lookup_whole_second("clip.mov", 4096, 1700000000), Some("vvvv"));
+    assert!(idx.lookup_whole_second("clip.mov", 4097, 1700000000).is_none());
+    assert!(idx.lookup_whole_second("clip.mov", 4096, 1700000001).is_none());
+    // A full-stat entry is still visible to it.
+    idx.update("pic.png".to_string(), &stat(10, 20), "pppp".to_string());
+    assert_eq!(idx.lookup_whole_second("pic.png", 10, 20), Some("pppp"));
+
+    // Nothing but the three original keys, so an index a video was recorded in reads
+    // exactly as it did before the stat record existed.
+    let json = serde_json::to_value(&idx.entries["clip.mov"]).unwrap();
+    assert_eq!(json, serde_json::json!({ "size": 4096, "mtime": 1700000000, "content_hash": "vvvv" }));
 }
 
 #[test]
@@ -826,14 +994,59 @@ fn test_hash_index_save_load_roundtrip() {
     let path = dir.join("hash-index.json");
 
     let mut idx = HashIndex::new();
-    idx.update("a.jpg".to_string(), 100, 1000, "aaaa".to_string());
-    idx.update("b.mp4".to_string(), 200, 2000, "bbbb".to_string());
+    idx.update("a.jpg".to_string(), &stat(100, 1000), "aaaa".to_string());
+    idx.update("b.mp4".to_string(), &stat(200, 2000), "bbbb".to_string());
     idx.save(&path).expect("save");
 
     let loaded = HashIndex::load(&path);
     assert_eq!(loaded.entries.len(), 2);
-    assert_eq!(loaded.lookup("a.jpg", 100, 1000), Some("aaaa"));
-    assert_eq!(loaded.lookup("b.mp4", 200, 2000), Some("bbbb"));
+    assert_eq!(loaded.lookup("a.jpg", &stat(100, 1000)), Some("aaaa"));
+    assert_eq!(loaded.lookup("b.mp4", &stat(200, 2000)), Some("bbbb"));
+}
+
+/// An index the previous version wrote — entries of `size`, `mtime` and
+/// `content_hash` only — loads without error through both loaders, its entries
+/// miss the full-stat lookup, and hashing the file rewrites the entry in the new
+/// format. No migration, no schema version.
+#[test]
+fn an_index_written_before_the_stat_record_existed_loads_misses_and_is_rewritten() {
+    let dir = make_test_dir("hash_idx_old_format");
+    let file = write_temp_file(&dir, "pic.png", b"the bytes as they are now");
+    let now = FileStat::of(&fs::metadata(&file).unwrap());
+
+    // The old format, with an entry that the OLD lookup would have trusted: same size,
+    // same whole second — and a hash that is wrong for these bytes.
+    let old_index = serde_json::json!({
+        "entries": { "pic.png": { "size": now.size, "mtime": now.mtime, "content_hash": "stale" } }
+    });
+    let path = dir.join("hash-index.json");
+    fs::write(&path, old_index.to_string()).unwrap();
+
+    let loaded = HashIndex::load(&path);
+    assert_eq!(loaded.entries.len(), 1, "an old-format index must load, not be discarded as corrupt");
+    let strict = HashIndex::load_strict(&path).expect("the GC's strict loader must accept it too");
+    assert_eq!(strict.map(|i| i.entries.len()), Some(1));
+    assert!(loaded.lookup("pic.png", &now).is_none(), "an entry with no sub-second field must miss");
+
+    let mut idx = loaded;
+    let hash = idx.resolve(&file, "pic.png").unwrap();
+    assert_ne!(hash, "stale", "the stale hash must not survive");
+    assert_eq!(hash, ObjectStore::hash_file(&file).unwrap());
+    assert_eq!(idx.lookup("pic.png", &now), Some(hash.as_str()), "the entry is rewritten in the new format");
+}
+
+/// An index written by THIS version still loads in the previous one: it ignores the
+/// fields it does not know (asserted here as "the new fields are additive JSON keys").
+#[test]
+fn a_full_stat_entry_only_adds_keys_to_the_old_format() {
+    let mut idx = HashIndex::new();
+    idx.update("pic.png".to_string(), &stat(10, 20), "pppp".to_string());
+    let json = serde_json::to_value(&idx.entries["pic.png"]).unwrap();
+    let object = json.as_object().unwrap();
+    for original in ["size", "mtime", "content_hash"] {
+        assert!(object.contains_key(original), "the original key {original} must still be written");
+    }
+    assert_eq!(object.len(), 6);
 }
 
 #[test]
@@ -856,20 +1069,223 @@ fn test_hash_index_load_corrupt_file_returns_empty() {
 fn test_hash_index_stale_entries_pruned() {
     // Simulates the scan flow: only entries seen this scan survive.
     let mut old_idx = HashIndex::new();
-    old_idx.update("kept.jpg".to_string(), 100, 1000, "aaaa".to_string());
-    old_idx.update("deleted.jpg".to_string(), 200, 2000, "bbbb".to_string());
+    old_idx.update("kept.jpg".to_string(), &stat(100, 1000), "aaaa".to_string());
+    old_idx.update("deleted.jpg".to_string(), &stat(200, 2000), "bbbb".to_string());
 
     // During a scan, we build a NEW index containing only seen files.
     let mut new_idx = HashIndex::new();
     // "kept.jpg" is seen again, carry over its entry.
-    if let Some(hash) = old_idx.lookup("kept.jpg", 100, 1000) {
-        new_idx.update("kept.jpg".to_string(), 100, 1000, hash.to_string());
+    if old_idx.lookup("kept.jpg", &stat(100, 1000)).is_some() {
+        new_idx.carry_forward(&old_idx, "kept.jpg");
     }
     // "deleted.jpg" is NOT seen, so it doesn't get carried over.
 
     assert_eq!(new_idx.entries.len(), 1);
-    assert!(new_idx.lookup("kept.jpg", 100, 1000).is_some());
-    assert!(new_idx.lookup("deleted.jpg", 200, 2000).is_none());
+    assert!(new_idx.lookup("kept.jpg", &stat(100, 1000)).is_some());
+    assert!(new_idx.lookup("deleted.jpg", &stat(200, 2000)).is_none());
+}
+
+/// A carried-forward entry is the entry as recorded, not the hit re-stamped with the
+/// file's current stat: a whole-second hit is not proof of anything finer, and
+/// re-stamping it would launder it into an entry the full-stat lookup trusts.
+#[test]
+fn carrying_an_entry_forward_never_upgrades_it() {
+    let mut old_idx = HashIndex::new();
+    old_idx.update_whole_second("clip.mov".to_string(), 4096, 1700000000, "vvvv".to_string());
+
+    let mut new_idx = HashIndex::new();
+    new_idx.carry_forward(&old_idx, "clip.mov");
+    new_idx.carry_forward(&old_idx, "never-recorded.mov");
+
+    assert_eq!(new_idx.entries, old_idx.entries);
+    assert!(new_idx.lookup("clip.mov", &stat(4096, 1700000000)).is_none());
+}
+
+/// `resolve` is the one place that turns a file into a hash through the index: a hit
+/// is trusted without reading the file, and a rewrite that keeps the size and the
+/// whole second — but not the instant inside it — is hashed, not trusted.
+#[test]
+fn resolve_hashes_a_same_size_rewrite_in_the_same_second_instead_of_trusting_the_index() {
+    let dir = make_test_dir("hash_idx_resolve_rewrite");
+    let file = write_temp_file(&dir, "pic.png", b"first version!");
+    let first = ObjectStore::hash_file(&file).unwrap();
+
+    let mut idx = HashIndex::new();
+    assert_eq!(idx.resolve(&file, "pic.png").unwrap(), first);
+    // Unchanged: the entry is trusted (a planted hash comes back, proving the file
+    // was not read).
+    idx.entries.get_mut("pic.png").unwrap().content_hash = "planted".to_string();
+    assert_eq!(idx.resolve(&file, "pic.png").unwrap(), "planted");
+
+    // Same size, different bytes, same wall-clock second, another instant in it.
+    let before = fs::metadata(&file).unwrap().modified().unwrap();
+    fs::write(&file, b"second version").unwrap();
+    assert_eq!(fs::metadata(&file).unwrap().len(), 14, "premise: same size");
+    FileStat::stamp_in_the_second_of(&file, before);
+
+    let second = idx.resolve(&file, "pic.png").unwrap();
+    assert_ne!(second, "planted", "the rewrite must not be answered from the index");
+    assert_eq!(second, ObjectStore::hash_file(&file).unwrap());
+}
+
+/// Replace-via-rename — the atomic-save pattern — with size and mtime carried over
+/// exactly: only the inode says the file is a different one.
+#[cfg(unix)]
+#[test]
+fn resolve_hashes_a_file_replaced_by_rename_even_when_size_and_mtime_survive() {
+    let dir = make_test_dir("hash_idx_resolve_inode");
+    let file = write_temp_file(&dir, "pic.png", b"first version!");
+    let at = fs::metadata(&file).unwrap().modified().unwrap();
+
+    let mut idx = HashIndex::new();
+    idx.resolve(&file, "pic.png").unwrap();
+    idx.entries.get_mut("pic.png").unwrap().content_hash = "planted".to_string();
+
+    let replacement = write_temp_file(&dir, "pic.png.new", b"second version");
+    fs::File::options().write(true).open(&replacement).unwrap().set_modified(at).unwrap();
+    fs::rename(&replacement, &file).unwrap();
+    let after = fs::metadata(&file).unwrap();
+    assert_eq!((after.len(), after.modified().unwrap()), (14, at), "premise: size and mtime survive the replacement");
+
+    assert_ne!(idx.resolve(&file, "pic.png").unwrap(), "planted", "a different inode must not reuse the hash");
+}
+
+/// The stat is taken before the bytes are read (`HashIndex::update`): a write landing
+/// during the read then leaves an entry the file no longer matches, where the other
+/// order pairs the new file's stat with the old bytes' hash and vouches for it. The
+/// hasher is injected so the write lands exactly between the two.
+#[test]
+fn resolve_with_records_the_stat_the_file_had_before_it_was_read() {
+    let dir = make_test_dir("hash_idx_resolve_stat_first");
+    let file = write_temp_file(&dir, "pic.png", b"first version!");
+    let mut idx = HashIndex::new();
+
+    let hash = idx
+        .resolve_with(
+            &file,
+            "pic.png",
+            |path| {
+                let read = ObjectStore::hash_file(path);
+                fs::write(path, b"rewritten while it was being hashed").unwrap();
+                read
+            },
+            |_| false,
+        )
+        .unwrap();
+
+    let probe = write_temp_file(&dir, "probe", b"first version!");
+    assert_eq!(hash, ObjectStore::hash_file(&probe).unwrap(), "the hash is of the bytes that were read");
+    let now = FileStat::of(&fs::metadata(&file).unwrap());
+    assert!(idx.lookup("pic.png", &now).is_none(), "the index vouches for the rewritten file with the old bytes' hash");
+}
+
+/// A file still in the cloud is not read to learn its hash: reading a dehydrated
+/// file blocks for the provider's download or fails, and a provider re-materialising
+/// one changes its ctime and inode, so the strict lookup misses on exactly the files
+/// the old size-and-second key answered without a read.
+#[test]
+fn resolve_with_never_reads_a_cloud_only_file_the_index_does_not_vouch_for() {
+    let dir = make_test_dir("hash_idx_resolve_cloud_miss");
+    let file = write_temp_file(&dir, "pic.png", b"in the cloud");
+    let here = FileStat::of(&fs::metadata(&file).unwrap());
+
+    // Never recorded, and recorded before the provider changed ctime and inode.
+    let mut rematerialised = HashIndex::new();
+    rematerialised.update("pic.png".to_string(), &FileStat { ctime: Some(1), inode: Some(1), ..here }, "old".to_string());
+    for (what, mut idx) in [("never recorded", HashIndex::new()), ("ctime and inode moved", rematerialised)] {
+        let mut reads = 0;
+        let before = idx.entries.clone();
+        let outcome = idx.resolve_with(&file, "pic.png", |_| { reads += 1; Ok("read".to_string()) }, |_| true);
+        assert!(outcome.is_err(), "{what}: answered {outcome:?} for a file in the cloud");
+        assert_eq!(reads, 0, "{what}: read a file that is in the cloud");
+        assert_eq!(idx.entries, before, "{what}: recorded something for a hash it did not get");
+    }
+}
+
+/// A hit costs no read, so it answers whether or not the file is in the cloud: the
+/// guard is for the read, not for the file.
+#[test]
+fn resolve_with_still_answers_a_cloud_only_file_from_a_hit() {
+    let dir = make_test_dir("hash_idx_resolve_cloud_hit");
+    let file = write_temp_file(&dir, "pic.png", b"in the cloud");
+    let mut idx = HashIndex::new();
+    idx.update("pic.png".to_string(), &FileStat::of(&fs::metadata(&file).unwrap()), "recorded".to_string());
+
+    let outcome = idx.resolve_with(&file, "pic.png", |_| panic!("read on a hit"), |_| true);
+
+    assert_eq!(outcome.as_deref(), Ok("recorded"));
+}
+
+/// The other side of the guard: a file on disk is hashed and recorded on a miss.
+#[test]
+fn resolve_with_hashes_and_records_a_local_file_the_index_does_not_vouch_for() {
+    let dir = make_test_dir("hash_idx_resolve_local_miss");
+    let file = write_temp_file(&dir, "pic.png", b"on disk");
+    let mut idx = HashIndex::new();
+
+    let outcome = idx.resolve_with(&file, "pic.png", |_| Ok("hashed".to_string()), |_| false);
+
+    assert_eq!(outcome.as_deref(), Ok("hashed"));
+    assert_eq!(idx.lookup("pic.png", &FileStat::of(&fs::metadata(&file).unwrap())), Some("hashed"));
+}
+
+/// `resolve` is what every caller holds, and it must be wired to the real cloud
+/// check: the seam above proves the guard, this proves nothing swaps it out.
+#[test]
+fn resolve_asks_whether_the_file_is_in_the_cloud() {
+    let dir = make_test_dir("hash_idx_resolve_cloud_wired");
+    let file = write_temp_file(&dir, "pic.png", b"in the cloud");
+    let mut idx = HashIndex::new();
+
+    let cloud = crate::build::icloud::pretend::evicted(&file);
+    assert!(idx.resolve(&file, "pic.png").is_err(), "resolve read a file that is in the cloud");
+    assert!(idx.entries.is_empty());
+
+    drop(cloud);
+    assert_eq!(idx.resolve(&file, "pic.png").unwrap(), ObjectStore::hash_file(&file).unwrap());
+}
+
+/// A scan builds a new index beside the last one. An entry the last one still vouches
+/// for, at the stat the walk took, is answered without a read and carried across exactly
+/// as recorded — re-stamped with today's stat it would become an entry `lookup` trusts
+/// that nobody vouched for. On a miss the file is hashed and recorded in the NEW index
+/// at the walk's stat, and the old one is left as it was.
+#[test]
+fn resolve_from_carries_a_hit_as_recorded_and_records_a_miss_in_the_new_index() {
+    let dir = make_test_dir("hash_idx_resolve_from");
+    let file = write_temp_file(&dir, "pic.png", b"on disk");
+    let here = FileStat::of(&fs::metadata(&file).unwrap());
+    // Recorded by a version that kept no ctime or inode: still a hit (an absent field
+    // agrees with anything), and what a re-stamp would fill in.
+    let mut previous = HashIndex::new();
+    previous.update("pic.png".to_string(), &FileStat { ctime: None, inode: None, ..here }, "recorded".to_string());
+
+    let mut new = HashIndex::new();
+    assert_eq!(new.resolve_from(&previous, &here, &file, "pic.png").as_deref(), Ok("recorded"));
+    assert_eq!(new.entries, previous.entries, "the hit was not carried as recorded");
+
+    let elsewhere = FileStat { mtime: here.mtime + 1, ..here };
+    let mut new = HashIndex::new();
+    let hash = new.resolve_from(&previous, &elsewhere, &file, "pic.png").unwrap();
+    assert_eq!(hash, ObjectStore::hash_file(&file).unwrap(), "a stat the last index does not vouch for is hashed");
+    assert_eq!(new.lookup("pic.png", &elsewhere), Some(hash.as_str()), "recorded at the walk's stat, not a later one");
+    assert_eq!(previous.lookup("pic.png", &here), Some("recorded"), "the last index is read, never written");
+}
+
+/// A scan's hash read is guarded the way `resolve`'s is: a file in the cloud is not
+/// read to learn what an index that does not vouch for it cannot say.
+#[test]
+fn resolve_from_never_reads_a_cloud_only_file_the_last_index_does_not_vouch_for() {
+    let dir = make_test_dir("hash_idx_resolve_from_cloud");
+    let file = write_temp_file(&dir, "pic.png", b"in the cloud");
+    let here = FileStat::of(&fs::metadata(&file).unwrap());
+    let mut new = HashIndex::new();
+
+    let _cloud = crate::build::icloud::pretend::evicted(&file);
+    let outcome = new.resolve_from(&HashIndex::new(), &here, &file, "pic.png");
+
+    assert!(outcome.is_err(), "answered {outcome:?} for a file in the cloud");
+    assert!(new.entries.is_empty(), "recorded something for a hash it did not get");
 }
 
 /// Simulate the iCloud eviction scenario: parent directory disappears
@@ -882,7 +1298,7 @@ fn test_hash_index_save_retries_on_parent_dir_eviction() {
     let path = cache_dir.join("hash-index.json");
 
     let mut idx = HashIndex::new();
-    idx.update("a.jpg".to_string(), 100, 1000, "aaaa".to_string());
+    idx.update("a.jpg".to_string(), &stat(100, 1000), "aaaa".to_string());
 
     // First save should succeed and create the parent directory.
     idx.save(&path).expect("first save");
@@ -895,14 +1311,14 @@ fn test_hash_index_save_retries_on_parent_dir_eviction() {
     // Second save should succeed via the retry path: save() calls
     // create_dir_all, writes the tmp file, rename fails with NotFound
     // (parent gone), retry re-creates parent, rename succeeds.
-    idx.update("b.jpg".to_string(), 200, 2000, "bbbb".to_string());
+    idx.update("b.jpg".to_string(), &stat(200, 2000), "bbbb".to_string());
     idx.save(&path).expect("save after eviction should succeed");
 
     // Verify the data round-trips correctly.
     let loaded = HashIndex::load(&path);
     assert_eq!(loaded.entries.len(), 2);
-    assert_eq!(loaded.lookup("a.jpg", 100, 1000), Some("aaaa"));
-    assert_eq!(loaded.lookup("b.jpg", 200, 2000), Some("bbbb"));
+    assert_eq!(loaded.lookup("a.jpg", &stat(100, 1000)), Some("aaaa"));
+    assert_eq!(loaded.lookup("b.jpg", &stat(200, 2000)), Some("bbbb"));
 }
 
 // -----------------------------------------------------------------------
@@ -922,7 +1338,7 @@ fn test_metadata_cache_hit_returns_stored_meta() {
         is_animated: false,
     };
     let json_bytes = serde_json::to_vec(&meta).expect("ser");
-    let meta_oid = store.store_bytes(&json_bytes).expect("store blob");
+    let meta_oid = store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).expect("store blob");
 
     // Create a fake source OID.
     let source_src = write_temp_file(&dir, "source.bin", b"video file content");
@@ -948,10 +1364,10 @@ fn test_metadata_cache_hit_returns_stored_meta() {
         source_size: 18,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // Look up → should hit.
-    let found_oid = cache.find_cached_output(&source_oid, "media/meta", &params);
+    let found_oid = cache.find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait);
     assert_eq!(found_oid, Some(meta_oid.clone()));
 
     // Read the blob and deserialize.
@@ -975,7 +1391,7 @@ fn test_metadata_cache_miss_triggers_extraction() {
     let params = serde_json::json!({});
 
     // No record exists → cache miss.
-    let result = cache.find_cached_output(&fake_oid, "media/meta", &params);
+    let result = cache.find_cached_output(&fake_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait);
     assert!(result.is_none(), "should miss when no record");
 }
 
@@ -998,7 +1414,7 @@ fn test_metadata_cache_full_roundtrip() {
     );
     let params = serde_json::json!({});
     assert!(cache
-        .find_cached_output(&source_oid, "media/meta", &params)
+        .find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait)
         .is_none());
 
     // 3. "Extract" metadata (simulate ffprobe + ffmpeg result).
@@ -1011,7 +1427,7 @@ fn test_metadata_cache_full_roundtrip() {
 
     // 4. Store metadata as blob in ObjectStore.
     let json_bytes = serde_json::to_vec(&meta).expect("ser");
-    let meta_oid = store.store_bytes(&json_bytes).expect("store blob");
+    let meta_oid = store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).expect("store blob");
 
     // 5. Write TransformRecord.
     let mut transforms = HashMap::new();
@@ -1028,14 +1444,14 @@ fn test_metadata_cache_full_roundtrip() {
         source_size,
         transforms,
     };
-    cache.put(&record).expect("put");
+    cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // 6. Check TransformCache again → hit!
     let cache2 = TransformCache::new(
         dir.join("transforms"),
         ObjectStore::new(dir.join("objects")),
     );
-    let found = cache2.find_cached_output(&source_oid, "media/meta", &params);
+    let found = cache2.find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait);
     assert_eq!(found, Some(meta_oid));
 }
 
@@ -1191,7 +1607,7 @@ fn test_singleflight_default() {
 }
 
 // =========================================================================
-// Singleflight Design Invariant Tests (ADR-010, Phase 4)
+// Singleflight Design Invariant Tests
 // =========================================================================
 
 /// INVARIANT: After completion, key is cleaned up from in-flight map.
@@ -1605,7 +2021,7 @@ fn test_singleflight_media_metadata_concurrent_dedup() {
 }
 
 // -----------------------------------------------------------------------
-// Singleflight error-propagation invariant tests (ADR-010, Phase 4)
+// Singleflight error-propagation invariant tests
 //
 // These tests lock the invariant fixed by the singleflight error-channel
 // refactor: when the primary closure returns an outcome with an error, all
@@ -1760,7 +2176,7 @@ fn test_cached_media_meta_backward_compat_no_lqip() {
 #[test]
 fn test_cached_media_meta_backward_compat_no_is_animated() {
     // JSON from before the is_animated field existed must still deserialize,
-    // defaulting to false (a bounded, self-healing gap — see moss#919: the
+    // defaulting to false (a bounded, self-healing gap: the
     // next content change re-sniffs and writes the real value).
     let json = r##"{"dimensions":[800,600],"dominant_color":"#ff5733"}"##;
     let meta: CachedMediaMeta = serde_json::from_str(json).expect("deser");
@@ -1821,14 +2237,15 @@ fn test_cached_media_meta_none_lqip_omitted_in_json() {
 
 /// Helper: set up a mock build directory with cache structure.
 /// Returns (build_dir, objects_dir, transforms_dir).
-fn make_gc_test_dir(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+fn make_gc_test_dir(name: &str) -> (crate::moss_paths::MossPaths, PathBuf, PathBuf) {
     let dir = make_test_dir(name);
-    let build_dir = dir.join("build");
-    let objects_dir = build_dir.join("cache").join("objects");
-    let transforms_dir = build_dir.join("cache").join("transforms");
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
+    let objects_dir = mp.cache_objects();
+    let transforms_dir = mp.cache_transforms();
     fs::create_dir_all(&objects_dir).expect("create objects dir");
     fs::create_dir_all(&transforms_dir).expect("create transforms dir");
-    (build_dir, objects_dir, transforms_dir)
+    fs::create_dir_all(mp.cache_dir()).expect("create the per-machine cache dir");
+    (mp, objects_dir, transforms_dir)
 }
 
 /// Helper: write a blob to the object store at the correct sharded path.
@@ -1854,8 +2271,8 @@ fn put_transform(transforms_dir: &Path, record: &TransformRecord) {
 #[test]
 fn test_gc_empty_cache() {
     // GC on an empty cache should succeed with zero removals.
-    let (build_dir, _, _) = make_gc_test_dir("gc_empty");
-    let result = gc(&build_dir);
+    let (mp, _, _) = make_gc_test_dir("gc_empty");
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
     assert_eq!(result.transforms_removed, 0);
     assert_eq!(result.objects_removed, 0);
     assert_eq!(result.bytes_freed, 0);
@@ -1865,9 +2282,9 @@ fn test_gc_empty_cache() {
 fn test_gc_nonexistent_dirs() {
     // GC on a build dir with no cache subdirs should not panic.
     let dir = make_test_dir("gc_nonexistent");
-    let build_dir = dir.join("build");
-    fs::create_dir_all(&build_dir).expect("create build dir");
-    let result = gc(&build_dir);
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
+    fs::create_dir_all(mp.root()).expect("create .moss");
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
     assert_eq!(result.transforms_removed, 0);
     assert_eq!(result.objects_removed, 0);
     assert_eq!(result.bytes_freed, 0);
@@ -1875,7 +2292,7 @@ fn test_gc_nonexistent_dirs() {
 
 #[test]
 fn test_gc_removes_orphaned_transform() {
-    let (build_dir, objects_dir, transforms_dir) = make_gc_test_dir("gc_orphan_transform");
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_orphan_transform");
 
     // Source OID that IS in HashIndex (live)
     let live_oid = "aaaa".repeat(16);
@@ -1893,15 +2310,15 @@ fn test_gc_removes_orphaned_transform() {
             m.insert(
                 "source.md".to_string(),
                 HashIndexEntry {
-                    size: 100,
-                    mtime: 1000,
+                    stat: FileStat::whole_second(100, 1000),
+                    recorded_at: None,
                     content_hash: live_oid.clone(),
                 },
             );
             m
         },
     };
-    let hash_index_path = build_dir.join("cache").join("hash-index.json");
+    let hash_index_path = mp.cache_hash_index();
     hash_index.save(&hash_index_path).expect("save hash index");
 
     // Create transform records
@@ -1940,6 +2357,7 @@ fn test_gc_removes_orphaned_transform() {
 
     put_transform(&transforms_dir, &live_record);
     put_transform(&transforms_dir, &orphan_record);
+    age_past_ttl(&transforms_dir, &orphan_record.source_oid);
 
     // Put objects for all OIDs
     put_object(&objects_dir, &live_oid, b"live source");
@@ -1947,7 +2365,7 @@ fn test_gc_removes_orphaned_transform() {
     put_object(&objects_dir, &orphan_oid, b"orphan source");
     put_object(&objects_dir, &orphan_output, b"orphan output");
 
-    let result = gc(&build_dir);
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     // Should have removed 1 transform record (the orphaned one)
     assert_eq!(
@@ -2006,7 +2424,7 @@ fn test_gc_removes_orphaned_transform() {
 
 #[test]
 fn test_gc_preserves_objects_referenced_by_site_hashes() {
-    let (build_dir, objects_dir, _) = make_gc_test_dir("gc_site_hashes");
+    let (mp, objects_dir, _) = make_gc_test_dir("gc_site_hashes");
 
     // Object referenced by hashes.json but NOT by any transform or hash index
     let site_hash_oid = "eeee".repeat(16);
@@ -2025,12 +2443,12 @@ fn test_gc_preserves_objects_referenced_by_site_hashes() {
         "video_outputs": [],
     });
     fs::write(
-        build_dir.join("hashes.json"),
+        mp.hashes(),
         serde_json::to_string_pretty(&hashes_json).unwrap(),
     )
     .expect("write hashes.json");
 
-    let result = gc(&build_dir);
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     // Should remove only the orphan, not the site-hashes-referenced blob
     assert_eq!(result.objects_removed, 1, "should remove 1 orphaned object");
@@ -2048,7 +2466,7 @@ fn test_gc_preserves_objects_referenced_by_site_hashes() {
 
 #[test]
 fn test_gc_preserves_objects_referenced_by_transforms() {
-    let (build_dir, objects_dir, transforms_dir) = make_gc_test_dir("gc_transform_refs");
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_transform_refs");
 
     let source_oid = "1111".repeat(16);
     let output_oid = "2222".repeat(16);
@@ -2061,15 +2479,15 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
             m.insert(
                 "file.jpg".to_string(),
                 HashIndexEntry {
-                    size: 500,
-                    mtime: 2000,
+                    stat: FileStat::whole_second(500, 2000),
+                    recorded_at: None,
                     content_hash: source_oid.clone(),
                 },
             );
             m
         },
     };
-    let hash_index_path = build_dir.join("cache").join("hash-index.json");
+    let hash_index_path = mp.cache_hash_index();
     hash_index.save(&hash_index_path).expect("save");
 
     // Create transform that references output_oid
@@ -2096,7 +2514,7 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
     put_object(&objects_dir, &output_oid, b"converted webp");
     put_object(&objects_dir, &orphan_oid, b"orphaned blob");
 
-    let result = gc(&build_dir);
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     assert_eq!(
         result.transforms_removed, 0,
@@ -2117,4 +2535,430 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
         !store.blob_path(&orphan_oid).exists(),
         "orphan should be removed"
     );
+}
+
+/// Back-date a transform record past `RECORD_TTL`, as GC finds one a machine
+/// wrote a season ago.
+fn age_past_ttl(transforms_dir: &Path, source_oid: &str) {
+    let path = transforms_dir
+        .join(&source_oid[..2])
+        .join(&source_oid[2..4])
+        .join(format!("{source_oid}.json"));
+    let record = fs::OpenOptions::new().write(true).open(&path).expect("record exists");
+    let a_day = std::time::Duration::from_secs(24 * 60 * 60);
+    record
+        .set_modified(std::time::SystemTime::now() - RECORD_TTL - a_day)
+        .expect("set mtime");
+}
+
+fn record_with(source_oid: &str, output_oid: &str) -> TransformRecord {
+    let mut transforms = HashMap::new();
+    transforms.insert(
+        "webp".to_string(),
+        TransformEntry { oid: output_oid.to_string(), size: 300, params: serde_json::json!({}) },
+    );
+    TransformRecord { source_oid: source_oid.to_string(), source_size: 500, transforms }
+}
+
+/// The cache is shared between machines, and this machine's hash index only
+/// names the sources IT scanned. A record for a source it never saw is another
+/// machine's live work until it has aged past the TTL; its outputs stay with it.
+#[test]
+fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_shared_records");
+    let fresh = record_with(&"aaaa".repeat(16), &"bbbb".repeat(16));
+    let aged = record_with(&"cccc".repeat(16), &"dddd".repeat(16));
+    put_transform(&transforms_dir, &fresh);
+    put_transform(&transforms_dir, &aged);
+    age_past_ttl(&transforms_dir, &aged.source_oid);
+    for oid in ["aaaa", "bbbb", "cccc", "dddd"] {
+        put_object(&objects_dir, &oid.repeat(16), oid.as_bytes());
+    }
+    // No hash index at all: nothing is live on this machine.
+
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    let store = ObjectStore::new(objects_dir);
+    assert_eq!(result.transforms_removed, 1, "only the aged record is condemned");
+    assert!(store.blob_path(&"bbbb".repeat(16)).exists(), "the fresh record's output survives");
+    assert!(store.blob_path(&"aaaa".repeat(16)).exists(), "and so does its source");
+    assert!(!store.blob_path(&"dddd".repeat(16)).exists(), "the aged record's output goes with it");
+    assert_eq!(result.objects_removed, 2);
+}
+
+/// A blob the cloud holds is waited for and trusted only once it hashes to its
+/// own name; one that arrives as other bytes is removed so the miss regenerates.
+#[test]
+fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {
+    let (_mp, objects_dir, transforms_dir) = make_gc_test_dir("cache_cloud_blob_ladder");
+    let store = ObjectStore::new(objects_dir.clone());
+    let cache = TransformCache::new(transforms_dir, ObjectStore::new(objects_dir.clone()));
+    let params = serde_json::json!({});
+
+    let good = store.store_bytes(b"the bytes the oid names", crate::build::cache::RecordMode::Request).expect("stored");
+    cache.put(&record_with(&"1111".repeat(16), &good), crate::build::cache::RecordMode::Request).expect("record");
+    let _short = ShortWaits::new();
+    let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&good));
+    assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait).as_deref(), Some(good.as_str()));
+
+    let forged = "ffff".repeat(16);
+    put_object(&objects_dir, &forged, b"not what its name says");
+    cache.put(&record_with(&"2222".repeat(16), &forged), crate::build::cache::RecordMode::Request).expect("record");
+    let _also_in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&forged));
+    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
+    assert!(!store.blob_path(&forged).exists(), "a blob that fails its checksum is removed");
+}
+
+/// A GC mark input that exists but cannot be read marks less, and marking less
+/// deletes more. Three inputs, one rig: the sweep must abort with nothing
+/// deleted when any of them is unreadable (moss 404c: an unreadable build tree
+/// is an ordinary input on a cloud-managed vault, not a corner case).
+#[cfg(unix)]
+#[test]
+fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let source_oid = "5555".repeat(16);
+    let output_oid = "6666".repeat(16);
+    let site_oid = "7777".repeat(16);
+    let orphan_oid = "8888".repeat(16);
+
+    let rig = |name: &str| {
+        let (mp, objects_dir, transforms_dir) = make_gc_test_dir(name);
+        let mut entries = HashMap::new();
+        entries.insert(
+            "file.jpg".to_string(),
+            HashIndexEntry { stat: FileStat::whole_second(500, 2000), recorded_at: None, content_hash: source_oid.clone() },
+        );
+        HashIndex { entries }
+            .save(&mp.cache_hash_index())
+            .expect("save index");
+        let mut transforms = HashMap::new();
+        transforms.insert(
+            "webp".to_string(),
+            TransformEntry { oid: output_oid.clone(), size: 3, params: serde_json::json!({}) },
+        );
+        put_transform(
+            &transforms_dir,
+            &TransformRecord { source_oid: source_oid.clone(), source_size: 500, transforms },
+        );
+        fs::write(
+            mp.hashes(),
+            format!(r#"{{"files": {{"page/index.html": "{site_oid}"}}}}"#),
+        )
+        .unwrap();
+        for oid in [&source_oid, &output_oid, &site_oid, &orphan_oid] {
+            put_object(&objects_dir, oid, oid.as_bytes());
+        }
+        (mp, objects_dir, transforms_dir)
+    };
+    let record_of = |transforms_dir: &Path| {
+        transforms_dir.join(&source_oid[..2]).join(&source_oid[2..4]).join(format!("{source_oid}.json"))
+    };
+
+    let cases: [(&str, fn(&crate::moss_paths::MossPaths, &Path) -> PathBuf); 3] = [
+        ("gc_unreadable_index", |mp, _| mp.cache_hash_index()),
+        ("gc_unreadable_record", |_, record| record.to_path_buf()),
+        ("gc_unreadable_hashes", |mp, _| mp.hashes()),
+    ];
+    for (name, locked_input) in cases {
+        let (mp, objects_dir, transforms_dir) = rig(name);
+        let record = record_of(&transforms_dir);
+        let locked = locked_input(&mp, &record);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&locked).is_ok() {
+            eprintln!("skipped: this process can read a 0o000 file (running as root?)");
+            return;
+        }
+
+        let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test());
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let store = ObjectStore::new(objects_dir.clone());
+        for oid in [&source_oid, &output_oid, &site_oid, &orphan_oid] {
+            assert!(
+                store.blob_path(oid).exists(),
+                "{name}: blob {oid} was deleted by a sweep that could not read {}",
+                locked.display()
+            );
+        }
+        assert!(record.exists(), "{name}: the live transform record was deleted");
+        assert!(result.is_err(), "{name}: an unreadable mark input must abort the sweep, got {result:?}");
+    }
+}
+
+// -----------------------------------------------------------------------
+// Blobs the cloud has not downloaded
+// -----------------------------------------------------------------------
+
+/// Log lines of every thread, so a test can say a path warned or did not. Keyed
+/// on the unique oid a test puts in the message.
+static LOG_LINES: std::sync::Mutex<Vec<(log::Level, String)>> = std::sync::Mutex::new(Vec::new());
+
+struct Capture;
+
+impl log::Log for Capture {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).push((record.level(), record.args().to_string()));
+    }
+    fn flush(&self) {}
+}
+
+fn logged_at(level: log::Level, about: &str) -> bool {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = log::set_logger(&Capture);
+        log::set_max_level(log::LevelFilter::Debug);
+    });
+    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(l, m)| *l == level && m.contains(about))
+}
+
+/// A store holding one blob of `source`'s bytes, with the blob's file replaced
+/// by `stand_in` so a test can tell whether it was rewritten.
+fn store_with_blob(name: &str, source: &[u8], stand_in: &[u8]) -> (ObjectStore, PathBuf, String, PathBuf) {
+    let dir = make_test_dir(name);
+    let store = ObjectStore::new(dir.join("objects"));
+    let src = write_temp_file(&dir, "source.bin", source);
+    let oid = store.store_file(&src, crate::build::cache::RecordMode::Request).expect("stored");
+    fs::write(store.blob_path(&oid), stand_in).expect("replace the blob's bytes");
+    (store, src, oid.clone(), dir)
+}
+
+#[cfg(unix)]
+#[test]
+fn storing_local_bytes_republishes_the_same_cloud_oid_for_every_reader() {
+    let _short = ShortWaits::new();
+    let (store, src, oid, dir) = store_with_blob("cloud_blob_republished", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+    assert!(store.ready_blob(&oid).is_none(), "the provider never delivers the old inode");
+    assert_eq!(store.store_file(&src, crate::build::cache::RecordMode::Request).expect("republished"), oid);
+    assert!(!crate::build::icloud::is_evicted(&blob), "a successful store supplies local bytes");
+    assert_eq!(ObjectStore::hash_file(&blob).unwrap(), oid, "shared content identity is unchanged");
+    let follower = ObjectStore::new(store.root().to_path_buf());
+    follower.link_to(&oid, &dir.join("follower.bin")).expect("reader holds only the oid");
+    assert_eq!(fs::read(dir.join("follower.bin")).unwrap(), b"the original bytes");
+
+    let bytes_oid = store.store_bytes(b"small json", crate::build::cache::RecordMode::Request).expect("stored");
+    let bytes_blob = store.blob_path(&bytes_oid);
+    fs::write(&bytes_blob, b"stand-in").unwrap();
+    let _also_in_cloud = crate::build::icloud::pretend::evicted_until_replaced(&bytes_blob);
+    assert_eq!(store.store_bytes(b"small json", crate::build::cache::RecordMode::Request).expect("republished"), bytes_oid);
+    assert!(!crate::build::icloud::is_evicted(&bytes_blob));
+    follower.link_to(&bytes_oid, &dir.join("follower.json")).expect("bytes reader holds only the oid");
+    assert_eq!(fs::read(dir.join("follower.json")).unwrap(), b"small json");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn refused_cloud_republication_keeps_the_shared_blob_and_reports_failure() {
+    let (store, src, oid, _dir) = store_with_blob("cloud_republication_refused", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+    let _folder = crate::build::icloud::pretend::evicted(store.root());
+    store.store_file(&src, RecordMode::Request).expect_err("the shared folder refuses the fresh file");
+    store.store_bytes(b"the original bytes", RecordMode::Request).expect_err("the shared folder refuses the fresh bytes");
+    assert_eq!(fs::read(&blob).unwrap(), b"stand-in", "no removal or truncation of the shared entry");
+    assert!(crate::build::icloud::is_evicted(&blob));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_rename_does_not_claim_a_cloud_placeholder_won_the_store_race() {
+    let (store, _src, oid, _dir) = store_with_blob("cloud_rename_refused", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+    let pending = write_temp_file(blob.parent().unwrap(), "valid.pending", b"the original bytes");
+    let _folder = crate::build::icloud::pretend::evicted(store.root());
+    store.place_pending(&oid, &pending, &blob, RecordMode::Request)
+        .expect_err("the existing cloud entry is not a successful concurrent publication");
+    assert_eq!(fs::read(&blob).unwrap(), b"stand-in");
+    assert!(!pending.exists(), "only the owned pending file is cleaned up");
+}
+
+#[cfg(unix)]
+#[test]
+fn cloud_republication_rejects_pending_bytes_that_do_not_match_the_shared_oid() {
+    let (store, _src, oid, dir) = store_with_blob("cloud_republication_checksum", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
+    let pending = write_temp_file(&dir, "wrong.pending", b"changed during copy");
+    store.place_pending(&oid, &pending, &blob, RecordMode::Request)
+        .expect_err("republishing shared content requires an exact checksum match");
+    assert_eq!(fs::read(&blob).unwrap(), b"stand-in");
+    assert!(!pending.exists(), "only the owned pending file is cleaned up");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_refused_rename_accepts_only_an_exact_local_store_race_winner() {
+    for (name, existing, accepted) in [("race_winner", b"the original bytes".as_slice(), true), ("race_wrong_bytes", b"other bytes".as_slice(), false)] {
+        let (store, _src, oid, _dir) = store_with_blob(name, b"the original bytes", existing);
+        let blob = store.blob_path(&oid);
+        let pending = write_temp_file(blob.parent().unwrap(), "valid.pending", b"the original bytes");
+        let _folder = crate::build::icloud::pretend::evicted(store.root());
+        let result = store.place_pending(&oid, &pending, &blob, RecordMode::Request);
+        assert_eq!(result.is_ok(), accepted, "{result:?}");
+        assert_eq!(fs::read(&blob).unwrap(), existing, "the other writer's entry is not touched");
+        assert!(!pending.exists());
+    }
+}
+
+#[test]
+fn a_downloaded_empty_blob_is_still_replaced() {
+    let (store, src, oid, _dir) = store_with_blob("downloaded_empty_blob", b"the original bytes", b"");
+    assert_eq!(store.store_file(&src, crate::build::cache::RecordMode::Request).expect("replaced"), oid);
+    assert_eq!(fs::read(store.blob_path(&oid)).unwrap(), b"the original bytes");
+}
+
+/// Shorten every cloud wait on this thread for the life of the guard.
+struct ShortWaits;
+
+impl ShortWaits {
+    fn new() -> Self {
+        crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(Some(std::time::Duration::from_millis(20))));
+        Self
+    }
+}
+
+impl Drop for ShortWaits {
+    fn drop(&mut self) {
+        crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(None));
+    }
+}
+
+fn waits_run() -> u32 {
+    crate::build::cloud_readiness::WAITS_RUN.with(|n| n.get())
+}
+
+/// A blob of `bytes` in `store`, with its file marked as in the cloud.
+fn blob_in_the_cloud(store: &ObjectStore, bytes: &[u8]) -> (String, PathBuf, crate::build::icloud::pretend::Guard) {
+    let oid = store.store_bytes(bytes, crate::build::cache::RecordMode::Request).expect("stored");
+    let blob = store.blob_path(&oid);
+    let guard = crate::build::icloud::pretend::evicted(&blob);
+    (oid, blob, guard)
+}
+
+#[test]
+fn link_to_requests_a_blob_in_the_cloud_once_and_links_it_when_it_arrives() {
+    let _short = ShortWaits::new();
+    let (store, _src, oid, dir) = store_with_blob("link_requests_blob", b"the original bytes", b"the original bytes");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
+    let target = dir.join("out").join("copy.bin");
+    store.link_to(&oid, &target).expect("linked once the blob arrived");
+    assert_eq!(fs::read(&target).unwrap(), b"the original bytes");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "one request, no polling loop of requests");
+}
+
+#[test]
+fn a_blob_in_the_cloud_with_local_bytes_is_placed_from_them_without_waiting() {
+    let (store, src, oid, dir) = store_with_blob("link_uses_local", b"the original bytes", b"stand-in");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    let target = dir.join("out").join("copy.bin");
+    let before = waits_run();
+    store.link_to_inode(&oid, &target, Some(&src)).expect("placed from the local file");
+    assert_eq!(fs::read(&target).unwrap(), b"the original bytes", "the local file's bytes");
+    assert_eq!(waits_run(), before, "no wait for the cloud");
+    assert_eq!(fs::read(&blob).unwrap(), b"stand-in", "the placeholder is not touched");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "one background request, so a later build finds it");
+}
+
+#[test]
+fn a_blob_that_stays_in_the_cloud_fails_after_a_bounded_wait_and_three_in_a_row_stop_the_waiting() {
+    let _short = ShortWaits::new();
+    let dir = make_test_dir("blob_breaker");
+    let store = ObjectStore::new(dir.join("objects"));
+    let target = dir.join("out").join("copy.bin");
+    let blobs: Vec<_> = (0..4u8).map(|n| blob_in_the_cloud(&store, &[n; 16])).collect();
+
+    for (n, (oid, _, _)) in blobs.iter().take(3).enumerate() {
+        let before = waits_run();
+        let err = store.link_to(oid, &target).expect_err("the blob never arrived");
+        assert!(err.contains("Failed to copy") && err.contains("in the cloud"), "{err}");
+        assert_eq!(waits_run(), before + 1, "wait {n} ran");
+    }
+    assert!(!target.exists(), "nothing half-written at the target");
+
+    let (oid, blob, _) = &blobs[3];
+    let before = waits_run();
+    store.link_to(oid, &target).expect_err("still in the cloud");
+    assert_eq!(waits_run(), before, "the fourth does not wait");
+    assert_eq!(crate::build::icloud::pretend::requests_for(blob), 1, "but it still asks for the file");
+
+    let other = ObjectStore::new(make_test_dir("blob_breaker_other").join("objects"));
+    let (oid, _, _guard) = blob_in_the_cloud(&other, &[9u8; 16]);
+    let before = waits_run();
+    other.link_to(&oid, &target).expect_err("never arrives");
+    assert_eq!(waits_run(), before + 1, "another objects root is unaffected");
+}
+
+#[test]
+fn a_blob_that_arrives_resets_the_count_of_waits_that_ran_out() {
+    let _short = ShortWaits::new();
+    let dir = make_test_dir("blob_breaker_reset");
+    let store = ObjectStore::new(dir.join("objects"));
+    let target = dir.join("out").join("copy.bin");
+    let stuck: Vec<_> = (0..4u8).map(|n| blob_in_the_cloud(&store, &[n; 16])).collect();
+    let oid = store.store_bytes(b"arrives when asked", crate::build::cache::RecordMode::Request).unwrap();
+    let _arriving = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&oid));
+
+    store.link_to(&stuck[0].0, &target).expect_err("timeout 1");
+    store.link_to(&stuck[1].0, &target).expect_err("timeout 2");
+    store.link_to(&oid, &target).expect("arrived");
+    store.link_to(&stuck[2].0, &target).expect_err("timeout 1 again");
+    let before = waits_run();
+    store.link_to(&stuck[3].0, &target).expect_err("timeout 2 again");
+    assert_eq!(waits_run(), before + 1, "two timeouts since the arrival are not three in a row");
+}
+
+#[test]
+fn a_blob_that_arrives_with_the_wrong_content_is_not_linked() {
+    let _short = ShortWaits::new();
+    let (store, _src, oid, dir) = store_with_blob("link_rejects_wrong_arrival", b"the original bytes", b"not what the name says");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
+    let target = dir.join("out").join("copy.bin");
+    store.link_to(&oid, &target).expect_err("the arrival does not hash to its name");
+    assert!(!target.exists(), "nothing linked");
+}
+
+#[test]
+fn one_blob_linked_to_two_targets_waits_once() {
+    let _short = ShortWaits::new();
+    let dir = make_test_dir("blob_two_targets");
+    let store = ObjectStore::new(dir.join("objects"));
+    let (oid, _blob, _cloud) = blob_in_the_cloud(&store, &[7u8; 16]);
+    let before = waits_run();
+    store.link_to(&oid, &dir.join("out").join("a.bin")).expect_err("never arrives");
+    store.link_to(&oid, &dir.join("out").join("b.bin")).expect_err("never arrives");
+    assert_eq!(waits_run(), before + 1, "the second target reuses the first one's wait");
+}
+
+#[test]
+fn a_blob_in_the_cloud_is_held_without_being_requested() {
+    let dir = make_test_dir("holds_cloud_blob");
+    let store = ObjectStore::new(dir.join("objects"));
+    let (oid, blob, _cloud) = blob_in_the_cloud(&store, b"kept version bytes");
+    assert!(store.holds(&oid));
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 0);
+    assert!(!store.holds(&"0".repeat(64)), "an absent blob is not held");
+}
+
+#[test]
+fn a_cheap_lookup_of_a_blob_in_the_cloud_requests_it_without_a_warning() {
+    let (store, _src, oid, _dir) = store_with_blob("cheap_lookup_requests", b"rendered page bytes", b"rendered page bytes");
+    let blob = store.blob_path(&oid);
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    assert_eq!(store.get_path(&oid), None, "recomputed this build");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "asked for, so a later build finds it");
+    assert!(!logged_at(log::Level::Warn, &oid), "in the cloud is the normal state of a second machine");
+
+    let (store, _src, empty, _dir) = store_with_blob("cheap_lookup_empty", b"other bytes", b"");
+    assert_eq!(store.get_path(&empty), None);
+    assert!(logged_at(log::Level::Warn, &empty), "a downloaded blob that is unusable still warns");
 }

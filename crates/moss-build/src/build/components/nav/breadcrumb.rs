@@ -9,6 +9,17 @@
 use super::{NavigationBuilder, island};
 
 impl<'a> NavigationBuilder<'a> {
+    /// The plain (non-breadcrumb) `.nav-left`: a linked site name. Extracted
+    /// so the two call sites below (no breadcrumb segments at all, and an
+    /// empty segment list) share one format string instead of each carrying
+    /// their own copy.
+    fn plain_site_name_html(&self, home_path: &str, logo_html: &str) -> String {
+        format!(
+            r#"<div class="nav-left"><a href="{}" class="site-name">{}{}</a></div>"#,
+            home_path, logo_html, self.site_title
+        )
+    }
+
     /// Build the `.nav-left` fragment: breadcrumb trail or plain site name.
     ///
     /// `home_path` / `logo_html` are precomputed by `generate_navigation`
@@ -17,14 +28,35 @@ impl<'a> NavigationBuilder<'a> {
         if let Some(segments) = &self.breadcrumb_segments {
             if segments.is_empty() {
                 // No segments: fall back to plain site name
-                format!(
-                    r#"<div class="nav-left"><a href="{}" class="site-name">{}{}</a></div>"#,
-                    home_path, logo_html, self.site_title
-                )
+                self.plain_site_name_html(home_path, logo_html)
             } else {
                 let mut parts = Vec::new();
                 for segment in segments {
                     if segment.is_current {
+                        // Ordinarily skipped — "you are here" is already
+                        // the page's own visible `<h1>`, so repeating the
+                        // title here would say it twice. `force`d on only
+                        // for an explorer root, whose `<h1>` is hidden (see
+                        // `breadcrumb_current_visible`'s own doc): render it
+                        // as the trail's own unlinked, `aria-current="page"`
+                        // terminal crumb, reusing the same label markup/
+                        // `data-trail-crumb` handle every other crumb gets.
+                        if self.breadcrumb_current_visible {
+                            // `breadcrumb-current` — not just `breadcrumb-segment` —
+                            // is what lets site.css's legibility/fold rules tell
+                            // this crumb apart from the real last ANCESTOR
+                            // segment: with this one forced on, it is the trail's
+                            // true last child, so a selector keyed on mere
+                            // position would now hit this span instead (see
+                            // `.breadcrumb-segment:last-child`'s own doc in
+                            // site.css). Same pattern the nav island already
+                            // uses for its own always-visible current crumb
+                            // (`island.rs`'s `moss-nav-island-current`).
+                            parts.push(format!(
+                                r#"<span class="breadcrumb-segment breadcrumb-current" aria-current="page" data-trail-crumb><span class="breadcrumb-label">{}</span></span>"#,
+                                segment.title
+                            ));
+                        }
                         continue;
                     }
                     let is_home = segment.url == home_path;
@@ -83,8 +115,8 @@ impl<'a> NavigationBuilder<'a> {
                 // the site name and the parent segment both always survive —
                 // so a shallow trail carries no `…` and no panel at all,
                 // rather than controls that can never unhide. With three or
-                // more, the masthead folds exactly like the island (ADR-049
-                // §4, extended to the masthead): the `…` opens the folded
+                // more, the masthead folds exactly like the island, extended
+                // to the masthead: the `…` opens the folded
                 // levels, and only the last segment may ellipsise. The panel
                 // is a sibling of `.nav-left` because `.nav-left` clips its
                 // own overflow — its containing block is `.nav-content`.
@@ -103,10 +135,7 @@ impl<'a> NavigationBuilder<'a> {
                 }
             }
         } else {
-            format!(
-                r#"<div class="nav-left"><a href="{}" class="site-name">{}{}</a></div>"#,
-                home_path, logo_html, self.site_title
-            )
+            self.plain_site_name_html(home_path, logo_html)
         }
     }
 }

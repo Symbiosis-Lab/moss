@@ -258,9 +258,10 @@ fn commit_response_deserializes_without_generation_id() {
     );
 }
 
-/// 200 with a real generation_id → Ok(Some(id)).
+/// 200 with a real generation_id → the id, and when it went live in the
+/// server's Unix seconds (what `moss deploy`'s stale-copy check compares).
 #[tokio::test]
-async fn test_get_live_generation_200_with_id_returns_some() {
+async fn test_live_generation_200_carries_id_and_deployed_at() {
     let body = br#"{"generation_id":"abc123def456abcd","deployed_at":1718000000}"#;
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n",
@@ -276,13 +277,19 @@ async fn test_get_live_generation_200_with_id_returns_some() {
         &identity,
         &format!("http://{}", addr),
     );
-    let result = client.get_live_generation("her-blog").await;
+    let result = client.live_generation("her-blog").await;
     assert!(
         result.is_ok(),
         "200+id must produce Ok, got: {:?}",
         result.err()
     );
-    assert_eq!(result.unwrap(), Some("abc123def456abcd".to_string()));
+    assert_eq!(
+        result.unwrap(),
+        crate::seta::sites::LiveGeneration {
+            generation_id: Some("abc123def456abcd".to_string()),
+            deployed_at: Some(1718000000),
+        }
+    );
 }
 
 // ============================================================================
@@ -452,51 +459,9 @@ async fn upload_file_chunked_create_session_sends_generation_header() {
     let (tx_complete, rx_complete) = tokio::sync::oneshot::channel::<Vec<u8>>();
 
     tokio::spawn(async move {
-        async fn drain_and_respond(mut stream: tokio::net::TcpStream, resp: &[u8]) -> Vec<u8> {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut raw = Vec::new();
-            let mut buf = [0u8; 8192];
-            loop {
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                raw.extend_from_slice(&buf[..n]);
-                if raw.windows(4).any(|w| w == b"\r\n\r\n") {
-                    // Parse Content-Length to drain body before responding.
-                    let hdr_str = String::from_utf8_lossy(&raw);
-                    let body_len = hdr_str
-                        .lines()
-                        .find_map(|l| {
-                            if l.to_ascii_lowercase().starts_with("content-length:") {
-                                l.split(':')
-                                    .nth(1)
-                                    .and_then(|v| v.trim().parse::<usize>().ok())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0);
-                    let hdr_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
-                    let expected = hdr_end + 4 + body_len;
-                    while raw.len() < expected {
-                        let n = stream.read(&mut buf).await.unwrap_or(0);
-                        if n == 0 {
-                            break;
-                        }
-                        raw.extend_from_slice(&buf[..n]);
-                    }
-                    break;
-                }
-            }
-            stream.write_all(resp).await.ok();
-            stream.shutdown().await.ok();
-            raw
-        }
-
         // conn 0: GET /uploads (resume handshake) → nothing staged
         let (stream, _) = listener.accept().await.unwrap();
-        drain_and_respond(
+        crate::test_mock_http_conn(
             stream,
             b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]",
         )
@@ -505,17 +470,17 @@ async fn upload_file_chunked_create_session_sends_generation_header() {
         // conn 1: POST /upload (create-session)
         let create_resp = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 29\r\n\r\n{\"uploadId\":\"test-upload-id\"}";
         let (stream, _) = listener.accept().await.unwrap();
-        let create_raw = drain_and_respond(stream, create_resp).await;
+        let create_raw = crate::test_mock_http_conn(stream, create_resp).await;
         let _ = tx_create.send(create_raw);
 
         // conn 2: PATCH chunk
         let (stream, _) = listener.accept().await.unwrap();
-        drain_and_respond(stream, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+        crate::test_mock_http_conn(stream, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
 
         // conn 3: POST complete
         let (stream, _) = listener.accept().await.unwrap();
         let complete_raw =
-            drain_and_respond(stream, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+            crate::test_mock_http_conn(stream, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
         let _ = tx_complete.send(complete_raw);
     });
 

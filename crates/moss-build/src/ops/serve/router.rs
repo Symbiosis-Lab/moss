@@ -6,10 +6,11 @@
 //! the iframe-bridge script alive on missing pages.
 
 use super::placeholder::{handle_asset_request, transparent_stub_response};
-use super::port::{verify_server_ready, MOSS_HEALTH_MARKER, MOSS_HEALTH_PATH};
+use super::port::{verify_server_ready, MOSS_HEALTH_PATH};
 use super::asset_rewriter;
 use super::content_wrapper;
 use super::iframe_bridge::inject_iframe_bridge;
+use super::ownership;
 use axum::{
     body::Body,
     http::{self, Request},
@@ -19,130 +20,15 @@ use axum::{
     Router,
 };
 use moss_core::media::html_escape;
-use std::net::SocketAddr;
+use std::net::IpAddr;
 use std::sync::Arc;
-use tokio::net::TcpListener;
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
-
-/// Attempt to bind TCP listeners for moss on both IPv4 (`127.0.0.1`) and
-/// IPv6 (`[::1]`) loopback for exactly the given port.
-///
-/// Returns `Err` if either family is unbindable; the caller is expected to
-/// move on to the next candidate port in that case.
-///
-/// ### Why two listeners instead of one wildcard bind
-///
-/// The obvious approach — binding the IPv6 wildcard `[::]:port` with
-/// `IPV6_V6ONLY=0` — does NOT work as a collision detector on macOS / BSD.
-/// macOS allows a later `127.0.0.1:port` bind to coexist with a prior
-/// `[::]:port` bind, and the more-specific listener wins for incoming
-/// localhost traffic. That is exactly the foreign-vs-moss collision pattern
-/// this code is supposed to detect and refuse.
-///
-/// Binding both specific loopback addresses explicitly accomplishes two
-/// things:
-///
-/// 1. **Detection.** If a foreign server holds `127.0.0.1:port` or `[::1]:port`
-///    directly, our bind fails on that address and we fall through to the
-///    next-port scan.
-/// 2. **Correctness in the wildcard case.** Even if a foreign dev server
-///    holds the IPv6 wildcard `[::]:port` (eleventy's default), the kernel
-///    routes connections to whichever listener has the more specific
-///    address. Our two specific-loopback listeners win, so the iframe
-///    sees moss content regardless of whether `localhost` resolves to
-///    `127.0.0.1` or `::1`.
-///
-/// See `docs/archive/2026-05-22-preview-port-dual-stack-collision.md`.
-async fn try_bind_dual_stack(port: u16) -> Result<(TcpListener, TcpListener), String> {
-    let v4_addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], port));
-    let v6_addr: SocketAddr = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
-
-    let v4 = TcpListener::bind(&v4_addr)
-        .await
-        .map_err(|e| format!("bind 127.0.0.1:{}: {}", port, e))?;
-    // If v4 succeeded but v6 fails, dropping `v4` here releases the IPv4
-    // listener so we don't leak a half-bound port — the next loop iteration
-    // (or a competing process) is free to grab the IPv4 side again.
-    let v6 = TcpListener::bind(&v6_addr)
-        .await
-        .map_err(|e| format!("bind [::1]:{}: {}", port, e))?;
-    Ok((v4, v6))
-}
-
-/// Scan upward from `start_port` until both IPv4 and IPv6 loopback can be
-/// bound simultaneously. Returns the bound port plus both listeners.
-///
-/// This is the **authoritative collision check** for the server-start path:
-/// the bind itself is the source of truth for "is this port free?", which
-/// closes the TOCTOU window that a separate `is_port_available` →
-/// `bind_dual_stack` sequence would leave open. Other callers that just
-/// want a non-binding probe (e.g. lifecycle health checks) can still use
-/// `port::is_port_available`.
-///
-/// Scans `MAX_PORT_SCAN` ports (currently 100) starting from `start_port`.
-/// Returns the same shape `try_bind_dual_stack` does on success, or an
-/// `Err` describing the last bind failure if no port in the range works.
-async fn bind_dual_stack_with_scan(
-    start_port: u16,
-) -> Result<(u16, TcpListener, TcpListener), String> {
-    const MAX_PORT_SCAN: u16 = 100;
-    let mut last_err: Option<String> = None;
-    for port in start_port..start_port.saturating_add(MAX_PORT_SCAN) {
-        match try_bind_dual_stack(port).await {
-            Ok((v4, v6)) => {
-                log::info!(
-                    target: "preview",
-                    "Preview server bound to port {} (dual-stack: IPv4 + IPv6)",
-                    port
-                );
-                return Ok((port, v4, v6));
-            }
-            Err(e) => {
-                log::info!(
-                    target: "preview",
-                    "Port {} unavailable, trying next port (foreign server may be holding it): {}",
-                    port, e
-                );
-                last_err = Some(e);
-            }
-        }
-    }
-    Err(format!(
-        "No dual-stack-bindable port found in range {}..{} (last error: {})",
-        start_port,
-        start_port.saturating_add(MAX_PORT_SCAN),
-        last_err.unwrap_or_else(|| "unknown".to_string())
-    ))
-}
-
-/// Body served by the [`MOSS_HEALTH_PATH`] endpoint.
-///
-/// The marker substring is physically substituted from [`MOSS_HEALTH_MARKER`]
-/// at format time, so the producer and the consumer
-/// ([`super::port::verify_server_ready`]) cannot drift apart: a rename of the
-/// marker constant updates both sides automatically. The sync test
-/// `moss_health_body_contains_marker` below also locks the invariant.
-///
-/// `schema: 1` is a forward-compat field for future format evolution. Readers
-/// (currently `verify_server_ready`) ignore it; if the body shape changes,
-/// bump to `2` and gate the consumer on `schema >= 1`.
-///
-/// Note that `MOSS_HEALTH_MARKER` already includes its own surrounding double
-/// quotes (it is itself a quoted JSON string token), so the format expression
-/// drops it in pre-quoted — no extra `\"` needed around the `{}`.
-fn moss_health_body() -> String {
-    format!(
-        "{{\"server\":{},\"version\":\"{}\",\"preview\":true,\"schema\":1}}",
-        MOSS_HEALTH_MARKER,
-        env!("CARGO_PKG_VERSION")
-    )
-}
 
 /// `/__moss/source/*path` — serve a project-scoped SOURCE file over HTTP.
 ///
 /// The vault root is derived from the served site directory rather than passed
-/// in: the site dir is `<vault>/.moss/build/…`, and `VaultRoot::find_containing`
+/// in: the site dir is `<vault>/.moss/build.nosync/…`, and `VaultRoot::find_containing`
 /// walks up to the nearest ancestor owning a `.moss/`. The `find_` variant is
 /// deliberate — it returns `None` instead of falling back to the starting
 /// directory, so a server pointed somewhere unexpected 404s rather than
@@ -186,26 +72,11 @@ fn source_asset_404() -> Response {
         .expect("static 404 response is always valid")
 }
 
-/// Handler for [`MOSS_HEALTH_PATH`].
-///
-/// Returns a JSON body containing the moss-specific marker token used by
-/// `verify_server_ready` to confirm that the responding server is moss
-/// (rather than a foreign dev server like eleventy that happens to be
-/// holding the same port).
-async fn moss_health_handler() -> Response<Body> {
-    Response::builder()
-        .status(http::StatusCode::OK)
-        .header("content-type", "application/json; charset=utf-8")
-        .header("cache-control", "no-store")
-        .body(Body::from(moss_health_body()))
-        .unwrap()
-}
-
 /// A page for a request `ServeDir` could not answer because the file's bytes
 /// are still in the cloud. `None` for every other failure — the caller then
 /// passes `ServeDir`'s own response through unchanged.
 ///
-/// `.moss/build/` lives inside the user's vault, so the sync client is free to
+/// `.moss/build.nosync/` lives inside the user's vault, so the sync client is free to
 /// evict moss's own output. When it does, `ServeDir`'s read fails with
 /// `EDEADLK` and tower-http renders that as a bodyless 500: a white void, and
 /// no `<html>` for `inject_iframe_bridge` to attach the navigation bridge to.
@@ -297,6 +168,36 @@ pub struct ServeConfig {
     /// see [`EvictedProbe`] for why the branch it guards cannot otherwise be
     /// reached on a Linux CI box.
     pub is_evicted: EvictedProbe,
+    /// Which kind of host is starting this server, recorded in the folder's
+    /// [`super::ownership::OwnerRecord`]. [`Self::new`] defaults this to
+    /// [`super::ownership::HostKind::Cli`] — every caller in this crate is
+    /// moss-cli or a test standing in for it; the desktop app's `launch_server`
+    /// impl (app crate, not a call site here) overrides it to `Desktop` via
+    /// struct-update syntax, the same way it already would `invoke`.
+    pub kind: super::ownership::HostKind,
+    /// Forwarded to [`super::ownership::acquire_for_site_dir`]. [`Self::new`]
+    /// defaults this to `false` — a one-shot `moss build --serve` still
+    /// refuses outright on a conflict; only a `--serve --watch` caller
+    /// (`ops::run_headless_build`) opts into standing by for the existing
+    /// owner instead.
+    pub standby_on_conflict: bool,
+    /// Fires on an admitted `POST /__moss/yield` — see `super::yield_route`.
+    pub yield_notify: Arc<tokio::sync::Notify>,
+    /// Routes an embedding host contributes, merged in before the
+    /// `ServeDir` fallback so a host route wins over a site file at the
+    /// same path. `None` merges nothing.
+    pub host_routes: Option<Router>,
+    /// Explicit non-loopback bind address. `None` (default) keeps today's
+    /// loopback dual-stack bind; `Some` binds that address alone — see
+    /// `super::port::bind_with_scan` and `super::trust_boundary`'s
+    /// `extra_hosts` section for what else opting in requires.
+    pub bind: Option<IpAddr>,
+    /// `Host`/`Origin` values trusted alongside loopback when `bind` is
+    /// `Some` — the hostnames the operator named for that address.
+    pub extra_hosts: Vec<String>,
+    /// Print the one-time sign-in URL (`super::session_route::announce_line`)
+    /// to stderr at bind time. Ignored unless `bind` is `Some`.
+    pub announce_sign_in: Option<String>,
 }
 
 impl ServeConfig {
@@ -315,6 +216,13 @@ impl ServeConfig {
             invoke: None,
             start_port,
             is_evicted: crate::build::icloud::is_evicted,
+            kind: super::ownership::HostKind::Cli,
+            standby_on_conflict: false,
+            yield_notify: Arc::new(tokio::sync::Notify::new()),
+            host_routes: None,
+            bind: None,
+            extra_hosts: Vec::new(),
+            announce_sign_in: None,
         }
     }
 }
@@ -334,7 +242,15 @@ pub async fn start_server(
         invoke: invoke_ctx,
         start_port,
         is_evicted,
+        kind,
+        standby_on_conflict,
+        yield_notify,
+        host_routes,
+        bind,
+        extra_hosts,
+        announce_sign_in,
     } = config;
+    let extra_hosts = Arc::new(extra_hosts);
     // === SETUP PHASE ===
     // Note: We don't check for index.html here - the server can start even for empty folders.
     // ServeDir will return 404 for missing files, and when content is generated (e.g., by
@@ -348,7 +264,8 @@ pub async fn start_server(
     // a useless half-bind and a confusing "server failed readiness check"
     // error). If neither stack can be bound at any port in the scan range,
     // we return Err synchronously, before spawning anything.
-    let (port, listener_v4, listener_v6) = bind_dual_stack_with_scan(start_port).await?;
+    let (port, listener_primary, listener_secondary) =
+        super::port::bind_with_scan(bind, start_port).await?;
 
     // Create shutdown channel for graceful server termination
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -365,8 +282,8 @@ pub async fn start_server(
     // `moss-source://` Tauri scheme uses (`editor::source_asset_protocol::serve_source_asset`).
     // One implementation, two carriers — not two implementations kept in step by a test.
     // It exists so a host with no custom-scheme support (a browser, an Obsidian
-    // pane) can still render the editor's SOURCE assets, which ADR-022 requires
-    // come from the vault rather than from `.moss/build`.
+    // pane) can still render the editor's SOURCE assets, which must
+    // come from the vault rather than from `.moss/build.nosync`.
     //
     // Internal moss endpoints live under the `/__moss_*` namespace. They MUST
     // be registered as explicit `.route(...)` entries BEFORE the
@@ -376,15 +293,24 @@ pub async fn start_server(
     let build_router = |state: Arc<std::sync::RwLock<std::path::PathBuf>>,
                         registry: Option<Arc<crate::types::assets::AssetRegistry>>,
                         invoke: Option<super::invoke::InvokeCtx>,
-                        is_evicted: EvictedProbe| {
+                        is_evicted: EvictedProbe,
+                        host_routes: Option<Router>,
+                        extra_hosts: Arc<Vec<String>>| {
         let registry_for_layer = registry.clone();
         // The `/__moss_health/` route is registered BEFORE `.fallback()` so it
         // always wins over `ServeDir`. The endpoint emits a moss-specific JSON
         // body that `verify_server_ready` checks before accepting a port as
-        // moss-owned (see `docs/archive/2026-05-22-preview-port-dual-stack-collision.md`).
+        // moss-owned.
         let state_for_source = state.clone();
+        let state_for_health = state.clone();
         let mut router = Router::new()
-            .route(MOSS_HEALTH_PATH, get(moss_health_handler))
+            .route(
+                MOSS_HEALTH_PATH,
+                get(move || {
+                    let site_dir = state_for_health.clone();
+                    async move { super::port::moss_health_handler(site_dir).await }
+                }),
+            )
             .route(
                 "/__moss/source/*path",
                 get(move |axum::extract::Path(p): axum::extract::Path<String>| {
@@ -401,6 +327,44 @@ pub async fn start_server(
             .route(
                 "/__moss/comments/api/v2/comments",
                 axum::routing::post(super::comment_stub::handle_comment_stub),
+            )
+            // Unconditional like health/source/comments — see `yield_route`.
+            .route("/__moss/yield", axum::routing::post({
+                let (site_dir, invoke, notify) = (state.clone(), invoke.clone(), yield_notify.clone());
+                move |r: Request<Body>| async move { super::yield_route::handle_yield(invoke, site_dir, kind, notify, r).await }
+            }))
+            // Unconditional like health/source/comments/yield — see
+            // `session_route`. The token→cookie exchange for a browser tab
+            // reached via `bind`/`extra_hosts`.
+            .route("/__moss/session", axum::routing::get({
+                let (site_dir, invoke, extra_hosts) = (state.clone(), invoke.clone(), extra_hosts.clone());
+                move |axum::extract::Query(q): axum::extract::Query<super::session_route::SessionQuery>,
+                      headers: http::HeaderMap| {
+                    let (site_dir, invoke, extra_hosts) = (site_dir.clone(), invoke.clone(), extra_hosts.clone());
+                    async move { super::session_route::handle_session(invoke, site_dir, extra_hosts, q, headers).await }
+                }
+            }))
+            // Unconditional like health/source/comments/yield/session, but the
+            // one mutating infrastructure route — see `upload_route`. The gate
+            // runs INSIDE the handler (same `carrier_token::admit` the
+            // mutation carrier uses) rather than as a `route_layer`, because
+            // it must stay in front of the multipart body: an unadmitted
+            // caller's upload is refused before a single byte of it is parsed.
+            // The `.layer(...)` below is attached to THIS route's own method
+            // router, not via a trailing `route_layer` — `Router::route_layer`
+            // applies to every route added so far in the chain, not just the
+            // last one, so a trailing call here would have raised every
+            // earlier `/__moss/*` route's body cap too. `upload_route::TOTAL_MAX_UPLOAD_BYTES`
+            // replaces axum's 2 MiB default for this route alone;
+            // `upload_route::MAX_UPLOAD_PART_BYTES` is the real, smaller limit,
+            // enforced per part while streaming.
+            .route(
+                "/__moss/upload",
+                axum::routing::post({
+                    let (site_dir, invoke) = (state.clone(), invoke.clone());
+                    move |r: Request<Body>| async move { super::upload_route::handle_upload(invoke, site_dir, r).await }
+                })
+                .layer(axum::extract::DefaultBodyLimit::max(super::upload_route::TOTAL_MAX_UPLOAD_BYTES)),
             );
 
         // Read-only HTTP command carrier (`POST /__moss/invoke/*cmd`). Registered
@@ -492,6 +456,11 @@ pub async fn start_server(
                 );
         }
 
+        // See `host_routes::merge_host_routes` (split out for router.rs's
+        // own size gate): merged in before `.fallback()`, same ordering rule
+        // as every route above.
+        let router = super::host_routes::merge_host_routes(router, host_routes);
+
         router
             .fallback(move |request: Request<Body>| {
                 let state = state.clone();
@@ -542,7 +511,7 @@ pub async fn start_server(
                                 // from `stat`, and returns 200 with a streaming
                                 // body that then dies mid-read on `EDEADLK`. A
                                 // truncated 200 on a chosen `<source>` is as
-                                // unrecoverable as the 404 ADR-013 forbids. The
+                                // unrecoverable as the 404 the promise model forbids. The
                                 // `SF_DATALESS` bit is an `lstat` — no download,
                                 // no block — so ask before opening and let the
                                 // placeholder handler stand in until the
@@ -595,8 +564,8 @@ pub async fn start_server(
                                     // transparent stub for an image variant —
                                     // never anything that could be mistaken for
                                     // the author's own picture), and stub if it
-                                    // declines. Never 404 a chosen <source>
-                                    // (ADR-013), and never block the request
+                                    // declines. Never 404 a chosen <source>,
+                                    // and never block the request
                                     // thread on a synchronous materialize
                                     // (build/media/icloud.rs rule).
                                     _ => {
@@ -633,6 +602,7 @@ pub async fn start_server(
                     match service.oneshot(request).await {
                         Ok(response) => {
                             if response.status() == http::StatusCode::NOT_FOUND {
+                                super::log_preview_404(&current_dir, &path);
                                 // Return a proper HTML 404 page so the iframe-bridge
                                 // middleware can inject its script and keep navigation alive.
                                 // Without this, the iframe gets a bare 404 with no body,
@@ -665,7 +635,7 @@ pub async fn start_server(
                                 // `ServeDir` turns every non-NotFound io error into a
                                 // bodyless 500 — including the `EDEADLK` a page gets when
                                 // the cloud has evicted moss's own build output, which is
-                                // possible because `.moss/build/` lives inside the user's
+                                // possible because `.moss/build.nosync/` lives inside the user's
                                 // vault. A bodyless 500 renders as a white void with no
                                 // bridge script injected, so navigation dies with it.
                                 match cloud_offline_response(&current_dir, &path, response.status()) {
@@ -692,14 +662,45 @@ pub async fn start_server(
                 })
             })
             .layer(middleware::from_fn(inject_iframe_bridge))
+            // A navigation — a page, not one of its assets — means someone is
+            // looking (`super::events::viewer_activity`). Inside the trust
+            // boundary, so a refused request is not a viewer.
+            .layer(middleware::from_fn(|request: Request<Body>, next: middleware::Next| async move {
+                if content_wrapper::is_navigation_request(request.headers()) {
+                    super::events::note_activity();
+                }
+                next.run(request).await
+            }))
             // Outermost layer: added last, so it runs FIRST — ahead of routing,
             // ServeDir and bridge injection — and covers every route including
-            // the health check. Refuses a non-loopback Host (DNS-rebinding
-            // defense) and a foreign Origin before any handler sees the request.
-            .layer(middleware::from_fn(
-                super::trust_boundary::validate_host_origin,
-            ))
+            // the health check. Refuses a Host that is neither loopback nor
+            // `extra_hosts` (DNS-rebinding defense) and a foreign Origin
+            // before any handler sees the request.
+            .layer({
+                let extra_hosts = extra_hosts.clone();
+                middleware::from_fn(move |request, next| {
+                    let extra_hosts = extra_hosts.clone();
+                    async move {
+                        super::trust_boundary::validate_host_origin(extra_hosts, request, next).await
+                    }
+                })
+            })
     };
+
+    // Record this process as the folder's owner — the ONE server entry both
+    // the CLI and the desktop reach, so this is the one place an acquire on
+    // behalf of either host can live. See `ownership::acquire_for_site_dir`
+    // for what `None` and `Err` mean here; a conflict fails before the
+    // carrier binds or anything spawns, same error channel as any other
+    // start failure.
+    let owner_guard = ownership::acquire_for_site_dir(
+        &site_dir_state,
+        kind,
+        crate::system::app_version().to_string(),
+        format!("http://127.0.0.1:{port}"),
+        standby_on_conflict,
+    )
+    .await?;
 
     // Bind the carrier to the served vault before the first request, which
     // mints the session token and publishes it to the vault's loopback-readable
@@ -710,55 +711,32 @@ pub async fn start_server(
     if let Some(ctx) = &invoke_ctx {
         ctx.bind(&site_dir_state);
     }
+    let token_arc = invoke_ctx.as_ref().and_then(|ctx| ctx.token());
+    let token_str = token_arc.as_ref().map(|t| t.as_str());
+    if let Some(line) =
+        super::session_route::maybe_announce_line(bind, announce_sign_in.as_deref(), &extra_hosts, port, token_str)
+    {
+        eprintln!("{line}");
+    }
 
     // Spawn the server task. We use a helper closure to avoid duplicating the
     // serve logic — both code paths run the same axum::serve with graceful shutdown.
-    let app = build_router(state_clone, registry_clone, invoke_ctx_clone, is_evicted);
+    let app = build_router(
+        state_clone,
+        registry_clone,
+        invoke_ctx_clone,
+        is_evicted,
+        host_routes,
+        extra_hosts.clone(),
+    );
 
-    // Both listeners were bound above. Hand them straight to the serve
-    // loops — no further chance for a foreign process to slip in.
+    // Both listeners were bound above. Hand them straight to `port::drive`'s
+    // serve loop — no further chance for a foreign process to slip in.
     let serve_future = async move {
-        // Drive both listeners with the same router. Two oneshot
-        // receivers feed off the single shutdown signal via a
-        // broadcast channel-of-one pattern.
-        let (broadcast_tx, _) = tokio::sync::broadcast::channel::<()>(1);
-        let shutdown_v4 = {
-            let mut rx = broadcast_tx.subscribe();
-            async move { let _ = rx.recv().await; }
-        };
-        let shutdown_v6 = {
-            let mut rx = broadcast_tx.subscribe();
-            async move { let _ = rx.recv().await; }
-        };
-
-        let app_v4 = app.clone();
-        let app_v6 = app;
-
-        let v4_serve = async move {
-            if let Err(e) = axum::serve(listener_v4, app_v4)
-                .with_graceful_shutdown(shutdown_v4)
-                .await
-            {
-                log::error!(target: "preview", "Preview server (IPv4) error: {}", e);
-            }
-        };
-        let v6_serve = async move {
-            if let Err(e) = axum::serve(listener_v6, app_v6)
-                .with_graceful_shutdown(shutdown_v6)
-                .await
-            {
-                log::error!(target: "preview", "Preview server (IPv6) error: {}", e);
-            }
-        };
-
-        // Wait for the external shutdown signal, then fan it out to
-        // both serve loops.
-        let bridge = async move {
-            let _ = shutdown_rx.await;
-            let _ = broadcast_tx.send(());
-        };
-
-        tokio::join!(v4_serve, v6_serve, bridge);
+        // Held for exactly as long as this server runs: dropped only when
+        // `drive` returns, which is after the shutdown signal fires.
+        let _owner_guard = owner_guard;
+        super::port::drive(listener_primary, listener_secondary, app, shutdown_rx).await;
     };
 
     if let Ok(handle) = tokio::runtime::Handle::try_current() {

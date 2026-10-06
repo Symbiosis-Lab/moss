@@ -34,8 +34,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use moss_core::asset_paths::{
-    audio_groups, hls_members, video_ladder_fingerprint, video_ladder_rungs,
-    video_ladder_rungs_by_count, AudioGroup, VideoRung, HLS_MASTER_NAME,
+    audio_groups, hls_members, video_ladder_rungs, AudioGroup, VideoRung, HLS_MASTER_NAME,
 };
 
 use crate::build::cache::{TransformCache, TransformEntry};
@@ -311,6 +310,150 @@ fn add_independent_segments(master: &str) -> String {
     out
 }
 
+/// The files that count as `ladder_dir`'s HLS ladder — read from its own
+/// `master.m3u8`, not assumed from a table and not trusted from whatever
+/// else happens to sit in the directory.
+///
+/// `master.m3u8` is the one file every ladder-producing path (a fresh
+/// encode, a cache hit, a legacy-migrated re-encode, a staging heal) writes
+/// LAST and atomically — `link_members`'s own gate-last ordering exists so
+/// that its mere presence already means everything it references landed
+/// first. By the time it exists, its own references are ground truth for
+/// what the ladder actually is, independent of how it got there and
+/// independent of what an earlier, bigger (or differently-shaped) ladder in
+/// the same directory might still be sitting beside it — a shrunk ladder's
+/// dropped rung is never one of these references, so a reader that asks
+/// THIS function instead of the directory never learns about it.
+///
+/// Parsing the real file, rather than reconstructing a member list from a
+/// guessed rung count via [`moss_core::asset_paths::hls_members`], is what
+/// keeps this right for a ladder that table did not produce: an older
+/// site's cache can hold a ladder encoded under a table this build no
+/// longer carries, and a future release may carry one this build has never
+/// seen. `hls_members` still owns the ENCODER's naming — what a fresh
+/// encode writes; this function owns reading back whatever is actually on
+/// disk, whichever table wrote it.
+///
+/// Every reference is paired with its `.m4s` sibling by a plain extension
+/// swap, not by re-deriving a rung table: `-hls_flags single_file` names a
+/// stream's segment file with the SAME `%v` identifier as its playlist
+/// (`build_hls_args`'s own `-hls_segment_filename {out_dir}/%v.m4s` beside
+/// the `{out_dir}/%v.m3u8` output), so the pairing holds for a video rung or
+/// an audio rendition alike, and for a silent source's ladder (no audio
+/// rendition referenced at all) exactly as for one with audio.
+///
+/// `None` only when the gate is POSITIVELY absent
+/// ([`crate::build::icloud::is_definitely_absent`]) — the caller's own
+/// gate-presence check already means this should be rare, but it is what a
+/// genuinely half-written ladder (mid first encode) looks like, and it must
+/// read as "nothing to advertise yet," same as before this function
+/// existed. Any OTHER read failure — a permission error, a still-syncing
+/// iCloud placeholder, `master.m3u8` displaced by a directory — is not
+/// evidence of absence (`io_utils::Presence`'s whole distinction; see its
+/// own doc), so it falls back to [`directory_listing`] instead: presence-
+/// based and conservative, it may include a surplus a smaller ladder left
+/// behind, but unlike `None` it can never drop a real member. Reading the
+/// whole ladder as gone on a transient error is worse than the bug this
+/// function exists to fix — the manifest would drop every member this
+/// build, and a later permitted sweep could then delete a perfectly good
+/// ladder that nothing ever re-registers.
+pub(crate) fn ladder_members_from_master(ladder_dir: &Path) -> Option<Vec<String>> {
+    let master_path = ladder_dir.join(HLS_MASTER_NAME);
+    let master = match std::fs::read_to_string(&master_path) {
+        Ok(content) => content,
+        Err(e) if crate::build::icloud::is_definitely_absent(&master_path, &e) => return None,
+        Err(e) => {
+            log::warn!(
+                "HLS ladder: {} unreadable ({e}) — not evidence it's gone, \
+                 falling back to a directory listing so a real member is never dropped",
+                master_path.display()
+            );
+            return Some(directory_listing(ladder_dir));
+        }
+    };
+    let mut members = vec![HLS_MASTER_NAME.to_string()];
+    let mut after_stream_inf = false;
+    for raw in master.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(uri) = line.starts_with("#EXT-X-MEDIA").then(|| attr(line, "URI")).flatten() {
+            push_member_pair(&mut members, uri);
+        }
+        if line.starts_with('#') {
+            after_stream_inf = line.starts_with("#EXT-X-STREAM-INF");
+            continue;
+        }
+        // The only bare (non-comment) line a VOD multivariant playlist has
+        // is a variant's playlist URI, immediately after its own
+        // #EXT-X-STREAM-INF.
+        if after_stream_inf {
+            push_member_pair(&mut members, line);
+        }
+        after_stream_inf = false;
+    }
+    Some(members)
+}
+
+/// The pre-census fallback for a `master.m3u8` that exists but could not be
+/// read as a file: every name directly inside `ladder_dir`, exactly what
+/// `register_existing_ladders` trusted before this module could ask the
+/// gate instead. Deliberately unfiltered by membership — a name that turns
+/// out to be a surplus rung costs far less than a real member silently
+/// dropped from the manifest over a permission error or a mid-sync file.
+fn directory_listing(ladder_dir: &Path) -> Vec<String> {
+    std::fs::read_dir(ladder_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+        .collect()
+}
+
+/// `playlist` (a `.m3u8` reference read out of a master playlist) plus its
+/// same-stem `.m4s` segment file — see [`ladder_members_from_master`]'s own
+/// doc for why the pairing is exact rather than assumed.
+///
+/// `playlist` must be a plain file name. Both callers only ever
+/// `ladder_dir.join(name)` with no further check of their own, so an
+/// absolute path, a path carrying a separator, or a bare `..` — anything a
+/// crafted or corrupt `master.m3u8` could use to name a file outside
+/// `ladder_dir` — is ignored rather than trusted.
+fn push_member_pair(members: &mut Vec<String>, playlist: &str) {
+    if playlist.is_empty() || playlist == ".." || playlist.contains('/') || playlist.contains('\\') {
+        return;
+    }
+    if let Some(stem) = playlist.strip_suffix(".m3u8") {
+        members.push(format!("{stem}.m4s"));
+    }
+    members.push(playlist.to_string());
+}
+
+/// The bare filenames a real encode of `rungs` actually writes for a source
+/// whose audio stream is (or isn't) present — [`hls_members`]'s table-only
+/// census narrowed to match `has_audio`.
+///
+/// `hls_members` cannot know this: it takes only `rungs`, so it always lists
+/// every rung's audio group. `build_hls_args` already stops mapping `a:0` and
+/// naming an audio group in `-var_stream_map` once `has_audio` is false (a
+/// silent source declares no group a player could resolve), so a real encode
+/// never writes `alo.*`/`ahi.*` for one. Every caller that reads those bytes
+/// back — storing them in the object store, relying on a cached record's own
+/// file count, building the delivery census — needs the narrowed list, or it
+/// tries to read files ffmpeg was correctly never asked to write.
+fn ladder_members(rungs: &[VideoRung], has_audio: bool) -> Vec<String> {
+    let members = hls_members(rungs);
+    if has_audio {
+        return members;
+    }
+    let audio_names: Vec<String> = audio_groups(rungs)
+        .into_iter()
+        .flat_map(|g| [format!("{}.m3u8", g.as_str()), format!("{}.m4s", g.as_str())])
+        .collect();
+    members.into_iter().filter(|m| !audio_names.contains(m)).collect()
+}
+
 /// Encode the HLS ladder for a source, beside its progressive MP4.
 ///
 /// Encodes the rungs it is given and returns the files it wrote. It does not
@@ -336,7 +479,7 @@ pub fn encode_ladder(
     }
 
     let dir_str = out_dir.to_str().ok_or("Invalid output directory")?;
-    std::fs::create_dir_all(out_dir)
+    crate::build::io_utils::create_output_dir_all(out_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
     let args = build_hls_args(
@@ -377,15 +520,17 @@ pub fn encode_ladder(
         // The encode that just finished wrote this file into its own scratch
         // directory; the object store copies it out afterwards. Never a vault
         // path, so never evictable.
-        // allow:raw_write ffmpeg scratch directory, not .moss/build/
+        // allow:raw_write ffmpeg scratch directory, not .moss/build.nosync/
         std::fs::write(&master_path, patched)
             .map_err(|e| format!("Failed to write master playlist: {}", e))?;
     }
 
     // Every name inside the directory is constant, so the census is the same
     // list wherever the ladder lands — that is what lets a cached ladder be
-    // relinked under a renamed video without rewriting a playlist.
-    Ok(hls_members(rungs))
+    // relinked under a renamed video without rewriting a playlist. Narrowed
+    // by `probe.has_audio`: a silent source's encode above never wrote an
+    // audio group, so this must not claim one either.
+    Ok(ladder_members(rungs, probe.has_audio))
 }
 
 #[cfg(test)]
@@ -401,11 +546,18 @@ mod hls_tests;
 /// references are exactly what a naming disagreement breaks.
 ///
 /// `Ok(None)` means no ladder was produced and none is owed: the source fills
-/// fewer than two rungs. That is the honest resolution of "`EncodePlan::
-/// KeepOriginal` cannot survive HLS" — segmenting is mandatory, so shipping the
-/// source bytes as a ladder is not available, but *not building one* is: a
-/// ladder is a choice between rungs, and one rung is three extra files offering
-/// a player nothing to switch to. The progressive MP4 already serves it.
+/// fewer than two rungs — too narrow for a second rung, so long that even its
+/// bottom rung's file only clears `config.hls_max_file_mb` by shipping alone,
+/// or so lean in its own video bitrate that its would-be second rung clamps to
+/// within `asset_paths::LADDER_MIN_RUNG_SPACING` of the bottom one and gets
+/// dropped rather than kept as a near-duplicate — a ratio check, not a floor;
+/// nothing here compares the clamp against the bottom rung's own value
+/// (`video_ladder_rungs_within` never returns fewer than one).
+/// That is the honest resolution of "`EncodePlan::KeepOriginal` cannot survive HLS" —
+/// segmenting is mandatory, so shipping the source bytes as a ladder is not
+/// available, but *not building one* is: a ladder is a choice between rungs,
+/// and one rung is three extra files offering a player nothing to switch to.
+/// The progressive MP4 already serves it.
 ///
 /// An `Err` means the ladder failed but the video did
 /// not — the progressive MP4 is still the page's video, so the caller logs and
@@ -433,31 +585,56 @@ pub(crate) fn produce_ladder(
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<Option<Vec<(String, TransformEntry)>>, String> {
     let objects = transforms.objects();
-    let params = ladder_params(config);
 
     // The cache is consulted before the source is touched. A cached ladder is
     // seventeen finished files and nothing about them needs re-reading the
     // source — and on an evicted cloud vault, probing first would turn a build
     // that has everything it needs into a download.
-    let (members, oids) = match cached_ladder(transforms, source_oid, &params) {
-        Some(hit) => hit,
-        None => {
-            let probe = ffmpeg.probe_source(source_file)?;
-            let rungs = video_ladder_rungs(probe.width);
+    let (members, oids, params) = if let Some(hit) = cached_ladder(transforms, source_oid, config) {
+        hit
+    } else {
+        let probe = ffmpeg.probe_source(source_file)?;
+        // A ladder recorded before this crate started keying on EFFECTIVE
+        // rungs (see `ladder_params`) has no source facts for `cached_ladder`
+        // to recompute against, so it read as a miss above. This is its one
+        // chance to be recognized without a SECOND probe — it reuses the one
+        // the fresh-encode path below needs regardless.
+        if let Some(hit) = legacy_cached_ladder(transforms, source_oid, config, &probe) {
+            hit
+        } else {
+            let width_rungs = video_ladder_rungs(probe.width);
+            let source = SourceFacts::from_probe(&probe);
+            let rungs = source.effective_rungs(config);
+            if rungs.len() < width_rungs.len() {
+                // The reader who needs this line is the one wondering why a
+                // long video's top quality is missing: width alone would have
+                // kept more rungs, so either the source's own bitrate or the
+                // per-file budget is why it didn't — not necessarily which.
+                log::info!(
+                    "HLS ladder for {}: kept {} of {} width-eligible rungs (narrowed by the \
+                     source's own bitrate and/or the {} MiB per-file budget)",
+                    source_file.display(),
+                    rungs.len(),
+                    width_rungs.len(),
+                    config.hls_max_file_mb,
+                );
+            }
             if rungs.len() < 2 {
                 return Ok(None);
             }
             // `hls_members` is the one owner of the naming scheme: the scratch
             // names, the staging names and the cache keys are all this same
-            // list. The scratch directory can be named anything, because
-            // nothing inside the ladder refers to the directory it sits in.
-            let members = hls_members(rungs);
+            // list, narrowed by `ladder_members` to drop the audio group a
+            // silent source's encode never writes. The scratch directory can
+            // be named anything, because nothing inside the ladder refers to
+            // the directory it sits in.
+            let members = ladder_members(&rungs, probe.has_audio);
             let scratch = temp_dir.join(format!("hls-{}", uuid::Uuid::new_v4()));
             let result = encode_ladder(
                 Path::new(ffmpeg.bin_path()),
                 source_file,
                 &scratch,
-                rungs,
+                &rungs,
                 &probe,
                 config,
                 progress,
@@ -467,95 +644,133 @@ pub(crate) fn produce_ladder(
             let stored: Result<Vec<String>, String> = result.and_then(|_written| {
                 members
                     .iter()
-                    .map(|name| objects.store_file(&scratch.join(name)))
+                    .map(|name| objects.store_file(&scratch.join(name), crate::build::cache::RecordMode::Wait))
                     .collect()
             });
-            let _ = std::fs::remove_dir_all(&scratch);
-            (members, stored?)
+            // allow:unlink ladder scratch this call created under cache/tmp
+            let _ = crate::build::io_utils::remove_output_dir_all(&scratch);
+            (members, stored?, ladder_params(config, &rungs, source))
         }
     };
+    Ok(Some(link_members(objects, ladder_dir, &members, oids, &params)?))
+}
+
+/// Link every member of a resolved ladder (cache hit or fresh encode alike)
+/// into `ladder_dir`, building the `TransformEntry` each file owns.
+///
+/// The one home for this loop: `produce_ladder`'s tail and the staging
+/// self-heal (`heal_cached_ladder` below, called from `VideoStore::stage` in
+/// video.rs) both relink a resolved `(members, oids)` pair the same way, so
+/// the naming/linking scheme has one copy rather than two that could drift.
+fn link_members(
+    objects: &crate::build::cache::ObjectStore,
+    ladder_dir: &Path,
+    members: &[String],
+    oids: Vec<String>,
+    params: &serde_json::Value,
+) -> Result<Vec<(String, TransformEntry)>, String> {
     let mut entries = Vec::with_capacity(oids.len());
-    for (name, oid) in members.iter().zip(oids) {
-        let target = ladder_dir.join(name);
+    let pairs: Vec<(&String, String)> = members.iter().zip(oids).collect();
+    // Link every member EXCEPT the gate first, and the gate (`master.m3u8`)
+    // last. `heal_ladder` (video.rs) and `register_existing_ladders` both
+    // read the gate's mere presence as "this ladder is complete" — `hls_
+    // members`' own documented order puts the gate FIRST, so linking in
+    // that order would leave it down, advertising a complete ladder, the
+    // moment a link partway through the rest fails (an evicted/vacuumed
+    // blob, disk full, any I/O error) — and neither reader would ever
+    // notice the hole or retry it: a permanent 404 on whatever segment
+    // never arrived. `hls_members`' own order is untouched; only the LINK
+    // order differs from it, here.
+    let ordered = pairs
+        .iter()
+        .filter(|(name, _)| name.as_str() != HLS_MASTER_NAME)
+        .chain(pairs.iter().filter(|(name, _)| name.as_str() == HLS_MASTER_NAME));
+    for (name, oid) in ordered {
+        let target = ladder_dir.join(name.as_str());
         objects
-            .link_to(&oid, &target)
+            .link_to(oid, &target)
             .map_err(|e| format!("Failed to link {}: {}", target.display(), e))?;
         let size = objects
-            .get_path(&oid)
+            .get_path(oid)
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .unwrap_or(0);
         entries.push((
             transform_name(name),
             TransformEntry {
-                oid,
+                oid: oid.clone(),
                 size,
                 params: params.clone(),
             },
         ));
     }
-    Ok(Some(entries))
+    Ok(entries)
 }
 
-/// A cached ladder, or nothing — never a partial one.
-///
-/// The rung count is read back out of the record rather than re-derived from
-/// the source, because the record is the only thing that knows which table the
-/// files were encoded under. `video_ladder_rungs` always truncates from the
-/// top, so a ladder of `k` rungs is `VIDEO_LADDER[..k]` and the expected census
-/// follows from `k` alone. If the record's `video/hls*` entries are not exactly
-/// that census — a rung evicted, a blob swept, a table edited — it is a miss,
-/// because seventeen files that reference each other are only valid together.
-/// The cache key for one file of a ladder. The name is a constant, so the key
-/// says nothing about which video it belongs to beyond the record it sits in.
-fn transform_name(member: &str) -> String {
-    format!("video/hls/{member}")
+/// What the staging self-heal should do about one video's HLS ladder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LadderHeal {
+    /// The gate is there, or there is no cached ladder at all for this
+    /// source (no `video/hls/` keys in its record) — nothing to heal, and
+    /// nothing wrong: a source with no ladder is an everyday outcome, owned
+    /// by the normal conversion path, not a defect this heal reports on.
+    Nothing,
+    /// A complete cached ladder was found and relinked.
+    Healed,
+    /// The record holds `video/hls/` keys, but this no-probe path can't
+    /// vouch for them — a legacy-form record (no `source` facts to recompute
+    /// against, see `cached_ladder`'s doc), or any other reason `cached_
+    /// ladder` misses while ladder keys are still there. The caller must NOT
+    /// read the item as fine: it needs a real dispatch, where `produce_
+    /// ladder`'s own legacy-migration path (which may probe) gets a chance
+    /// to recognize or re-encode it — a second migration path here would
+    /// just be the same logic written twice.
+    NeedsDispatch,
 }
 
-fn cached_ladder(
+/// Relink an already-cached ladder into staging without touching ffmpeg or a
+/// temp directory — the staging self-heal's counterpart to `produce_ladder`'s
+/// cache-hit branch, for the one output `cas_heal::rematerialize` cannot cover
+/// because a ladder is several cross-referencing files, not one.
+pub(crate) fn heal_cached_ladder(
     transforms: &TransformCache,
     source_oid: &str,
-    params: &serde_json::Value,
-) -> Option<(Vec<String>, Vec<String>)> {
-    let record = transforms.get(source_oid)?;
-    let rung_count = record
-        .transforms
-        .keys()
-        .filter(|k| k.starts_with("video/hls/v") && k.ends_with(".m3u8"))
-        .count();
-    if rung_count < 2 {
-        return None;
-    }
-    let rungs = video_ladder_rungs_by_count(rung_count)?;
-    let members = hls_members(rungs);
-    if record
-        .transforms
-        .keys()
-        .filter(|k| k.starts_with("video/hls/"))
-        .count()
-        != members.len()
-    {
-        return None;
-    }
-    let oids: Option<Vec<String>> = members
-        .iter()
-        .map(|name| transforms.find_cached_output(source_oid, &transform_name(name), params))
-        .collect();
-    Some((members, oids?))
+    ladder_dir: &Path,
+    config: &VideoCompressionConfig,
+) -> Result<LadderHeal, String> {
+    let Some((members, oids, params)) = cached_ladder(transforms, source_oid, config) else {
+        let has_ladder_keys = transforms
+            .get_with(source_oid, crate::build::cache::RecordMode::Wait)
+            .is_some_and(|record| record.transforms.keys().any(|k| k.starts_with(HLS_TRANSFORM_PREFIX)));
+        return Ok(if has_ladder_keys { LadderHeal::NeedsDispatch } else { LadderHeal::Nothing });
+    };
+    link_members(transforms.objects(), ladder_dir, &members, oids, &params)?;
+    Ok(LadderHeal::Healed)
 }
 
-/// What invalidates a cached ladder: the rung table and the encoder settings
-/// that shape the bytes. Shared by every file in one ladder, so a table edit
-/// re-encodes the whole thing rather than leaving rungs from two generations
-/// referencing each other.
-fn ladder_params(config: &VideoCompressionConfig) -> serde_json::Value {
-    serde_json::json!({
-        "ladder": video_ladder_fingerprint(),
-        "preset": config.preset,
-        "segment_seconds": SEGMENT_SECONDS,
-        "keyframe_seconds": KEYFRAME_SECONDS,
-    })
+/// The one owner of the transform-cache key prefix every HLS ladder file's
+/// entry is stored under — `video.rs`'s ladder-record writer and cache-key
+/// filters use this rather than repeating the literal, so there is one place
+/// where "is this key part of some video's ladder?" is answered.
+pub(crate) const HLS_TRANSFORM_PREFIX: &str = "video/hls/";
+
+/// The cache key for one file of a ladder. The name is a constant, so the key
+/// says nothing about which video it belongs to beyond the record it sits in.
+/// Not `pub`: the child module `cache` reaches it via `super::transform_name`
+/// (Rust privacy already grants a submodule access to its parent's private
+/// items), so `cached_ladder`/`legacy_cached_ladder` build the same keys this
+/// module's own `link_members` does — one naming scheme, not two.
+fn transform_name(member: &str) -> String {
+    format!("{HLS_TRANSFORM_PREFIX}{member}")
 }
+
+mod cache;
+pub(crate) use cache::{ladder_params, SourceFacts};
+use cache::{cached_ladder, legacy_cached_ladder};
+// Test-only: video.rs's own staging-heal test needs the same real legacy
+// shapes hls_tests.rs's migration tests do — see `cache::legacy_form_params`.
+#[cfg(test)]
+pub(crate) use cache::{legacy_form_params, LegacyShape};
 
 /// Register every ladder already present in `staging`, returning how many.
 ///
@@ -571,10 +786,19 @@ fn ladder_params(config: &VideoCompressionConfig) -> serde_json::Value {
 /// build of latency for never being wrong. The cache knows a ladder exists
 /// sooner — it is what causes this build to link the files into staging — so a
 /// cache-sourced answer would emit markup one build earlier on a fresh checkout
-/// with a warm cache. But what makes an emitted URL true is a file at that URL
-/// (ADR-013), and only disk answers that question. The `master.m3u8` is the
+/// with a warm cache. But what makes an emitted URL true is a file at that URL,
+/// and only disk answers that question. The `master.m3u8` is the
 /// gate: `hls_master_stem` is what marks a stem as laddered, and a directory
 /// without one is a half-written ladder that must not be advertised.
+///
+/// The gate is also, now, the CENSUS: what gets registered is exactly
+/// [`ladder_members_from_master`]'s reading of the gate's own references,
+/// filtered to what is actually present, never a raw directory listing. A
+/// bigger, earlier ladder can leave a now-dropped rung's files sitting right
+/// beside a smaller one's — nothing physically removes them, since deleting
+/// out from under a background encode that might still be mid-`link_members`
+/// on the very same directory is its own hazard — so the directory itself is
+/// not a trustworthy membership list; the master playlist that gates it is.
 ///
 /// `set_pending` here has no paired `set_source_passthrough`, which every other
 /// caller does have. That pairing exists so a variant requested before it is
@@ -591,18 +815,23 @@ pub fn register_existing_ladders(
         .filter(|e| e.file_type().is_dir())
     {
         let dir = entry.path();
-        if dir.extension().and_then(|e| e.to_str()) != Some("hls")
-            || !dir.join(HLS_MASTER_NAME).is_file()
-        {
+        if dir.extension().and_then(|e| e.to_str()) != Some("hls") {
             continue;
         }
+        let Some(members) = ladder_members_from_master(dir) else {
+            continue;
+        };
         let Ok(rel_dir) = dir.strip_prefix(staging) else {
             continue;
         };
-        for member in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let Some(name) = member.file_name().to_str().map(str::to_owned) else {
+        for name in members {
+            // Present-on-disk, same standard `present_video_output_keys`
+            // (video.rs) holds its own reading of this same census to: the
+            // gate vouches for what SHOULD be there, not for a read that
+            // raced a write and lost.
+            if !dir.join(&name).is_file() {
                 continue;
-            };
+            }
             // Bare, like every other registry writer. The key space no longer
             // has to be guessed — `variant_key` normalizes both forms — so this
             // takes the form the rest of the tree uses.

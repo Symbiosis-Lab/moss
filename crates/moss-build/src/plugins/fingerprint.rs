@@ -2,7 +2,7 @@
 //!
 //! Had a second fingerprint — a SHA-256 over every installed enhance plugin's
 //! files, which forced a rebuild and browser refresh when plugin code changed.
-//! ADR-055 retired the `enhance` capability, so that digest covered an empty
+//! Retiring the `enhance` capability meant that digest covered an empty
 //! set on every build; it and its `SiteHashes.plugin_fingerprint` field went
 //! with it. Nothing a plugin does now reaches page bytes at render time: a
 //! process hook writes SOURCE files, and the content hashes already see those.

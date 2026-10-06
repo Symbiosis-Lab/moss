@@ -31,14 +31,11 @@ use crate::moss_paths::MossPaths;
 
 /// Record what went live and recompute what is left to publish.
 ///
-/// `sealed` was an `Option` until track P slice P3, because the plugin path
-/// could arrive without a manifest and would then advance only what it could.
-/// It cannot any more: both plugin callers go through
+/// `sealed` is required: both plugin callers go through
 /// `plugin_push::run_plugin_deploy_inner`, which refuses a sealless publish
 /// before any bytes move — the directory it hands the plugin is
-/// `.moss/build/current`, and without the manifest nothing can say which
-/// generation that is. The sealless writer went with the `Option`; its
-/// behaviour is in git history and in `one_shot::require_sealed`'s doc.
+/// `.moss/build.nosync/current`, and without the manifest nothing can say which
+/// generation that is.
 ///
 /// `target` is `<method>:<id>` — `moss:<site_id>`, `onionpress:<url>`. It says
 /// which host the record describes, so a site that switches hosts does not
@@ -47,29 +44,25 @@ use crate::moss_paths::MossPaths;
 /// Both halves are best-effort in the same direction: a failed write costs one
 /// degraded change set, never a failed deploy.
 ///
-/// The recompute reaches the process through `ports` rather than an
-/// `Option<&AppState>`. The `Option` was there because a caller might have no
-/// state to recompute against; a headless publish answers the same question by
-/// having nothing to tell, which is an implementation rather than an absence —
-/// so the guard that used to return early is gone.
+/// The recompute reaches the process through `ports`; a headless publish
+/// answers the same question by having nothing to tell, which is an
+/// implementation rather than an absence.
 ///
-/// `history` is `None` only when this platform has no application data
-/// directory at all (`HistoryStore::in_app_data` already tried and failed) —
-/// production callers construct it once, right beside `ports`, and a test
-/// passes a `HistoryStore::at(tempdir)`. There is no second, test-only entry
-/// point: whichever store a caller has is the one this function uses.
+/// `history` is a plain `&HistoryStore`, not an `Option` — `HistoryStore::
+/// in_vault` is infallible, a fixed join against the vault rather than an
+/// app-data lookup, so every caller already has one to give; a test passes a
+/// `HistoryStore::at(tempdir)`.
 ///
 /// Returns the same [`PageChangeSummary`] it hands [`DeployPorts::
 /// after_landing`](crate::build::ports::deploy::DeployPorts::after_landing) —
-/// `push_site` (task 4-6) needs it a second time, to verify the pages it
-/// names, and reading it back off the return value is the one way to give it
-/// that without computing it twice.
+/// `push_site` needs it a second time, to verify the pages it names, and
+/// reading it back off the return value avoids computing it twice.
 pub async fn record_landed(
     folder: &Path,
     sealed: &SealedManifest,
     target: &str,
     ports: &dyn crate::build::ports::deploy::DeployPorts,
-    history: Option<&HistoryStore>,
+    history: &HistoryStore,
 ) -> PageChangeSummary {
     let mp = MossPaths::new(folder);
 
@@ -85,34 +78,28 @@ pub async fn record_landed(
 /// The record is one artifact carrying two facts, because one publish
 /// establishes both at the same instant: the page hashes the next change set
 /// diffs against, and the `{source path → uid}` map that rename detection and
-/// duplicate-uid resolution read (`manifest::live_baseline`). They were two
-/// files until moss#1079, and the second one was a byte copy of the whole
-/// article map — 4.83 MB on a real vault to carry about 7 KB.
+/// duplicate-uid resolution read (`manifest::live_baseline`).
 ///
-/// One shape since track P slice P3. There was a second — a publish with no
-/// manifest advanced the uids and the page mapping on the STANDING record and
-/// left the hashes alone — for the deploy-plugin path, which used to publish a
-/// directory it could not name a generation for. That path now refuses instead,
-/// so the branch was unreachable, and an unreachable branch that quietly
-/// degrades the rename baseline is worse than absent: nothing would have
-/// reported it running.
+/// There is no sealless variant: a publish with no manifest is refused
+/// upstream, and a branch that quietly degraded the rename baseline would
+/// report nothing.
 ///
 /// Best-effort throughout: a failed write costs the next build's rename
-/// detection, never the publish. `history` is `None` only when this
-/// platform has no application data directory — see [`record_landed`]'s doc.
+/// detection, never the publish. See [`record_landed`]'s doc for why
+/// `history` is a plain `&HistoryStore` rather than an `Option`.
 ///
 /// Returns the completion-scoped Added/Moved/Removed page summary a publish
-/// receipt renders (publish-receipt design, step 4). It has to be computed
+/// receipt renders. It has to be computed
 /// from the reads below BEFORE the write further down overwrites the record
 /// they read — the same "before" the redirect stubs above already read for
 /// the same reason. `PageChangeSummary::default()` when this build's own
 /// article map cannot be read: with no `current_map` there is nothing to
-/// diff, and guessing here is the moss#1079 mistake one call site over.
+/// diff, and guessing here would corrupt the rename baseline.
 async fn record_what_is_live(
     mp: &MossPaths,
     sealed: &SealedManifest,
     target: &str,
-    history: Option<&HistoryStore>,
+    history: &HistoryStore,
 ) -> PageChangeSummary {
     let now = chrono::Utc::now().to_rfc3339();
     let live = read_live_article_mapping(mp).await;
@@ -123,10 +110,17 @@ async fn record_what_is_live(
             // below moves it — `prev_snapshot` is this target's own last
             // publish (what `change_set::classify` diffs against);
             // `prev_baseline` is the cross-target union `detect_renames`
-            // reads, the same baseline `feeds::redirects::emit_redirect_stubs`
+            // reads, the same baseline `feeds::redirects::emit_redirect_table`
             // loads at build time for the identical reason.
             let prev_snapshot = published_record::load_for(mp, Some(target));
             let prev_change_set = change_set::classify(prev_snapshot.as_ref(), sealed);
+            // The list this build computed at its seal, against the baseline
+            // the gate used. Recomputing here could disagree with it if another
+            // target's publish moved the baseline since; only a landing with no
+            // build in this process (nothing recorded) computes it afresh.
+            let removed = crate::system::build_records::records()
+                .removed_addresses(&mp.project_root().to_string_lossy())
+                .unwrap_or_else(|| crate::build::manifest::backfill::removed_for_seal(mp, sealed));
             match live_baseline::load(mp) {
                 live_baseline::Baseline::Present(projection) => {
                     let renames = redirects::detect_renames(&projection, &live.article_map);
@@ -135,6 +129,7 @@ async fn record_what_is_live(
                         &renames,
                         &live.article_map,
                         &projection.entries,
+                        &removed,
                     )
                 }
                 live_baseline::Baseline::Absent | live_baseline::Baseline::Unreadable(_) => {
@@ -143,6 +138,7 @@ async fn record_what_is_live(
                         &HashMap::new(),
                         &live.article_map,
                         &[],
+                        &removed,
                     )
                 }
             }
@@ -174,17 +170,13 @@ async fn record_what_is_live(
     let root = mp.project_root().to_path_buf();
     let sealed_for_history = sealed.clone();
     let target_owned = target.to_string();
-    let history_owned = history.cloned();
+    let history_owned = history.clone();
     let written = tokio::task::spawn_blocking(move || {
         let outcome = published_record::save(&MossPaths::new(&root), &record);
         // Best-effort and independent of the write above: a publish-history
         // failure must never suppress the rename baseline, and vice versa.
-        // `None` (no app-data directory on this platform) is not a failure
-        // to warn about — there is nowhere history could have lived.
-        if let Some(store) = &history_owned {
-            if let Err(e) = store.snapshot(&root, &sealed_for_history, &target_owned, &now) {
-                log::warn!("deploy: could not snapshot publish history: {e}");
-            }
+        if let Err(e) = history_owned.snapshot(&root, &sealed_for_history, &target_owned, &now) {
+            log::warn!("deploy: could not snapshot publish history: {e}");
         }
         outcome
     })
@@ -198,11 +190,42 @@ async fn record_what_is_live(
     summary
 }
 
+/// Write the publish record for a prebuilt tree that just went live.
+///
+/// Another tool built it, so moss knows no pages behind it: `sources` and
+/// `source_to_output` are empty, which is the truth. `files` is the tree as
+/// sent to the server. The next moss-built publish therefore counts every page
+/// as added, because to the live site every page is. The note IDs last seen
+/// live are carried forward from the standing record, as
+/// [`record_what_is_live`] does when it has no article map to read: forgetting
+/// them would drop the rename forwarding the site has earned.
+///
+/// Best-effort like the hosted record: a failed write costs a degraded change
+/// set, never the publish.
+pub fn record_prebuilt_landed(folder: &Path, generation_id: &str, target: &str, files: &HashMap<String, String>) {
+    let mp = MossPaths::new(folder);
+    let standing = published_record::load_for(&mp, Some(target));
+    let record = PublishedSnapshot {
+        generation_id: generation_id.to_string(),
+        target: target.to_string(),
+        published_at: chrono::Utc::now().to_rfc3339(),
+        files: files.clone(),
+        // Always `Some`: `None` would ask `live_baseline` to rebuild the
+        // triples from `uids` and `source_to_output`, and this record has no
+        // pages to rebuild them from.
+        triples: Some(standing.and_then(|s| s.triples).unwrap_or_default()),
+        ..Default::default()
+    };
+    if let Err(e) = published_record::save(&mp, &record) {
+        log::warn!("deploy(prebuilt): could not record what went live: {e}");
+    }
+}
+
 /// What one publish record advances together, read off the same article map so
-/// none of it can land out of step with the rest (moss#1089: the sealless
+/// none of it can land out of step with the rest (the sealless
 /// writer, deleted at track P slice P3, used to advance `uids` alone and leave
 /// `source_to_output` frozen as of the last SEALED publish). `triples` is that
-/// pair's replacement as `live_baseline`'s source (moss#1093) — read here
+/// pair's replacement as `live_baseline`'s source — read here
 /// beside `uids` rather than derived from it, because deriving it would be
 /// exactly the join this struct exists to make unnecessary.
 ///
@@ -227,7 +250,7 @@ struct LiveArticleMapping {
 /// Async fs so a slow (e.g. iCloud-syncing) file cannot block a runtime worker.
 async fn read_live_article_mapping(mp: &MossPaths) -> Option<LiveArticleMapping> {
     let src = mp.article_map();
-    // allow:raw_read regenerable build output under `.moss/build/` (ADR-043),
+    // allow:raw_read regenerable build output under `.moss/build.nosync/`,
     // where dataless is absent — and an unreadable one is handled either way.
     let bytes = match tokio::fs::read(&src).await {
         Ok(bytes) => bytes,

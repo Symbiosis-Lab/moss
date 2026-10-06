@@ -10,8 +10,7 @@
  * - **Outcome UX** = `toast` (data describing what happened; moss renders it)
  *
  * Both travel in the same return value. A hook never raises its own outcome
- * toast imperatively — moss owns every status surface (see moss's
- * docs/reference/plugin-architecture-boundary.md), and an imperative toast
+ * toast imperatively — moss owns every status surface, and an imperative toast
  * raised mid-hook cannot be reconciled with the surfaces moss is already
  * showing for the same operation.
  */

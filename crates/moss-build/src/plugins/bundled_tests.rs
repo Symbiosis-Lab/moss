@@ -8,7 +8,7 @@ static FIXTURE: Dir<'static> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/te
 /// capabilities, versions and manifest config defaults, and nothing checks
 /// these against `plugins/*/assets/manifest.json`. The real bundles are the
 /// app's; tests about their contents live beside the embed in
-/// `src-tauri/src/plugins/bundled_embed.rs`.
+/// the desktop app.
 pub(super) fn fixture() -> BundledSet {
     BundledSet { names: &["github", "matters", "onionpress", "comment"], root: &FIXTURE, default_deployer: "" }
 }

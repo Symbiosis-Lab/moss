@@ -18,7 +18,7 @@ fn article_doc(source_path: &str, url_path: &str) -> ParsedDocument {
     }
 }
 
-/// The regression this predicate exists to close (moss#1101): a root
+/// The regression this predicate exists to close: a root
 /// folder-note's `url_path` can end up NOT being `index.html` (its home
 /// election can miss for reasons entirely upstream of this predicate), while
 /// its `PageKind::Folder` + source location still correctly say it IS the
@@ -26,7 +26,7 @@ fn article_doc(source_path: &str, url_path: &str) -> ParsedDocument {
 /// pair, never the first, or the two can silently disagree.
 #[test]
 fn dir_has_markdown_index_root_ignores_url_path_and_reads_kind() {
-    let docs = vec![folder_doc("William Blake.md", "william-blake/index.html")];
+    let docs = vec![folder_doc("Garden Path.md", "garden-path/index.html")];
     let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
     assert!(
         idx.dir_has_markdown_index(""),
@@ -48,7 +48,7 @@ fn dir_has_markdown_index_root_rejects_a_root_article() {
 fn dir_has_markdown_index_nested_folder_matches_its_own_source_dir_only() {
     let docs = vec![
         folder_doc("notes/daily/daily.md", "notes/daily/index.html"),
-        folder_doc("William Blake.md", "index.html"),
+        folder_doc("Garden Path.md", "index.html"),
     ];
     let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
     assert!(idx.dir_has_markdown_index("notes/daily"));
@@ -68,13 +68,13 @@ fn dir_has_markdown_index_slug_normalizes_both_sides() {
 }
 
 /// A `url:` override renames the served directory independently of its
-/// source path (e.g. `獎項/` served at `awards/`). The root-only fix must
+/// source path (e.g. `評選/` served at `awards/`). The root-only fix must
 /// not touch this: nested folders still answer from `url_path`, which is
 /// the only place the override is recorded.
 #[test]
 fn dir_has_markdown_index_nested_url_override_still_matches_by_url_path() {
-    let docs = vec![folder_doc("獎項/獎項.md", "awards/index.html")];
+    let docs = vec![folder_doc("評選/評選.md", "awards/index.html")];
     let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
     assert!(idx.dir_has_markdown_index("awards"));
-    assert!(!idx.dir_has_markdown_index("獎項"));
+    assert!(!idx.dir_has_markdown_index("評選"));
 }

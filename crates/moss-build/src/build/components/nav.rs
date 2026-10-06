@@ -11,8 +11,15 @@ use crate::i18n::link::TranslationLink;
 /// so it can build from `NavigationBuilder`'s private state without widening
 /// any of it.
 mod breadcrumb;
-/// The floating nav island (ADR-049). A child module for the same reason.
+/// The floating nav island. A child module for the same reason.
 mod island;
+/// `generate_footer`. A child module for the same reason as the two above.
+mod footer;
+/// `[site].header` — see `HeaderMode`. Not a private-state module like the
+/// two above (nothing here reads `NavigationBuilder`'s privates), just a
+/// sibling kept close to its one reader.
+mod header_mode;
+pub use header_mode::HeaderMode;
 
 /// A single segment of a breadcrumb trail
 pub struct BreadcrumbSegment {
@@ -31,6 +38,14 @@ pub struct NavigationBuilder<'a> {
     current_page_url: Option<&'a str>,
     lang: Language,
     breadcrumb_segments: Option<Vec<BreadcrumbSegment>>,
+    /// Render the trail's own `is_current` segment instead of the ordinary
+    /// skip (`breadcrumb.rs`'s `nav_left_html`) — an explorer root's only
+    /// use (`render/html.rs`/`render/blocking.rs`, both via `is_explorer_root`).
+    /// Every other page relies on its own visible `<h1>` to say "you are
+    /// here" and would show its own title twice if this were ever on by
+    /// default; an explorer root's `<h1>` is `.visually-hidden` (design
+    /// decision 7), so the breadcrumb is the only thing left to say it.
+    breadcrumb_current_visible: bool,
     /// Translations for the current page (for nav language toggle)
     translations: Vec<TranslationLink>,
     /// Language of the current page — the INTERFACE language, so it picks nav
@@ -59,6 +74,8 @@ pub struct NavigationBuilder<'a> {
     /// and a chip absent from the open file cannot be revealed.
     fm_breadcrumb: bool,
     fm_logo: bool,
+    /// `[site].header`, resolved. See `HeaderMode`.
+    header_mode: HeaderMode,
 }
 
 impl<'a> NavigationBuilder<'a> {
@@ -75,6 +92,7 @@ impl<'a> NavigationBuilder<'a> {
             current_page_url,
             lang,
             breadcrumb_segments: None,
+            breadcrumb_current_visible: false,
             translations: Vec::new(),
             current_lang: lang,
             current_lang_tag: lang.as_bcp47_attr().to_string(),
@@ -83,6 +101,7 @@ impl<'a> NavigationBuilder<'a> {
             has_search: false,
             fm_breadcrumb: false,
             fm_logo: false,
+            header_mode: HeaderMode::Brand,
         }
     }
 
@@ -90,6 +109,12 @@ impl<'a> NavigationBuilder<'a> {
     pub fn with_source_fm(mut self, breadcrumb: bool, logo: bool) -> Self {
         self.fm_breadcrumb = breadcrumb;
         self.fm_logo = logo;
+        self
+    }
+
+    /// Set `[site].header` — see `HeaderMode`.
+    pub fn with_header_mode(mut self, header_mode: HeaderMode) -> Self {
+        self.header_mode = header_mode;
         self
     }
 
@@ -104,8 +129,20 @@ impl<'a> NavigationBuilder<'a> {
 
     /// Set breadcrumb segments for this navigation.
     /// When set, the site name in `.nav-left` is replaced with a breadcrumb trail.
-    pub fn with_breadcrumb(mut self, segments: Vec<BreadcrumbSegment>) -> Self {
+    ///
+    /// `force_current_visible` is the SAME `force` an explorer-root caller
+    /// already passed to [`compute_breadcrumb_segments`] to get `segments`
+    /// in the first place — one switch, not two kept manually in sync. It
+    /// used to be a separate chained `.with_breadcrumb_current_visible()`
+    /// call every explorer-root call site had to remember to add right
+    /// after this one; a caller that set one and not the other (compute the
+    /// segments with `force: true` but forget the builder call, or vice
+    /// versa) would have gotten a trail whose own "current page" segment
+    /// disagreed with whether its heading was hidden. See the
+    /// `breadcrumb_current_visible` field doc for what it does.
+    pub fn with_breadcrumb(mut self, segments: Vec<BreadcrumbSegment>, force_current_visible: bool) -> Self {
         self.breadcrumb_segments = Some(segments);
+        self.breadcrumb_current_visible = force_current_visible;
         self
     }
 
@@ -144,7 +181,7 @@ impl<'a> NavigationBuilder<'a> {
         // The tree segment the page ACTUALLY lives under, never a code spelled
         // back out of the interface enum. `en-us/` and `en-gb/` are language
         // trees moss accepts but `Language::code()` cannot spell, so their
-        // pages linked home to `/en/` — a path no build emits (#949). The
+        // pages linked home to `/en/` — a path no build emits. The
         // folder name is the path, by construction.
         match self.current_page_url.and_then(moss_core::home::lang_tree_prefix) {
             Some(tree) if self.effective_lang() != self.lang => {
@@ -186,9 +223,24 @@ impl<'a> NavigationBuilder<'a> {
         let effective_lang = self.effective_lang();
         let home_path = self.home_path();
         let logo_html = self.logo_html();
+        let nav_mode = self.header_mode == HeaderMode::Nav;
 
         // Build nav-left: breadcrumb trail or plain site name (nav/breadcrumb.rs)
-        let site_name = self.nav_left_html(&home_path, &logo_html);
+        // — omitted entirely under `[site].header = "nav"`, which drops the
+        // brand from the masthead in favor of the Home link below. Omitting
+        // the `<div>` outright (not just its content) is what matters here:
+        // `.nav-left` claims 999/1000 of row 1's free space by design (see
+        // its own comment), so an EMPTY-but-present div would still crowd
+        // `.nav-right` over to the right edge. With no `.nav-left` sibling at
+        // all, `.nav-right` becomes `.nav-content`'s only flex child and
+        // takes the full row; `.nav-icons`'s own `margin-inline-start: auto`
+        // then pins it to the end edge and the link list falls in at the
+        // start, with no CSS of its own for this mode.
+        let site_name = if nav_mode {
+            String::new()
+        } else {
+            self.nav_left_html(&home_path, &logo_html)
+        };
 
         // Adaptive auto-navigation model:
         // - Organized mode (has content folders): root-level non-index files auto-appear in nav
@@ -211,29 +263,63 @@ impl<'a> NavigationBuilder<'a> {
                 // independent of filesystem walk order. Without the tiebreaker
                 // macOS and Linux scan_folder() produce different nav orders
                 // for items with the same explicit weight.
-                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.label.cmp(&b.label)),
+                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.nav_text().cmp(b.nav_text())),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 // Sort alphabetically by the plain-text chrome label.
-                (None, None) => a.label.cmp(&b.label),
+                (None, None) => a.nav_text().cmp(b.nav_text()),
             }
         });
 
-        let page_items: Vec<String> = nav_documents.iter()
+        let mut page_items: Vec<String> = nav_documents.iter()
             .map(|doc| {
-                // Nav link text uses the chrome label (plain text). See
-                // docs/archive/2026-04-17-title-simplification.md.
-                let label = doc.label.clone();
+                // Nav link text: `nav_label` if the page set one, else the
+                // chrome label. Both are plain text, so escape at the write.
+                let label = crate::build::features::html_escape(doc.nav_text());
                 let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
                 let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (nav href to user content page, not a framework asset)
-                let class = if self.current_page_url.map_or(false, |url| url == doc.url_path) {
-                    r#" class="active""#
+                let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
+                // `nav` header mode has no breadcrumb trail to say "you are
+                // somewhere under this section" on a deep page (the section's
+                // own nav item is the only cue left), so it marks that item
+                // itself: `aria-current="true"` for a containing section,
+                // `"page"` reserved for the exact page, same as Home above.
+                // Brand mode is unaffected — its plain `class="active"`-on-
+                // exact-match behavior (and the breadcrumb trail alongside
+                // it) is unchanged.
+                let attrs = if is_current_page {
+                    if nav_mode {
+                        r#" class="active" aria-current="page""#
+                    } else {
+                        r#" class="active""#
+                    }
+                } else if nav_mode && is_current_nav_section(doc, self.current_page_url) {
+                    r#" class="active" aria-current="true""#
                 } else {
                     ""
                 };
-                format!(r#"<a href="{}"{class}>{}</a>"#, href, label)
+                format!(r#"<a href="{}"{attrs}>{}</a>"#, href, label)
             })
             .collect();
+
+        // `nav` header mode always opens the link list with Home, ahead of
+        // the site's own nav items and outside their weight order — it is
+        // the one way back to the site root now that the brand link is gone
+        // from the masthead, so it leads even on a site with no nav items of
+        // its own.
+        if nav_mode {
+            let home_label = crate::i18n::t(self.current_lang, "nav_home");
+            // Compared as hrefs, not `url_path`s: there is no ParsedDocument
+            // for "the home page" in hand here, but `home_path` and every
+            // other page_items href are both already `to_pretty_url`-built,
+            // so comparing the two forms is comparing like with like.
+            let is_home = self.current_page_url.is_some_and(|url| {
+                let pretty = crate::build::scan::article_map::to_pretty_url(url);
+                format!("/{}", pretty.trim_start_matches('/')) == home_path
+            });
+            let current_attrs = if is_home { r#" class="active" aria-current="page""# } else { "" };
+            page_items.insert(0, format!(r#"<a href="{}"{}>{}</a>"#, home_path, current_attrs, home_label));
+        }
 
         let has_nav_items = !page_items.is_empty();
 
@@ -243,7 +329,7 @@ impl<'a> NavigationBuilder<'a> {
         // theme.ts's toggleMobileMenu keeps it in sync on open/close, and the
         // outside-click handler resets it on close. aria-controls points at
         // the nav-links id below, so a screen reader can name what the button
-        // discloses (WCAG 4.1.2, moss#1047).
+        // discloses (WCAG 4.1.2).
         let hamburger = if has_nav_items {
             format!(
                 r#"<button class="mobile-menu-button" onclick="toggleMobileMenu()" aria-label="{}" aria-expanded="false" aria-controls="nav-links"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>"#,
@@ -256,7 +342,7 @@ impl<'a> NavigationBuilder<'a> {
         // Nav links (only if nav items exist). `id="nav-links"` is the
         // aria-controls target above; theme.ts also uses it to toggle `inert`
         // on the closed mobile menu so its (invisible) links leave the tab
-        // order (WCAG 2.4.7/2.4.3, moss#1047).
+        // order (WCAG 2.4.7/2.4.3).
         let nav_links = if has_nav_items {
             format!(r#"<div class="nav-links" id="nav-links">{}</div>"#, page_items.join(""))
         } else {
@@ -273,7 +359,7 @@ impl<'a> NavigationBuilder<'a> {
 
         // Search icon — only when this build actually shipped an index
         // (`_moss/pagefind/`).
-        // The client runtime (frontend/site) binds the click; with JS off the
+        // The client runtime binds the click; with JS off the
         // button is inert, which is why it is a `<button>` and not a link.
         if self.has_search {
             let search_label = crate::i18n::t(self.current_lang, "nav_search");
@@ -296,7 +382,7 @@ impl<'a> NavigationBuilder<'a> {
                     r#"<a href="{}" class="nav-lang-link" hreflang="{}">{}</a>"#,
                     // The declared tag, not `code()` — whose own doc says to use
                     // the BCP-47 form for an hreflang, and which collapses an
-                    // unshipped language onto one of three variants (moss#1177).
+                    // unshipped language onto one of three variants.
                     href, t.lang_tag, t.display_name
                 )
             }).collect();
@@ -318,7 +404,7 @@ impl<'a> NavigationBuilder<'a> {
         // exist only where they carry information the row has hidden — a
         // truncated breadcrumb label, a fold's `…` levels — and those are
         // JS-promoted (breadcrumb-hint.ts, breadcrumb-fold.ts), never emitted
-        // here. See docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md.
+        // here.
         let theme_label = crate::i18n::t(self.current_lang, "nav_toggle_theme");
         icon_items.push(format!(
             r#"<button class="nav-theme-btn" type="button" aria-label="{}" onclick="toggleTheme()"><svg class="theme-toggle-icon" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" fill="currentColor" stroke-linecap="round" viewBox="0 0 32 32"><clipPath id="theme-toggle__classic__cutout"><path d="M0-5h30a1 1 0 0 0 9 13v24H0Z"/></clipPath><g clip-path="url(#theme-toggle__classic__cutout)"><circle cx="16" cy="16" r="9.34"/><g stroke="currentColor" stroke-width="1"><path d="M16 5.5v-4"/><path d="M16 30.5v-4"/><path d="M1.5 16h4"/><path d="M26.5 16h4"/><path d="m23.4 8.6 2.8-2.8"/><path d="m5.7 26.3 2.9-2.9"/><path d="m5.8 5.8 2.8 2.8"/><path d="m23.4 23.4 2.9 2.9"/></g></g></svg></button>"#,
@@ -329,126 +415,6 @@ impl<'a> NavigationBuilder<'a> {
         let nav_right = format!(r#"<div class="nav-right">{}{}{}</div>"#, hamburger, nav_links, nav_icons);
 
         format!("{}{}", site_name, nav_right)
-    }
-
-    /// Generates footer HTML.
-    ///
-    /// Layout:
-    /// ```html
-    /// <footer class="container">
-    ///   {footer.md HTML, if present}
-    ///   {default link list <p class="footer-default">, if any links}
-    ///   {auto-injected subscribe form, if moss-hosted with [channels.email]}
-    /// </footer>
-    /// ```
-    ///
-    /// Three-segment vertical stack: leading author chrome (footer.md) →
-    /// auto-generated link list → trailing widget (subscribe form). The
-    /// trailing-widget position is the design B decision from
-    /// `docs/archive/2026-05-06-footer-default-order.md` — links lead, the
-    /// auto-injected widget trails.
-    ///
-    /// Flat HTML — authored content sits as direct children of `<footer>`.
-    /// The default visual chrome (border-top divider, padding, muted
-    /// typography) lives on `footer.container` directly in CSS; the footer
-    /// renders at the body font-size by default. This shape gives sites two
-    /// ways to customize:
-    ///
-    /// 1. Override `footer.container { ... }` to replace the default chrome.
-    /// 2. Use `body > footer.container > selector` rules to target individual
-    ///    elements for custom designs (the SoCiviC pattern: brand text +
-    ///    :::grid + copyright + :::subscribe stack with custom flex layout).
-    ///
-    /// History: An earlier "verbatim footer" design (commit 6e47a8024)
-    /// stripped the `.footer-content` wrapper but left no chrome on
-    /// `<footer>` either, removing the divider + muted typography from the
-    /// default look. The current shape restores the chrome on `footer.container`
-    /// directly so SoCiviC's existing `body > footer.container > *` direct-
-    /// child selectors keep working.
-    ///
-    /// When `footer.md` is absent, the wrapper still emits with default
-    /// content: an auto-generated link list from pages with `footer: true`
-    /// frontmatter, plus an optional RSS link.
-    ///
-    /// `current_page_url` is used to mark the matching footer link as
-    /// `.active` (parallel to `generate_navigation`).
-    pub fn generate_footer(&self, show_rss: bool) -> String {
-        let mut footer_pages: Vec<&ParsedDocument> = self.documents
-            .iter()
-            .filter(|d| d.footer == Some(true) && d.lang == self.current_lang)
-            .collect();
-        footer_pages.sort_by(|a, b| match (a.weight, b.weight) {
-            // Tied weights fall through to alphabetical for cross-platform
-            // determinism — see comment in generate_navigation().
-            (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.label.cmp(&b.label)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            // Sort alphabetically by the plain-text chrome label.
-            (None, None) => a.label.cmp(&b.label),
-        });
-
-        let mut default_links = Vec::new();
-        for doc in &footer_pages {
-            let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
-            let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (footer nav href to user content page, not a framework asset)
-            let class = if self.current_page_url.map_or(false, |url| url == doc.url_path) {
-                "footer-link active"
-            } else {
-                "footer-link"
-            };
-            // Footer link text is chrome; use the plain-text label.
-            default_links.push(format!(
-                r#"<a href="{}" class="{}">{}</a>"#,
-                href, class, doc.label
-            ));
-        }
-
-        if show_rss {
-            let rss_url = crate::build::served_path::ServedPath::for_rss("").unwrap().to_relative_url();
-            default_links.push(format!(
-                r#"<a href="{rss_url}" class="footer-link" data-external>{}</a>"#,
-                crate::i18n::t(self.lang, "rss"),
-            ));
-        }
-
-        // Two slot markers, resolved during the pre-ship slot pass:
-        //   slot:footer-left  — author chrome (footer.md) or empty
-        //   slot:footer-end   — auto-injected subscribe form or empty
-        // When both content slots are empty, only the default link list shows.
-        //
-        // Footer LAYOUT is driven purely by CSS: `footer.container:has(> .moss-subscribe)`
-        // lays the footer out as a flex row (links left, subscribe form
-        // right-anchored) — see site.css. There is no `data-moss-shape` marker:
-        // the retired attribute existed only to toggle that layout from the
-        // build side, but keying the CSS on the presence of the (now-unified)
-        // `.moss-subscribe` form covers the auto-injected AND footer.md cases
-        // uniformly, so the footer open tag is a plain `<footer class="container">`.
-        //
-        // The default link list is emitted in a wrapping <p> with class
-        // `footer-default` so themes can hide it (`.footer-default { display:
-        // none }`) when they author a richer footer.
-        //
-        // No `.footer-content` wrapper here: the visual chrome (divider,
-        // padding, muted typography) lives on `<footer class="container">`
-        // directly. This keeps the HTML flat — author content sits as direct
-        // children of <footer>, which lets sites use `body > footer.container
-        // > selector` rules (SoCiviC pattern) to target individual elements
-        // for their custom design.
-        let default_inner = if default_links.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "\n        <p class=\"footer-default\">{}</p>",
-                default_links.join(" · ")
-            )
-        };
-
-        format!(
-            r#"<footer class="container">
-        <!-- slot:footer-left -->{default_inner}
-        <!-- slot:footer-end -->
-</footer>"#
-        )
     }
 
 }
@@ -564,6 +530,31 @@ pub fn has_nav_items(docs: &[crate::build::types::ParsedDocument], has_content_f
     docs.iter().any(|doc| is_nav_bar_item_doc(doc, has_content_folders))
 }
 
+/// Whether the current page sits inside `doc`'s own section — true for a
+/// page anywhere under a folder-kind nav item's tree, at any depth, false
+/// for an exact match on `doc` itself (that case carries
+/// `aria-current="page"` instead, at the call site) and false for a leaf nav
+/// item, which has no section beyond itself.
+///
+/// `[site] header = "nav"`'s stand-in for the breadcrumb trail it drops: on
+/// a deep page (`essays/2024/some-post/index.html`) the "Essays" nav item is
+/// the one remaining cue for which top-level section the reader is under.
+fn is_current_nav_section(doc: &crate::build::types::ParsedDocument, current_page_url: Option<&str>) -> bool {
+    if doc.kind != moss_core::PageKind::Folder {
+        return false;
+    }
+    let Some(current) = current_page_url else {
+        return false;
+    };
+    if current == doc.url_path {
+        return false;
+    }
+    let Some(folder_prefix) = doc.url_path.strip_suffix("index.html") else {
+        return false;
+    };
+    current.starts_with(folder_prefix)
+}
+
 /// Titlecase a path segment: replace hyphens with spaces, capitalize each word.
 pub fn titlecase_segment(segment: &str) -> String {
     segment
@@ -587,7 +578,7 @@ pub fn titlecase_segment(segment: &str) -> String {
 /// Returns `Some(segments)` when breadcrumbs should be shown, `None` otherwise.
 ///
 /// Breadcrumbs are shown when:
-/// 1. The homepage has `breadcrumb: true` (site-wide enable)
+/// 1. The homepage has `breadcrumb: true` (site-wide enable), OR `force` is set
 /// 2. The current page has NOT set `breadcrumb: false` (per-page override)
 /// 3. The page's effective depth > 0 (homepages don't get breadcrumbs)
 ///
@@ -595,15 +586,23 @@ pub fn titlecase_segment(segment: &str) -> String {
 /// The last segment is the current page as plain text (not a link).
 /// Middle segments link to their folder's index page.
 ///
+/// `force`: an explorer root (design decision 7, "the map is the page") draws
+/// its own `<h1>` `.visually-hidden` — with no other visible title anywhere
+/// in the page, a site that otherwise keeps breadcrumbs off (nav items cover
+/// orientation everywhere else) would name the section nowhere at all. `true`
+/// only for that one page shape; every other rule above still applies on top
+/// of it (a page-level `breadcrumb: false` still opts out).
+///
 /// **Translation roots**: A folder whose index page is a translation of the site
 /// homepage (linked via `translationKey` or stem convention) is transparent in
 /// breadcrumbs — it doesn't appear as a segment. Instead, the home segment links
-/// to that folder's URL. See `docs/reference/breadcrumb-navigation.md`.
+/// to that folder's URL.
 pub fn compute_breadcrumb_segments(
     doc: &ParsedDocument,
     all_docs: &[ParsedDocument],
     site_title: &str,
     has_content_folders: bool,
+    force: bool,
 ) -> Option<Vec<BreadcrumbSegment>> {
     // Parse URL path into folder parts
     let parts: Vec<&str> = doc.url_path.split('/').collect();
@@ -645,15 +644,16 @@ pub fn compute_breadcrumb_segments(
         .find(|d| d.url_path == "index.html")
         .and_then(|d| d.breadcrumb);
 
-    let breadcrumb_enabled = match homepage_breadcrumb {
-        Some(true) => true,
-        Some(false) => false,
-        None => {
-            // Auto-enable when no nav items exist
-            let has_nav_items = has_nav_items(all_docs, has_content_folders);
-            !has_nav_items
-        }
-    };
+    let breadcrumb_enabled = force
+        || match homepage_breadcrumb {
+            Some(true) => true,
+            Some(false) => false,
+            None => {
+                // Auto-enable when no nav items exist
+                let has_nav_items = has_nav_items(all_docs, has_content_folders);
+                !has_nav_items
+            }
+        };
 
     if !breadcrumb_enabled {
         return None;

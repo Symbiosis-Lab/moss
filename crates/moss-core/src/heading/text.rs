@@ -9,11 +9,9 @@
 //! | [`crate::ast::plain_text::inlines_to_plain_text`] | `&[Inline]` | after parse | [`super::extract`]'s autocomplete label |
 //!
 //! What they must NOT do is disagree about what a piece of content looks
-//! like as text. They did: `collect_heading_text` in `ast/parser.rs` and
-//! `inlines_to_text` in `extract_headings.rs` were independent `match`
-//! arms over independent enums, so a heading's slug and its autocomplete
-//! label could drift apart — which is exactly what the July 2026 math
-//! cluster found (`$f*g$` came out of one and `$fg$` out of the other).
+//! like as text: two independent `match` arms over independent enums can
+//! drift, so a heading's slug and its autocomplete label disagree on the
+//! same math span (`$f*g$` from one, `$fg$` from the other).
 //!
 //! So: **one policy, two adapters.** [`crate::ast::plain_text::TextAtom`] is
 //! the vocabulary the policy speaks; `push_atom` IS the policy and is the
@@ -22,13 +20,10 @@
 //! (or a line break, or code) looks like in plain text is a one-line edit in
 //! one function, and both surfaces move together by construction.
 //!
-//! The `&[Inline]` half of the policy (and its adapter,
-//! [`crate::ast::plain_text::inlines_to_plain_text`]) moved to
-//! `ast/plain_text.rs` (ADR-036) once a third non-heading consumer
-//! (`build::page::meta::extract_description`) appeared — exactly the
-//! trigger that module's promotion doc comment named in advance. This
-//! module keeps only [`events_to_text`], the mid-parse event-stream half
-//! that has no AST to walk yet.
+//! The `&[Inline]` half of the policy lives in
+//! [`crate::ast::plain_text::inlines_to_plain_text`]. This module keeps only
+//! [`events_to_text`], the mid-parse event-stream half that has no AST to
+//! walk yet.
 //!
 //! ## The one difference that remains, and why it is not a bug to fix here
 //!
@@ -55,10 +50,10 @@ use pulldown_cmark::Event;
 /// caller passes the range *inside* the heading tags (exclusive of the
 /// matching `Event::End(TagEnd::Heading)`).
 ///
-/// Mirrors production's `transform_events` heading-text collection at
-/// `src-tauri/src/build/markdown/pipeline.rs`. Inline HTML
+/// Mirrors the pre-AST-migration `transform_events` pass's heading-text
+/// collection byte-for-byte. Inline HTML
 /// (`Event::InlineHtml` / `Event::Html`) is intentionally skipped, so
-/// `# FAREWELL,<br>AND ERASE` slugs as `FAREWELL,AND ERASE` with no `<br>`
+/// `# HELLO,<br>AND GOODBYE` slugs as `HELLO,AND GOODBYE` with no `<br>`
 /// in the anchor. Link and image *labels* are captured: pulldown walks the
 /// events inside `Tag::Link` / `Tag::Image` transparently and their
 /// `Event::Text` payloads land here, matching production; the href does

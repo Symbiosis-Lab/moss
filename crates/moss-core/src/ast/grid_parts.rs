@@ -7,9 +7,9 @@
 //! The split form exists because a structural decision about a grid *cell* —
 //! "is this cell a link to a collection, and if so what is that collection's
 //! title, cover and child count?" — depends on facts no single page can see.
-//! Before ADR-034 the host answered it by regex-scraping its own emitted
+//! Previously the host answered it by regex-scraping its own emitted
 //! markup; that scraping is what aborted the build when a CJK character sat in
-//! front of a `:::grid` (moss#903 bug 1). With the pieces kept separate the
+//! front of a `:::grid`. With the pieces kept separate the
 //! host pairs each cell's HTML with the typed [`Block`] cell it came from, so
 //! recognition reads exactly what emission read.
 
@@ -33,7 +33,7 @@ pub struct GridParts {
 /// Kept apart rather than pre-joined because a host pass that re-wraps a cell
 /// (an internal-link cell becomes one big `<a>`) needs the content WITHOUT the
 /// chrome, and the alternative — handing it the joined string to cut the
-/// wrapper back off — is the string surgery ADR-034 exists to delete.
+/// wrapper back off — is the string surgery this split form exists to delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GridCellParts {
     /// The cell's rendered content, before any card chrome.
@@ -151,6 +151,41 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
             open_tag.push_str(r#" style="--moss-grid-ratio:"#);
             open_tag.push_str(&cols);
             open_tag.push('"');
+        }
+        // `scroll` keeps the row on one line and lets the reader drag it
+        // sideways; `tabindex="0"` makes an overflowing row
+        // keyboard-scrollable, the same affordance `.moss-table-scroll` gives
+        // a wide table. `label` only means something once the row IS a
+        // scroll region, so `role`/`aria-label` are emitted only alongside
+        // `scroll` — alone they would name a landmark that was never created.
+        //
+        // `args.is_scroll_row()`, not the bare `scroll` flag: a one-cell
+        // `{scroll}` grid has nothing to drag past, so it gets none of this.
+        //
+        // A row whose cells already fit in `columns` (`fits_without_scrolling`)
+        // still gets the full scroll-region treatment but carries `data-fits`
+        // too, so site.css/vertical.css can key the wide-screen plain-grid
+        // layout off it. `tabindex="0"` is always emitted so a no-JS narrow
+        // view stays keyboard-scrollable; the runtime script (`scroll-row.ts`)
+        // removes it once it can see the row isn't scrollable at the current
+        // width.
+        //
+        // `label` is the author's `{label="…"}` text or, when none, the
+        // nearest preceding heading's text, filled in by the caller that sees
+        // the top-level blocks (`grid_with_heading_fallback` in moss-build's
+        // `body_plan.rs`). This function only reads `args.label`; an unnamed
+        // focusable element is an accessibility gap, so either name is valid.
+        if args.is_scroll_row() {
+            open_tag.push_str(r#" data-scroll"#);
+            if args.fits_without_scrolling() {
+                open_tag.push_str(r#" data-fits"#);
+            }
+            open_tag.push_str(r#" tabindex="0""#);
+            if let Some(label) = &args.label {
+                open_tag.push_str(r#" role="region" aria-label=""#);
+                open_tag.push_str(&escape_attr(label));
+                open_tag.push('"');
+            }
         }
         if let Some(w) = &args.width {
             open_tag.push_str(r#" data-width=""#);

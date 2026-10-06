@@ -93,7 +93,7 @@ struct GroupMember {
 /// stranger never gets to clean up. Measured on a Mac 2026-08-18 while chasing
 /// the OnionPress menu-bar SIGTERM: pids ran 99230 → 231 → 4063 inside four
 /// minutes, i.e. the whole pid space wrapped twice over between two ordinary
-/// installs. See `docs/archive/2026-08-18-onionpress-sigterm.md`.
+/// installs.
 ///
 /// The rule costs nothing on the path it has to protect: everything the wedged
 /// child started is younger than the child, so a genuine subtree is still
@@ -235,7 +235,7 @@ fn stop_process_group(child: &mut std::process::Child) {
 /// Run a child to completion, STOPPING it if it outlives `timeout`, and calling
 /// `tick` roughly every 100 ms while it runs.
 ///
-/// Three failures this shape exists to prevent, all observed on the live path:
+/// Three failures this shape exists to prevent:
 ///
 /// 1. **Pipe deadlock.** Piping stdout+stderr and then only polling `try_wait`
 ///    reads nothing until after the child exits. A child that fills the ~64 KB
@@ -250,10 +250,9 @@ fn stop_process_group(child: &mut std::process::Child) {
 ///    threads put the unbounded wait straight back one level down: the launcher
 ///    starts background children (`bundled_python … ensure-archive-s3-keys &`)
 ///    that inherit both pipes and outlive it, so `read_to_end` waits on the
-///    GRANDCHILD. Measured at 8 s past a successful exit and forever past a
-///    SIGKILLed one — all of it holding [`install_lock`], which left every later
-///    install and every publish blocked until moss restarted. The child and the
-///    collection of its output are now bounded independently
+///    GRANDCHILD, holding [`install_lock`] and blocking every later install
+///    and publish until moss restarts. The child and the collection of its
+///    output are bounded independently
 ///    ([`stop_process_group`], [`collect_drained`]).
 ///
 /// stdin is `/dev/null`: every subcommand moss drives here is non-interactive,

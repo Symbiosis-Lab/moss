@@ -93,11 +93,11 @@ fn every_path_gets_the_disposition_whose_wait_can_actually_end() {
     // notebook asset and a cache blob are all regenerable, and the `.html`
     // special case that used to be here left them reported instead.
     for p in [
-        "/Users/x/Vault/.moss/build/staging/index.html",
-        "/Users/x/Vault/.moss/build/staging/posts/hello/index.html",
-        "/Users/x/Vault/.moss/build/staging/_moss/og/abc123.png",
-        "/Users/x/Vault/.moss/build/staging/jupyter/jupyter-lite.json",
-        "/Users/x/Vault/.moss/build/cache/objects/ab/cd1234",
+        "/Users/x/Vault/.moss/build.nosync/staging/index.html",
+        "/Users/x/Vault/.moss/build.nosync/staging/posts/hello/index.html",
+        "/Users/x/Vault/.moss/build.nosync/staging/_moss/og/abc123.png",
+        "/Users/x/Vault/.moss/build.nosync/staging/jupyter/jupyter-lite.json",
+        "/Users/x/Vault/.moss/cache/objects/ab/cd1234",
     ] {
         assert_eq!(disposition(root(), std::path::Path::new(p)), Disposition::Discard, "{p}");
     }
@@ -126,7 +126,7 @@ fn every_path_gets_the_disposition_whose_wait_can_actually_end() {
     // raise a screen nothing can lower; discarding one would destroy the
     // generation the preview server is serving right now.
     for p in [
-        "/Users/x/Vault/.moss/build/generations/ab12/index.html",
+        "/Users/x/Vault/.moss/build.nosync/generations/ab12/index.html",
         "/Users/x/Vault/.moss/data/redirects.json",
         "/Users/x/Vault/.moss/plugins/github/main.js",
         // A file whose extension nothing consumes. Its arrival schedules no
@@ -139,21 +139,22 @@ fn every_path_gets_the_disposition_whose_wait_can_actually_end() {
 }
 
 /// A vault whose own directory is named `.mossy` is not moss's `.moss`: its
-/// `build/staging/` is the user's own folder, so the file is neither staging
-/// (nothing to discard) nor a build input (nothing to wait for). Pinned
-/// separately because the `.moss`-component split is what decides it, and a
-/// substring gate would read `.mossy` as a hit.
+/// `build/staging/` is the user's own folder. A non-input there must be
+/// reported, while an HTML input must wait for the watcher. A substring gate
+/// would mistake `.mossy` for moss's own staging and discard either one.
 #[test]
 fn a_vault_named_dot_mossy_has_no_moss_staging() {
     let root = std::path::Path::new("/Users/x/.mossy");
-    let staged = std::path::Path::new("/Users/x/.mossy/build/staging/index.html");
+    let staged = std::path::Path::new("/Users/x/.mossy/build/staging/report.docx");
     assert_eq!(disposition(root, staged), Disposition::Report);
+    let watched = std::path::Path::new("/Users/x/.mossy/build/staging/index.html");
+    assert_eq!(disposition(root, watched), Disposition::Wait);
 }
 
 /// `disposition` is a vault-path predicate, so it is held to the same
-/// relocation invariant as the watcher predicates it delegates to: a client's
+/// relocation invariant as the watcher predicates it delegates to: a
 /// Google shared-drive vault used to classify EVERY dataless read as `Report`,
-/// so the user saw a raw OS error where the waiting screen belonged (#1067).
+/// so the user saw a raw OS error where the waiting screen belonged.
 #[test]
 fn a_relocated_vault_gets_the_same_disposition() {
     use crate::build::watch::scope::{mount_join, VAULT_MOUNTS};
@@ -167,7 +168,7 @@ fn a_relocated_vault_gets_the_same_disposition() {
             );
         }
         assert_eq!(
-            disposition(root, &mount_join(mount, ".moss/build/staging/index.html")),
+            disposition(root, &mount_join(mount, ".moss/build.nosync/staging/index.html")),
             Disposition::Discard,
             "a staged page under {shape}"
         );
@@ -187,7 +188,7 @@ fn a_relocated_vault_gets_the_same_disposition() {
 #[test]
 fn a_present_output_file_is_not_discarded() {
     let dir = tempfile::tempdir().unwrap();
-    let staged = dir.path().join(".moss/build/staging/index.html");
+    let staged = dir.path().join(".moss/build.nosync/staging/index.html");
     std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
     std::fs::write(&staged, b"<html>").unwrap();
 

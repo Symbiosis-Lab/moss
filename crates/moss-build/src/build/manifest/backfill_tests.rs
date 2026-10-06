@@ -8,7 +8,7 @@ use crate::types::content::SiteHashes;
 /// `gen_id`. Mirrors the real layout: the pointer lives in the machine-managed
 /// state file under the active target's record (`site_id` alone selects moss
 /// hosting, so `moss:site-1` is the slot the flat view reads), the tree under
-/// `.moss/build/generations/<id>/`.
+/// `.moss/build.nosync/generations/<id>/`.
 fn project_with_pointer(gen_id: &str) -> (tempfile::TempDir, MossPaths) {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
     std::fs::create_dir_all(&base).expect("create target/test-tmp");
@@ -45,7 +45,7 @@ fn sealed_of(files: &[(&str, &[u8])]) -> SealedManifest {
     pending.seal()
 }
 
-/// The whole feasibility claim of moss#993's local backfill, and the
+/// The whole feasibility claim of this local backfill, and the
 /// non-obvious half of it: the manifest entry for a page is in the GENERATION
 /// domain, not staging's. Staging carries `data-source-*` annotations that
 /// `ship_phase` strips on the way to the generation directory, and the manifest
@@ -63,7 +63,7 @@ fn a_manifest_entry_hashes_the_shipped_page_not_the_staged_one() {
 
     let (dir, mp) = project_with_pointer("gen-shipped");
     let staged: &[u8] = br#"<p data-source-line="3">home</p>"#;
-    let stage_dir = dir.path().join(".moss/build/staging");
+    let stage_dir = dir.path().join(".moss/build.nosync/staging");
     std::fs::create_dir_all(&stage_dir).unwrap();
     std::fs::write(stage_dir.join("index.html"), staged).unwrap();
 
@@ -76,7 +76,7 @@ fn a_manifest_entry_hashes_the_shipped_page_not_the_staged_one() {
     pending.register(&served, &shipped, HashBucket::Files);
     let sealed = pending.seal();
 
-    ship_phase(&stage_dir, &mp.generation_dir("gen-shipped"), &sealed, None)
+    ship_phase(&stage_dir, &mp.generation_dir("gen-shipped"), &sealed, None, None)
         .expect("ship_phase must materialize the generation");
     let files = published_files(&mp).expect("generation on disk must reconstruct");
 
@@ -192,7 +192,7 @@ fn a_symlink_hashes_its_target_string_not_the_bytes_behind_it() {
     );
 }
 
-/// The defect moss#993 #2 names: with no `last-published.json`, the resting
+/// The defect this backfill closes: with no `last-published.json`, the resting
 /// answer used to be blank AND zero. It is now a real file-level count — and
 /// still carries no verb, because a file set cannot justify one.
 #[tokio::test]
@@ -217,7 +217,7 @@ async fn with_no_publish_record_a_seal_reports_the_backfilled_count() {
 }
 
 /// Generations are collectable, and a site published only from another machine
-/// has no pointer at all — the residual gap moss#993 documents. Both surface as
+/// has no pointer at all — a residual gap this backfill documents but cannot close. Both surface as
 /// `AskServer`, and a caller with no port renders that as the blank default —
 /// unclassified and zero, exactly where they landed before the backfill
 /// existed. Never a partial count.
@@ -310,7 +310,7 @@ async fn the_server_diff_is_the_last_resort_and_is_asked_once_per_generation() {
     assert_eq!((again.flat_upload, again.flat_remove), (3, 1));
 }
 
-/// The step-5b contract (moss#993 4a, and the superseded-tail defect beside it).
+/// The step-5b contract (and the superseded-tail defect beside it).
 /// Both refusals produce the same `None`, and `None` is "say nothing" — the
 /// caller leaves the stash standing, because the manifest it describes stands.
 #[tokio::test]

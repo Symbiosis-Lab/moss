@@ -73,7 +73,7 @@ fn accepts_project_root_itself() {
 }
 
 /// The first-party door does NOT fence off `.moss/` — that is the whole point
-/// of splitting the two domains (moss#997). The editor's file tree can show
+/// of splitting the two domains. The editor's file tree can show
 /// `.moss/config.toml`, and moss's own panels read their own data.
 #[test]
 fn first_party_may_reach_moss_internal_paths() {
@@ -182,7 +182,7 @@ fn plugin_storage_name_must_be_one_segment() {
     }
 }
 
-// ── Shared social-data exception (docs/reference/social-data-standard.md) ──
+// ── Shared social-data exception ──────────────────────────────────────────
 
 /// `write_project_file` / `read_project_file` try `shared_social_data` first
 /// and fall back to `sandboxed` — so the fallback must still catch traversal
@@ -457,19 +457,19 @@ fn create_files_writes_all_or_nothing_and_makes_the_folder() {
         frontmatter: fm.as_object().cloned().unwrap(),
     };
     let home = || note("作者", serde_json::json!({ "url": "authors", "listed": false }));
-    let claim = |name: &str| note(name, serde_json::json!({ "author_page": "馬欣宜" }));
+    let claim = |name: &str| note(name, serde_json::json!({ "author_page": "林小滿" }));
 
     // The second file fails validation, so the first is not written either.
     assert!(create_files_inner(root, &[home(), claim("../escape")]).is_err());
     assert!(create_files_inner(root, &[home(), home()]).is_err(), "one path twice would silently overwrite");
     assert!(!root.join("作者").exists(), "a rejected batch leaves no folder behind");
 
-    let paths = create_files_inner(root, &[home(), claim("馬欣宜")]).unwrap();
+    let paths = create_files_inner(root, &[home(), claim("林小滿")]).unwrap();
     assert_eq!(paths.len(), 2);
-    assert!(paths[1].ends_with("馬欣宜.md"), "paths come back in order, the one to open last");
+    assert!(paths[1].ends_with("林小滿.md"), "paths come back in order, the one to open last");
     let written = std::fs::read_to_string(&paths[0]).unwrap();
     assert!(written.starts_with("---\n") && written.contains("url: authors") && written.contains("listed: false"), "{written}");
-    assert_eq!(std::fs::read_to_string(&paths[1]).unwrap(), "---\nauthor_page: 馬欣宜\n---\n");
+    assert_eq!(std::fs::read_to_string(&paths[1]).unwrap(), "---\nauthor_page: 林小滿\n---\n");
 }
 
 #[test]

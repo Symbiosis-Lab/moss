@@ -1,4 +1,4 @@
-//! Tests for the output-write primitive (ADR-043).
+//! Tests for the output-write primitive.
 //!
 //! The property that actually matters — "a write over a cloud-evicted
 //! destination succeeds" — cannot be tested on any CI moss has: it needs a real
@@ -28,9 +28,9 @@ fn overwrites_an_existing_file() {
     assert_eq!(fs::read(&path).unwrap(), b"new");
 }
 
-/// The whole point of ADR-043: the destination is replaced, never opened for
+/// The whole point of this write primitive: the destination is replaced, never opened for
 /// truncation. A fresh inode is the observable consequence — and it is also
-/// what makes the CAS-hardlink hazard (CLAUDE.md `fs::hard_link` rule) unable
+/// what makes the CAS-hardlink hazard unable
 /// to arise on these paths.
 #[test]
 #[cfg(unix)] // .ino() — Windows has no stable file-identity API; the temp+rename mechanism is shared code
@@ -161,7 +161,7 @@ fn an_unreadable_destination_is_treated_as_different() {
     assert_eq!(fs::read(&path).unwrap(), b"fresh");
 }
 
-// ----- create_output_dir_all: ADR-043 for directories -----
+// ----- create_output_dir_all: the same rule, for directories -----
 //
 // The branch that matters — `EDEADLK` from a provider refusing to materialize a
 // directory entry — needs a real macOS File Provider vault and cannot run on any
@@ -196,7 +196,7 @@ fn an_existing_directory_is_left_alone() {
 }
 
 /// A real error that is NOT a cloud refusal must still fail. Removing-and-
-/// remaking is licensed by ADR-043 for regenerable output the provider will not
+/// remaking is licensed for regenerable output the provider will not
 /// hand back; it is not a general "retry harder" for permission errors, which
 /// would delete a user's directory to work around a misconfiguration.
 #[test]
@@ -215,6 +215,25 @@ fn a_non_cloud_error_is_reported_not_worked_around() {
     );
 }
 
+/// A `cache/tmp` the provider will not materialize answered `EDEADLK` to every
+/// video run in the field, because each run made its scratch with a raw
+/// `create_dir_all`, which has no way out. Made through `io_utils`, the refused
+/// directory is replaced and the run gets its scratch.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_scratch_dir_under_a_cache_tmp_the_provider_refuses_is_made_by_replacing_it() {
+    let dir = tempdir().unwrap();
+    let tmp_root = dir.path().join(".moss/build.nosync/cache/tmp");
+    fs::create_dir_all(&tmp_root).unwrap();
+    fs::write(tmp_root.join("left-dataless"), b"x").unwrap();
+    fault::refuse_dataless(&tmp_root);
+
+    let scratch = ScratchDir::new(&tmp_root, "video-1");
+
+    assert!(scratch.path().is_dir(), "the run must get its scratch directory");
+    assert!(!tmp_root.join("left-dataless").exists(), "by replacing the refused directory, not waiting on it");
+}
+
 // ----- is_regenerable_output: what may be deleted -----
 //
 // The predicate that stands between a scratch directory and the user's site.
@@ -224,8 +243,8 @@ fn a_non_cloud_error_is_reported_not_worked_around() {
 #[test]
 fn only_paths_below_moss_build_are_regenerable() {
     let yes = [
-        "/Users/x/Google Drive/site/.moss/build/staging",
-        "/Users/x/site/.moss/build/generations/7/assets",
+        "/Users/x/Google Drive/site/.moss/build.nosync/staging",
+        "/Users/x/site/.moss/build.nosync/generations/7/assets",
     ];
     for p in yes {
         assert!(is_regenerable_output(Path::new(p)), "{p} is output moss can remake");
@@ -233,7 +252,7 @@ fn only_paths_below_moss_build_are_regenerable() {
 }
 
 /// Every one of these is an ancestor of some output path, so a walk from the
-/// filesystem root reaches them all before it reaches `.moss/build`. If any
+/// filesystem root reaches them all before it reaches `.moss/build.nosync`. If any
 /// answered `true`, one refused `create_dir` would `remove_dir_all` the user's
 /// vault to fix a staging directory.
 #[test]
@@ -253,12 +272,12 @@ fn a_vault_and_its_content_are_never_regenerable() {
     }
 }
 
-/// `.moss/build` itself is excluded deliberately, not by accident of the
+/// `.moss/build.nosync` itself is excluded deliberately, not by accident of the
 /// boundary: remaking it drops every sealed generation at once, and a sealed
 /// generation is what keeps a site being read from going dark.
 #[test]
 fn the_build_root_itself_is_not_replaceable() {
-    assert!(!is_regenerable_output(Path::new("/Users/x/site/.moss/build")));
+    assert!(!is_regenerable_output(Path::new("/Users/x/site/.moss/build.nosync")));
 }
 
 /// The four states a presence check has to tell apart. "Empty" and "dataless"

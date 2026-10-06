@@ -1,0 +1,43 @@
+:root {
+  --moss-color-bg: #f8f5f0;
+  --moss-color-text: #1a1a1a;
+  --moss-color-accent: #c04020;
+  --moss-color-surface: #f0ebe3;
+  --moss-color-muted: #7a7570;
+  --moss-font-body: "Noto Serif TC", "Source Han Serif TC", "Songti TC", "Noto Serif SC", serif;
+  --moss-font-heading: "Noto Serif TC", "Source Han Serif TC", "Songti TC", "Noto Serif SC", serif;
+  --moss-content-width: 50ch;
+  --moss-space-xl: 4rem;
+  --moss-space-2xl: 6rem;
+  --moss-reading-size-base: 1.2rem;
+}
+
+/* 夜色: the same five tokens for dark mode. moss flips `data-theme` on <html>;
+   a theme that redeclares a token on :root must redeclare it here too, or the
+   page stays light while moss's own dark chrome goes dark. */
+:root[data-theme="dark"] {
+  --moss-color-bg: #1c1914;
+  --moss-color-text: #e6dfd3;
+  --moss-color-accent: #e06a48;
+  --moss-color-surface: #27221b;
+  --moss-color-muted: #9b938a;
+}
+
+/* 留白: generous line height for classical Chinese */
+main > article.container {
+  line-height: 2;
+}
+
+/* More breathing room between collection items */
+.moss-cards[data-layout="list"] {
+  gap: var(--moss-space-xl);
+}
+
+/* 圖版: `:::hero {.plate}` is a moss hero variant (2026-09-11) — whole plate, never cropped, never upscaled, bounded by the column. Nothing to override here. */
+
+/* 起句與三架之間留一段大白。首頁開篇四句自題之後，即是書畫文三卡；
+   moss 預設的段間距（24px）在此太促，開篇與其目錄之間該有一停頓。
+   只認緊接段落的那一格，故三卡與其下六卡之間不受影響。 */
+main > article.container > p + .moss-grid {
+  margin-block-start: var(--moss-space-xl);
+}

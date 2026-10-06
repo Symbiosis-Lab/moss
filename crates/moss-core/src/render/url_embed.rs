@@ -11,6 +11,7 @@
 //! [`crate::render::iframe::synthesize_iframe_html`].
 
 use crate::asset_snapshot::AssetSnapshot;
+use crate::media::{extract_placement_from_alias, Placement};
 use crate::render::iframe::synthesize_iframe_html;
 use crate::resolve::embed_renderer::Sizing;
 use crate::resolve::title_params::TitleParams;
@@ -118,17 +119,27 @@ pub fn synthesize_url_embed_html(
 ) -> String {
     let provider = detect_provider(url);
     let mut params = TitleParams::default();
+    let mut placement = Placement::default();
 
     match pothole {
         PotholeContent::Empty => {}
         PotholeContent::WidthToken { width, rest_alias } => {
-            params.insert("data-width", *width);
-            if !rest_alias.is_empty() {
-                apply_alias_to_params(rest_alias.as_str(), &mut params);
+            placement.width = Some(*width);
+            let (rest_placement, rest) = extract_placement_from_alias(rest_alias);
+            placement.align = rest_placement.align;
+            placement.size = rest_placement.size;
+            if !rest.is_empty() {
+                apply_alias_to_params(&rest, &mut params);
             }
         }
         PotholeContent::Alias(alias) => {
-            apply_alias_to_params(alias.as_str(), &mut params);
+            // An external embed reads the same pipe vocabulary as a local
+            // one: `![[https://…|align-right 40%|…]]` floats and sizes it.
+            let (found, rest) = extract_placement_from_alias(alias.as_str());
+            placement = found;
+            if !rest.is_empty() {
+                apply_alias_to_params(&rest, &mut params);
+            }
         }
         PotholeContent::Params(kv) => {
             for (k, v) in &kv.params {
@@ -150,7 +161,7 @@ pub fn synthesize_url_embed_html(
         params.insert("data-provider", provider.provider_name);
     }
 
-    synthesize_iframe_html(&params, &provider.embed_url, assets)
+    synthesize_iframe_html(&params, &placement, &provider.embed_url, assets)
 }
 
 // ---------------------------------------------------------------------------

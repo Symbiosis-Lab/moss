@@ -24,24 +24,9 @@ async function main() {
     await fetchBinary();
   }
 
-  // stderr is piped so a loader failure can be recognized, then replayed
-  // verbatim. stdin/stdout stay inherited for interactive use.
-  const result = spawnSync(binary, process.argv.slice(2), {
-    stdio: ['inherit', 'inherit', 'pipe'],
-  });
-
-  const stderr = result.stderr ? result.stderr.toString() : '';
-  if (stderr) process.stderr.write(stderr);
+  const result = spawnSync(binary, process.argv.slice(2), { stdio: 'inherit' });
 
   if (result.error) throw result.error;
-
-  if (stderr.includes('error while loading shared libraries')) {
-    console.error(
-      '\nmoss-npm: the moss binary currently needs the WebKitGTK runtime libraries:\n' +
-        '  sudo apt install libwebkit2gtk-4.1-0\n' +
-        'This is temporary — a moss CLI build without that linkage is planned.'
-    );
-  }
 
   process.exit(result.status === null ? 1 : result.status);
 }

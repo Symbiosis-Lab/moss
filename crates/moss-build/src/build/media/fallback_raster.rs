@@ -1,8 +1,8 @@
 //! The deployed raster ORIGINAL — the `<img>` inside `<picture>`.
 //!
 //! Sibling of `image` (which owns the WebP variant pass) and `rungs` (which
-//! owns the responsive ladder), extracted per MIGRATION-STATE's image.rs debt
-//! row. Plan: docs/archive/2026-07-06-exclude-original-images-from-deploy.md.
+//! owns the responsive ladder), extracted out of `image.rs` to separate the
+//! deployed-original path from the encoded-variant paths it used to share.
 //!
 //! ## The container constraint
 //!
@@ -16,7 +16,7 @@
 //!
 //! ## Why it is worth attacking
 //!
-//! Measured on the 潮汐 corpus (2026-08-04): a build was 4,156 files / 592.8
+//! Measured on the 河灣 corpus (2026-08-04): a build was 4,156 files / 592.8
 //! MB, of which the raster originals were 1,086 files / 328.2 MB — 55% of the
 //! bytes, and 327.7 MB of that had a `.webp` sibling that ~96% of installs
 //! fetch instead. The fallback was also the build's HIGHEST-resolution asset
@@ -47,7 +47,7 @@ pub(crate) const SIZED_JPEG_QUALITY: u8 = 82;
 /// negotiation (it carries no width descriptor; `render/image.rs::render_img_tag`
 /// takes `width`/`height` from the SOURCE's natural dimensions, so shrinking the
 /// deployed pixels changes no HTML). Sizing it at 2400 made the fallback the
-/// build's HIGHEST-resolution asset: on the 潮汐 corpus the raster originals
+/// build's HIGHEST-resolution asset: on the 河灣 corpus the raster originals
 /// were 328 MB of a 593 MB build — 55% of the bytes.
 ///
 /// **It is not only a web fallback.** `infra/newsletter.rs`'s
@@ -58,7 +58,7 @@ pub(crate) const SIZED_JPEG_QUALITY: u8 = 82;
 /// is a resolution a mail client can still render well; something aggressive
 /// like 800 would not be.
 ///
-/// A literal, not derived from `asset_paths::LADDER` — moss#976 B1 measured
+/// A literal, not derived from `asset_paths::LADDER` — measurement showed
 /// that decoupling it from the ladder's top rung (1600) down to 1200 saves
 /// ~39.5% on JPEG and ~29.5% on PNG fallbacks with no HTML change (the
 /// fallback carries no width descriptor) and negligible visible softening in
@@ -145,7 +145,7 @@ const PHOTOGRAPHIC_COLOR_RATIO: f32 = 0.02;
 ///
 /// The discriminator is colour complexity — distinct RGB triples per pixel,
 /// measured after the downscale, since resampling is what reintroduces colours
-/// into an image that was already palettized. Measured on the 潮汐 corpus
+/// into an image that was already palettized. Measured on the 河灣 corpus
 /// (469 PNGs, 608 JPEGs, sampled 40 each, resized to `FALLBACK_MAX_EDGE`):
 ///
 /// | class                          | p10    | p50    | p90    |
@@ -259,7 +259,7 @@ fn is_fully_opaque(rgba: &image::RgbaImage) -> bool {
 /// truecolour re-encode of a photograph is essentially always LARGER than the
 /// author's already-optimized original, so `sized_raster_oid_for_original`'s
 /// keep-smaller guard used to lose every time and ship the original verbatim.
-/// A lost size comparison, not a deliberate policy — measured on the 潮汐
+/// A lost size comparison, not a deliberate policy — measured on the 河灣
 /// corpus, PNG originals shipped at 100.0% of source bytes.
 ///
 /// Caller must have checked [`is_fully_opaque`]: the palette is written without
@@ -385,21 +385,11 @@ pub(crate) fn encode_sized_raster(
     max_edge: u32,
     jpeg_quality: u8,
 ) -> Result<Vec<u8>, String> {
-    use image::io::Reader as ImageReader;
-    // Same decompression-bomb ceiling as the WebP decode path — a tiny file
-    // declaring enormous dimensions fails cleanly instead of OOM-killing us.
-    const DECODE_ALLOC_CEILING: u64 = 1024 * 1024 * 1024;
-
+    // Content-sniffed and allocation-capped by `media::decode::sniff_decode`
+    // (same primitive the WebP decode path uses) rather than a second
+    // hand-rolled copy of that open/guess/decode sequence.
     let orientation = read_exif_orientation(source_file);
-    let img = ImageReader::open(source_file)
-        .and_then(|r| r.with_guessed_format())
-        .map_err(image::ImageError::IoError)
-        .and_then(|mut r| {
-            let mut limits = image::io::Limits::default();
-            limits.max_alloc = Some(DECODE_ALLOC_CEILING);
-            r.limits(limits);
-            r.decode()
-        })
+    let img = super::decode::sniff_decode(source_file)
         .map_err(|e| format!("decode failed: {}", e))?;
 
     // EXIF orientation must be applied so the sized image isn't rotated wrong.
@@ -447,6 +437,15 @@ pub(crate) fn encode_sized_raster(
 /// (corrupt / mislabeled non-image), or a CMYK JPEG (libjpeg's CMYK→RGB is
 /// lossy; mirrors the WebP `SkipReason::Cmyk`). On `None` the caller keeps the
 /// verbatim original. Never panics; never fails the build.
+///
+/// Concurrent callers for the same source share one encode. Every build's
+/// background asset walk comes through here, and the walks of earlier builds
+/// keep running while a later build starts its own. On a cold cache each walk
+/// that catches up with the one ahead of it arrives at the first uncached image
+/// while that image is still being encoded, misses the cache, and encodes it
+/// too; from then on the walks move in lockstep and every image is encoded
+/// once per live walk. Joining the encode already in flight makes the cost
+/// one encode per source however many builds overlap.
 pub(crate) fn sized_raster_oid_for_original(
     source_file: &Path,
     source_oid: &str,
@@ -455,9 +454,8 @@ pub(crate) fn sized_raster_oid_for_original(
     config: &ImageCompressionConfig,
     quality: u8,
 ) -> Option<String> {
-    use crate::build::cache::{TransformEntry, TransformRecord};
-
-    const TRANSFORM: &str = "image/sized-raster";
+    static IN_FLIGHT: std::sync::LazyLock<crate::build::cache::Singleflight<Option<String>>> =
+        std::sync::LazyLock::new(crate::build::cache::Singleflight::new);
 
     let ext = source_file
         .extension()
@@ -479,20 +477,57 @@ pub(crate) fn sized_raster_oid_for_original(
         "flatten_alpha": !is_png,
         "format": if is_png { "png" } else { "jpeg" },
     });
+    let job = SizedRasterJob { source_file, source_oid, ext: &ext, fallback_edge, quality, params: &params };
 
-    // ---- Cache hit? (checked BEFORE reading the source at all) ----
-    if !source_oid.is_empty() {
-        if let Some(cached) = transforms.find_cached_output(source_oid, TRANSFORM, &params) {
-            return Some(cached);
-        }
+    if source_oid.is_empty() {
+        return produce_sized_raster(&job, objects, transforms);
     }
+    // ---- Cache hit? (checked BEFORE reading the source at all) ----
+    let cached = || transforms.find_cached_output(source_oid, SIZED_RASTER_TRANSFORM, &params, crate::build::cache::RecordMode::Wait);
+    if let Some(hit) = cached() {
+        return Some(hit);
+    }
+    // The key is the cache entry's own identity. The cache root is in it
+    // because the returned oid names a blob in that site's object store.
+    let key = format!("{}|{source_oid}|{SIZED_RASTER_TRANSFORM}|{params}", transforms.root().display());
+    // Re-checked inside: an encode that finished between the check above and
+    // this call has already cached its output.
+    IN_FLIGHT
+        .do_work(&key, || cached().or_else(|| produce_sized_raster(&job, objects, transforms)))
+        .0
+        .flatten()
+}
+
+const SIZED_RASTER_TRANSFORM: &str = "image/sized-raster";
+
+/// What one sized-raster output depends on, derived once so the cache params
+/// and the in-flight key cannot disagree.
+struct SizedRasterJob<'a> {
+    source_file: &'a Path,
+    source_oid: &'a str,
+    ext: &'a str,
+    fallback_edge: u32,
+    quality: u8,
+    params: &'a serde_json::Value,
+}
+
+/// The cache-miss path: guard, encode, store, record.
+fn produce_sized_raster(
+    job: &SizedRasterJob<'_>,
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+) -> Option<String> {
+    use crate::build::cache::TransformEntry;
+
+    let SizedRasterJob { source_file, source_oid, ext, fallback_edge, quality, params } = *job;
+    let is_png = ext == "png";
 
     // ---- Cloud guard: the bytes are not here, and that is not a verdict. ----
     //
     // Every guard below this point reads the source, and each one answers a
     // question about its CONTENT — is it CMYK, is it animated, does it
     // re-encode smaller. A source that is still in the cloud can answer none of
-    // them, and before moss#982 it silently took the encode-failure arm: an
+    // them, and before this was fixed it silently took the encode-failure arm: an
     // eviction was logged with the same words as a corrupt JPEG, 6,967 times in
     // one incident log, recording nothing anywhere the gate could see.
     //
@@ -532,6 +567,8 @@ pub(crate) fn sized_raster_oid_for_original(
     }
 
     // ---- Encode (decode → orient → resize → [flatten] → JPEG/PNG). ----
+    #[cfg(test)]
+    TEST_HOOK_ENCODED_SOURCES.lock().unwrap().push(source_file.to_path_buf());
     let sized_bytes = match encode_sized_raster(source_file, fallback_edge, quality) {
         Ok(b) => b,
         Err(e) => {
@@ -578,7 +615,7 @@ pub(crate) fn sized_raster_oid_for_original(
         (source_oid.to_string(), source_size)
     } else {
         // Store the sized bytes in the CAS.
-        match objects.store_bytes(&sized_bytes) {
+        match objects.store_bytes(&sized_bytes, crate::build::cache::RecordMode::Wait) {
             Ok(o) => (o, sized_bytes.len() as u64),
             Err(e) => {
                 log::warn!(
@@ -598,26 +635,29 @@ pub(crate) fn sized_raster_oid_for_original(
     // When keep_source, out_oid == source_oid so the cached decision resolves to
     // a verbatim link on the next build without re-encoding.
     if !source_oid.is_empty() {
-        let mut record = transforms.get(source_oid).unwrap_or(TransformRecord {
-            source_oid: source_oid.to_string(),
-            source_size: fs::metadata(source_file).map(|m| m.len()).unwrap_or(0),
-            transforms: std::collections::HashMap::new(),
+        let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
+        let merged = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, |record| {
+            record.transforms.insert(
+                SIZED_RASTER_TRANSFORM.to_string(),
+                TransformEntry {
+                    oid: out_oid.clone(),
+                    size: out_size,
+                    params: params.clone(),
+                },
+            );
         });
-        record.transforms.insert(
-            TRANSFORM.to_string(),
-            TransformEntry {
-                oid: out_oid.clone(),
-                size: out_size,
-                params,
-            },
-        );
-        if let Err(e) = transforms.put(&record) {
+        if let Err(e) = merged {
             log::warn!("[sized-raster] failed to write transform record: {}", e);
         }
     }
 
     Some(out_oid)
 }
+
+/// Test hook: every source this process actually encoded, as opposed to served
+/// from the cache or from an encode already in flight. Compiled only for tests.
+#[cfg(test)]
+pub(crate) static TEST_HOOK_ENCODED_SOURCES: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 /// Cheap animated-PNG (APNG) detection: an `acTL` control chunk appears before
 /// the first `IDAT` in an animated PNG. The still-image decoder used by the

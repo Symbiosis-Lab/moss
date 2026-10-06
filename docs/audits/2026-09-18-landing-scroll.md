@@ -1,0 +1,21 @@
+# Landing scroll and transition audit — 2026-09-18
+
+## Decision
+
+Desktop keeps the existing intent spring. In direct Chromium and WebKit wheel checks it retained the established weighted travel and stopped with scroll snap disabled. Mobile uses `scroll-snap-type: y proximity` with anchors on the intro, each scene, and the closing section. The page does not cancel touch or wheel input in this path, and the mobile scroll watcher reads the browser-owned position without running the JavaScript settle. This adds a restrained detent near a composition while leaving native momentum, reversal, and longer reading pauses to the browser.
+
+Mandatory snapping and `scroll-snap-stop: always` were rejected. The [CSS Scroll Snap specification](https://www.w3.org/TR/css-scroll-snap-1/) requires user agents to choose positions near the natural end point and ensure that users can escape a snap position; proximity is the weaker behavior suited to continuous reading. WebKit documents that iOS momentum is implemented by native `UIScrollView` and that scroll snapping is part of the scrolling system in [its scrolling architecture notes](https://trac.webkit.org/wiki/Scrolling). The page therefore does not recreate touch momentum in JavaScript. The [Document `scrollend` reference](https://developer.mozilla.org/en-US/docs/Web/API/Document/scrollend_event) confirms that a scroll ends only after pending position updates and the user's gesture have completed; it is now broadly available, but no extra listener is needed because CSS proximity already runs at that lifecycle point.
+
+Reduced motion retains static scene states, skips the closing video request, and lets mobile remain on the same browser-owned scroll path. Desktop retains the existing instant reduced-motion arrival. No word-by-word or reset-on-reentry reveal was added. The visual hierarchy and whitespace choices follow the useful parts of the [`guizang-ppt-skill` guidance](https://raw.githubusercontent.com/op7418/guizang-ppt-skill/main/SKILL.md) and its [component reference](https://raw.githubusercontent.com/op7418/guizang-ppt-skill/main/references/components.md): one message per beat, clear type contrast, and restrained motion at semantic-block scale.
+
+## Layout result
+
+The desktop intro is 68% of the small viewport height with its headline lower in the opening field. While the intro is visible, the scene 1 visual remains at 60% of its fitted size and its heading is 34px; both grow to their full scene state as the intro leaves. At 1440×900 the initial visual occupies y=560–878, fully inside the viewport. The desktop copy column moves 88px left, reducing the empty visual-to-copy gap while retaining the visual's uncropped overflow.
+
+At 390×844, the intro and all scene 1 copy end at about 518px, while the visual begins at about 908px, below the first viewport even where the loose plates overhang it; after the intro exits, the copy rests at the top and the visual occupies approximately y=388–778. Both calls to action remain on one row. Later copy uses a paper-color edge gradient rather than a shadow or blur, so it can pass over and dissolve the pinned visual without softening scene 1. Copy blocks are horizontally centered at widths up to 520px. The closing section and footer remain in normal flow.
+
+## Scene 3/4 flicker
+
+The cause was stacking and lifecycle order, not the watercolor shader. The wash canvas is at z-index 6 and the interactive scene 4 fan is at z-index 7. On a scene 4→3 departure, `scenes('morph')` calls `stopOrbit()` before `pour()` changes `data-scene`; the fan therefore remained visible and animated above the outgoing wash for several frames. The shared fix hides `#fan` whenever `#stage.morphing` owns the visual. It does not change the fan's settled entrance or outgoing state captured for the wash.
+
+In both Chromium and WebKit, desktop and 390px mobile checks observed `morphing: true`, fan `visibility: hidden`, and then a clean scene 3 rest. Real wheel input advanced the page in all four cases. Both engines opened at scroll position 0, had no horizontal overflow, kept the scene 1 copy above the mobile visual, and reached the final footer. No page errors were reported. The build used the repository's existing `moss-cli` and served the generated site at the next available port, 8082.

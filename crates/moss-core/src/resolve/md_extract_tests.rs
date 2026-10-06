@@ -176,3 +176,151 @@ fn label_containing_code_span_is_preserved() {
         refs[0].syntax
     );
 }
+
+// ── Angle-bracket destinations ───────────────────────────────────────────
+
+#[test]
+fn angle_bracket_destination_is_unwrapped() {
+    // `[x](<my note.md>)` — CommonMark's alternate destination syntax lets a
+    // path contain a space; pulldown-cmark strips the brackets before the
+    // build resolves it, so the scanner must extract the INNER text, not the
+    // literal "<my note.md>".
+    let src = "[x](<my note.md>)";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "my note.md");
+    // The span excludes the brackets, so a rewrite of just ref_from..ref_to
+    // leaves them in place around the new text.
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "my note.md");
+    assert_eq!(&src[refs[0].byte_from..refs[0].byte_to], "[x](<my note.md>)");
+}
+
+// ── Link reference definitions ───────────────────────────────────────────
+
+#[test]
+fn definition_destination_is_extracted_and_use_needs_no_edit() {
+    // pulldown-cmark resolves `[text][id]` against the `[id]: page.md`
+    // definition and renders a normal link — only the definition's own
+    // destination is a reference; the `[text][id]` use names no path of its
+    // own and must not be extracted a second time.
+    let src = "See [text][id] here.\n\n[id]: page.md\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "only the definition's destination, got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+    assert!(matches!(&refs[0].syntax, RefSyntax::Definition { label } if label == "id"));
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "page.md");
+}
+
+#[test]
+fn definition_inside_code_fence_is_ignored() {
+    let src = "```\n[id]: page.md\n```\n[[find]]";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "only the live ref after the fence, got: {:?}", refs);
+    assert_eq!(refs[0].text, "find");
+}
+
+#[test]
+fn definition_with_angle_bracket_destination_is_unwrapped() {
+    let src = "[id]: <my note.md>\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "my note.md");
+}
+
+#[test]
+fn definition_destination_stops_before_a_title() {
+    let src = "[id]: page.md \"A title\"\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+}
+
+#[test]
+fn definition_inside_a_list_item_is_extracted() {
+    // pulldown-cmark renders `[x][id]` as a working link here — a definition
+    // is recognized inside a list item's content, not just at the top level.
+    let src = "- [id]: page.md\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "page.md");
+}
+
+#[test]
+fn definition_inside_a_blockquote_is_extracted() {
+    let src = "> [id]: page.md\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "page.md");
+}
+
+#[test]
+fn definition_inside_nested_blockquote_and_list_item_is_extracted() {
+    let src = "> - [id]: page.md\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "page.md");
+}
+
+
+#[test]
+fn footnote_definition_is_not_a_link_reference_definition() {
+    let src = "x[^1]\n\n[^1]: [t](../notes/alpha.md)\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "only the link inside the footnote, got: {refs:?}");
+    assert_eq!(refs[0].text, "../notes/alpha.md");
+    assert!(matches!(refs[0].syntax, RefSyntax::MarkdownLink { .. }));
+}
+
+#[test]
+fn escaped_pipe_alias_in_a_table_cell_is_not_part_of_the_target() {
+    let src = "| [[alpha\\|Alias]] |\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].text, "alpha");
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "alpha");
+    assert!(matches!(&refs[0].syntax, RefSyntax::WikilinkAliased { display } if display == "Alias"));
+}
+
+/// Link and image destinations as the build's own Markdown parser reads them
+/// (`LinkType::WikiLink` events are not links here; those have no title).
+fn parser_destinations(src: &str) -> Vec<String> {
+    use pulldown_cmark::{Event, LinkType, Parser, Tag};
+    Parser::new_ext(src, crate::ast::parser::parser_options(false))
+        .filter_map(|ev| match ev {
+            Event::Start(Tag::Link { dest_url, link_type, .. }) if !matches!(link_type, LinkType::WikiLink { .. }) => {
+                Some(dest_url.to_string())
+            }
+            Event::Start(Tag::Image { dest_url, link_type, .. }) if !matches!(link_type, LinkType::WikiLink { .. }) => {
+                Some(dest_url.to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The scanner must separate a destination from its title the way the parser
+/// does, however many words the title has, and span the destination alone.
+#[test]
+fn link_and_image_destinations_stop_before_a_multi_word_title() {
+    let cases = [
+        r#"![i](p.jpg "a title with spaces")"#,
+        r#"[t](p.md "a title with spaces")"#,
+        "[t](p.md 'two words')",
+        "[t](p.md (two words))",
+        r#"[t](p.md   "padded  title"  )"#,
+        r#"[t](<my note.md> "a title")"#,
+        r#"[t](<my note.md> 'a title')"#,
+        r#"[t](p.md "one")"#,
+        "[t](p.md)",
+    ];
+    for src in cases {
+        let refs = extract_md_references(src);
+        let parsed = parser_destinations(src);
+        assert_eq!(refs.len(), 1, "{src}");
+        assert_eq!(vec![refs[0].text.clone()], parsed, "scanner vs parser for {src}");
+        assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], refs[0].text, "span is the destination alone: {src}");
+    }
+}

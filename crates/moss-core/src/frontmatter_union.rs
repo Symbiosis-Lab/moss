@@ -113,7 +113,7 @@ pub fn normalize_series(v: &Value) -> SeriesNorm {
 ///
 /// | Input value                                | Output                       |
 /// |--------------------------------------------|------------------------------|
-/// | `String("作者 糜緒洋")`                      | `["作者 糜緒洋"]`             |
+/// | `String("作者 陳遠山")`                      | `["作者 陳遠山"]`             |
 /// | block scalar `"作者 X\n編輯 Y\n"`            | `["作者 X", "編輯 Y"]`        |
 /// | `Sequence(["作者 X", "編輯 Y"])`             | `["作者 X", "編輯 Y"]`        |
 /// | `String("")` / whitespace / empty sequence  | `[]`                         |
@@ -195,7 +195,7 @@ pub fn normalize_term_claim(v: &Value) -> Result<Option<crate::terms::TermClaim>
 
 /// Normalize an authored `author` value into a list of names.
 ///
-/// A single string is ONE name, kept verbatim — `author: "方六、常籮"` and
+/// A single string is ONE name, kept verbatim — `author: "卓遠、沐恩"` and
 /// `author: "A and B"` are one pre-formatted entry, because splitting on
 /// prose separators would guess. A YAML list is one name per item; the list
 /// form is how co-authors are stated structurally. Unlike
@@ -204,8 +204,8 @@ pub fn normalize_term_claim(v: &Value) -> Result<Option<crate::terms::TermClaim>
 ///
 /// | Input value                       | Output               |
 /// |-----------------------------------|----------------------|
-/// | `String("馬欣宜")`                 | `["馬欣宜"]`          |
-/// | `Sequence(["方六", "常籮"])`        | `["方六", "常籮"]`     |
+/// | `String("林小滿")`                 | `["林小滿"]`          |
+/// | `Sequence(["卓遠", "沐恩"])`        | `["卓遠", "沐恩"]`     |
 /// | `String("")` / blank / empty seq  | `[]`                 |
 /// | `Null`                            | `[]`                 |
 /// | `Bool` / `Number` / `Mapping`     | `Err(_)`             |
@@ -399,16 +399,16 @@ mod tests {
 
     #[test]
     fn credit_single_string_is_one_row() {
-        assert_eq!(normalize_credit_rows(&s("作者 糜緒洋")).unwrap(), vec!["作者 糜緒洋"]);
+        assert_eq!(normalize_credit_rows(&s("作者 陳遠山")).unwrap(), vec!["作者 陳遠山"]);
     }
 
     #[test]
     fn credit_block_scalar_is_one_row_per_line() {
         // What `byline: |` yields: lines plus the trailing newline it always carries.
-        let block = s("作者　糜緒洋\n編輯　謝丁\n首發媒體　[端傳媒](https://x)\n");
+        let block = s("作者　陳遠山\n編輯　周一\n首發媒體　[遠聲媒體](https://x)\n");
         assert_eq!(
             normalize_credit_rows(&block).unwrap(),
-            vec!["作者　糜緒洋", "編輯　謝丁", "首發媒體　[端傳媒](https://x)"]
+            vec!["作者　陳遠山", "編輯　周一", "首發媒體　[遠聲媒體](https://x)"]
         );
     }
 
@@ -448,17 +448,17 @@ mod tests {
 
     #[test]
     fn author_single_string_is_one_name_verbatim() {
-        assert_eq!(normalize_name_list(&s("馬欣宜")).unwrap(), vec!["馬欣宜"]);
+        assert_eq!(normalize_name_list(&s("林小滿")).unwrap(), vec!["林小滿"]);
         // A pre-formatted co-author string is ONE entry: moss never splits prose.
-        assert_eq!(normalize_name_list(&s("方六、常籮")).unwrap(), vec!["方六、常籮"]);
+        assert_eq!(normalize_name_list(&s("卓遠、沐恩")).unwrap(), vec!["卓遠、沐恩"]);
         // Unlike credit rows, a multi-line string does not split into entries.
         assert_eq!(normalize_name_list(&s("A\nB")).unwrap(), vec!["A\nB"]);
     }
 
     #[test]
     fn author_list_is_one_name_per_item() {
-        let seq = Value::Sequence(vec![s(" 方六 "), s("常籮")]);
-        assert_eq!(normalize_name_list(&seq).unwrap(), vec!["方六", "常籮"]);
+        let seq = Value::Sequence(vec![s(" 卓遠 "), s("沐恩")]);
+        assert_eq!(normalize_name_list(&seq).unwrap(), vec!["卓遠", "沐恩"]);
     }
 
     #[test]

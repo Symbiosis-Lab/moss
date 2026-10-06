@@ -188,8 +188,7 @@ describe('parseMarks — multi-line', () => {
 
 // ── PATTERN 7 — incremental decoration update via RangeSet.map ────────
 //
-// These tests pin the contract refactored in PR-3 (see
-// docs/archive/2026-05-22-editor-state-architecture.md): typing plain prose must
+// These tests pin the contract refactored in PR-3: typing plain prose must
 // remap existing decorations through the change set instead of rebuilding the
 // whole DecorationSet by re-parsing the document.
 

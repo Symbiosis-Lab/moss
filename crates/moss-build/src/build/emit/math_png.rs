@@ -1,5 +1,4 @@
-//! Email/RSS math PNG projection (ADR-030 §3.4/§3.5, design
-//! `docs/archive/2026-07-21-latex-math-design.md`).
+//! Email/RSS math PNG projection.
 //!
 //! The website inlines each typeset equation as an `<svg>` (see
 //! `build::markdown::math`). Two surfaces cannot show that SVG:
@@ -28,7 +27,7 @@
 //! are exempt from stale-file/dir pruning (`media::pipeline`), and
 //! [`emit_math_pngs`] re-registers every PNG already on disk into each
 //! build's manifest so old equations keep shipping in every deployed
-//! generation. *Falsifier (ADR-030): if pruning ever removes a math PNG that
+//! generation. *Falsifier: if pruning ever removes a math PNG that
 //! a sent email references, adopt the append-only ledger mechanism
 //! (`.moss/data/math-ledger.json`) in place of the exemption rule.*
 //!
@@ -176,7 +175,7 @@ impl EmailMathImg {
 /// guard, big-stack render, output validation — then derives the `<img>`
 /// geometry from the same layout metrics that drive the web SVG.
 pub fn email_math_img(tex: &str, display: bool) -> Result<EmailMathImg, MathRefusal> {
-    let t = typeset(tex)?;
+    let t = typeset(tex, display)?;
     let ink_w = t.width_em;
     let ink_h = t.height_em + t.depth_em;
     if !(ink_w > 0.0 && ink_h > 0.0) || !ink_w.is_finite() || !ink_h.is_finite() {
@@ -210,6 +209,10 @@ pub fn email_math_html(tex: &str, display: bool, site_url: &str) -> Option<Strin
 /// guarantees it), so an EMPTY fontdb is fine — proven by `og_card.rs`'s
 /// text-free rendering path and the tests below.
 fn rasterize_png(img: &EmailMathImg) -> Result<Vec<u8>, String> {
+    // The engine's own math SVG, never an author's — a usvg/resvg warning
+    // here names no moss file, so it must not reach the terminal
+    // unattributed. See `cli_output::suppress_renderer_warnings`.
+    let _suppress = crate::build::cli_output::suppress_renderer_warnings();
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_str(&img.svg, &opt).map_err(|e| format!("math svg parse: {e}"))?;
     let tree_w = tree.size().width() as f64;
@@ -252,10 +255,11 @@ impl EmailMathImg {
 /// inputs render identical bytes, so whichever writer wins is immaterial.
 fn write_atomic(disk_path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = disk_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        crate::build::io_utils::create_output_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     let tmp = disk_path.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;  // allow:raw_write the temp this fn just minted; the rename below is the output write
+    // allow:unlink rename into place: the PNG is replaced, never absent
     std::fs::rename(&tmp, disk_path).map_err(|e| format!("rename {}: {e}", disk_path.display()))
 }
 
@@ -263,7 +267,12 @@ fn write_atomic(disk_path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// Parses with the SAME pulldown dialect as the web build and the email
 /// walkers (`moss_core::ast::parser_options`), so the event text — and thus
 /// the content hash — is identical at every call site.
-fn collect_math_events(markdown: &str) -> Vec<(String, bool)> {
+///
+/// `pub(crate)`: also the pure, no-RaTeX way `parse_cache::math_cache_finish_build`
+/// computes "which equations does this build's corpus still contain" without
+/// triggering a render as a side effect of asking (`typeset_math_hashes`,
+/// below, would — it calls `email_math_img` per event to check eligibility).
+pub(crate) fn collect_math_events(markdown: &str) -> Vec<(String, bool)> {
     use pulldown_cmark::{Event, Parser};
     Parser::new_ext(markdown, moss_core::ast::parser_options(true))
         .filter_map(|ev| match ev {
@@ -344,11 +353,10 @@ pub fn emit_math_pngs(
             let name = entry.file_name();
             let name = name.to_string_lossy();
             // A crash between temp-write and rename leaves `*.pending.<uuid>`
-            // behind, and the stale-cleanup exemption on _moss/math/ means
-            // nothing else will ever remove it — sweep it here. Only real
-            // `<hash>.png` files are append-only.
+            // behind. It is never registered; the permitted staging sweep
+            // removes it. Removing it here could take a concurrent
+            // `write_atomic`'s temp mid-rename.
             if name.contains(".pending.") {
-                let _ = std::fs::remove_file(entry.path());
                 continue;
             }
             let Some(stem) = name.strip_suffix(".png") else { continue };
@@ -359,7 +367,7 @@ pub fn emit_math_pngs(
                 }
                 // Unreadable or a 0-byte eviction stub. Dropping it would let
                 // the next publish remove a URL that is already in somebody's
-                // inbox, which ADR-030 §3.4 forbids — so carry the previous
+                // inbox, which the append-only design forbids — so carry the previous
                 // build's entry instead. The PNG is content-addressed, so that
                 // entry describes these exact bytes; C1 is what makes the file
                 // itself come back.
@@ -660,8 +668,8 @@ mod tests {
 
     /// An unreadable math PNG must keep its manifest entry, not lose it.
     ///
-    /// These URLs are already in people's inboxes: ADR-030 §3.4 makes the
-    /// directory append-only precisely so a published `<img>` never 404s. The
+    /// These URLs are already in people's inboxes: the directory is
+    /// append-only precisely so a published `<img>` never 404s. The
     /// walk used to `continue` past a file it could not read, which silently
     /// dropped the entry and let the next publish delete the URL from the live
     /// site. The hash is in the previous manifest and the file is
@@ -767,22 +775,6 @@ mod tests {
     }
 
     #[test]
-    fn retention_sweeps_crashed_pending_temps_but_keeps_pngs() {
-        let dir = tempfile::tempdir().unwrap();
-        let math = dir.path().join("_moss").join("math");
-        std::fs::create_dir_all(&math).unwrap();
-        std::fs::write(math.join("aaaaaaaaaaaaaaaa.png"), b"real png").unwrap();
-        let stub = math.join("aaaaaaaaaaaaaaaa.pending.dead-uuid");
-        std::fs::write(&stub, b"crash leftover").unwrap();
-
-        let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
-        emit_math_pngs(&[], true, dir.path(), &mut pending).unwrap();
-
-        assert!(!stub.exists(), "crashed temp must be swept (stale cleanup skips this dir)");
-        assert!(math.join("aaaaaaaaaaaaaaaa.png").exists(), "real PNGs stay");
-    }
-
-    #[test]
     fn emit_is_idempotent_byte_for_byte() {
         let dir = tempfile::tempdir().unwrap();
         let docs = vec![doc_with("$\\frac{a}{b}$")];
@@ -800,6 +792,73 @@ mod tests {
             std::fs::metadata(&disk).unwrap().modified().unwrap(),
             mtime1,
             "existing file must be reused, not rewritten"
+        );
+    }
+
+    // ---- Render caching ----
+    //
+    // `emit_math_pngs` already skips the PNG *write* for an existing file
+    // (`emit_is_idempotent_byte_for_byte`, above), but that guard is on the
+    // OUTPUT file, not the typeset — without a render cache, every equation
+    // is re-typeset on every build regardless. This asserts the render cache
+    // (`markdown::math::typeset_count`, shared with the HTML/SVG path) now
+    // catches that: a repeat emit with nothing changed costs zero typesets,
+    // and a changed equation costs exactly one.
+    #[test]
+    fn repeat_emit_of_an_unchanged_equation_skips_the_typeset() {
+        use crate::build::markdown::math::typeset_count;
+
+        let dir = tempfile::tempdir().unwrap();
+        let tex = r"\gamma_{cache_probe_c3d1}";
+        let changed_tex = r"\gamma_{cache_probe_c3d1} + 1";
+        let docs = vec![doc_with(&format!("${tex}$"))];
+
+        // Captured BEFORE anything else touches `tex`, so this is a genuine
+        // miss — the reference the later cache HITS must reproduce. Calling
+        // `email_math_img` again after `emit_math_pngs` has already cached
+        // the equation would itself be a hit, and comparing a hit against
+        // another hit can't catch a cache that mutates every hit the same
+        // way (an earlier draft of this test made exactly that mistake).
+        let fresh = email_math_img(tex, false).unwrap();
+        assert_eq!(typeset_count(tex, false), 1, "first call for a new equation must typeset");
+
+        let mut p1 = PendingManifest::new(crate::types::content::SiteHashes::default());
+        emit_math_pngs(&docs, true, dir.path(), &mut p1).unwrap();
+        assert_eq!(
+            typeset_count(tex, false),
+            1,
+            "emit_math_pngs must reuse the cached typeset, not redo it"
+        );
+
+        let mut p2 = PendingManifest::new(crate::types::content::SiteHashes::default());
+        emit_math_pngs(&docs, true, dir.path(), &mut p2).unwrap();
+        assert_eq!(
+            typeset_count(tex, false),
+            1,
+            "re-emitting the SAME equation must not typeset again"
+        );
+        // The counter only proves RaTeX was skipped; it says nothing about
+        // whether the cache handed back the RIGHT bytes instead. A cache hit
+        // that quietly returned a different SVG would still pass the
+        // count-based assertion above, and would rasterize into a WRONG png
+        // for a URL Gmail's proxy caches forever (module doc, "append-only
+        // retention").
+        let cached = email_math_img(tex, false).unwrap();
+        assert_eq!(
+            cached.svg, fresh.svg,
+            "a cache hit must rasterize from the identical SVG a fresh typeset produced"
+        );
+        assert_eq!(cached.width_1x, fresh.width_1x);
+        assert_eq!(cached.height_1x, fresh.height_1x);
+        assert_eq!(cached.valign_1x_px, fresh.valign_1x_px);
+
+        let changed = vec![doc_with(&format!("${changed_tex}$"))];
+        let mut p3 = PendingManifest::new(crate::types::content::SiteHashes::default());
+        emit_math_pngs(&changed, true, dir.path(), &mut p3).unwrap();
+        assert_eq!(
+            typeset_count(changed_tex, false),
+            1,
+            "a DIFFERENT equation must still typeset exactly once"
         );
     }
 

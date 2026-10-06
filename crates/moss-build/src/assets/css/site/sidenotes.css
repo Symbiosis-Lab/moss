@@ -4,15 +4,14 @@
    core styles no `.moss-footnote*` element (a partial may only style what
    it owns — stylesheet_tests.rs).
 
-   Design: docs/archive/2026-08-24-footnote-sidenotes-design.md, layout (C):
-   a gutter is reserved on the right at wide viewports and the column moves
+   A gutter is reserved on the right at wide viewports and the column moves
    left only if the window is too narrow to hold both — so a footnoted page
    and a plain page read as the same layout, whichever of them a reader is on.
    Nav, article, comments and footer all move together, which keeps their
    shared left edge aligned. Column + gutter were centred as ONE ASSEMBLY
    until 2026-09-01, which cost a 140px move at every width and gave 244 of
    one site's 252 pages an empty band; the move is now only what the window is
-   short (docs/archive/2026-09-01-sidenote-gutter-shift-amount.md), zero from
+   short, zero from
    about 1316px up, and core derives it in site.css as --moss-sidenote-inset.
 
    The reserve is measured, not breakpointed, within the coarse 76rem gate:
@@ -26,8 +25,7 @@
    and the reader gets the SHEET presentation at any width — the design's
    "no gutter to place notes in" fallback.
 
-   The front page joined that list on 2026-08-30
-   (docs/archive/2026-08-30-sidenote-gutter-page-kind.md). The consistency the
+   The front page joined that list on 2026-08-30. The consistency the
    reserve buys is between pages a reader experiences as the same layout, and
    a front page is a composition — a hero and card grids, no reading column to
    keep aligned with anything, so the reserve buys it nothing to be consistent
@@ -63,14 +61,13 @@
    At narrow widths the list is the interface: sidenotes.ts lifts the SAME
    section as a bottom sheet via `.moss-footnotes-lifted` (position:
    sticky + a height clip). One surface, nothing cloned into a sheet.
-   Design: docs/archive/2026-08-25-sidenote-sheet-one-surface-redesign.md.
 
    Wrapped in @layer shortcodes to match the position the footnote rules hold
    inside site.css; multiple @layer blocks of the same name merge. */
 
 @layer shortcodes {
 
-/* Footnotes (ADR-034). The renderer appends `.moss-footnotes` after the body
+/* Footnotes. The renderer appends `.moss-footnotes` after the body
    on any page that defines one, so the section is its own closing movement:
    a rule, smaller type, and quieter colour set it apart from the article
    without hiding it. Numbering comes from the `<ol>`, so the markers and the

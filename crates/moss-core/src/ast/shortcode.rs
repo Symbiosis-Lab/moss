@@ -39,7 +39,7 @@ pub enum Shortcode {
     /// Optional `{.classname}` extra classes attach to the wrapping div.
     ///
     /// URLs flow through [`Url::Unresolved`] at parse time;
-    /// [`crate::ast::visit::visit_urls_mut`] (or src-tauri's
+    /// [`crate::ast::visit::visit_urls_mut`] (or moss-build's
     /// `apply_typed_shortcodes`) classifies them into [`Url::Resolved`]
     /// before rendering. The resolver-bypass class is closed by
     /// construction: `RenderHooks::render_shortcode` reads `Url::Resolved`,
@@ -65,7 +65,7 @@ pub enum Shortcode {
     /// `:::grid {cols=N}` or `:::grid N` — flexible multi-cell layout.
     ///
     /// Cells are split on `+++` (new grammar) or `---` (legacy moss-releases
-    /// backward-compat — Step 3 of #613 rewrites these to `+++`). Each cell
+    /// backward-compat — a migration step rewrites these to `+++`). Each cell
     /// stores its raw markdown source; the renderer is responsible for any
     /// nested-shortcode extraction and markdown processing per cell.
     Grid(GridShortcode),
@@ -168,7 +168,7 @@ pub struct GridShortcode {
     /// [`crate::ast::parser::parse`] recursion in
     /// [`crate::ast::shortcode_extract::parse_grid`].
     ///
-    /// Compound-link cells (the SoCiviC `[![[poster]] ### Title ...](/url)`
+    /// Compound-link cells (the `[![[poster]] ### Title ...](/url)`
     /// pattern, where the entire cell is wrapped in a markdown link that
     /// spans block-level inner content) are represented as a single-element
     /// `vec![Block::LinkCard { url, children }]`. See
@@ -179,6 +179,60 @@ pub struct GridShortcode {
     /// a width — the emitter omits `data-width` so the HTML stays sparse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<String>,
+    /// From the bare `scroll` keyword: the row stays on one line and the
+    /// reader scrolls it sideways instead of it wrapping/collapsing.
+    /// `data-columns` then reads as "how many cards fit in view at once"
+    /// rather than "how many per row".
+    #[serde(default)]
+    pub scroll: bool,
+    /// Accessible name for the scrolling row (`label="…"`). Only meaningful
+    /// alongside `scroll` — rendered as `aria-label` (with `role="region"`)
+    /// on the wrapping element; `None` when the author did not set it, or
+    /// when the grid never became a scroll region in the first place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl GridShortcode {
+    /// True whenever this grid is a scroll row AT ALL — the author wrote
+    /// `{scroll}` and there's more than one cell. A single-cell `{scroll}`
+    /// grid has nothing to drag past at any viewport width, so it never
+    /// counts, even though `cells.len() <= columns` would otherwise call it
+    /// "fits". Everything downstream that decides whether the scroll-row
+    /// machinery exists AT ALL for this grid — `data-scroll`/`tabindex` on
+    /// the emitted element ([`crate::ast::grid_parts::render_grid_parts`]),
+    /// the accessible-name fallback
+    /// ([`crate::build::markdown::body_plan`] in moss-build), and the
+    /// `scroll_rows` page-feature gate that ships `scroll-row.js`
+    /// ([`crate::ast::visit::has_scroll_row_recursive`]) — calls this
+    /// rather than reading `scroll` directly, so they cannot disagree about
+    /// which grids get it. It says nothing about whether the row scrolls at
+    /// every width or only once the viewport narrows — see
+    /// [`Self::fits_without_scrolling`] for that.
+    pub fn is_scroll_row(&self) -> bool {
+        self.scroll && self.cells.len() >= 2
+    }
+
+    /// True when a scroll row's own cells already fit in one line at its
+    /// authored `columns` count. Only meaningful when [`Self::is_scroll_row`]
+    /// is already true — a plain (non-`{scroll}`) grid, or a one-cell
+    /// `{scroll}` grid, never asks this.
+    ///
+    /// A fitting row (`cells.len() <= columns`) is not exempt from the
+    /// scroll-row treatment the way it used to be: on a screen wide enough
+    /// to show every card at once it renders exactly like the plain grid —
+    /// N equal tracks, no drag, no dots — but once the viewport narrows
+    /// past the same breakpoint that would otherwise wrap a plain grid to
+    /// one column, it becomes a real scroller instead, one card (plus a
+    /// peek) at a time. The emitter marks this case with `data-fits`
+    /// alongside `data-scroll`, and `site.css`/`site/vertical.css` key the
+    /// wide-screen plain-grid layout off that marker; the script still
+    /// ships and still attaches (`is_scroll_row` is what gates it), because
+    /// only the runtime knows which side of the breakpoint the reader is
+    /// actually on right now.
+    pub fn fits_without_scrolling(&self) -> bool {
+        self.cells.len() <= self.columns as usize
+    }
 }
 
 /// Arguments for [`Shortcode::Hero`].
@@ -194,7 +248,7 @@ pub struct HeroShortcode {
     /// consecutive leading body media line after the first. Non-empty →
     /// the hero renders an ambient crossfade (one slide visible at a
     /// time, no controls — no slide may carry information the others
-    /// don't; design: docs/archive/2026-07-27-import-conventions-engine-design.md).
+    /// don't).
     /// Empty for `image=`-attribute and directive-line heroes.
     pub extra_images: Vec<Url>,
     /// Pipe-suffix media attributes verbatim (e.g. "cover top",
@@ -239,6 +293,16 @@ pub struct HeroShortcode {
     /// (image full-width at natural ratio, text block below).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mobile: Option<String>,
+    /// Which inline edge the overlay panel sits at. `Some("end")` moves it
+    /// to the END of the inline axis — right in LTR, left in RTL — instead
+    /// of the default start. For a portrait subject in a wide frame, the
+    /// crop cannot move it sideways (the image already spans the full
+    /// width), so when the subject sits at the start edge the overlay is
+    /// what has to move instead. `None` = default start placement. Below
+    /// the mobile breakpoint under `mobile=overlay` the panel is full
+    /// width, so this has no visible effect there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<String>,
     /// Caption or credit for the image, from `caption="…"`. Rendered as a
     /// line of text BELOW the hero, never over it.
     ///
@@ -271,7 +335,7 @@ pub struct ApplyShortcode {
 ///
 /// Parameters parsed at shortcode-extract time; the query runs at render
 /// time against the full post set. Renderer lives in
-/// `src-tauri/src/build/markdown/recent.rs`.
+/// moss-build's `recent.rs`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecentShortcode {
     /// `since="YYYY-MM-DD"` — posts on or after this date. Stored as the
@@ -340,8 +404,8 @@ impl ShortcodeKind {
     /// application form, meaningful only on sites configured for it, so it
     /// parses and renders but is never suggested. The decision lives here,
     /// in Rust, once — the generated catalog
-    /// (`frontend/app/editor/shortcodes.generated.ts`) carries it as the
-    /// `authorable` flag (design: docs/archive/2026-08-11-cm6-extraction-design.md §4, §7.1).
+    /// (the frontend editor's `shortcodes.generated.ts`) carries it as the
+    /// `authorable` flag.
     pub fn authorable(self) -> bool {
         !matches!(self, ShortcodeKind::Apply)
     }
@@ -566,6 +630,50 @@ mod tests {
         let s = serde_json::to_string(&sc).expect("serialize");
         let back: Shortcode = serde_json::from_str(&s).expect("deserialize");
         assert_eq!(sc, back);
+    }
+
+    // ---- Grid ----
+
+    fn grid_with(columns: u32, cell_count: usize, scroll: bool) -> GridShortcode {
+        GridShortcode {
+            columns,
+            scroll,
+            cells: (0..cell_count).map(|_| vec![Block::Paragraph(vec![])]).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn is_scroll_row_is_false_without_the_scroll_flag_at_every_cell_count() {
+        assert!(!grid_with(3, 1, false).is_scroll_row());
+        assert!(!grid_with(3, 2, false).is_scroll_row());
+        assert!(!grid_with(3, 3, false).is_scroll_row());
+        assert!(!grid_with(3, 4, false).is_scroll_row());
+    }
+
+    #[test]
+    fn is_scroll_row_is_false_for_a_single_cell_even_with_scroll() {
+        // Nothing to drag past at any width — `{scroll}` on a one-cell grid
+        // is a no-op, not a fitting scroll row.
+        assert!(!grid_with(3, 1, true).is_scroll_row());
+    }
+
+    #[test]
+    fn is_scroll_row_is_true_for_two_or_more_cells_with_scroll_whether_or_not_they_fit() {
+        assert!(grid_with(3, 2, true).is_scroll_row());
+        assert!(grid_with(3, 3, true).is_scroll_row());
+        assert!(grid_with(3, 4, true).is_scroll_row());
+    }
+
+    #[test]
+    fn fits_without_scrolling_is_true_at_or_under_columns() {
+        assert!(grid_with(3, 2, true).fits_without_scrolling());
+        assert!(grid_with(3, 3, true).fits_without_scrolling());
+    }
+
+    #[test]
+    fn fits_without_scrolling_is_false_once_cells_exceed_columns() {
+        assert!(!grid_with(3, 4, true).fits_without_scrolling());
     }
 
     // ---- Recent ----

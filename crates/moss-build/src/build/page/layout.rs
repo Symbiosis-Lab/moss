@@ -21,8 +21,8 @@ pub struct LayoutConfig {
     /// scripts get a `<script>` tag, which CSS partials ship. One embedded
     /// [`SiteAssets`] rather than a private copy of five of its bools: the
     /// render paths used to read `LayoutConfig::math` while the emitter read
-    /// `SiteAssets::math`, two names for one fact that could disagree
-    /// (#1149). `with_math`/`with_search`/`with_link_preview`/
+    /// `SiteAssets::math`, two names for one fact that could disagree.
+    /// `with_math`/`with_search`/`with_link_preview`/
     /// `with_heading_anchors` write here; `with_assets` replaces the whole set
     /// once the page fold and the asset registry know the rest.
     ///
@@ -31,19 +31,22 @@ pub struct LayoutConfig {
     /// navigation, so a tag that came and went per page would turn every such
     /// navigation into a reload.
     pub assets: SiteAssets,
-    /// `[site].floating_nav` — the floating nav island (ADR-049, default OFF
+    /// `[site].floating_nav` — the floating nav island (default OFF
     /// since 2026-08-30, explicit opt-in). Site-level for the same reason as
     /// `math`: the island is chrome, present on every breadcrumbed page or none.
     pub floating_nav: bool,
+    /// `[site].header` — resolved. See `crate::build::components::nav::HeaderMode`.
+    pub header: crate::build::components::nav::HeaderMode,
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
     /// on a page that declares none of its own.
     ///
     /// A tag, not a [`Language`]: moss draws its interface in three languages
-    /// and `lang` describes the content (#977), so `[site] lang = "fr"`
+    /// and `lang` describes the content, so `[site] lang = "fr"`
     /// belongs here in full even though the chrome falls back to English.
     /// Before 2026-09-01 the render path only had the three-variant enum, so
     /// a French site's artifact said `fr` while its pages said `en`.
     pub lang_tag: String,
+    pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
 }
 
 impl LayoutConfig {
@@ -71,7 +74,9 @@ impl LayoutConfig {
                 ..SiteAssets::default()
             },
             floating_nav: false,
+            header: crate::build::components::nav::HeaderMode::Brand,
             lang_tag: "en".to_string(),
+            place_maps: None,
         }
     }
 
@@ -139,6 +144,12 @@ impl LayoutConfig {
         self
     }
 
+    /// Set `[site].header` (default `HeaderMode::Brand`)
+    pub fn with_header_mode(mut self, header: crate::build::components::nav::HeaderMode) -> Self {
+        self.header = header;
+        self
+    }
+
     /// Replace the whole gate set with the build's folded [`SiteAssets`].
     /// Called once, after the page fold and the asset registry know the
     /// content-derived facts (`has_footnotes`, `media_pages`, `video_ladder`);
@@ -146,6 +157,11 @@ impl LayoutConfig {
     /// use before that point.
     pub fn with_assets(mut self, assets: SiteAssets) -> Self {
         self.assets = assets;
+        self
+    }
+
+    pub fn with_place_maps(mut self, place_maps: Option<crate::build::place_map::PlaceMapRenderContext>) -> Self {
+        self.place_maps = place_maps;
         self
     }
 }
@@ -156,8 +172,8 @@ mod tests {
 
     #[test]
     fn test_site_name_uses_homepage_title() {
-        let config = LayoutConfig::new("my-blog", Some("刘果"));
-        assert_eq!(config.site_name, "刘果");
+        let config = LayoutConfig::new("my-blog", Some("山居"));
+        assert_eq!(config.site_name, "山居");
     }
 
     #[test]
@@ -174,7 +190,7 @@ mod tests {
 
     #[test]
     fn floating_nav_is_opt_in() {
-        // ADR-049 §1 as amended 2026-08-30. A second navigation bar is an
+        // As amended 2026-08-30: a second navigation bar is an
         // addition to someone's site, so it is asked for rather than
         // inherited — and `render/html.rs` emits the island only when this is
         // true, which makes this line the whole of "no island by default".

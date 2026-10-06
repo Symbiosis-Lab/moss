@@ -187,11 +187,12 @@ fn describe_plugin_contract_structs_serialize_correctly() {
 
 /// The seven hooks the 2026-08-03 audit found invisible.
 ///
-/// okagaki and 潮汐 — the two most heavily customized moss sites — between them
-/// set six custom properties and hung their layouts off three structural
-/// attributes. Before schema v6, `describe --json` reported **none** of them,
-/// so an agent given moss's own contract could not have written either theme.
-/// This is the acceptance test for that gap.
+/// A large live site and a literary-award site — the two most heavily
+/// customized moss sites — between them set six custom properties and hung
+/// their layouts off three structural attributes. Before schema v6, `describe
+/// --json` reported **none** of them, so an agent given moss's own contract
+/// could not have written either theme. This is the acceptance test for that
+/// gap.
 #[test]
 fn the_hooks_the_flagship_themes_actually_used_are_discoverable() {
     let tokens = load_tokens().expect("tokens");
@@ -200,15 +201,15 @@ fn the_hooks_the_flagship_themes_actually_used_are_discoverable() {
     let blob = json.to_string();
 
     for hook in [
-        // set by okagaki
+        // set by the large live site
         "--moss-hero-object-position",
-        // set by 潮汐
+        // set by the literary-award site
         "--moss-grid-image-ratio",
         "--moss-grid-image-radius",
         "--moss-grid-image-fit",
         "--moss-card-cover-ratio",
         "--moss-card-cover-fit",
-        // the cap okagaki hand-fought across three selectors
+        // the cap the large live site hand-fought across three selectors
         "--moss-hero-max-height",
         // structural attributes both themes scoped to
         "data-page",

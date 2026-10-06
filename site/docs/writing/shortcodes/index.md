@@ -44,7 +44,7 @@ Inside `:::grid` and `:::buttons`, cells are separated by a line containing only
 
 ## Configuration
 
-Pass options in the attribute block, not the body. For example: `:::subscribe {placeholder="..." button="..."}` or `:::grid {cols=2}` (the positional form `:::grid 2` also works). Descriptive prose belongs above or below the block, not inside the option line.
+Pass options in the attribute block, not the body. For example: `:::subscribe {placeholder="..." button="..."}` or `:::grid {per-line=2}` (the positional form `:::grid 2` also works, and is what the docs below lead with; the older `cols=` spelling still works but is deprecated). Descriptive prose belongs above or below the block, not inside the option line.
 
 ## Shortcodes
 

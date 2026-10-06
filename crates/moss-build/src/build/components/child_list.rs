@@ -28,6 +28,24 @@ pub struct ArticleListItemProps {
     pub url: String,
     /// Article title
     pub title: String,
+    /// The page's own `url_path`, which breaks a tie between two rows on the
+    /// same date — the same key the folder's series links use.
+    pub url_path: String,
+    /// The page's resolved place, plain and unlinked (`ParsedDocument::place_names`)
+    /// — shown next to the date by [`with_place`]. `None` for a page with no
+    /// resolved `location:`.
+    pub place: Option<String>,
+}
+
+impl ArticleListItemProps {
+    pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
+        moss_core::sort::DateSortKey {
+            date: self.date_raw.as_deref(),
+            is_folder: false,
+            label: &self.title,
+            url_path: &self.url_path,
+        }
+    }
 }
 
 /// Renders an article list item as HTML.
@@ -86,15 +104,21 @@ pub fn render(
         // Year + month (e.g., "2025 · 11")
         props.date_display.clone()
     };
+    // The page's resolved place next to its date — see `with_place`. Applied
+    // before the empty check below: a bare-year row under a `minimal` month
+    // prefix can have no month text at all, and a place is still worth a row
+    // on its own rather than vanishing alongside the empty date.
+    let date_display = with_place(&date_display, props.place.as_deref());
 
-    // An empty prefix means a year-only date under its own year heading; emit
-    // no span at all rather than one that lays out as a blank column.
+    // An empty prefix means a year-only date under its own year heading, and
+    // no place either; emit no span at all rather than one that lays out as
+    // a blank column.
     let prefix = if date_display.is_empty() {
         String::new()
     } else {
         format!(
             r#"<span class="moss-prefix-link-prefix date">{}</span>"#,
-            html_escape(&date_display)
+            date_display
         )
     };
     format!(
@@ -116,7 +140,10 @@ pub struct ChildItemProps {
     pub date_raw: Option<String>,
     /// Number of articles inside. None for leaf articles
     pub child_count: Option<usize>,
-    /// From frontmatter description or auto-extracted
+    /// From frontmatter description or auto-extracted. Markdown, not plain
+    /// text — a renderer prints it with `page::meta::render_description_html`,
+    /// never a bare escape, the way `child_summary`/`grid_card`/this file's
+    /// own `render_child` already do.
     pub description: Option<String>,
     /// Optional cover image path
     pub cover: Option<String>,
@@ -137,6 +164,69 @@ pub struct ChildItemProps {
     /// year-grouped row layout has no slot for a second anchor.
     /// `None` for ordinary cards (where `url` is already the local URL).
     pub permalink: Option<String>,
+    /// The page's own `url_path`. Unlike `url`, neither `external_url:` nor a
+    /// directory override changes it, so it is what breaks a tie between two
+    /// cards on the same date.
+    pub url_path: String,
+    /// The page's resolved place, plain and unlinked (`ParsedDocument::place_names`)
+    /// — shown next to a leaf's date by [`with_place`]; never shown beside a
+    /// folder's count, which is not a date. `None` for a page with no
+    /// resolved `location:`.
+    pub place: Option<String>,
+}
+
+impl ChildItemProps {
+    pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
+        moss_core::sort::DateSortKey {
+            date: self.date_raw.as_deref(),
+            is_folder: self.child_count.is_some(),
+            label: &self.title,
+            url_path: &self.url_path,
+        }
+    }
+}
+
+/// The compact meta text for a leaf's date, with its resolved place appended
+/// when the page declares one — the single owner of this composition.
+/// `grid_card::render_item`, `child_summary::render_with_sort` and this
+/// module's own `render`/`render_child` each decided independently whether a
+/// date-or-count string needed anything else beside it; this fold is that
+/// one decision, made once, so a place name (always author-supplied text)
+/// gets escaped exactly once rather than at three call sites with three
+/// different escaping habits — `grid_card`'s `count_text` was interpolated
+/// unescaped before this fold, safe only because it never carried anything
+/// but machine-generated text.
+///
+/// `text` is escaped even with no place to append, so every caller can stop
+/// escaping it separately.
+pub(crate) fn with_place(text: &str, place: Option<&str>) -> String {
+    let text = html_escape(text);
+    match place.map(str::trim).filter(|p| !p.is_empty()) {
+        None => text,
+        Some(p) if text.is_empty() => html_escape(p),
+        Some(p) => format!("{} · {}", text, html_escape(p)),
+    }
+}
+
+/// The compact meta text every listing form shows: a leaf's date (with its
+/// place via [`with_place`]), a folder's article count, or — when a child
+/// folder's own home page declares a date — that date (with its place) and
+/// the count after it, the same `date · place` a page's own meta gets. The
+/// one owner of this composition; `grid_card`, `child_summary` and this
+/// module's own `render_child` all call it instead of deciding count-vs-date
+/// on their own.
+///
+/// `count_label` is `None` for a leaf (no count at all) and `Some` for a
+/// folder (always shown, with or without a date of its own) — a folder's
+/// place only ever shows beside ITS OWN date, never beside a bare count.
+pub(crate) fn meta_text(date_display: Option<&str>, place: Option<&str>, count_label: Option<&str>) -> String {
+    match count_label {
+        Some(count) => match date_display {
+            Some(date) => format!("{} · {}", with_place(date, place), html_escape(count)),
+            None => html_escape(count),
+        },
+        None => with_place(date_display.unwrap_or(""), place),
+    }
 }
 
 /// Build one card's props from the document it describes.
@@ -177,8 +267,21 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         .filter(|n| *n > 0);
 
     let (child_count, date_raw, date_display) = if let Some(count) = article_count {
-        let latest = crate::build::folder_embed::folder_latest_date(doc, all_docs, root_path);
-        (Some(count), latest, None)
+        // A folder's own home page can declare `date:` (and `location:`)
+        // just like any page — that's the date a reader picks the folder
+        // by, so it wins over `folder_latest_date` (the latest date among
+        // the folder's children, which stays the fallback when the home
+        // page has none of its own, e.g. a folder that only groups other
+        // dated pages). `date_display` is set ONLY from the folder's own
+        // date, never from the fallback: a folder with no date of its own
+        // keeps showing just its count, exactly as before.
+        let date_display = doc.date.as_deref().map(|d| {
+            date_formatters::format_compact_date(d, doc.lang, typesetting)
+        });
+        let date_raw = doc.date.clone().or_else(|| {
+            crate::build::folder_embed::folder_latest_date(doc, all_docs, root_path)
+        });
+        (Some(count), date_raw, date_display)
     } else {
         // `dd` is Arabic-formatted; re-format the raw date so a vertical-CJK
         // page gets CJK numerals.
@@ -210,7 +313,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     // page itself is still built at its slug; direct visits keep working.
     // Pattern from JSON Feed 1.1. The local archive URL is preserved as the
     // card's `permalink` so child_summary can emit a `★` mark next to the
-    // kicker (the Daring-Fireball linkblog convention — see #680).
+    // kicker (the Daring-Fireball linkblog convention).
     let external_url = crate::build::scan::page_map::external_url(&doc.raw_frontmatter);
     let local_url =
         path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path));
@@ -230,6 +333,8 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
             .map(|c| detect_cover_type(c, doc.cover_type.as_deref())),
         kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
         permalink,
+        url_path: doc.url_path.clone(),
+        place: doc.place_names.clone(),
     }
 }
 
@@ -238,20 +343,25 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
 /// - For articles (child_count is None, date_display is Some): renders with the
 ///   full-precision date prefix ("year · month", or "year" alone) — there is no
 ///   year heading above this row to carry it, unlike the year-grouped rows.
-/// - For folders (child_count is Some): renders with count suffix (e.g., "4 篇")
+/// - For folders (child_count is Some): renders with count suffix (e.g., "4 篇");
+///   a folder whose own home page declares a date gets that date (and its
+///   place) ahead of the count, the same way a page's date reads, via
+///   [`meta_text`].
 /// - For articles without date: renders title only
 pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typesetting: Option<&str>) -> String {
     let escaped_url = html_escape(&props.url);
     let escaped_title = html_escape(&props.title);
 
     if let Some(count) = props.child_count {
-        let count_text = html_escape(&crate::i18n::article_count_label(lang, count, typesetting));
+        let count_label = crate::i18n::article_count_label(lang, count, typesetting);
+        let count_text = meta_text(props.date_display.as_deref(), props.place.as_deref(), Some(&count_label));
 
         if let Some(ref desc) = props.description {
             // Folder WITH description: title + count suffix, description below
             format!(
                 r#"<div class="moss-card moss-folder-item"><a href="{}" class="moss-prefix-link moss-folder-link"><span class="moss-prefix-link-title">{}</span><span class="moss-prefix-link-suffix">{}</span></a><p class="moss-folder-description">{}</p></div>"#,
-                escaped_url, escaped_title, count_text, html_escape(desc)
+                escaped_url, escaped_title, count_text,
+                crate::build::page::meta::render_description_html(desc)
             )
         } else {
             // Folder WITHOUT description: count in prefix slot
@@ -264,19 +374,22 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // Article with a raw date — full precision, since there is no year
         // heading above this row (unlike the year-grouped rows) to carry it:
         // "year · month" when the date has a month, "year" when that's all
-        // it has. Same compact form grid cards use.
+        // it has. Same compact form grid cards use. The page's resolved
+        // place, if any, goes right next to it — see `with_place`.
         let date = date_formatters::format_compact_date(date_raw, lang, typesetting);
+        let date = with_place(&date, props.place.as_deref());
         format!(
             r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, html_escape(&date), escaped_title
+            escaped_url, date, escaped_title
         )
     } else if let Some(ref date_display) = props.date_display {
         // Article with a display date but no raw date. `date_display` is
         // already the compact "year · month"/"year" form —
         // `props_for_document` formatted it with `format_compact_date`.
+        let date = with_place(date_display, props.place.as_deref());
         format!(
             r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, html_escape(date_display), escaped_title
+            escaped_url, date, escaped_title
         )
     } else {
         // Article without any date

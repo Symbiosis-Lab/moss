@@ -62,14 +62,17 @@ pub fn run(args: &[String], binary_version: &'static str) -> i32 {
 }
 
 /// Plugin hook table — one entry per `Capability` variant in
-/// `plugins/types.rs`.
+/// `plugins/types.rs` that is independently dispatched to a plugin's own
+/// export. `Capability::Import` is deliberately absent: it exists for
+/// onboarding-catalog filtering and legacy-manifest migration, but a plugin
+/// that declares it still implements `process(ctx)` — there is no separate
+/// `import` export moss ever calls.
 ///
 /// Arity rules:
 /// - "single": at most one plugin may be active for this hook per project
-///   (hooks where two plugins doing the same thing would be redundant or
-///   conflict — generate, deploy).
-/// - "multiple": many plugins may coexist for this hook (process, enhance,
-///   syndicate, import are additive / independent).
+///   (deploy — two plugins publishing the same site would conflict).
+/// - "multiple": many plugins may coexist for this hook (process, syndicate,
+///   login are additive / independent).
 fn plugin_hooks() -> Vec<PluginHookInfo> {
     vec![
         PluginHookInfo {
@@ -91,12 +94,10 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
             context: "SyndicateContext",
         },
         PluginHookInfo {
-            name: "import",
-            description: "Import content from an external source into the project folder (e.g. Matters profile, RSS feed).",
+            name: "login",
+            description: "Connect a user account for a plugin that needs one (e.g. Matters); invoked once via `connect_account`, not part of the build pipeline.",
             arity: "multiple",
-            // Intentionally shares ProcessContext with the `process` hook: the import
-            // path dispatches through the same process pipeline after fetching content.
-            context: "ProcessContext",
+            context: "BaseContext",
         },
     ]
 }
@@ -337,7 +338,7 @@ fn print_human(payload: &DescribePayload) {
     }
     println!();
     // No URL here. This used to print landing.mosspub.com/contract/v1/reference.md,
-    // which 404s (#653) — and any URL would be a second source of truth that can
+    // which 404s — and any URL would be a second source of truth that can
     // go stale between releases, which is the whole reason this command exists.
     // Point at the flags of this same binary instead.
     println!("Everything above in full: moss describe --json");
@@ -361,5 +362,46 @@ mod tests {
                 "manifest_fields() is missing '{expected}' — it drifted from PluginManifest in plugins/types.rs"
             );
         }
+    }
+
+    /// `site/docs/reference/hooks.md`'s `<!-- auto:start:hooks -->` table is
+    /// meant to be regenerated from `plugin_hooks()` by
+    /// `scripts/sync-reference.mjs`, but nothing runs that script in CI (it
+    /// needs a built `moss` binary on PATH) — a hand-edit, or a
+    /// `plugin_hooks()` change with no doc update, can drift silently. This
+    /// is what let the published table document `generate`/`enhance`/`import`
+    /// long after all three stopped being real dispatched hooks. Parse the
+    /// table's first column and check it names exactly the same hooks as the
+    /// code.
+    #[test]
+    fn hooks_doc_matches_plugin_hooks() {
+        let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../site/docs/reference/hooks.md");
+        let doc = std::fs::read_to_string(&doc_path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", doc_path.display()));
+
+        let region = doc
+            .split("<!-- auto:start:hooks -->")
+            .nth(1)
+            .and_then(|s| s.split("<!-- auto:end:hooks -->").next())
+            .expect("hooks.md is missing its auto:start:hooks/auto:end:hooks region");
+
+        let doc_names: std::collections::BTreeSet<String> = region
+            .lines()
+            .filter(|line| line.starts_with('|') && !line.starts_with("|---"))
+            .skip(1) // header row ("| Hook | Arity | Context | Description |")
+            .filter_map(|line| line.split('|').nth(1))
+            .map(|cell| cell.trim().trim_matches('`').to_string())
+            .collect();
+
+        let code_names: std::collections::BTreeSet<String> =
+            plugin_hooks().iter().map(|h| h.name.to_string()).collect();
+
+        assert_eq!(
+            doc_names, code_names,
+            "site/docs/reference/hooks.md's hook table has drifted from plugin_hooks() — \
+             regenerate with `node scripts/sync-reference.mjs --write` (needs a built `moss` \
+             on PATH) or hand-edit the table to match"
+        );
     }
 }

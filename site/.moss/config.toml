@@ -1,8 +1,11 @@
 schema_version = 4
 
+[build]
+passthrough = ["index.html", "zh-hans/index.html", "zh-hant/index.html", "illustrations", "assets/brand", "assets/platforms", "blake", "scene3", "scene4", "scene5-loop", "ui", "vendor", "zhuda"]
 [channels.email]
 
 [site]
+search = true
 ai_policy = "unrestricted"
 lang = "en"
 rss_footer = false

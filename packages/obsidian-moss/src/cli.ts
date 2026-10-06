@@ -4,15 +4,15 @@
 //
 // Ground truth for the parsers (verified against moss 0.11.1, 2026-08-11):
 // `moss build <folder> --serve` prints ALL status to **stderr** via
-// `cli_eprintln!` (src-tauri/src/diagnostics.rs). The lines that matter:
+// `cli_eprintln!` (crates/moss-build/src/build/cli_output.rs). The lines that matter:
 //
 //   Building website from: /path/to/vault
-//   📁 'name': Site generated at /path/.moss/build/current
+//   📁 'name': Site generated at /path/.moss/build.nosync/current
 //   🌐 Preview server ready! Access at http://localhost:8080
 //   moss: 2 problems reported above — the site was still generated.
 //   Build failed: <reason>
 //
-// The port is dynamic (scan starts at 8080, src-tauri/src/preview/server/port.rs),
+// The port is dynamic (scan starts at 8080, crates/moss-build/src/ops/serve/port.rs),
 // so the "Access at" line is the only machine-discoverable source of the URL.
 // Every moss preview server also serves GET /__moss_health/ whose JSON body
 // contains "moss-preview-server" — used to validate a fallback port.
@@ -103,7 +103,21 @@ export interface ServerAddress {
   port: number;
 }
 
-const SERVER_URL_RE = /Access at (https?:\/\/(?:localhost|127\.0\.0\.1):(\d{1,5}))/;
+// The port group requires a trailing non-digit: a chunk boundary can cut the
+// line mid-port ("Access at http://localhost:8"), and without the lookahead
+// that reads as a complete port 8, then the next chunk completes the same
+// line and reads again as port 8080 — one real event, two onServerReady
+// calls. `(?!\d)` doesn't close this: it's vacuously true at the buffer's
+// end, exactly where a cut-off chunk ends. The CLI prints a second "Access
+// at" line when it takes over serving a vault from another moss process
+// that was standing in front of it (see STANDBY_RE below and
+// `parseServerEvents`).
+const SERVER_URL_RE_ALL = /Access at (https?:\/\/(?:localhost|127\.0\.0\.1):(\d{1,5})(?=\D))/g;
+// The line a CLI invocation prints once, right after an "Access at" line that
+// names another process's URL, when it finds the vault already served:
+//   served by <kind> (pid <pid>, moss <version>); standing by
+// It then takes over and prints a fresh "Access at" line once that owner exits.
+const STANDBY_RE = /served by (.+) \(pid (\d+), moss (\S+)\); standing by/g;
 
 /**
  * Find the preview-server URL in a chunk of CLI stderr, or null.
@@ -111,9 +125,30 @@ const SERVER_URL_RE = /Access at (https?:\/\/(?:localhost|127\.0\.0\.1):(\d{1,5}
  * callers feed it the accumulated stream, not single lines.
  */
 export function parseServerUrl(text: string): ServerAddress | null {
-  const m = SERVER_URL_RE.exec(text);
-  if (!m) return null;
-  return { url: m[1], port: Number(m[2]) };
+  const m = text.matchAll(SERVER_URL_RE_ALL).next().value;
+  return m ? { url: m[1], port: Number(m[2]) } : null;
+}
+
+export type ServerEvent = { type: "url"; addr: ServerAddress } | { type: "standby" };
+
+/**
+ * Every "Access at" URL and "standing by" announcement in a chunk of CLI
+ * output, in the order they appear. A single `--serve --watch` run can print
+ * more than one of each: a first "Access at" naming another process's URL,
+ * a "standing by" line, then (once that owner exits) a second "Access at"
+ * naming this process's own URL. Callers replay this list against persisted
+ * state to tell a first announcement from a later change.
+ */
+export function parseServerEvents(text: string): ServerEvent[] {
+  const found: Array<{ index: number; event: ServerEvent }> = [];
+  for (const m of text.matchAll(SERVER_URL_RE_ALL)) {
+    found.push({ index: m.index, event: { type: "url", addr: { url: m[1], port: Number(m[2]) } } });
+  }
+  for (const m of text.matchAll(STANDBY_RE)) {
+    found.push({ index: m.index, event: { type: "standby" } });
+  }
+  found.sort((a, b) => a.index - b.index);
+  return found.map((f) => f.event);
 }
 
 /** The fatal-failure line, or null. (`Build failed: <reason>` on stderr.) */

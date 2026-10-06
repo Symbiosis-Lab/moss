@@ -65,11 +65,11 @@
 //!
 //! ```yaml
 //! byline: |
-//!   作者　糜緒洋
-//!   編輯　謝丁
+//!   作者　陳遠山
+//!   編輯　周一
 //! colophon: |
-//!   首發媒體　[端傳媒](https://…)、[單讀](https://…)
-//!   封面　基輔米迦勒修道院門口的陣亡將士紀念牆（拍攝：糜緒洋）
+//!   首發媒體　[遠聲媒體](https://…)、[夜讀](https://…)
+//!   封面　河灣港口清晨卸魚的漁船（拍攝：陳遠山）
 //! ```
 //!
 //! Two fields, one renderer, because they differ only in where they land. The
@@ -92,21 +92,110 @@
 //!    the body (the file is the author's own — this is not a trust boundary).
 //! 2. **moss cannot style the role apart from the name.** With a free-form
 //!    string there is nothing to tell moss that `作者` is a label and
-//!    `糜緒洋` is a person, so the whole row is one muted line. A site that
+//!    `陳遠山` is a person, so the whole row is one muted line. A site that
 //!    wants the label tracked-out (the CJK stand-in for small caps) writes
 //!    that in its own theme CSS, or writes the label in markdown emphasis.
 //! 3. **The row separator is whatever the author typed.** A full-width space
-//!    (`作者　糜緒洋`) is preserved verbatim — rows are trimmed at the ends
+//!    (`作者　陳遠山`) is preserved verbatim — rows are trimmed at the ends
 //!    only, never re-spaced in the middle.
 
+use crate::build::markdown::body_plan::LocatorPlacement;
+
 /// Render the byline block for an article, or `None` when there is nothing
-/// to show.
+/// to show — the authored `byline:` rows, the automatic place line, or both.
 ///
 /// `emit_source_fm` mirrors the date row: when the preview is running for the
-/// editor, the block carries `data-source-fm="byline"` so a click maps back to
-/// the frontmatter field. Stripped from shipped HTML by `build::ship`.
-pub fn render_byline_html(rows: &[String], emit_source_fm: bool) -> Option<String> {
-    render_rows("moss-byline", "moss-byline-row", "byline", rows, emit_source_fm)
+/// editor, the block carries `data-source-fm="byline"` (or `"location"` on
+/// the place line's own `<div>`) so a click maps back to the frontmatter
+/// field. Stripped from shipped HTML by `build::ship`.
+///
+/// The two pieces are resolved independently and only `None` when BOTH are —
+/// a page with `location:` set but no `byline:` (the common case) must still
+/// show its place line, which keying this function's result on `rows` alone
+/// would silently drop.
+pub fn render_byline_html(rows: &[String], emit_source_fm: bool, place_line: Option<&str>) -> Option<String> {
+    let byline = render_rows("moss-byline", "moss-byline-row", "byline", rows, emit_source_fm);
+    let place = render_place_line_html(place_line, emit_source_fm);
+    match (byline, place) {
+        (None, None) => None,
+        (Some(b), None) => Some(b),
+        (None, Some(p)) => Some(p),
+        (Some(b), Some(p)) => Some(format!("{}{}", b, p)),
+    }
+}
+
+/// Render the complete page-head credit area, including an optional place
+/// locator, for a folder index or a plain page (the two page-head emission
+/// sites; see the module docs). An article's own masthead is byline + place
+/// line only — same `render_byline_html` call this makes, minus the
+/// locator — because the locator's article-page position is no longer
+/// fixed right after the place line: `render/html.rs` inserts it into the
+/// body itself, via `BodyPlan::insert_locator`. The locator is drawn here
+/// only for [`LocatorPlacement::Masthead`].
+pub fn render_page_masthead(
+    doc: &crate::build::types::ParsedDocument,
+    layout: &crate::build::page::layout::LayoutConfig,
+    emit_source_lines: bool,
+    placement: LocatorPlacement,
+) -> String {
+    let mut html = render_byline_html(&doc.byline, emit_source_lines, doc.place_line.as_deref())
+        .unwrap_or_default();
+    if placement == LocatorPlacement::Masthead {
+        if let Some(locator) = render_place_locator(doc, layout) {
+            html.push_str(&locator);
+        }
+    }
+    html
+}
+
+/// The place-map locator's own HTML (`<div class="moss-place-locator" …>`),
+/// or `None` when neither the site (`[site] locator`) nor the page (`map:`)
+/// asks for one, or the page names no place with coordinates — same
+/// resolution `render_page_masthead` folds in. A place page's own map is its
+/// term map, so it never also gets a locator. Exposed separately so the
+/// article path can place it in the BODY, via `BodyPlan::insert_locator`,
+/// rather than in the masthead.
+pub fn render_place_locator(
+    doc: &crate::build::types::ParsedDocument,
+    layout: &crate::build::page::layout::LayoutConfig,
+) -> Option<String> {
+    let maps = layout.place_maps.as_ref()?;
+    let is_place_page = doc.place_page.is_some() || doc.is_place_namespace_root;
+    if is_place_page || doc.has_own_map_embed || !doc.shows_own_map(maps.locator_default()) {
+        return None;
+    }
+    maps.render_locator(&doc.location, doc.route, &doc.url_path, 0)
+}
+
+/// Put a non-empty page masthead after the authored title block.
+pub fn splice_page_masthead(
+    content: String,
+    doc: &crate::build::types::ParsedDocument,
+    layout: &crate::build::page::layout::LayoutConfig,
+    emit_source_lines: bool,
+    placement: LocatorPlacement,
+) -> String {
+    let masthead = render_page_masthead(doc, layout, emit_source_lines, placement);
+    if masthead.is_empty() {
+        content
+    } else {
+        crate::build::markdown::html_post::splice_after_title_block(&content, &masthead)
+    }
+}
+
+/// The automatic place line's own block, or `None` when there is none. Not
+/// row-split like `render_rows` — the line is inherently one row, so
+/// `moss-place-line` is the only class the contract table needs.
+fn render_place_line_html(place_line: Option<&str>, emit_source_fm: bool) -> Option<String> {
+    let line = place_line?;
+    let mut out = String::from(r#"<div class="moss-place-line""#);
+    if emit_source_fm {
+        out.push_str(r#" data-source-fm="location""#);
+    }
+    out.push('>');
+    out.push_str(&render_row(line));
+    out.push_str("</div>");
+    Some(out)
 }
 
 /// Append the colophon to the end of a page's content — the one placement it
@@ -141,17 +230,17 @@ pub fn splice_byline_at_page_head(
     content: String,
     rows: &[String],
     emit_source_fm: bool,
+    place_line: Option<&str>,
 ) -> String {
-    let Some(byline) = render_byline_html(rows, emit_source_fm) else {
+    let Some(byline) = render_byline_html(rows, emit_source_fm, place_line) else {
         return content;
     };
-    if content.trim_start().starts_with("<h1") {
-        // Same splice the article path uses, so the byline lands in the same
-        // relation to the title on every page kind.
-        crate::build::markdown::html_post::splice_after_title_block(&content, &byline)
-    } else {
-        format!("{}{}", byline, content)
-    }
+    // Same splice the article path uses, so the byline lands in the same
+    // relation to the title on every page kind — including a claimed leaf's
+    // cover, which wraps that title behind a recognized prefix
+    // `splice_after_title_block` already knows to step past; a page with no
+    // title block at all still falls through to its own prepend.
+    crate::build::markdown::html_post::splice_after_title_block(&content, &byline)
 }
 
 /// The shared body of both renderers.

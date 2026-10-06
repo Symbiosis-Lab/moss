@@ -155,9 +155,9 @@ pub use crate::i18n::use_cjk_numerals;
 /// [`format_vertical_cjk_date`] under [`use_cjk_numerals`], else [`format_article_date`].
 pub fn format_display_date(date_str: &str, lang: Language, typesetting: Option<&str>) -> String {
     if use_cjk_numerals(typesetting, lang) {
-        format_vertical_cjk_date(date_str).unwrap_or_else(|| format_article_date(date_str))
+        format_vertical_cjk_date(date_str).unwrap_or_else(|| format_article_date(date_str, lang))
     } else {
-        format_article_date(date_str)
+        format_article_date(date_str, lang)
     }
 }
 
@@ -221,29 +221,65 @@ pub fn format_year_heading(year: i32, lang: Language, typesetting: Option<&str>)
     }
 }
 
-/// Formats a date string for minimal layout article pages.
-/// Returns "year · month · day" format (e.g., "2024 · 9 · 22").
+/// Formats a date string for an article's own displayed date line, in `lang`'s
+/// conventional written form: "April 10, 1919" / "April 1919" (en),
+/// "1919年4月10日" / "1919年4月" (zh-hans/zh-hant). A year-only date (`date:
+/// 1925`) stays a bare year in every language — there is no month or day to
+/// spell out, and "1925年" would claim a precision the source never gave.
+/// Returns the original string unparsed if it does not parse as a date at
+/// all.
+///
+/// This is the HORIZONTAL-typesetting path — [`format_display_date`] is what
+/// chooses between this and [`format_vertical_cjk_date`], a vertical CJK
+/// page's own already-conventional Chinese-numeral form ("一九一九年·四月十日"),
+/// which this function does not touch.
+///
+/// Before this fix, every precision — including a full `YYYY-MM-DD` — printed
+/// as raw numbers joined by " · " ("1919 · 4 · 10"): never a documented
+/// display choice, just what a numeric formatter built for a listing's
+/// compact card ([`format_date_string`], whose OWN "print what was given"
+/// partial-precision format IS documented and unchanged by this fix) also
+/// did for the one place — a full article date — where the site's language
+/// has a real written form to use instead. A full, tested, unused month-name
+/// table (`i18n::strings::t`'s `month_N`/`month_abbr_N` keys) already existed
+/// for exactly this and had no caller until now.
 ///
 /// # Examples
 /// ```ignore
 /// use moss::build::components::date_formatters::format_article_date;
-/// assert_eq!(format_article_date("2024-09-22"), "2024 · 9 · 22");
-/// assert_eq!(format_article_date("2025-11-17T00:50:43.135Z"), "2025 · 11 · 17");
+/// use moss::i18n::Language;
+/// assert_eq!(format_article_date("2024-09-22", Language::En), "September 22, 2024");
+/// assert_eq!(format_article_date("2025-11", Language::En), "November 2025");
+/// assert_eq!(format_article_date("1919-04-10", Language::ZhHant), "1919年4月10日");
 /// ```
-///
-/// # Arguments
-/// * `date_str` - Date in YYYY-MM-DD or ISO format
-///
-/// # Returns
-/// Formatted date string or original if parsing fails
-pub fn format_article_date(date_str: &str) -> String {
+pub fn format_article_date(date_str: &str, lang: Language) -> String {
     let Some(pd) = parse_partial_date(date_str) else {
         return date_str.to_string();
     };
     match (pd.month, pd.day) {
-        (Some(month), Some(day)) => format!("{} · {} · {}", pd.year, month, day),
-        (Some(month), None) => format!("{} · {}", pd.year, month),
+        (Some(month), day) => format_long_date(pd.year, month, day, lang),
         (None, _) => pd.year.to_string(),
+    }
+}
+
+/// The locale table behind [`format_article_date`]'s month+[day] rungs: a
+/// month name plus year, and a day when there is one, assembled in the order
+/// and with the punctuation each language actually writes it in. `month` is
+/// looked up in `i18n::strings::t`'s "month_N" table (already zh-hans/
+/// zh-hant-aware — the Chinese entries there are `"N月"`, so `{year}年{month}`
+/// alone reads correctly with no separate day-suffix logic needed for the
+/// month-only rung).
+fn format_long_date(year: i32, month: u32, day: Option<u32>, lang: Language) -> String {
+    let month_name = crate::i18n::t(lang, &format!("month_{month}"));
+    match lang {
+        Language::En => match day {
+            Some(day) => format!("{month_name} {day}, {year}"),
+            None => format!("{month_name} {year}"),
+        },
+        Language::ZhHans | Language::ZhHant => match day {
+            Some(day) => format!("{year}年{month_name}{day}日"),
+            None => format!("{year}年{month_name}"),
+        },
     }
 }
 

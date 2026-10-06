@@ -93,25 +93,25 @@ export async function reportError(
 
 
 // ============================================================================
-// PanelTask lifecycle API (ADR-015 Phase 2 — T8a, 2026-05-28)
+// PanelTask lifecycle API (2026-05-28)
 // ============================================================================
 //
 // `startTask()` is the preferred path for plugin progress / completion
 // reporting going forward. It returns a `TaskHandle` whose methods map
 // 1:1 to the `PluginTaskLifecycle` enum on the Rust side
-// (`src-tauri/src/plugins/runtime.rs`). Each call invokes the
+// (the app's plugin runtime module). Each call invokes the
 // `report_plugin_task_lifecycle_command` Tauri command which routes
 // through the PanelTask registry and emits typed `PanelTaskUpdate`
 // events to the four UI renderers (Ambient, Inline, Narrated, Awaiting).
 //
 // `reportProgress` / `reportError` / `reportComplete` (above) keep working
-// untouched — they are LEGACY but supported. ADR-015 § Migration plan
-// schedules the 151-call-site sweep for Phase 3; until then, both APIs
+// untouched — they are LEGACY but supported. A later phase sweeps the
+// remaining call sites; until then, both APIs
 // coexist. Plugin authors writing NEW code should prefer `startTask()`.
 
 /**
  * `PluginHook` mirrors the closed Rust enum in
- * `src-tauri/src/plugins/types.rs`. The router (T1) cross-products
+ * the app's plugin types module. The router (T1) cross-products
  * `PluginHook × TriggerContext` to pick a UI surface for the task.
  * Plugin authors pick the hook that matches what they're doing; they
  * do NOT pick the surface (the router owns that).
@@ -207,7 +207,13 @@ export interface AdvisoryProposal {
   scope: AdvisoryScope;
   /** The severity the plugin REQUESTS. moss clamps it (R13). */
   severity: AdvisorySeverity;
-  /** The item this is about — usually a filename. `null` for build-wide. */
+  /**
+   * The site-relative path of the file this advisory is about, e.g.
+   * `posts/2026/hello.md` — omit it (`null`) for a build-wide notice. moss
+   * resolves it by joining it onto the open folder to let the reader click
+   * straight to the file, so an absolute path or one containing `..` is
+   * dropped rather than trusted; the advisory then renders build-wide.
+   */
   item: string | null;
   /** What happened (free text). */
   what: string;
@@ -263,7 +269,7 @@ export interface StartTaskOptions {
  * tracking store; calling any further method on the same handle will
  * reject with "unknown plugin task id".
  *
- * The state machine matches ADR-015 § Layer 2:
+ * The state machine:
  *
  *   Running ↔ Awaiting → Succeeded | Failed | Cancelled
  *
@@ -323,7 +329,7 @@ export interface TaskHandle {
   succeeded(receipt?: string, amount?: number): Promise<void>;
   /**
    * Terminal: failure. `recoverable=false` (default) also fires the
-   * toast subscriber (ADR-015 § "Plugin-originated failure toasts").
+   * toast subscriber.
    */
   failed(error: string, recoverable?: boolean): Promise<void>;
   /** Terminal: explicit user cancellation. */
@@ -393,8 +399,7 @@ async function invokeLifecycle(
  * Awaiting pulse) surfaces the task. Plugin authors do NOT pick the
  * surface; they just describe what they're doing and why.
  *
- * Preferred over `reportProgress()` for new code. The legacy API stays
- * supported until ADR-015 Phase 3 sweeps all 151 call sites.
+ * Preferred over `reportProgress()` for new code.
  *
  * @example
  * const task = await startTask("Importing 42 articles", {

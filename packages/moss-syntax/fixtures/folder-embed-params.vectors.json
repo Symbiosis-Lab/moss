@@ -1,6 +1,6 @@
 {
   "$schema_note": "Golden vectors for the folder-embed pothole grammar (`![[/folder/|key:value,...]]`). This is a CROSS-LANGUAGE CONTRACT: `moss_core::resolve::embed_renderer::folder_list::parse_params` is checked against it by tests/folder_embed_params.rs, and the editor's read-side twin `parseFolderParams` (packages/moss-syntax/src/cm6/cm-image-extract.ts) by packages/moss-syntax/src/cm6/__tests__/cm-image-extract.test.ts. Add a vector before you add a key. Every `expect` below was DERIVED BY RUNNING parse_params, never by reasoning about the grammar.",
-  "rules_as_measured": ["Last wins WITH RESET. Each keyed token ASSIGNS, so `sort:weight,sort:weght` yields NO sort - the later unparseable value clears the earlier good one. Same for `limit:3,limit:abc`. A 'drop unparseable values' reading would keep the first, and is wrong.", "`style`, `depth` and `group` have no whitelist: any string is kept verbatim. Only `sort` is validated (date|weight|title) and only `limit` is numeric.", "`limit` goes through `usize::from_str`, so a leading `+` is accepted and an out-of-range integer yields no limit.", "Token, key and value are each trimmed independently.", "Bare tokens (no `:`) never produce any of the five charted fields. A bare sizing token sets `size`, which the listing branch ignores and this fixture therefore does not carry."],
+  "rules_as_measured": ["Last wins WITH RESET. Each keyed token ASSIGNS, so `sort:weight,sort:weght` yields NO sort - the later unparseable value clears the earlier good one. Same for `limit:3,limit:abc`. A 'drop unparseable values' reading would keep the first, and is wrong.", "`style`, `depth` and `group` have no whitelist: any string is kept verbatim. Only `sort` is validated (date|date-asc|weight|title) and only `limit` is numeric.", "`limit` goes through `usize::from_str`, so a leading `+` is accepted and an out-of-range integer yields no limit.", "Token, key and value are each trimmed independently.", "Bare tokens (no `:`) never produce any of the five charted fields. A bare sizing token sets `size`, which the listing branch ignores and this fixture therefore does not carry."],
   "charted_fields": ["style", "sort", "depth", "group", "limit"],
   "vectors": [
     {
@@ -38,6 +38,18 @@
         "limit": null
       },
       "note": "a recognised sort axis"
+    },
+    {
+      "name": "sort-date-asc",
+      "input": "sort:date-asc",
+      "expect": {
+        "style": null,
+        "sort": "date-asc",
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "the ascending (oldest-first) date axis"
     },
     {
       "name": "depth-all",

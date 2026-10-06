@@ -378,19 +378,151 @@ More content here."#;
     assert!(desc.contains("This is bold and italic text"));
 }
 
+// --- render_description_html / plain-text pairing (the moss-card-description
+// / meta-description bug: an auto-derived or explicit description used to
+// leak `_..._`/`**...**` as literal characters everywhere, since the only
+// existing reduction (`strip_markdown_inline`) deletes markup for a
+// plain-text surface and nothing rendered it as real markup for an HTML one.
+
+#[test]
+fn auto_derived_description_renders_em_on_a_card_and_plain_text_in_meta() {
+    let content = "_The Common Reader, 1925._\n\nMore text follows this opening line.";
+
+    // Card/listing surface: the resolved markdown, rendered safely inline.
+    let markdown = extract_description_markdown(content, true);
+    assert_eq!(render_description_html(&markdown), "<em>The Common Reader, 1925.</em>");
+
+    // Meta/OG/Twitter surface: plain text, markers gone.
+    let plain = extract_description(content, true);
+    assert_eq!(plain, "The Common Reader, 1925.");
+}
+
+#[test]
+fn explicit_description_renders_em_on_a_card_and_plain_text_in_meta() {
+    // `resolve_page_description` is the HTML-card path (child lists, grid
+    // cards): it returns the description's MARKDOWN now, for a caller to
+    // render with `render_description_html` — not pre-stripped plain text.
+    let markdown = resolve_page_description(Some("_The Common Reader, 1925._"), "", true)
+        .expect("explicit description resolves");
+    assert_eq!(render_description_html(&markdown), "<em>The Common Reader, 1925.</em>");
+
+    // `resolve_page_description_with_fallbacks` is the meta/OG/Twitter path:
+    // plain text, same underlying `strip_markdown_inline` reduction.
+    let inputs = DescriptionChainInputs {
+        page_description: Some("_The Common Reader, 1925._"),
+        page_hero_overlay_text: None,
+        page_content: "",
+        homepage_description: None,
+        homepage_hero_overlay_text: None,
+        homepage_content: None,
+        math: true,
+    };
+    let plain = resolve_page_description_with_fallbacks(&inputs).expect("resolves");
+    assert_eq!(plain, "The Common Reader, 1925.");
+}
+
+#[test]
+fn render_description_html_neutralises_script_and_raw_html() {
+    let html = render_description_html("before <script>alert(1)</script> after");
+    assert!(!html.contains("<script>"), "raw <script> must not survive: {html}");
+    assert!(html.contains("&lt;script&gt;"), "neutralised as inert text: {html}");
+
+    let html2 = render_description_html(r#"<img src=x onerror="alert(1)">text"#);
+    assert!(!html2.contains("<img"), "raw <img> must not survive: {html2}");
+}
+
+#[test]
+fn render_description_html_keeps_strong_code_and_links() {
+    let html = render_description_html("**bold** and `code` and [a link](https://example.com)");
+    assert_eq!(
+        html,
+        r#"<strong>bold</strong> and <code>code</code> and <a href="https://example.com">a link</a>"#
+    );
+}
+
+#[test]
+fn render_description_html_in_link_renders_inline_markdown_but_drops_the_anchor() {
+    assert_eq!(render_description_html_in_link("*em* and **strong**"), "<em>em</em> and <strong>strong</strong>");
+    assert_eq!(render_description_html_in_link("use `code` here"), "use <code>code</code> here");
+    assert_eq!(render_description_html_in_link("see [a link](https://example.com) now"), "see a link now");
+    assert_eq!(render_description_html_in_link("plain text, 1 < 2"), "plain text, 1 &lt; 2");
+    let raw = render_description_html_in_link("<script>alert(1)</script> [x](u)");
+    assert!(!raw.contains("<script>") && !raw.contains("<a "), "{raw}");
+}
+
+#[test]
+fn strip_markdown_inline_handles_underscore_emphasis_without_corrupting_snake_case() {
+    assert_eq!(strip_markdown_inline("_italic_ and __bold__ text"), "italic and bold text");
+    // The bug's exact reported case.
+    assert_eq!(strip_markdown_inline("_The Common Reader, 1925._"), "The Common Reader, 1925.");
+    // Intraword underscores (identifiers, filenames) are prose, not emphasis:
+    // each underscore here sits directly against a letter on BOTH sides, so
+    // there is no space/punctuation edge for a delimiter run to open or
+    // close on.
+    assert_eq!(strip_markdown_inline("see my_file_name.py"), "see my_file_name.py");
+    assert_eq!(strip_markdown_inline("prefix__glued__suffix"), "prefix__glued__suffix");
+    // `__init__` flanked by SPACES on its true outer edges is not intraword
+    // by CommonMark's own rule (the rule looks at the space/punctuation
+    // immediately outside the delimiter run, not at what the wrapped word
+    // looks like) — real Markdown renderers bold this too, which is why
+    // prose about Python dunders is conventionally written in backticks.
+    assert_eq!(strip_markdown_inline("call __init__ once"), "call init once");
+}
+
 #[test]
 fn test_extract_description_truncates() {
-    // Content longer than 160 chars to ensure truncation
+    // The first sentence alone (148 chars) fits the 160-char budget; the
+    // second does not. The result is the first sentence VERBATIM, with no
+    // added ellipsis — it is a complete sentence, not a cut one. Before
+    // sentence-boundary truncation, this content was hard-cut at char 160,
+    // landing mid-word in the second sentence and always ending "...".
     let content = "This is a very long description that should be truncated at a word boundary to ensure it fits within the maximum length limit for meta descriptions. Adding more text here to exceed the limit.";
 
     let desc = extract_description(content, true);
 
-    assert!(
-        desc.len() <= 163,
-        "Description too long: {} chars",
-        desc.len()
-    ); // 160 + "..."
-    assert!(desc.ends_with("..."), "Should end with ellipsis: {}", desc);
+    assert_eq!(
+        desc,
+        "This is a very long description that should be truncated at a word boundary to ensure it fits within the maximum length limit for meta descriptions."
+    );
+    assert!(!desc.contains('…'), "a whole sentence needs no ellipsis: {}", desc);
+}
+
+#[test]
+fn test_extract_description_keeps_two_sentences_when_both_fit() {
+    let content = "Short one. Also short.";
+    let desc = extract_description(content, true);
+    assert_eq!(desc, "Short one. Also short.");
+}
+
+#[test]
+fn test_extract_description_single_sentence_longer_than_budget_gets_one_ellipsis() {
+    // One sentence, no period until the very end, well over 160 chars: the
+    // "whole sentence" rung never has anything to offer, so this falls back
+    // to a hard cut at the last word boundary within budget plus a single
+    // "…" — never the old three-dot "...".
+    let content = "This is a very long first paragraph that goes on and on with many words to ensure it exceeds the one hundred and sixty character limit that we impose for meta descriptions in summary cards.";
+    let desc = extract_description(content, true);
+    assert!(desc.ends_with('…'), "should end with a single ellipsis: {}", desc);
+    assert!(!desc.ends_with("...."), "never the old three-dot form: {}", desc);
+    assert!(desc.chars().count() <= 161, "too long: {} chars", desc.chars().count());
+}
+
+#[test]
+fn test_extract_description_chinese_sentence_boundary() {
+    // No spaces at all; the first 。-terminated sentence is short and must
+    // come back whole, with the second sentence dropped rather than the
+    // pair being hard-cut mid-character. The second sentence is padded well
+    // past the 160-char budget so the pair as a whole genuinely needs
+    // truncating (a too-short fixture here would make this test pass for
+    // the wrong reason: nothing to truncate at all).
+    let first = "這是第一句話。";
+    let filler = "用來確保如果兩句都放進去會超過一百六十個字的上限";
+    let second = format!("這是第二句比較長的話，{}。", filler.repeat(6));
+    let content = format!("{first}{second}");
+    assert!(content.chars().count() > 160, "fixture must exceed the budget");
+
+    let desc = extract_description(&content, true);
+    assert_eq!(desc, first);
 }
 
 #[test]
@@ -631,9 +763,9 @@ fn test_extract_description_truncates_long_first_paragraph() {
     let long_para = "This is a very long first paragraph that goes on and on with many words to ensure it exceeds the one hundred and sixty character limit that we impose for meta descriptions in summary cards.";
     let content = format!("{}\n\nSecond paragraph.", long_para);
     let desc = extract_description(&content, true);
-    assert!(desc.ends_with("..."), "Should end with ellipsis: {}", desc);
+    assert!(desc.ends_with('…'), "Should end with a single ellipsis: {}", desc);
     assert!(
-        desc.chars().count() <= 163,
+        desc.chars().count() <= 161,
         "Too long: {} chars",
         desc.chars().count()
     );
@@ -923,7 +1055,7 @@ fn test_extract_description_keeps_css_region_prose_no_nested_shortcode() {
 #[test]
 fn test_extract_description_css_region_wrapping_only_typed_shortcode_is_empty() {
     // A CSS region whose ONLY content is a nested typed shortcode (the
-    // common SoCiviC `:::{.support-band}` around `::::buttons` pattern)
+    // common `:::{.support-band}` around `::::buttons` pattern)
     // has no surrounding prose — the excerpt is empty, not the leaked
     // button text.
     let content = "\
@@ -990,7 +1122,7 @@ fn test_extract_description_one_line_empty_body_shortcode_does_not_swallow_rest(
 #[test]
 fn test_extract_description_nested_shortcode_arity_does_not_leak_or_truncate() {
     // Higher-arity outer fence wrapping a lower-arity inner fence
-    // (docs/reference/shortcode-grammar.md "What's reserved").
+    // (a reserved shortcode-grammar case).
     // Nothing between the outer opener and closer should leak, and
     // prose after the outer closer must still be reachable.
     let content = "\
@@ -1094,7 +1226,7 @@ fn make_translation_link(lang: Language, url_path: &str) -> TranslationLink {
 #[test]
 fn an_unshipped_language_advertises_its_own_tag_not_the_nearest_shipped_one() {
     // `Language` has three variants, so a `fr` page resolves to `En` for the
-    // interface. Its `<html lang>` says `fr` (#977) and its hreflang used to
+    // interface. Its `<html lang>` says `fr` and its hreflang used to
     // say `en` — the two contradicting each other on the same page — while a
     // second `fr` page deduped away against the first as "already seen en".
     let fr = |url: &str| TranslationLink {
@@ -1433,12 +1565,12 @@ fn test_build_twitter_tags_skips_description_when_empty() {
 
 #[test]
 fn og_image_becomes_absolute_when_cover_is_local() {
-    let site_url = SiteUrl::parse("https://chps.mosspub.com").unwrap();
+    let site_url = SiteUrl::parse("https://my-site.mosspub.com").unwrap();
     let cover = CoverRef::Local(ServedPath::for_og_card("abc1234567890def").unwrap());
     let tags = build_og_tags(
         "Page Title",
         "Description",
-        "https://chps.mosspub.com/page/",
+        "https://my-site.mosspub.com/page/",
         "Site",
         None,
         Some(&cover),
@@ -1449,7 +1581,7 @@ fn og_image_becomes_absolute_when_cover_is_local() {
     );
     assert!(
         tags.contains(
-            r#"og:image" content="https://chps.mosspub.com/_moss/og/abc1234567890def.png"#
+            r#"og:image" content="https://my-site.mosspub.com/_moss/og/abc1234567890def.png"#
         ),
         "og:image must be absolute; got: {}",
         tags
@@ -1458,12 +1590,12 @@ fn og_image_becomes_absolute_when_cover_is_local() {
 
 #[test]
 fn og_image_passes_through_already_absolute_cover() {
-    let site_url = SiteUrl::parse("https://chps.mosspub.com").unwrap();
+    let site_url = SiteUrl::parse("https://my-site.mosspub.com").unwrap();
     let cover = CoverRef::External("https://cdn.example.com/photo.jpg".to_string());
     let tags = build_og_tags(
         "Page Title",
         "Description",
-        "https://chps.mosspub.com/page/",
+        "https://my-site.mosspub.com/page/",
         "Site",
         None,
         Some(&cover),
@@ -1481,12 +1613,12 @@ fn og_image_passes_through_already_absolute_cover() {
 
 #[test]
 fn twitter_image_becomes_absolute_when_cover_is_local() {
-    let site_url = SiteUrl::parse("https://chps.mosspub.com").unwrap();
+    let site_url = SiteUrl::parse("https://my-site.mosspub.com").unwrap();
     let cover = CoverRef::Local(ServedPath::for_og_card("abc1234567890def").unwrap());
     let tags = build_twitter_tags("Page Title", "Description", Some(&cover), None, &site_url);
     assert!(
         tags.contains(
-            r#"twitter:image" content="https://chps.mosspub.com/_moss/og/abc1234567890def.png"#
+            r#"twitter:image" content="https://my-site.mosspub.com/_moss/og/abc1234567890def.png"#
         ),
         "twitter:image must be absolute; got: {}",
         tags
@@ -1596,15 +1728,15 @@ fn og_image_is_relative_when_site_url_is_not_deployed() {
 fn og_image_is_absolute_when_site_url_is_deployed() {
     // NOTE: plan called for ServedPath::from_source("_moss/og/abc123.png")
     // but `_moss/` is reserved; use for_og_card(hex16) instead.
-    let real = SiteUrl::parse("https://liu-guo.com").unwrap();
+    let real = SiteUrl::parse("https://example.com").unwrap();
     let cover_hash = "abc1230000000000";
     let cover =
         CoverRef::Local(crate::build::served_path::ServedPath::for_og_card(cover_hash).unwrap());
     let result = build_og_tags(
         "Test",
         "desc",
-        "https://liu-guo.com/",
-        "Liu Guo",
+        "https://example.com/",
+        "Mountain Home",
         None,
         Some(&cover),
         Some((1200, 630)),
@@ -1614,7 +1746,7 @@ fn og_image_is_absolute_when_site_url_is_deployed() {
     );
     assert!(
         result.contains(&format!(
-            r#"og:image" content="https://liu-guo.com/_moss/og/{}.png"#,
+            r#"og:image" content="https://example.com/_moss/og/{}.png"#,
             cover_hash
         )),
         "deployed must emit absolute og:image. Got: {}",
@@ -1739,7 +1871,7 @@ fn homepage_hero_overlay_when_no_homepage_description() {
 
 #[test]
 fn homepage_body_when_no_homepage_hero() {
-    // Mirrors the Yi-website case: home page has no `description:`, hero
+    // Mirrors a real site's case: home page has no `description:`, hero
     // overlay is empty, but the body has a usable first paragraph.
     let inputs = desc_inputs(
         None,
@@ -2126,7 +2258,7 @@ fn the_excerpt_asks_the_parser_which_lines_are_a_footnote_definition() {
 }
 
 /// Only the doc-order-FIRST definition of a label is hoisted; a repeat
-/// renders its body in place (ADR-035, `footnotes::is_hoisted`), so the
+/// renders its body in place (`footnotes::is_hoisted`), so the
 /// repeat's text is the page's visible prose and must stay in the
 /// description — marker-less, exactly as the page shows it. Skipping every
 /// definition deleted the page's real lead; when the repeat was the ONLY
