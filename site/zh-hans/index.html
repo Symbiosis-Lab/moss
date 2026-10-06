@@ -349,7 +349,8 @@
   :is(html:not(.js), html[data-static]) #five-in { width: min(900px, calc(100% - 40px)); }
 
   /* Desktop scrolls and snaps natively. The page must rest on the title, a scene, the close or
-     the footer, and one gesture cannot pass one (scroll-snap-stop). setupSnap() in the page's
+     the footer, and one gesture cannot pass one (scroll-snap-stop, and narrowSnap() in the page's
+     script for the browsers whose momentum passes it). setupSnap() in the page's
      script gives each scene and the close the scroll-margin-top that puts its snap point on
      restY(). A phone, and the page without its script, scroll freely. */
   @media (min-width: 901px) {
@@ -357,8 +358,9 @@
     html.js:not([data-static]) :is(#intro, .scene, #five) { scroll-snap-align: start; scroll-snap-stop: always; }
     html.js:not([data-static]) #footer { scroll-snap-align: end; }
     /* While the page carries a short scroll on (goOnward in the script), the browser's snap is
-       off, so its return to where the scroll began cannot fight the carry. */
-    html.js.carried:not([data-static]) { scroll-snap-type: none; }
+       off, so its return to where the scroll began cannot fight the carry; and while the script
+       changes which elements are snap points (setSnapPoints), so WebKit cannot jump. */
+    html.js:is(.carried, .snap-change):not([data-static]) { scroll-snap-type: none; }
   }
 
   /* Layout pass: the intro owns the first beat, while the stage remains tied
@@ -3000,12 +3002,13 @@ function sceneKey(e, fromDemo) {
   const dir = e.key === ' ' && e.shiftKey ? -1 : KEY_STEP[e.key];
   if (dir == null || (inClose() && !(dir < 0 && scrollY <= restY(SHARE) + 2))) return;
   e.preventDefault();
+  widenSnap();
   const far = e.key === 'Home' || e.key === 'End';
   scrollToRest(far ? (dir < 0 ? -1 : SHARE) : Math.max(-1, Math.min(SHARE, (aimed ?? nearestRest()) + dir)));
 }
 addEventListener('keydown', (e) => sceneKey(e, false));
 // pointerdown on the page itself (a frame's own never reaches here): no demo is in use
-addEventListener('pointerdown', () => { demoInUse = false; aimed = null; }, true);
+addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSnap(); }, true);
 // Chrome snaps a short scroll back to the rest it started from: one 100px wheel notch moves the
 // page about 90px within 100 ms and has it back within 200 ms, and only two quick notches
 // advance (measured on Chrome 154). So a short scroll is carried on to the next rest: the first
@@ -3024,6 +3027,49 @@ addEventListener('pointerdown', () => { demoInUse = false; aimed = null; }, true
 // they never take the wheel from the reader.
 const ONWARD_QUIET_MS = 60, ONWARD_MIN_PX = 24, NOTCH_PX = 40;
 let stood = scrollY, carried = false, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
+// One swipe moves at most one scene. A swipe's momentum is the browser's, and so is the snap
+// point it picks: the one nearest where the momentum would carry the page. scroll-snap-stop asks
+// it to stop at the first, but Safari's momentum passes it: scene 1 stands a third of a screen
+// below the title, and an ordinary trackpad swipe from the title went on to scene 2 (in WebKit
+// an ordinary swipe moved two scenes from every rest and a large one three; measured). So from
+// a gesture's first wheel or touch event until the page has come to rest, only the rest the
+// page stood on and its two neighbours are snap points, and the browser can pick no further.
+// Reading where the page stood needs nothing from the input: no guess at fingers or momentum.
+// A gesture has ended once no wheel or touch event has come for GESTURE_GAP_MS: a trackpad's glide
+// sends one every frame until it stops.
+const GESTURE_GAP_MS = 250;
+let gestureAt = 0, touching = false, narrowed = false;
+// the snap points in the order of the rests: the title, the scenes, the close (its spacer and
+// #five), then the footer
+const snapPoints = () => [[document.getElementById('intro'), 0], ...scenesEl.map((el, i) => [el, i + 1]), [five, SHARE + 1], [document.getElementById('footer'), SHARE + 2]];
+// WebKit keeps its place among the snap points by position in their list, not by element:
+// changing which elements are snap points while the snap is on moved a page at rest on scene 2
+// to scene 3, and back again when they were restored (measured with no input at all; Chrome
+// keeps the element). So the snap goes off in the same moment the list changes and comes back
+// two frames later, when the browser takes the point nearest the page.
+let snapChange = 0;
+const afterFrames = (n, then) => requestAnimationFrame(() => (n > 1 ? afterFrames(n - 1, then) : then()));
+function setSnapPoints(keep) {
+  const token = ++snapChange, root = document.documentElement;
+  root.classList.add('snap-change');
+  for (const [el, i] of snapPoints()) el.style.scrollSnapAlign = keep(i) ? '' : 'none';
+  afterFrames(2, () => { if (token === snapChange) root.classList.remove('snap-change'); });
+}
+function narrowSnap() {
+  gestureAt = performance.now();
+  if (narrowed || mobileLayout()) return;
+  const from = stood >= document.scrollingElement.scrollHeight - innerHeight - 2 ? SHARE + 2 : nearestRest(stood) + 1;
+  narrowed = true;
+  setSnapPoints((i) => Math.abs(i - from) <= 1);
+}
+// Keys, a click and a page at rest may go anywhere again.
+function widenSnap() {
+  if (!narrowed) return;
+  narrowed = false;
+  setSnapPoints(() => true);
+}
+addEventListener('touchstart', () => { touching = true; narrowSnap(); }, { passive: true });
+for (const type of ['touchend', 'touchcancel']) addEventListener(type, () => { touching = false; gestureAt = performance.now(); }, { passive: true });
 function goOnward() {
   const dir = Math.sign(wheelSum), enough = Math.abs(wheelSum) >= ONWARD_MIN_PX; wheelOpen = false;
   if (!enough || mobileLayout()) return;   // the window may have become the phone layout since the wheel was heard
@@ -3036,8 +3082,17 @@ function goOnward() {
   restSince = performance.now();   // the page's stillness is counted from here, not from before the gesture
   scrollToRest(i - 1);
 }
-addEventListener('wheel', (e) => {
+// Whether the reader can use the frame a wheel event arrived in: every frame between it and this
+// page takes the pointer. Over one they can use, the wheel may be scrolling the frame's own
+// content, so the page narrows its snap points there and carries nothing on.
+const usable = (win) => {
+  for (let w = win; w && w !== window; w = w.parent) { const fe = w.frameElement; if (!fe || fe.ownerDocument.defaultView.getComputedStyle(fe).pointerEvents === 'none') return false; }
+  return true;
+};
+function onWheel(e) {
   if (mobileLayout() || e.ctrlKey || !e.deltaY) return;
+  narrowSnap();
+  if (e.view && e.view !== window && usable(e.view)) return;
   aimed = null;
   const opens = !wheelOpen;
   if (opens) { wheelOpen = true; wheelSum = 0; }
@@ -3045,7 +3100,28 @@ addEventListener('wheel', (e) => {
   clearTimeout(wheelQuiet);
   if (opens && (e.deltaMode || Math.abs(e.deltaY) >= NOTCH_PX)) goOnward();   // a notch, or a line or page delta
   else wheelQuiet = setTimeout(goOnward, ONWARD_QUIET_MS);
-}, { passive: true });
+}
+addEventListener('wheel', onWheel, { passive: true });
+// Wheel events over a frame are the frame's own and never reach this page, though the scroll they
+// make chains to it once the frame has nothing to scroll. WebKit sends them even to a frame that
+// ignores the pointer: the notebook beside scene 1 took every wheel event over the left half of
+// the screen there, so a swipe that began over it was never heard and passed scenes 2 and 3
+// (measured). So each frame of the page, and each frame inside one, hears the wheel for it, on
+// every load. A frame a demo makes after it has loaded (the site preview inside scene 4's) is
+// found when the page next comes to rest on a new scene, long before a reader can reach it.
+const heardFrames = new WeakSet();
+function hearWheel(frame) {
+  const hook = () => {
+    let win;
+    try { win = frame.contentWindow; if (!win) return; win.document; } catch { return; }   // a frame from elsewhere cannot be heard
+    if (!win.__landingWheel) { win.__landingWheel = true; win.addEventListener('wheel', onWheel, { passive: true, capture: true }); }
+    for (const inner of win.document.querySelectorAll('iframe')) hearWheel(inner);
+  };
+  if (!heardFrames.has(frame)) { heardFrames.add(frame); frame.addEventListener('load', hook); }
+  hook();
+}
+const hearFrames = () => { for (const frame of document.querySelectorAll('iframe')) hearWheel(frame); };
+hearFrames();
 
 // Give each scene and the close a snap point at exactly restY(scene), by turning that absolute
 // position into a scroll-margin-top correction on the element scroll-snap-align already aligns
@@ -3218,15 +3294,22 @@ function drivePicture(now) {
   const dy = following() ? viewDy : real;
   if (real) { restSince = now; travel = Math.sign(real); }
   else if (dy) travel = Math.sign(dy);
-  if (now - restSince > 150) { aimed = null; stood = scrollY; }
+  // Where the page stands still between gestures. A page that pauses inside one, on a snap point
+  // it reached mid-swipe, has not stood there: a swipe is counted from where it began.
+  if (now - restSince > 150) {
+    aimed = null;
+    if (!touching && now - gestureAt > GESTURE_GAP_MS) { if (stood !== scrollY) { stood = scrollY; hearFrames(); } widenSnap(); }
+  }
   // A carried scroll ends when the page has come to rest on a rest, and the snap returns. One
-  // the reader stopped short of a rest is first finished on the nearest, so the returning snap
-  // has nothing to jump; that waits longer than the rest does, because a carry that has not yet
-  // begun to move is still, too. A window that became the phone layout has no snap to return.
+  // that stopped short of a rest is first finished on the nearest, so the returning snap has
+  // nothing to jump. That waits for 1.5 s of stillness, far longer than a frame: a smooth scroll
+  // that has not yet begun to move is still too, and at a frame or two a second, as a busy page
+  // can run, waiting 400 ms sent a carry that had not yet moved back to where it began
+  // (measured). A window that became the phone layout has no snap to return.
   if (carried) {
     const rest = nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
     if (mobileLayout() || (there && now - restSince > 150)) { carried = false; document.documentElement.classList.remove('carried'); }
-    else if (!there && now - restSince > 400) { restSince = now; scrollToRest(rest); }
+    else if (!there && now - restSince > 1500) { restSince = now; scrollToRest(rest); }
   }
   onScroll(dy);
   updateFinalDissolve();

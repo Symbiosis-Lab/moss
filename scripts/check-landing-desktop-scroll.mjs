@@ -12,9 +12,11 @@
 // there rests on the close; with reduced motion a step lands at once, the snap
 // stays and the picture does not trail the page; and the page never cancels a
 // wheel event. WebKit only, because headless Chromium draws this page at about
-// a frame a second: the wash starts with the notch and lands whole about two
-// seconds later, four notches end on scene 4, and down-then-up ends where it
-// began.
+// a frame a second: a swipe (real trackpad timing, fingers then the glide)
+// moves one scene and every snap point is back once it rests, however far the
+// glide would otherwise carry the page; the wash starts with a notch and lands
+// whole about two seconds later; four notches end on scene 4; down-then-up
+// ends where it began.
 import { loadPlaywright, whenReady } from './landing-harness.mjs';
 
 const base = process.argv[2];
@@ -24,6 +26,15 @@ const assert = (ok, message) => { if (!ok) throw new Error(message); };
 setTimeout(() => { console.error('Error: check-landing-desktop-scroll did not finish within 4 minutes'); process.exit(1); }, 240000).unref();
 const NOTCH = 100;
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+// The wheel events a trackpad swipe sends at 60 Hz: the fingers speeding up, then the glide the
+// system adds after they lift (an exponential decay, 325ms).
+const swipe = (frames, from, to) => {
+  const deltas = [];
+  for (let i = 0; i < frames; i++) deltas.push(from + (to - from) * i / (frames - 1));
+  for (let k = 1, v; (v = to * Math.exp(-k * (1000 / 60) / 325)) >= .5; k++) deltas.push(v);
+  return deltas;
+};
+const ORDINARY = swipe(12, 4, 30), LARGE = swipe(14, 6, 60);   // about 760px and 1600px in all
 
 async function open(browser, options = {}) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...options });
@@ -44,6 +55,18 @@ async function open(browser, options = {}) {
   return { page, context, errors };
 }
 const restY = (page, scene) => page.evaluate((s) => __restY(s), scene);
+// sends a swipe at its own pace: each event leaves when the last was sent, not when it was handled
+const sendSwipe = async (page, deltas, sign = 1) => {
+  const sent = [];
+  for (const delta of deltas) { sent.push(page.mouse.wheel(0, sign * delta)); await sleep(1000 / 60); }
+  await Promise.all(sent);
+};
+// where the page comes to a stop: still for 800ms
+const stillAt = async (page) => {
+  let last = NaN;
+  for (let n = 0, still = 0; n < 200 && still < 8; n++) { await sleep(100); const y = await page.evaluate(() => Math.round(scrollY)); still = y === last ? still + 1 : 0; last = y; }
+  return last;
+};
 const rested = async (page, scene, label) => {
   await page.waitForFunction((s) => Math.abs(scrollY - __restY(s)) <= 1, scene, { timeout: 40000 })
     .catch(async () => { throw new Error(`${label}: the page did not rest on rest ${scene}: ${JSON.stringify(await page.evaluate(() => ({ y: scrollY, rests: [-1, 0, 1, 2, 3, 4].map(__restY) })))}`); });
@@ -159,6 +182,26 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await one.page.waitForFunction(() => __state().shown === 0 && !__state().running, null, { timeout: 8000 })
       .catch(async () => { throw new Error(`webkit: down then up did not end whole on scene 1: ${JSON.stringify(await one.page.evaluate(() => __state()))}`); });
     await one.context.close();
+
+    // A trackpad swipe moves one scene, however far its glide would carry the page. Native momentum
+    // picks the snap point nearest where it would end, and WebKit's passed scroll-snap-stop: an
+    // ordinary swipe moved two scenes from every rest and a large one three, and from the title,
+    // a third of a screen above scene 1, almost every swipe went past scene 1. The pointer is
+    // over the picture, where scene 1's notebook frame took the wheel events unheard. WebKit
+    // only, like the timings below: headless Chromium draws this page at about a frame a second,
+    // so a swipe's glide outruns every frame the page gets.
+    const swiped = await open(browser);
+    await swiped.page.mouse.move(480, 450);
+    await sleep(500);
+    for (const [label, deltas, sign, scene] of [['an ordinary swipe from the title', ORDINARY, 1, 0], ['a large swipe from scene 1', LARGE, 1, 1], ['an ordinary swipe up from scene 2', ORDINARY, -1, 0]]) {
+      await sendSwipe(swiped.page, deltas, sign);
+      const y = await stillAt(swiped.page), want = await restY(swiped.page, scene);
+      assert(Math.abs(y - want) <= 1, `webkit: ${label} came to rest at ${y}, not on scene ${scene + 1} at ${want}`);
+      // once the page rests, every snap point is back and the snap is on
+      await swiped.page.waitForFunction(() => [...document.querySelectorAll('#intro, .scene, #five, #footer')].every((el) => getComputedStyle(el).scrollSnapAlign !== 'none') && getComputedStyle(document.documentElement).scrollSnapType === 'y mandatory', null, { timeout: 5000 })
+        .catch(async () => { throw new Error(`webkit: after ${label} came to rest the snap points were not all back: ${JSON.stringify(await swiped.page.evaluate(() => ({ points: [...document.querySelectorAll('#intro, .scene, #five, #footer')].map((el) => getComputedStyle(el).scrollSnapAlign), type: getComputedStyle(document.documentElement).scrollSnapType })))}`); });
+    }
+    await swiped.context.close();
 
     // four notches 600ms apart from the title, the picture whole on scene 4 within 4s of the page resting
     const four = await open(browser);

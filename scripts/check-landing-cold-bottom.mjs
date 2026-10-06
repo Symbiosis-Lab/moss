@@ -38,9 +38,14 @@ try {
       // Playwright cannot synthesize a wheel in mobile WebKit; test native
       // document arrival directly. Chromium covers actual wheel input above.
       await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    } else if (test.mobile) {
+      await page.mouse.wheel(0, 10000);
+      await page.mouse.wheel(0, 10000);
     } else {
-      await page.mouse.wheel(0, 10000);
-      await page.mouse.wheel(0, 10000);
+      // Desktop: a wheel notch now moves at most one rest (narrowSnap in the page's script), so
+      // two large wheel deltas no longer reach the close. End is real, trusted input too, and is
+      // the one key, like Home, that still goes all the way, so it still arrives while cold.
+      await page.keyboard.press('End');
     }
     // On desktop the picture follows the page to the close: about two seconds of frames, and five or so
     // while the page is busy with its first captures. The fixture holds the frames back for longer there
