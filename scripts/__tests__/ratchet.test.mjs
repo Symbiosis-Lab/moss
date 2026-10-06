@@ -508,8 +508,32 @@ describe('reasonIsWeak floor (item 6)', () => {
 });
 
 describe('verify-accepts --range (item 8)', () => {
-  it('flags a historical commit whose raise has no trailer', () => {
+  function adoptPolicy(t) {
+    fs.mkdirSync(path.join(t.root, '.githooks'));
+    fs.copyFileSync(path.join(path.dirname(SCRIPT), '..', '.githooks', 'commit-msg'), path.join(t.root, '.githooks', 'commit-msg'));
+    t.git('add', '.githooks/commit-msg');
+    t.git('commit', '-q', '-m', 'enforce acceptance trailers');
+  }
+
+  it('does not retroactively require trailers before the commit-time policy existed', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 800 })), (t) => {
+      const start = t.git('rev-parse', 'HEAD').trim();
+      t.writeBaseline(perPath({ [A]: 850 }));
+      t.stageBaseline();
+      t.git('commit', '-q', '-m', 'historical raise before enforcement');
+      t.writeBaseline(perPath({ [A]: 900 }));
+      t.stageBaseline();
+      adoptPolicy(t);
+
+      const r = t.run('verify-accepts', '--range', `${start}..HEAD`);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /OK/);
+    });
+  });
+
+  it('flags a post-adoption commit whose raise has no trailer', () => {
     within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      adoptPolicy(t);
       t.writeBaseline(perPath({ [A]: 900 }));
       t.git('add', 'scripts/ratchet-baseline.open.json');
       t.git('commit', '-q', '-m', 'bump A, no trailer');
@@ -520,8 +544,34 @@ describe('verify-accepts --range (item 8)', () => {
     });
   });
 
+  it('requires the verifier tool as well as the hook to establish adoption', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 800 })), (t) => {
+      const scriptPath = path.join(t.root, 'scripts', 'ratchet.mjs');
+      fs.writeFileSync(scriptPath, '// verifier not implemented yet\n');
+      t.git('add', 'scripts/ratchet.mjs');
+      adoptPolicy(t);
+      const start = t.git('rev-parse', 'HEAD').trim();
+      t.writeBaseline(perPath({ [A]: 850 }));
+      t.stageBaseline();
+      fs.copyFileSync(SCRIPT, scriptPath);
+      t.git('add', 'scripts/ratchet.mjs');
+      t.git('commit', '-q', '-m', 'add the verifier with an existing baseline raise');
+
+      const before = t.run('verify-accepts', '--range', `${start}..HEAD`);
+      assert.equal(before.status, 0, before.stdout + before.stderr);
+      t.writeBaseline(perPath({ [A]: 900 }));
+      t.stageBaseline();
+      t.git('commit', '-q', '-m', 'later raise without acceptance');
+      const after = t.run('verify-accepts', '--range', `${start}..HEAD`);
+      assert.notEqual(after.status, 0);
+      assert.match(after.stderr, /from 850 to 900/);
+      assert.doesNotMatch(after.stderr, /from 800 to 850/);
+    });
+  });
+
   it('passes when the historical commit carries a matching trailer', () => {
     within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      adoptPolicy(t);
       t.writeBaseline(perPath({ [A]: 900 }));
       t.git('add', 'scripts/ratchet-baseline.open.json');
       t.git(
@@ -534,6 +584,142 @@ describe('verify-accepts --range (item 8)', () => {
       assert.match(r.stdout, /OK/);
     });
   });
+
+  it('still requires trailers after the adopted hook is removed', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      adoptPolicy(t);
+      t.git('rm', '.githooks/commit-msg');
+      t.git('commit', '-q', '-m', 'remove hook');
+      t.writeBaseline(perPath({ [A]: 900 }));
+      t.stageBaseline();
+      t.git('commit', '-q', '-m', 'raise without acceptance');
+
+      const r = t.run('verify-accepts', '--range', 'HEAD~1..HEAD');
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /prod_lines_per_file crates\/c\/src\/a\.rs/);
+    });
+  });
+
+  function historicalRaise(t) {
+    adoptPolicy(t);
+    const start = t.git('rev-parse', 'HEAD').trim();
+    t.writeBaseline(perPath({ [A]: 900 }));
+    t.stageBaseline();
+    t.git('commit', '-q', '-m', 'raise with missing metadata');
+    return { start, original: t.git('rev-parse', 'HEAD').trim() };
+  }
+
+  const historyTrailer = (original, row = ROW, key = A, reason = 'keeps the measured source-name sorting behavior') =>
+    `Ratchet-Accept-History: ${original} ${row} ${key} — ${reason}`;
+
+  function recovery(t, ...trailers) {
+    t.git('commit', '--allow-empty', '-q', '-m', `record historical acceptance\n\n${trailers.join('\n')}\n`);
+  }
+
+  it('accepts a verified forward historical record without rewriting the original commit', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      const { start, original } = historicalRaise(t);
+      recovery(t, historyTrailer(original));
+      const r = t.run('verify-accepts', '--range', `${start}..HEAD`);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.doesNotMatch(t.git('log', '-1', '--format=%B', original), /Ratchet-Accept/);
+    });
+  });
+
+  it('does not let a historical record satisfy a new staged raise', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      const { original } = historicalRaise(t);
+      t.writeBaseline(perPath({ [A]: 1000 }));
+      t.stageBaseline();
+      const r = t.verifyAccepts(`raise again\n\n${historyTrailer(original)}\n`);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /from 900 to 1000/);
+    });
+  });
+
+  for (const [label, make] of [
+    ['abbreviated commit', (sha) => historyTrailer(sha.slice(0, 9))],
+    ['fabricated commit', () => historyTrailer('0'.repeat(40))],
+    ['unrelated row', (sha) => historyTrailer(sha, 'children_per_dir')],
+    ['unrelated key', (sha) => historyTrailer(sha, ROW, B)],
+    ['weak reason', (sha) => historyTrailer(sha, ROW, A, 'wip')],
+    ['malformed record', (sha) => `Ratchet-Accept-History: ${sha} ${ROW} ${A}`],
+  ]) {
+    it(`rejects a historical acceptance with an ${label}`, () => {
+      within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+        const { start, original } = historicalRaise(t);
+        recovery(t, make(original));
+        const r = t.run('verify-accepts', '--range', `${start}..HEAD`);
+        assert.notEqual(r.status, 0);
+        assert.match(r.stderr, /Ratchet-Accept-History/);
+      });
+    });
+  }
+
+  it('rejects an original commit that did not raise the named baseline', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      adoptPolicy(t);
+      const original = t.git('rev-parse', 'HEAD').trim();
+      recovery(t, historyTrailer(original));
+      const r = t.run('verify-accepts', '--range', 'HEAD~1..HEAD');
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /not a baseline raise/);
+    });
+  });
+
+  it('rejects a malformed historical trailer name even with no outstanding raise', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      adoptPolicy(t);
+      const original = t.git('rev-parse', 'HEAD').trim();
+      recovery(t, historyTrailer(original).replace('History:', 'History'));
+      const r = t.run('verify-accepts', '--range', 'HEAD~1..HEAD');
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /invalid Ratchet-Accept-History record/);
+    });
+  });
+
+  it('requires a commit object rather than an annotated tag that Git can peel', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      const { original } = historicalRaise(t);
+      t.git('tag', '-a', 'raised', original, '-m', 'tag the original increase');
+      const tag = t.git('rev-parse', 'raised').trim();
+      recovery(t, historyTrailer(tag));
+      const r = t.run('verify-accepts', '--range', 'HEAD~1..HEAD');
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /original is not a commit object/);
+    });
+  });
+
+  it('requires the original to be an ancestor of the recovery commit itself', () => {
+    within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+      adoptPolicy(t);
+      const start = t.git('rev-parse', 'HEAD').trim();
+      t.git('checkout', '-q', '-b', 'other');
+      t.writeBaseline(perPath({ [A]: 900 }));
+      t.stageBaseline();
+      t.git('commit', '-q', '-m', 'raise on other branch');
+      const original = t.git('rev-parse', 'HEAD').trim();
+      t.git('checkout', '-q', '-b', 'recovery', start);
+      recovery(t, historyTrailer(original));
+      t.git('merge', '-q', '--no-edit', 'other');
+      const r = t.run('verify-accepts', '--range', `${start}..HEAD`);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /not an ancestor of the recovery commit/);
+    });
+  });
+
+  for (const conflicting of [false, true]) {
+    it(`rejects ${conflicting ? 'conflicting' : 'duplicate'} historical records`, () => {
+      within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {
+        const { start, original } = historicalRaise(t);
+        recovery(t, historyTrailer(original));
+        recovery(t, historyTrailer(original, ROW, A, conflicting ? 'another reason for the same baseline increase' : undefined));
+        const r = t.run('verify-accepts', '--range', `${start}..HEAD`);
+        assert.notEqual(r.status, 0);
+        assert.match(r.stderr, /duplicate or conflicting/);
+      });
+    });
+  }
 
   it('needs an A..B range, not a bare ref', () => {
     within(gitTree({ [A]: 900 }, perPath({ [A]: 850 })), (t) => {

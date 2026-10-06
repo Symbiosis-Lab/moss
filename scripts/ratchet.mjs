@@ -1167,13 +1167,107 @@ function cmdVerifyAccepts(root, commitMsgFile) {
   }
 }
 
-// verify-accepts --range <A>..<B> (copied verbatim from the private repo's
-// ratchet.mjs, 2026-09-21 joint review, item 8): a retroactive audit over a
-// COMMIT RANGE, for exactly the gap the live commit-msg hook cannot close on
-// its own — the hook was only added 2026-09-21, `check` is green precisely
-// BECAUSE a baseline raise succeeded, so nothing else in CI or review would
-// ever flag a trailerless raise that either predates the hook or slipped
-// past it (a `--no-verify` commit, a repo this hook was never installed in).
+/** Whether this parent had already adopted commit-time acceptance checking.
+ *  Inspect tracked policy, not the current checkout's hook installation. A
+ *  later removal cannot undo adoption: ancestors that changed the hook or
+ *  tool still establish the requirement for subsequent commits. */
+function acceptancePolicyAdopted(root, parentRef) {
+  if (!parentRef) return false;
+  const hookPath = '.githooks/commit-msg';
+  const toolPath = rel(root, path.join(SCRIPT_DIR, 'ratchet.mjs'));
+  const hasPolicy = (ref) => {
+    const hook = git(root, ['show', `${ref}:${hookPath}`]);
+    if (!hook || !/^\s*(?:exec\s+)?node\s+scripts\/ratchet\.mjs\s+verify-accepts\b/m.test(hook)) return false;
+    const tool = git(root, ['show', `${ref}:${toolPath}`]);
+    return tool !== null && tool.includes('function cmdVerifyAccepts(');
+  };
+  if (hasPolicy(parentRef)) return true;
+  const history = git(root, ['rev-list', '--full-history', parentRef, '--', hookPath, toolPath]);
+  return (history ?? '').trim().split('\n').filter(Boolean).some(hasPolicy);
+}
+
+/** Baseline snapshots changed by one non-merge commit, shared by the audit
+ *  and historical record validation. Merge resolutions retain the same
+ *  exemption as the live commit-msg hook. */
+function commitBaselineChanges(root, commit, baselinePaths) {
+  const parents = (git(root, ['rev-list', '--parents', '-1', commit]) ?? '').trim().split(/\s+/).slice(1);
+  const parent = parents[0];
+  const changes = [];
+  if (parents.length > 1) return { parent, changes };
+  const changed = new Set((git(root, ['diff-tree', '--no-commit-id', '--name-only', '-r', commit]) ?? '').trim().split('\n'));
+  for (const file of baselinePaths.filter((p) => changed.has(p))) {
+    const stagedText = git(root, ['show', `${commit}:${file}`]);
+    if (stagedText === null) continue;
+    try {
+      const staged = JSON.parse(stagedText);
+      const headText = parent ? git(root, ['show', `${parent}:${file}`]) : null;
+      let head = { rows: {} };
+      if (headText !== null) {
+        try { head = JSON.parse(headText); } catch { /* No readable parent baseline. */ }
+      }
+      changes.push({ file, head, staged });
+    } catch { /* `check` guards baseline JSON integrity. */ }
+  }
+  return { parent, changes };
+}
+
+/** Historical records reuse the ordinary row/key/reason parser, but malformed
+ *  records are errors rather than silently ignored commit-message prose. */
+function historicalAcceptanceTrailers(message) {
+  const records = [];
+  const problems = [];
+  for (const line of message.split('\n').map((s) => s.trim())) {
+    if (!/^Ratchet-Accept-History\b/.test(line)) continue;
+    const match = /^Ratchet-Accept-History:\s*([0-9a-f]{40})\s+(.+)$/.exec(line);
+    const trailer = match && parseTrailers(`Ratchet-Accept: ${match[2]}`)[0];
+    if (!trailer || reasonIsWeak(trailer.reason, trailer.row, trailer.key)) {
+      problems.push(`invalid Ratchet-Accept-History record: ${line}`);
+    } else records.push({ original: match[1], ...trailer });
+  }
+  return { records, problems };
+}
+
+function historicalAcceptances(root, commits, messages, baselinePaths, problems) {
+  const accepted = new Map();
+  const seen = new Set();
+  for (const recovery of commits) {
+    const parsed = historicalAcceptanceTrailers(messages.get(recovery));
+    for (const p of parsed.problems) problems.push(`${recovery.slice(0, 9)}: ${p}`);
+    for (const record of parsed.records) {
+      const { original, row, key, reason } = record;
+      const identity = JSON.stringify([original, row, key]);
+      const prefix = `${recovery.slice(0, 9)} Ratchet-Accept-History ${original} ${row} ${key}`;
+      if (seen.has(identity)) {
+        problems.push(`${prefix}: duplicate or conflicting record`);
+        continue;
+      }
+      seen.add(identity);
+      if (git(root, ['cat-file', '-t', original])?.trim() !== 'commit') {
+        problems.push(`${prefix}: original is not a commit object`);
+        continue;
+      }
+      if (original === recovery || git(root, ['merge-base', '--is-ancestor', original, recovery]) === null) {
+        problems.push(`${prefix}: original is not an ancestor of the recovery commit`);
+        continue;
+      }
+      const { changes } = commitBaselineChanges(root, original, baselinePaths);
+      const raises = changes.flatMap(({ head, staged }) => diffRaisedEntries(head, staged));
+      if (!raises.some((r) => r.row === row && r.key === key)) {
+        problems.push(`${prefix}: named row/key is not a baseline raise in the original commit`);
+        continue;
+      }
+      const trailers = accepted.get(original) ?? [];
+      trailers.push(`Ratchet-Accept: ${row} ${key} — ${reason}`);
+      accepted.set(original, trailers);
+    }
+  }
+  return accepted;
+}
+
+// verify-accepts --range <A>..<B>: audit every baseline change made after
+// commit-time checking was adopted. `check` is green precisely BECAUSE a
+// baseline raise succeeded, so it cannot detect a missing trailer from a
+// `--no-verify` commit or a checkout whose hooks were never installed.
 // For each commit in the range that changed a baseline file, this runs the
 // exact same `verifyAccepts` pure function against THAT commit's message and
 // THAT commit's parent — so a historical audit and the live hook can never
@@ -1194,55 +1288,25 @@ function cmdVerifyAcceptsRange(root, rangeArg) {
   const relBaselinePaths = baselineFiles.map((name) => rel(root, path.join(SCRIPT_DIR, name)));
 
   const problems = [];
+  const messages = new Map(commits.map((commit) => [commit, git(root, ['log', '-1', '--format=%B', commit]) ?? '']));
+  const recovered = historicalAcceptances(root, commits, messages, relBaselinePaths, problems);
   for (const commit of commits) {
-    const parentsOut = git(root, ['rev-list', '--parents', '-1', commit]);
-    const parents = (parentsOut ?? '').trim().split(/\s+/).slice(1);
-
-    // `git diff-tree` with neither `-m` nor `-c` — deliberately not passed —
-    // reports NO paths at all for a merge commit, by git's own documented
-    // default (verified: true for a clean merge AND for one resolved through
-    // a real conflict, with content matching neither parent). That is this
-    // audit's merge exemption, the historical counterpart to isMidMerge's
-    // live one: a merge commit is never individually re-litigated here, on
-    // the same "already justified on its own branch" theory. It is also
-    // this audit's known blind spot — a raise entering ONLY through a merge
-    // resolution, never as its own commit anywhere in the range, is invisible
-    // to it; `-c`/`-m` would see it but would also re-flag every ordinary
-    // clean merge, which is the tradeoff `isMidMerge` makes the same way live.
-    const changedOut = git(root, ['diff-tree', '--no-commit-id', '--name-only', '-r', commit]);
-    const changed = new Set((changedOut ?? '').split('\n').map((l) => l.trim()).filter(Boolean));
-    const touchedBaselines = relBaselinePaths.filter((p) => changed.has(p));
-    if (touchedBaselines.length === 0) continue;
-
-    const message = git(root, ['log', '-1', '--format=%B', commit]) ?? '';
-    const parentRef = parents[0]; // undefined for a root commit (no parent at all)
-
-    for (const relPath of touchedBaselines) {
-      const stagedText = git(root, ['show', `${commit}:${relPath}`]);
-      if (stagedText === null) continue; // deleted in this commit — nothing to verify
-      let stagedJson;
-      try { stagedJson = JSON.parse(stagedText); } catch { continue; }
-
-      let headJson = { rows: {} };
-      if (parentRef) {
-        const headText = git(root, ['show', `${parentRef}:${relPath}`]);
-        if (headText !== null) {
-          try { headJson = JSON.parse(headText); } catch { headJson = { rows: {} }; }
-        }
-      }
-
-      for (const p of verifyAccepts(headJson, stagedJson, message)) {
-        problems.push(`${commit.slice(0, 9)} ${relPath}: ${p}`);
+    const { parent, changes } = commitBaselineChanges(root, commit, relBaselinePaths);
+    if (changes.length === 0 || !acceptancePolicyAdopted(root, parent)) continue;
+    const message = [messages.get(commit), ...(recovered.get(commit) ?? [])].join('\n');
+    for (const { file, head, staged } of changes) {
+      for (const p of verifyAccepts(head, staged, message)) {
+        problems.push(`${commit.slice(0, 9)} ${file}: ${p}`);
       }
     }
   }
 
   if (problems.length) {
-    console.error(`verify-accepts --range ${rangeArg}: baseline raise(s) with no matching Ratchet-Accept trailer:`);
+    console.error(`verify-accepts --range ${rangeArg}: acceptance audit failed:`);
     for (const p of problems) console.error(`  ${p}`);
     process.exit(1);
   }
-  console.log(`verify-accepts --range ${rangeArg}: OK — every baseline raise in range is covered by a trailer.`);
+  console.log(`verify-accepts --range ${rangeArg}: OK — every baseline raise after policy adoption is covered by a trailer.`);
 }
 
 // ---------------------------------------------------------------------------

@@ -23,6 +23,18 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before adding or moving a file. Do not r
 
 Anything that changes a published page's CSS is also checked by the render gates, which lay out real pages in Chromium and WebKit: `bash scripts/render-gates.sh`. The script's header lists its flags.
 
+## Baseline acceptance metadata
+
+A deliberate size-budget increase requires the `Ratchet-Accept:` trailer printed by `node scripts/ratchet.mjs accept`. Audit a branch with `node scripts/ratchet.mjs verify-accepts --range <base>..HEAD`. The audit requires trailers once the tracked commit-message hook and verifier existed; removing them later does not undo that requirement.
+
+If an already-shared commit missed its acceptance metadata, review the original increase and record its reason in a new descendant commit, without rewriting history:
+
+```text
+Ratchet-Accept-History: <full-original-commit-SHA> <row> <key> — <reviewed reason>
+```
+
+This is an exceptional metadata correction, not permission for another increase. The range audit checks the full original SHA, ancestry to the recording commit, the exact row/key increase, and the same reason requirements as ordinary acceptance. Malformed, duplicate, conflicting, or unrelated records fail. A historical record cannot satisfy a new staged increase: that commit still needs its own ordinary `Ratchet-Accept:` trailer.
+
 ## Written by you, built with any tool
 
 Use whatever tools you like to write code, AI coding agents included. Two things have to come from you.
