@@ -18,7 +18,7 @@ for (const engine of ['chromium', 'webkit']) {
   console.log(`${engine} ${route}: tagline and absence of search passed`);
   await page.close();
  }
- for (const [route,query,label] of [['/docs/','Markdown','Search'],['/zh-hans/docs/','网站','搜索'],['/zh-hant/docs/','網站','搜尋']]) {
+ for (const [route,query,label] of [['/docs/','Markdown','Search'],['/zh-hans/开始使用/','网站','搜索'],['/zh-hant/開始使用/','網站','搜尋']]) {
   const page = await browser.newPage({ viewport:{width:1440,height:900},reducedMotion:'reduce' });
   const errors=[]; page.on('pageerror', e=>errors.push(e.message));
   const requests=[]; page.on('request', r=>requests.push(r.url()));
