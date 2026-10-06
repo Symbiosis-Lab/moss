@@ -346,7 +346,7 @@ pub struct SiteResult {
     pub site_build_dir: String,
     /// Site metadata extracted from content
     pub site_title: String,
-    /// Hash map of all generated files (path -> SHA-256 hash)
+    /// Hash map of all generated files (path -> mode-tagged content hash)
     /// Used for change detection in preview refresh
     #[specta(skip)]
     pub hashes: SiteHashes,
@@ -366,7 +366,7 @@ pub struct SiteResult {
 
 /// Hash map of generated site files for change detection.
 ///
-/// Maps output file paths (relative to the active generation `.moss/build.nosync/current/`) to their SHA-256 content hashes.
+/// Maps output file paths (relative to the active generation `.moss/build.nosync/current/`) to their mode-tagged content hashes (xxh3_64 for regular files).
 /// Used for:
 /// 1. Smart preview refresh - only refresh if current page's hash changed
 /// 2. Future incremental uploads - only upload files whose hash changed
@@ -377,8 +377,9 @@ pub struct SiteHashes {
     /// Map of output path to mode-tagged content hash.
     ///
     /// Wire format:
-    ///   `<octal-mode>:<sha256>`
-    ///   - `100644:<hash>` — regular file, hash of bytes
+    ///   `<octal-mode>:<hash>`
+    ///   - `100644:<hash>` — regular file, xxh3_64 of the bytes (16 hex chars); the
+    ///     manifest `moss deploy --prebuilt` builds uses the same
     ///   - `120000:<hash>` — symlink, hash of the target path string
     ///
     /// Legacy bare-hash values (no colon) deserialize as `100644:<hash>`

@@ -25,11 +25,10 @@ use crate::deploy::{progress, PushResult};
 use crate::deploy::progress::DeploySink;
 use std::sync::Arc;
 use crate::identity::Identity;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Walk `dir` and build a moss-seta manifest (`path → "100644:<sha256>"`).
+/// Walk `dir` and build a moss-seta manifest (`path → "100644:<xxh3_64>"`).
 ///
 /// Paths are forward-slash separated and relative to `dir`. Symlinks within
 /// the tree are followed transparently — the upload path uses the file's
@@ -64,18 +63,18 @@ pub fn build_manifest_from_dir(dir: &Path) -> Result<HashMap<String, String>, St
         // Forward-slash-only on the wire; Windows-style backslashes break
         // server-side path joins.
         let rel_str = rel.to_string_lossy().replace('\\', "/");
-        // allow:raw_read built output being uploaded — regenerable, dataless is absent
-        let bytes = std::fs::read(path)
-            .map_err(|e| format!("read {}: {}", path.display(), e))?;
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let hash = hex::encode(hasher.finalize());
-        manifest.insert(rel_str, format!("{}:{}", crate::types::content::MODE_FILE, hash));
-        // Hashing is pure local work that happens BEFORE the first request, and
-        // it scales with the site. Without a bump per file the stall watchdog
-        // wrapping `push_prebuilt` would cancel a big prebuilt tree during a
-        // phase where nothing is wrong at all.
-        crate::infra::liveness::bump();
+        // The same streaming xxh3_64 the normal build seals into its manifest,
+        // so a prebuilt deploy and a normal publish of identical bytes agree
+        // on every entry and on the generation id; the server compares entries
+        // as opaque strings. Hashing is pure local work that happens BEFORE
+        // the first request and scales with the site, so each buffer bumps the
+        // stall clock: without it the watchdog wrapping `push_prebuilt` would
+        // cancel a big prebuilt tree during a phase where nothing is wrong.
+        let hash = crate::build::assets::paths::compute_binary_hash_file_with_heartbeat(
+            path,
+            &|| crate::infra::liveness::bump(),
+        )?;
+        manifest.insert(rel_str, crate::types::content::file_entry(&hash));
     }
 
     if manifest.is_empty() {
@@ -249,10 +248,8 @@ async fn push_prebuilt_inner(
     //    PUT and got a 524 from Cloudflare. Sharing the routing is the point —
     //    a fix in one loop was not a fix.
     //
-    //    The one thing that cannot be shared is the digest: manifests built
-    //    here are Sha256 (see build_prebuilt_manifest), while deploy.rs seals
-    //    xxh3_64. Hence HashAlgo as a parameter. Passing Sha256 here also means
-    //    prebuilt deploys now verify integrity at all, which they never did.
+    //    Manifest entries are xxh3_64 here and in deploy.rs, so the upload
+    //    verifies each file against the hash the manifest carries.
     let total = diff.need.len() as u32;
     let uploaded = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let canonical_base = prebuilt_dir
@@ -315,7 +312,6 @@ async fn push_prebuilt_inner(
                     file_size,
                     &generation_id,
                     expected_hash,
-                    crate::deploy::upload::HashAlgo::Sha256,
                     &throughput,
                     self_heal_cap,
                     // This path reports FILE-count progress, so it passes no

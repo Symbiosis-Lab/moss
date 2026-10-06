@@ -12,16 +12,13 @@
 //! lives here. Progress reporting and symlink handling stay with their callers,
 //! because those really do differ.
 //!
-//! # The two things that differ, and are therefore parameters
-//!
-//! **Hash algorithm.** `deploy.rs` manifests carry xxh3_64 (16 hex chars);
-//! `prebuilt.rs` builds its manifest with Sha256 (64 hex). A shared function
-//! that hard-coded either one would fail 100% of the other's uploads. Hence
-//! [`HashAlgo`] — the caller names its algorithm and this module decides
-//! whether to verify buffered or streaming.
+//! # What differs, and is therefore a parameter
 //!
 //! **Byte accounting.** The interactive path drives a 4 Hz byte-based progress
 //! ticker; the CLI path counts files. Hence the optional `on_bytes` callback.
+//!
+//! Manifest hashes are not a parameter: both paths carry xxh3_64 (16 hex
+//! chars), so a site that alternates between them re-uploads only what changed.
 //!
 //! # Sizing
 //!
@@ -33,75 +30,29 @@ use std::path::Path;
 use crate::seta::upload_policy;
 use crate::seta::client::MossSetaClient;
 
-/// Which digest the caller's manifest entries carry.
-///
-/// Not a stylistic choice — the two deploy paths genuinely use different
-/// algorithms, and conflating them is a whole-feature outage rather than a
-/// subtle bug.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HashAlgo {
-    /// `deploy.rs` — the sealed build manifest (`build/assets/paths.rs`).
-    Xxh3,
-    /// `deploy/prebuilt.rs` — the manifest it walks the prebuilt dir to build.
-    Sha256,
+/// Digest of an in-memory buffer — the manifest's xxh3_64, as lowercase hex.
+fn hash_bytes(bytes: &[u8]) -> String {
+    crate::build::assets::paths::compute_binary_hash(bytes)
 }
 
-impl HashAlgo {
-    /// Digest of an in-memory buffer, as lowercase hex.
-    fn hash_bytes(self, bytes: &[u8]) -> String {
-        match self {
-            HashAlgo::Xxh3 => crate::build::assets::paths::compute_binary_hash(bytes),
-            HashAlgo::Sha256 => {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(bytes);
-                hex::encode(h.finalize())
-            }
-        }
-    }
-
-    /// Digest of a file read incrementally — identical output to
-    /// [`Self::hash_bytes`] over the same content, without buffering it.
-    ///
-    /// Needed because lowering the chunking threshold to 4 MB would otherwise
-    /// *widen* the band of files that go out unverified. Before, only files
-    /// >20 MB skipped the integrity check; a naive threshold change would have
-    /// made that >4 MB. Streaming keeps the guarantee at every size.
-    ///
-    /// Both arms bump the stall clock per buffer. This runs for every chunked
-    /// file *before* its first request, so it credits no bytes and emits no
-    /// progress: without the bump, hashing a large video on a slow disk (or an
-    /// iCloud file that is materialising) would be indistinguishable from a
-    /// wedged publish and `activity::watchdog` would cancel it during work that
-    /// is going perfectly well.
-    fn hash_file(self, path: &Path) -> Result<String, String> {
-        match self {
-            HashAlgo::Xxh3 => crate::build::assets::paths::compute_binary_hash_file_with_heartbeat(
-                path,
-                &|| crate::infra::liveness::bump(),
-            ),
-            HashAlgo::Sha256 => {
-                use sha2::{Digest, Sha256};
-                use std::io::Read;
-                // allow:raw_read built output being hashed for upload — dataless is absent
-                let mut file = std::fs::File::open(path)
-                    .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
-                let mut hasher = Sha256::new();
-                let mut buf = vec![0u8; 64 * 1024];
-                loop {
-                    let n = file
-                        .read(&mut buf)
-                        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-                    if n == 0 {
-                        break;
-                    }
-                    hasher.update(&buf[..n]);
-                    crate::infra::liveness::bump();
-                }
-                Ok(hex::encode(hasher.finalize()))
-            }
-        }
-    }
+/// Digest of a file read incrementally — identical output to [`hash_bytes`]
+/// over the same content, without buffering it.
+///
+/// Needed because lowering the chunking threshold to 4 MB would otherwise
+/// *widen* the band of files that go out unverified. Before, only files
+/// >20 MB skipped the integrity check; a naive threshold change would have
+/// made that >4 MB. Streaming keeps the guarantee at every size.
+///
+/// It bumps the stall clock per buffer. This runs for every chunked
+/// file *before* its first request, so it credits no bytes and emits no
+/// progress: without the bump, hashing a large video on a slow disk (or an
+/// iCloud file that is materialising) would be indistinguishable from a
+/// wedged publish and `activity::watchdog` would cancel it during work that
+/// is going perfectly well.
+fn hash_file(path: &Path) -> Result<String, String> {
+    crate::build::assets::paths::compute_binary_hash_file_with_heartbeat(path, &|| {
+        crate::infra::liveness::bump()
+    })
 }
 
 /// Compare a digest against the manifest's, tolerating a manifest entry with no
@@ -138,9 +89,8 @@ pub(crate) fn verify_bytes(
     file_path: &str,
     bytes: &[u8],
     expected: &str,
-    algo: HashAlgo,
 ) -> Result<(), String> {
-    compare(file_path, expected, &algo.hash_bytes(bytes))
+    compare(file_path, expected, &hash_bytes(bytes))
 }
 
 /// Settle pause between the first and second read of a file whose hash
@@ -157,7 +107,7 @@ pub(crate) const DRIFT_SETTLE_DELAY: std::time::Duration = std::time::Duration::
 
 /// How many leading bytes to sample when checking whether a file looks like
 /// a zeroed-out iCloud eviction stub, without reading a large chunked file in
-/// full. Matches the streaming hasher's own read buffer size ([`HashAlgo::hash_file`]).
+/// full. Matches the streaming hasher's own read buffer size ([`hash_file`]).
 const ZEROED_STUB_SAMPLE_BYTES: usize = 64 * 1024;
 
 /// The one corruption shape this module knows how to recognize by content:
@@ -293,7 +243,6 @@ pub async fn upload_regular_file(
     size: u64,
     generation_id: &str,
     expected_hash: &str,
-    algo: HashAlgo,
     throughput: &upload_policy::Throughput,
     self_heal_cap: usize,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
@@ -303,7 +252,7 @@ pub async fn upload_regular_file(
         // Verify BEFORE uploading. The bytes are never buffered on this path,
         // so the check has to stream the file — which also means it costs one
         // local read of a file we are about to spend far longer sending.
-        let first_hash = algo.hash_file(canonical)?;
+        let first_hash = hash_file(canonical)?;
         if let Err(e) = compare(file_path, expected_hash, &first_hash) {
             // On a live-edited, sync-backed vault (Google Drive) a
             // raw/background asset can legitimately change on disk between
@@ -313,7 +262,7 @@ pub async fn upload_regular_file(
             // looks identical. Settle, then re-hash: only a file reporting
             // the SAME hash on both reads has actually stopped changing.
             tokio::time::sleep(DRIFT_SETTLE_DELAY).await;
-            let second_hash = algo.hash_file(canonical)?;
+            let second_hash = hash_file(canonical)?;
             if second_hash != first_hash {
                 return Err(format!(
                     "{e} (still changing {:?} later — not self-healing a moving target)",
@@ -349,7 +298,7 @@ pub async fn upload_regular_file(
         let mut body = tokio::fs::read(canonical)
             .await
             .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
-        if let Err(e) = verify_bytes(file_path, &body, expected_hash, algo) {
+        if let Err(e) = verify_bytes(file_path, &body, expected_hash) {
             // Same self-heal discipline as the chunked branch: settle, then
             // re-read from disk — `body` alone is only one sample and cannot
             // tell a finished rebuild from a torn read mid-write.
@@ -361,8 +310,8 @@ pub async fn upload_regular_file(
             let resettled = tokio::fs::read(canonical)
                 .await
                 .map_err(|e| format!("Failed to re-read {}: {}", file_path, e))?;
-            let first_hash = algo.hash_bytes(&body);
-            let second_hash = algo.hash_bytes(&resettled);
+            let first_hash = hash_bytes(&body);
+            let second_hash = hash_bytes(&resettled);
             if second_hash != first_hash {
                 return Err(format!(
                     "{e} (still changing {:?} later — not self-healing a moving target)",

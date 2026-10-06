@@ -395,7 +395,7 @@ async fn push_site_inner_impl(
                         // of single-PUT vs chunked all live in deploy/upload.rs
                         // — shared with deploy/prebuilt.rs, which had no size
                         // routing at all and would send a 100 MB video as one
-                        // PUT. Manifest hashes here are xxh3_64.
+                        // PUT.
                         let file_size = tokio::fs::metadata(&canonical).await
                             .map_err(|e| format!("Failed to stat {}: {}", file_path, e))?
                             .len();
@@ -408,7 +408,6 @@ async fn push_site_inner_impl(
                             file_size,
                             &generation_id,
                             expected_hash,
-                            upload::HashAlgo::Xxh3,
                             &throughput,
                             self_heal_cap,
                             Some(&move |n: u64| credit_upload_bytes(&st_bytes, n)),

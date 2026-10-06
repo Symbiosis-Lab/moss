@@ -36,6 +36,33 @@ fn prebuilt_generation_id_is_real_hash_not_placeholder() {
     );
 }
 
+/// A prebuilt manifest and a normal build's sealed manifest are compared by the
+/// server as opaque strings, so for the same bytes the entry must be identical
+/// down to the hex formatting. A different digest marks every file as changed
+/// each time a site switches between the two paths.
+#[test]
+fn a_prebuilt_manifest_entry_equals_the_normal_builds_entry_for_the_same_bytes() {
+    let tmp = tmp_dir();
+    // The second file spans several streaming reads.
+    let big: Vec<u8> = (0u32..40_000).flat_map(|i| i.to_le_bytes()).collect();
+    let files: [(&str, &[u8]); 3] =
+        [("index.html", b"<html></html>"), ("empty.txt", b""), ("assets/big.bin", &big)];
+    for (name, bytes) in files {
+        let path = tmp.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    let manifest = build_manifest_from_dir(tmp.path()).expect("build_manifest_from_dir");
+
+    for (name, bytes) in files {
+        let normal_build_entry = crate::types::content::file_entry(
+            &crate::build::assets::paths::compute_binary_hash(bytes),
+        );
+        assert_eq!(manifest[name], normal_build_entry, "{name}");
+    }
+}
+
 /// Same manifest content produced in different ways (e.g. different HashMap
 /// insertion order) must yield the same generation_id.
 #[test]
@@ -236,7 +263,6 @@ async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
 
 #[tokio::test]
 async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit() {
-    use sha2::{Digest, Sha256};
     use tokio::net::TcpListener;
 
     let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -246,11 +272,7 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
     let old_bytes = b"<html>content the manifest hash was computed from</html>";
     let new_bytes: &[u8] =
         b"<html>content actually on disk by upload time - a racing rebuild</html>";
-    let hash_of = |b: &[u8]| -> String {
-        let mut h = Sha256::new();
-        h.update(b);
-        hex::encode(h.finalize())
-    };
+    let hash_of = crate::build::assets::paths::compute_binary_hash;
     let old_hash = hash_of(old_bytes);
     let new_hash = hash_of(new_bytes);
     assert_ne!(old_hash, new_hash, "fixture sanity: the drift must be real");

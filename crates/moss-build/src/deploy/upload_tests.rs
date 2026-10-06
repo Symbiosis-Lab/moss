@@ -1,10 +1,7 @@
 //! Tests for the shared upload routing and the sliding window.
 //!
 //! The routing test exists because this exact routing was silently deleted by a
-//! refactor once (`b1df2298a`) and cost a real site six 100 MB videos. The
-//! algorithm test exists because a shared verifier that hard-coded one hash
-//! would break 100% of `moss deploy --prebuilt` while every `deploy.rs` test
-//! stayed green.
+//! refactor once (`b1df2298a`) and cost a real site six 100 MB videos.
 
 use super::*;
 
@@ -17,66 +14,33 @@ fn tmp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
     path
 }
 
-// ── Hash algorithm is a parameter, not a constant ────────────────────────────
-
-/// The two deploy paths build their manifests with different digests:
-/// `deploy.rs` uses xxh3_64 (16 hex chars), `deploy/prebuilt.rs` uses Sha256
-/// (64 hex). Verifying one against the other rejects every single file.
-#[test]
-fn the_two_algorithms_produce_different_digests_and_lengths() {
-    let bytes = b"the same bytes";
-    let xxh3 = HashAlgo::Xxh3.hash_bytes(bytes);
-    let sha = HashAlgo::Sha256.hash_bytes(bytes);
-    assert_eq!(xxh3.len(), 16, "xxh3_64 is 16 hex chars");
-    assert_eq!(sha.len(), 64, "sha256 is 64 hex chars");
-    assert_ne!(xxh3, sha);
-}
-
-#[test]
-fn each_algorithm_verifies_its_own_manifest_hash() {
-    let bytes = b"content";
-    for algo in [HashAlgo::Xxh3, HashAlgo::Sha256] {
-        let expected = algo.hash_bytes(bytes);
-        assert!(verify_bytes("f.txt", bytes, &expected, algo).is_ok());
-    }
-}
-
-/// The regression this module was restructured to make impossible.
-#[test]
-fn verifying_a_sha256_manifest_with_xxh3_rejects_a_correct_file() {
-    let bytes = b"content";
-    let sha_entry = HashAlgo::Sha256.hash_bytes(bytes);
-    let err = verify_bytes("f.txt", bytes, &sha_entry, HashAlgo::Xxh3)
-        .expect_err("wrong algorithm must not silently pass");
-    assert!(err.contains("integrity"), "{err}");
-}
+// ── Streaming and buffered digests ───────────────────────────────────────────
 
 /// Streaming and buffered digests must agree, or a file would verify on the
 /// single-PUT path and fail on the chunked path purely because of its size.
 #[test]
-fn streaming_and_buffered_digests_agree_for_both_algorithms() {
+fn streaming_and_buffered_digests_agree() {
     // Larger than the 64 KB streaming buffer so it spans multiple reads.
     let bytes: Vec<u8> = (0u32..40_000).flat_map(|i| i.to_le_bytes()).collect();
     let path = tmp_file("streaming-agreement.bin", &bytes);
-    for algo in [HashAlgo::Xxh3, HashAlgo::Sha256] {
-        assert_eq!(
-            algo.hash_bytes(&bytes),
-            algo.hash_file(&path).expect("hash file"),
-            "streaming digest must equal the buffered one"
-        );
-    }
+    assert_eq!(
+        hash_bytes(&bytes),
+        hash_file(&path).expect("hash file"),
+        "streaming digest must equal the buffered one"
+    );
+    assert_eq!(hash_bytes(&bytes).len(), 16, "xxh3_64 is 16 hex chars");
 }
 
 /// An empty manifest hash means a legacy or regressed entry. Failing the deploy
 /// would strand the user behind a stale build cache with no way forward.
 #[test]
 fn an_empty_manifest_hash_skips_verification_rather_than_failing() {
-    assert!(verify_bytes("f.txt", b"anything", "", HashAlgo::Xxh3).is_ok());
+    assert!(verify_bytes("f.txt", b"anything", "").is_ok());
 }
 
 #[test]
 fn a_wrong_hash_names_the_file_and_both_hashes_so_the_error_is_actionable() {
-    let err = verify_bytes("assets/photo.jpg", b"bytes", "deadbeefdeadbeef", HashAlgo::Xxh3)
+    let err = verify_bytes("assets/photo.jpg", b"bytes", "deadbeefdeadbeef")
         .expect_err("must reject");
     assert!(err.contains("assets/photo.jpg"), "{err}");
     assert!(err.contains("deadbeefdeadbeef"), "must quote the expected hash: {err}");
@@ -90,9 +54,9 @@ fn a_wrong_hash_names_the_file_and_both_hashes_so_the_error_is_actionable() {
 #[test]
 fn a_zeroed_icloud_stub_is_rejected_before_it_is_uploaded() {
     let real = b"actual image bytes";
-    let expected = HashAlgo::Xxh3.hash_bytes(real);
+    let expected = hash_bytes(real);
     let evicted = vec![0u8; real.len()];
-    assert!(verify_bytes("assets/photo.jpg", &evicted, &expected, HashAlgo::Xxh3).is_err());
+    assert!(verify_bytes("assets/photo.jpg", &evicted, &expected).is_err());
 }
 
 // ── Self-heal on a drifted hash ──────────────────────────────────────────────
@@ -139,7 +103,6 @@ async fn a_drifted_hash_self_heals_on_the_single_put_path() {
         bytes.len() as u64,
         "abc123def456abcd",
         stale_hash,
-        HashAlgo::Xxh3,
         &throughput,
         100, // self_heal_cap: generous, not what this test is about
         None,
@@ -150,7 +113,7 @@ async fn a_drifted_hash_self_heals_on_the_single_put_path() {
         .expect("a hash drift stable across the settle pause must self-heal, not fail the deploy");
     assert_eq!(
         healed_hash,
-        Some(HashAlgo::Xxh3.hash_bytes(bytes)),
+        Some(hash_bytes(bytes)),
         "the caller must get back the hash actually shipped, to correct commit_sync's manifest"
     );
     mock.assert_async().await;
@@ -239,7 +202,6 @@ async fn a_drifted_hash_self_heals_on_the_chunked_path() {
         file_size as u64,
         "abc123def456abcd",
         stale_hash,
-        HashAlgo::Xxh3,
         &throughput,
         100, // self_heal_cap: generous, not what this test is about
         None,
@@ -252,7 +214,7 @@ async fn a_drifted_hash_self_heals_on_the_chunked_path() {
     );
     assert_eq!(
         healed_hash,
-        Some(HashAlgo::Xxh3.hash_bytes(&bytes)),
+        Some(hash_bytes(&bytes)),
         "the caller must get back the hash actually shipped, to correct commit_sync's manifest"
     );
 }
@@ -294,7 +256,6 @@ async fn a_still_changing_file_does_not_self_heal() {
         bytes_v1.len() as u64,
         "abc123def456abcd",
         "0000000000000000",
-        HashAlgo::Xxh3,
         &throughput,
         100,
         None,
@@ -338,7 +299,6 @@ async fn a_zeroed_stub_does_not_self_heal_even_though_it_is_stable() {
         real_size as u64,
         "abc123def456abcd",
         sealed_hash_for_real_content,
-        HashAlgo::Xxh3,
         &throughput,
         100,
         None,
@@ -383,7 +343,6 @@ async fn a_self_heal_cap_stops_healing_the_rest_of_the_deploy() {
             bytes.len() as u64,
             "abc123def456abcd",
             "0000000000000000",
-            HashAlgo::Xxh3,
             &throughput,
             cap,
             None,
@@ -404,7 +363,6 @@ async fn a_self_heal_cap_stops_healing_the_rest_of_the_deploy() {
         bytes.len() as u64,
         "abc123def456abcd",
         "0000000000000000",
-        HashAlgo::Xxh3,
         &throughput,
         cap,
         None,

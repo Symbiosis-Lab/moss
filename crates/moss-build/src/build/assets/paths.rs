@@ -45,9 +45,7 @@ pub fn compute_binary_hash_file(path: &std::path::Path) -> Result<String, String
 /// cancel work that is going perfectly well.
 ///
 /// It is a parameter rather than a call into `deploy::activity` because the
-/// build has no business knowing a publish watchdog exists — and because the
-/// SHA-256 arm of the same `HashAlgo::hash_file` already bumps at its own call
-/// site, so this makes the two arms say the same thing in the same place.
+/// build has no business knowing a publish watchdog exists.
 ///
 /// **What that cost, said out loud.** The bump used to live INSIDE
 /// [`compute_binary_hash_file`], so it fired for every caller. It now fires
