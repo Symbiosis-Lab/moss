@@ -28,6 +28,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A site with hand-written HTML pages no longer re-uploads or self-corrects them on every publish, and such pages can no longer make a publish abort. The page's recorded hash now matches the file that is actually published, so identical output gets the same generation id.
 - Switching between `moss deploy --prebuilt` and a normal publish of the same site no longer re-uploads every file. The two paths now describe each file the same way, so only the files that changed go up, and byte-identical output counts as already live whichever path published it. The first deploy after upgrading still sends everything once, because the live site's record was written the old way.
 - On a cloud-synced folder, a cache folder that another computer created and this one has not downloaded yet is fetched when moss needs to write into it, instead of the same images shipping unoptimized on every build.
 - `&nbsp;` in imported text now becomes a real non-breaking space instead of staying as the literal text `&nbsp;`.

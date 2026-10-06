@@ -747,6 +747,80 @@ async fn test_theme_video_overlay_copied_to_output() {
     );
 }
 
+/// Builds a site holding one hand-written `.html` page carrying
+/// `data-moss-preview` `builds` times over, with the hash memo optionally
+/// pre-seeded with a hash of the RAW bytes under the blob's plain oid (what a
+/// build before the fix left behind). Returns each build's sealed entry for the
+/// page and the entry for the bytes ship writes.
+async fn seal_hand_written_page(builds: usize, stale_memo: bool) -> (Vec<Option<String>>, String) {
+    use crate::build::coordinator::test_utils;
+    use crate::types::content::SiteHashes;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    fs::create_dir_all(&base).expect("create target/test-tmp");
+    let tmp = TempDir::new_in(&base).unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = tmp.path().join(".moss");
+    let staging = moss_dir.join("build/site-stage");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache/objects")).unwrap();
+
+    let raw = b"<html><body data-moss-preview=\"\"><p>hand written</p></body></html>";
+    fs::write(source.join("page.html"), raw).unwrap();
+    let shipped = crate::build::ship::apply_transform(crate::build::served_path::ShipTransform::StripPreviewAttrs, raw);
+    assert_ne!(shipped.as_slice(), &raw[..], "fixture must actually change under the transform");
+    let expected = crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(&shipped));
+
+    if stale_memo {
+        let memo_path = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()).cache_manifest_hash_memo();
+        let memo = crate::build::media::manifest_hash_memo::ManifestHashMemo::load(&memo_path);
+        let oid = crate::build::cache::ObjectStore::hash_file(&source.join("page.html")).unwrap();
+        memo.record(&oid, crate::build::assets::paths::compute_binary_hash(raw));
+        memo.save(&memo_path).unwrap();
+    }
+
+    let mut entries = Vec::new();
+    for _ in 0..builds {
+        let ctx = crate::types::services::BackgroundContext {
+            source_path: source.clone().to_string_lossy().to_string(),
+            staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(),
+            blocking_keys: Default::default(),
+            dir_overrides: Default::default(),
+            ..crate::types::services::BackgroundContext::for_test()
+        };
+        let (tx, rx) = test_utils::build_test_coordinator();
+        tokio::task::spawn_blocking(move || {
+            copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+        })
+        .await
+        .unwrap();
+        let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+        entries.push(sealed.files().get("page.html").cloned());
+    }
+    (entries, expected)
+}
+
+/// A hand-written `.html` page is copied, not rendered, and `ship_phase` then
+/// strips `data-moss-preview` from it. The sealed hash must be that of the
+/// stripped bytes, on a cold build and on a second build served from the memo.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_deferred_html_seals_the_shipped_bytes() {
+    let (entries, expected) = seal_hand_written_page(2, false).await;
+    assert_eq!(entries, vec![Some(expected.clone()), Some(expected)], "cold then memoized build");
+}
+
+/// A memo written before the fix holds the raw bytes' hash under the plain
+/// oid. It must not be recalled for a transformed entry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_deferred_html_ignores_a_pre_transform_memo_entry() {
+    let (entries, expected) = seal_hand_written_page(1, true).await;
+    assert_eq!(entries, vec![Some(expected)]);
+}
+
 #[test]
 fn remove_stale_files_idempotent_with_no_placeholders() {
     // Fresh vault has no .placeholder.svg files. Running cleanup twice
@@ -1740,7 +1814,7 @@ fn recall_or_hash_output_memoizes_the_real_hash() {
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let got = recall_or_hash_output(&memo, "oid-x", &target, "fallback-oid", "output");
+    let got = recall_or_hash_output(&memo, "oid-x", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
 
     assert_eq!(got, expected, "a miss must return exactly what compute_binary_hash_file returns");
     assert_eq!(
@@ -1760,7 +1834,7 @@ fn recall_or_hash_output_hit_does_not_read_the_file() {
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let first = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output");
+    let first = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
     assert_eq!(first, expected);
 
     // Delete the file entirely. A second call that reads it would fail
@@ -1768,7 +1842,7 @@ fn recall_or_hash_output_hit_does_not_read_the_file() {
     // so returning the real hash here is proof the memo hit short-circuited
     // before any file I/O.
     std::fs::remove_file(&target).unwrap();
-    let second = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output");
+    let second = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
     assert_eq!(second, expected, "a memo hit must not touch the (now-deleted) file");
 }
 
@@ -1781,7 +1855,7 @@ fn recall_or_hash_output_never_memoizes_the_fallback() {
     let target = tmp.path().join("missing.bin");
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let failed = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output");
+    let failed = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
     assert_eq!(failed, "fallback-oid", "a hash failure must return the fallback");
     assert_eq!(memo.get("oid-z"), None, "a failed hash must never be memoized");
 
@@ -1789,7 +1863,7 @@ fn recall_or_hash_output_never_memoizes_the_fallback() {
     // is looked up again — this must be a genuine miss, not a poisoned hit.
     std::fs::write(&target, b"now it exists").unwrap();
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
-    let recovered = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output");
+    let recovered = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
     assert_eq!(recovered, expected, "a subsequent successful read must record the real xxh3");
     assert_eq!(memo.get("oid-z").as_deref(), Some(expected.as_str()));
 }

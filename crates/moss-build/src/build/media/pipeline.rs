@@ -820,13 +820,30 @@ fn recall_or_hash_output(
     target: &Path,
     fallback: &str,
     log_context: &str,
+    transform: crate::build::served_path::ShipTransform,
 ) -> String {
-    if let Some(hash) = memo.get(memo_key) {
+    use crate::build::served_path::ShipTransform;
+    // A transformed entry's hash describes the bytes ship writes, not the
+    // blob's, so it is memoized under its own key, which also carries the
+    // transform revision: bumping it must not recall a hash of old output.
+    let key = match transform {
+        ShipTransform::CopyAsIs => memo_key.to_string(),
+        ShipTransform::StripPreviewAttrs => {
+            format!("{memo_key}+ship{}", crate::build::ship::SHIP_TRANSFORM_REV)
+        }
+    };
+    if let Some(hash) = memo.get(&key) {
         return hash;
     }
-    match crate::build::assets::paths::compute_binary_hash_file(target) {
+    let hashed = match transform {
+        ShipTransform::CopyAsIs => crate::build::assets::paths::compute_binary_hash_file(target),
+        ShipTransform::StripPreviewAttrs => std::fs::read(target).map_err(|e| e.to_string()).map(|bytes| {
+            crate::build::assets::paths::compute_binary_hash(&crate::build::ship::apply_transform(transform, &bytes))
+        }),
+    };
+    match hashed {
         Ok(hash) => {
-            memo.record(memo_key, hash.clone());
+            memo.record(&key, hash.clone());
             hash
         }
         Err(e) => {
@@ -914,29 +931,25 @@ fn place_blob(
     true
 }
 
-/// `record_blob`'s hash source: a value already computed byte-exactly (SPA
-/// post-injection — the memo would answer for the wrong, pre-injection
-/// blob), or the inputs to resolve one via `recall_or_hash_output`. A type,
-/// not four more `&str` params dead under `Known` and, at the theme call
-/// site, three positional copies of the same `oid` with nothing to catch a swap.
-enum OutputHash<'a> {
-    Known(String),
-    Compute {
-        memo_key: &'a str,
-        target: &'a Path,
-        fallback_oid: &'a str,
-        log_context: &'a str,
-    },
+/// The inputs `record_blob` resolves a manifest hash from via
+/// `recall_or_hash_output`. A struct, not four positional `&str`s: at the
+/// theme call site three of them are copies of the same `oid`, with nothing to
+/// catch a swap.
+struct OutputHash<'a> {
+    memo_key: &'a str,
+    target: &'a Path,
+    fallback_oid: &'a str,
+    log_context: &'a str,
 }
 
 /// Resolve `hash` and register it, plus the staged CAS object id, for a blob
 /// `place_blob` already linked into `out_path`'s target.
 ///
-/// This records the staged, PRE-`apply_transform` bytes' hash — for an HTML
-/// entry, `ship::verify_ship_integrity` compares POST-transform bytes
-/// instead. Benign: an entry here normally carries a live `staged_oid`,
-/// which skips that check entirely, and the check is fail-open/log-only on
-/// the rare entry that does reach it.
+/// The sealed hash is of the bytes ship writes: for an HTML entry that is the
+/// staged blob AFTER `apply_transform`, not the blob. Sealing the blob's own
+/// hash would mismatch whenever the transform changes something (a hand-written
+/// page carrying `data-moss-preview`), skewing the generation id and the
+/// server diff, and leaving every such upload to the integrity self-heal.
 ///
 /// A hash failure registers `fallback_oid` rather than panicking (this runs
 /// inside a `spawn_blocking` worker, where a panic is swallowed) and rather
@@ -950,12 +963,9 @@ fn record_blob(
     out_path: &crate::build::served_path::ServedPath,
     staged_oid: &str,
 ) {
-    let hash = match hash {
-        OutputHash::Known(h) => h,
-        OutputHash::Compute { memo_key, target, fallback_oid, log_context } => {
-            recall_or_hash_output(manifest_hash_memo, memo_key, target, fallback_oid, log_context)
-        }
-    };
+    let OutputHash { memo_key, target, fallback_oid, log_context } = hash;
+    let transform = crate::build::served_path::transform_for(out_path.as_str());
+    let hash = recall_or_hash_output(manifest_hash_memo, memo_key, target, fallback_oid, log_context, transform);
     site_hashes.insert_file_hash(out_path, crate::types::content::file_entry(&hash));
     staged_oids.insert(out_path.as_str().to_string(), staged_oid.to_string());
 }
@@ -1442,7 +1452,6 @@ pub(crate) fn copy_deferred_assets(
                     &relative_path,
                     &ctx.passthrough_roots,
                 );
-                let mut spa_post_hash: Option<String> = None;
                 // The CAS object actually backing `target`'s bytes AFTER SPA
                 // injection, when injection changed them. `link_oid` (below)
                 // names the PRE-injection object `link_to` placed at `target`
@@ -1466,8 +1475,7 @@ pub(crate) fn copy_deferred_assets(
                             &object_store,
                             &transforms,
                         ) {
-                            Ok(Some((new_hash, new_oid))) => {
-                                spa_post_hash = Some(new_hash);
+                            Ok(Some((_, new_oid))) => {
                                 spa_post_oid = Some(new_oid);
                             }
                             Ok(None) => {} // no-op (nothing to inject)
@@ -1499,12 +1507,12 @@ pub(crate) fn copy_deferred_assets(
                         // pure and path-only, so a later CAS read reproduces
                         // exactly what reading `target` now would.
                         let staged_oid = spa_post_oid.clone().unwrap_or_else(|| link_oid.clone());
-                        let hash = spa_post_hash.map(OutputHash::Known).unwrap_or(OutputHash::Compute {
-                            memo_key: &link_oid,
+                        let hash = OutputHash {
+                            memo_key: &staged_oid,
                             target: &target,
                             fallback_oid: &oid,
                             log_context: "output",
-                        });
+                        };
                         record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &staged_oid);
                         copied += 1;
                     }
@@ -1607,7 +1615,7 @@ pub(crate) fn copy_deferred_assets(
                         continue;
                     }
                     let hash =
-                        OutputHash::Compute { memo_key: &oid, target: &target, fallback_oid: &oid, log_context: ".moss/theme output" };
+                        OutputHash { memo_key: &oid, target: &target, fallback_oid: &oid, log_context: ".moss/theme output" };
                     record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &oid);
                     copied += 1;
                 }
