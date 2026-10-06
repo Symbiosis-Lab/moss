@@ -282,18 +282,46 @@ impl std::fmt::Display for RejectReason {
 /// and catalog open, so re-fetching the same unchanged file is the ordinary
 /// case, not an attack. Only a serial that went *backwards* is a replay.
 pub fn accept_index(raw: &str, highest_seen_serial: u64) -> Result<RegistryIndex, RejectReason> {
-    let index: RegistryIndex =
-        serde_json::from_str(raw).map_err(|e| RejectReason::Unparseable(e.to_string()))?;
-    if index.schema_version != SUPPORTED_SCHEMA_VERSION {
-        return Err(RejectReason::UnknownSchemaVersion(index.schema_version));
+    /// The document with its rows still untyped, so one row can fail alone.
+    #[derive(Deserialize)]
+    struct RawIndex {
+        schema_version: u32,
+        serial: u64,
+        entries: Vec<serde_json::Value>,
     }
-    if index.serial < highest_seen_serial {
+    let raw_index: RawIndex =
+        serde_json::from_str(raw).map_err(|e| RejectReason::Unparseable(e.to_string()))?;
+    if raw_index.schema_version != SUPPORTED_SCHEMA_VERSION {
+        return Err(RejectReason::UnknownSchemaVersion(raw_index.schema_version));
+    }
+    if raw_index.serial < highest_seen_serial {
         return Err(RejectReason::SerialWentBackwards {
             seen: highest_seen_serial,
-            offered: index.serial,
+            offered: raw_index.serial,
         });
     }
-    Ok(index)
+    let mut entries = Vec::with_capacity(raw_index.entries.len());
+    for row in raw_index.entries {
+        match serde_json::from_value::<IndexEntry>(row.clone()) {
+            Ok(entry) => entries.push(entry),
+            // A plugin row is what this client must trust: one that does not
+            // read means the registry is broken, so the whole index is refused.
+            Err(e) if row.get("type").and_then(|t| t.as_str()) == Some(ENTRY_TYPE_PLUGIN) => {
+                return Err(RejectReason::Unparseable(e.to_string()));
+            }
+            // Any other row (a starter, a type from the future) is optional
+            // content. It must not hide every plugin, so it is dropped alone.
+            Err(e) => {
+                let id = row.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                log::warn!(target: "registry", "dropping unreadable index row {id}: {e}");
+            }
+        }
+    }
+    Ok(RegistryIndex {
+        schema_version: raw_index.schema_version,
+        serial: raw_index.serial,
+        entries,
+    })
 }
 
 /// Parse and accept a freshly fetched `revoked.json`.
@@ -455,6 +483,54 @@ mod tests {
         let index = accept_index(&index_json(1, &both), 0).expect("one bad row is not fatal");
         let ids: Vec<String> = index.starters().into_iter().map(|s| s.id).collect();
         assert_eq!(ids, vec!["essays"]);
+    }
+
+    /// Plugins and one healthy starter around a single bad row.
+    fn assert_bad_row_dropped_alone(bad: &str) {
+        let doc = format!("{},{},{}", entry("github", "plugin"), bad, starter("essays", ""));
+        let index = accept_index(&index_json(1, &doc), 0).expect("one bad starter row is not fatal");
+        let plugins: Vec<&str> = index.plugins().iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(plugins, vec!["github"]);
+        let starters: Vec<String> = index.starters().into_iter().map(|s| s.id).collect();
+        assert_eq!(starters, vec!["essays"]);
+    }
+
+    #[test]
+    fn a_starter_missing_download_url_is_dropped_alone() {
+        assert_bad_row_dropped_alone(
+            r#"{"type":"starter","id":"bad","version":"1.0.0","display_name":"B","sha256":"aa"}"#,
+        );
+    }
+
+    #[test]
+    fn a_starter_missing_sha256_is_dropped_alone() {
+        assert_bad_row_dropped_alone(
+            r#"{"type":"starter","id":"bad","version":"1.0.0","display_name":"B",
+                "download_url":"https://example.invalid/b.zip"}"#,
+        );
+    }
+
+    #[test]
+    fn a_starter_with_a_wrong_typed_version_is_dropped_alone() {
+        assert_bad_row_dropped_alone(
+            r#"{"type":"starter","id":"bad","version":1,"display_name":"B",
+                "download_url":"https://example.invalid/b.zip","sha256":"aa"}"#,
+        );
+    }
+
+    #[test]
+    fn an_unreadable_row_of_an_unknown_type_is_dropped_alone() {
+        assert_bad_row_dropped_alone(r#"{"type":"hologram","id":"bad"}"#);
+    }
+
+    #[test]
+    fn a_broken_plugin_row_still_rejects_the_whole_index() {
+        let bad = r#"{"type":"plugin","id":"bad","version":"1.0.0","display_name":"B","sha256":"aa"}"#;
+        let doc = format!("{},{bad},{}", entry("github", "plugin"), starter("essays", ""));
+        assert!(matches!(
+            accept_index(&index_json(1, &doc), 0),
+            Err(RejectReason::Unparseable(_))
+        ));
     }
 
     #[test]
