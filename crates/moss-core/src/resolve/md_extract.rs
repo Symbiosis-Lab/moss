@@ -245,7 +245,9 @@ fn parse_definition_line_inner(line: &str) -> Option<DefinitionLine> {
     let close = line[label_start..].find(']').map(|p| label_start + p)?;
     #[allow(clippy::string_slice)]
     let label = line[label_start..close].trim();
-    if label.is_empty() {
+    // `[^1]: body` is a footnote definition, whose body is prose (it may hold
+    // an ordinary link, which the main scan finds), never a destination.
+    if label.is_empty() || label.starts_with('^') {
         return None;
     }
     let mut j = close + 1;
@@ -331,8 +333,10 @@ fn scan_range(source: &str, bytes: &[u8], from: usize, to: usize, refs: &mut Vec
                 let inner = &source[inner_start..close];
                 let token_end = close + 2;
                 // Split on | for alias/pothole
+                // In a table cell the separator is written `\|`; the
+                // backslash belongs to the escape, not to the target.
                 let (path_part, pipe_part) = match inner.split_once('|') {
-                    Some((before, after)) => (before, Some(after)),
+                    Some((before, after)) => (before.strip_suffix('\\').unwrap_or(before), Some(after)),
                     None => (inner, None),
                 };
                 // Only record non-empty targets
@@ -499,39 +503,16 @@ fn parse_md_link(
     let path_end = k;
     #[allow(clippy::string_slice)]
     let raw = &source[path_start..path_end];
-    // Strip optional title: `path "title"` → path. Both `trim` and
-    // `strip_link_title` only ever cut from the ends, so the surviving text is
-    // a prefix of the trimmed slice and its span is arithmetic, not a search
-    // (a `find` would land on the wrong copy of a repeated path).
+    // The destination is a prefix of the trimmed slice, so its span is
+    // arithmetic, not a search (a `find` would land on the wrong copy of a
+    // repeated path). Anything after it is a title and stays out of the span.
     let trimmed = raw.trim();
-    let path_from = path_start + (raw.len() - raw.trim_start().len());
-
-    // CommonMark alternate destination syntax: `(<my note.md>)`. pulldown-cmark
-    // strips the `< >` wrapper before the build resolves the destination, so
-    // this scanner must too — otherwise the literal brackets end up glued to
-    // the path and every lookup misses. Only the plain `<dest>` shape (no
-    // trailing title inside or after the brackets) is recognized; that's the
-    // form a rename/delete rewrite needs to see. The span excludes the
-    // brackets themselves, so a rewrite substitutes only the inside and the
-    // brackets survive untouched — which is what lets a new path that gained
-    // a space stay correctly wrapped without any extra escaping logic here.
-    if let Some((inner, offset)) = strip_angle_brackets(trimmed) {
-        let path_from = path_from + offset;
-        let path = inner.to_string();
-        let path_to = path_from + path.len();
-        return Some(ParsedLink {
-            label,
-            label_from: label_start,
-            label_to: label_end,
-            path,
-            path_from,
-            path_to,
-            token_end: k + 1,
-        });
-    }
-
-    let path = strip_link_title(trimmed);
-    let path_to = path_from + path.len();
+    let (dest_off, dest_len) = destination_span(trimmed);
+    let path_from = path_start + (raw.len() - raw.trim_start().len()) + dest_off;
+    let path_to = path_from + dest_len;
+    // SAFETY: `destination_span` returns char boundaries of `trimmed`.
+    #[allow(clippy::string_slice)]
+    let path = trimmed[dest_off..dest_off + dest_len].to_string();
 
     Some(ParsedLink {
         label,
@@ -554,23 +535,42 @@ fn strip_angle_brackets(s: &str) -> Option<(&str, usize)> {
     s.strip_prefix('<').and_then(|rest| rest.strip_suffix('>')).map(|inner| (inner, 1))
 }
 
-/// Strip an optional CommonMark link title from a raw link destination string.
-/// `path "My Title"` → `path`, `path 'title'` → `path`, `path (title)` → `path`.
-/// If no title is present, returns the input unchanged.
-fn strip_link_title(raw: &str) -> String {
-    let raw = raw.trim();
-    // Find the last whitespace-separated token that looks like a title
-    if let Some(ws) = raw.rfind(|c: char| c.is_ascii_whitespace()) {
-        let (path_part, maybe_title) = raw.split_at(ws);
-        let maybe_title = maybe_title.trim();
-        let is_title = (maybe_title.starts_with('"') && maybe_title.ends_with('"'))
-            || (maybe_title.starts_with('\'') && maybe_title.ends_with('\''))
-            || (maybe_title.starts_with('(') && maybe_title.ends_with(')'));
-        if is_title {
-            return path_part.trim().to_string();
+/// A CommonMark link title: `"…"`, `'…'` or `(…)`, any spaces inside.
+fn is_link_title(s: &str) -> bool {
+    s.len() >= 2
+        && matches!((s.as_bytes()[0], s.as_bytes()[s.len() - 1]), (b'"', b'"') | (b'\'', b'\'') | (b'(', b')'))
+}
+
+/// Where the destination sits in the trimmed inside of `( … )`: `(offset,
+/// len)`, with the optional title after it left out. The `<…>` form excludes
+/// the brackets, so a rewrite replaces only the inside and the brackets
+/// survive; that is what lets a new path that gained a space stay wrapped.
+// SAFETY: every index is the position of an ASCII byte found in `s`, or one
+// past it, so each is a char boundary.
+#[allow(clippy::string_slice)]
+fn destination_span(s: &str) -> (usize, usize) {
+    if let Some((inner, offset)) = strip_angle_brackets(s) {
+        return (offset, inner.len());
+    }
+    if let Some(close) = s.strip_prefix('<').and_then(|rest| rest.find('>')) {
+        let after = &s[close + 2..];
+        if after.starts_with(|c: char| c.is_ascii_whitespace()) && is_link_title(after.trim()) {
+            return (1, close);
         }
     }
-    raw.to_string()
+    // A bare destination holds no whitespace, so it ends at the first.
+    if let Some(ws) = s.find(|c: char| c.is_ascii_whitespace()) {
+        if is_link_title(s[ws..].trim()) {
+            return (0, ws);
+        }
+        // Lenient: an unquoted space in the destination, then a title.
+        if let Some(ws) = s.rfind(|c: char| c.is_ascii_whitespace()) {
+            if is_link_title(s[ws..].trim()) {
+                return (0, s[..ws].trim_end().len());
+            }
+        }
+    }
+    (0, s.len())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

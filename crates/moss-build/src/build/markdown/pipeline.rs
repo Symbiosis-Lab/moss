@@ -600,7 +600,7 @@ pub fn process_markdown_file(
     // the folder upstream in scan/reduce (`folder_lang`, computed once per
     // folder, never from this file's own content). `resolve_document_language`
     // treats both the same and no longer reads `content` at all.
-    let ancestor_lang = crate::i18n::path::ancestor_lang_from_path(file_path).or(page.folder_lang);
+    let ancestor_lang = crate::i18n::folder_language(file_path, page.folder_lang);
     let (doc_lang, clean_stem) = crate::i18n::resolve_document_language(
         frontmatter.lang.as_deref(),
         filename_stem,

@@ -54,7 +54,9 @@ pub fn reference_card_for(
 
     let moss_dir = canonical_root.join(".moss");
     let map = ArticleMap::load(&moss_dir).unwrap_or_default();
-    let fs_assets = crate::editor::resolve::asset_resolver::FsAssetIndex::new(&canonical_root);
+    // A link (not an embed) is classified against the site's addresses alone;
+    // the file graph is never read, so the card does not walk the folder.
+    let fs_assets = moss_core::content_graph::ContentGraph::from_paths(&[]);
     let fs_folders =
         crate::editor::resolve::folder_index::EditorFolderIndex::new(&canonical_root, &map);
     let article_idx = crate::editor::resolve::url_index::ArticleMapIndex::from_map(&map);

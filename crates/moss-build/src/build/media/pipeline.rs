@@ -1100,9 +1100,9 @@ pub(crate) fn copy_deferred_assets(
 
     for entry in WalkDir::new(source_root)
         .into_iter()
-        // Directories only (a file like `_43A2045.jpg` always passes), and never
-        // the source root itself.
-        .filter_entry(|e| !crate::build::scan::classify::is_excluded_walk_entry(e))
+        // What the scan reads: never a nested site, an excluded folder or the
+        // root agent instructions.
+        .filter_entry(|e| crate::build::scan::classify::left_out_of_site(e).is_none())
     {
         let entry = match entry {
             Ok(e) => e,

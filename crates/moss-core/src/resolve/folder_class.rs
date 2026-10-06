@@ -1,8 +1,8 @@
 //! Directory-shaped resolution capability (injected; pure core).
 //! Build impl is backed by the content graph + html_files; the editor impl by
 //! the last build's folder-index URL set plus a vault walk. Separate from
-//! AssetIndex because the backing data and the query shape (is_dir /
-//! markdown-index / static-index) differ.
+//! the file set (a `ContentGraph`) because the backing data and the query
+//! shape (is_dir / markdown-index / static-index) differ.
 
 pub trait FolderIndex {
     /// Does a directory exist at this root-relative path?

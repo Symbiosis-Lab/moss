@@ -1175,7 +1175,7 @@ fn render_one(
         docs: all_docs,
         html_files: &project.html_files,
     };
-    let no_assets = crate::build::folder_index::NoAssetIndex;
+    let no_assets = moss_core::content_graph::ContentGraph::from_paths(&[]);
     let no_urls = crate::build::folder_index::NoUrlIndex;
     let ctx = moss_core::resolve::reference::ReferenceContext {
         assets: &no_assets,

@@ -203,6 +203,11 @@ impl VaultRoot {
 
     /// Testable core of [`VaultRoot::find_containing`].
     pub fn find_containing_in(path: &Path, cwd: &Path) -> Option<Self> {
+        Self::find_containing_below(path, cwd, dirs::home_dir().as_deref())
+    }
+
+    /// [`VaultRoot::find_containing_in`] with the home folder passed in.
+    pub fn find_containing_below(path: &Path, cwd: &Path, home: Option<&Path>) -> Option<Self> {
         let start_dir = Self::start_dir_in(path, cwd);
 
         // Never walk above the user's home directory: `~/.moss/` is moss's app-level cache
@@ -210,12 +215,11 @@ impl VaultRoot {
         // resolves to `~` and moss scans the entire home directory. Canonical comparison
         // too — on Windows an ancestor can surface as an 8.3 short path
         // (`C:\Users\RUNNER~1`) while `dirs::home_dir()` is the long form.
-        let home_dir = dirs::home_dir();
-        let home_canon = home_dir.as_ref().and_then(|h| h.canonicalize().ok());
+        let home_canon = home.and_then(|h| h.canonicalize().ok());
 
         for ancestor in start_dir.ancestors() {
-            if let Some(ref home) = home_dir {
-                let at_home = ancestor == home.as_path()
+            if let Some(home) = home {
+                let at_home = ancestor == home
                     || matches!(
                         (ancestor.canonicalize().ok(), home_canon.as_ref()),
                         (Some(ac), Some(hc)) if &ac == hc

@@ -33,7 +33,7 @@
 //! fresh read per folder.)
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::i18n::{detect, filename::parse_filename_stem, path::ancestor_lang_from_path, Language};
 
@@ -104,7 +104,20 @@ pub(crate) fn resolve_folder_languages(
     cache: &mut FolderLangCache,
     declarations: &super::frontmatter_cache::FrontmatterScanCache,
 ) -> HashMap<String, Language> {
-    let is_evicted: &dyn Fn(&Path) -> bool = &crate::build::icloud::is_evicted;
+    let locate = |p: &str| source_path.join(p);
+    let is_evicted = &crate::build::icloud::is_evicted_and_requested;
+    resolve_folder_languages_with(markdown_files, &locate, is_evicted, cache, declarations)
+}
+
+/// [`resolve_folder_languages`] with each file read from `locate(path)` and
+/// an injectable eviction predicate.
+pub(super) fn resolve_folder_languages_with(
+    markdown_files: &[crate::types::content::FileInfo],
+    locate: &dyn Fn(&str) -> PathBuf,
+    is_evicted: &dyn Fn(&Path) -> bool,
+    cache: &mut FolderLangCache,
+    declarations: &super::frontmatter_cache::FrontmatterScanCache,
+) -> HashMap<String, Language> {
     let mut by_folder: HashMap<String, Vec<&crate::types::content::FileInfo>> = HashMap::new();
     for file_info in markdown_files {
         if ancestor_lang_from_path(&file_info.path).is_some() {
@@ -145,9 +158,8 @@ pub(crate) fn resolve_folder_languages(
             let bodies: Vec<String> = files
                 .iter()
                 .filter_map(|f| {
-                    let abs_path = source_path.join(&f.path);
+                    let abs_path = locate(&f.path);
                     if is_evicted(&abs_path) {
-                        crate::build::cloud_readiness::request_download(&abs_path);
                         return None;
                     }
                     std::fs::read_to_string(&abs_path).ok().map(|c| detect::strip_frontmatter(&c))

@@ -1559,7 +1559,7 @@ fn pump_gate_suppresses_a_root_agent_instruction_file() {
     }
 }
 
-/// The suppression is root-only, matching `scan::classify::skip_root_agent_config`.
+/// The suppression is root-only, matching `scan::classify::left_out_of_site`.
 /// `posts/AGENTS.md` is an ordinary article and must rebuild like any other.
 #[test]
 fn pump_gate_still_rebuilds_for_a_nested_agents_md() {
@@ -3884,7 +3884,7 @@ fn raw_create_key_root_agent_config_excluded() {
 
 /// The root-only half of the rule above. `posts/AGENTS.md` is an ordinary
 /// article that the tree DOES show and the build DOES publish — only the
-/// source root is a location tooling claims (see `skip_root_agent_config`).
+/// source root is a location tooling claims (see `left_out_of_site`).
 /// Suppressing it too would trade one lie for a worse one: a real file the
 /// author created, silently never flashed.
 #[test]

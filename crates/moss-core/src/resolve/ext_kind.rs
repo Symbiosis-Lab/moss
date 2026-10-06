@@ -29,6 +29,45 @@ pub fn reference_kind_for_ext(ext: &str) -> ExtKind {
         .unwrap_or(ExtKind::Other)
 }
 
+/// Whether a standard `![alt](dest)` image should be rendered by its file
+/// kind (like `![[name]]`) instead of as an `<img>`: `dest` names a file in
+/// the site (not `http:`, `https:`, `//`, `data:`, `mailto:` or an in-page
+/// `#anchor`) and its extension is a typed embed other than an image.
+pub fn is_typed_site_embed(dest: &str) -> bool {
+    let external = ["http://", "https://", "//", "data:", "mailto:", "#"];
+    if external.iter().any(|p| dest.starts_with(p)) {
+        return false;
+    }
+    let ext = crate::path_ext::path_extension_lower(dest);
+    matches!(
+        reference_kind_for_ext(&ext),
+        ExtKind::Video | ExtKind::Audio | ExtKind::Pdf | ExtKind::Iframe | ExtKind::Model
+    )
+}
+
+/// Whether the wikilink-embed dispatcher handles this image: every wiki embed
+/// (`![[name]]`), and a standard `![alt](dest)` only when `dest` is a typed
+/// site file ([`is_typed_site_embed`]). Widening the standard form to more
+/// targets means changing [`is_typed_site_embed`].
+pub(crate) fn dispatcher_takes_embed(is_wikilink: bool, dest: &str) -> bool {
+    is_wikilink || is_typed_site_embed(dest)
+}
+
+/// Whether a lone image must stay a `Paragraph` so the dispatcher (which only
+/// visits paragraphs) can replace it, instead of being promoted to an image
+/// `Figure` at parse time.
+///
+/// This differs from [`dispatcher_takes_embed`] on one input: a wiki embed of
+/// an image extension is taken by the dispatcher but promoted by the parser,
+/// because the figure it would build there is the same one. An extension-less
+/// wiki embed (`![[draft|55%]]`) stays a paragraph: only the dispatcher, with
+/// the content graph, can say what it is.
+pub(crate) fn embed_stays_paragraph(is_wikilink: bool, dest: &str) -> bool {
+    let ext = crate::path_ext::path_extension_lower(dest);
+    dispatcher_takes_embed(is_wikilink, dest)
+        && !(is_wikilink && reference_kind_for_ext(&ext) == ExtKind::Image)
+}
+
 /// The diagnostic an *unresolvable* reference to this extension deserves.
 ///
 /// Media the browser would have rendered in place leaves a visible hole when
@@ -59,6 +98,37 @@ mod tests {
         assert_eq!(reference_kind_for_ext("ipynb"), ExtKind::Notebook);
         assert_eq!(reference_kind_for_ext("csv"), ExtKind::Table);
         assert_eq!(reference_kind_for_ext("xyz"), ExtKind::Other);
+    }
+
+    #[test]
+    fn typed_site_embed_excludes_images_externals_and_unknown() {
+        for d in ["a/clip.mp4", "song.MP3", "/x/paper.pdf", "w.html", "m.glb", "my%20clip.mp4", "clip.mp4?t=1"] {
+            assert!(is_typed_site_embed(d), "{d}");
+        }
+        for d in [
+            "photo.jpg", "photo.jpg?v=2", "n.md", "t.csv", "b.ipynb", "x.xyz", "noext", "gallery/",
+            "https://e.com/clip.mp4", "http://e.com/a.pdf", "//e.com/a.mp3", "data:video/mp4;base64,AA",
+            "mailto:a@b.c.pdf", "#a.mp4",
+        ] {
+            assert!(!is_typed_site_embed(d), "{d}");
+        }
+    }
+
+    #[test]
+    fn the_dispatcher_and_the_parser_ask_two_related_questions() {
+        // (is_wikilink, dest, dispatcher takes it, parser keeps it a paragraph)
+        for (wiki, dest, takes, stays) in [
+            (true, "photo.jpg", true, false),
+            (true, "clip.mp4", true, true),
+            (true, "draft", true, true),
+            (false, "photo.jpg", false, false),
+            (false, "clip.mp4", true, true),
+            (false, "https://e.com/clip.mp4", false, false),
+            (false, "n.md", false, false),
+        ] {
+            assert_eq!(dispatcher_takes_embed(wiki, dest), takes, "takes {wiki} {dest}");
+            assert_eq!(embed_stays_paragraph(wiki, dest), stays, "stays {wiki} {dest}");
+        }
     }
 
     #[test]

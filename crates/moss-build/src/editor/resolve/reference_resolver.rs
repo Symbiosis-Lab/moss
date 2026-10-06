@@ -4,7 +4,7 @@
 //!
 //! This is the ONE editor resolution command — it replaced the former separate
 //! `editor_resolve_assets` + `resolve_links` commands (now deleted). One call
-//! builds the three indexes ONCE — `FsAssetIndex` (assets), `EditorFolderIndex` (folders),
+//! builds the three indexes ONCE — `project_graph` (the site's files), `EditorFolderIndex` (folders),
 //! `ArticleMapIndex` (deployed URLs) — and routes each target through the same
 //! classifier the build pipeline uses, so the editor's lint/preview decisions
 //! can never drift from the published site.
@@ -122,7 +122,7 @@ fn compute_from_source(from_file: &str, project_root: &Path) -> String {
 /// Resolve a batch of references, building the three indexes ONCE and routing
 /// every target through the shared `classify_reference`.
 ///
-/// - `FsAssetIndex` / `EditorFolderIndex` operate on the canonicalized project root
+/// - `project_graph` / `EditorFolderIndex` operate on the canonicalized project root
 ///   (so `strip_prefix` is stable on macOS where `/tmp` symlinks).
 /// - `ArticleMapIndex` is built from the on-disk `ArticleMap` (mirrors
 ///   `resolve_links`); an empty/missing map means Link targets simply don't
@@ -141,7 +141,7 @@ pub fn resolve_references_batch(
     // set from it (slug overrides live there, not on disk).
     let moss_dir = canonical_root.join(".moss");
     let map = ArticleMap::load(&moss_dir).unwrap_or_default();
-    let fs_assets = crate::editor::resolve::asset_resolver::FsAssetIndex::new(&canonical_root);
+    let fs_assets = crate::editor::resolve::asset_resolver::project_graph(&canonical_root);
     let fs_folders =
         crate::editor::resolve::folder_index::EditorFolderIndex::new(&canonical_root, &map);
     let article_idx = ArticleMapIndex::from_map(&map);

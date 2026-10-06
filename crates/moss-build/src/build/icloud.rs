@@ -90,6 +90,18 @@ pub fn is_evicted(path: &Path) -> bool {
     pretended(path) || std::fs::symlink_metadata(path).is_ok_and(|meta| evicted_meta(&meta))
 }
 
+/// [`is_evicted`], asking for the file to be downloaded when it is. The build
+/// hands this to the readers that skip an offline page, so the page they skip
+/// this build is on disk for the next; a reader that only looks, such as
+/// planning a rename, hands them [`is_evicted`].
+pub fn is_evicted_and_requested(path: &Path) -> bool {
+    let evicted = is_evicted(path);
+    if evicted {
+        crate::build::cloud_readiness::request_download(path);
+    }
+    evicted
+}
+
 /// [`is_evicted`] for a caller already holding `meta`, `path`'s own
 /// `symlink_metadata`: no second `lstat`.
 pub fn is_evicted_stat(path: &Path, meta: &std::fs::Metadata) -> bool {

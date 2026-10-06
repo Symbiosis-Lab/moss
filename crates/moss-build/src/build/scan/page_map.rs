@@ -63,16 +63,20 @@ pub(crate) fn compute_home_overrides(
     markdown_files: &[crate::types::content::FileInfo],
     root: &crate::vault::paths::VaultRoot,
 ) -> std::collections::HashMap<String, String> {
-    compute_home_overrides_with_evicted(markdown_files, root, &crate::build::icloud::is_evicted)
+    let source_path = root.path();
+    let is_evicted = &crate::build::icloud::is_evicted_and_requested;
+    compute_home_overrides_with_evicted(markdown_files, root, &|p| source_path.join(p), is_evicted)
 }
 
-/// Same as [`compute_home_overrides`] with an injectable eviction predicate. A
-/// dataless (cloud-evicted) source file is skipped exactly like a read
-/// error (`Err(_) => continue`, just below) rather than blocking this
-/// serial, single-threaded scan on the OS materializing it.
+/// Same as [`compute_home_overrides`] with an injectable eviction predicate,
+/// and each file read from `locate(path)` (the path under the site folder for
+/// every build). A dataless (cloud-evicted) source file is skipped exactly
+/// like a read error (`Err(_) => continue`, just below) rather than blocking
+/// this serial, single-threaded scan on the OS materializing it.
 pub(crate) fn compute_home_overrides_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
     root: &crate::vault::paths::VaultRoot,
+    locate: &dyn Fn(&str) -> std::path::PathBuf,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
@@ -94,13 +98,11 @@ pub(crate) fn compute_home_overrides_with_evicted(
     // root while `blocking.rs`, eight lines away, patched around the same problem
     // with a local canonicalize fallback. Two consumers of one string, two answers.
     let root_basename = root.name();
-    let source_path = root.path();
 
     let mut facts: Vec<FileFacts> = Vec::new();
     for fi in markdown_files {
-        let abs = source_path.join(&fi.path);
+        let abs = locate(&fi.path);
         if is_evicted(&abs) {
-            crate::build::cloud_readiness::request_download(&abs);
             continue;
         }
         let content = match std::fs::read_to_string(&abs) {
@@ -468,7 +470,7 @@ pub(crate) fn build_page_map(
         root_folder_name,
         home_file_winners,
         home_overrides,
-        &crate::build::icloud::is_evicted,
+        &crate::build::icloud::is_evicted_and_requested,
     )
 }
 
@@ -495,7 +497,6 @@ pub(crate) fn build_page_map_with_evicted(
         // Cloud-dataless source: skip like a read error rather than blocking
         // this serial, single-threaded scan on materialization.
         if is_evicted(&source_file_path) {
-            crate::build::cloud_readiness::request_download(&source_file_path);
             continue;
         }
 
@@ -541,6 +542,48 @@ pub(crate) fn build_page_map_with_evicted(
 /// `(url_path, is_index)` and, for a winning index file with a `url:`
 /// override, the `(dir, slug)` pair to fold into `dir_overrides`.
 ///
+/// Every page of `markdown_files` as slug deduplication
+/// ([`crate::build::markdown::resolve_duplicate_slugs_with_lang`]) receives it,
+/// in `markdown_files` order: the address [`page_map_entry`] gives it, whether
+/// it is its folder's home, its language as `process_markdown_file` resolves
+/// it, and whether it fills a slot instead of being a page. Each file is read
+/// from `locate(path)` instead of from `path` under the site folder, so this
+/// answers for a tree whose files have not been moved there yet. It reads the
+/// build's folder-language cache and writes no cache.
+pub(crate) fn pages_before_dedup(
+    markdown_files: &[crate::types::content::FileInfo],
+    root: &crate::vault::paths::VaultRoot,
+    site_lang: crate::i18n::Language,
+    locate: &dyn Fn(&str) -> std::path::PathBuf,
+    is_evicted: &dyn Fn(&Path) -> bool,
+) -> Vec<crate::build::types::ParsedDocument> {
+    let overrides = compute_home_overrides_with_evicted(markdown_files, root, locate, is_evicted);
+    let winners = compute_home_file_winners(markdown_files, root.name(), &overrides);
+    let mut scan = FrontmatterScanCache::default();
+    let scanned = frontmatter_cache::scan_frontmatter_urls_with_evicted(markdown_files, locate, &mut scan, is_evicted);
+    let (entries, _, _) = frontmatter_cache::assemble_page_map(markdown_files, &scanned, root.name(), &winners, &overrides);
+    let mut folder_cache = FolderLangCache::load(&crate::moss_paths::MossPaths::new(root.path()).cache_folder_lang());
+    let folder_langs =
+        folder_lang::resolve_folder_languages_with(markdown_files, locate, is_evicted, &mut folder_cache, &scan);
+
+    let mut pages = Vec::new();
+    for (path, url_path, is_index) in entries {
+        let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("untitled");
+        let folder = crate::i18n::folder_language(&path, folder_langs.get(&folder_of(&path)).copied());
+        let (lang, _) = crate::i18n::resolve_document_language(scan.declared_lang(&path), stem, site_lang, folder);
+        let page = crate::build::types::ParsedDocument {
+            url_path,
+            kind: if is_index { moss_core::PageKind::Folder } else { moss_core::PageKind::Article },
+            lang,
+            slot_only: crate::build::footer::is_excluded_from_pages(&path),
+            source_path: Some(path),
+            ..Default::default()
+        };
+        crate::build::scan::slug::admit_unless_reserved_device_output(&mut pages, page);
+    }
+    pages
+}
+
 /// Factored out so [`build_page_map_and_external_urls_cached_with_evicted`]
 /// can share it: that path gets `frontmatter_url` from a cache instead of a
 /// fresh read, but everything downstream of the extraction is identical.
@@ -717,7 +760,7 @@ pub(crate) fn build_external_url_map(
     markdown_files: &[crate::types::content::FileInfo],
     source_path: &Path,
 ) -> std::collections::HashMap<String, String> {
-    build_external_url_map_with_evicted(markdown_files, source_path, &crate::build::icloud::is_evicted)
+    build_external_url_map_with_evicted(markdown_files, source_path, &crate::build::icloud::is_evicted_and_requested)
 }
 
 /// Same as [`build_external_url_map`] with an injectable eviction predicate.
@@ -735,7 +778,6 @@ pub(crate) fn build_external_url_map_with_evicted(
         let file_path = &file_info.path;
         let source_file_path = source_path.join(file_path);
         if is_evicted(&source_file_path) {
-            crate::build::cloud_readiness::request_download(&source_file_path);
             continue;
         }
         let content = match std::fs::read_to_string(&source_file_path) {

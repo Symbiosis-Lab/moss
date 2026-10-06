@@ -10,11 +10,14 @@
 //! editor (no published site). Calling it with `is_embed:false` for a
 //! `[[note]]` or `[text](note.md)` reference returns NotFound/no target_path
 //! in the editor context. We ALWAYS call `classify_reference(is_embed:true)`,
-//! which routes through `resolve_asset_ref` + FsAssetIndex — FS-backed,
-//! always available. This is the correct editor path for ALL reference kinds.
+//! which resolves through the one resolver (`ContentGraph::resolve_path`) over
+//! the project's files read from disk, always available. This is the correct
+//! editor path for ALL reference kinds, and picks the file the build links.
 
 use crate::build::scan::article_map::ArticleMap;
-use crate::editor::resolve::asset_resolver::FsAssetIndex;
+use crate::build::scan::classify::{is_page_path, left_out_of_site, LeftOut};
+use crate::editor::resolve::asset_resolver::project_graph;
+use moss_core::content_graph::ContentGraph;
 use crate::editor::resolve::folder_index::EditorFolderIndex;
 use crate::editor::resolve::url_index::ArticleMapIndex;
 use crate::editor::ref_rewrite::{matches_target, rewrite_for_removal};
@@ -37,8 +40,8 @@ pub struct FileReferenceHit {
 
 /// Build the three indexes from the project root (canonicalized).
 /// Reused by scan and rewrite to avoid rebuilding per-file.
-pub(crate) fn build_indexes(root: &Path) -> (FsAssetIndex, EditorFolderIndex, ArticleMapIndex) {
-    let fs_assets = FsAssetIndex::new(root);
+pub(crate) fn build_indexes(root: &Path) -> (ContentGraph, EditorFolderIndex, ArticleMapIndex) {
+    let fs_assets = project_graph(root);
     // ArticleMap: empty is fine for LINK resolution — we never use
     // is_embed:false (see module doc). It is NOT optional for the folder
     // index, which reconstructs the build's folder-index URL set from it.
@@ -50,7 +53,22 @@ pub(crate) fn build_indexes(root: &Path) -> (FsAssetIndex, EditorFolderIndex, Ar
 }
 
 
-/// Scan every `.md` file in the project for references that resolve to
+/// Every page whose links point into the site under `root`: each file the
+/// build's scan turns into a page ([`left_out_of_site`], [`is_page_path`]),
+/// so a nested site or a hidden folder is never scanned or rewritten, plus the
+/// root agent instructions. Those are not published and so are never the file
+/// a reference names, but they are the author's own files and their links are
+/// kept current like any page's.
+fn site_pages(root: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| matches!(left_out_of_site(e), None | Some(LeftOut::AgentInstructions)))
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| is_page_path(e.path()))
+}
+
+/// Scan every page ([`site_pages`]) for references that resolve to
 /// `target_abs` (absolute path). Returns one hit per reference found.
 ///
 /// ALWAYS calls `classify_reference(is_embed:true)` — see module doc.
@@ -81,23 +99,7 @@ pub fn scan_project_references_to(
 
     let mut hits = Vec::new();
 
-    for entry in walkdir::WalkDir::new(&canonical_root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let p = e.path();
-            // Only .md files, not inside .moss/ or hidden dirs
-            if !p.is_file() { return false; }
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "md" && ext != "markdown" { return false; }
-            // Skip inside .moss/
-            let rel = p.strip_prefix(&canonical_root)
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            !rel.starts_with(".moss/") && !rel.starts_with(".git/")
-        })
-    {
+    for entry in site_pages(&canonical_root) {
         let file_path = entry.path();
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
@@ -156,7 +158,7 @@ pub fn scan_project_references_to(
     Ok(hits)
 }
 
-/// Remove every reference to each of `paths` from every `.md` file in the
+/// Remove every reference to each of `paths` from every page ([`site_pages`]) in the
 /// project. The app's `clean_references_and_delete` command trashes the paths
 /// after this; the body itself touches nothing but the referencing files.
 pub fn clean_references_to_paths(project_root: &Path, paths: &[String]) -> Result<(), String> {
@@ -178,7 +180,7 @@ pub fn clean_references_to_paths(project_root: &Path, paths: &[String]) -> Resul
     Ok(())
 }
 
-/// Remove every reference to `target_abs` from every `.md` file under
+/// Remove every reference to `target_abs` from every page ([`site_pages`]) under
 /// `canonical_root`. The delete-side counterpart of
 /// `rename_entry_with_refs_core`.
 fn clean_references_to(
@@ -199,21 +201,7 @@ fn clean_references_to(
         .replace('\\', "/");
     let target_is_dir = canonical_target.is_dir();
 
-    for entry in walkdir::WalkDir::new(canonical_root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let p = e.path();
-            if !p.is_file() { return false; }
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "md" && ext != "markdown" { return false; }
-            let rel = p.strip_prefix(canonical_root)
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            !rel.starts_with(".moss/") && !rel.starts_with(".git/")
-        })
-    {
+    for entry in site_pages(canonical_root) {
         let file_path = entry.path();
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,

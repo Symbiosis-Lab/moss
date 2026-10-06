@@ -200,6 +200,14 @@ pub fn clean_stem_only(filename_stem: &str) -> String {
     filename::parse_filename_stem(filename_stem).stem
 }
 
+/// The folder rung of a page's language: the language a folder above the page
+/// is named after, else `inferred`, the language the page's own folder
+/// declares in its index or is inferred to be written in
+/// (`build::scan::page_map::resolve_folder_languages`).
+pub fn folder_language(file_path: &str, inferred: Option<Language>) -> Option<Language> {
+    path::ancestor_lang_from_path(file_path).or(inferred)
+}
+
 /// Resolve the language for a document using the priority chain:
 /// 1. Explicit `lang` frontmatter value
 /// 2. Filename language suffix (e.g. `post.zh-hans.md`)
@@ -376,7 +384,6 @@ pub fn declared_lang_in_file(
     is_evicted: &dyn Fn(&std::path::Path) -> bool,
 ) -> Option<String> {
     if is_evicted(path) {
-        crate::build::cloud_readiness::request_download(path);
         return None;
     }
     let content = std::fs::read_to_string(path).ok()?;

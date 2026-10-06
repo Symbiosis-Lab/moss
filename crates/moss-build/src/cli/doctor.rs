@@ -204,22 +204,19 @@ fn report_summary(total_spans: usize, files_with_math: usize) {
     println!("    math = false");
 }
 
-/// Every markdown file the build would read, using the build's own directory
-/// exclusions (`is_excluded_walk_entry` prunes `.moss`, `.git`, dotfiles,
-/// `node_modules`) so the report covers exactly the files that get published.
+/// Every page the build would read, by the build's own rules for what
+/// belongs to the site (`left_out_of_site`) and what becomes a page
+/// (`is_page_source`), so the report covers exactly the files that get
+/// published.
 fn markdown_files(folder: &Path) -> Vec<PathBuf> {
+    use crate::build::scan::classify::{is_page_path, left_out_of_site};
     let mut files: Vec<PathBuf> = walkdir::WalkDir::new(folder)
         .into_iter()
-        .filter_entry(|e| !crate::build::scan::classify::is_excluded_walk_entry(e))
+        .filter_entry(|e| left_out_of_site(e).is_none())
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
         .map(|e| e.into_path())
-        .filter(|p| {
-            matches!(
-                p.extension().and_then(|e| e.to_str()),
-                Some("md") | Some("markdown")
-            )
-        })
+        .filter(|p| is_page_path(p))
         .collect();
 
     // WalkDir order is filesystem order; sort so two runs over the same vault
@@ -355,5 +352,16 @@ mod tests {
         std::fs::write(root.join("a.md"), "x").unwrap();
         std::fs::write(root.join(".hidden/b.md"), "x").unwrap();
         assert_eq!(markdown_files(&root), vec![root.join("a.md")]);
+    }
+
+    #[test]
+    fn the_report_covers_exactly_the_pages_the_build_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for f in ["a.md", "B.MD", "c.mdown", "AGENTS.md", "shop/.moss/x", "shop/d.md"] {
+            std::fs::create_dir_all(root.join(f).parent().unwrap()).unwrap();
+            std::fs::write(root.join(f), "x").unwrap();
+        }
+        assert_eq!(markdown_files(root), vec![root.join("B.MD"), root.join("a.md"), root.join("c.mdown")]);
     }
 }

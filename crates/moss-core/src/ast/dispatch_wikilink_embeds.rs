@@ -1,7 +1,9 @@
 //! Wikilink embed dispatch visitor.
 //!
 //! Walks a [`Document`] and routes every wikilink embed image
-//! (`Inline::Image { is_wikilink: true, .. }`) through the
+//! (`Inline::Image { is_wikilink: true, .. }`), plus a standard
+//! `![alt](clip.mp4)` naming a typed site file ([`dispatcher_takes_embed`]),
+//! through the
 //! [`crate::resolve::wikilink_dispatch::dispatch_wikilink_embed`]
 //! dispatcher, replacing the block-level paragraph with the renderer's
 //! output (HTML, inline markdown re-parse, or standard link).
@@ -50,6 +52,7 @@
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;
+use crate::resolve::ext_kind::dispatcher_takes_embed;
 use crate::resolve::wikilink_dispatch::{dispatch_wikilink_embed, EmitKind, WikilinkEmit};
 use crate::resolve::{Diagnostic, OutgoingLink};
 
@@ -196,7 +199,7 @@ fn dispatch_in_shortcode(
 }
 
 /// Detect a "lone wikilink image" paragraph: exactly one
-/// `Inline::Image { is_wikilink: true, .. }` modulo whitespace text and
+/// image the dispatcher takes ([`dispatcher_takes_embed`]) modulo whitespace text and
 /// line breaks.
 ///
 /// Returns `Some((dest_url, pothole))` where `dest_url` is the unresolved
@@ -208,7 +211,9 @@ fn find_lone_wikilink_image(inlines: &[Inline]) -> Option<(String, Option<String
         match inline {
             Inline::Image {
                 src,
-                is_wikilink: true,
+                alt,
+                title,
+                is_wikilink,
                 wikilink_pothole,
                 ..
             } => {
@@ -219,7 +224,10 @@ fn find_lone_wikilink_image(inlines: &[Inline]) -> Option<(String, Option<String
                     Url::Unresolved(s) => s.clone(),
                     Url::Resolved(r) => r.href.clone(),
                 };
-                found = Some((dest, wikilink_pothole.clone()));
+                if !dispatcher_takes_embed(*is_wikilink, &dest) {
+                    return None; // A plain image: the ordinary image path owns it.
+                }
+                found = Some((dest, embed_pothole(*is_wikilink, alt, title, wikilink_pothole)));
             }
             // Whitespace / linebreak siblings are tolerated.
             Inline::Text(t) if t.trim().is_empty() => {}
@@ -228,6 +236,22 @@ fn find_lone_wikilink_image(inlines: &[Inline]) -> Option<(String, Option<String
         }
     }
     found
+}
+
+/// The pothole text the dispatcher reads for an image: the raw text after `|`
+/// for a wikilink; for a standard `![alt](src "title")` image the alt text, or
+/// the title when the alt is empty.
+fn embed_pothole(
+    is_wikilink: bool,
+    alt: &str,
+    title: &Option<String>,
+    wikilink_pothole: &Option<String>,
+) -> Option<String> {
+    if is_wikilink {
+        return wikilink_pothole.clone();
+    }
+    Some(if alt.is_empty() { title.clone().unwrap_or_default() } else { alt.to_string() })
+        .filter(|t| !t.is_empty())
 }
 
 /// Dispatch every wikilink-embed image inside a paragraph that
@@ -275,12 +299,16 @@ fn dispatch_inline_wikilink_embeds(
         let (dest_url, pothole) = match inline {
             Inline::Image {
                 src: Url::Unresolved(dest),
-                is_wikilink: true,
+                alt,
+                title,
+                is_wikilink,
                 wikilink_pothole,
                 ..
-            } => (dest.clone(), wikilink_pothole.clone()),
+            } if dispatcher_takes_embed(*is_wikilink, dest) => {
+                (dest.clone(), embed_pothole(*is_wikilink, alt, title, wikilink_pothole))
+            }
             // Already-resolved src (shouldn't happen — this visitor runs
-            // before `resolve_urls`) or not a wikilink embed at all.
+            // before `resolve_urls`) or an image the dispatcher doesn't take.
             _ => continue,
         };
         let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, source_path);
@@ -436,27 +464,48 @@ mod tests {
         let _ = result;
     }
 
-    #[test]
-    fn non_wikilink_image_is_left_alone() {
-        // Standard markdown image (not a wikilink). Dispatch should
-        // skip it.
-        let mut doc = Document::from_blocks(vec![Block::Paragraph(vec![Inline::Image {
-            src: Url::unresolved("photo.png"),
-            alt: "a".into(),
+    fn standard_image(dest: &str, alt: &str) -> Block {
+        Block::Paragraph(vec![Inline::Image {
+            src: Url::unresolved(dest),
+            alt: alt.into(),
             title: None,
             is_wikilink: false,
             wikilink_pothole: None,
-        }])]);
-        let snap = empty_snapshot();
-        let graph = empty_graph();
-        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, "post.md");
-        match &doc.blocks[0] {
-            Block::Paragraph(inlines) => match &inlines[0] {
-                Inline::Image { is_wikilink, .. } => assert!(!is_wikilink),
-                _ => panic!("expected Image"),
-            },
-            _ => panic!("expected Paragraph"),
+        }])
+    }
+
+    #[test]
+    fn standard_image_is_left_alone_unless_it_is_a_typed_site_file() {
+        // The dispatcher takes a standard `![alt](path)` only for a site file
+        // of a typed non-image kind. Images, external URLs, data URIs and
+        // unknown extensions stay plain images.
+        for dest in [
+            "photo.png",
+            "photo.png?v=2",
+            "https://example.com/clip.mp4",
+            "//example.com/clip.mp4",
+            "data:video/mp4;base64,AAAA",
+            "thing.xyz",
+        ] {
+            let mut doc = Document::from_blocks(vec![standard_image(dest, "a")]);
+            let _ = dispatch_wikilink_embeds(&mut doc, &empty_snapshot(), &empty_graph(), "post.md");
+            match &doc.blocks[0] {
+                Block::Paragraph(inlines) => match &inlines[0] {
+                    Inline::Image { is_wikilink, .. } => assert!(!is_wikilink, "{dest}"),
+                    _ => panic!("{dest}: expected Image"),
+                },
+                other => panic!("{dest}: expected Paragraph, got {other:?}"),
+            }
         }
+    }
+
+    #[test]
+    fn standard_image_of_a_typed_site_file_is_dispatched() {
+        // Unresolved target: the dispatcher's answer for the wiki form
+        // (a link to the missing file), not a left-behind `<img>`.
+        let mut doc = Document::from_blocks(vec![standard_image("clip.mp4", "")]);
+        let r = dispatch_wikilink_embeds(&mut doc, &empty_snapshot(), &empty_graph(), "post.md");
+        assert!(!r.diagnostics.is_empty(), "dispatcher must have seen the embed");
     }
 
     #[test]

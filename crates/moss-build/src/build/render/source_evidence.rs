@@ -229,7 +229,6 @@ pub(super) fn flatten_missing_reference_occurrences(
 mod tests {
     use super::*;
     use crate::build::folder_index::{NoFolderIndex, NoUrlIndex};
-    use moss_core::ast::resolve_urls::GraphAssetIndex;
     use moss_core::content_graph::ContentGraphBuilder;
     use moss_core::resolve::reference::ReferenceContext;
     use sha2::Digest;
@@ -261,11 +260,10 @@ mod tests {
     fn source_evidence_keeps_every_blocking_candidate_on_its_physical_span() {
         let source = "before\r\n![猫](gone.png)\r\n![[also-gone.jpg#part]]\r\n:::hero missing.webp\r\nbody\r\n:::\r\n";
         let graph = ContentGraphBuilder::new().build();
-        let assets = GraphAssetIndex(&graph);
         let folders = NoFolderIndex;
         let urls = NoUrlIndex;
         let context = ReferenceContext {
-            assets: &assets,
+            assets: &graph,
             folders: &folders,
             urls: &urls,
         };
@@ -381,11 +379,10 @@ mod tests {
         assert!(offset > source.find("gone.png").unwrap(), "uid shifts the physical span");
 
         let graph = ContentGraphBuilder::new().build();
-        let assets = GraphAssetIndex(&graph);
         let folders = NoFolderIndex;
         let urls = NoUrlIndex;
         let context = ReferenceContext {
-            assets: &assets,
+            assets: &graph,
             folders: &folders,
             urls: &urls,
         };
@@ -421,10 +418,9 @@ mod tests {
         let written = std::fs::read_to_string(&disk).unwrap();
 
         let graph = ContentGraphBuilder::new().build();
-        let assets = GraphAssetIndex(&graph);
         let folders = NoFolderIndex;
         let urls = NoUrlIndex;
-        let context = ReferenceContext { assets: &assets, folders: &folders, urls: &urls };
+        let context = ReferenceContext { assets: &graph, folders: &folders, urls: &urls };
         let evidence = MissingReferenceOccurrence::from_authored_source(
             "copy.md", &record.final_source, &moss_core::ast::ParseConfig::default(), &context,
         );

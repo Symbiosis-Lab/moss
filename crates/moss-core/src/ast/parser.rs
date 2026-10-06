@@ -968,9 +968,9 @@ fn try_promote_to_figure(
         return Err(inlines);
     }
 
-    // Non-image wikilink embeds never promote. pulldown-cmark parses every
-    // `![[…]]` as an Image event, but Figure is an image concept: a video /
-    // pdf / audio wikilink promoted here bypasses `dispatch_wikilink_embeds`
+    // Non-image embeds never promote. pulldown-cmark parses every `![[…]]`
+    // as an Image event, but Figure is an image concept: a video / pdf /
+    // audio wikilink promoted here bypasses `dispatch_wikilink_embeds`
     // (which only dispatches Paragraph-shaped lone embeds), so its typed
     // synthesizer never runs and the page ships `<figure><img src="clip.mov">`
     // — a broken image. The gate keys off the same classifier the dispatcher
@@ -978,22 +978,18 @@ fn try_promote_to_figure(
     // synthesis cannot disagree about who owns the block. Extension-less
     // wikilinks (`![[draft|55%]]`) also stay Paragraph: only the with-graph
     // dispatcher can resolve their kind, and committing them to an image
-    // Figure here would be a guess.
-    if let Some(Inline::Image {
-        src,
-        is_wikilink: true,
-        ..
-    }) = inlines.iter().find(|i| matches!(i, Inline::Image { .. }))
+    // Figure here would be a guess. A standard `![](clip.mp4)` stays
+    // Paragraph only for a typed site file. The rule is
+    // `ext_kind::embed_stays_paragraph`, shared with the dispatcher's own
+    // `dispatcher_takes_embed`.
+    if let Some(Inline::Image { src, is_wikilink, .. }) =
+        inlines.iter().find(|i| matches!(i, Inline::Image { .. }))
     {
         let dest = match src {
             Url::Unresolved(s) => s.as_str(),
             Url::Resolved(r) => r.href.as_str(),
         };
-        let ext = crate::path_ext::path_extension_lower(dest);
-        if !matches!(
-            crate::resolve::ext_kind::reference_kind_for_ext(&ext),
-            crate::resolve::ext_kind::ExtKind::Image
-        ) {
+        if crate::resolve::ext_kind::embed_stays_paragraph(*is_wikilink, dest) {
             return Err(inlines);
         }
     }

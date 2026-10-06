@@ -994,7 +994,7 @@ mod with_evicted_seam_tests {
         let files = vec![make_file("mountain-home.md")];
 
         let is_evicted = |p: &Path| p.ends_with("mountain-home.md");
-        let overrides = compute_home_overrides_with_evicted(&files, &root, &is_evicted);
+        let overrides = compute_home_overrides_with_evicted(&files, &root, &|p| root.path().join(p), &is_evicted);
         assert!(
             overrides.is_empty(),
             "an evicted home-marker file must not be promoted — its frontmatter was never read"
@@ -1004,7 +1004,7 @@ mod with_evicted_seam_tests {
         // DOES promote — proving the test fixture is valid and the skip
         // above is caused by eviction, not a fixture mistake.
         let not_evicted = |_: &Path| false;
-        let real_overrides = compute_home_overrides_with_evicted(&files, &root, &not_evicted);
+        let real_overrides = compute_home_overrides_with_evicted(&files, &root, &|p| root.path().join(p), &not_evicted);
         assert!(!real_overrides.is_empty(), "fixture sanity check: non-evicted read should promote");
     }
 

@@ -16,7 +16,7 @@
 use crate::types::content::{FileInfo, MediaMetadata, ProjectStructure};
 use crate::build::stat::FileStat;
 use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry};
-use super::classify::{classify_extension, is_excluded_walk_entry, skip_root_agent_config, ScanBucket};
+use super::classify::{classify_extension, left_out_of_site, LeftOut, ScanBucket};
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;
 use std::cell::OnceCell;
@@ -999,27 +999,23 @@ pub fn scan_folder_with_dedup_emit(
     // Nested moss sites pruned by the walk below, reported once after it.
     let mut nested_boundaries: Vec<std::path::PathBuf> = Vec::new();
 
-    // Walk through the directory recursively. `is_excluded_dir_name` applies to
-    // DIRECTORY entries only — a file named `_43A2045.jpg` must not be filtered
-    // by it. Files get one rule of their own: `skip_root_agent_config`.
+    // Walk through the directory recursively, reading what `left_out_of_site`
+    // keeps. A skipped agent file is logged because it sits in plain sight in
+    // the author's folder, so its absence from the built site has to be
+    // explainable from the log.
     for entry in WalkDir::new(path)
         .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            if !e.file_type().is_dir() {
-                return !skip_root_agent_config(&name, e.depth());
-            }
-            if is_excluded_walk_entry(e) {
-                return false;
-            }
-            // Nested-vault boundary (2026-08-19 design §4): a descendant
-            // owning its own `.moss/` is a different site — the outer build
-            // goes around it rather than absorbing its pages.
-            if e.depth() > 0 && e.path().join(".moss").is_dir() {
+        .filter_entry(|e| match left_out_of_site(e) {
+            None => true,
+            Some(LeftOut::NestedSite) => {
                 nested_boundaries.push(e.path().to_path_buf());
-                return false;
+                false
             }
-            true
+            Some(LeftOut::AgentInstructions) => {
+                log::info!("Skipping {}: agent instructions are tooling, not a page", e.file_name().to_string_lossy());
+                false
+            }
+            Some(LeftOut::ExcludedDir) => false,
         }) {
         let entry = match entry {
             Ok(entry) => entry,

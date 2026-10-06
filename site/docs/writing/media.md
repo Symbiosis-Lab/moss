@@ -36,6 +36,8 @@ Drop video files in your folder and reference them the same way:
 
 moss transcodes `.mov` files to `.mp4` (H.264 + AAC) in the background. The preview opens immediately and video loads progressively as transcoding completes. Reference the original `.mov` filename; moss serves the converted `.mp4` automatically.
 
+The standard form also embeds video, audio, PDF, HTML and 3D model files that are in your site: `![](demo.mov)` gives the same player as `![[demo.mov]]`. A size in the alt text works as it does after the pipe (`![400](demo.mov)` matches `![[demo.mov|400]]`), and plain alt text becomes the player's accessible label, as the text after the pipe does for `![[demo.mov|a label]]`.
+
 ## Display control
 
 Control how media displays with pipe syntax — append a fit/position keyword, a size, or a [caption](#captions) after a `|`:

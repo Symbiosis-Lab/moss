@@ -1645,7 +1645,7 @@ fn test_breadcrumbs_auto_enable_when_no_nav_items() {
     );
 }
 
-/// Test that relative image paths are adjusted for pretty URLs
+/// A relative image path is linked at the file's own address, not the authored relative one
 #[test]
 fn test_image_paths_adjusted_for_pretty_urls() {
     let temp_dir = std::env::temp_dir().join(format!("moss_imgpath_test_{}", uuid::Uuid::new_v4()));
@@ -1678,12 +1678,17 @@ fn test_image_paths_adjusted_for_pretty_urls() {
     let article = fs::read_to_string(site_dir.join("blog/my-post/index.html"))
         .expect("Failed to read article");
 
-    // Pretty URL adds one directory level: blog/my-post.md → blog/my-post/index.html
-    // So ../../assets/photo.jpg should become ../../../assets/photo.jpg
+    // `../../assets/photo.jpg` climbs out of the site from blog/my-post.md, so
+    // it is found by name like the wiki form and linked at the file's own
+    // address, whatever depth the page is served from.
     assert!(
-        article.contains("../../../assets/photo.jpg"),
-        "Relative image path should be adjusted by one level for pretty URLs. Got:\n{}",
+        article.contains("<img src=\"/assets/photo.jpg\""),
+        "An image path that leaves the site should resolve to the file by name. Got:\n{}",
         &article[..article.len().min(3000)]
+    );
+    assert!(
+        !article.contains("../assets/photo.jpg"),
+        "No relative form of the path should remain"
     );
 
     // Absolute paths should be unchanged
@@ -1697,6 +1702,51 @@ fn test_image_paths_adjusted_for_pretty_urls() {
         article.contains("https://example.com/img.jpg"),
         "External URLs should be unchanged"
     );
+}
+
+/// A link written as a site-root address of a Markdown source file
+/// (`/notes/alpha.md`) points where the page is served, like the same link
+/// written without the leading `/`. Any other root address stays as written.
+#[test]
+fn test_root_address_of_a_page_source_links_to_the_served_page() {
+    let temp_dir = std::env::temp_dir().join(format!("moss_rootmd_test_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(temp_dir.join("notes")).expect("Failed to create temp directory");
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(temp_dir.clone());
+
+    fs::write(temp_dir.join("notes/alpha.md"), "---\ntitle: Alpha\n---\n# Alpha\n").unwrap();
+    fs::write(temp_dir.join("notes/data.csv"), "a,b\n1,2\n").unwrap();
+    fs::write(
+        temp_dir.join("index.md"),
+        "# Home\n\n[plain](notes/alpha.md)\n\n[rooted](/notes/alpha.md)\n\n[[/notes/alpha.md|wiki]]\n\n\
+         [no ext](/notes/alpha)\n\n[missing](/notes/missing.md)\n\n[wrong case](/Notes/Alpha.md)\n\n[csv](/notes/data.csv)\n",
+    )
+    .unwrap();
+
+    let result = build_sync(&temp_dir.to_string_lossy(), false);
+    assert!(result.is_ok(), "Build failed: {:?}", result);
+    let home = fs::read_to_string(temp_dir.join(".moss/build.nosync/staging/index.html"))
+        .expect("Failed to read home page");
+
+    let href_of = |text: &str| -> String {
+        let re = regex::Regex::new(&format!(r#"<a [^>]*href="([^"]*)"[^>]*>{}</a>"#, regex::escape(text))).unwrap();
+        re.captures(&home)
+            .unwrap_or_else(|| panic!("no link {text:?} in:\n{}", &home[..home.len().min(4000)]))[1]
+            .to_string()
+    };
+    let served = href_of("plain");
+    assert!(!served.ends_with(".md"), "the page is not served at its source name: {served}");
+    assert_eq!(href_of("rooted"), served);
+    assert_eq!(href_of("wiki"), served);
+    assert_eq!(href_of("no ext"), "/notes/alpha");
+    assert_eq!(href_of("missing"), "/notes/missing.md");
+    assert_eq!(href_of("wrong case"), "/Notes/Alpha.md");
+    assert_eq!(href_of("csv"), "/notes/data.csv");
 }
 
 // Series navigation tests removed: classification system was removed.

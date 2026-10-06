@@ -242,3 +242,42 @@ fn scan_finds_frontmatter_cover_reference() {
     assert_eq!(hits.len(), 1, "got: {hits:?}");
     assert_eq!(hits[0].ref_text, "cover.png");
 }
+
+#[test]
+fn every_page_the_build_reads_and_the_root_agent_files_are_scanned_and_rewritten() {
+    // A nested site and a hidden folder are not this site's pages. The root
+    // agent instructions are not published but are the author's own files, so
+    // their links are kept current too.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "doc.md", "# Doc");
+    for page in ["index.md", "Post.MD", "notes.mdown", "AGENTS.md"] {
+        write(root, page, "See [[doc]].");
+    }
+    write(root, "shop/.moss/config.toml", "");
+    write(root, "shop/page.md", "See [[doc]].");
+    write(root, ".drafts/page.md", "See [[doc]].");
+
+    let hits = scan_project_references_to(&root.join("doc.md"), root).expect("scan");
+    let mut files: Vec<&str> = hits.iter().map(|h| h.referencing_file.rsplit('/').next().unwrap_or("")).collect();
+    files.sort();
+    assert_eq!(files, ["AGENTS.md", "Post.MD", "index.md", "notes.mdown"], "{hits:?}");
+
+    clean_references_to_paths(root, &[root.join("doc.md").to_string_lossy().into_owned()]).expect("clean");
+    for rel in ["index.md", "Post.MD", "notes.mdown", "AGENTS.md"] {
+        assert_ne!(fs::read_to_string(root.join(rel)).unwrap(), "See [[doc]].", "{rel} was not rewritten");
+    }
+    for rel in ["shop/page.md", ".drafts/page.md"] {
+        assert_eq!(fs::read_to_string(root.join(rel)).unwrap(), "See [[doc]].", "{rel}");
+    }
+}
+
+#[test]
+fn a_root_agent_file_is_never_the_file_a_reference_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "AGENTS.md", "# Agents");
+    write(root, "index.md", "See [[AGENTS]] and [x](AGENTS.md).");
+    let hits = scan_project_references_to(&root.join("AGENTS.md"), root).expect("scan");
+    assert!(hits.is_empty(), "{hits:?}");
+}

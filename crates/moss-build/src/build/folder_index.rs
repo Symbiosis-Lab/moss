@@ -7,7 +7,6 @@
 //! directory doesn't.
 
 use moss_core::content_graph::generate_slug;
-use moss_core::resolve::asset_class::AssetIndex;
 use moss_core::resolve::folder_class::FolderIndex;
 use moss_core::resolve::link_class::UrlIndex;
 use moss_core::PageKind;
@@ -101,23 +100,6 @@ pub(crate) fn is_root_source(doc: &ParsedDocument) -> bool {
     }
 }
 
-/// Stub asset/url indexes for `classify_reference` calls that only need the
-/// folder arm. Never consulted — folder markers short-circuit in
-/// classify_reference's folder arm (their `parsed.path` always ends in `/`).
-pub struct NoAssetIndex;
-
-impl AssetIndex for NoAssetIndex {
-    fn contains(&self, _root_rel: &str) -> bool {
-        false
-    }
-    fn contains_ci(&self, _root_rel: &str) -> Option<String> {
-        None
-    }
-    fn find_by_suffix(&self, _suffix: &str) -> Vec<String> {
-        Vec::new()
-    }
-}
-
 /// Negative folder index for source-only reference evidence. Folder references
 /// are not missing assets, so this keeps them advisory without re-deriving the
 /// later whole-corpus page surface during Loop A.
@@ -137,7 +119,9 @@ impl FolderIndex for NoFolderIndex {
     }
 }
 
-/// See `NoAssetIndex` — never consulted for folder markers.
+/// Stub url index for `classify_reference` calls that only need the folder
+/// arm. Never consulted — folder markers short-circuit in classify_reference's
+/// folder arm (their `parsed.path` always ends in `/`).
 pub struct NoUrlIndex;
 
 impl UrlIndex for NoUrlIndex {

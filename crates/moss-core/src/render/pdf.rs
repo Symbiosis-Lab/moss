@@ -77,9 +77,10 @@ pub fn synthesize_pdf_html(
     // <object> with inline download fallback for browsers that can't render PDFs.
     // Attribute order matches the pre-Phase-0 PDF renderer's byte shape exactly.
     format!(
-        "<object class=\"{}\" data-type=\"pdf\"{} type=\"application/pdf\" data=\"{}\"{}{}{}><a href=\"{}\">Download {}</a></object>",
+        "<object class=\"{}\" data-type=\"pdf\"{}{} type=\"application/pdf\" data=\"{}\"{}{}{}><a href=\"{}\">Download {}</a></object>",
         class_value,
         place.data_width_attr,
+        params.label_attr("aria-label"),
         html_escape_attr(&data_url),
         html_width_attr,
         html_height_attr,

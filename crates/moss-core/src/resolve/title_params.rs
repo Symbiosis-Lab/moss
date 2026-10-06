@@ -25,6 +25,18 @@ impl TitleParams {
         self.params.is_empty()
     }
 
+    /// The author's plain-text label as a leading-space HTML attribute named
+    /// `attr` (`aria-label`, `alt`), escaped; empty when there is none.
+    pub fn label_attr(&self, attr: &str) -> String {
+        match self.get("label") {
+            Some(l) => format!(
+                " {attr}=\"{}\"",
+                crate::resolve::embed_renderer::html_escape_attr(l)
+            ),
+            None => String::new(),
+        }
+    }
+
     pub fn insert(&mut self, k: impl Into<String>, v: impl Into<String>) {
         self.params.insert(k.into(), v.into());
     }

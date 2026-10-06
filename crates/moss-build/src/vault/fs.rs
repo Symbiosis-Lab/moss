@@ -274,105 +274,100 @@ pub fn rename_entry_inner(
         .ok_or_else(|| "Invalid destination path".to_string())?;
     recheck_canonical(project_root, new_parent)?;
 
-    // Detect whether this is a directory rename before we move it.
-    let is_dir = old_p.is_dir();
+    // `fs::rename` silently replaces an existing file. Refuse, unless this is
+    // a case-only rename, where a case-insensitive filesystem reports the
+    // destination as existing because it is the source itself.
+    if std::fs::symlink_metadata(&new_p).is_ok() && !is_case_only_rename(&old_p, &new_p) {
+        return Err(format!("'{}' already exists", new_p.display()));
+    }
+
+    // A folder's self-named home file is carried to the new name after the
+    // move. Decide that, and refuse a collision, before anything moves: the
+    // carry's own `fs::rename` would replace a page already named that.
+    let carry = if old_p.is_dir() { home_carry_names(&old_p, &new_p) } else { None };
+    if let Some((from, to)) = &carry {
+        let (src, dst) = (old_p.join(from), old_p.join(to));
+        if std::fs::symlink_metadata(&dst).is_ok() && !is_case_only_rename(&src, &dst) {
+            return Err(format!("'{}' already exists", new_p.join(to).display()));
+        }
+    }
 
     std::fs::rename(&old_p, &new_p)
         .map_err(|e| format!("Failed to rename '{}': {}", old_p.display(), e))?;
 
-    // After a successful directory rename, check whether the folder had a
-    // self-named home file and carry it to the new name (best-effort).
-    if is_dir {
-        rename_self_named_home(project_root, &old_p, &new_p);
+    if let Some((from, to)) = carry {
+        carry_home(project_root, &new_p.join(from), &new_p.join(to));
     }
 
     Ok(())
 }
 
-/// After a directory is renamed from `old_dir` to `new_dir`, rename its
-/// self-named home file if one exists.
+/// True when `new` differs from `old` only in letter case, in the same
+/// folder, and names the same file: the one case where an existing
+/// destination is not another file. A hard link or symlink to the source is
+/// the same file but not a case-only rename.
+fn is_case_only_rename(old: &std::path::Path, new: &std::path::Path) -> bool {
+    let (Some(a), Some(b)) = (old.file_name(), new.file_name()) else { return false };
+    old.parent() == new.parent()
+        && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        && same_file::is_same_file(old, new).unwrap_or(false)
+}
+
+/// File names `(from, to)` of the self-named home file a directory rename
+/// carries along, looking inside `old_dir` before the move.
 ///
 /// A "self-named" home file is `<old_folder_name>.md` (case-insensitive, with
 /// optional recognized lang-suffix) inside the directory.  Index/README/
 /// `_index`/`main` stems are left untouched — they are conventional and do not
 /// need to track the folder name.
-///
-/// This is best-effort: any error emits a `log::warn!` and returns without
-/// propagating — the `home: true` marker keeps resolution working even if the
-/// file name doesn't match.
-fn rename_self_named_home(
-    project_root: &std::path::Path,
-    old_dir: &std::path::Path,
-    new_dir: &std::path::Path,
-) {
-    // Extract old and new folder base-names as lowercase strings.
-    let old_name = match old_dir.file_name().and_then(|n| n.to_str()) {
-        Some(n) => n.to_string(),
-        None => return,
-    };
-    let new_name = match new_dir.file_name().and_then(|n| n.to_str()) {
-        Some(n) => n.to_string(),
-        None => return,
-    };
+fn home_carry_names(old_dir: &std::path::Path, new_dir: &std::path::Path) -> Option<(String, String)> {
+    let old_name = old_dir.file_name()?.to_str()?;
+    let new_name = new_dir.file_name()?.to_str()?;
 
-    // Build the candidate path: <new_dir>/<old_name>.md
-    // (the file was already moved with the directory)
-    let candidate = new_dir.join(format!("{}.md", old_name));
-    if !candidate.exists() {
-        // No self-named home file found — nothing to carry.
-        return;
+    let from = format!("{old_name}.md");
+    if !old_dir.join(&from).exists() {
+        return None;
     }
-
-    // Extract the stem of the candidate (without ".md") to check whether it
-    // is truly self-named for the OLD folder and not an index stem.
-    let stem = match candidate
-        .file_stem()
-        .and_then(|s| s.to_str())
-    {
-        Some(s) => s.to_string(),
-        None => return,
-    };
+    let stem = old_name;
 
     // Strip a recognized lang-suffix if present (e.g. "游记.zh-hans" → "游记").
-    let bare_stem = moss_core::home::strip_lang_suffix(&stem)
-        .unwrap_or(&stem)
-        .to_string();
+    let bare_stem = moss_core::home::strip_lang_suffix(stem).unwrap_or(stem);
 
-    // If the bare stem is a recognized index stem (index, readme, etc.),
-    // do NOT rename — those are conventional and folder-name-independent.
-    if moss_core::home::is_index_stem(&bare_stem) {
-        return;
+    // Index stems (index, readme, etc.) are conventional and folder-name-independent.
+    if moss_core::home::is_index_stem(bare_stem) {
+        return None;
     }
 
     // Confirm the bare stem matches the OLD folder name (case-insensitive).
     if bare_stem.to_lowercase() != old_name.to_lowercase() {
-        // Not self-named for this folder — leave it alone.
-        return;
+        return None;
     }
 
-    // Build the destination: <new_dir>/<new_name>.md (preserving any lang suffix).
-    let new_filename = match stem.rsplit_once('.') {
-        // A recognized lang suffix was stripped — preserve it.
+    // Destination: <new_name>.md, preserving any lang suffix.
+    let to = match stem.rsplit_once('.') {
         Some((_, suffix)) if bare_stem != stem => format!("{new_name}.{suffix}.md"),
-        // No lang suffix — plain `<new_name>.md`
         _ => format!("{new_name}.md"),
     };
+    Some((from, to))
+}
 
-    let destination = new_dir.join(&new_filename);
-
+/// Rename the home file inside the already-moved directory. Best-effort: an
+/// error emits a `log::warn!` and returns — the `home: true` marker keeps
+/// resolution working even if the file name doesn't match.
+fn carry_home(project_root: &std::path::Path, candidate: &std::path::Path, destination: &std::path::Path) {
     // Validate destination is still within the project root (best-effort guard).
     if let Err(e) = validate_entry_path(project_root, destination.to_str().unwrap_or("")) {
         log::warn!(
-            "rename_self_named_home: destination '{}' failed path guard: {}",
+            "carry_home: destination '{}' failed path guard: {}",
             destination.display(),
             e
         );
         return;
     }
 
-    if let Err(e) = std::fs::rename(&candidate, &destination) {
+    if let Err(e) = std::fs::rename(candidate, destination) {
         log::warn!(
-            "rename_self_named_home: could not rename '{}' → '{}': {}",
+            "carry_home: could not rename '{}' → '{}': {}",
             candidate.display(),
             destination.display(),
             e

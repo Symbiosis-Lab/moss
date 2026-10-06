@@ -324,7 +324,6 @@ fn detect_project_language(
         .filter_map(|f| {
             let abs_path = std::path::Path::new(root_path).join(&f.path);
             if is_evicted(&abs_path) {
-                crate::build::cloud_readiness::request_download(&abs_path);
                 return None;
             }
             let content = std::fs::read_to_string(abs_path).ok()?;
@@ -470,7 +469,18 @@ pub fn resolve_site_default_lang(
     markdown_files: &[crate::types::content::FileInfo],
     root_path: &str,
 ) -> String {
-    let is_evicted = &crate::build::icloud::is_evicted;
+    let is_evicted = &crate::build::icloud::is_evicted_and_requested;
+    resolve_site_default_lang_with(explicit, homepage_file, markdown_files, root_path, is_evicted)
+}
+
+/// [`resolve_site_default_lang`] with an injectable eviction predicate.
+pub(crate) fn resolve_site_default_lang_with(
+    explicit: Option<&str>,
+    homepage_file: Option<&str>,
+    markdown_files: &[crate::types::content::FileInfo],
+    root_path: &str,
+    is_evicted: &dyn Fn(&std::path::Path) -> bool,
+) -> String {
     // Trimmed AND lowercased, because the consumers compare this code as a
     // string: `Language::from_code` and `is_known_language_code` both fold
     // case, so ` zh-hant ` and `ZH-Hant` sail through validation and then ride

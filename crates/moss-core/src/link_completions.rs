@@ -64,12 +64,21 @@ pub struct InsertCtx<'a> {
 impl InsertCtx<'_> {
     /// URL space is the ONE case where the author is naming a place on the
     /// published site: an inline link opened with `/`. Every other context is
-    /// a source path — the same reading `resolve_asset_ref` step 1 and the
+    /// a source path — the same reading `ContentGraph::resolve_path` and the
     /// editor lint's `classify_link` already give a leading slash.
     pub fn url_space(&self) -> bool {
         self.syntax == LinkSyntax::Inline && self.prefix.starts_with('/')
     }
 
+    /// The standard Markdown forms, `[text](…)` and `![alt](…)`, and the
+    /// other asset-path places that read the same way (an `image=` value, a
+    /// gallery body line), written as a path. The destination is then a real
+    /// path from the page's folder, so any Markdown tool can follow it. A
+    /// leading `/` opts out: it asks for the site's own address space (inline
+    /// link) or a root path.
+    fn standard_form(&self) -> bool {
+        matches!(self.syntax, LinkSyntax::Inline | LinkSyntax::AssetPath) && !self.prefix.starts_with('/')
+    }
 }
 
 /// A target's kind, as the dropdown paints it (`.cm-completionIcon-<kind>`).
@@ -193,30 +202,36 @@ impl Target {
 /// The text an accepted row inserts. THE INVARIANT: the emitted form is the
 /// one whose FIRST applicable resolver step reproduces the target exactly.
 ///
-/// - Wikilink / embed / asset path: Obsidian forms — a page by stem, an asset
-///   by filename — unless the author typed a path, in which case the exact
-///   path form (`ContentGraph::resolve_path` steps 1/2 pin a root-relative
-///   page path; `resolve_asset_ref` step 2 reproduces a source-relative asset
-///   path, step 1 a `/`-rooted one).
-/// - Inline link, source space: always the exact form. A relative markdown
-///   link is validated by the lint and rewritten to the pretty URL by the
-///   build, and survives a `url:` change, which is why it is the default.
-/// - Inline link, URL space: the published URL for a page or a generated page;
-///   `/` + source for an asset, which step 1 pins.
-/// - Folder: the path so far plus `/`, so the list reopens inside.
+/// - Inline link / image destination (no leading `/`): the path from the
+///   page's folder to the file, `../` segments included, percent-encoded so it
+///   is a valid destination ([`relative_destination`]). A page keeps its
+///   `.md`. It names the file by itself, so no name search is involved:
+///   `ContentGraph::resolve_path` tries a path from the page's folder first
+///   and so reproduces it.
+/// - Wikilink / embed: Obsidian forms — a page by stem, an asset by filename —
+///   unless the author typed a path, in which case the exact path form
+///   (`ContentGraph::resolve_path` steps 1/2 pin a root-relative page path;
+///   its page-folder step reproduces a source-relative asset path, step 1 a
+///   `/`-rooted one).
+/// - A leading `/`: URL space for an inline link (the published URL for a page
+///   or a generated page, `/` + source for an asset, which step 1 pins), the
+///   asset-path form above for an asset path.
+/// - Folder: the path so far plus `/`, so the list reopens inside; encoded as
+///   a destination in the standard form, like a file's.
 /// - Heading: the text for `[[…#`, the anchor slug for `[…](…#`.
 ///
-/// The bare root-relative asset form is never emitted: from `關於/x.md` it
-/// would hit step 2 first and silently resolve `assets/hero.png` to an
-/// entirely different, existing `關於/assets/hero.png`. `..` is never emitted
-/// either — step-1 anchoring is strictly simpler and equally exact.
+/// The bare root-relative asset form is never emitted for a path the author
+/// typed in a wiki context: from `關於/x.md` it would hit step 2 first and
+/// silently resolve `assets/hero.png` to an entirely different, existing
+/// `關於/assets/hero.png`.
 pub fn insert_for(t: &Target, ctx: &InsertCtx<'_>) -> String {
-    use LinkSyntax::*;
-    let exact = ctx.syntax == Inline || parse_query(ctx.prefix).path_qualified;
+    let exact = parse_query(ctx.prefix).path_qualified;
     match t {
         Target::Page { source, url, .. } => {
             if ctx.url_space() {
                 url.clone()
+            } else if ctx.standard_form() {
+                relative_destination(ctx.from_rel, source)
             } else if exact {
                 let rel = source.replace('\\', "/");
                 rel.strip_suffix(".md").unwrap_or(&rel).to_string()
@@ -227,16 +242,22 @@ pub fn insert_for(t: &Target, ctx: &InsertCtx<'_>) -> String {
         Target::Asset { source } => {
             if ctx.url_space() {
                 format!("/{}", source.replace('\\', "/"))
+            } else if ctx.standard_form() {
+                relative_destination(ctx.from_rel, source)
             } else if exact {
                 asset_ref_relative(ctx.from_rel, source)
             } else {
                 file_name(source).to_string()
             }
         }
-        Target::Folder { source } => format!("{}/", source.replace('\\', "/")),
+        Target::Folder { source } => {
+            let path = source.replace('\\', "/");
+            let path = if ctx.standard_form() { crate::resolve::fuzzy_path::escape_md_destination(&path, false) } else { path };
+            format!("{path}/")
+        }
         Target::Generated { url, .. } => url.clone(),
         Target::Heading { text, slug, .. } => {
-            if ctx.syntax == Inline { slug.clone() } else { text.clone() }
+            if ctx.syntax == LinkSyntax::Inline { slug.clone() } else { text.clone() }
         }
     }
 }
@@ -287,7 +308,8 @@ pub fn rank_completions(targets: &[Target], ctx: &InsertCtx<'_>) -> Vec<usize> {
 
     // `sort_by_cached_key`, not `sort_by_key`: `score` allocates, so caching one
     // key per element avoids re-running it on every comparison.
-    hits.sort_by_cached_key(|(p, hit)| score(&query, p, *hit, from_lang, &from_dirs));
+    let prefer_same_folder = matches!(ctx.syntax, LinkSyntax::Inline | LinkSyntax::AssetPath) && !url_space;
+    hits.sort_by_cached_key(|(p, hit)| score(&query, p, *hit, from_lang, &from_dirs, prefer_same_folder));
     hits.into_iter().map(|(p, _)| p.idx).collect()
 }
 
@@ -316,12 +338,25 @@ struct Query {
 }
 
 fn parse_query(prefix: &str) -> Query {
-    let raw = prefix.replace('\\', "/");
+    // `my%20ph` finds `my photo.jpg`: the destination the author sees written
+    // after accepting a row is percent-encoded, and they edit it in that form.
+    // An escape still being typed (`my%`, `my%2`) is left out until complete.
+    let typed = prefix.replace('\\', "/");
+    let raw = crate::resolve::fuzzy_path::percent_decode_path(without_partial_escape(&typed));
     Query {
         path_qualified: raw.contains('/'),
         dir_only: raw.ends_with('/'),
         segs: raw.split('/').filter(|s| !s.is_empty()).map(norm).collect(),
     }
+}
+
+/// `s` without an escape it ends in the middle of (`%` or `%` and one hex digit).
+fn without_partial_escape(s: &str) -> &str {
+    if let Some(head) = s.strip_suffix('%') {
+        return head;
+    }
+    let digit = s.chars().last().filter(char::is_ascii_hexdigit);
+    digit.and_then(|d| s.strip_suffix(d)?.strip_suffix('%')).unwrap_or(s)
 }
 
 /// How well a target matched — two sort keys, both constant `0` for a
@@ -335,8 +370,8 @@ struct Hit {
     seg_hit: u8,
     /// 0 = the matched components are contiguous AND end at the final
     /// component (a true path-suffix match); 1 = gapped. Mirrors
-    /// `resolve_asset_ref` step 4, which tries `find_by_suffix(target)` before
-    /// `find_by_suffix(basename)`.
+    /// the resolver's suffix match, which tries the whole path as a suffix
+    /// before its shorter sub-paths and the bare name.
     dir_tight: u8,
 }
 
@@ -390,13 +425,23 @@ fn match_query(q: &Query, p: &Prepared<'_>) -> Option<Hit> {
     })
 }
 
+/// The destination that names `target` from the page at `from_rel`: the
+/// relative path ([`crate::resolve::fuzzy_path::relative_path`]), encoded for
+/// a Markdown destination.
+fn relative_destination(from_rel: &str, target: &str) -> String {
+    let relative = crate::resolve::fuzzy_path::relative_path(from_rel, target);
+    let path = crate::resolve::fuzzy_path::escape_md_destination(&relative, false);
+    // A first segment holding `:` would be read as a URL scheme.
+    if path.split('/').next().is_some_and(|first| first.contains(':')) { format!("./{path}") } else { path }
+}
+
 /// The reference form for an asset at `rel_path`, written from the page at
 /// `from_rel` — the asset arm of [`insert_for`].
 ///
 /// Same invariant: the emitted form is the one whose first applicable resolver
 /// step reproduces `rel_path` exactly — source-relative when the asset lives in
-/// the page's own subtree (`resolve_asset_ref` step 2 reproduces it by
-/// construction), `/`-rooted otherwise (pinned by step 1).
+/// the page's own subtree (`ContentGraph::resolve_path` tries the path from
+/// the page's folder first), `/`-rooted otherwise (pinned by its step 1).
 fn asset_ref_relative(from_rel: &str, rel_path: &str) -> String {
     let rel = rel_path.replace('\\', "/");
     let from = from_rel.replace('\\', "/");
@@ -450,13 +495,14 @@ fn norm(s: &str) -> String {
 /// 3. the last query segment matched the final component, not just a directory
 /// 4. the matched components are a contiguous path suffix, not a gapped one
 /// 5. same language tree as the source (or both tree-less) beats a different one
-/// 6. closer in the directory tree (longer shared dir prefix) beats farther
-/// 7. shorter label (closer match) beats longer
-/// 8. lexicographic primary name
-/// 9. lexicographic normalized path (fully deterministic, independent of the
+/// 6. in the standard forms, the page's own folder beats any other
+/// 7. closer in the directory tree (longer shared dir prefix) beats farther
+/// 8. shorter label (closer match) beats longer
+/// 9. lexicographic primary name
+/// 10. lexicographic normalized path (fully deterministic, independent of the
 ///    filesystem walk order)
 ///
-/// Keys 5, 6 and 9 mirror the resolver's tiebreak chain in
+/// Keys 5, 7 and 10 mirror the resolver's tiebreak chain in
 /// [`crate::content_graph`] (`tree_match`, `common_prefix_len`,
 /// `Reverse(normalized path)`), so when two candidates share a stem the
 /// dropdown surfaces the same one the link would resolve to. Keys 1–4 are
@@ -472,7 +518,8 @@ fn score(
     hit: Hit,
     from_lang: Option<&str>,
     from_dirs: &[&str],
-) -> (u8, u8, u8, u8, u8, Reverse<usize>, usize, String, String) {
+    prefer_same_folder: bool,
+) -> (u8, u8, u8, u8, u8, u8, Reverse<usize>, usize, String, String) {
     let primary = p.names.first().map(String::as_str).unwrap_or("");
     let starts = match q.segs.last() {
         Some(last) if primary.starts_with(last.as_str()) => 0u8,
@@ -488,10 +535,11 @@ fn score(
         (None, None) => 0u8,
         _ => 1u8,
     };
-    let proximity = crate::content_graph::common_prefix_len(
-        &crate::content_graph::dir_components(&cand_path),
-        from_dirs,
-    );
+    let cand_dirs = crate::content_graph::dir_components(&cand_path);
+    let proximity = crate::content_graph::common_prefix_len(&cand_dirs, from_dirs);
+    // Shared leading folders cannot tell the page's own folder from one below
+    // it, and the path written for the first is the shortest.
+    let other_folder = u8::from(prefer_same_folder && cand_dirs != from_dirs);
 
     (
         p.kind_rank,
@@ -499,6 +547,7 @@ fn score(
         hit.seg_hit,
         hit.dir_tight,
         lang_rank,
+        other_folder,
         Reverse(proximity), // more shared dirs sorts first under ascending order
         p.label.chars().count(), // scalar count, not byte len — CJK filenames sort correctly
         primary.to_string(),

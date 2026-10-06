@@ -57,6 +57,9 @@ fn folder_predicates_over_one_fixture_vault() {
     // `assets/photo.png` is a real file. `is_dir` must not conflate them.
     write(root, "assets/photo.png", b"\x89PNG");
     write(root, "assets/photo/raw.tif", b"II*");
+    // A nested site is not a folder of this one, as in the build's scan.
+    write(root, "shop/.moss/config.toml", b"");
+    write(root, "shop/index.md", b"# Shop");
 
     let idx = EditorFolderIndex::new(root, &ArticleMap::default());
 
@@ -89,6 +92,7 @@ fn folder_predicates_over_one_fixture_vault() {
         );
         assert_eq!(idx.is_dir(q), *is_dir, "is_dir({q:?})");
     }
+    assert!(!idx.dir_has_markdown_index("shop"), "a nested site's home page is not a listing here");
 }
 
 /// The reported bug: `評選/評選.md` carries `url: awards`, so the folder lives

@@ -46,19 +46,6 @@ pub fn is_excluded_dir_name(name: &str) -> bool {
     EXCLUDED_DIR_NAMES.iter().any(|&n| n.to_lowercase() == lower)
 }
 
-/// Whether a walk of the site folder should prune this entry: a directory whose
-/// name [`is_excluded_dir_name`] rejects, anywhere *below* the walk's root.
-///
-/// The root is never pruned. Its name is the author's choice, not an entry
-/// inside the site, and a site living in `.mysite` would otherwise have its
-/// whole walk emptied. Every `WalkDir` over the site folder asks this instead of
-/// calling the name rule directly, so the root exemption is written once.
-pub fn is_excluded_walk_entry(entry: &walkdir::DirEntry) -> bool {
-    entry.depth() > 0
-        && entry.file_type().is_dir()
-        && is_excluded_dir_name(&entry.file_name().to_string_lossy())
-}
-
 /// Agent-instruction filenames that conventionally live at a project root.
 ///
 /// Every coding agent that reads a root-anchored instruction file uses one of
@@ -78,30 +65,50 @@ pub const ROOT_AGENT_CONFIG_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md", "GEMINI
 /// matching case-insensitively would silently unpublish an author's
 /// `Agents.md` essay, which is a worse failure than publishing a stray config
 /// file. Root-ness is the caller's half of the test — see
-/// [`skip_root_agent_config`].
+/// [`left_out_of_site`].
 pub fn is_agent_config_name(name: &str) -> bool {
     ROOT_AGENT_CONFIG_FILES.contains(&name)
 }
 
-/// Scan-time decision for a *file* entry: is this a root-level agent-instruction
-/// file that must not become a page?
-///
-/// `depth` is `WalkDir`'s — the walk root is 0, so a file directly in the site
-/// folder is 1. Root only, because `posts/agents.md` is an ordinary article
-/// about agents and must keep publishing; only the source root is a location
-/// tooling claims.
-///
-/// Logs on a match. The file is sitting in plain sight in the author's folder,
-/// so its absence from the built site has to be explainable from the log.
-pub fn skip_root_agent_config(name: &str, depth: usize) -> bool {
-    if depth == 1 && is_agent_config_name(name) {
-        log::info!("Skipping {name}: agent instructions are tooling, not a page");
-        return true;
-    }
-    false
+/// Why a walk of the site folder leaves an entry out of the site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftOut {
+    /// A directory below the root whose name [`is_excluded_dir_name`] rejects.
+    /// The root is never left out: its name is the author's choice, and a site
+    /// living in `.mysite` would otherwise have its whole walk emptied.
+    ExcludedDir,
+    /// A directory below the root with its own `.moss/`: a different site,
+    /// which the build goes around rather than absorbing its pages.
+    NestedSite,
+    /// An agent-instruction file directly in the site folder. Root only,
+    /// because `posts/agents.md` is an ordinary article about agents; only the
+    /// source root is a location tooling claims.
+    AgentInstructions,
 }
 
-/// Watch-time counterpart to [`skip_root_agent_config`]: is `abs` a root-level
+/// The one rule for which files belong to the site: `Some` for an entry a walk
+/// of the site folder must not read, saying why. The build's scan and every
+/// editor walk that must see the files the build sees ask this, so a file the
+/// build cannot link is never offered or found by the editor either.
+pub fn left_out_of_site(entry: &walkdir::DirEntry) -> Option<LeftOut> {
+    left_out(entry.path(), entry.file_type().is_dir(), entry.depth())
+}
+
+/// [`left_out_of_site`] for an entry at `path`, `depth` levels below the site
+/// folder (a file directly in it is at depth 1), for a reader that lists
+/// folders itself instead of walking with `walkdir`.
+pub fn left_out(path: &Path, is_dir: bool, depth: usize) -> Option<LeftOut> {
+    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    if !is_dir {
+        return (depth == 1 && is_agent_config_name(&name)).then_some(LeftOut::AgentInstructions);
+    }
+    if depth > 0 && is_excluded_dir_name(&name) {
+        return Some(LeftOut::ExcludedDir);
+    }
+    (depth > 0 && path.join(".moss").is_dir()).then_some(LeftOut::NestedSite)
+}
+
+/// Watch-time counterpart to [`left_out_of_site`]: is `abs` a root-level
 /// agent-instruction file of the site at `root`?
 ///
 /// A file the scan skips cannot change one byte of the built site, so a change
@@ -436,7 +443,7 @@ pub fn is_hidden_reason(name: &str, parent_relative: &str, show_internal: bool) 
         }
         // Agent-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md) are the one
         // category that reads as prose and isn't. The scan already refuses to
-        // publish them (`skip_root_agent_config`, above) — whoever wrote it,
+        // publish them (`left_out_of_site`, above) — whoever wrote it,
         // it isn't the site's content, so it would otherwise sit in the tree
         // between `index.md` and `about.md`. Same standing as `.moss/`: present,
         // one toggle away.
@@ -475,6 +482,12 @@ pub fn is_hidden_reason(name: &str, parent_relative: &str, show_internal: bool) 
 /// trap the preview follower's slot check already avoids.
 pub fn is_page_source(extension: &str) -> bool {
     matches!(extension, "md" | "markdown" | "mdown" | "mkd")
+}
+
+/// [`is_page_source`] for a path, whatever the letter case of its extension:
+/// `Post.MD` is a page like `post.md`.
+pub fn is_page_path(path: &Path) -> bool {
+    path.extension().is_some_and(|e| is_page_source(&e.to_string_lossy().to_lowercase()))
 }
 
 /// Which bucket of `ProjectStructure` a file extension belongs to — the pure,
@@ -565,7 +578,7 @@ mod tests {
     #[test]
     fn a_nested_agents_md_is_an_ordinary_file() {
         // `posts/AGENTS.md` is an article about agents. The scan publishes it
-        // (`skip_root_agent_config` is root-only) and so the tree
+        // (`left_out_of_site` is root-only for these) and so the tree
         // shows it, in both modes.
         assert!(!is_hidden("AGENTS.md", "posts", false));
         assert!(!is_hidden("AGENTS.md", "posts", true));

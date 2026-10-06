@@ -914,6 +914,8 @@ fn synth_kind_for_ext(ext: &str) -> Option<SynthKind> {
 ///   [`Sizing`]. Pixel/percent/vh values are CSS-formatted.
 /// - **`title`** (iframe only) carries non-sizing alias text as the
 ///   iframe's accessible name (legacy behaviour: `[[widget.html|My Widget]]`).
+/// - **`label`** (video / audio / pdf / 3D model) carries the same non-sizing
+///   alias text; each synthesizer emits it as that element's accessible name.
 /// - **`query` / `fragment`** (iframe/pdf only) reconstruct the served URL
 ///   from the split dest-url — pulldown-cmark percent-encodes `?` and `#`
 ///   if they stay in the URL slot, so the dispatcher hands them out-of-band.
@@ -970,6 +972,7 @@ fn build_synth_params(
                             params.insert("width", w.to_css());
                             params.insert("height", h.to_css());
                         }
+                        None if is_label_text(&remainder) => params.insert("label", &remainder),
                         None => {}
                     }
                 }
@@ -982,6 +985,7 @@ fn build_synth_params(
                     params.insert("width", w.to_css());
                     params.insert("height", h.to_css());
                 }
+                None if is_label_text(alias) => params.insert("label", alias),
                 None => {}
             },
             SynthKind::Iframe => match Sizing::parse(alias) {
@@ -997,10 +1001,12 @@ fn build_synth_params(
                     params.insert("title", alias);
                 }
             },
+            // Audio never sizes, but a size spelling (`400`, `640x360`) is
+            // still not text to announce.
             SynthKind::Audio => {
-                // Audio synthesizer reads no alias-derived params today
-                // (controls / preload defaults are unconditional). Leave
-                // params untouched.
+                if Sizing::parse(alias).is_none() && is_label_text(alias) {
+                    params.insert("label", alias);
+                }
             }
         }
     }
@@ -1014,6 +1020,12 @@ fn build_synth_params(
     }
 
     params
+}
+
+/// Is `text` words for a player's accessible name? Display keywords
+/// (`cover`, `top left`) describe how an image is fitted, not what a player is.
+fn is_label_text(text: &str) -> bool {
+    !crate::media::is_all_display_keywords(text)
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 //! corpus-scaled cost this closes.
 
 use crate::build::stat::{recording_clock, FileStat};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// One file's cached frontmatter pre-scan result, plus the stat identity it
 /// was captured against. See [`FrontmatterScanCache`].
@@ -97,7 +97,7 @@ impl FrontmatterScanCache {
         source_path: &Path,
     ) -> Self {
         let mut cache = Self::default();
-        scan_frontmatter_urls_with_evicted(files, source_path, &mut cache, &|_| false);
+        scan_frontmatter_urls_with_evicted(files, &|p| source_path.join(p), &mut cache, &|_| false);
         cache
     }
 
@@ -149,9 +149,12 @@ fn unquote(v: &str) -> &str {
 /// untouched). Stale entries for files no longer in `markdown_files` are
 /// left in the map too — harmless, and pruning them is the caller's call
 /// since eviction/deletion already has its own stale-cleanup pass.
-fn scan_frontmatter_urls_with_evicted(
+///
+/// Each file is read from `locate(path)`, which is the path under the site
+/// folder for every build.
+pub(super) fn scan_frontmatter_urls_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
-    source_path: &Path,
+    locate: &dyn Fn(&str) -> PathBuf,
     cache: &mut FrontmatterScanCache,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> std::collections::HashMap<String, (Option<String>, Option<String>)> {
@@ -161,10 +164,9 @@ fn scan_frontmatter_urls_with_evicted(
 
     for file_info in markdown_files {
         let file_path = &file_info.path;
-        let source_file_path = source_path.join(file_path);
+        let source_file_path = locate(file_path);
 
         if is_evicted(&source_file_path) {
-            crate::build::cloud_readiness::request_download(&source_file_path);
             continue;
         }
 
@@ -282,7 +284,7 @@ pub(crate) fn build_page_map_and_external_urls_cached(
         home_file_winners,
         home_overrides,
         cache,
-        &crate::build::icloud::is_evicted,
+        &crate::build::icloud::is_evicted_and_requested,
     )
 }
 
@@ -301,9 +303,30 @@ pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     std::collections::HashMap<String, String>,
     std::collections::HashMap<String, String>,
 ) {
-    use std::collections::HashMap;
+    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, &|p| source_path.join(p), cache, is_evicted);
+    let (entries, dir_overrides, external_url_map) =
+        assemble_page_map(markdown_files, &scanned, root_folder_name, home_file_winners, home_overrides);
+    let page_map = entries.into_iter().map(|(k, v, _)| (k, v)).collect();
+    (page_map, dir_overrides, external_url_map)
+}
 
-    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, source_path, cache, is_evicted);
+/// The page map of [`build_page_map_and_external_urls_cached`] as
+/// `(path, url_path, is_index)` in `markdown_files` order, where `is_index`
+/// says the page is its folder's home, plus the other two maps, from the
+/// pre-scanned `url:` and `external_url:` of each file.
+#[allow(clippy::type_complexity)]
+pub(super) fn assemble_page_map(
+    markdown_files: &[crate::types::content::FileInfo],
+    scanned: &std::collections::HashMap<String, (Option<String>, Option<String>)>,
+    root_folder_name: &str,
+    home_file_winners: &std::collections::HashSet<String>,
+    home_overrides: &std::collections::HashMap<String, String>,
+) -> (
+    Vec<(String, String, bool)>,
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    use std::collections::HashMap;
 
     let mut entries: Vec<(String, String, bool)> = Vec::new();
     let mut dir_overrides: HashMap<String, String> = HashMap::new();
@@ -334,7 +357,5 @@ pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     }
 
     super::apply_cascading_dir_overrides(&mut entries, &dir_overrides);
-
-    let page_map = entries.into_iter().map(|(k, v, _)| (k, v)).collect();
-    (page_map, dir_overrides, external_url_map)
+    (entries, dir_overrides, external_url_map)
 }

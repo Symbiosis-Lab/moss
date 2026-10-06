@@ -72,10 +72,11 @@ pub fn synthesize_model_html(
     };
 
     format!(
-        r#"<model-viewer class="{class}" data-type="3d"{data_width} src="{src}"{flags} touch-action="pan-y" loading="lazy"{style}></model-viewer>"#,
+        r#"<model-viewer class="{class}" data-type="3d"{data_width} src="{src}"{alt}{flags} touch-action="pan-y" loading="lazy"{style}></model-viewer>"#,
         class = place.class_value(CLASS_EMBED),
         data_width = place.data_width_attr,
         src = html_escape_attr(src),
+        alt = params.label_attr("alt"),
         flags = flags,
         style = style,
     )

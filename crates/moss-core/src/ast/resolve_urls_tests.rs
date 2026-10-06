@@ -357,6 +357,27 @@ fn standard_markdown_link_emits_sentinel() {
 }
 
 #[test]
+fn root_address_of_a_page_source_resolves_to_exactly_that_file() {
+    // From a zh-hans page, `/notes/a.md` still means the root file, not the
+    // language copy a bare `notes/a.md` would be scoped to.
+    let graph = graph_with(&["zh-hans/index.md", "notes/a.md", "zh-hans/notes/a.md", "notes/b.csv"]);
+    let mut doc = parse("[a](/notes/a.md#top) [b](/notes/b.csv) [c](/notes/missing.md)");
+    let found = resolve_urls(&mut doc, &graph, "zh-hans/index.md");
+    let targets: Vec<_> = found.outgoing.iter().map(|o| o.target_path.as_str()).collect();
+    assert_eq!(targets, ["notes/a.md"]);
+    let Block::Paragraph(children) = &doc.blocks[0] else { panic!("expected Paragraph") };
+    let urls: Vec<_> = children
+        .iter()
+        .filter_map(|i| match i {
+            Inline::Link { url: Url::Unresolved(s), .. } => Some(s.clone()),
+            Inline::Link { url: Url::Resolved(r), .. } => Some(r.href.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(urls, ["moss-resolved:notes/a.md#top", "/notes/b.csv", "/notes/missing.md"]);
+}
+
+#[test]
 fn multiple_links_one_line_emit_sentinels() {
     let source = "index.md";
     let content = "[a](foo.md) and [b](bar.md)";
@@ -812,16 +833,16 @@ fn slug_wikilink_suffix_preserves_query() {
 }
 
 // -----------------------------------------------------------------
-// Task 6: engine routing tests for resolve_asset_url
+// Routing tests for resolve_asset_url
 //
-// These tests exercise the unified asset engine (resolve_asset_ref)
-// through the resolve_asset_url path. They cover:
-//   - Separator-bearing paths that the old code passed through verbatim
-//     (the 404 bug), now rebased via SeparatorFallback.
-//   - Absolute `/`-prefixed paths that must stay absolute (R3).
-//   - Case-mismatched paths that the engine canonicalises.
-//   - Bare filenames that must behave identically to the old
-//     resolve_reference path (the `image_bare_unchanged_from_today` gate).
+// resolve_asset_url asks the one resolver (resolve_file_target over
+// ContentGraph::resolve_path) which file an image names and emits that file's
+// pinned, root-absolute URL, whatever the spelling. These tests cover:
+//   - a path with no file where it is written, found by partial-path search;
+//   - a `/`-rooted path, which names the file at that path from the site
+//     root, and is otherwise searched for like any other path;
+//   - a path in other letter case, emitted in the file's real case;
+//   - a bare file name, found by name search.
 // -----------------------------------------------------------------
 
 /// Test seam: build a `Url::Unresolved(raw)`, run it through `resolve_asset_url`,
@@ -859,12 +880,16 @@ fn image_separator_fallback_rebases_to_root() {
 
 #[test]
 fn image_absolute_stays_absolute() {
-    // R3: an absolute `/`-prefixed asset reference keeps its leading `/`.
-    // Now the general case rather than a special one — every resolved asset
-    // reference is emitted root-absolute.
+    // Every resolved asset reference is emitted root-absolute, a `/`-rooted
+    // one included. A rooted path with no file there is searched for like any
+    // other, and the file found is emitted at its own address.
     let graph = graph_with(&["assets/x.jpg"]);
     assert_eq!(
         resolve_image_src("/assets/x.jpg", "News/post.md", &graph),
+        "/assets/x.jpg"
+    );
+    assert_eq!(
+        resolve_image_src("/img/x.jpg", "News/post.md", &graph),
         "/assets/x.jpg"
     );
 }

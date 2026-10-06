@@ -2,7 +2,7 @@
 //!
 //! Pattern-matching a reference's raw text against the renamed entry's
 //! old/new path covers only a hand-picked subset of the rules the real
-//! resolver (`classify_reference` / `resolve_asset_ref`) knows, so a reference
+//! resolver (`classify_reference` / `ContentGraph::resolve_path`) knows, so a reference
 //! the resolver accepts through another route (a folder's self-named note
 //! reached by its bare filename, a suffix-fallback match, …) would go stale
 //! silently after a rename. So the invariant is explicit: a rename/move never
@@ -13,32 +13,40 @@
 //! possible, and VERIFY the rewritten text actually resolves before using it.
 //!
 //! Both the "pre" and "post" resolution passes run against an in-memory
-//! [`ContentGraph`] built from a plain path list — no filesystem access during
-//! planning, so `plan_moves` can run against a hypothetical rename and answer
-//! "what would change" without touching disk (the desktop's confirmation
-//! modal, and CLI dry-runs). `apply_planned_moves` is the only place that
-//! performs I/O.
+//! [`ContentGraph`] built from a plain path list, and the addresses pages will
+//! be served at are worked out from the files where they are now — planning
+//! reads the project and never writes, so `plan_moves` can run against a
+//! hypothetical rename and answer "what would change" without changing
+//! anything (the desktop's confirmation modal, and CLI dry-runs).
+//! `apply_planned_moves` is the only place that writes.
 //!
 //! `rename_entry_with_refs_core` — the public entry point used by
 //! both the app's rename command and `moss rename` — is a one-element
 //! wrapper: `plan_moves` + `apply_planned_moves` for a batch of exactly one.
 
+mod apply;
 mod path_list_folder_index;
+mod served_address;
 
 use std::collections::HashSet;
 use std::path::Path;
 
-use moss_core::ast::resolve_urls::GraphAssetIndex;
 use moss_core::content_graph::{ContentGraph, ContentGraphBuilder};
 use moss_core::resolve::md_extract::{extract_md_references, extract_structural_asset_refs, RefSyntax};
 use moss_core::resolve::fuzzy_path::{
-    percent_decoded_fallback, percent_encode_path_segments, resolve_reference_with_percent_fallback, ResolvedRef,
+    percent_decoded_fallback, resolve_reference_with_percent_fallback, ResolvedRef,
 };
 use moss_core::resolve::reference::{classify_reference, ReferenceContext, ReferenceKind};
 
 use crate::build::folder_index::NoUrlIndex;
-use crate::editor::ref_rewrite::{apply_edits, match_and_retarget, render_bare_value, Edit};
+use crate::editor::ref_rewrite::{
+    dirname, exact_spelling, exact_style, match_and_retarget, relative_root_path, render_bare_value, render_destination,
+    dest_form, DestForm, ExactStyle, WIKI_UNWRITABLE,
+};
 use path_list_folder_index::{collect_dirs, PathListFolderIndex};
+use served_address::Addresses;
+
+pub use apply::{apply_planned_moves, undo_applied};
 
 // ── Public, serializable plan/apply/undo types ──────────────────────────────
 // Derives mirror `FileReferenceHit` (ref_scan.rs): the desktop passes these
@@ -143,7 +151,7 @@ fn map_path(path: &str, moves: &[ResolvedMove]) -> String {
     path.to_string()
 }
 
-/// Predict `rename_self_named_home`'s (vault/fs.rs) effect for every
+/// Predict the home-file carry (`home_carry_names` in vault/fs.rs) for every
 /// directory move in `top_level`, using `files` — the file list reflecting
 /// the state BEFORE these moves run — to detect a self-named home file.
 /// Mirrors that function's exact matching rules (lang-suffix aware, index
@@ -190,58 +198,22 @@ fn expand_with_home_carry(top_level: &[ResolvedMove], files: &[String]) -> Vec<R
     out
 }
 
-fn dirname(root_rel: &str) -> &str {
-    root_rel.rsplit_once('/').map_or("", |(d, _)| d)
-}
-
-/// Minimal `../`-relative spelling of `to_path` from `from_dir` (both
-/// root-relative, filesystem shape). Deliberately NOT `fuzzy_path`'s
-/// `relative_asset_path`: that percent-encodes segments for an HTML `href`,
-/// and this text is written back into markdown SOURCE, where percent-encoding
-/// would be a regression an author never asked for.
-fn relative_root_path(from_dir: &str, to_path: &str) -> String {
-    let from_parts: Vec<&str> = if from_dir.is_empty() { vec![] } else { from_dir.split('/').collect() };
-    let to_parts: Vec<&str> = to_path.split('/').collect();
-    let common = from_parts.iter().zip(to_parts.iter()).take_while(|(a, b)| a == b).count();
-    let ups = from_parts.len() - common;
-    let mut segs: Vec<&str> = std::iter::repeat("..").take(ups).collect();
-    segs.extend_from_slice(&to_parts[common..]);
-    segs.join("/")
-}
-
-// ── Which resolver the BUILD actually uses for this reference ──────────────
+// ── Which entry the BUILD uses for this reference ──────────────────────────
 //
-// `classify_reference`/`resolve_asset_ref` is NOT the build's resolver for
-// plain links and (non-embed) wikilinks. Traced via
-// `crates/moss-core/src/ast/resolve_urls.rs::resolve_link_urls`: a
-// `[text](url)` link or a bare `[[note]]` wikilink resolves through
-// `fuzzy_path::resolve_reference` → `ContentGraph::resolve_path`
-// (content_graph.rs), which is the one function its own doc comment calls
-// "the single source of truth for target resolution in moss" — and it
-// differs from `resolve_asset_ref` in two ways that matter here:
-// `ContentGraph::resolve_path`'s folder-note fallback (content_graph.rs
-// ~495-538) fires unconditionally for a bare name, where
-// `classify_reference`'s folder arm (reference.rs ~212-235) only enters for
-// a leading or trailing `/`; and an ambiguous bare stem always resolves to
-// SOME file there (an ext/page/tree/common-prefix/alphabetical tiebreak,
-// content_graph.rs ~463-491), where `resolve_asset_ref` reports `Ambiguous`
-// (no target) and stops.
-//
-// Standard `![alt](path)` image syntax and structural spans (gallery/hero
-// bodies, frontmatter asset fields) are genuinely `resolve_asset_ref`'s:
-// `resolve_urls.rs`'s `resolve_image_urls` drives `resolve_asset_ref` off a
-// `ContentGraph`-backed `AssetIndex` the same way `GraphAssetIndex` here does.
-// Embed wikilink syntax (`![[x]]`/`![[x|attrs]]`) is grouped with assets
-// deliberately, not because it is provably `resolve_asset_ref`-routed for
-// every target kind, but because a folder embed specifically (`![[folder/]]`)
-// IS — `crates/moss-build/src/build/folder_embed.rs` calls
-// `classify_reference` directly for that marker — and because no divergence is
-// known for the non-folder embed case; re-verify that assumption if one shows
-// up.
+// Every reference form names its file through `ContentGraph::resolve_path`, so
+// both routes below agree on which file a target means, including which of
+// several same-named files is nearest the page. They differ only in what
+// surrounds that answer: the asset route goes through `classify_reference`,
+// which also knows trailing-slash folder references (`![[folder/]]`) and the
+// kind of file found; the page route calls the resolver directly and so also
+// reaches a folder's home page by a bare folder name. Standard `![alt](path)`
+// images, embed wikilinks and structural spans (gallery/hero bodies,
+// frontmatter asset fields) take the asset route; markdown links and
+// non-embed wikilinks take the page route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefRoute {
-    /// `resolve_asset_ref` via `classify_reference` — standard image syntax,
-    /// embed wikilinks, and every structural span.
+    /// `classify_reference` — standard image syntax, embed wikilinks, and
+    /// every structural span.
     AssetOrEmbed,
     /// `ContentGraph::resolve_path` — markdown links and non-embed
     /// wikilinks.
@@ -264,6 +236,15 @@ fn ref_route(syntax: &RefSyntax) -> RefRoute {
         | RefSyntax::WikilinkPath
         | RefSyntax::WikilinkAliased { .. } => RefRoute::PageGraph,
     }
+}
+
+/// [`exact_style`] of a finished destination `text` (suffix and percent
+/// escapes included), the way the reader will see it.
+fn exact_style_of_text(text: &str, from_dir: &str, target: &str, is_dir: bool, wiki: bool) -> Option<ExactStyle> {
+    let (base, _) = split_ref_suffix(text);
+    exact_style(base, from_dir, target, is_dir, wiki).or_else(|| {
+        percent_decoded_fallback(base).and_then(|decoded| exact_style(&decoded, from_dir, target, is_dir, wiki))
+    })
 }
 
 /// Resolve `text` (already anchor-stripped for the `PageGraph` route; the
@@ -330,7 +311,7 @@ fn split_ref_suffix(text: &str) -> (&str, &str) {
 fn plan_one_ref(
     raw_text: &str,
     route: RefRoute,
-    from_dir_pre: &str,
+    form: DestForm,
     from_source_pre: &str,
     from_source_post: &str,
     ctx_pre: &ReferenceContext,
@@ -338,7 +319,25 @@ fn plan_one_ref(
     graph_pre: &ContentGraph,
     graph_post: &ContentGraph,
     expanded_moves: &[ResolvedMove],
+    addresses: &Addresses,
 ) -> Result<Option<String>, String> {
+    let (base_text, suffix) = split_ref_suffix(raw_text);
+    let wiki = form == DestForm::Wiki;
+    // `/` is the site's front door whatever file is served there.
+    if base_text == "/" && route == RefRoute::PageGraph && !wiki {
+        return Ok(None);
+    }
+    // The build keeps a link starting with `/` verbatim, so one written as a
+    // published address names whichever page the site serves there, however
+    // that address is spelled: a slugged name, a frontmatter `url:`, a
+    // numbered or language-prefixed address.
+    let served_page = (route == RefRoute::PageGraph && !wiki && base_text.starts_with('/') && base_text.ends_with('/'))
+        .then(|| {
+            let decoded = percent_decoded_fallback(base_text);
+            addresses.page_at(base_text).or_else(|| addresses.page_at(decoded.as_deref()?)).map(str::to_string)
+        })
+        .flatten();
+
     // target_is_dir only has meaning on the AssetOrEmbed route: a folder
     // reference there is a distinct `FolderListing`/`FolderIndexIframe`
     // kind whose `target_path` IS the folder. `ContentGraph::resolve_path`
@@ -346,6 +345,7 @@ fn plan_one_ref(
     // through to a FILE (the folder's home page) — so a PageGraph reference
     // is never itself "a directory" to retarget.
     let (t, target_is_dir) = match route {
+        _ if served_page.is_some() => (served_page.clone(), false),
         RefRoute::AssetOrEmbed => {
             let resolved = classify_reference(raw_text, from_source_pre, true, ctx_pre);
             let is_dir =
@@ -356,23 +356,14 @@ fn plan_one_ref(
     };
     let Some(t) = t else {
         // Unresolved before the move: leave it alone (case 4 of the
-        // invariant). On the AssetOrEmbed route this also covers an
-        // ambiguous bare reference — `resolve_asset_ref` reports
-        // `Ambiguous`, which carries no `target_path`, indistinguishable
-        // from "not found" here. The PageGraph route has no such case:
-        // `ContentGraph::resolve_path` always picks a deterministic winner
-        // via its own tiebreak chain rather than reporting ambiguity, so a
-        // reference on that route reaches `None` only when the build itself
-        // would show it unresolved.
+        // invariant). Both routes pick the file the build links even when
+        // several are equally near (the editor only flags that as ambiguous),
+        // so a reference reaches `None` only when the build itself would show
+        // it unresolved.
         return Ok(None);
     };
     let map_t = map_path(&t, expanded_moves);
-
-    if resolve_by_route(route, raw_text, from_source_post, ctx_post, graph_post).as_deref()
-        == Some(map_t.as_str())
-    {
-        return Ok(None); // still resolves to the same (mapped) place, byte-identical
-    }
+    let from_dir_post = dirname(from_source_post);
 
     // A PageGraph target with no REGISTERED file behind it is the synthetic
     // `<dir>/index.md` the folder-note fallback manufactures for an
@@ -380,14 +371,41 @@ fn plan_one_ref(
     // equals that string, so retargeting swaps in `dirname(t)`/`dirname(map_t)`
     // with `target_is_dir = true`, same as a real AssetOrEmbed folder ref.
     let synthetic_auto_index = route == RefRoute::PageGraph && !target_is_dir && !graph_pre.contains_path(&t);
+
+    // Did the authored text name its file EXACTLY (as a path from the page,
+    // from the root, or as a published address)? Then it has to keep doing so,
+    // in the same style: the resolver's name search would still find a moved
+    // file through a path that is now dead for every other tool.
+    let exact_of = |from_dir: &str, target: &str| exact_style_of_text(base_text, from_dir, target, target_is_dir, wiki);
+    let exact = match served_page {
+        Some(_) => Some(ExactStyle::root_address()),
+        None if synthetic_auto_index => None,
+        None => exact_of(dirname(from_source_pre), &t),
+    };
+    let resolves_post = resolve_by_route(route, raw_text, from_source_post, ctx_post, graph_post).as_deref()
+        == Some(map_t.as_str());
+    let unchanged = match &exact {
+        Some(style) => resolves_post && exact_of(from_dir_post, &map_t).is_some_and(|post| post.same_kind(style)),
+        None => resolves_post,
+    };
+    if unchanged {
+        return Ok(None); // still names the same (mapped) place, byte-identical
+    }
+
     let (retarget_t, retarget_map_t, target_is_dir) = if synthetic_auto_index {
         (dirname(&t).to_string(), dirname(&map_t).to_string(), true)
     } else {
         (t.clone(), map_t.clone(), target_is_dir)
     };
 
-    let (base_text, suffix) = split_ref_suffix(raw_text);
-    let from_dir_post = dirname(from_source_post);
+    let no_rewrite = || {
+        if wiki && map_t.contains(WIKI_UNWRITABLE) {
+            return format!(
+                "the new name {map_t:?} cannot be written in a wikilink, which cannot carry '|', '#', '?' or ']'; the link {raw_text:?} in {from_source_pre} was not rewritten"
+            );
+        }
+        format!("could not produce a resolving rewrite for reference {raw_text:?} in {from_source_pre} (resolved to {t:?}, mapped to {map_t:?})")
+    };
     let verify = |candidate: &str| -> bool {
         resolve_by_route(route, candidate, from_source_post, ctx_post, graph_post).as_deref()
             == Some(map_t.as_str())
@@ -395,24 +413,60 @@ fn plan_one_ref(
 
     // Obsidian (wikilinks off) writes a percent-encoded destination
     // (`my%20note.md`) for a path with a space or non-ASCII character; the
-    // resolvers above already decode it as a fallback. A rewrite has to
-    // reproduce that authored style, or an escalated candidate with a
-    // literal space would emit a destination CommonMark can't parse as one
-    // path.
+    // resolvers above already decode it as a fallback. A rewrite reproduces
+    // that authored style; otherwise `render_destination` escapes only what
+    // would break the destination. Either way a candidate that would not
+    // parse back as the same destination is dropped (`None`).
     // `retarget_root_relative`'s own "same authored shape" comparisons are
-    // never fooled by this: they run on `base_text` before this encoding is
-    // applied, so an already-encoded reference that still needs no rewrite
-    // is untouched by any of this.
-    let needs_percent_encoding = percent_decoded_fallback(base_text).is_some();
-    let maybe_encode = |s: String| if needs_percent_encoding { percent_encode_path_segments(&s) } else { s };
+    // never fooled by this: they run on `base_text` before any encoding, so
+    // an already-encoded reference that still needs no rewrite is untouched.
+    let percent_style = percent_decoded_fallback(base_text).is_some();
+    let render = |candidate: &str| render_destination(form, candidate, suffix, percent_style);
 
-    // Attempt 1: same authored shape. Produced against the PRE-move
-    // directory (the context the text was actually written in) — the shape
-    // survives even when the referencing file itself moved; correctness is
-    // never assumed, only what `verify` (against the POST-move context)
-    // confirms.
-    if let Some(candidate) = match_and_retarget(base_text, from_dir_pre, &retarget_t, &retarget_map_t, target_is_dir) {
-        let full = format!("{}{suffix}", maybe_encode(candidate));
+    // An exact path stays exact, in the authored style, or in the same anchor's
+    // full-path form when the style no longer fits. Besides resolving, the
+    // candidate must still name the file exactly by itself, so a form that only
+    // the resolver's name search follows is never accepted: no candidate means
+    // the error below, and nothing is changed.
+    if let Some(style) = exact.as_ref().filter(|s| s.is_root_address()) {
+        // The build keeps a destination starting with `/` verbatim, so a link
+        // written as a published address must carry the address the build
+        // serves the new file at, which is not spelled from the file name.
+        let address = addresses.after_moves(&map_t).map_err(|why| {
+            format!("cannot rewrite the address {raw_text:?} in {from_source_pre}: {map_t:?} {}", why.reason())
+        })?;
+        let text = render(style.respell_address(address, &map_t)).ok_or_else(no_rewrite)?;
+        return Ok((text != raw_text).then_some(text));
+    }
+    if let Some(style) = &exact {
+        for style in std::iter::once(*style).chain(style.full_path()) {
+            let Some(mut full) = exact_spelling(&style, &map_t, from_dir_post).and_then(|c| render(&c)) else {
+                continue;
+            };
+            // A wikilink with no `/` is a name, so a page-relative one gets
+            // `./` to stay a path. A root-relative one for a file at the root
+            // is just its name, and the resolver tries the exact root path
+            // before it searches: `verify` confirms that.
+            let root_level = wiki && style.is_root_bare() && !full.contains('/');
+            if wiki && !full.contains('/') && !root_level {
+                full.insert_str(0, "./");
+            }
+            let named_exactly = root_level
+                || exact_style_of_text(&full, from_dir_post, &map_t, target_is_dir, wiki)
+                    .is_some_and(|post| post.same_kind(&style));
+            if named_exactly && verify(&full) {
+                return Ok(Some(full));
+            }
+        }
+        return Err(no_rewrite());
+    }
+
+    // Attempt 1: same authored shape for a reference that was never an exact
+    // path (a bare name, a suffix match). `verify` (against the POST-move
+    // context) confirms the result; correctness is never assumed.
+    if let Some(full) = match_and_retarget(base_text, &retarget_t, &retarget_map_t, target_is_dir)
+        .and_then(|c| render(&c))
+    {
         if verify(&full) {
             return Ok(Some(full));
         }
@@ -423,9 +477,10 @@ fn plan_one_ref(
     if target_is_dir {
         doc_rel.push('/');
     }
-    let full = format!("{}{suffix}", maybe_encode(doc_rel));
-    if verify(&full) {
-        return Ok(Some(full));
+    if let Some(full) = render(&doc_rel) {
+        if verify(&full) {
+            return Ok(Some(full));
+        }
     }
 
     // Attempt 3: explicit root-absolute — always resolves for a real path
@@ -435,14 +490,13 @@ fn plan_one_ref(
     if target_is_dir {
         abs.push('/');
     }
-    let full = format!("{}{suffix}", maybe_encode(abs));
-    if verify(&full) {
-        return Ok(Some(full));
+    if let Some(full) = render(&abs) {
+        if verify(&full) {
+            return Ok(Some(full));
+        }
     }
 
-    Err(format!(
-        "could not produce a resolving rewrite for reference {raw_text:?} (resolved to {t:?}, mapped to {map_t:?})"
-    ))
+    Err(no_rewrite())
 }
 
 // ── In-memory index construction ────────────────────────────────────────────
@@ -466,28 +520,44 @@ impl Indexes {
     }
 }
 
-/// Walk every file under `canonical_root` (skipping `.moss/` and `.git/`),
-/// root-relative, forward-slashed.
+/// Every file of the site under `canonical_root`, root-relative and
+/// forward-slashed, as the build's folder walk finds them: a symbolic link is
+/// not followed, and nothing [`left_out_of_site`](crate::build::scan::classify::left_out_of_site) is walked.
 fn walk_all_files(canonical_root: &Path) -> Vec<String> {
     walkdir::WalkDir::new(canonical_root)
         .follow_links(false)
         .into_iter()
+        .filter_entry(|e| crate::build::scan::classify::left_out_of_site(e).is_none())
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| {
-            let rel = e.path().strip_prefix(canonical_root).ok()?.to_string_lossy().replace('\\', "/");
-            if rel.starts_with(".moss/") || rel.starts_with(".git/") {
-                None
-            } else {
-                Some(rel)
-            }
-        })
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| Some(e.path().strip_prefix(canonical_root).ok()?.to_string_lossy().replace('\\', "/")))
         .collect()
 }
 
-fn is_markdown(rel: &str) -> bool {
-    let ext = Path::new(rel).extension().and_then(|e| e.to_str()).unwrap_or("");
-    ext == "md" || ext == "markdown"
+fn is_page(rel: &str) -> bool {
+    crate::build::scan::classify::is_page_path(Path::new(rel))
+}
+
+/// The files whose own links a rename rewrites: the site's pages, the agent
+/// instruction files in the site folder, and every page being moved wherever
+/// it comes from (a hidden folder, a site of its own). The build leaves the
+/// last two out of the site, but their links still have to keep working.
+/// Symbolic links are never followed.
+fn pages_to_rewrite(canonical_root: &Path, site_files: &[String], moves: &[ResolvedMove]) -> Vec<String> {
+    let files_under = |rel: &str, depth: usize| -> Vec<String> {
+        walkdir::WalkDir::new(canonical_root.join(rel))
+            .follow_links(false)
+            .max_depth(depth)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|e| Some(e.path().strip_prefix(canonical_root).ok()?.to_string_lossy().replace('\\', "/")))
+            .collect()
+    };
+    let agent_files = files_under("", 1).into_iter().filter(|p| crate::build::scan::classify::is_agent_config_name(p));
+    let moved = moves.iter().flat_map(|m| files_under(&m.old, usize::MAX));
+    let mut seen = HashSet::new();
+    site_files.iter().cloned().chain(agent_files).chain(moved).filter(|p| is_page(p) && seen.insert(p.clone())).collect()
 }
 
 fn root_relative_existing(canonical_root: &Path, abs: &Path) -> Result<String, String> {
@@ -570,30 +640,29 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
     let post_files: Vec<String> = pre_files.iter().map(|p| map_path(p, &expanded)).collect();
 
     let idx_pre = Indexes::build(&pre_files);
-    let assets_pre = GraphAssetIndex(&idx_pre.graph);
     let urls_pre = NoUrlIndex;
-    let ctx_pre = ReferenceContext { assets: &assets_pre, folders: &idx_pre.folders, urls: &urls_pre };
+    let ctx_pre = ReferenceContext { assets: &idx_pre.graph, folders: &idx_pre.folders, urls: &urls_pre };
 
     let idx_post = Indexes::build(&post_files);
-    let assets_post = GraphAssetIndex(&idx_post.graph);
     let urls_post = NoUrlIndex;
-    let ctx_post = ReferenceContext { assets: &assets_post, folders: &idx_post.folders, urls: &urls_post };
+    let ctx_post = ReferenceContext { assets: &idx_post.graph, folders: &idx_post.folders, urls: &urls_post };
+
+    let addresses = Addresses::new(&canonical_root, &pre_files, &post_files);
 
     let mut edits: Vec<PlannedEdit> = Vec::new();
-    for rel in pre_files.iter().filter(|r| is_markdown(r)) {
+    for rel in &pages_to_rewrite(&canonical_root, &pre_files, &resolved) {
         let abs = canonical_root.join(rel);
         let source = match std::fs::read_to_string(&abs) {
             Ok(s) => s,
             Err(_) => continue,
         };
         let from_source_post = map_path(rel, &expanded);
-        let from_dir_pre = dirname(rel);
 
         for rr in extract_md_references(&source) {
             if let Some(new_text) = plan_one_ref(
                 &rr.text,
                 ref_route(&rr.syntax),
-                from_dir_pre,
+                dest_form(&source, &rr),
                 rel,
                 &from_source_post,
                 &ctx_pre,
@@ -601,6 +670,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
                 &idx_pre.graph,
                 &idx_post.graph,
                 &expanded,
+                &addresses,
             )? {
                 edits.push(PlannedEdit {
                     file: from_source_post.clone(),
@@ -616,7 +686,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
             if let Some(new_path_text) = plan_one_ref(
                 &span.path,
                 RefRoute::AssetOrEmbed,
-                from_dir_pre,
+                DestForm::Bare,
                 rel,
                 &from_source_post,
                 &ctx_pre,
@@ -624,6 +694,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
                 &idx_pre.graph,
                 &idx_post.graph,
                 &expanded,
+                &addresses,
             )? {
                 let new_value = render_bare_value(&span.container, span.quote, &new_path_text, &span.attrs);
                 edits.push(PlannedEdit {
@@ -642,137 +713,6 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
         moves: resolved.into_iter().map(|m| PlannedMove { old_path: m.old, new_path: m.new, is_dir: m.is_dir }).collect(),
         edits,
     })
-}
-
-/// Apply a [`RenamePlan`]: OS-rename every entry (via `rename_entry_inner`,
-/// which carries a folder's self-named home file the same way a plain
-/// rename does), then write exactly the planned edits. Before writing each
-/// file, every one of its edits must still match its recorded position and
-/// text — a mismatch (the file changed since planning) skips the WHOLE file
-/// rather than clobbering it or guessing a new position.
-pub fn apply_planned_moves(project_root: &Path, plan: &RenamePlan) -> Result<RenameApplyResult, String> {
-    let canonical_root =
-        std::fs::canonicalize(project_root).map_err(|e| format!("Cannot canonicalize root: {}", e))?;
-
-    for mv in &plan.moves {
-        let old_abs = canonical_root.join(&mv.old_path);
-        let new_abs = canonical_root.join(&mv.new_path);
-        crate::vault::fs::rename_entry_inner(
-            &canonical_root,
-            &old_abs.to_string_lossy(),
-            &new_abs.to_string_lossy(),
-        )?;
-    }
-
-    let mut file_order: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for e in &plan.edits {
-        if seen.insert(e.file.clone()) {
-            file_order.push(e.file.clone());
-        }
-    }
-
-    let mut applied_edits = Vec::new();
-    let mut skipped = Vec::new();
-    for file in file_order {
-        let file_edits: Vec<&PlannedEdit> = plan.edits.iter().filter(|e| e.file == file).collect();
-        let abs = canonical_root.join(&file);
-        let source = match std::fs::read_to_string(&abs) {
-            Ok(s) => s,
-            Err(_) => {
-                skipped.push(SkippedFile { file, reason: "file not found after the move".to_string() });
-                continue;
-            }
-        };
-        let stale = file_edits.iter().any(|e| source.get(e.byte_from..e.byte_to) != Some(e.old_text.as_str()));
-        if stale {
-            skipped.push(SkippedFile { file, reason: "reference text changed since planning".to_string() });
-            continue;
-        }
-        let to_apply: Vec<Edit> =
-            file_edits.iter().map(|e| Edit { from: e.byte_from, to: e.byte_to, text: e.new_text.clone() }).collect();
-        let rewritten = apply_edits(&source, to_apply);
-        // allow:raw_write the vault's own .md source, rewritten in place after a rename -- not build output
-        std::fs::write(&abs, &rewritten).map_err(|e| format!("Failed to write '{}': {}", abs.display(), e))?;
-        for e in file_edits {
-            applied_edits.push(AppliedEdit {
-                file: file.clone(),
-                byte_from: e.byte_from,
-                byte_to: e.byte_from + e.new_text.len(),
-                old_text: e.old_text.clone(),
-                new_text: e.new_text.clone(),
-            });
-        }
-    }
-
-    Ok(RenameApplyResult { moves: plan.moves.clone(), edits: applied_edits, skipped })
-}
-
-/// Reverse an [`apply_planned_moves`] result: rename every entry back (in
-/// reverse order), then restore each edit's original text — with the same
-/// staleness check, so a page a viewer edited after the rename is skipped
-/// rather than clobbered. Restores the ORIGINAL bytes even when the forward
-/// rewrite escalated a bare reference to an explicit path.
-pub fn undo_applied(project_root: &Path, applied: &RenameApplyResult) -> Result<UndoResult, String> {
-    let canonical_root =
-        std::fs::canonicalize(project_root).map_err(|e| format!("Cannot canonicalize root: {}", e))?;
-
-    // The reverse move-set, built from the CURRENT (post-apply, pre-undo)
-    // file list so the folder-note carry prediction sees the state the
-    // forward apply actually left behind.
-    let current_files = walk_all_files(&canonical_root);
-    let reversed_top: Vec<ResolvedMove> = applied
-        .moves
-        .iter()
-        .map(|m| ResolvedMove { old: m.new_path.clone(), new: m.old_path.clone(), is_dir: m.is_dir })
-        .collect();
-    let expanded_reverse = expand_with_home_carry(&reversed_top, &current_files);
-
-    for mv in applied.moves.iter().rev() {
-        let cur_abs = canonical_root.join(&mv.new_path);
-        let restored_abs = canonical_root.join(&mv.old_path);
-        crate::vault::fs::rename_entry_inner(
-            &canonical_root,
-            &cur_abs.to_string_lossy(),
-            &restored_abs.to_string_lossy(),
-        )?;
-    }
-
-    let mut file_order: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for e in &applied.edits {
-        if seen.insert(e.file.clone()) {
-            file_order.push(e.file.clone());
-        }
-    }
-
-    let mut restored_files = Vec::new();
-    let mut skipped = Vec::new();
-    for post_apply_file in file_order {
-        let pre_apply_file = map_path(&post_apply_file, &expanded_reverse);
-        let file_edits: Vec<&AppliedEdit> = applied.edits.iter().filter(|e| e.file == post_apply_file).collect();
-        let abs = canonical_root.join(&pre_apply_file);
-        let source = match std::fs::read_to_string(&abs) {
-            Ok(s) => s,
-            Err(_) => {
-                skipped.push(SkippedFile { file: pre_apply_file, reason: "file not found while undoing".to_string() });
-                continue;
-            }
-        };
-        let stale = file_edits.iter().any(|e| source.get(e.byte_from..e.byte_to) != Some(e.new_text.as_str()));
-        if stale {
-            skipped.push(SkippedFile { file: pre_apply_file, reason: "reference text changed since the rename".to_string() });
-            continue;
-        }
-        let to_apply: Vec<Edit> =
-            file_edits.iter().map(|e| Edit { from: e.byte_from, to: e.byte_to, text: e.old_text.clone() }).collect();
-        let restored = apply_edits(&source, to_apply);
-        // allow:raw_write undoing a rename's own reference rewrite -- not build output
-        std::fs::write(&abs, &restored).map_err(|e| format!("Failed to write '{}': {}", abs.display(), e))?;
-        restored_files.push(pre_apply_file);
-    }
-
-    Ok(UndoResult { restored_files, skipped })
 }
 
 #[cfg(test)]

@@ -2244,3 +2244,33 @@ fn copy_deferred_assets_places_an_original_from_its_own_file_when_the_cached_cop
     assert_eq!(std::fs::read(&blob).unwrap(), b"placeholder", "the placeholder is left alone");
     assert!(matches!(registry.get("paper.pdf"), Some(AssetState::Ready)), "and registered");
 }
+
+/// A folder with its own `.moss/` is a different site: the copy goes around
+/// it, as the scan does, rather than shipping its files inside this one.
+#[test]
+fn copy_deferred_assets_skips_a_nested_site() {
+    use std::fs;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = tmp.path().join("source");
+    let moss = tmp.path().join(".moss");
+    let staging = moss.join("build/site-stage");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss.join("cache/objects")).unwrap();
+    fs::create_dir_all(source.join("docs")).unwrap();
+    fs::write(source.join("docs/guide.pdf"), b"%PDF-1.4 outer").unwrap();
+    fs::create_dir_all(source.join("shop/.moss")).unwrap();
+    fs::write(source.join("shop/price-list.pdf"), b"%PDF-1.4 inner").unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss.clone(),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+    let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    let _ = copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    let sealed = drained_sealed(rx);
+    let names: Vec<&String> = sealed.files().keys().collect();
+    assert!(names.iter().any(|k| k.ends_with("guide.pdf")), "{names:?}");
+    assert!(!names.iter().any(|k| k.contains("price-list")), "{names:?}");
+}

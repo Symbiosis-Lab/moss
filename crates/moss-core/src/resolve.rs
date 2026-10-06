@@ -2,7 +2,9 @@
 //!
 //! This module provides shared types for the resolve phase of the
 //! build pipeline, a fuzzy path resolver that wraps
-//! [`ContentGraph::resolve_path`](crate::content_graph::ContentGraph::resolve_path),
+//! [`ContentGraph::resolve_path`](crate::content_graph::ContentGraph::resolve_path)
+//! (in `content_graph.rs`, the one function that decides which site file a
+//! target names; `asset_class::resolve_file_target` is its file-reference view),
 //! and the top-level [`resolve_content`] function that ties all phases together.
 //!
 //! **Architectural boundary:** Downstream code (markdown.rs, render.rs) receives

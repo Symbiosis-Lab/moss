@@ -989,11 +989,10 @@ pub fn generate_blocking_content_for_build(
             },
         );
     let mut failed_uid_writes = std::collections::HashSet::new();
-    let asset_index = moss_core::ast::resolve_urls::GraphAssetIndex(&content_graph);
     let folder_index = crate::build::folder_index::NoFolderIndex;
     let url_index = crate::build::folder_index::NoUrlIndex;
     let reference_context = moss_core::resolve::reference::ReferenceContext {
-        assets: &asset_index,
+        assets: &content_graph,
         folders: &folder_index,
         urls: &url_index,
     };

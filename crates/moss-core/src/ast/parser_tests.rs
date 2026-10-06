@@ -1978,6 +1978,23 @@ fn wikilink_pdf_alias_stays_paragraph() {
 }
 
 #[test]
+fn standard_embed_of_a_typed_site_file_stays_paragraph() {
+    // `![alt](thing.glb)` is the standard spelling of `![[thing.glb]]`; the
+    // dispatcher only visits paragraphs, so it must not be promoted either.
+    for md in ["![a model](m/thing.glb)\n", "![400](clip.mp4)\n", "![](paper.pdf)\n"] {
+        assert!(
+            matches!(first_block(md), Block::Paragraph(_)),
+            "{md:?} must stay Paragraph for dispatch"
+        );
+    }
+    // Externals and plain images keep the ordinary figure path.
+    assert!(matches!(
+        first_block("![cap](https://e.com/clip.mp4)\n"),
+        Block::Figure { .. }
+    ));
+}
+
+#[test]
 fn wikilink_extensionless_stays_paragraph() {
     // `![[draft|55%]]` carries no extension intent — only the
     // with-graph dispatcher can resolve its kind, so the parser must

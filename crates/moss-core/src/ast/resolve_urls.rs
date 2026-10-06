@@ -27,35 +27,9 @@ use super::shortcode::Shortcode;
 use super::url::{ResolvedUrl, Url, UrlKind};
 use super::visit::visit_urls_mut;
 use crate::content_graph::ContentGraph;
-use crate::resolve::asset_class::{resolve_asset_ref, AssetIndex, AssetResolution};
-use crate::resolve::fuzzy_path::{resolve_reference_with_percent_fallback, ResolvedRef};
+use crate::resolve::asset_class::{resolve_file_target, AssetResolution};
+use crate::resolve::fuzzy_path::{resolve_reference, ResolvedRef};
 use crate::resolve::{Diagnostic, DiagnosticKind, LinkType, OutgoingLink};
-
-// ---------------------------------------------------------------------------
-// GraphAssetIndex: adapts ContentGraph to the AssetIndex trait so the pure
-// engine (resolve_asset_ref) can run against a real content graph.
-// ---------------------------------------------------------------------------
-
-/// Adapts [`ContentGraph`] to the [`AssetIndex`] trait.
-///
-/// Wraps a borrowed `ContentGraph` so that `resolve_asset_ref` (the pure
-/// shared engine in `moss_core::resolve::asset_class`) can be driven by the
-/// build-time in-memory index — identical to how `FsAssetIndex` in the desktop
-/// app drives it from the live filesystem. Exposed `pub` so integration tests and
-/// editor↔build parity tests can construct both adapters over the same file set.
-pub struct GraphAssetIndex<'a>(pub &'a ContentGraph);
-
-impl<'a> AssetIndex for GraphAssetIndex<'a> {
-    fn contains(&self, p: &str) -> bool {
-        self.0.asset_contains(p)
-    }
-    fn contains_ci(&self, p: &str) -> Option<String> {
-        self.0.asset_contains_ci(p)
-    }
-    fn find_by_suffix(&self, s: &str) -> Vec<String> {
-        self.0.asset_find_by_suffix(s)
-    }
-}
 
 /// What one `resolve_urls` walk learned: the dependency edges the build needs,
 /// and the references it could not resolve. A miss produces a diagnostic and
@@ -79,7 +53,7 @@ pub struct UrlResolution {
 ///   are left untouched (idempotent on a resolved document).
 /// * `graph` — the content graph for bare-filename / cross-page lookups.
 /// * `source_path` — the file containing the URLs, used by
-///   [`resolve_reference_with_percent_fallback`] for relative-path
+///   [`resolve_reference`] for relative-path
 ///   disambiguation. It does NOT enter the emitted URL (see
 ///   [`ContentGraph::pinned_url`]).
 pub fn resolve_urls(
@@ -170,10 +144,10 @@ fn resolve_image_urls(
 /// args (Hero, Gallery). Behavior:
 /// - Already `Url::Resolved` → no-op.
 /// - Pipe-bearing → pass through verbatim (Phase 3 PR3 contract).
-/// - External, anchor, data URLs → pass through (engine returns NotFound for
+/// - External, anchor, data URLs → pass through (the resolver finds no file for
 ///   these, so they fall through to the verbatim passthrough arm).
 /// - Separator-bearing, bare filename, or `/`-absolute → routed through
-///   [`resolve_asset_ref`] (the unified engine). On `Resolved` / `Ambiguous`:
+///   [`resolve_file_target`] (the one resolver, [`ContentGraph::resolve_path`]). On `Resolved` / `Ambiguous`:
 ///   emit the target's pinned URL and push an OutgoingLink. On `NotFound`: keep
 ///   the author's bytes and record a diagnostic — the build never hard-fails on
 ///   an unresolved asset ref, and never invents a path either.
@@ -204,7 +178,7 @@ fn resolve_asset_url(
     }
 
     // External, anchor, and data URLs are not asset filesystem references.
-    // Pass them through before invoking the engine (which only understands
+    // Pass them through before resolving (which only understands
     // filesystem paths) so we don't misinterpret `https://...` as a path.
     if raw.starts_with('#')
         || raw.starts_with("http://")
@@ -218,7 +192,7 @@ fn resolve_asset_url(
     }
 
     // Route ALL remaining refs (bare filenames, separator paths, absolute
-    // `/…` paths) through the unified asset engine. This replaces BOTH the
+    // `/…` paths) through the one resolver. This replaces BOTH the
     // old `is_bare_filename` branch (which called `resolve_reference`) and
     // the old passthrough branch (which emitted the verbatim separator path,
     // causing 404s for cross-directory relative paths).
@@ -230,7 +204,7 @@ fn resolve_asset_url(
     // hover tooltip. The build's job here is only to emit a correct URL; a
     // build-time console warning is a deferred follow-up (would require
     // surfacing provenance to moss-build's build layer).
-    match resolve_asset_ref(&raw, source_path, &GraphAssetIndex(graph)) {
+    match resolve_file_target(&raw, source_path, graph) {
         AssetResolution::Resolved { root_rel, provenance: _ } => {
             pin_asset_url(url, root_rel, alt, graph, found);
         }
@@ -376,7 +350,8 @@ fn resolve_shortcode_image_urls(
 /// Mirrors `markdown_links::resolve_markdown_links`:
 /// - Only touches Link URLs (image URLs were handled in phase 1).
 /// - Resolvable targets (not external / not anchor / not protocol /
-///   not absolute-path / not already-prefixed) → graph lookup.
+///   not already-prefixed, and not a `/…` published address unless it
+///   exactly names a Markdown source file) → graph lookup.
 /// - On `Found`: classify into Internal (markdown) / Asset (binary) and
 ///   push OutgoingLink with target_path = resolved path.
 /// - On `Unresolved`: leave URL author-input; Stage 1 emitted a diagnostic
@@ -445,9 +420,13 @@ fn resolve_link_urls(
             return;
         }
 
-        // Absolute filesystem path — treat as opaque. Mirrors
-        // markdown_links: `if url.starts_with('/') { return false; }`.
-        if raw.starts_with('/') {
+        // A destination starting with `/` is a published address and is kept
+        // as written, except when it exactly names a Markdown source file of
+        // the site (`/notes/alpha.md`): that file is not served under its
+        // source name, so the link resolves to the page like any other path.
+        let (path_part, suffix) = split_path_suffix(&raw);
+        let rooted_page = path_part.strip_prefix('/').filter(|rel| names_page_source(rel, graph));
+        if raw.starts_with('/') && rooted_page.is_none() {
             *link_url = Url::Resolved(ResolvedUrl::new(raw, UrlKind::Internal));
             return;
         }
@@ -465,8 +444,13 @@ fn resolve_link_urls(
         // The sentinel IS the moss-core ↔ moss-build layering seam — the
         // visitor must NOT collapse it to a final `Url::Resolved` or
         // page_map decoding silently breaks.
-        let (path_part, suffix) = split_path_suffix(&raw);
-        match resolve_reference_with_percent_fallback(path_part, graph, source_path) {
+        let target = match rooted_page {
+            // The root address names this one file; no search, no language-tree
+            // scoping from the referencing page.
+            Some(rel) => ResolvedRef::Found(rel.to_string()),
+            None => resolve_reference(path_part, graph, source_path),
+        };
+        match target {
             ResolvedRef::Found(resolved) => {
                 found.outgoing.push(OutgoingLink {
                     target_path: resolved.clone(),
@@ -504,6 +488,16 @@ fn resolve_link_urls(
             }
         }
     });
+}
+
+/// `true` iff `rel` (a site-root path without its leading `/`) is, spelled
+/// exactly, a Markdown source file the graph holds.
+fn names_page_source(rel: &str, graph: &ContentGraph) -> bool {
+    let is_markdown = matches!(
+        crate::path_ext::path_extension(rel).as_deref(),
+        Some("md" | "markdown")
+    );
+    is_markdown && graph.resolve_path(rel, "").as_deref() == Some(rel)
 }
 
 /// Split a URL into (path, suffix) where `suffix` is `?query` and/or

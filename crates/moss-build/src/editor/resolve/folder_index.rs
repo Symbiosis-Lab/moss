@@ -21,7 +21,7 @@
 //! So this index reconstructs both halves from the same three inputs the build
 //! uses — the last build's [`ArticleMap`] (half 1, plus its `dir_overrides`),
 //! the scanned directory set, and the passthrough/language exclusions (half 2).
-//! Every rule is CALLED, never re-implemented: [`crate::build::scan::classify::is_excluded_dir_name`],
+//! Every rule is CALLED, never re-implemented: [`crate::build::scan::classify::left_out_of_site`],
 //! `classify::compute_passthrough_roots`,
 //! `crate::build::site_config::get_build_passthrough`,
 //! [`moss_core::home::is_home_file`],
@@ -125,12 +125,11 @@ impl EditorFolderIndex {
         // home/index markdown file.
         let mut md_home_dirs: HashSet<String> = HashSet::new();
 
-        // Same predicate, same shape as the build scan's WalkDir
-        // (`build/scan/scan.rs`), reached through the crate-root re-export so
-        // there is ONE exclusion rule, not two.
+        // The build scan's own rule for what belongs to the site, so a nested
+        // site or an excluded folder is never a folder here either.
         let walker = walkdir::WalkDir::new(&self.root)
             .into_iter()
-            .filter_entry(|e| !crate::build::scan::classify::is_excluded_walk_entry(e));
+            .filter_entry(|e| crate::build::scan::classify::left_out_of_site(e).is_none());
 
         for entry in walker.flatten() {
             let rel = match entry.path().strip_prefix(&self.root) {

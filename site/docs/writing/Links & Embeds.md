@@ -87,7 +87,7 @@ moss detects circular embeds and stops before an infinite loop.
 
 ## HTML and interactive embeds
 
-Embed an interactive or animated `.html` file (an animation, a small demo, a widget) with the same `![[...]]` syntax:
+Embed an interactive or animated `.html` file (an animation, a small demo, a widget) with the same `![[...]]` syntax (a standard `![](folder-to-site.html)` that points at an HTML file in your site embeds it the same way):
 
 ```markdown
 ![[folder-to-site.html]]

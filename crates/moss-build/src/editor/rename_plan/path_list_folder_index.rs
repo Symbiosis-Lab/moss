@@ -1,10 +1,9 @@
 //! In-memory `FolderIndex` over a plain path list.
 //!
-//! `GraphAssetIndex` (moss-core, already `pub`) adapts `ContentGraph` to
-//! `AssetIndex`; nothing equivalent exists for `FolderIndex`, so this is the
-//! one genuinely new adapter the pure planner needs — everything else
-//! (`resolve_asset_ref`, `classify_reference`, `ContentGraph`) was already
-//! zero-I/O and trait-injected.
+//! A `ContentGraph` built from a path list already serves as the file set
+//! (`ReferenceContext::assets`); nothing equivalent existed for `FolderIndex`,
+//! so this is the one adapter the pure planner needs — everything else
+//! (`classify_reference`, `ContentGraph`) is zero-I/O.
 
 use std::collections::HashSet;
 

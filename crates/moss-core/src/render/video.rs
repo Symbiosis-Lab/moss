@@ -168,16 +168,19 @@ pub fn synthesize_video_html(
         (r#"controls playsinline preload="metadata""#.to_string(), "")
     };
 
+    let label = params.label_attr("aria-label");
+
     if assets.has_hls_for_source(&PathBuf::from(src)) {
         // Ladder form. `src` is deliberately absent — a <video> carrying it
         // ignores its <source> children — and the progressive MP4 is last so a
         // browser with neither native HLS nor hls.js still plays something.
         return format!(
-            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}"><source src="{src}" type="video/mp4"></video>"#,
+            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}"><source src="{src}" type="video/mp4"></video>"#,
             align = align,
             dw = place.data_width_attr,
             size = place.size_style_attr,
             data_loop = data_loop,
+            label = label,
             hls = html_escape_attr(&to_hls_master(src)),
             src = html_escape_attr(&converted_src),
             orig = html_escape_attr(src),
@@ -189,11 +192,12 @@ pub fn synthesize_video_html(
     }
 
     format!(
-        r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop} src="{src}" data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}></video>"#,
+        r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} src="{src}" data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}></video>"#,
         align = align,
         dw = place.data_width_attr,
         size = place.size_style_attr,
         data_loop = data_loop,
+        label = label,
         src = html_escape_attr(&converted_src),
         orig = html_escape_attr(src),
         thumb = html_escape_attr(&thumb),

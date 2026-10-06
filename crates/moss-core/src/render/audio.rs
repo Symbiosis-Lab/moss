@@ -57,8 +57,13 @@ pub fn synthesize_audio_html(
     let align = place.align_suffix();
 
     format!(
-        "<audio class=\"moss-embed moss-embed-audio{}\" data-type=\"audio\"{}{} controls preload=\"metadata\"><source src=\"{}\" type=\"{}\">Your browser does not support the audio tag.</audio>",
-        align, place.data_width_attr, place.size_style_attr, escaped, mime,
+        "<audio class=\"moss-embed moss-embed-audio{}\" data-type=\"audio\"{}{}{} controls preload=\"metadata\"><source src=\"{}\" type=\"{}\">Your browser does not support the audio tag.</audio>",
+        align,
+        place.data_width_attr,
+        params.label_attr("aria-label"),
+        place.size_style_attr,
+        escaped,
+        mime,
     )
 }
 

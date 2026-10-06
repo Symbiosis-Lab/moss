@@ -1,5 +1,5 @@
 use super::*;
-use crate::resolve::asset_class::FakeAssetIndex;
+use crate::content_graph::ContentGraph;
 use crate::resolve::folder_class::FakeFolderIndex;
 use crate::resolve::link_class::FakeUrlIndex;
 
@@ -22,7 +22,7 @@ fn texts(source: &str) -> Vec<String> {
 }
 
 fn missing(source: &str, assets: &[&str]) -> Vec<String> {
-    let assets = FakeAssetIndex::new(assets);
+    let assets = ContentGraph::from_paths(assets);
     let folders = FakeFolderIndex::new();
     let urls = FakeUrlIndex::new();
     let context = ReferenceContext {

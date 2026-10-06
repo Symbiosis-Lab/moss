@@ -100,7 +100,7 @@ fn url_space_offers_deployed_urls_and_generated_pages_only_there() {
 
     let source = complete(root, LinkSyntax::Inline, "", "index.md");
     let got = inserts(&source);
-    assert!(got.contains(&"about"), "source space, exact form: {got:?}");
+    assert!(got.contains(&"about.md"), "source space, relative path to the source file: {got:?}");
     assert!(got.contains(&"notes/"), "folders offered in source space: {got:?}");
     assert!(!got.iter().any(|i| i.starts_with("/tags")), "generated pages need URL space: {got:?}");
 }
@@ -249,8 +249,8 @@ fn a_picked_file_is_always_the_exact_form() {
     let r = picked(root, "img/cover.png", "index.md").unwrap();
     assert_eq!((r.insert.as_str(), r.label.as_str(), r.kind), ("img/cover.png", "cover.png", TargetKind::Asset));
     assert_eq!(r.detail.as_deref(), Some("img/cover.png"));
-    // Outside the page's subtree: rooted.
-    assert_eq!(picked(root, "photos/cover.png", "關於/x.md").unwrap().insert, "/photos/cover.png");
+    // Outside the page's folder: up and over.
+    assert_eq!(picked(root, "photos/cover.png", "關於/x.md").unwrap().insert, "../photos/cover.png");
 }
 
 #[test]

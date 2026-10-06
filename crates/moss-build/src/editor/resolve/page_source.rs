@@ -209,12 +209,7 @@ pub fn detect_home_source_with(
         .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
         .filter_map(|e| e.file_name().into_string().ok())
         .collect();
-    let is_page = |f: &str| {
-        std::path::Path::new(f)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| crate::build::scan::classify::is_page_source(&e.to_lowercase()))
-    };
+    let is_page = |f: &str| crate::build::scan::classify::is_page_path(std::path::Path::new(f));
     // `home: true` markers win over filename rules (folder-rename resilient),
     // mirroring the renderer + build (`compute_home_overrides`). Unreadable
     // markers are held aside as UNKNOWN rather than dropped.

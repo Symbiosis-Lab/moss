@@ -34,31 +34,8 @@ pub fn resolve_reference(reference: &str, graph: &ContentGraph, from_path: &str)
     }
 }
 
-/// [`resolve_reference`], retrying a percent-decoded form once the raw text
-/// has already missed. Obsidian (wikilinks off) writes a percent-encoded
-/// destination for any path with a space or non-ASCII character
-/// (`my%20note.md` for a real "my note.md"); the graph is keyed on real
-/// filesystem names, so such a reference never resolves raw. Decoding is a
-/// fallback, not a rewrite of the input — see [`percent_decoded_fallback`]
-/// for why a file whose name literally contains a `%` is unaffected.
-///
-/// Shared by the build's own link resolution
-/// (`ast::resolve_urls::resolve_link_urls`) and the rename planner's
-/// PageGraph route, so both agree on what a percent-encoded destination
-/// resolves to.
-pub fn resolve_reference_with_percent_fallback(
-    reference: &str,
-    graph: &ContentGraph,
-    from_path: &str,
-) -> ResolvedRef {
-    match resolve_reference(reference, graph, from_path) {
-        ResolvedRef::Unresolved => match percent_decoded_fallback(reference) {
-            Some(decoded) => resolve_reference(&decoded, graph, from_path),
-            None => ResolvedRef::Unresolved,
-        },
-        found => found,
-    }
-}
+/// Another name for [`resolve_reference`], which already retries a percent-decoded target; kept for the rename planner, its last caller.
+pub use self::resolve_reference as resolve_reference_with_percent_fallback;
 
 /// Compute the relative URL from one file to another using pretty URL format.
 ///
@@ -165,48 +142,26 @@ pub fn relative_url(from_path: &str, to_path: &str) -> String {
 /// Use this for binary assets (images, fonts, etc.) and any reference that
 /// should keep its file extension in the URL.
 pub fn relative_asset_path(from_path: &str, to_path: &str) -> String {
-    let from_dir = parent_dir(from_path);
-    let from_parts: Vec<&str> = if from_dir.is_empty() {
-        vec![]
-    } else {
-        from_dir.split('/').collect()
-    };
+    percent_encode_path_segments(&relative_path(from_path, to_path))
+}
 
-    let to_parts: Vec<&str> = if to_path.is_empty() {
-        vec![]
-    } else {
-        to_path.split('/').collect()
-    };
-
-    let common = from_parts
-        .iter()
-        .zip(to_parts.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-
-    let ups = from_parts.len() - common;
-    let remaining = &to_parts[common..];
-
-    let mut result = String::new();
-    for _ in 0..ups {
-        result.push_str("../");
+/// The path from `from_path`'s folder to `to_path`, not encoded: the
+/// components below their shared leading folders, with a `..` for each folder
+/// `from_path` sits deeper than that. Components are compared exactly, so
+/// `關於2/x.png` is not read as living inside `關於`. A target that is
+/// `from_path`'s own folder comes out as its last component.
+pub(crate) fn relative_path(from_path: &str, to_path: &str) -> String {
+    let from = from_path.replace('\\', "/");
+    let to = to_path.replace('\\', "/");
+    let from_dir: Vec<&str> = parent_dir(&from).split('/').filter(|s| !s.is_empty()).collect();
+    let to: Vec<&str> = to.split('/').filter(|s| !s.is_empty()).collect();
+    let common = from_dir.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<&str> = vec![".."; from_dir.len() - common];
+    parts.extend(&to[common..]);
+    if parts.is_empty() {
+        return to.last().map_or_else(String::new, |name| name.to_string());
     }
-    for (i, part) in remaining.iter().enumerate() {
-        if i > 0 {
-            result.push('/');
-        }
-        push_encoded_segment(&mut result, part);
-    }
-
-    if result.is_empty() {
-        // Same directory, just the filename
-        let filename = to_path.rsplit('/').next().unwrap_or(to_path);
-        let mut out = String::new();
-        push_encoded_segment(&mut out, filename);
-        out
-    } else {
-        result
-    }
+    parts.join("/")
 }
 
 /// Percent-encode a path, segment by segment, preserving `/` as the separator.
@@ -229,6 +184,56 @@ pub fn percent_encode_path_segments(path: &str) -> String {
             out.push('/');
         }
         push_encoded_segment(&mut out, segment);
+    }
+    out
+}
+
+/// Percent-encode exactly the characters that would break a Markdown
+/// destination or change what it means: `#`, `?`, `<`, `>`, `|` (it splits a
+/// table cell the link may sit in), control
+/// characters, a `%` that would read as an escape, a backslash before
+/// punctuation, an `&` that would read as an entity, and unbalanced
+/// parentheses, plus spaces outside `<…>`. Everything else, non-ASCII included, is
+/// left raw. This is the one encoder for a path written as a link or image
+/// destination; [`percent_encode_path_segments`] is the stricter one for hrefs.
+pub fn escape_md_destination(path: &str, angle: bool) -> String {
+    // Also inside `<…>`, where CommonMark does not need it: the scanner pairs
+    // parentheses in the whole token, so an unbalanced one would hide the link.
+    let mut unmatched = std::collections::HashSet::new();
+    let mut open: Vec<usize> = Vec::new();
+    for (i, c) in path.char_indices() {
+        match c {
+            '(' => open.push(i),
+            ')' if open.pop().is_none() => {
+                unmatched.insert(i);
+            }
+            _ => {}
+        }
+    }
+    unmatched.extend(open);
+    let mut out = String::with_capacity(path.len());
+    for (i, c) in path.char_indices() {
+        let rest = &path.as_bytes()[i + c.len_utf8()..];
+        let encode = match c {
+            ' ' => !angle,
+            '#' | '?' | '<' | '>' | '|' => true,
+            '(' | ')' => unmatched.contains(&i),
+            '%' => rest.len() >= 2 && rest[0].is_ascii_hexdigit() && rest[1].is_ascii_hexdigit(),
+            '\\' => rest.first().is_some_and(|b| b.is_ascii_punctuation()),
+            '&' => {
+                let name = rest.iter().take_while(|b| b.is_ascii_alphanumeric() || **b == b'#').count();
+                name > 0 && rest.get(name) == Some(&b';')
+            }
+            c => c.is_ascii_control(),
+        };
+        if encode {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
     }
     out
 }
@@ -755,5 +760,48 @@ mod tests {
     fn split_url_path_no_separator_returns_empty_suffix() {
         assert_eq!(split_url_path("plain/path.png"), ("plain/path.png", ""));
         assert_eq!(split_url_path(""), ("", ""));
+    }
+
+    fn md_dest_of(src: &str) -> Option<String> {
+        use pulldown_cmark::{Event, Parser, Tag};
+        Parser::new(src).find_map(|ev| {
+            if let Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) = ev {
+                Some(dest_url.to_string())
+            } else {
+                None
+            }
+        })
+    }
+
+    #[test]
+    fn md_destination_encodes_only_what_breaks_or_changes_a_destination() {
+        assert_eq!(escape_md_destination("my photo.jpg", false), "my%20photo.jpg");
+        assert_eq!(escape_md_destination("a#b?c.png", false), "a%23b%3Fc.png");
+        assert_eq!(escape_md_destination("a|b<c>d.png", false), "a%7Cb%3Cc%3Ed.png");
+        assert_eq!(escape_md_destination("100%.png", false), "100%.png");
+        assert_eq!(escape_md_destination("a%20b.png", false), "a%2520b.png");
+        assert_eq!(escape_md_destination("a&amp;b.png", false), "a%26amp;b.png");
+    }
+
+    #[test]
+    fn md_destination_keeps_balanced_parentheses_and_non_ascii_raw() {
+        assert_eq!(escape_md_destination("笔记 (一).md", false), "笔记%20(一).md");
+        assert_eq!(escape_md_destination("a)b.png", false), "a%29b.png");
+        assert_eq!(escape_md_destination("a(b.png", false), "a%28b.png");
+    }
+
+    #[test]
+    fn md_destination_keeps_a_space_inside_angle_brackets() {
+        assert_eq!(escape_md_destination("a b.md", true), "a b.md");
+    }
+
+    #[test]
+    fn md_destination_parses_back_to_the_original_name() {
+        // The parser leaves percent escapes in place, so compare after decoding them.
+        for name in ["my photo.jpg", "a#b.png", "x (1).png", "笔记 (一).md", "a)b.png", "a(b.png", "50%.png", "a%41.png"] {
+            let enc = escape_md_destination(name, false);
+            let got = md_dest_of(&format!("![x]({enc})")).unwrap_or_default();
+            assert_eq!(percent_decode_path(&got), name, "{name} -> {enc}");
+        }
     }
 }
