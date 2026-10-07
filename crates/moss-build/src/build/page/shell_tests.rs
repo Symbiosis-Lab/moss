@@ -1801,6 +1801,73 @@ fn template_marks_series_nav_as_source_none_in_preview_mode() {
 }
 
 #[test]
+fn template_marks_main_nav_and_nav_island_as_source_none_in_preview_mode() {
+    // The floating nav island is emitted before <header> and contains a
+    // <nav> of its own, so it comes first in the document. Both it and the
+    // main nav are chrome; marking whichever <nav> happens to be first left
+    // the main nav unmarked whenever the island was on.
+    let processor = ShellProcessor::new();
+    let mut vars = make_test_vars(false);
+    vars.body_attrs = " data-moss-preview".to_string();
+    vars.nav_island = concat!(
+        r#"<div class="moss-nav-island"><div class="moss-nav-island-bar">"#,
+        r#"<nav class="moss-nav-island-trail" aria-label="Breadcrumb"></nav>"#,
+        r#"</div></div>"#,
+    )
+    .to_string();
+    let result = processor.process(ShellType::Article, vars);
+    assert!(
+        result.contains(r#"<nav data-source-none class="main-nav container">"#),
+        "main nav must carry data-source-none when the nav island is on"
+    );
+    assert!(
+        result.contains(r#"<div class="moss-nav-island" data-source-none>"#),
+        "the nav island must carry data-source-none"
+    );
+}
+
+#[test]
+fn template_marks_colophon_and_skip_link_as_source_none_in_preview_mode() {
+    let processor = ShellProcessor::new();
+    let mut vars = make_test_vars(false);
+    vars.body_attrs = " data-moss-preview".to_string();
+    let result = processor.process(ShellType::Article, vars);
+    assert!(
+        result.contains(r#"<div class="moss-colophon" data-source-none>"#),
+        "the moss colophon must carry data-source-none"
+    );
+    assert!(
+        result.contains(r#"<a class="moss-skip-link" data-source-none "#),
+        "the skip link must carry data-source-none"
+    );
+}
+
+#[test]
+fn template_marks_site_footer_not_a_body_footer_as_source_none_in_preview_mode() {
+    // A review colophon or an author's raw-HTML <footer> in the article body
+    // comes before the site footer in the document. Only the site footer,
+    // bracketed by its moss:footer bounds, is chrome.
+    let processor = ShellProcessor::new();
+    let mut vars = make_test_vars(false);
+    vars.body_attrs = " data-moss-preview".to_string();
+    vars.content =
+        Some(r#"<p>Text</p><footer class="review-colophon">Reviewed</footer>"#.to_string());
+    vars.footer = Some(
+        "<!-- moss:footer --><footer class=\"container\">\n</footer><!-- /moss:footer -->"
+            .to_string(),
+    );
+    let result = processor.process(ShellType::Article, vars);
+    assert!(
+        result.contains(r#"<footer data-source-none class="container">"#),
+        "the site footer must carry data-source-none"
+    );
+    assert!(
+        result.contains(r#"<footer class="review-colophon">"#),
+        "a footer inside the article body must stay unmarked"
+    );
+}
+
+#[test]
 fn template_series_nav_not_source_none_in_production_mode() {
     let processor = ShellProcessor::new();
     let mut vars = make_test_vars(false);
