@@ -126,6 +126,9 @@ use std::time::{Duration, Instant};
 /// minutes those threads are wedged and more readers would only widen the loss.
 pub const READERS: usize = 8;
 
+/// Background admission is bounded here for every producer.
+pub const BACKGROUND_WAITING: usize = 12;
+
 /// How a file is made local. Injected so the queue and the accounting can be
 /// tested without a cloud provider — on Linux there are no dataless files at
 /// all, so the real implementation would be untestable and every test vacuous.
@@ -404,7 +407,7 @@ impl Prefetcher {
         if q.shutdown {
             return;
         }
-        if !q.pending.insert(path.to_path_buf()) {
+        if q.pending.contains(path) {
             if foreground {
                 if let Some(index) = q.fifo.iter().position(|p| p == path) {
                     if let Some(queued) = q.fifo.remove(index) {
@@ -417,6 +420,10 @@ impl Prefetcher {
             }
             return;
         }
+        if !foreground && q.fifo.len() >= BACKGROUND_WAITING {
+            return;
+        }
+        q.pending.insert(path.to_path_buf());
         if foreground {
             q.foreground.push_back(path.to_path_buf());
         } else {

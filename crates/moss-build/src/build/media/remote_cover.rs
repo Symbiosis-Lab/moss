@@ -116,10 +116,20 @@ fn materialize_one(
     let hash16 = &oid[..oid.len().min(16)];
     let original_sp = ServedPath::for_remote_cover(hash16, ext).ok()?;
 
-    // The encoder needs a real path with a real extension — it can't take
-    // bytes directly (see module doc). `ready_blob` (not `get_path`)
-    // because the CAS can be cloud-synced.
-    let blob_path = objects.ready_blob(oid)?;
+    // The encoder needs a path. This blob is the cover's source, so unlike
+    // optional transform hits it must be requested when only the cloud has it.
+    let blob_path = match objects.ready_blob(oid) {
+        Some(path) => path,
+        None => {
+            if objects.holds(oid) {
+                let source = objects.blob_path(oid);
+                if crate::build::icloud::is_still_in_the_cloud(&source) {
+                    crate::build::cloud_readiness::request_download(&source);
+                }
+            }
+            return None;
+        }
+    };
     let scratch_source = scratch_dir.join(format!("{oid}.{ext}"));
     // `scratch_source`'s name is content-addressed (oid + ext), not a fresh
     // UUID, so a leftover from a prior run can already sit at this exact

@@ -111,7 +111,7 @@ fn cloud_offline_response(
     if !crate::build::icloud::is_still_in_the_cloud(&disk) {
         return None;
     }
-    crate::build::cloud_readiness::request_download(&disk);
+    crate::build::cloud_readiness::request_download_foreground(&disk);
     Response::builder()
         // 503, not 500: the page is temporarily unavailable and will come
         // back, which is exactly what this status means.
@@ -485,21 +485,21 @@ pub async fn start_server(
                     let serves_current = valid_image.is_some()
                         && image_original::serves_current(&current_dir);
                     let image_output = valid_image.as_ref().map(|served| current_dir.join(served.as_str()));
-                    if let Some(output) = image_output.as_ref().filter(|output|
-                        crate::build::icloud::is_still_in_the_cloud(output)) {
-                        let source = serves_current.then(||
-                            image_original::original_in_served_root(&current_dir, &normalized)).flatten();
-                        return image_original::serve_original(source.as_deref().unwrap_or(output), request, is_evicted)
-                            .await.unwrap_or_else(pending_image_response);
-                    }
-                    if serves_current && image_output.as_ref().is_some_and(|output| !output.exists()) {
+                    if serves_current && image_output.as_ref().is_some_and(|output|
+                        !output.exists() || crate::build::icloud::is_still_in_the_cloud(output)) {
+                        if let Some(original) = image_original::recorded_original(&current_dir, &normalized).await {
+                            return original.serve(request, is_evicted)
+                                .await.unwrap_or_else(pending_image_response);
+                        }
                         if let Some(original) = image_original::original_in_served_root(&current_dir, &normalized) {
                             return image_original::serve_original(&original, request, is_evicted)
                                 .await.unwrap_or_else(pending_image_response);
                         }
-                        // No selected-generation source proves this URL. Do
-                        // not borrow a new attempt's registry promise for an
-                        // old page or turn an arbitrary typo into a 503.
+                        if let Some(output) = image_output.as_ref().filter(|output|
+                            crate::build::icloud::is_still_in_the_cloud(output)) {
+                            return image_original::serve_original(output, request, is_evicted)
+                                .await.unwrap_or_else(pending_image_response);
+                        }
                         return source_asset_404();
                     }
 

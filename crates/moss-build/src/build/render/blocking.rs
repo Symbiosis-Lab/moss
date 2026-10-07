@@ -3719,6 +3719,7 @@ pub fn generate_blocking_content_for_build(
         // `media/promise.rs`.
         let items = crate::build::media::promise::promise_image_variants(
             services.and_then(|s| s.assets.as_deref()),
+            pending,
             items,
             project_structure,
             &dir_overrides,

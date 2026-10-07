@@ -655,6 +655,8 @@ pub fn materialize_and_promote(
     } else {
         log::info!("generation {} is already on disk — promoting it without a copy", sealed.generation_id());
     }
+    sealed.write_preview_originals(&mp.generations_dir())
+        .map_err(|e| format!("Failed to write generation original identities: {e}"))?;
     let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     // A generation holding bytes its id does not describe keeps its lock file,

@@ -76,7 +76,7 @@ fn report_once(path: &Path, what: &str) -> bool {
 impl TransformCache {
     /// The one place a record's text is read from disk.
     fn load(&self, path: &Path) -> io::Result<String> {
-        crate::build::cloud_readiness::read_record_text(path)
+        crate::build::io_utils::read_record_file(path)
     }
 
     pub(crate) fn read(&self, source_oid: &str, mode: RecordMode) -> RecordRead {
@@ -116,8 +116,8 @@ impl TransformCache {
             },
             Err(e) if crate::build::icloud::is_definitely_absent(&path, &e) => RecordRead::Absent,
             Err(e) => {
-                // A placeholder that did not arrive is routine and was already
-                // requested; anything else is worth saying once.
+                // An optional cloud record is a cache miss; other read
+                // failures are worth saying once.
                 if !crate::build::icloud::is_offline_not_absent(&path, &e) {
                     report_once(&path, &format!("cannot be read ({e}); it is left as it is"));
                 } else {

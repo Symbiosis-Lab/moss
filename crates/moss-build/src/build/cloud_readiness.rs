@@ -730,16 +730,6 @@ pub fn read_to_string_with_materialize_wait(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-/// Read one cache record's text. A placeholder is requested but the lookup
-/// returns immediately so regeneration can proceed while it downloads.
-pub fn read_record_text(path: &Path) -> std::io::Result<String> {
-    let out = crate::build::io_utils::read_record_file(path);
-    if out.as_ref().is_err_and(|e| icloud::is_offline_not_absent(path, e)) {
-        request_download(path);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -659,3 +659,29 @@ async fn an_unreadable_page_keeps_its_published_address_until_a_fresh_render() {
             .publish_preflight(vault.folder.to_str().unwrap()).unwrap().unresolved_inputs.is_empty());
     }
 }
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generation_original_receipt_flows_from_headless_render_through_promote() {
+    let vault = Vault::new();
+    let source = "Pictures/Portrait, Tomorrow/assets/cover.png";
+    let source_path = vault.folder.join(source);
+    std::fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+    let image = image::RgbImage::from_fn(800, 600, |x, y| {
+        image::Rgb([(x.wrapping_mul(17) ^ y.wrapping_mul(53)) as u8,
+            (x.wrapping_mul(71) ^ y.wrapping_mul(11)) as u8, (x ^ y) as u8])
+    });
+    image.save(&source_path).unwrap();
+    std::fs::write(vault.folder.join("Pictures/Portrait, Tomorrow/Portrait, Tomorrow.md"),
+        "---\ntitle: Portrait\nurl: portrait-display\n---\n\n![portrait](assets/cover.png)\n").unwrap();
+    vault.edit("![portrait](<Pictures/Portrait, Tomorrow/assets/cover.png>)");
+    let generation = vault.promote().await;
+    let path = crate::build::manifest::preview_originals::receipt_path(&vault.mp.generations_dir(), &generation);
+    let receipt: crate::build::manifest::preview_originals::Originals =
+        serde_json::from_slice(&std::fs::read(&path).expect("render and promotion persisted originals")).unwrap();
+    let original = receipt.images.get("pictures/portrait-display/assets/cover.webp")
+        .unwrap_or_else(|| panic!("canonical URL override missing from {:?}", receipt.images.keys().collect::<Vec<_>>()));
+    assert_eq!(original.source, source);
+    assert_eq!(original.oid, crate::build::cache::ObjectStore::hash_file(&source_path).unwrap());
+    assert!(!vault.mp.current_ptr().join(path.file_name().unwrap()).exists(), "receipt is outside the served tree");
+}

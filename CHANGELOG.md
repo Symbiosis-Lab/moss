@@ -33,6 +33,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Image previews can use the original image while a smaller version is being prepared, including when an older page is still open.
+- Cloud folders no longer queue thousands of unnecessary cache downloads; files needed by the current page take priority.
 - Scrollbars now use the browser and operating system defaults on every page and nested scroller, even when link previews are disabled. Vertical pages no longer hide their page bar by default; themes can opt out with the CSS in the theme guide.
 
 - A file whose name starts with a dot, such as `posts/.draft.md`, is no longer published. The file tree and the asset copy already treated it as hidden, but the build still turned a dot-prefixed page into a live address. The first deploy after this change lists those addresses once in the removal check; `moss deploy --accept-removals` confirms.

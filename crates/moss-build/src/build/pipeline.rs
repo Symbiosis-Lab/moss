@@ -222,7 +222,7 @@ fn request_preview_inputs(
             crate::build::cloud_readiness::request_download_foreground(&focused);
         }
     }
-    for shared in [root.join(".moss/config.toml"), root.join(".moss/theme/style.css"), root.join(".moss/theme/script.js")] {
+    for shared in [root.join(".moss/config.toml"), root.join(".moss/places.toml"), root.join(".moss/theme/style.css"), root.join(".moss/theme/script.js")] {
         if crate::build::icloud::is_still_in_the_cloud(&shared) {
             crate::build::cloud_readiness::request_download_foreground(&shared);
         }

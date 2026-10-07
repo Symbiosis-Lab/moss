@@ -5361,6 +5361,8 @@ fn focused_article_and_generated_home_ignore_unrelated_media() {
 fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
     use crate::system::folder_session::{FolderSession, PreviewSource};
     let (dir, _cleanup) = create_test_dir();
+    // The production cache lease pins this record across render and promotion.
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&dir));
     let folder = dir.to_str().unwrap();
     fs::write(dir.join("index.md"), "---\ntitle: Home\nchildren_style: grid\n---\n\n# Home\n\n![Hero](card.jpg)\n").unwrap();
     let story = "---\ntitle: Original Card\ncover: card.jpg\n---\n\n# Story\n\nOriginal story.\n";
@@ -6905,4 +6907,21 @@ fn an_unchanged_warm_build_writes_no_page_to_the_stage() {
 
     let rewritten: Vec<&String> = cold.keys().filter(|page| cold.get(*page) != warm.get(*page)).collect();
     assert!(rewritten.is_empty(), "an unchanged warm build rewrote {rewritten:?}");
+}
+
+#[test]
+fn preview_inputs_request_selected_source_and_shared_essentials() {
+    let root = tempfile::tempdir().unwrap();
+    let names = ["selected.md", ".moss/config.toml", ".moss/places.toml", ".moss/theme/style.css", ".moss/theme/script.js"];
+    let paths: Vec<_> = names.iter().map(|name| root.path().join(name)).collect();
+    let _cloud: Vec<_> = paths.iter().map(|path| crate::build::icloud::pretend::evicted(path)).collect();
+    let requirement = crate::system::folder_session::PreviewRequirement {
+        url_path: "/selected.html".into(),
+        source: crate::system::folder_session::PreviewSource::File("selected.md".into()),
+        revision: 1,
+    };
+    request_preview_inputs(root.path(), Some(&requirement));
+    for path in &paths {
+        assert_eq!(crate::build::icloud::pretend::requests_for(path), 1, "{}", path.display());
+    }
 }

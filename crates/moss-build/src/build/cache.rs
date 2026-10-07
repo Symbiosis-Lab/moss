@@ -1545,6 +1545,14 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
     // may be stored in objects/); a live record's outputs are live.
     let mut referenced_oids: std::collections::HashSet<String> =
         live_source_oids.iter().map(|oid| (*oid).to_string()).collect();
+    for generation in read_dir_strict(&mp.generations_dir()).map_err(|error| unreadable(&mp.generations_dir(), error))? {
+        let path = mp.generation_dir(&generation);
+        if !fs::metadata(&path).map_err(|error| unreadable(&path, error))?.is_dir() { continue; }
+        if let Some(receipt) = crate::build::manifest::preview_originals::Originals::read(&mp.generations_dir(), &generation)
+            .map_err(|error| format!("original identities unreadable: {error}"))? {
+            referenced_oids.extend(receipt.images.into_values().map(|original| original.oid));
+        }
+    }
     let mut condemned_records: Vec<PathBuf> = Vec::new();
     let mut shard_dirs: Vec<PathBuf> = Vec::new();
     // transforms/ab/cd/<source_oid>.json

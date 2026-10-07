@@ -59,25 +59,7 @@ unsafe extern "C" {
 /// to share that issue, but a process-wide I/O policy is not worth crashing
 /// startup over if it does.
 pub fn set_dataless_fail_fast() -> bool {
-    // SAFETY: `setiopolicy_np` is a plain BSD syscall wrapper (no pointers,
-    // no callback, no aliasing concerns) taking three `int`s and returning an
-    // `int`. All three arguments are compile-time constants verified against
-    // the SDK header cited above.
-    let rc = unsafe {
-        setiopolicy_np(
-            IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES,
-            IOPOL_SCOPE_PROCESS,
-            IOPOL_MATERIALIZE_DATALESS_FILES_OFF,
-        )
-    };
-    if rc != 0 {
-        log::warn!(
-            "[iopolicy] setiopolicy_np(MATERIALIZE_DATALESS_FILES, PROCESS, OFF) \
-             returned {rc} — dataless reads will still block on this process"
-        );
-        return false;
-    }
-    true
+    set_policy(IOPOL_SCOPE_PROCESS, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
 }
 
 /// Opt **the calling thread** back in to dataless materialization, overriding
@@ -131,23 +113,20 @@ pub fn set_dataless_fail_fast() -> bool {
 /// still works, but its reads fail `EDEADLK` instead of downloading, which the
 /// prefetch pool reports as a failed materialization rather than a hang.
 pub fn materialize_on_this_thread() -> bool {
-    // SAFETY: as `set_dataless_fail_fast` — a plain BSD syscall wrapper taking
-    // three `int`s, all compile-time constants verified against the SDK header.
-    let rc = unsafe {
-        setiopolicy_np(
-            IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES,
-            IOPOL_SCOPE_THREAD,
-            IOPOL_MATERIALIZE_DATALESS_FILES_ON,
-        )
-    };
-    if rc != 0 {
-        log::warn!(
-            "[iopolicy] setiopolicy_np(MATERIALIZE_DATALESS_FILES, THREAD, ON) \
-             returned {rc} — this worker cannot download evicted files"
-        );
-        return false;
-    }
-    true
+    set_policy(IOPOL_SCOPE_THREAD, IOPOL_MATERIALIZE_DATALESS_FILES_ON)
+}
+
+/// Keep reused blocking-pool workers fail-fast without changing the process
+/// or the dedicated materialization threads. This policy stays on the worker.
+pub fn fail_fast_on_this_thread() -> bool {
+    set_policy(IOPOL_SCOPE_THREAD, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+}
+
+fn set_policy(scope: c_int, policy: c_int) -> bool {
+    // SAFETY: the BSD syscall accepts integer constants from the SDK header.
+    let rc = unsafe { setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, scope, policy) };
+    if rc != 0 { log::warn!("[iopolicy] dataless policy {policy} at scope {scope} failed: {rc}"); }
+    rc == 0
 }
 
 #[cfg(test)]
@@ -158,6 +137,29 @@ mod tests {
     /// the syscall binding links and returns cleanly on this machine.
     #[test]
     fn set_dataless_fail_fast_does_not_panic() {
+        let _serial = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
         let _ = set_dataless_fail_fast();
     }
+
+    #[test]
+    fn generation_original_worker_policy_preserves_process_and_reader_thread() {
+        let _serial = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+        unsafe extern "C" { fn getiopolicy_np(iotype: c_int, scope: c_int) -> c_int; }
+        let policy = |scope| unsafe { getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, scope) };
+        let process = policy(IOPOL_SCOPE_PROCESS);
+        let caller = policy(IOPOL_SCOPE_THREAD);
+        std::thread::spawn(move || {
+            assert!(materialize_on_this_thread());
+            assert_eq!(policy(IOPOL_SCOPE_THREAD), IOPOL_MATERIALIZE_DATALESS_FILES_ON);
+            std::thread::spawn(move || {
+                assert!(fail_fast_on_this_thread());
+                assert_eq!(policy(IOPOL_SCOPE_THREAD), IOPOL_MATERIALIZE_DATALESS_FILES_OFF);
+                assert_eq!(policy(IOPOL_SCOPE_PROCESS), process);
+            }).join().unwrap();
+            assert_eq!(policy(IOPOL_SCOPE_THREAD), IOPOL_MATERIALIZE_DATALESS_FILES_ON);
+        }).join().unwrap();
+        assert_eq!(policy(IOPOL_SCOPE_PROCESS), process);
+        assert_eq!(policy(IOPOL_SCOPE_THREAD), caller);
+    }
+
 }

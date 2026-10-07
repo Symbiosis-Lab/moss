@@ -1,4 +1,4 @@
-//! Resident cached blobs. A cloud placeholder is requested and treated as a
+//! Resident cached blobs. A cloud placeholder is treated as a
 //! cache miss; preview work can regenerate the bytes without waiting for it.
 
 use super::ObjectStore;
@@ -25,14 +25,13 @@ impl ObjectStore {
     }
 
     /// A cached blob usable now, after checking that its bytes match its name.
-    /// A cloud-only shared blob is requested in the background and is a miss
+    /// A cloud-only shared blob is a miss
     /// for this build. The local CAS holds outputs regenerated this run even
     /// when the shared cache refuses a write.
     pub fn ready_blob(&self, oid: &str) -> Option<PathBuf> {
         if !valid_oid(oid) { return None; }
         for path in [self.resident_local_blob(oid), Some(self.blob_path(oid))].into_iter().flatten() {
             if crate::build::icloud::is_still_in_the_cloud(&path) {
-                crate::build::cloud_readiness::request_download(&path);
                 continue;
             }
             if !crate::build::io_utils::output_present(&path) {

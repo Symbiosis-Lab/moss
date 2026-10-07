@@ -2614,6 +2614,8 @@ fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {
     cache.put(&record_with(&"1111".repeat(16), &good), crate::build::cache::RecordMode::Request).expect("record");
     let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&good));
     assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&store.blob_path(&good)), 0);
+    drop(_in_cloud);
     assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait).as_deref(), Some(good.as_str()));
 
     let forged = "ffff".repeat(16);
@@ -2621,6 +2623,8 @@ fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {
     cache.put(&record_with(&"2222".repeat(16), &forged), crate::build::cache::RecordMode::Request).expect("record");
     let _also_in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&forged));
     assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
+    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
+    drop(_also_in_cloud);
     assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
     assert!(!store.blob_path(&forged).exists(), "a blob that fails its checksum is removed");
 }
@@ -2896,7 +2900,7 @@ fn blob_in_the_cloud(store: &ObjectStore, bytes: &[u8]) -> (String, PathBuf, cra
 }
 
 #[test]
-fn link_to_requests_a_blob_in_the_cloud_once_and_links_it_when_it_arrives() {
+fn link_to_observes_a_cloud_blob_without_requesting_it() {
     let (store, _src, oid, dir) = store_with_blob("link_requests_blob", b"the original bytes", b"the original bytes");
     let blob = store.blob_path(&oid);
     let _cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
@@ -2905,9 +2909,11 @@ fn link_to_requests_a_blob_in_the_cloud_once_and_links_it_when_it_arrives() {
     store.link_to(&oid, &target).expect_err("cloud-only cache is a miss for this build");
     assert_eq!(waits_run(), before);
     assert!(!target.exists());
-    store.link_to(&oid, &target).expect("linked after the background request arrived");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 0);
+    drop(_cloud);
+    store.link_to(&oid, &target).expect("linked after an external arrival");
     assert_eq!(fs::read(&target).unwrap(), b"the original bytes");
-    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "one request, no polling loop of requests");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 0, "cache lookup does not request downloads");
 }
 
 #[test]
@@ -2921,7 +2927,7 @@ fn a_blob_in_the_cloud_with_local_bytes_is_placed_from_them_without_waiting() {
     assert_eq!(fs::read(&target).unwrap(), b"the original bytes", "the local file's bytes");
     assert_eq!(waits_run(), before, "no wait for the cloud");
     assert_eq!(fs::read(&blob).unwrap(), b"stand-in", "the placeholder is not touched");
-    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "one background request, so a later build finds it");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 0, "local bytes avoid a cache download");
 }
 
 #[test]
@@ -2936,7 +2942,7 @@ fn a_blob_that_stays_in_the_cloud_never_waits() {
         let err = store.link_to(oid, &target).expect_err("the blob never arrived");
         assert!(err.contains("not resident"), "{err}");
         assert_eq!(waits_run(), before);
-        assert_eq!(crate::build::icloud::pretend::requests_for(blob), 1);
+        assert_eq!(crate::build::icloud::pretend::requests_for(blob), 0);
     }
     assert!(!target.exists(), "nothing half-written at the target");
 }
@@ -2947,7 +2953,8 @@ fn a_blob_that_arrives_with_the_wrong_content_is_not_linked() {
     let blob = store.blob_path(&oid);
     let _cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
     let target = dir.join("out").join("copy.bin");
-    store.link_to(&oid, &target).expect_err("first pass requests the blob");
+    store.link_to(&oid, &target).expect_err("cloud-only blob is a miss");
+    drop(_cloud);
     store.link_to(&oid, &target).expect_err("the arrival does not hash to its name");
     assert!(!target.exists(), "nothing linked");
 }
@@ -2963,12 +2970,12 @@ fn a_blob_in_the_cloud_is_held_without_being_requested() {
 }
 
 #[test]
-fn a_cheap_lookup_of_a_blob_in_the_cloud_requests_it_without_a_warning() {
+fn a_cheap_lookup_of_a_blob_in_the_cloud_is_observational() {
     let (store, _src, oid, _dir) = store_with_blob("cheap_lookup_requests", b"rendered page bytes", b"rendered page bytes");
     let blob = store.blob_path(&oid);
     let _cloud = crate::build::icloud::pretend::evicted(&blob);
     assert_eq!(store.get_path(&oid), None, "recomputed this build");
-    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "asked for, so a later build finds it");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 0, "optional cache lookup does not hydrate history");
     assert!(!logged_at(log::Level::Warn, &oid), "in the cloud is the normal state of a second machine");
 
     let (store, _src, empty, _dir) = store_with_blob("cheap_lookup_empty", b"other bytes", b"");
@@ -3010,4 +3017,45 @@ fn malformed_blob_oid_cannot_read_or_remove_a_file_outside_the_store() {
     assert!(store.get_path(outside.to_str().unwrap()).is_none());
     assert_eq!(std::fs::read(&outside).unwrap(), b"keep source");
     assert_eq!(super::blob_residency::HASH_READS.with(|count| count.get()), 0);
+}
+
+#[test]
+fn a_cloud_record_miss_does_not_request_optional_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TransformCache::new(dir.path().join("transforms"), ObjectStore::new(dir.path().join("objects")));
+    let source = "abcd".repeat(16);
+    let path = cache.record_path(&source);
+    let _cloud = crate::build::icloud::pretend::evicted(&path);
+    crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+    assert!(matches!(cache.read(&source, RecordMode::Request), super::records::RecordRead::Unreadable));
+    assert_eq!(crate::build::icloud::pretend::requests_for(&path), 0);
+}
+
+#[test]
+fn generation_original_receipts_keep_both_cas_replicas_reachable() {
+    let (mp, objects, _) = make_gc_test_dir("generation_original_gc");
+    let generation = "1234567890abcdef";
+    fs::create_dir_all(mp.generation_dir(generation)).unwrap();
+    let oid = "eeee".repeat(16);
+    let orphan = "ffff".repeat(16);
+    for base in [&objects, &mp.cache_local_objects()] {
+        put_object(base, &oid, b"old original");
+        put_object(base, &orphan, b"unreferenced");
+    }
+    let receipt = crate::build::manifest::preview_originals::Originals {
+        generation: generation.into(),
+        images: [("cover.webp".into(), crate::build::manifest::preview_originals::Original {
+            source: "cover.jpg".into(), oid: oid.clone(), size: 12,
+        })].into_iter().collect(),
+    };
+    let lock = crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), generation).unwrap();
+    receipt.bind(&mp.generations_dir()).unwrap();
+    lock.finish();
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).unwrap();
+    assert_eq!(result.objects_removed, 2);
+    for base in [objects, mp.cache_local_objects()] {
+        let store = ObjectStore::new(base);
+        assert!(store.blob_path(&oid).exists());
+        assert!(!store.blob_path(&orphan).exists());
+    }
 }

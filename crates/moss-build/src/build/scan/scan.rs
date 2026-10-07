@@ -285,12 +285,7 @@ pub fn extract_media_metadata(
     // video would record "no dimensions, no colour" as if that were the truth
     // about the file. Ask for it back and leave the fields empty; the watcher
     // rebuilds once it lands.
-    // The ask is deliberately unconditional but *not* unbounded: the scan visits
-    // every media file, and media is the bulk of an evicted vault, so a cold
-    // open of a 700-photo folder asks 700 times. `request_download` holds every
-    // build caller to a global burst cap for exactly this reason — and the
-    // supervisor, which asks in Home-first order, bypasses it so this can never
-    // starve the file the gate is waiting on.
+    // Every producer shares the reader pool's background admission bound.
     let evicted = crate::build::icloud::is_evicted(path);
     if evicted {
         crate::build::cloud_readiness::request_download(path);

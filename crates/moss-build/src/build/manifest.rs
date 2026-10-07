@@ -73,6 +73,8 @@ use ship_source::ShipSource;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+pub(crate) mod preview_originals;
+
 use crate::build::assets::paths::{compute_binary_hash, compute_manifest_generation_id};
 use crate::types::content::{file_entry, SiteHashes};
 
@@ -140,6 +142,7 @@ pub struct PendingManifest {
     input_evidence: Option<crate::build::cloud_ledger::InputEvidence>,
     preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     preview_uses_places: bool,
+    preview_originals: std::collections::BTreeMap<String, Option<String>>,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -338,6 +341,7 @@ impl PendingManifest {
             input_evidence: None,
             preview_embeds: std::collections::BTreeMap::new(),
             preview_uses_places: false,
+            preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
             carried_source_to_output,
@@ -876,6 +880,7 @@ impl PendingManifest {
             input_evidence,
             preview_embeds: self.preview_embeds,
             preview_uses_places: self.preview_uses_places,
+            preview_originals: self.preview_originals,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
@@ -900,6 +905,7 @@ pub struct SealedManifest {
     input_evidence: Option<std::collections::BTreeMap<String, crate::build::cloud_ledger::InputEntry>>,
     preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     preview_uses_places: bool,
+    preview_originals: std::collections::BTreeMap<String, Option<String>>,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).

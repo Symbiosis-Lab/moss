@@ -66,6 +66,27 @@ fn park_the_reader(p: &Prefetcher, seen: &Arc<Mutex<Vec<PathBuf>>>) {
 }
 
 #[test]
+fn background_admission_is_bounded_for_every_producer_and_preserves_demand() {
+    let (m, tx, seen) = gated();
+    let p = Prefetcher::with_materializer(1, m, false);
+    park_the_reader(&p, &seen);
+    for n in 0..3603 {
+        p.read(&PathBuf::from(format!("/vault/background-{n}.jpg")));
+    }
+    assert_eq!(p.snapshot().waiting, BACKGROUND_WAITING);
+    p.read_foreground(Path::new("/vault/requested.md"));
+    assert_eq!(p.snapshot().waiting, BACKGROUND_WAITING + 1);
+    tx.send(()).unwrap();
+    assert!(wait_until(|| !seen.lock().unwrap().is_empty()));
+    assert_eq!(seen.lock().unwrap()[0], PathBuf::from("/vault/requested.md"));
+    for _ in 0..BACKGROUND_WAITING + 1 { let _ = tx.send(()); }
+    assert!(wait_until(|| p.snapshot().done == (BACKGROUND_WAITING + 2) as u64));
+    p.read(Path::new("/vault/previously-rejected.jpg"));
+    assert!(wait_until(|| p.snapshot().in_flight == 1));
+    tx.send(()).unwrap();
+}
+
+#[test]
 fn a_file_handed_over_gets_read() {
     let (m, seen) = recording();
     let p = Prefetcher::with_materializer(2, m, false);

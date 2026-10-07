@@ -48,8 +48,7 @@ pub(crate) fn request_downloads(
         *cursor = 0;
         return;
     }
-    let waiting = crate::build::cloud_readiness::download_snapshot().waiting;
-    let count = pending.len().min(6).min(12usize.saturating_sub(waiting));
+    let count = pending.len().min(6);
     let mut paths: Vec<_> = pending.iter().collect();
     paths.sort();
     for offset in 0..count {

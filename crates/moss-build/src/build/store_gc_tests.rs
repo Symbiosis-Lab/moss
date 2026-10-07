@@ -443,3 +443,14 @@ fn a_symlink_entry_is_never_reused_where_ship_copies_its_target() {
     assert!(dir_holds(tmp.path(), &files, false), "sanity: the entry is present");
     assert!(!dir_holds(tmp.path(), &files, true));
 }
+
+
+#[test]
+fn generation_original_receipt_lifetime_follows_its_generation() {
+    let (_temp, generations) = make_generations(&["old", "current"]);
+    let receipt = crate::build::manifest::preview_originals::receipt_path(&generations, "old");
+    std::fs::write(&receipt, b"receipt").unwrap();
+    gc(&generations, &roots_of(&["current"]), 0).unwrap();
+    assert!(!receipt.exists());
+    assert_eq!(surviving(&generations), vec!["current"]);
+}
