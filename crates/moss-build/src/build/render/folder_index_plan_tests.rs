@@ -72,6 +72,9 @@ fn indexless_language_tree_keeps_its_served_indexes_and_gains_typed_tree_entries
     assert!(story.contains("<title>故事 - Garden</title>"), "a synthetic edition root cannot invent a translated site brand");
     assert!(story.contains(r#"<meta property="og:site_name" content="Garden">"#));
     assert!(story.contains(r#"class="site-name"#) && story.contains(">Garden</a>"));
+    let homepage = fs::read_to_string(output.join("index.html")).unwrap();
+    assert!(homepage.contains(r#"href="/zh-hans/" class="nav-lang-link" hreflang="zh-Hans""#), "a published synthesized front door is reachable from the English edition");
+    assert!(story.contains(r#"href="/" class="nav-lang-link" hreflang="en""#), "the published Chinese edition can return to English");
     let notes = fs::read_to_string(output.join("zh-hans/notes/index.html")).unwrap();
     assert!(notes.contains("zh-hans/"), "breadcrumb and navigation can find the represented root");
 }
@@ -154,4 +157,34 @@ fn pending_page_sources_suppress_only_their_generated_folder_indexes() {
     assert!(folders.contains("empty"), "a genuinely empty directory still gets an index");
     assert!(!folders.contains("pending"), "a pending-only directory cannot masquerade as finished");
     assert!(!folders.contains("mixed"), "a pending authored index cannot be replaced by a synthetic one");
+}
+
+
+#[test]
+fn draft_translation_pair_cannot_publish_a_generated_language_edition() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "index.md", "---\ntitle: Home\n---\n");
+    write(root.path(), "notes/story.md", "---\ntitle: Story\n---\n这是一篇讨论文化与生态之间关系的中文文章，以及这种关系如何影响我们对世界的理解和思考方式。");
+    write(root.path(), "about.md", "---\ntitle: About\nlang: en\ndraft: true\n---\nA draft introduction.");
+    write(root.path(), "about.zh-hans.md", "---\ntitle: 关于\nlang: zh-hans\ndraft: true\n---\n这是介绍页面的草稿。");
+    let (output, documents) = build(root.path());
+    let with_switcher: BTreeSet<&str> = documents.iter().filter(|doc| {
+        fs::read_to_string(output.join(&doc.url_path)).unwrap().contains("nav-lang-toggle")
+    }).map(|doc| doc.url_path.as_str()).collect();
+    assert_eq!(with_switcher, BTreeSet::from(["about/index.html", "zh-hans/about/index.html"]),
+        "authored draft translations keep their links; no generated root publishes their edition");
+    assert!(output.join("zh-hans/index.html").exists(), "the existing served index survives");
+}
+
+#[test]
+fn draft_only_language_tree_cannot_publish_a_generated_language_edition() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "index.md", "---\ntitle: Garden\nlang: en\n---\nAn English homepage.");
+    write(root.path(), "zh-hans/notes/story.md", "---\ntitle: 故事\nlang: zh-hans\ndraft: true\n---\n这是故事草稿。");
+    let (output, documents) = build(root.path());
+    assert!(output.join("zh-hans/index.html").exists(), "draft exclusion must not delete served paths");
+    for doc in &documents {
+        let html = fs::read_to_string(output.join(&doc.url_path)).unwrap();
+        assert!(!html.contains("nav-lang-toggle"), "a draft-only edition cannot add a root fallback on {}", doc.url_path);
+    }
 }

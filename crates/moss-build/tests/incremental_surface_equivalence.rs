@@ -958,3 +958,35 @@ fn a_placeholder_arriving_after_a_cold_build_reaches_every_page_that_shows_the_i
 
     assert_trees_byte_identical("placeholder arrival", &incremental_root, &full_root);
 }
+
+
+#[test]
+fn generated_language_switchers_follow_publish_draft_publish_incrementally() {
+    let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = tempfile::tempdir().unwrap();
+    let incremental_root = tmp.path().join("incremental");
+    let full_root = tmp.path().join("full");
+    let edition = "zh-hans/notes/story.md";
+    for root in [&incremental_root, &full_root] {
+        write(root, ".moss/config.toml", "[site]\nlang = \"en\"\n");
+        write(root, "index.md", "---\ntitle: Garden\nuid: home-en\nlang: en\n---\nAn English homepage.");
+        write(root, "notes/stable.md", "---\ntitle: Stable\nuid: stable-en\nlang: en\n---\nAn unchanged English page.");
+    }
+    for (step, draft) in [false, true, false].into_iter().enumerate() {
+        for root in [&incremental_root, &full_root] {
+            write(root, edition, &format!("---\ntitle: 故事\nuid: story-zh\nlang: zh-hans\ndraft: {draft}\n---\n这是故事。"));
+        }
+        let trigger = if step == 0 { moss_build::build::BuildTrigger::Full }
+            else { moss_build::build::BuildTrigger::ContentOnly(vec![incremental_root.join(edition)]) };
+        let incremental = build(&incremental_root.to_string_lossy(), trigger);
+        assert!(incremental.is_ok(), "incremental step {step}: {incremental:?}");
+        let full = build(&full_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+        assert!(full.is_ok(), "full step {step}: {full:?}");
+        for path in ["index.html", "notes/index.html", "zh-hans/index.html", "zh-hans/notes/index.html"] {
+            let html = std::fs::read_to_string(staging_dir(&incremental_root).join(path)).unwrap();
+            assert_eq!(html.contains("nav-lang-toggle"), !draft,
+                "step {step}: the generated/root switcher must follow published source eligibility on {path}");
+        }
+        assert_trees_byte_identical(&format!("language edition step {step}"), &incremental_root, &full_root);
+    }
+}
