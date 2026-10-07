@@ -66,6 +66,7 @@ async function clickFullscreenButton(page: Page, browserName: string): Promise<v
     await page.locator(".immersive-fullscreen-btn").evaluate((el) => (el as HTMLElement).focus());
     await page.keyboard.press("Enter");
   } else {
+    await page.locator(POSTER).hover();
     await page.locator(".immersive-fullscreen-btn").click();
   }
 }
@@ -232,6 +233,36 @@ test.describe("style:map embed", () => {
     await expect(viewport).toHaveAttribute("data-gesture-mode", "cooperative");
   });
 
+  test("map controls reveal on hover and focus, and remain visible on touch", async ({ page, browser, baseURL }) => {
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    const expand = page.locator(".immersive-fullscreen-btn");
+    const mapControls = page.frameLocator(IFRAME).locator(".moss-places-controls");
+    await expect(expand).toHaveCSS("opacity", "0");
+    await expect(mapControls).toHaveCSS("opacity", "0");
+
+    await page.locator(POSTER).hover();
+    await expect(expand).toHaveCSS("opacity", "1");
+    await expect(mapControls).toHaveCSS("opacity", "1");
+
+    await page.mouse.move(0, 0);
+    await expand.focus();
+    await expect(expand).toHaveCSS("opacity", "1");
+    await mapControls.locator("button").first().focus();
+    await expect(mapControls).toHaveCSS("opacity", "1");
+
+    const touchContext = await browser.newContext({ baseURL, hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+    try {
+      const touchPage = await touchContext.newPage();
+      await touchPage.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+      await waitForSettled(touchPage);
+      await expect(touchPage.locator(".immersive-fullscreen-btn")).toHaveCSS("opacity", "1");
+      await expect(touchPage.frameLocator(IFRAME).locator(".moss-places-controls")).toHaveCSS("opacity", "1");
+    } finally {
+      await touchContext.close();
+    }
+  });
+
   test("the embedded iframe's document is requested exactly once — the wrapper built for the expand/open controls must not re-navigate an already-loaded iframe", async ({ page }) => {
     // Counts actual HTTP document requests, not Playwright's own
     // `framenavigated` event: that event also fires for a same-document
@@ -306,6 +337,8 @@ test.describe("style:map embed", () => {
 
     await clickFullscreenButton(page, browserName);
     await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
+    await page.mouse.move(0, 0);
+    await expect(page.locator(".immersive-fullscreen-btn")).toHaveCSS("opacity", "1");
     const embedFrame = page.frames().find((f) => f.url().includes("place=places%2Flisbon"))!;
     await expect
       .poll(async () => embedFrame.locator("[data-moss-places-explorer]").getAttribute("data-moss-places-embed-mode"))

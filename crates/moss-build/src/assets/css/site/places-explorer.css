@@ -630,6 +630,41 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   gap: 8px;
 }
 
+/* Collapsed embeds keep their zoom and expand controls out of the artwork
+   until hover or keyboard focus. Controls remain in the tab order. Full
+   explorer pages keep their controls visible. */
+[data-moss-places-embed-mode="collapsed"] .moss-places-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+body:not(.immersive-fs-active) figure[data-moss-place-embed] .immersive-fullscreen-btn {
+  opacity: 0;
+  pointer-events: none;
+}
+[data-moss-places-embed-mode="collapsed"]:is(:hover, :focus-within) .moss-places-controls,
+body:not(.immersive-fs-active) figure[data-moss-place-embed]:is(:hover, :focus-within) .immersive-fullscreen-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (hover: none), (pointer: coarse) {
+  [data-moss-places-embed-mode="collapsed"] .moss-places-controls,
+  body:not(.immersive-fs-active) figure[data-moss-place-embed] .immersive-fullscreen-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-moss-places-embed-mode="collapsed"] .moss-places-controls {
+    transition: opacity 160ms ease-out;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body:not(.immersive-fs-active) figure[data-moss-place-embed] .immersive-fullscreen-btn {
+    transition: opacity 160ms ease-out, background 0.15s ease, transform 0.15s ease;
+  }
+}
+
 .moss-places-control,
 .moss-places-capsule,
 .moss-places-chip,
