@@ -19,8 +19,13 @@ function dateKey(work: Work): string {
   return work.date ?? "";
 }
 
-/** Stable row order: date descending, then title. */
-export function byDateDescThenTitle(a: Work, b: Work): number {
+/** Stable row order: weighted works first by `weight` ascending (the author's own order), then date descending, then title. */
+export function byWeightThenDateThenTitle(a: Work, b: Work): number {
+  if (a.weight != null || b.weight != null) {
+    if (a.weight == null) return 1;
+    if (b.weight == null) return -1;
+    if (a.weight !== b.weight) return a.weight - b.weight;
+  }
   const ad = dateKey(a);
   const bd = dateKey(b);
   if (ad !== bd) {
@@ -52,7 +57,7 @@ export function worksForRow(works: Work[], visibleIds: ReadonlySet<string>, scop
     const selected = works.find((work) => work.id === selectedId);
     if (selected) records.push(selected);
   }
-  return records.sort(byDateDescThenTitle);
+  return records.sort(byWeightThenDateThenTitle);
 }
 
 export interface CardCallbacks {
@@ -112,7 +117,7 @@ export class CardRow {
       this.cardEntries.set(work.id, entry);
     }
     // Always re-appended (never only on creation): `works` arrives sorted
-    // (date descending, then title) on every render, and `append` on a
+    // (weight, then date descending, then title) on every render, and `append` on a
     // node already in the document MOVES it rather than duplicating it, so
     // this keeps the row's visible order matching that sort cheaply.
     this.container.append(entry.card);

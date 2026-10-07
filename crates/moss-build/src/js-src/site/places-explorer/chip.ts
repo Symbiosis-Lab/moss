@@ -40,8 +40,9 @@ export interface DisplayCrumb {
   target: Scope | null;
 }
 
-function labelForScope(scope: Scope, places: Place[], strings: PlacesStrings): string {
-  if (scope.kind === "all") return strings.chipAll;
+function labelForScope(scope: Scope, places: Place[], strings: PlacesStrings, switchable: boolean): string {
+  // The root names places, except as the "All articles" half of an article's own scope switch.
+  if (scope.kind === "all") return switchable ? strings.chipAllArticles : strings.chipAll;
   if (scope.kind === "article") return strings.chipThisArticle;
   return places.find((place) => place.id === scope.id)?.name ?? scope.id;
 }
@@ -57,9 +58,10 @@ export function deriveCrumbs(
   ringCount: number | null,
   strings: PlacesStrings,
   lang: string,
+  switchable = false,
 ): DisplayCrumb[] {
   const trail: DisplayCrumb[] = scopeCrumbs(scope, places).map((crumb) => ({
-    label: labelForScope(crumb, places, strings),
+    label: labelForScope(crumb, places, strings, switchable),
     target: crumb,
   }));
   if (ringCount != null) {
@@ -133,7 +135,7 @@ export class ScopeChip {
     this.lastRenderKey = key;
 
     this.closeMenu();
-    const crumbList = deriveCrumbs(scope, places, ringCount, this.strings, this.lang);
+    const crumbList = deriveCrumbs(scope, places, ringCount, this.strings, this.lang, switchable);
     const terminalIsScope = ringCount == null;
     const children = terminalIsScope ? childrenOf(scope, places, works) : [];
 
@@ -201,7 +203,7 @@ export class ScopeChip {
     button.type = "button";
     button.className = SCOPE_OPTION;
     button.dataset.scope = "all";
-    button.textContent = this.strings.chipAll;
+    button.textContent = this.strings.chipAllArticles;
     button.addEventListener("click", () => {
       this.focusOnNextRender = '[data-scope="all"]';
       this.callbacks.setArticleMode(false);

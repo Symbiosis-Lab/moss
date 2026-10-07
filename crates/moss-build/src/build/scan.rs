@@ -6,6 +6,7 @@
 
 pub mod article_map;
 pub(crate) mod cascade;
+pub(crate) mod case_collision;
 // `classify` stays crate-private; the one symbol an integration test needs
 // (`is_excluded_dir_name`) is re-exported at this crate's own root
 // so external callers don't see the module path.

@@ -67,6 +67,9 @@ struct WorkEntry {
     url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     date: Option<String>,
+    /// The page's `weight:`, the author's own order for a listing. The card row sorts by it before falling back to date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    weight: Option<i32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     byline: Vec<String>,
     /// The page's `author:` names — what a collapsed card shows. The byline
@@ -349,6 +352,7 @@ fn build_entry(
         title: home.title.clone(),
         url: page_url(&home.url_path),
         date: home.date.clone(),
+        weight: home.weight,
         // Byline is authored as inline markdown (often a linked author
         // name, `[Name](/people/name/)`) for the page's own credit line;
         // the explorer's compact card reads it as plain text, never HTML.
@@ -655,6 +659,20 @@ mod tests {
         // byline so a future reviewer sees all four together.
         assert!(work.get("date").is_none(), "{json}");
         assert!(work.get("cover").is_none(), "{json}");
+    }
+
+    /// A page's `weight:` reaches the wire so the card row can follow the author's order, and is absent when the page has none.
+    #[test]
+    fn weight_serializes_when_set_and_is_absent_otherwise() {
+        let mut weighted = standalone("posts/kyoto-report.md", "posts/kyoto-report/", "Kyoto Report", &["Kyoto"]);
+        weighted.weight = Some(7);
+        let plain = standalone("posts/nara-diary.md", "posts/nara-diary/", "Nara Diary", &["Nara"]);
+        let json = emit_places_data(&[weighted, plain], &context(gazetteer()), true, &HashMap::new());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let works = parsed["works"].as_array().unwrap();
+        let by_title = |t: &str| works.iter().find(|w| w["title"] == t).unwrap();
+        assert_eq!(by_title("Kyoto Report")["weight"], 7, "{json}");
+        assert!(by_title("Nara Diary").get("weight").is_none(), "{json}");
     }
 
     /// `byline:` is authored as inline markdown — a linked author name is

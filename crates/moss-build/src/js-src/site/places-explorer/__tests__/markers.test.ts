@@ -89,3 +89,21 @@ describe("MarkerLayer highlight", () => {
     expect(container.querySelector(".moss-places-marker")!.hasAttribute("data-dimmed")).toBe(false);
   });
 });
+
+describe("MarkerLayer ring order", () => {
+  test("an open ring's dots follow weight, the order the card row uses, not id or title", () => {
+    const container = document.createElement("div");
+    const callbacks = { fitPoints: vi.fn(), focusPoint: vi.fn(), selectWork: vi.fn(), scopeRow: vi.fn(), announce: vi.fn(), maxZoom: () => 1 };
+    const layer = new MarkerLayer(container, callbacks, copyFor("en"), "en");
+    const weighted = (id: string, weight: number): Work => ({ ...work(id, []), weight });
+    const works = new Map([["a", weighted("a", 3)], ["b", weighted("b", 1)], ["c", weighted("c", 2)]]);
+    const points = ["a", "b", "c"].map((id) => ({ id, workId: id, x: 100, y: 100, precision: "city" as const }));
+    const camera = { x: 100, y: 100, zoom: 1 };
+    const viewport = { width: 400, height: 300 };
+    layer.render(points, camera, viewport, null, works);
+    container.querySelector<HTMLElement>(".moss-places-marker")!.click();
+    layer.render(points, camera, viewport, null, works);
+    const dots = [...container.querySelectorAll(".moss-places-ring-dot")].map((dot) => dot.getAttribute("aria-label"));
+    expect(dots).toEqual(["b", "c", "a"]);
+  });
+});

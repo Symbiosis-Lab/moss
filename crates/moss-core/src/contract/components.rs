@@ -4096,7 +4096,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-places-chip",
         data_attrs: &[],
-        example_html: r#"<div class="moss-places-chip-trail"><button class="moss-places-chip-crumb">All articles</button></div>"#,
+        example_html: r#"<div class="moss-places-chip-trail"><button class="moss-places-chip-crumb">All places</button></div>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "1",

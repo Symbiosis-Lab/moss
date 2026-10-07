@@ -8,9 +8,10 @@
  * under an in-flight gesture.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { coverCamera, detailMaxZoom, resizeCamera, screenScale, tileDetailMaxZoom, worldToScreen } from "../camera";
+import { coverCamera, detailMaxZoom, openingMaxZoom, resizeCamera, screenScale, tileDetailMaxZoom, worldToScreen } from "../camera";
+import { TileLayer } from "../tiles";
 import { mountPlacesMap } from "../map";
-import { project } from "../projection";
+import { project, WORLD_WIDTH } from "../projection";
 import { readUrlState } from "../state";
 import type { LabelsData, Place, Work } from "../types";
 
@@ -110,6 +111,57 @@ describe("mountPlacesMap — embed seams", () => {
     expect(ready).toBe(true);
   });
 
+  test("places within one region open fitted to them, and Fit all places returns to that view", () => {
+    // Three stations a few degrees apart: the whole-world cover view would draw them as one dot.
+    const region = {
+      works: ["a", "b", "c"].map((id, i) => ({ ...PLACES.works[0], id, places: [`r${i}`], url: `/${id}/` })),
+      places: [[35.7, 139.7], [35.0, 137.0], [34.9, 135.7]].map(([lat, lng], i) => ({ id: `r${i}`, name: `R${i}`, lat, lng, precision: "city", parent: null })),
+    };
+    const { figure } = mount(region);
+    const cover = coverCamera([], VIEWPORT);
+    const opened = readUrlState().camera!;
+    expect(opened.zoom).toBeGreaterThan(cover.zoom * 4);
+    for (const place of region.places) {
+      const screen = worldToScreen(project(place.lat, place.lng), opened, VIEWPORT);
+      expect(screen.x).toBeGreaterThan(0);
+      expect(screen.x).toBeLessThan(VIEWPORT.width);
+      expect(screen.y).toBeGreaterThan(0);
+      expect(screen.y).toBeLessThan(VIEWPORT.height);
+    }
+
+    figure.querySelector<HTMLElement>('[data-control="zoom-out"]')!.click();
+    figure.querySelector<HTMLElement>('[data-control="zoom-out"]')!.click();
+    expect(readUrlState().camera!.zoom).toBeLessThan(opened.zoom);
+    figure.querySelector<HTMLElement>('[data-control="reset"]')!.click();
+    expect(readUrlState().camera!.zoom).toBeCloseTo(opened.zoom, 2);
+  });
+
+  test("places on opposite sides of the globe open on the cover view, and Fit all places returns to it", () => {
+    // Three works in one place and one an ocean away: the cover view pans to the dense side, where a bounds-centred fit would sit in the middle.
+    const spread = {
+      works: ["a", "b", "c", "d"].map((id, i) => ({ ...PLACES.works[0], id, places: [i < 3 ? "s0" : "s1"], url: `/${id}/` })),
+      places: [[0, 160], [0, -170]].map(([lat, lng], i) => ({ id: `s${i}`, name: `S${i}`, lat, lng, precision: "city", parent: null })),
+    };
+    const { figure } = mount(spread);
+    // The cover view pans east, toward the three works; a fit centred on the bounds would sit west of the middle.
+    const opened = readUrlState().camera!;
+    expect(opened.x).toBeGreaterThan(WORLD_WIDTH / 2);
+
+    figure.querySelector<HTMLElement>('[data-control="zoom-in"]')!.click();
+    expect(readUrlState().camera!.zoom).toBeGreaterThan(opened.zoom);
+    figure.querySelector<HTMLElement>('[data-control="reset"]')!.click();
+    const reset = readUrlState().camera!;
+    expect(reset.zoom).toBeCloseTo(opened.zoom, 5);
+    expect(reset.x).toBeCloseTo(opened.x, 1);
+  });
+
+  test("a lone place opens at a regional zoom, not the deepest one", () => {
+    mount();
+    const opened = readUrlState().camera!;
+    expect(opened.zoom).toBeLessThan(detailMaxZoom(VIEWPORT));
+    expect(opened.zoom).toBeGreaterThan(coverCamera([], VIEWPORT).zoom * 4);
+  });
+
   test("camera paint coalesces while wheel input keeps the final camera", () => {
     vi.useFakeTimers();
     try {
@@ -118,7 +170,12 @@ describe("mountPlacesMap — embed seams", () => {
         frames.push(callback);
         return frames.length;
       });
-      const { figure, controller } = mount();
+      // Places spread across the globe: a lone place would open fitted at the zoom ceiling, where a wheel zoom-in changes nothing.
+      const spread = {
+        works: [...PLACES.works, { ...PLACES.works[0], id: "w3", places: ["p2"], url: "/w3/" }],
+        places: [...PLACES.places, { id: "p2", name: "P2", lat: -30, lng: 150, precision: "city", parent: null }],
+      };
+      const { figure, controller } = mount(spread);
       request.mockClear();
       frames.length = 0;
       const world = figure.querySelector<HTMLElement>(".moss-places-world")!;
@@ -523,5 +580,68 @@ describe("mountPlacesMap — the label layer actually reserves the breadcrumb ch
     menuItem?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     expect(figure.querySelector(".moss-places-chip-menu")).toBeNull();
     expect(labelEl!.hidden).toBe(false);
+  });
+});
+
+describe("mountPlacesMap — the opening view of all places and the world layer's resolution", () => {
+  const PLACES = {
+    works: [{ id: "w1", title: "W1", byline: [], authors: [], companions: [], places: ["p1"], date: "2024-01-01", description: "", cover: null, url: "/w1/" }],
+    places: [{ id: "p1", name: "P1", lat: 15, lng: 25, precision: "city", parent: null }],
+  } as any;
+  const WIDE = { width: 1600, height: 500 };
+  type Wait = "ready" | "failed" | "superseded";
+  /** Mounts with each `waitForVisibleTiles` call answering the next of `waits` (the last one repeats), a promise standing for a wait still pending. */
+  function open(...waits: Array<Wait | Promise<Wait>>) {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      width: WIDE.width, height: WIDE.height, top: 0, left: 0, right: WIDE.width, bottom: WIDE.height, x: 0, y: 0, toJSON() {},
+    } as DOMRect);
+    // A tile fetch that never settles keeps its cell in the manifest, as a slow network would; a rejected one marks it failed.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    let call = 0;
+    vi.spyOn(TileLayer.prototype, "waitForVisibleTiles").mockImplementation(() => Promise.resolve(waits[Math.min(call++, waits.length - 1)]));
+    const figure = document.createElement("figure");
+    document.body.append(figure);
+    mountPlacesMap(figure, { worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [TILE_CELL], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, places: PLACES, lang: "en" });
+    return { figure, zoom: () => readUrlState().camera!.zoom };
+  }
+  const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+
+  test("stays within the world layer's ceiling until the tiles under it have decoded", async () => {
+    const { zoom } = open("ready");
+    expect(zoom()).toBeLessThanOrEqual(detailMaxZoom(WIDE) + 1e-2);
+    await settle();
+    expect(zoom()).toBeGreaterThan(detailMaxZoom(WIDE) + 0.1);
+  });
+
+  test("keeps the world-ceiling fit when the tiles fail", async () => {
+    const { zoom } = open("failed");
+    await settle();
+    expect(zoom()).toBeLessThanOrEqual(detailMaxZoom(WIDE) + 1e-2);
+  });
+
+  test("a wait that is superseded is asked again, and the view deepens when that one is ready", async () => {
+    const { zoom } = open("superseded", "ready");
+    await settle();
+    expect(zoom()).toBeGreaterThan(detailMaxZoom(WIDE) + 0.1);
+  });
+
+  test("a reader who pans while the tiles load keeps their view, and Fit all places then goes deep", async () => {
+    let tilesDecoded!: (result: Wait) => void;
+    const { figure, zoom } = open(new Promise<Wait>((resolve) => { tilesDecoded = resolve; }) as never);
+    figure.querySelector<HTMLElement>('[data-control="zoom-out"]')!.click();
+    const panned = zoom();
+    expect(panned).toBeLessThan(detailMaxZoom(WIDE));
+    tilesDecoded("ready");
+    await settle();
+    expect(zoom()).toBeCloseTo(panned, 2);
+    figure.querySelector<HTMLElement>('[data-control="reset"]')!.click();
+    expect(zoom()).toBeGreaterThan(detailMaxZoom(WIDE) + 0.1);
+  });
+
+  test("once tiles are ready the opening view stops at the depth where the bundled data still looks clean", async () => {
+    const { zoom } = open("ready");
+    await settle();
+    expect(zoom()).toBeCloseTo(openingMaxZoom(WIDE), 2);
+    expect(openingMaxZoom(WIDE)).toBeLessThan(tileDetailMaxZoom(WIDE));
   });
 });

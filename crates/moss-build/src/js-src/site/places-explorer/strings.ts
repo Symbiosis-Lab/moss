@@ -30,8 +30,10 @@ export interface PlacesStrings {
   worksInView: string;
   /** Link text to a work's own article. */
   readArticle: string;
-  /** The scope chip's root crumb — every other crumb widens toward this. */
+  /** The scope chip's root crumb — every other crumb widens toward this. Names the places the map shows, not the pages: a site's located pages need not be articles. */
   chipAll: string;
+  /** The "All articles" segment of the "This article | All articles" switch, which exists only on an article's own map. */
+  chipAllArticles: string;
   /** The scope chip's "this article" segment (the article scope's own crumb). */
   chipThisArticle: string;
   /** `aria-label` on the "This article | All articles" switch's group. */
@@ -61,7 +63,8 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "Showing all works again.",
     worksInView: "Works in view",
     readArticle: "Read article",
-    chipAll: "All articles",
+    chipAll: "All places",
+    chipAllArticles: "All articles",
     chipThisArticle: "This article",
     chipScopeGroup: "Which articles to show",
     scopeThisArticle: "Showing only this article.",
@@ -82,7 +85,8 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "已显示全部作品。",
     worksInView: "视野中的作品",
     readArticle: "阅读原文",
-    chipAll: "全部文章",
+    chipAll: "全部地点",
+    chipAllArticles: "全部文章",
     chipThisArticle: "本文",
     chipScopeGroup: "显示哪些文章",
     scopeThisArticle: "只显示本文。",
@@ -103,7 +107,8 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "已顯示全部作品。",
     worksInView: "視野中的作品",
     readArticle: "閱讀原文",
-    chipAll: "全部文章",
+    chipAll: "全部地點",
+    chipAllArticles: "全部文章",
     chipThisArticle: "本文",
     chipScopeGroup: "顯示哪些文章",
     scopeThisArticle: "只顯示本文。",
