@@ -57,7 +57,7 @@ import { rasterizeOrFallback, splitMapSvg } from "./raster";
 import { inScope } from "./scope";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
-import { TileLayer } from "./tiles";
+import { TileLayer, tileFadeOpacity } from "./tiles";
 import * as urlState from "./state";
 import { hasPoint, type Camera, type LabelsData, type PlacesData, type Place, type Point, type Rect, type Scope, type Viewport } from "./types";
 
@@ -122,6 +122,8 @@ export interface PlacesMapController {
   setScope(scope: Scope): void;
   /** The element gestures attach to and `getBoundingClientRect` sizes against — exposed so `embed.ts` can toggle cooperative-gesture mode and observe resizes without map.ts knowing anything about embeds. */
   readonly viewportEl: HTMLElement;
+  /** Waits for the initial viewport's actual paint after embed scope and size are applied. */
+  waitForInitialPaint(): Promise<boolean>;
   /** Switch `gestures.ts` between its ordinary mode (a lone touch pans the map, the only mode the full explorer page ever uses) and cooperative mode (a lone touch defers to the page's own scroll; two fingers pan as well as pinch) — see `gestures.ts`'s own `GestureCallbacks.cooperative` doc. Also reflects the mode onto the viewport as `data-gesture-mode="cooperative"` for `places-explorer.css`'s own `touch-action` rule. */
   setCooperativeGestures(enabled: boolean): void;
   /** Re-clamp is already automatic on every resize (the `ResizeObserver`/`window.resize` listeners below re-run `applyCamera`, which re-clamps zoom/pan around the UNCHANGED camera centre). What is not automatic: a resize that changes the viewport's aspect ratio sharply enough — the embed's own expand/collapse transition, far larger than an ordinary window resize — can leave the current scope's own points outside the new frame even though the camera centre didn't move. Call after such a transition settles; a no-op when every in-scope point is still in view. */
@@ -189,12 +191,17 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   let worldRelease: () => void = () => {};
   let worldRebakeTimer: ReturnType<typeof setTimeout> | null = null;
 
+  function worldBakeIsSharpEnough(unitScale: number, zoom: number): boolean {
+    const targetZoom = Math.min(Math.max(zoom, MIN_ZOOM), WORLD_RASTER_ZOOM_CAP);
+    return worldBakedScale > 0 && unitScale * targetZoom <= worldBakedScale * WORLD_RASTER_REBAKE_RATIO;
+  }
+
   /** Resolves once the world raster is sharp enough for `zoom` — a no-op returning the already-resolved past bake once it is. */
   function rebakeWorld(unitScale: number, zoom: number): Promise<void> {
     if (worldBakePromise) return worldBakePromise;
     const targetZoom = Math.min(Math.max(zoom, MIN_ZOOM), WORLD_RASTER_ZOOM_CAP);
     const targetScale = unitScale * targetZoom;
-    if (worldBakedScale > 0 && targetScale <= worldBakedScale * WORLD_RASTER_REBAKE_RATIO) return Promise.resolve();
+    if (worldBakeIsSharpEnough(unitScale, zoom)) return Promise.resolve();
     worldBakePromise = (async () => {
       try {
         const dpr = Math.min(window.devicePixelRatio || 1, WORLD_RASTER_DPR_CAP);
@@ -754,5 +761,54 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     camera = fitForScope(viewport, freeFrame(viewport));
     applyCamera(true);
   }
-  return { setScope, viewportEl, setCooperativeGestures, refitScopeIfClipped, setCurrentArticle, setArticleMode: (articleOnly) => setArticleMode(articleOnly, articleOnly) };
+  return {
+    setScope,
+    viewportEl,
+    waitForInitialPaint: async () => {
+      // Scope changes and ResizeObserver callbacks can land while a surface is
+      // decoding. Re-read the actual frame after each await; a stale world
+      // bake must never announce readiness for a larger/current viewport.
+      // The world still fills gaps between available cells and under the tile
+      // fade band, so it is a required part of the first paint even when
+      // regional tiles cover the places themselves.
+      while (true) {
+        applyCamera(true);
+        const viewport = getViewport();
+        const awaitedCamera = { ...camera };
+        const unitScale = screenScale({ x: 0, y: 0, zoom: 1 }, viewport);
+        // Capture dependencies before awaiting the world surface. A visible
+        // tile failure can lower the camera's zoom ceiling and hide its own
+        // requirement; the poster must still remain for that original view.
+        const requiresVisibleTiles = tileFadeOpacity(camera, viewport) > 0 && tileLayer.hasManifestTiles(camera, viewport);
+        const visibleTilesReady = requiresVisibleTiles
+          ? tileLayer.waitForVisibleTiles()
+          : Promise.resolve("ready" as const);
+        try {
+          const [, tilesReady] = await Promise.all([rebakeWorld(unitScale, camera.zoom), visibleTilesReady]);
+          if (tilesReady === "failed") return false;
+          if (tilesReady === "superseded") {
+            // A resize can go A→B→A while the old request is pending. The
+            // generation changed regardless of the final geometry, so always
+            // capture and await dependencies for the current frame again.
+            continue;
+          }
+        } catch {
+          return false;
+        }
+        applyCamera(true);
+        const latest = getViewport();
+        if (
+          camera.x !== awaitedCamera.x || camera.y !== awaitedCamera.y || camera.zoom !== awaitedCamera.zoom ||
+          latest.width !== viewport.width || latest.height !== viewport.height
+        ) continue;
+        const latestUnitScale = screenScale({ x: 0, y: 0, zoom: 1 }, latest);
+        if (!worldBakeIsSharpEnough(latestUnitScale, camera.zoom)) continue;
+        return true;
+      }
+    },
+    setCooperativeGestures,
+    refitScopeIfClipped,
+    setCurrentArticle,
+    setArticleMode: (articleOnly) => setArticleMode(articleOnly, articleOnly),
+  };
 }

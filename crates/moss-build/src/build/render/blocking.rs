@@ -186,6 +186,8 @@ fn synthetic_folder_doc(
         nav: hidden_root,
         listed: hidden_root,
         is_place_namespace_root: is_place_root,
+        term_sections: term_index.sections(folder).map(|sections| sections.to_vec()),
+        place_children: term_index.children(folder).map(|children| children.to_vec()),
         ..Default::default()
     }
 }
@@ -1640,6 +1642,14 @@ pub fn generate_blocking_content_for_build(
             doc
         },
     );
+    // The resolved set now contains both authored and synthetic folders.
+    // Stamp every explorer root once so its facade includes the shared places
+    // asset URL that its own map markup renders below.
+    if let Some(hash) = site_config.place_maps.as_ref().and_then(|ctx| ctx.explorer_places_hash()) {
+        for doc in documents.iter_mut().filter(|doc| doc.is_place_namespace_root) {
+            doc.explorer_places_hash = Some(hash.to_string());
+        }
+    }
 
     // The incremental render verdict.
     //
@@ -1712,15 +1722,19 @@ pub fn generate_blocking_content_for_build(
     // carry-forward gate below (keyed on "was anything carried this build")
     // can see it too.
     let homepage_index_sp = ServedPath::from_source("index.html").unwrap();
-    let homepage_carried = documents
+    let homepage_carry_proof = documents
         .iter()
         .find(|d| d.url_path == "index.html")
-        .and_then(|d| d.source_path.as_ref())
-        .is_some_and(|src| {
-            verdict.may_skip(src)
-                && previous_hashes.files.contains_key(homepage_index_sp.as_str())
-                && crate::build::io_utils::output_present(&output_dir.join("index.html"))
+        .and_then(|doc| {
+            crate::build::render::incremental::CarryProof::for_document(
+                doc,
+                &verdict,
+                &previous_hashes,
+                output_dir,
+                &site_url,
+            )
         });
+    let homepage_carried = homepage_carry_proof.is_some();
 
     // Generate HTML files
     //
@@ -1782,23 +1796,28 @@ pub fn generate_blocking_content_for_build(
         // disk in the persistent stage dir, and the previous build's manifest
         // must still carry its entry. Missing either, we render — the skip has
         // to PROVE it is safe, not assume it.
-        let (mut to_render, mut to_carry): (Vec<&ParsedDocument>, Vec<&ParsedDocument>) = documents
+        let (mut to_render, mut to_carry): (
+            Vec<&ParsedDocument>,
+            Vec<(&ParsedDocument, crate::build::render::incremental::CarryProof)>,
+        ) = documents
             .iter()
             .filter(|doc| {
                 !(doc.url_path == "index.html"
                     || (doc.kind == PageKind::Folder && doc.source_path.is_none())
                     || doc.slot_only)
             })
-            .partition(|doc| {
-                let skippable = doc
-                    .source_path
-                    .as_ref()
-                    .is_some_and(|src| verdict.may_skip(src))
-                    && ServedPath::from_source(&doc.url_path).is_ok_and(|sp| {
-                        previous_hashes.files.contains_key(sp.as_str())
-                    })
-                    && crate::build::io_utils::output_present(&output_dir.join(&doc.url_path));
-                !skippable
+            .fold((Vec::new(), Vec::new()), |(mut render, mut carry), doc| {
+                match crate::build::render::incremental::CarryProof::for_document(
+                    doc,
+                    &verdict,
+                    &previous_hashes,
+                    output_dir,
+                    &site_url,
+                ) {
+                    Some(proof) => carry.push((doc, proof)),
+                    None => render.push(doc),
+                }
+                (render, carry)
             });
 
         // Shadow verification. Move the carried set into
@@ -1809,13 +1828,13 @@ pub fn generate_blocking_content_for_build(
         // which is precisely what the verdict exists to avoid.
         let verify_shadow: std::collections::HashSet<String> = if carry_verification.is_some() {
             let shadow: std::collections::HashSet<String> =
-                to_carry.iter().map(|d| d.url_path.clone()).collect();
+                to_carry.iter().map(|(d, _)| d.url_path.clone()).collect();
             log::info!(
                 target: "incremental",
                 "MOSS_INCREMENTAL_VERIFY=1: re-rendering {} carried pages to byte-compare them",
                 shadow.len(),
             );
-            to_render.append(&mut to_carry);
+            to_render.extend(to_carry.drain(..).map(|(doc, _)| doc));
             shadow
         } else {
             std::collections::HashSet::new()
@@ -1883,7 +1902,9 @@ pub fn generate_blocking_content_for_build(
         let rendered: Vec<Result<RenderedPage, BuildStopped>> = to_render
             .par_iter()
             .map(|doc| {
-                let output_file_path = output_dir.join(&doc.url_path);
+                let url_sp = ServedPath::from_source(&doc.url_path)
+                    .map_err(|e| format!("Failed to construct article URL path: {}", e))?;
+                let output_file_path = output_dir.join(url_sp.as_str());
                 let mut og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
                 // `is_homepage` used to be hardcoded false here, so only the
                 // site-default-locale home (rendered separately below, never
@@ -1904,29 +1925,16 @@ pub fn generate_blocking_content_for_build(
                 // the previous build's FINAL (post-slot-injection) bytes, and
                 // they are the only copy of them that survives this build.
                 let carried_previous = if verify_shadow.contains(&doc.url_path) {
-                    match std::fs::read(&output_file_path) {
-                        Ok(prev) => Some((doc.url_path.clone(), prev)),
-                        Err(e) => {
-                            log::warn!(
-                                target: "incremental",
-                                "MOSS_INCREMENTAL_VERIFY: cannot read {} to compare: {e}",
-                                doc.url_path,
-                            );
-                            None
-                        }
-                    }
+                    crate::build::render::incremental::CarryVerification::read_previous(
+                        url_sp.as_str(),
+                        &output_file_path,
+                    )
                 } else {
                     None
                 };
 
-                let url_sp = ServedPath::from_source(&doc.url_path)
-                    .map_err(|e| format!("Failed to construct article URL path: {}", e))?;
                 let source_mapping = match doc.source_path.as_ref() {
-                    Some(src) => {
-                        let url_sp2 = ServedPath::from_source(&doc.url_path)
-                            .map_err(|e| format!("Failed to construct article URL path for mapping: {}", e))?;
-                        Some((src.clone(), url_sp2))
-                    }
+                    Some(src) => Some((src.clone(), url_sp.clone())),
                     None => None,
                 };
                 let page_meta = doc.source_path.as_ref().map(|_| crate::types::content::PageMeta {
@@ -2014,19 +2022,10 @@ pub fn generate_blocking_content_for_build(
             // reused verbatim: the file on disk is literally the previous
             // build's bytes, so its hash is too, and the sealed manifest stays
             // identical to the previous build across the skipped region.
-            for doc in &to_carry {
-                let url_sp = ServedPath::from_source(&doc.url_path)
-                    .map_err(|e| format!("Failed to construct carried URL path: {}", e))?;
-                let Some(entry) = previous_hashes.files.get(url_sp.as_str()).cloned() else {
-                    // Unreachable: the partition above required this entry.
-                    return Err(BuildStopped::from(format!(
-                        "carry-forward lost the manifest entry for {}",
-                        url_sp.as_str()
-                    )));
-                };
-                pending.register_hashed(&url_sp, &entry, HashBucket::Files);
+            for (doc, proof) in &to_carry {
+                proof.register_all(pending);
                 if let Some(src) = doc.source_path.as_ref() {
-                    pending.register_source_mapping(src.clone(), &url_sp);
+                    pending.register_source_mapping(src.clone(), proof.html_path());
                     register_page_source(pending, &page_source_hashes, src);
                     pending.register_page_meta(
                         src.clone(),
@@ -2139,15 +2138,13 @@ pub fn generate_blocking_content_for_build(
     // but no explicit index.md. This implements Principle 2: "Folders and .md
     // files correspond to HTML pages."
     {
-        // The synthetic folder indexes — real directories with no `index.md`.
-        // Outside the skip machinery
-        // entirely (no source document → no facade entry → nothing to carry),
-        // so all of them re-render on every save. That is the target here. How many
-        // there are is a fact about the vault: an earlier count here (171 of
-        // 386 pages) matched neither vault measured since — a 226-post bench
-        // vault and a real 223-page site each emit exactly ONE.
+        // Generated folder documents now share the facade verdict with
+        // authored pages. Carry still proves the previous HTML and any
+        // expected QR output are present in both the manifest and stage tree;
+        // otherwise this loop renders the page from the resolved plan.
         let _phase_auto_index = PhaseTrace::start("render_auto_folder_indexes");
         let mut auto_index_count = 0usize;
+        let mut auto_index_carried = 0usize;
 
         for entry in &folder_plan.entries {
             let folder = &entry.folder;
@@ -2179,6 +2176,29 @@ pub fn generate_blocking_content_for_build(
 
             let auto_url_path = format!("{}/index.html", folder);
             let folder_doc = &documents[entry.document_index];
+            let mut verification_snapshot = None;
+            if let Some(proof) = crate::build::render::incremental::CarryProof::for_document(
+                folder_doc,
+                &verdict,
+                &previous_hashes,
+                output_dir,
+                &site_url,
+            ) {
+                if carry_verification.is_some() {
+                    verification_snapshot =
+                        crate::build::render::incremental::CarryVerification::read_previous(
+                            proof.html_path().as_str(),
+                            &output_dir.join(proof.html_path().as_str()),
+                        )
+                        .map(|(_, previous)| previous);
+                } else {
+                    proof.register_all(pending);
+                    generated_index_urls.push(format!("{}/", folder));
+                    page_count += 1;
+                    auto_index_carried += 1;
+                    continue;
+                }
+            }
             let folder_lang = folder_doc.lang;
             let page_title = folder_doc.title.clone();
             let localized_site_name = render_context.chrome.site_title(Some(folder_doc));
@@ -2224,14 +2244,14 @@ pub fn generate_blocking_content_for_build(
             // `folder_lang`: a role heading is term chrome, and the term's
             // two pages have to say the same word.
             let article_list = crate::build::terms::render_term_sections(
-                term_index.sections(folder),
+                folder_doc.term_sections.as_deref(),
                 &folder_docs,
                 site_lang,
                 render_group,
             )
             .unwrap_or_else(|| render_group(&folder_docs));
             let place_children_html = crate::build::components::place_hierarchy::render_children(
-                term_index.children(folder).unwrap_or(&[]),
+                folder_doc.place_children.as_deref().unwrap_or(&[]),
             )
             .unwrap_or_default();
             // Synthetic folder index: no markdown source, so prepend the shared
@@ -2279,11 +2299,9 @@ pub fn generate_blocking_content_for_build(
                 .map_err(|e| format!("Failed to construct auto-index path: {}", e))?;
             pending.register_unwritten_page(&auto_sp, html_page);
 
-            // …and its QR code, here rather than in the loop below, because a
-            // synthetic index has no entry in `documents` for that loop to walk.
-            // Attribute and file are written together so neither can exist
-            // without the other.
-            qr::emit_share_qr(&auto_url_path, true, &site_url, output_dir, pending)?;
+            if let (Some(verify), Some(previous)) = (carry_verification.as_mut(), verification_snapshot) {
+                verify.record(auto_sp.as_str().to_string(), previous);
+            }
             page_count += 1;
             auto_index_count += 1;
             // Per-folder DEBUG line removed 2026-09-15 (measured ~650
@@ -2293,8 +2311,8 @@ pub fn generate_blocking_content_for_build(
         }
         drop(_phase_auto_index);
         log::info!(
-            target: "timing",
-            "[render] auto folder indexes: {auto_index_count} rendered (none skippable — no source document, so no facade entry to carry)",
+            target: "incremental",
+            "{auto_index_count} generated folder indexes rendered, {auto_index_carried} carried",
         );
         // All vault SHAPE, so measure before optimizing: each index costs in
         // proportion to the children it lists. One flat `posts/` folder of 225
@@ -2472,13 +2490,7 @@ pub fn generate_blocking_content_for_build(
             // neither the homepage's own facade nor any listing group it
             // reads has moved — reuse the previous build's index.html
             // verbatim instead of re-running folder_embed's card synthesis.
-            let Some(entry) = previous_hashes.files.get(homepage_index_sp.as_str()).cloned() else {
-                // Unreachable: `homepage_carried` required this entry to exist.
-                return Err(BuildStopped::from(
-                    "carry-forward lost the manifest entry for index.html".to_string(),
-                ));
-            };
-            pending.register_hashed(&homepage_index_sp, &entry, HashBucket::Files);
+            homepage_carry_proof.as_ref().expect("homepage carry has proof").register_all(pending);
         } else {
             let mut homepage_og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
             let index_html = render_page(&render_context,

@@ -125,6 +125,10 @@ impl PlaceMapRenderContext {
         self
     }
 
+    pub(crate) fn explorer_places_hash(&self) -> Option<&str> {
+        self.explorer_places_hash.as_deref()
+    }
+
     pub fn is_place_key(&self, key: &str) -> bool {
         key == self.namespace || key.starts_with(&format!("{}/", self.namespace))
     }

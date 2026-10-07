@@ -15,13 +15,17 @@
 //! * [`carry_verify`] — the `MOSS_INCREMENTAL_VERIFY=1` falsifier for the
 //!   above: render the carried set anyway and prove the served
 //!   bytes are the same either way.
+//! * [`carry`] — output-side proof that a verdict-approved page can be
+//!   carried without losing its HTML or required QR manifest entry.
 
+pub mod carry;
 pub mod carry_verify;
 pub mod dependents;
 pub mod listing;
 pub mod policy;
 pub mod verdict;
 
+pub use carry::CarryProof;
 pub use carry_verify::CarryVerification;
 pub use policy::IncrementalPolicy;
 pub use verdict::{FullCause, RenderVerdict, VerdictBasis};
