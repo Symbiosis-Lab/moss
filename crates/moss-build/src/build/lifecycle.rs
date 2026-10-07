@@ -337,6 +337,32 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<Pat
     (seq, Some(staging))
 }
 
+/// Reveal a render whose required outputs became ready after its initial
+/// preview decision. A detached tail may do this only while the render it
+/// belongs to is still the newest admitted render.
+pub(crate) fn reveal_render_if_latest(mp: &MossPaths, render: Option<u64>) -> bool {
+    let Some(render) = render else { return false; };
+    let staging = mp.staging_dir();
+    let build_dir = mp.build_dir();
+    let record = lock_for(mp);
+    let mut state = record.state();
+    if state.next_render != render { return false; }
+    if state.shown_render == Some(render) { return false; }
+    let Some(cell) = state.served.clone() else { return false; };
+    // The preview server's cell is process-global and can be re-adopted by a
+    // different folder while this detached tail is waiting. Prove ownership
+    // and switch the pointer under the same write lock so a folder switch
+    // cannot land between the check and the write.
+    let mut served = cell.write().unwrap_or_else(PoisonError::into_inner);
+    if !served.starts_with(&build_dir) { return false; }
+    if *served != staging {
+        *served = staging;
+    }
+    drop(served);
+    state.shown_render = Some(render);
+    true
+}
+
 /// Repoint `current` at `gen_id` unless a newer build already has, and record
 /// that `current` now holds `render`. `Ok(false)` is refused-as-stale.
 ///

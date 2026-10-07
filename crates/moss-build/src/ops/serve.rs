@@ -93,6 +93,7 @@ pub(crate) mod iframe_bridge;
 pub mod invoke;
 pub mod ownership;
 pub mod placeholder;
+mod image_original;
 pub mod port;
 pub mod router;
 pub mod session;

@@ -5510,12 +5510,14 @@ fn generated_places_requires_the_emitted_route_in_this_attempt() {
     let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
     let mut pending = crate::build::manifest::PendingManifest::for_build(Default::default(), evidence);
     let requirement = PreviewRequirement { url_path: "/places/".into(), source: PreviewSource::Generated, revision: 1 };
-    assert_eq!(pending.preview_readiness(&requirement), crate::build::manifest::PreviewReadiness::Missing);
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), crate::build::manifest::PreviewReadiness::Missing);
     let path = crate::build::served_path::ServedPath::from_source("places/index.html").unwrap();
     pending.register(&path, b"<h1>Places</h1>", crate::build::manifest::HashBucket::Files);
-    assert_eq!(pending.preview_readiness(&requirement), crate::build::manifest::PreviewReadiness::Usable);
+    fs::create_dir_all(dir.path().join("places")).unwrap();
+    fs::write(dir.path().join("places/index.html"), b"<h1>Places</h1>").unwrap();
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), crate::build::manifest::PreviewReadiness::Usable);
     let unresolved = PreviewRequirement { source: PreviewSource::Unresolved, ..requirement };
-    assert_eq!(pending.preview_readiness(&unresolved), crate::build::manifest::PreviewReadiness::Pending);
+    assert_eq!(pending.preview_readiness(&unresolved, dir.path()), crate::build::manifest::PreviewReadiness::Pending);
 }
 
 /// Every file under `dir`, as relative path → content hash. The instrument a

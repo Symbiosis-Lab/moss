@@ -1085,10 +1085,7 @@ async fn failed_variant_returns_warning_svg_despite_passthrough_registration() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pending_passthrough_with_unreadable_source_falls_back_to_transparent_stub() {
-    // iCloud-dataless / deleted source: the passthrough source path is
-    // registered but the file is gone. The server must fail GRACEFULLY to
-    // the 1×1 transparent-webp stub (200) — never 404 a chosen <source>.
+async fn pending_passthrough_with_deleted_source_reports_unavailable() {
     use crate::types::assets::AssetRegistry;
     use tempfile::TempDir;
 
@@ -1110,47 +1107,25 @@ async fn pending_passthrough_with_unreadable_source_falls_back_to_transparent_st
     .expect("Server should start");
 
     let url = format!("http://localhost:{}/assets/gone.webp", port);
-    let response = ureq::get(&url)
+    let error = ureq::get(&url)
         .set("Sec-Fetch-Dest", "image")
         .timeout(std::time::Duration::from_secs(5))
         .call()
-        .expect("unreadable passthrough must fall back to stub, not 404");
-    assert_eq!(response.status(), 200, "must never 404 a chosen <source>");
-    let content_type = response.header("content-type").unwrap_or("");
-    assert!(
-        content_type.starts_with("image/webp"),
-        "unreadable source falls back to the transparent-webp stub; got: {}",
-        content_type
-    );
-    let mut body = Vec::new();
-    std::io::Read::read_to_end(&mut response.into_reader(), &mut body).unwrap();
-    let decoded = webp::Decoder::new(&body)
-        .decode()
-        .expect("the HTTP body must be a valid WebP image")
-        .to_image()
-        .to_rgba8();
-    assert_eq!(decoded.dimensions(), (1, 1));
-    assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
+        .expect_err("a deleted original cannot be reported as a loaded image");
+    assert!(matches!(error, ureq::Error::Status(503, _)));
 
     let _ = shutdown_tx.send(());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
-    // The source is READABLE here — the file is right there, full of bytes. Only
-    // the eviction probe says otherwise, which is exactly the macOS case this
-    // branch exists for and the one no Linux filesystem can stage: under the
-    // dataless-fail-fast policy a plain `open` of an evicted file SUCCEEDS, so
-    // `ServeFile` would answer 200 with a full Content-Length and a body that
-    // dies on first poll. A truncated 200 is as unrecoverable for `<picture>` as
-    // the 404 the promise model forbids, so the probe has to be asked BEFORE the open.
-    //
-    // Injecting the verdict is not faking the test: the bytes, the registry, the
-    // router and the response are all real, and the assertion is that a `true`
-    // verdict diverts the request. Without the gate this serves the original and
-    // the test fails.
+    // Hold the real HTTP request until this one source becomes local. A source
+    // that merely exists must not produce an early, truncated 200.
     use crate::types::assets::AssetRegistry;
     use tempfile::TempDir;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static EVICTED: AtomicBool = AtomicBool::new(true);
+    fn evicted(_: &std::path::Path) -> bool { EVICTED.load(Ordering::SeqCst) }
 
     let site = TempDir::new().unwrap();
     let src = TempDir::new().unwrap();
@@ -1162,33 +1137,33 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file.clone());
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    EVICTED.store(true, Ordering::SeqCst);
     let (port, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
-        is_evicted: |_path| true, // the provider has evicted this file's data
+        is_evicted: evicted,
         ..ServeConfig::new(site_dir_state, 60500)
     })
     .await
     .expect("Server should start");
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        EVICTED.store(false, Ordering::SeqCst);
+    });
 
     let url = format!("http://localhost:{}/assets/hero.webp", port);
     let response = ureq::get(&url)
         .set("Sec-Fetch-Dest", "image")
         .timeout(std::time::Duration::from_secs(5))
         .call()
-        .expect("an evicted source must still answer, never 404");
-    assert_eq!(response.status(), 200, "must never 404 a chosen <source>");
+        .expect("the request should complete when its original becomes local");
+    assert_eq!(response.status(), 200);
     assert_eq!(
         response.header("content-type").unwrap_or(""),
-        "image/webp",
-        "an evicted source diverts to the 1x1 transparent stub"
+        "image/jpeg"
     );
     let mut body = Vec::new();
     std::io::Read::read_to_end(&mut response.into_reader(), &mut body).unwrap();
-    assert!(
-        body.len() < 100,
-        "the tiny WebP stub, not the 4096-byte original: got {} bytes",
-        body.len()
-    );
+    assert_eq!(body, vec![9u8; 4096]);
     assert_eq!(
         crate::build::icloud::pretend::requests_for(&source_file),
         1,
@@ -1196,6 +1171,140 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     );
 
     let _ = shutdown_tx.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_image_wait_does_not_hold_page_requests_or_browser_slots() {
+    use crate::types::assets::AssetRegistry;
+    use tempfile::TempDir;
+
+    fn evicted(_: &std::path::Path) -> bool { true }
+    let site = TempDir::new().unwrap();
+    let source = TempDir::new().unwrap();
+    std::fs::write(site.path().join("index.html"), b"ready page").unwrap();
+    let source_file = source.path().join("slow.jpg");
+    std::fs::write(&source_file, b"not yet readable").unwrap();
+    let registry = Arc::new(AssetRegistry::new());
+    registry.set_pending("assets/slow.webp".into(), None, None);
+    registry.set_source_passthrough("assets/slow.webp".into(), source_file);
+    let state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let (port, shutdown) = start_server(ServeConfig {
+        asset_registry: Some(registry),
+        is_evicted: evicted,
+        ..ServeConfig::new(state, 60880)
+    }).await.unwrap();
+
+    let image_url = format!("http://localhost:{port}/assets/slow.webp");
+    let pending = std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let response = ureq::get(&image_url)
+            .timeout(std::time::Duration::from_secs(5)).call();
+        (started.elapsed(), matches!(response, Err(ureq::Error::Status(503, _))))
+    });
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    let page_started = std::time::Instant::now();
+    let page = ureq::get(&format!("http://localhost:{port}/index.html"))
+        .timeout(std::time::Duration::from_secs(2)).call().unwrap();
+    assert_eq!(page.status(), 200);
+    assert!(page_started.elapsed() < std::time::Duration::from_secs(2));
+    let (image_wait, unavailable) = pending.join().unwrap();
+    assert!(unavailable, "a still-evicted image must report a retryable error");
+    assert!(image_wait < std::time::Duration::from_secs(5),
+        "pending media must release its browser connection promptly");
+    let _ = shutdown.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn old_current_image_uses_its_own_original_after_new_registry_is_cleared() {
+    use crate::types::assets::AssetRegistry;
+    use tempfile::TempDir;
+
+    for (index, latest_failed) in [false, true].into_iter().enumerate() {
+        let site = TempDir::new().unwrap();
+        let current = site.path().join(".moss/build.nosync/current");
+        std::fs::create_dir_all(current.join("assets")).unwrap();
+        std::fs::write(current.join("assets/cover.jpg"), b"old original").unwrap();
+        let registry = latest_failed.then(|| {
+            let registry = Arc::new(AssetRegistry::new());
+            registry.set_failed("assets/cover.webp".into(), "new attempt failed".into());
+            registry.set_source_passthrough("assets/cover.webp".into(),
+                site.path().join("new-attempt.jpg"));
+            registry
+        });
+        let state = Arc::new(std::sync::RwLock::new(current));
+        let (port, shutdown) = start_server(ServeConfig {
+            asset_registry: registry,
+            ..ServeConfig::new(state, 60650 + index as u16 * 10)
+        }).await.unwrap();
+        let url = format!("http://localhost:{port}/assets/cover.webp");
+        let response = ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call().unwrap();
+        assert_eq!(response.status(), 200);
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes).unwrap();
+        assert_eq!(bytes, b"old original");
+        let _ = shutdown.send(());
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn old_current_image_waits_for_hidden_cloud_original() {
+    use tempfile::TempDir;
+
+    let site = TempDir::new().unwrap();
+    let current = site.path().join(".moss/build.nosync/current");
+    let assets = current.join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    let stub = assets.join(".cover.jpg.icloud");
+    let original = assets.join("cover.jpg");
+    std::fs::write(&stub, b"cloud placeholder").unwrap();
+    let state = Arc::new(std::sync::RwLock::new(current));
+    let (port, shutdown) = start_server(ServeConfig::new(state, 60760)).await.unwrap();
+    let url = format!("http://localhost:{port}/assets/cover.webp");
+    let arrival = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        std::fs::remove_file(stub).unwrap();
+        std::fs::write(original, b"arrived original").unwrap();
+    });
+    let response = ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call().unwrap();
+    assert_eq!(response.status(), 200);
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes).unwrap();
+    assert_eq!(bytes, b"arrived original");
+    arrival.join().unwrap();
+    let _ = shutdown.send(());
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn waiting_for_hidden_original_stays_on_the_selected_generation() {
+    use tempfile::TempDir;
+
+    let site = TempDir::new().unwrap();
+    let build = site.path().join(".moss/build.nosync");
+    let first = build.join("generations/first");
+    let second = build.join("generations/second");
+    std::fs::create_dir_all(first.join("assets")).unwrap();
+    std::fs::create_dir_all(second.join("assets")).unwrap();
+    std::fs::write(first.join("assets/.cover.jpg.icloud"), b"pending").unwrap();
+    std::fs::write(second.join("assets/cover.jpg"), b"wrong generation").unwrap();
+    let current = build.join("current");
+    std::os::unix::fs::symlink(&first, &current).unwrap();
+    let state = Arc::new(std::sync::RwLock::new(current.clone()));
+    let (port, shutdown) = start_server(ServeConfig::new(state, 60990)).await.unwrap();
+    let arrival = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::fs::remove_file(&current).unwrap();
+        std::os::unix::fs::symlink(&second, &current).unwrap();
+        std::fs::write(first.join("assets/cover.jpg"), b"selected generation").unwrap();
+    });
+    let response = ureq::get(&format!("http://localhost:{port}/assets/cover.webp"))
+        .timeout(std::time::Duration::from_secs(5)).call().unwrap();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes).unwrap();
+    assert_eq!(bytes, b"selected generation");
+    arrival.join().unwrap();
+    let _ = shutdown.send(());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

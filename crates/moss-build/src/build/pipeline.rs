@@ -205,6 +205,7 @@ fn previous_route_present(
                 .is_ok_and(|bytes| format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&bytes)) == hash)
         });
         source_matches && matches_current
+            && crate::build::manifest::required_page_outputs_present(&previous.files, key, current_dir)
     })
 }
 
@@ -1654,7 +1655,7 @@ fn build_inner(
     let request = current_request.as_ref().unwrap_or(&elected_home);
     let prior_route = !(home_substituted && request.url_path == "/")
         && previous_route_present(request, &previous_hashes, &paths.current_ptr());
-    let focused_pending = matches!(pending.preview_readiness(request), crate::build::manifest::PreviewReadiness::Pending);
+    let focused_pending = matches!(pending.preview_readiness(request, &stage_dir), crate::build::manifest::PreviewReadiness::Pending);
     let waiting = focused_pending && !prior_route;
     if focused_pending && prior_route {
         crate::build::lifecycle::protect_current_before_rebuild(&paths);

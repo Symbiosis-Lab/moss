@@ -61,6 +61,11 @@ pub mod link_audit;
 /// Durable record of what the last confirmed publish shipped, one per target
 /// under `.moss/deploy/records/`. The other half of `change_set`'s diff.
 pub mod published_record;
+/// Selected-page input and required-output readiness projections for preview.
+mod preview_readiness;
+pub(crate) use preview_readiness::required_page_outputs_present;
+pub use preview_readiness::PreviewReadiness;
+use preview_readiness::preview_readiness_for;
 /// How `ship_phase` reads one entry's staged bytes: [`ShipSource`] and its accessors.
 mod ship_source;
 use ship_source::ShipSource;
@@ -221,58 +226,6 @@ pub struct PendingManifest {
     unwritten_pages: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewReadiness {
-    Usable,
-    Pending,
-    Missing,
-}
-
-fn preview_readiness_for(
-    files: &HashMap<String, String>,
-    source_to_output: &HashMap<String, String>,
-    evidence: Option<&std::collections::BTreeMap<String, crate::build::cloud_ledger::InputEntry>>,
-    embeds: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-    uses_places: bool,
-    requirement: &crate::system::folder_session::PreviewRequirement,
-    registered: impl Fn(&str) -> bool,
-) -> PreviewReadiness {
-    use crate::build::cloud_ledger::{InputState, unresolved_preview_entries};
-    use crate::system::folder_session::PreviewSource;
-    let Some(evidence) = evidence else { return PreviewReadiness::Pending; };
-    let output = files.keys()
-        .filter(|key| registered(key))
-        .find(|key| crate::build::served_path::served_address(key) == requirement.url_path);
-    if matches!(&requirement.source, PreviewSource::Unresolved) {
-        return PreviewReadiness::Pending;
-    }
-    let mut needed = std::collections::BTreeSet::new();
-    // Authored pages also compose nav and child/card listings from the
-    // corpus. Until the renderer records a narrower per-page metadata read
-    // set, every page depends on the page metadata it could not read.
-    let mut source_pending = false;
-    let mut source_rel = None;
-    if let PreviewSource::File(source) = &requirement.source {
-        let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
-        source_rel = Some(rel.clone());
-        needed.insert(rel.clone());
-        needed.extend(embeds.get(&rel).into_iter().flat_map(|deps| deps.iter().cloned()));
-        source_pending = evidence.get(&rel).is_some_and(|entry|
-            matches!(entry.state, InputState::Pending { .. } | InputState::ReadError { .. }));
-        if let Some(output) = output {
-            if source_to_output.get(&rel).is_none_or(|mapped| mapped != output) {
-                return if source_pending { PreviewReadiness::Pending } else { PreviewReadiness::Missing };
-            }
-        }
-    }
-    let unresolved = unresolved_preview_entries(evidence, &needed, true, uses_places, source_rel.as_deref());
-    if output.is_none() {
-        return if source_pending || !unresolved.is_empty() { PreviewReadiness::Pending }
-            else { PreviewReadiness::Missing };
-    }
-    if unresolved.is_empty() { PreviewReadiness::Usable } else { PreviewReadiness::Pending }
-}
-
 /// Is this `SiteHashes.sources` key in the page half?
 ///
 /// The page half is NOT `source_to_output`'s key set — a slot-only source is a
@@ -413,18 +366,6 @@ impl PendingManifest {
     ) {
         self.preview_embeds = embeds;
         self.preview_uses_places = uses_places;
-    }
-
-    pub(crate) fn preview_readiness(
-        &self,
-        requirement: &crate::system::folder_session::PreviewRequirement,
-    ) -> PreviewReadiness {
-        let evidence = self.input_evidence.as_ref().map(|entry| entry.snapshot());
-        preview_readiness_for(
-            &self.inner.files, &self.inner.source_to_output, evidence.as_ref(),
-            &self.preview_embeds, self.preview_uses_places, requirement,
-            |key| self.touched.contains(key),
-        )
     }
 
     /// Record that `rel_path`'s output could not be verified this build.

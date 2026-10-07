@@ -220,6 +220,46 @@ async fn settle_forces_a_synchronous_seal_before_generation_id_is_read() {
     );
 }
 
+/// A local stylesheet can reach staging only in the deferred asset-copy
+/// worker. The first preview projection must wait; once the merged seal has
+/// its bytes, the matching render may be revealed and promoted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selected_page_with_late_copied_local_stylesheet_becomes_servable() {
+    use crate::system::folder_session::PreviewSource;
+    let vault = Vault::new();
+    vault.session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
+    std::fs::write(vault.folder.join("critical.css"), "body { color: navy; }\n").unwrap();
+    vault.edit("<link rel=\"stylesheet\" href=\"/critical.css\">\n\nready");
+
+    vault.build().await;
+    vault.drained().await;
+    assert!(vault.mp.staging_dir().join("critical.css").is_file(), "deferred copy must land before the seal projection");
+    assert!(std::fs::read_to_string(vault.mp.staging_dir().join("index.html")).unwrap().contains("critical.css"));
+    assert_eq!(*vault.served.read().unwrap(), vault.mp.staging_dir(), "the ready stage should be revealed before the materialize debounce");
+    crate::build::seal_phase::settle(&vault.mp).await;
+
+    assert!(vault.mp.current_generation_id().is_ok(), "a complete selected page should promote");
+    assert_eq!(*vault.served.read().unwrap(), vault.mp.staging_dir(), "the late-ready latest render should be revealed");
+}
+
+/// The selected page cannot promote a generation while its linked local CSS
+/// is absent from the sealed file set and actual served root.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selected_page_with_missing_local_stylesheet_cannot_promote() {
+    use crate::system::folder_session::PreviewSource;
+    let vault = Vault::new();
+    vault.session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
+    vault.edit("<link rel=\"stylesheet\" href=\"/missing.css\">\n\nnot ready");
+
+    vault.build().await;
+    vault.drained().await;
+    assert!(std::fs::read_to_string(vault.mp.staging_dir().join("index.html")).unwrap().contains("missing.css"));
+    crate::build::seal_phase::settle(&vault.mp).await;
+
+    assert!(vault.mp.current_generation_id().is_err(), "a selected route with a missing required stylesheet must not promote");
+    assert!(!vault.mp.hashes().exists(), "a withheld incomplete attempt must not replace the incremental baseline");
+}
+
 /// (f) An app that bounds its quit with a `tokio::time::timeout` around
 /// `settle` must get control back at that bound even while a slow
 /// materialize is still copying. That holds only because the copy runs on

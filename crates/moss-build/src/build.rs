@@ -1909,12 +1909,61 @@ async fn advertise_sealed(
     // here because it is the only thing in this phase that needs one — see
     // `degrade::repair_staged_html` for the four sources and why their order
     // is what it is.
-    let presence_verdict = crate::build::degrade::repair_staged_html(
+    let mut presence_verdict = crate::build::degrade::repair_staged_html(
         mp,
         stage_dir,
         &mut sealed,
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
     );
+    // Background assets have drained. Validate only the selected page's
+    // direct local CSS/script outputs before writing hashes.json or scheduling
+    // promotion; media and unrelated pages do not affect preview readiness.
+    let active_session = session.as_ref().filter(|s| {
+        !s.cancel.is_cancelled()
+            && crate::system::folder_session::registry()
+                .get(folder_path)
+                .is_some_and(|current| std::sync::Arc::ptr_eq(&current, s))
+    });
+    let selected_requirement = active_session.and_then(|s| s.preview_requirement());
+    if matches!(&presence_verdict, crate::build::ship::ShipVerdict::Ship) {
+        if let Some(requirement) = selected_requirement.as_ref() {
+            if let Some(sample) = sealed.mark_missing_preview_outputs(requirement, stage_dir) {
+                presence_verdict = crate::build::ship::ShipVerdict::Withhold(
+                    crate::build::ship::WithholdReason::Unverified {
+                        entries: 1,
+                        sample: vec![sample],
+                    },
+                );
+            }
+        }
+    }
+    let selected_preview_ready = selected_requirement.as_ref().is_some_and(|requirement| {
+        sealed.preview_readiness_with_outputs(requirement, stage_dir)
+            == crate::build::manifest::PreviewReadiness::Usable
+    });
+    if active_session.is_some()
+        && selected_preview_ready
+        && crate::build::lifecycle::reveal_render_if_latest(mp, render_seq)
+    {
+        if ports.events.shell_listening()
+            && crate::build::cloud_readiness::take_gate(folder_path)
+        {
+            let remaining = sealed.unresolved_inputs().len();
+            let provider = crate::build::cloud_provider::detect_from_path(mp.project_root());
+            ports.events.cloud_sync(&crate::build::ports::reporter::CloudSync {
+                folder: folder_path,
+                phase: "home_ready",
+                provider,
+                total: remaining,
+                downloaded: 0,
+                remaining,
+                blocking: None,
+                unavailable: &[],
+                unavailable_count: 0,
+            });
+        }
+        ports.events.stage_ready(stage_dir);
+    }
     // The focused preview may be usable while another page's metadata is
     // still in the cloud. Keep the last complete hashes/generation as the
     // durable baseline until this attempt has read every required input.

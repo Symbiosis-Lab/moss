@@ -43,7 +43,7 @@
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,
         "crates/moss-core/src/schema_fields.rs": 1200,
         "packages/moss-api/src/testing/mock-tauri.ts": 1200,
-        "crates/moss-build/src/build/manifest.rs": 1300,
+        "crates/moss-build/src/build/manifest.rs": 1200,
         "crates/moss-build/src/ops/serve/invoke.rs": 900,
         "crates/moss-build/src/build/terms.rs": 1000,
         "crates/moss-core/src/asset_paths.rs": 1000,
@@ -101,7 +101,7 @@
         "crates/moss-core/src": 41,
         "crates/moss-core/src/ast": 24,
         "crates/moss-core/src/resolve": 16,
-        "crates/moss-build/src/ops/serve": 19,
+        "crates/moss-build/src/ops/serve": 20,
         "crates/moss-build/src/js-src/site/places-explorer": 17,
         "crates/moss-build/src/vault/import/scrape": 17
       },

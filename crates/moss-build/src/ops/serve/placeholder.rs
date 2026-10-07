@@ -17,36 +17,26 @@ pub fn generate_placeholder_svg(dims: Option<(u32, u32)>, color: Option<String>)
     )
 }
 
-/// Tiny 1×1 transparent WebP embedded as a constant. The last-resort,
-/// never-404 fallback body for a Pending image variant whose source
-/// passthrough could not be served (unregistered, or the source read failed —
-/// e.g. a dataless original). This 28-byte lossless image was encoded from a
-/// fully transparent RGBA pixel. A chosen `<source>` must never 404.
-const TRANSPARENT_WEBP_1X1: &[u8] = &[
-    0x52, 0x49, 0x46, 0x46, 0x14, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
-    0x56, 0x50, 0x38, 0x4c, 0x08, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00,
-    0x10, 0x88, 0x88, 0x08,
-];
-
-/// Build the 1×1 transparent-webp stub response. The router calls this as the
-/// graceful fallback when a registered source-passthrough hand-off fails
-/// (missing/dataless/unreadable source) so a chosen `<source>` never 404s.
-pub fn transparent_stub_response() -> Response<Body> {
+/// A source that could not become readable within its request's bounded wait.
+/// The browser treats this as an image error, so the existing preview-only
+/// blueprint can stand in without falsely reporting a loaded image.
+pub fn pending_image_response() -> Response<Body> {
     use axum::http::{header, StatusCode};
     Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "image/webp")
+        .status(StatusCode::SERVICE_UNAVAILABLE)
         .header(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")
-        .body(Body::from(TRANSPARENT_WEBP_1X1.to_vec()))
+        .header(header::RETRY_AFTER, "2")
+        .body(Body::empty())
         .unwrap()
 }
 
-/// Returns `true` when the request path looks like an image variant URL
-/// (`.webp` / `.avif`) — these fall back to the transparent-webp stub, while
+/// Returns `true` when the request path names an image — these return a
+/// retryable error after the source wait, while
 /// a Pending non-image (video) URL uses the SVG-with-rect placeholder.
-fn is_image_variant_url(path: &str) -> bool {
+pub(super) fn is_image_variant_url(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    lower.ends_with(".webp") || lower.ends_with(".avif")
+    [".webp", ".avif", ".jpg", ".jpeg", ".png", ".gif", ".svg"]
+        .iter().any(|ext| lower.ends_with(ext))
 }
 
 /// Build the warning-SVG response body for a Failed asset. The user only
@@ -114,10 +104,9 @@ fn generate_failed_svg(error: &str) -> String {
 ///
 /// Response shape per state:
 /// - File exists on disk → `None` (let ServeDir handle it).
-/// - `Pending` + image variant URL (`.webp`/`.avif`) → 200 with the 1×1
-///   transparent-webp stub. Deliberately something the author can NEVER mistake
-///   for their own image; it exists only so a chosen `<source>` never 404s.
-///   An LQIP is never served here — see the two-audiences rule above.
+/// - `Pending` + image variant URL (`.webp`/`.avif`) → 503 when no readable
+///   original can be served. The preview's existing image-error handler shows
+///   its grid; no successful response may contain substitute image bytes.
 /// - `Pending` + other URL → 200 with SVG placeholder (video path — the
 ///   derived poster `to_thumb` has no source equivalent, so it stays a brief
 ///   gray poster until playback loads the passthrough original).
@@ -127,10 +116,9 @@ fn generate_failed_svg(error: &str) -> String {
 /// - Unknown (not registered) → `None` (ServeDir → 404).
 ///
 /// All placeholder/warning responses carry `Cache-Control: no-cache,
-/// no-store, must-revalidate` (RFC 9111 § 5.2.2.5) so the browser refetches
-/// when the iframe-bridge sideband signals the asset is ready and mutates
-/// the matching `<source srcset>` to trigger fresh source-set selection
-/// (HTML spec § reacting-to-dom-mutations).
+/// no-store, must-revalidate` (RFC 9111 § 5.2.2.5). The iframe bridge swaps
+/// encoded outputs on `AssetReady`; after a 503 the preview's existing image
+/// fallback retries its own URL until the original is readable.
 pub fn handle_asset_request(
     request_path: &str,
     asset_registry: &crate::types::assets::AssetRegistry,
@@ -167,12 +155,11 @@ pub fn handle_asset_request(
                 // Image variant last resort: the router's source passthrough
                 // serves the real original for a Pending variant before this
                 // runs. We only reach here when the original could not be read
-                // or was never registered; return the 1×1 transparent-webp stub
-                // so a chosen <source> never 404s. Nothing that
-                // resembles the author's image is ever served in its place.
+                // or was never registered; report temporary unavailability so
+                // the browser's image-error path can show the existing grid.
                 // `placeholder`'s dimensions/color are the VIDEO branch's
                 // material; an image variant needs none of it.
-                Some(transparent_stub_response())
+                Some(pending_image_response())
             } else {
                 // Non-image variant (currently videos): existing SVG path.
                 let svg = generate_placeholder_svg(
@@ -289,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_asset_request_pending_returns_svg() {
+    fn pending_original_image_reports_unavailable() {
         use crate::types::assets::AssetRegistry;
         use axum::http::{header, StatusCode};
         use tempfile::TempDir;
@@ -301,8 +288,8 @@ mod tests {
         let response = handle_asset_request("/img/photo.jpg", &registry, temp_dir.path());
         assert!(response.is_some());
         let response = response.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers().get(header::CONTENT_TYPE).unwrap(), "image/svg+xml");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.headers().get(header::CONTENT_TYPE).is_none());
     }
 
     #[test]
@@ -390,9 +377,8 @@ mod tests {
             "CJK image-variant placeholder must be served (request path decoded before registry lookup)"
         );
         let response = response.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        // .webp is an image variant → image bytes (1×1 webp stub when no LQIP).
-        assert_eq!(response.headers().get(header::CONTENT_TYPE).unwrap(), "image/webp");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.headers().get(header::CONTENT_TYPE).is_none());
     }
 
     #[test]
@@ -415,16 +401,10 @@ mod tests {
         );
     }
 
-    // ---- Image variant tests (Bug 1: source-passthrough is the sharp path;
-    // this handler is the last-resort never-404 stub) ----
+    // ---- Image variants use the original or report a pending load error. ----
 
     #[test]
-    fn pending_variant_without_passthrough_source_falls_back_to_transparent_stub_not_404() {
-        // LQIP-at-URL serving is retired: `AssetPlaceholder` no longer carries
-        // an LQIP at all, so this handler CANNOT serve one. A Pending image
-        // variant that reaches it (the router's source passthrough did not
-        // serve the original) returns the 1×1 transparent-webp stub — never
-        // None/404 — so a chosen <source> never 404s.
+    fn pending_variant_without_a_readable_original_reports_unavailable() {
         use crate::types::assets::AssetRegistry;
         use axum::http::{header, StatusCode};
         use tempfile::TempDir;
@@ -438,27 +418,22 @@ mod tests {
         );
 
         let response = handle_asset_request("/assets/header.webp", &registry, temp_dir.path());
-        assert!(response.is_some(), "webp + Pending must never 404");
+        assert!(response.is_some());
         let response = response.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CONTENT_TYPE).unwrap(),
-            "image/webp",
-            "Pending image variant falls back to the transparent-webp stub (no LQIP JPEG)"
-        );
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.headers().get(header::CONTENT_TYPE).is_none());
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL).unwrap(),
             "no-cache, no-store, must-revalidate",
-            "Stub must not be cached (browser refetches on asset-ready)"
+            "an unavailable response must not be cached"
         );
     }
 
     #[test]
     fn test_handle_asset_request_avif_pending_treated_as_image_variant() {
-        // The image-variant matcher must catch .avif too, not just .webp →
-        // transparent-webp stub (image path), not the SVG (video path).
+        // An AVIF variant uses the image error path, not the SVG video path.
         use crate::types::assets::AssetRegistry;
-        use axum::http::header;
+        use axum::http::StatusCode;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
@@ -466,11 +441,7 @@ mod tests {
         registry.set_pending("assets/header.avif".to_string(), None, None);
 
         let response = handle_asset_request("/assets/header.avif", &registry, temp_dir.path()).unwrap();
-        assert_eq!(
-            response.headers().get(header::CONTENT_TYPE).unwrap(),
-            "image/webp",
-            "AVIF variant must take the image-variant stub path, not the SVG path"
-        );
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]

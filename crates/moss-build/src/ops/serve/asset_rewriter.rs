@@ -46,9 +46,8 @@
 //! cannot tell a blur that resembles it from a badly-encoded result. With the
 //! source passthrough serving the real original the background is invisible
 //! anyway — until the passthrough cannot read the source (cloud-evicted,
-//! deleted mid-session). The fallback is then a 1×1 **transparent** WebP, and a
-//! transparent image over an LQIP background paints the LQIP, scaled to the
-//! `width`/`height` attributes.
+//! deleted mid-session). The preview then uses its image-error grid. An inline
+//! LQIP behind that grid would still paint at the image's width and height.
 
 use axum::{
     body::Body,
@@ -276,8 +275,7 @@ mod tests {
 
     /// The exact shape `moss_core::render::image` emits for a source whose
     /// LQIP is known. This is the channel removing the registry field did NOT
-    /// close, and it is the one an author actually sees behind a transparent
-    /// stub.
+    /// close, and it could otherwise appear while an image is pending.
     const LQIP_IMG: &str = concat!(
         r#"<picture><source srcset="/hero.webp" type="image/webp">"#,
         r#"<img src="/hero.png" width="800" height="600" "#,

@@ -67,6 +67,54 @@ fn generated_route_with_pending_metadata_cannot_clear_cold_preview_gate() {
     assert!(!sealed.preview_route_present(&requirement));
 }
 
+#[test]
+fn pending_preview_requires_manifested_stylesheet_and_script_bytes_only() {
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempdir().unwrap();
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), evidence);
+    let page = crate::build::served_path::ServedPath::from_source("article/index.html").unwrap();
+    let css = crate::build::served_path::ServedPath::from_source("assets/site.css").unwrap();
+    let framework_css = crate::build::served_path::ServedPath::from_cached("_moss/style.test.css").unwrap();
+    let relative_framework_css = crate::build::served_path::ServedPath::from_cached("_moss/style.relative.css").unwrap();
+    let preview_js = crate::build::served_path::ServedPath::from_cached("_moss/js/preview.test.js").unwrap();
+    let html = br#"<link rel="stylesheet" href="../assets/site.css">
+        <link rel="stylesheet" href="/_moss/style.test.css">
+        <link rel="stylesheet" href="../_moss/style.relative.css">
+        <script src="/_moss/js/preview.test.js"></script>
+        <a href="/missing.css">a normal link</a>
+        <img src="/background.png">
+        <p>&lt;script src="/inline-code.js"&gt;</p>
+        <script>const example = "<script src='/inline-code.js'>";</script>
+        <script src="/assets/site.js"></script>"#;
+    pending.register(&page, html, HashBucket::Files);
+    pending.register(&css, b"body { color: red; }
+", HashBucket::Files);
+    pending.register(&framework_css, b"framework css\n", HashBucket::Files);
+    pending.register(&relative_framework_css, b"relative framework css\n", HashBucket::Files);
+    pending.register(&preview_js, b"window.preview = true;", HashBucket::Files);
+    std::fs::create_dir_all(dir.path().join("article")).unwrap();
+    std::fs::create_dir_all(dir.path().join("assets")).unwrap();
+    std::fs::create_dir_all(dir.path().join("_moss/js")).unwrap();
+    std::fs::write(dir.path().join("article/index.html"), html).unwrap();
+    std::fs::write(dir.path().join("assets/site.css"), b"body { color: red; }
+").unwrap();
+    std::fs::write(dir.path().join("_moss/style.test.css"), b"framework css\n").unwrap();
+    std::fs::write(dir.path().join("_moss/style.relative.css"), b"relative framework css\n").unwrap();
+    std::fs::write(dir.path().join("_moss/js/preview.test.js"), b"window.preview = true;").unwrap();
+    let requirement = PreviewRequirement {
+        url_path: "/article/".into(), source: PreviewSource::Generated, revision: 1,
+    };
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), PreviewReadiness::Pending);
+
+    let js = crate::build::served_path::ServedPath::from_source("assets/site.js").unwrap();
+    pending.register(&js, b"window.ready = true;", HashBucket::Files);
+    std::fs::write(dir.path().join("assets/site.js"), b"wrong bytes").unwrap();
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), PreviewReadiness::Pending);
+    std::fs::write(dir.path().join("assets/site.js"), b"window.ready = true;").unwrap();
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), PreviewReadiness::Usable);
+}
+
 // -----------------------------------------------------------------------
 // Bucket registration semantics
 // -----------------------------------------------------------------------

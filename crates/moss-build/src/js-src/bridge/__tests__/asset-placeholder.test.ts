@@ -17,12 +17,12 @@
  * (ticket LOG-8D03-T0528-08-08).
  */
 
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach, vi } from "vitest";
 
 // Side-effect import: the module installs its capture-phase error listener on
 // `document` at load, exactly as the inlined <head> script does.
 import "../asset-placeholder";
-import { place, restore } from "../asset-placeholder";
+import { install, place, restore } from "../asset-placeholder";
 
 const BLUEPRINT = "data:image/svg+xml,";
 
@@ -69,6 +69,125 @@ beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.removeAttribute("data-theme");
   loaded = [];
+});
+
+test("a timed-out image restores when only its original later arrives", async () => {
+  const doc = document.implementation.createHTMLDocument("preview");
+  const img = doc.createElement("img");
+  img.src = "/assets/card.webp";
+  img.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 100 } as DOMRect);
+  doc.body.appendChild(img);
+  let tick: (() => void) | undefined;
+  const fetch = vi.fn()
+    .mockResolvedValueOnce({ ok: false, status: 503 })
+    .mockResolvedValueOnce({ ok: true, status: 200 });
+  const fakeWindow = {
+    fetch,
+    innerWidth: 1000,
+    innerHeight: 1000,
+    setInterval: (fn: () => void) => { tick = fn; return 1; },
+    clearInterval: () => {},
+    setTimeout: () => 2,
+    clearTimeout: () => {},
+  } as unknown as Window;
+  const teardown = install(doc, fakeWindow);
+  img.dispatchEvent(new Event("error"));
+  expect(img.hasAttribute("data-moss-ph")).toBe(true);
+
+  tick?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(img.hasAttribute("data-moss-ph")).toBe(true);
+  tick?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(img.hasAttribute("data-moss-ph")).toBe(false);
+  expect(img.getAttribute("src")).toContain("/assets/card.webp?_t=");
+  teardown();
+});
+
+test("the retry probe skips offscreen images", async () => {
+  const doc = document.implementation.createHTMLDocument("preview");
+  const img = doc.createElement("img");
+  img.src = "/assets/offscreen.webp";
+  img.getBoundingClientRect = () => ({ left: 1200, top: 0, right: 1300, bottom: 100 } as DOMRect);
+  doc.body.appendChild(img);
+  let tick: (() => void) | undefined;
+  const fetch = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+  const win = {
+    fetch, innerWidth: 1000, innerHeight: 1000,
+    setInterval: (fn: () => void) => { tick = fn; return 1; },
+    clearInterval: () => {}, setTimeout: () => 2, clearTimeout: () => {},
+  } as unknown as Window;
+  const teardown = install(doc, win);
+  img.dispatchEvent(new Event("error"));
+  tick?.();
+  expect(fetch).not.toHaveBeenCalled();
+  img.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 100 } as DOMRect);
+  tick?.();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  teardown();
+});
+
+test("teardown aborts an in-flight probe and cannot restore its image", async () => {
+  const doc = document.implementation.createHTMLDocument("preview");
+  const img = doc.createElement("img");
+  img.src = "/assets/card.webp";
+  img.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 100 } as DOMRect);
+  doc.body.appendChild(img);
+  let tick: (() => void) | undefined;
+  let reply: ((value: { ok: boolean; status: number }) => void) | undefined;
+  let signal: AbortSignal | undefined;
+  const fetch = vi.fn((_url: string, init: RequestInit) => {
+    signal = init.signal as AbortSignal;
+    return new Promise<{ ok: boolean; status: number }>((resolve) => { reply = resolve; });
+  });
+  const win = {
+    fetch, innerWidth: 1000, innerHeight: 1000,
+    setInterval: (fn: () => void) => { tick = fn; return 1; },
+    clearInterval: () => {}, setTimeout: () => 2, clearTimeout: () => {},
+  } as unknown as Window;
+  const teardown = install(doc, win);
+  img.dispatchEvent(new Event("error"));
+  tick?.();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  teardown();
+  expect(signal?.aborted).toBe(true);
+  reply?.({ ok: true, status: 200 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(img.hasAttribute("data-moss-ph")).toBe(true);
+});
+
+test("a reused image can retry a new URL after an old URL is terminal", async () => {
+  const doc = document.implementation.createHTMLDocument("preview");
+  const img = doc.createElement("img");
+  img.src = "/assets/removed.webp";
+  img.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 100 } as DOMRect);
+  doc.body.appendChild(img);
+  let tick: (() => void) | undefined;
+  const fetch = vi.fn()
+    .mockResolvedValueOnce({ ok: false, status: 404 })
+    .mockResolvedValueOnce({ ok: true, status: 200 });
+  const win = {
+    fetch, innerWidth: 1000, innerHeight: 1000,
+    setInterval: (fn: () => void) => { tick = fn; return 1; },
+    clearInterval: () => {}, setTimeout: () => 2, clearTimeout: () => {},
+  } as unknown as Window;
+  const teardown = install(doc, win);
+  img.dispatchEvent(new Event("error"));
+  tick?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  tick?.();
+  expect(fetch).toHaveBeenCalledTimes(1);
+
+  restore("/assets/removed.webp", doc);
+  img.src = "/assets/new.webp";
+  img.dispatchEvent(new Event("error"));
+  tick?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenLastCalledWith("/assets/new.webp", expect.objectContaining({ method: "HEAD" }));
+  expect(img.hasAttribute("data-moss-ph")).toBe(false);
+  teardown();
 });
 
 describe("place — paints the blueprint without destroying identity", () => {
