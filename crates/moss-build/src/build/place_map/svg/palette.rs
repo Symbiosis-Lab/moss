@@ -28,7 +28,7 @@ pub(super) fn relief_height_grey(band: i16) -> &'static str {
 }
 
 /// Every threshold the pack stores for a layer, in the order they nest: the
-/// stretch a flat figure (a detail tile) tints against, so one band has one
+/// stretch a detail tile tints against, so one band has one
 /// colour in every tile.
 pub(super) fn band_ladder(name: &str) -> &'static [i16] {
     if name == "relief" {

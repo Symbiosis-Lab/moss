@@ -1,14 +1,16 @@
 /**
  * raster.ts — turns a fetched map SVG (the world document or one regional
- * tile) into a decoded, opaque `<img>` plus a small live rivers overlay.
+ * tile) into a fixed-pixel `<canvas>` plus a small live rivers overlay.
  *
  * Both WebKit and Chromium were measured re-running the world's
  * relief/lighting filters on every repaint of a LIVE, in-document,
  * filtered `<svg>` — WebKit worst of all, going unresponsive for whole
- * seconds. An `<img>` decoded from the same markup is composited as a
- * single opaque bitmap instead: nothing left for either engine's
- * paint-invalidation to re-run. Regional tiles carry no filters but are
- * rasterised the same way, so each is one bitmap too. `map.ts` and
+ * seconds. A filtered SVG `<img>` is also not a reliable high-resolution
+ * backing surface: native WebKit can rasterise its filters at the small
+ * layout size before the ancestor camera transform enlarges it. Drawing a
+ * decoded, pixel-sized SVG image into a canvas fixes the backing dimensions
+ * before it enters that transform tree. Regional tiles use the same path,
+ * so each surface is one bitmap too. `map.ts` and
  * `tiles.ts` both build their own raster this way; this module is the one
  * place that knows how to split a fetched document into the part worth
  * rasterising and the part that must stay live.
@@ -168,25 +170,9 @@ export function splitMapSvg(markup: string): MapSvgSplit | null {
 }
 
 export interface Raster {
-  el: HTMLImageElement;
-  /** Revoke the backing blob URL once `el` is no longer shown — an un-revoked one leaks for the rest of the page's life. */
+  el: HTMLCanvasElement;
+  /** Drop the owned backing store once `el` is no longer shown. */
   release(): void;
-}
-
-/**
- * The `<img>` `rasterize` decodes into, pulled out so a test can check its
- * accessibility attributes without the `Blob`/`img.decode()` round trip
- * jsdom can't do — the same reason `withRootSize` was pulled out above. An
- * empty `alt` keeps a screen reader from enumerating the world raster and
- * every regional tile as their own unlabelled graphics: every one of them
- * sits inside `map.ts`'s `viewportEl`, which alone carries the map's
- * `role="application"`/`aria-label` pair.
- */
-export function createRasterImage(): HTMLImageElement {
-  const img = new Image();
-  img.decoding = "async";
-  img.alt = "";
-  return img;
 }
 
 /**
@@ -209,33 +195,44 @@ export function withRootSize(markup: string, pixelWidth: number, pixelHeight: nu
 /**
  * Patch `baseMarkup`'s own root `width`/`height` to `pixelWidth`x
  * `pixelHeight` — never its `viewBox`, so content geometry is unchanged —
- * and decode the result into an `<img>`, resolving only once
- * `img.decode()` resolves so a caller never shows a half-loaded frame.
- * Overriding the raw pixel attributes (rather than relying on the CSS size
- * the `<img>` is later shown at) is the standard way to ask an SVG
- * resource for more native pixels than its own authored size, which is
- * what keeps a raster sharp once a caller's own CSS transform scales it
- * up, instead of upscaling a blurrier source bitmap. A string patch rather
+ * then draw the decoded source into a canvas whose backing dimensions are
+ * exactly those requested pixels. The SVG image stays detached from the
+ * transformed map tree; this matters in WebKit, where a filtered SVG image
+ * can be cached at its small CSS box before a camera transform enlarges it.
+ * A string patch rather
  * than `cloneNode` + `XMLSerializer` on every call — see `MapSvgSplit.
  * baseMarkup`'s own doc for the cost that was measured costing.
  */
 export async function rasterize(baseMarkup: string, pixelWidth: number, pixelHeight: number): Promise<Raster> {
   const sized = withRootSize(baseMarkup, pixelWidth, pixelHeight);
   const url = URL.createObjectURL(new Blob([sized], { type: "image/svg+xml" }));
-  const img = createRasterImage();
-  img.src = url;
+  const source = new Image();
+  source.decoding = "async";
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(pixelWidth));
+  canvas.height = Math.max(1, Math.round(pixelHeight));
+  canvas.setAttribute("aria-hidden", "true");
   try {
-    await img.decode();
-  } catch (error) {
+    source.src = url;
+    await source.decode();
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("2D canvas is unavailable");
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  } finally {
     URL.revokeObjectURL(url);
-    throw error;
   }
-  return { el: img, release: () => URL.revokeObjectURL(url) };
+  return {
+    el: canvas,
+    release: () => {
+      canvas.width = 0;
+      canvas.height = 0;
+    },
+  };
 }
 
 /** The element a caller actually shows: a decoded raster, or (see `rasterizeOrFallback`) the live SVG itself. */
 export interface Surface {
-  el: HTMLImageElement | SVGSVGElement;
+  el: HTMLCanvasElement | SVGSVGElement;
   release(): void;
 }
 

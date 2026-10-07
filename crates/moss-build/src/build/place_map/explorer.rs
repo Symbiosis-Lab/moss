@@ -242,35 +242,37 @@ mod tests {
         assert!(!first.contains("data-map-layer=\"globe\""));
     }
 
-    /// A tile carries no SVG filter of any kind: WebKit rasterises blur and
-    /// lighting filters at low resolution, so a filtered tile came out
-    /// blurry, off-tint from the world layer under it, and drew a light
-    /// line at its edges. The world SVG, shown far smaller, keeps its
-    /// filters. A tile's flat land is the same `--moss-place-land` the
-    /// world draws, so the hand-over shows no colour step on flat ground.
+    /// A tile carries the world layer's relief lighting and band shadows.
+    /// Runtime rasterization bakes them into a fixed-pixel canvas before the
+    /// camera transform, so WebKit does not resample filtered SVG content at
+    /// the wrapper's smaller layout size. The coast halo stays out of tiles;
+    /// land color and full band ladder remain identical to the world.
     #[test]
-    fn a_tile_is_flat_and_draws_land_in_the_worlds_own_land_colour() {
+    fn a_tile_bakes_terrain_lighting_with_filter_bounds_for_its_own_height() {
         let context = PlaceMapContext::embedded().unwrap();
-        // East Asian coast and the Alps: land, relief, sea floor and rivers.
-        for (x, y) in [(29i16, 12i16), (18, 13)] {
+        // East Asian coast and a taller northern cell: both land and relief,
+        // with different canvas heights that must not share a fixed filter.
+        for (x, y) in [(29i16, 12i16), (29, 13)] {
             let svg = emit_tile_svg(&context, x, y);
-            for banned in ["filter", "feGaussianBlur", "feDiffuseLighting", "feDropShadow", "data-map-layer=\"lighting\"", "data-map-layer=\"coast\""] {
-                assert!(!svg.contains(banned), "tile ({x},{y}) carries {banned}");
+            for required in ["feGaussianBlur", "feDiffuseLighting", "feDropShadow", "data-map-layer=\"lighting\""] {
+                assert!(svg.contains(required), "tile ({x},{y}) lacks {required}");
             }
+            assert!(!svg.contains("data-map-layer=\"coast\""), "tile ({x},{y}) should not carry the coast halo");
+            assert!(!svg.contains("radialGradient id=\"moss-place-map-tile-"), "tile ({x},{y}) should omit the unused marker gradient");
+            assert!(!svg.contains("-globe-clip\""), "tile ({x},{y}) should omit the unused globe clip");
+            assert!(!svg.contains("-soft\" filterUnits=\"userSpaceOnUse\""), "tile ({x},{y}) should omit the unused coast halo filter");
+            assert!(svg.contains("style=\"fill:") && svg.contains("filter=\"url(#moss-place-map-tile-"), "tile ({x},{y}) relief bands need their shadow");
             for layer in ["seafloor", "land", "relief", "lakes", "rivers"] {
                 assert!(svg.contains(&format!("data-map-layer=\"{layer}\"")), "tile ({x},{y}) lost {layer}");
             }
             assert!(svg.contains("<use href=\"#moss-place-map-tile-"), "land fill is drawn");
             assert!(svg.contains("fill=\"var(--moss-place-land, "), "tile ({x},{y}) land is not --moss-place-land");
-            // The lowest relief band is the flat ground: its tint starts at, and
-            // here is exactly, the land colour.
-            let relief = &svg[svg.find("data-map-layer=\"relief\"").unwrap()..];
-            let first_band = &relief[relief.find("<g data-map-band=").expect("tile has relief")..];
-            assert!(
-                first_band.contains("style=\"fill:color-mix(in srgb, var(--moss-place-land, #e3e6d5), var(--moss-place-land-mid, #ece4cc) 0%)\""),
-                "tile ({x},{y}): {:.200}",
-                first_band
-            );
+            let canvas_height = svg
+                .split_once("<svg ").unwrap().1
+                .split_once(" height=\"").unwrap().1
+                .split_once('"').unwrap().0.parse::<f64>().unwrap();
+            let expected_filter_height = format!("height=\"{}\"", ((canvas_height + 24.0) * 1000.0).round() / 1000.0);
+            assert!(svg.matches(&expected_filter_height).count() >= 2, "tile ({x},{y}) shadow filters must cover its full canvas plus bleed");
         }
         assert!(emit_world_svg(&context).contains("feDiffuseLighting"), "the world layer keeps its filters");
     }
@@ -321,7 +323,9 @@ mod tests {
             let svg = emit_tile_svg(&context, x, y);
             for part in svg.split("<g data-map-band=\"").skip(1) {
                 let band = &part[..part.find('"').unwrap()];
-                let tint = &part[part.find("fill:").unwrap()..part.find("\">").unwrap()];
+                let tint_start = part.find("style=\"fill:").unwrap();
+                let tint_end = part[tint_start..].find('"').unwrap();
+                let tint = &part[tint_start..tint_start + tint_end];
                 let entry = tints.entry(band.to_string()).or_insert((tint.to_string(), 0));
                 assert_eq!(entry.0, tint, "band {band} is tinted differently in tile ({x},{y})");
                 entry.1 += 1;

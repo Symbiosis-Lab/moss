@@ -71,6 +71,54 @@ async function clickFullscreenButton(page: Page, browserName: string): Promise<v
   }
 }
 
+/** Observe both halves of the FLIP transition before triggering it. The class
+ * lasts only for the animation; WebKit can complete it between Playwright
+ * polls while resizing a live map. Activation checks run before waiting for
+ * the exit mutation, so callers can inspect fullscreen's immediate styles. */
+async function clickAndObserveFullscreenFlip(
+  page: Page,
+  browserName: string,
+  afterActivation?: () => Promise<void>,
+): Promise<void> {
+  await page.evaluate(() => {
+    const wrapper = document.querySelector(".immersive-iframe-wrapper");
+    if (!wrapper) throw new Error("immersive wrapper is missing");
+    const className = "fs-animating-enter";
+    let entered = wrapper.classList.contains(className);
+    const cleanupWindow = window as typeof window & {
+      __fullscreenFlipSettled?: boolean;
+      __cleanupFullscreenFlipObserver?: () => void;
+    };
+    cleanupWindow.__fullscreenFlipSettled = false;
+    const cleanup = () => {
+      observer.disconnect();
+      delete cleanupWindow.__cleanupFullscreenFlipObserver;
+    };
+    const observer = new MutationObserver((records) => {
+      entered ||= wrapper.classList.contains(className) || records.some((record) => record.oldValue?.split(/\s+/).includes(className));
+      if (entered && !wrapper.classList.contains(className)) {
+        cleanupWindow.__fullscreenFlipSettled = true;
+        cleanup();
+      }
+    });
+    cleanupWindow.__cleanupFullscreenFlipObserver = cleanup;
+    observer.observe(wrapper, { attributes: true, attributeFilter: ["class"], attributeOldValue: true });
+  });
+  try {
+    await clickFullscreenButton(page, browserName);
+    await afterActivation?.();
+    await expect
+      .poll(() => page.evaluate(() => (window as typeof window & { __fullscreenFlipSettled?: boolean }).__fullscreenFlipSettled === true), { timeout: 2000 })
+      .toBe(true);
+  } finally {
+    await page.evaluate(() => {
+      const state = window as typeof window & { __fullscreenFlipSettled?: boolean; __cleanupFullscreenFlipObserver?: () => void };
+      state.__cleanupFullscreenFlipObserver?.();
+      delete state.__fullscreenFlipSettled;
+    }).catch(() => {});
+  }
+}
+
 test.describe("style:map embed", () => {
   test("hydrates near the viewport and cross-fades over the static poster", async ({ page }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
@@ -110,9 +158,9 @@ test.describe("style:map embed", () => {
         await page.waitForTimeout(120);
         loadedVisibleTiles = await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => {
           const bounds = viewport.getBoundingClientRect();
-          return [...document.querySelectorAll<HTMLImageElement>(".moss-places-tile > img")].filter((img) => {
-            const box = img.getBoundingClientRect();
-            return img.complete && img.naturalWidth > 0 && box.right > bounds.left && box.left < bounds.right && box.bottom > bounds.top && box.top < bounds.bottom;
+          return [...document.querySelectorAll<HTMLCanvasElement>(".moss-places-tile > canvas")].filter((canvas) => {
+            const box = canvas.getBoundingClientRect();
+            return canvas.width > 0 && box.right > bounds.left && box.left < bounds.right && box.bottom > bounds.top && box.top < bounds.bottom;
           }).length;
         });
       }
@@ -126,13 +174,13 @@ test.describe("style:map embed", () => {
       await waitForSettled(page);
       const visibleTiles = await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => {
         const bounds = viewport.getBoundingClientRect();
-        return [...document.querySelectorAll<HTMLImageElement>(".moss-places-tile > img")]
-          .map((img) => ({ img, box: img.getBoundingClientRect() }))
+        return [...document.querySelectorAll<HTMLCanvasElement>(".moss-places-tile > canvas")]
+          .map((canvas) => ({ canvas, box: canvas.getBoundingClientRect() }))
           .filter(({ box }) => box.right > bounds.left && box.left < bounds.right && box.bottom > bounds.top && box.top < bounds.bottom)
-          .map(({ img }) => ({ complete: img.complete, width: img.naturalWidth }));
+          .map(({ canvas }) => ({ width: canvas.width, height: canvas.height, hidden: canvas.getAttribute("aria-hidden") }));
       });
       expect(visibleTiles.length).toBeGreaterThanOrEqual(2);
-      expect(visibleTiles.every((tile) => tile.complete && tile.width > 0)).toBe(true);
+      expect(visibleTiles.every((tile) => tile.width > 0 && tile.height > 0 && tile.hidden === "true")).toBe(true);
     } finally {
       releaseTileRequests.filter(({ released }) => !released).forEach((request) => request.release());
     }
@@ -290,8 +338,6 @@ test.describe("style:map embed", () => {
   test("the exit-fullscreen control is an opaque surface with a legible icon", async ({ page, browserName }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
-    await clickFullscreenButton(page, browserName);
-    await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
     const button = page.locator(".immersive-fullscreen-btn");
     const channels = (css: string) => css.match(/[\d.]+/g)!.map(Number);
     const read = () => button.evaluate((el) => {
@@ -299,17 +345,22 @@ test.describe("style:map embed", () => {
       const box = el.getBoundingClientRect();
       return { background: cs.backgroundColor, color: cs.color, width: box.width, height: box.height };
     });
-    // Waits out the colour transition the base rule starts from.
-    await expect.poll(async () => {
-      const bg = channels((await read()).background);
-      return bg.length === 3 ? 1 : bg[3];
-    }, { timeout: 3000, message: "background must become opaque" }).toBe(1);
+    // The exit surface must be opaque on the first fullscreen computed-style
+    // read. Safari can leave a background transition pending forever during
+    // native fullscreen, so check before waiting for the ancestor FLIP to settle.
+    await clickAndObserveFullscreenFlip(page, browserName, async () => {
+      await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
+      const transitionProperties = await button.evaluate((el) => getComputedStyle(el).transitionProperty.split(",").map((property) => property.trim()));
+      expect(transitionProperties).not.toContain("background");
+      const immediateBackground = channels((await read()).background);
+      expect(immediateBackground.length === 3 ? 1 : immediateBackground[3]).toBe(1);
+    });
     // Fullscreen moves the button away from the pointer location used to
     // click it. Wait for that hover transform to finish before measuring its
     // untransformed 36px hit target; the background's separate transition is
     // not a proxy for this one.
     await page.mouse.move(0, 0);
-    await expect.poll(() => button.evaluate((el) => getComputedStyle(el).transform)).toBe("none");
+    await expect.poll(() => button.evaluate((el) => getComputedStyle(el).transform), { timeout: 2000 }).toBe("none");
     const style = await read();
     const luminance = ([r, g, b]: number[]) => {
       const lin = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
@@ -348,7 +399,8 @@ test.describe("style:map embed", () => {
     await expect(expand).toHaveCSS("opacity", "0");
     await expect(mapControls).toHaveCSS("opacity", "0");
 
-    await page.locator(POSTER).hover();
+    const posterBox = (await page.locator(POSTER).boundingBox())!;
+    await page.mouse.move(posterBox.x + posterBox.width / 2, posterBox.y + posterBox.height / 2);
     await expect(expand).toHaveCSS("opacity", "1");
     await expect(mapControls).toHaveCSS("opacity", "1");
 
@@ -442,32 +494,7 @@ test.describe("style:map embed", () => {
     await waitForSettled(page);
     await expect(page.locator(".immersive-new-window-btn")).toHaveCount(0);
 
-    const flipSettled = page.evaluate(() => new Promise<void>((resolve) => {
-      const wrapper = document.querySelector(".immersive-iframe-wrapper");
-      if (!wrapper) throw new Error("immersive wrapper is missing");
-      const className = "fs-animating-enter";
-      let entered = wrapper.classList.contains(className);
-      const cleanupWindow = window as typeof window & { __cleanupFullscreenFlipObserver?: () => void };
-      const observer = new MutationObserver((records) => {
-        entered ||= wrapper.classList.contains(className) || records.some((record) => record.oldValue?.split(/\s+/).includes(className));
-        if (entered && !wrapper.classList.contains(className)) {
-          cleanupWindow.__cleanupFullscreenFlipObserver?.();
-        }
-      });
-      cleanupWindow.__cleanupFullscreenFlipObserver = () => {
-        observer.disconnect();
-        delete cleanupWindow.__cleanupFullscreenFlipObserver;
-        resolve();
-      };
-      observer.observe(wrapper, { attributes: true, attributeFilter: ["class"], attributeOldValue: true });
-    }));
-    try {
-      await clickFullscreenButton(page, browserName);
-      await flipSettled;
-    } finally {
-      await page.evaluate(() => (window as typeof window & { __cleanupFullscreenFlipObserver?: () => void }).__cleanupFullscreenFlipObserver?.()).catch(() => {});
-      await flipSettled.catch(() => {});
-    }
+    await clickAndObserveFullscreenFlip(page, browserName);
     await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
     await page.mouse.move(0, 0);
     await expect(page.locator(".immersive-fullscreen-btn")).toHaveCSS("opacity", "1");
@@ -860,8 +887,7 @@ test.describe("chip beside the host's exit control (fullscreen locator embed)", 
   async function expand(page: Page, browserName: string): Promise<void> {
     await page.goto("fjord-crossing/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
-    await clickFullscreenButton(page, browserName);
-    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await clickAndObserveFullscreenFlip(page, browserName);
     await expect(page.frameLocator(IFRAME).locator(".moss-places-chip")).toBeVisible();
   }
 
@@ -893,8 +919,8 @@ test.describe("chip beside the host's exit control (fullscreen locator embed)", 
     const frame = page.frameLocator(IFRAME);
     await frame.locator("html").evaluate((el) => el.setAttribute("dir", "rtl"));
     const chip = frame.locator(".moss-places-chip");
-    const frameBox = (await page.locator(IFRAME).boundingBox())!;
     await expect.poll(async () => {
+      const frameBox = (await page.locator(IFRAME).boundingBox())!;
       const box = (await chip.boundingBox())!;
       return frameBox.x + frameBox.width - (box.x + box.width);
     }).toBeLessThanOrEqual(20);
@@ -911,17 +937,17 @@ test.describe("chip beside the host's exit control (fullscreen locator embed)", 
 test.describe("fullscreen embed", () => {
   test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
 
-  /** The world raster's natural width and every regional tile on screen, as natural px over displayed device px (>= 1 is sharp). */
+  /** The world canvas backing width and every regional tile on screen, as backing px over displayed device px (>= 1 is sharp). */
   async function sharpness(page: Page, embedFrame: ReturnType<Page["frames"]>[number]) {
     return embedFrame.evaluate(() => {
       const viewport = document.querySelector(".moss-places-viewport")!.getBoundingClientRect();
       const dpr = window.devicePixelRatio;
-      const world = document.querySelector<HTMLImageElement>(".moss-places-world-surface");
-      const tiles = [...document.querySelectorAll<HTMLImageElement>(".moss-places-tile > img")]
-        .map((img) => ({ img, box: img.getBoundingClientRect() }))
+      const world = document.querySelector<HTMLCanvasElement>(".moss-places-world-surface");
+      const tiles = [...document.querySelectorAll<HTMLCanvasElement>(".moss-places-tile > canvas")]
+        .map((canvas) => ({ canvas, box: canvas.getBoundingClientRect() }))
         .filter(({ box }) => box.right > viewport.left && box.left < viewport.right && box.bottom > viewport.top && box.top < viewport.bottom)
-        .map(({ img, box }) => img.naturalWidth / (box.width * dpr));
-      return { worldWidth: world?.naturalWidth ?? 0, tiles };
+        .map(({ canvas, box }) => canvas.width / (box.width * dpr));
+      return { worldWidth: world?.width ?? 0, tiles };
     });
   }
 
@@ -935,9 +961,7 @@ test.describe("fullscreen embed", () => {
     const bakedEmbed = (await sharpness(page, embedFrame)).worldWidth;
     expect(bakedEmbed).toBeGreaterThan(0);
 
-    await clickFullscreenButton(page, browserName);
-    await expect(page.locator(".immersive-iframe-wrapper")).toHaveClass(/fs-animating-enter/, { timeout: 2000 });
-    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await clickAndObserveFullscreenFlip(page, browserName);
     const widthFull = (await page.locator(IFRAME).boundingBox())!.width;
 
     // The scale (px per degree) is kept, so the visible range grows with the
@@ -1030,10 +1054,10 @@ test.describe("the hero", () => {
     const frame = page.locator('.moss-place-map-frame[data-width="screen"]');
     await expect(frame).toHaveCount(1);
     const box = (await frame.boundingBox())!;
-    const viewportSize = page.viewportSize()!;
+    const contentWidth = await page.evaluate(() => document.documentElement.clientWidth);
     const SLACK = 8; // scrollbar-gutter slack, same margin places-explorer-boot.spec.ts already allows
     expect(box.x).toBeLessThanOrEqual(SLACK);
-    expect(box.x + box.width).toBeGreaterThanOrEqual(viewportSize.width - SLACK);
+    expect(box.x + box.width).toBeGreaterThanOrEqual(contentWidth - SLACK);
   });
 });
 

@@ -94,7 +94,7 @@ describe("mountPlacesMap — embed seams", () => {
       width: viewport.width, height: viewport.height, top: 0, left: 0,
       right: viewport.width, bottom: viewport.height, x: 0, y: 0, toJSON() {},
     } as DOMRect));
-    const pending: Array<(surface: { el: HTMLImageElement; release: () => void }) => void> = [];
+    const pending: Array<(surface: { el: HTMLCanvasElement | SVGSVGElement; release: () => void }) => void> = [];
     raster.rasterizeOrFallback.mockImplementation(() => new Promise((resolve) => pending.push(resolve)));
     const { controller } = mount();
     let ready = false;
@@ -102,10 +102,10 @@ describe("mountPlacesMap — embed seams", () => {
     await vi.waitFor(() => expect(pending).toHaveLength(1));
 
     viewport = { width: 1600, height: 500 };
-    pending[0]!({ el: document.createElement("img"), release: vi.fn() });
+    pending[0]!({ el: document.createElement("canvas"), release: vi.fn() });
     await vi.waitFor(() => expect(pending).toHaveLength(2));
     expect(ready).toBe(false);
-    pending[1]!({ el: document.createElement("img"), release: vi.fn() });
+    pending[1]!({ el: document.createElement("canvas"), release: vi.fn() });
     await waiting;
     expect(ready).toBe(true);
   });

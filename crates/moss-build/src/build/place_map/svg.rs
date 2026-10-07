@@ -319,13 +319,9 @@ pub(super) struct Writer<'a> {
     /// is only a width.
     pub(super) full_extent: bool,
     /// The figure is one of the explorer's regional detail tiles
-    /// (`FrameTier::Tile`), set by `render_svg`. A tile is flat: it carries
-    /// no SVG filters and no lighting group. WebKit rasterises
-    /// `feGaussianBlur`/`feDiffuseLighting` at low resolution, so a filtered
-    /// tile came out blurry, tinted differently from the world layer under
-    /// it, and showed a light line where two tiles meet; the world figure
-    /// keeps its filters because it is shown at a scale where that does not
-    /// matter.
+    /// (`FrameTier::Tile`), set by `render_svg`. The tile carries the same
+    /// terrain lighting and band shadows as the world; the runtime bakes
+    /// those effects into a fixed-pixel canvas before camera transforms.
     pub(super) tile: bool,
 }
 
@@ -505,7 +501,7 @@ impl Writer<'_> {
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" aria-hidden=\"true\" focusable=\"false\">",
         )
         .expect("writing to String cannot fail");
-        // A flat tile is composited at a fractional size. WebKit clips the
+        // A tile is composited at a fractional size. WebKit clips the
         // stacked band polygons at the image edge one draw at a time, so the
         // last partly covered row blends every band over a lighter one and
         // reads as a light line. Isolating the whole drawing clips it once.
@@ -529,9 +525,6 @@ impl Writer<'_> {
     }
 
     fn defs(&mut self) {
-        if self.tile {
-            return;
-        }
         let height_filter = self.ids.get("height-filter");
         let marker_gradient = self.ids.get("marker-fade");
         let globe_clip = self.ids.get("globe-clip");
@@ -556,9 +549,18 @@ impl Writer<'_> {
         // the wider ring-clip bounds (geometry.rs) were just fixed to let
         // through.
         let halo_width = length(self.canvas_width + 48.0);
+        let halo_height = length(self.canvas_height + 48.0);
+        let page_only_defs = if self.tile {
+            format!("<path id=\"{height_empty}\" d=\"m0 0l0 0\"/>")
+        } else {
+            format!(
+                "<radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0.28\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"{halo_width}\" height=\"{halo_height}\"><feGaussianBlur stdDeviation=\"{halo_blur}\"/></filter>",
+                self.ids.get("soft"),
+            )
+        };
         write!(
             self.output,
-            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{wide}\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"{steep}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{narrow}\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"{soft}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.6363961030678928\" intercept=\"0.45\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-light-warm-strength, 1)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" flood-opacity=\"var(--moss-place-light-cool-strength, 0.8889)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"{smooth}\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0.28\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"{halo_width}\" height=\"528\"><feGaussianBlur stdDeviation=\"{halo_blur}\"/></filter></defs>", self.ids.get("soft"),
+            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{wide}\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"{steep}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{narrow}\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"{soft}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.6363961030678928\" intercept=\"0.45\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-light-warm-strength, 1)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" flood-opacity=\"var(--moss-place-light-cool-strength, 0.8889)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"{smooth}\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter>{page_only_defs}</defs>",
         )
         .expect("writing to String cannot fail");
         // The approved design's two cut-paper shadows, one per band family,
@@ -569,9 +571,10 @@ impl Writer<'_> {
         let (edge, edge_blur) = (length(0.7 * scale), length(0.49 * scale));
         let (sea, sea_blur) = (length(1.0 * scale), length(0.6 * scale));
         let filter_width = length(self.canvas_width + 24.0);
+        let filter_height = length(self.canvas_height + 24.0);
         write!(
             self.output,
-            "<defs><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"{filter_width}\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"{relief}\" dy=\"{relief}\" stdDeviation=\"{relief_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"with-shadow\"/><feDropShadow in=\"SourceGraphic\" dx=\"-{edge}\" dy=\"-{edge}\" stdDeviation=\"{edge_blur}\" flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-relief-edge-opacity, 0)\" result=\"with-edge\"/><feMerge><feMergeNode in=\"with-shadow\"/><feMergeNode in=\"with-edge\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"{filter_width}\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"{sea}\" dy=\"{sea}\" stdDeviation=\"{sea_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\"/></filter>",
+            "<defs><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"{filter_width}\" height=\"{filter_height}\"><feDropShadow in=\"SourceGraphic\" dx=\"{relief}\" dy=\"{relief}\" stdDeviation=\"{relief_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"with-shadow\"/><feDropShadow in=\"SourceGraphic\" dx=\"-{edge}\" dy=\"-{edge}\" stdDeviation=\"{edge_blur}\" flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-relief-edge-opacity, 0)\" result=\"with-edge\"/><feMerge><feMergeNode in=\"with-shadow\"/><feMergeNode in=\"with-edge\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"{filter_width}\" height=\"{filter_height}\"><feDropShadow in=\"SourceGraphic\" dx=\"{sea}\" dy=\"{sea}\" stdDeviation=\"{sea_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\"/></filter>",
             self.ids.get("shadow-relief"),
             self.ids.get("shadow-seafloor"),
         )
@@ -783,11 +786,7 @@ impl Writer<'_> {
             self.ids.get(&format!("layer-{name}"))
         )
         .expect("writing to String cannot fail");
-        let band_shadow = if self.tile {
-            String::new()
-        } else {
-            format!(" filter=\"url(#{})\"", self.ids.get(&format!("shadow-{name}")))
-        };
+        let band_shadow = format!(" filter=\"url(#{})\"", self.ids.get(&format!("shadow-{name}")));
         let mut active_band = None;
         for (index, (feature, path)) in projected.into_iter().enumerate() {
             if active_band != Some(feature.band) {
@@ -838,9 +837,6 @@ impl Writer<'_> {
             .expect("writing to String cannot fail");
         }
         self.output.push_str("</clipPath>");
-        if self.tile {
-            return;
-        }
         // The approved design lights the terrain at half strength: the
         // opacity sits on the filtered group, so it fades the filter's
         // output. On an element inside the filter it would change nothing,

@@ -11,7 +11,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test, expect, vi } from "vitest";
-import { detailMaxZoom, MIN_ZOOM } from "../camera";
+import { detailMaxZoom, MIN_ZOOM, screenScale } from "../camera";
 import { WORLD_WIDTH, WORLD_HEIGHT } from "../projection";
 import { TileLayer, tileCellBounds, tileEdgeMask, tileFadeOpacity, tileOverlayTransform, tilesForView } from "../tiles";
 
@@ -694,6 +694,114 @@ describe("TileLayer — re-bakes follow the density needed, within the same conc
     layer.render(CAMERA, VIEWPORT, unitScaleFor(900), true);
     await flush();
     expect(rasterizeOrFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { label: "small embed", density: 0.33, dpr: 2, expected: [[66, 66], [66, 66]] },
+    { label: "deep zoom", density: 10, dpr: 1, expected: [[1000, 1000], [100, 100]] },
+  ])("$label bakes one visible and one padding tile at the intended density", async ({ density, dpr: devicePixelRatio, expected }) => {
+    const requests = new Map<string, () => void>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => new Promise((resolve) => {
+      requests.set(url, () => resolve({ ok: true, text: () => Promise.resolve(TILE_SVG) } as unknown as Response));
+    })));
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
+    const dpr = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: devicePixelRatio });
+    const cells: Array<[number, number]> = [[9, 5], [10, 5]];
+    const viewport = { width: 200, height: 200 };
+    const bounds = tileCellBounds(9, 5);
+    const zoom = detailMaxZoom(viewport);
+    const scale = screenScale({ x: 0, y: 0, zoom }, viewport);
+    const camera = {
+      x: bounds.maxX - 10 - viewport.width / (2 * scale),
+      y: (bounds.minY + bounds.maxY) / 2,
+      zoom,
+    };
+    expect(tilesForView(cells, camera, viewport, 0)).toEqual([[9, 5]]);
+    expect(tilesForView(cells, camera, viewport)).toEqual(cells);
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cells, k: K, origins: originsFor(cells, K, 0.1), ...GRID });
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      layer.render(camera, viewport, (density * K) / zoom, true);
+      requests.get(`${BASE_URL}tile-9-5.svg`)!();
+      await flush();
+      expect(frames).toHaveLength(1);
+      frames.shift()!(0);
+      frames.shift()!(16);
+      requests.get(`${BASE_URL}tile-10-5.svg`)!();
+      await flush();
+      const dimensions = rasterizeOrFallbackSpy.mock.calls.map(([, , width, height]) => [Math.round(width), Math.round(height)]);
+      expect(dimensions).toEqual(expected);
+    } finally {
+      raf.mockRestore();
+      if (dpr) Object.defineProperty(window, "devicePixelRatio", dpr);
+      else Reflect.deleteProperty(window, "devicePixelRatio");
+    }
+  });
+
+  test("a density increase during a visible load queues the current sharpness bake before readiness", async () => {
+    stubFetch();
+    const cell: Array<[number, number]> = [[9, 5]];
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cell, k: K, origins: originsFor(cell, K, 0.1), ...GRID });
+    const releases: Array<() => void> = [];
+    const surface = () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} });
+    rasterizeOrFallbackSpy.mockImplementation(() => new Promise((resolve) => releases.push(() => resolve(surface()))));
+
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(0.33), true);
+    const ready = layer.waitForVisibleTiles();
+    await flush();
+    expect(releases).toHaveLength(1);
+
+    // Same cell stays visible, but the viewport now needs >1.3× more detail.
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(1), true);
+    releases.shift()!();
+    await flush();
+    expect(rasterizeOrFallbackSpy).toHaveBeenCalledTimes(2);
+    let settled = false;
+    void ready.then(() => { settled = true; });
+    await flush();
+    expect(settled).toBe(false);
+
+    releases.shift()!();
+    await expect(ready).resolves.toBe("ready");
+  });
+
+  test("a density increase during a visible rebake is reconciled before readiness", async () => {
+    stubFetch();
+    const cell: Array<[number, number]> = [[9, 5]];
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cell, k: K, origins: originsFor(cell, K, 0.1), ...GRID });
+    const surface = () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} });
+    rasterizeOrFallbackSpy.mockImplementation(async () => surface());
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(0.33), true);
+    await flush();
+    await expect(layer.waitForVisibleTiles()).resolves.toBe("ready");
+    rasterizeOrFallbackSpy.mockClear();
+
+    const releases: Array<() => void> = [];
+    rasterizeOrFallbackSpy.mockImplementation(() => new Promise((resolve) => releases.push(() => resolve(surface()))));
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(1), true);
+    await flush();
+    expect(releases).toHaveLength(1);
+    const ready = layer.waitForVisibleTiles();
+
+    // The first rebake is in flight when the same cell's demand rises again.
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(2), true);
+    releases.shift()!();
+    await flush();
+    expect(releases.length).toBeGreaterThan(0); // a current-density bake followed the stale one
+    let settled = false;
+    void ready.then(() => { settled = true; });
+    await flush();
+    expect(settled).toBe(false);
+    while (releases.length) releases.shift()!();
+    await expect(ready).resolves.toBe("ready");
   });
 
   test("a raster is baked smaller again once the density needed falls well below it", async () => {

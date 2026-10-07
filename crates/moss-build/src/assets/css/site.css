@@ -8350,6 +8350,9 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   background: var(--moss-color-surface);
   box-shadow: var(--moss-elevation-1);
   color: var(--moss-color-text);
+  /* Safari can leave background-color transitions pending while entering
+     native fullscreen. The exit surface must become opaque immediately. */
+  transition: transform 0.15s ease;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

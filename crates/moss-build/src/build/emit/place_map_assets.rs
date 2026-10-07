@@ -94,7 +94,10 @@ struct TileIndex<'a> {
 /// lattice and is a whole number of units wide and tall, and `tiles.json`
 /// carries each tile's origin; tiles cached at the old fractional origin
 /// would be placed a fraction of a unit off.
-pub const GENERATOR_VERSION: u32 = 5;
+/// 6: regional tiles now carry the world's relief lighting and band shadows,
+/// with filter bounds derived from each tile's own height; cached tiles from
+/// the former flat-terrain output must not survive the upgrade.
+pub const GENERATOR_VERSION: u32 = 6;
 
 #[cfg(test)]
 mod generator_version_guard {
@@ -111,7 +114,7 @@ mod generator_version_guard {
         let world = compute_binary_hash(place_map::emit_world_svg(&context).as_bytes());
         assert_eq!(
             (GENERATOR_VERSION, tile.as_str(), world.as_str()),
-            (5, "2fef236394428a37", "593d9e7750c79f3a"),
+            (6, "f7ecd5c30bea6139", "593d9e7750c79f3a"),
             "the emitter's output changed: bump GENERATOR_VERSION before updating the pinned digests, \
              because every site that rebuilds would otherwise keep its old tiles under the new manifest"
         );

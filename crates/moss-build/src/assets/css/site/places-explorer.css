@@ -242,6 +242,12 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
    without it, a filtered live SVG's own paint invalidation on every
    transform change cost whole frames even before WebKit's own, larger cost
    entered the picture. */
+.moss-places-world,
+.moss-places-labels {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .moss-places-world {
   position: absolute;
   top: 50%;
@@ -286,26 +292,15 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   position: absolute;
 }
 
-/* The world surface and every tile raster are cut from one continuous map, so
-   a rounded corner on any of them leaves a four-pointed gap where four tiles
-   meet. The explorer sits inside `article`, whose `article img` rule rounds
-   every image by 6px (scaled up with the tile's own transform), so the
-   reset has to out-rank it. */
-.moss-places-viewport img {
-  border-radius: 0;
-}
-
-/* The tile's own raster (an `<img>`, or the live, unrasterised SVG on the
-   progressive-enhancement fallback path — see raster.ts's
-   `rasterizeOrFallback`) fills that wrapper exactly; `display: block` drops
-   the inline-replaced baseline gap a bare `<img>` would otherwise leave
-   beneath it. Its rivers overlay (if any) fills the same box but stacks
-   OVER it by `position: absolute` instead of normal flow, so the pair
-   paints as one image rather than the overlay pushing a second row below. */
-.moss-places-tile > img {
+/* The tile's fixed-pixel canvas (or live SVG fallback) fills its wrapper
+   exactly. Its rivers overlay (if any) fills the same box but stacks over it
+   by `position: absolute` instead of normal flow. */
+.moss-places-tile > canvas,
+.moss-places-tile > svg {
   display: block;
   inline-size: 100%;
   block-size: 100%;
+  aspect-ratio: auto;
 }
 .moss-places-tile > .moss-places-rivers {
   position: absolute;
@@ -326,9 +321,8 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
    axes fills exactly the box `applyCamera` computed, no second aspect-ratio
    opinion layered on top; keyed on `[data-moss-places-explorer]` so it
    always wins regardless of source order, the same specificity trick the
-   generic rule itself uses. `img` and `svg` share one selector: the surface
-   is whichever one `rasterizeOrFallback` actually produced. */
-[data-moss-places-explorer] .moss-places-world > img,
+   generic rule itself uses. */
+[data-moss-places-explorer] .moss-places-world > canvas,
 [data-moss-places-explorer] .moss-places-world > svg {
   inline-size: 100%;
   block-size: 100%;

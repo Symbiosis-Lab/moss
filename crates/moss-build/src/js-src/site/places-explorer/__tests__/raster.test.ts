@@ -2,15 +2,15 @@
  * Tests for raster.ts's pure/DOM-manipulation half: splitting a fetched map
  * SVG into a bakeable base and a live rivers overlay, and the theme-token
  * capture that stands in for the page cascade a rasterised resource cannot
- * read. `rasterize` itself (the actual `Blob`/`img.decode()` round trip) is
+ * read. `rasterize` itself (the actual `Blob`/`Image.decode()`/canvas round trip) is
  * covered by the render gates instead — jsdom implements neither API, which
  * is also exactly the path `rasterizeOrFallback` exists to degrade through,
  * so that fallback is what gets exercised here.
  */
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   capturePlaceMapTheme,
-  createRasterImage,
+  rasterize,
   rasterizeOrFallback,
   splitMapSvg,
   withRootSize,
@@ -131,17 +131,51 @@ describe("splitMapSvg's cached baseMarkup", () => {
   });
 });
 
-describe("createRasterImage", () => {
-  test("carries an empty alt — every raster sits inside the map's own single labelled region (viewportEl)", () => {
-    expect(createRasterImage().alt).toBe("");
-  });
-});
-
 describe("rasterizeOrFallback", () => {
   test("falls back to the live fallback element when Blob/decode aren't available (jsdom, same as this suite)", async () => {
     const split = splitMapSvg(SAMPLE_SVG)!;
     const surface = await rasterizeOrFallback(split.baseMarkup, split.base, 100, 100);
     expect(surface.el).toBe(split.base);
     expect(() => surface.release()).not.toThrow();
+  });
+});
+
+describe("rasterize", () => {
+  test("draws a detached SVG decode into the exact requested canvas backing and frees it on release", async () => {
+    const source = { decoding: "", src: "", decode: vi.fn().mockResolvedValue(undefined) } as unknown as HTMLImageElement;
+    const drawImage = vi.fn();
+    const context = { drawImage } as unknown as CanvasRenderingContext2D;
+    vi.stubGlobal("Image", vi.fn(() => source));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+
+    const createdUrl = vi.fn(() => "blob:places-map-test");
+    const revokedUrl = vi.fn();
+    const createDescriptor = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
+    const revokeDescriptor = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createdUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokedUrl });
+
+    try {
+      const raster = await rasterize(SAMPLE_SVG, 1048.4, 1101.6);
+      expect(raster.el).toBeInstanceOf(HTMLCanvasElement);
+      expect(raster.el.width).toBe(1048);
+      expect(raster.el.height).toBe(1102);
+      expect(raster.el.getAttribute("aria-hidden")).toBe("true");
+      expect(source.decode).toHaveBeenCalledOnce();
+      expect(drawImage).toHaveBeenCalledWith(source, 0, 0, 1048, 1102);
+      expect(createdUrl).toHaveBeenCalledOnce();
+      expect(revokedUrl).toHaveBeenCalledWith("blob:places-map-test");
+
+      raster.release();
+      expect(raster.el.width).toBe(0);
+      expect(raster.el.height).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      if (createDescriptor) Object.defineProperty(URL, "createObjectURL", createDescriptor);
+      else delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
+      if (revokeDescriptor) Object.defineProperty(URL, "revokeObjectURL", revokeDescriptor);
+      else delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+    }
   });
 });

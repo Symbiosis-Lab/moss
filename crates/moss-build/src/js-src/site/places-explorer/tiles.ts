@@ -16,7 +16,7 @@
  * `pointsForWorks`/`clusters.ts` (pure) — so a test can exercise the
  * geometry without a camera or a DOM ever existing.
  *
- * Each loaded tile is a decoded raster `<img>` plus a small live rivers
+ * Each loaded tile is a fixed-pixel canvas plus a small live rivers
  * overlay (`raster.ts`'s `splitMapSvg`/`rasterize`). A raster is baked for the
  * density its tile is shown at (up to a size cap) and re-baked, through the
  * same concurrency limit as loads, when that density moves away from it.
@@ -294,14 +294,6 @@ export class TileLayer {
       this.elements.set(key, "loading");
       this.queue.push(key);
     }
-    // Every loaded tile, not only the visible ones: a tile left outside the view when the frame shrinks must give its large raster back too.
-    if (settled) {
-      for (const [key, entry] of this.elements) {
-        if (entry === "loading" || entry === "failed" || entry.bakeState === "baking" || !this.needsRebake(key, entry)) continue;
-        entry.bakeState = "baking";
-        this.rebakeQueue.push(key);
-      }
-    }
     this.drainQueue();
     this.publishState();
   }
@@ -346,6 +338,16 @@ export class TileLayer {
 
   /** Start current-frame work first; padding runs one job after a paint opportunity. */
   private drainQueue(): void {
+    // Reconcile after both renders and async completions. A render during an
+    // in-flight load/rebake cannot enqueue that key while its state is
+    // "loading"/"baking"; its completion comes back through this same drain.
+    if (this.settledRender) {
+      for (const [key, entry] of this.elements) {
+        if (entry === "loading" || entry === "failed" || entry.bakeState !== "ready" || !this.needsRebake(key, entry)) continue;
+        entry.bakeState = "baking";
+        this.rebakeQueue.push(key);
+      }
+    }
     while (this.activeLoads < MAX_CONCURRENT_TILE_LOADS) {
       const visibleLoadIndex = this.queue.findIndex((key) => this.onScreen.has(key));
       if (visibleLoadIndex >= 0) {
@@ -437,7 +439,10 @@ export class TileLayer {
       if (generation !== this.generation || this.elements.get(key) !== "loading") return; // dropped out of the fade band mid-fetch
       const split = splitMapSvg(text);
       if (!split || !this.options.origins[key]) throw new Error("invalid tile svg");
-      const { surface, baked } = await this.bake(split, this.onScreen.has(key) ? this.density : 1);
+      // Visible cells use current density; off-screen prefetch stays at or
+      // below 1× until promotion to bound memory.
+      const density = this.onScreen.has(key) ? this.density : Math.min(this.density, 1);
+      const { surface, baked } = await this.bake(split, density);
       if (generation !== this.generation || this.elements.get(key) !== "loading") {
         surface.release();
         return; // dropped out of the fade band while the raster decoded, or superseded by a clear() + re-queue
@@ -455,7 +460,8 @@ export class TileLayer {
       }
       wrapper.style.zIndex = String(tileDrawOrder(x, y, this.options.columns, this.options.rows));
       this.container.append(wrapper);
-      this.elements.set(key, { el: wrapper, release: surface.release, split, bakedDensity: baked, bakeState: "ready" });
+      const entry: LoadedTile = { el: wrapper, release: surface.release, split, bakedDensity: baked, bakeState: "ready" };
+      this.elements.set(key, entry);
       this.position(wrapper, x, y, this.unitScale);
       // A cell the manifest names counts as present while it loads, so its
       // own load changes no neighbour's mask; only its own edges need one.
@@ -473,10 +479,10 @@ export class TileLayer {
     }
   }
 
-  /** CSS px per canvas px a raster of `split` can actually be baked for when `density` is wanted: never below 1, never past the size cap. */
+  /** CSS px per canvas px a raster of `split` can actually be baked for when `density` is wanted, never past the size cap. */
   private bakeableDensity(split: MapSvgSplit, density: number): number {
     const dpr = Math.min(window.devicePixelRatio || 1, TILE_RASTER_DPR_CAP);
-    return Math.min(Math.max(1, density), TILE_RASTER_MAX_SIDE / (Math.max(split.width, split.height) * dpr));
+    return Math.min(density, TILE_RASTER_MAX_SIDE / (Math.max(split.width, split.height) * dpr));
   }
 
   /** Decode `split` at the pixel size a tile shown at `density` CSS px per canvas px needs, and return the density that size actually gives. */
@@ -551,7 +557,7 @@ export class TileLayer {
     return this.options.availableTiles.filter(([cx, cy]) => this.elements.get(`${cx},${cy}`) !== "failed");
   }
 
-  /** Recompute and (re)apply `mask-image` for `el`, the tile wrapper at `(x, y)` — the only place it is ever written, so it changes only by a call here, never on a plain `render()` pan. The mask works on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly, so a fade distance in canvas units (`tileEdgeMask`) lands in the right place regardless of `unitScale`/zoom, and fades the wrapper's raster AND its rivers overlay together as one composited unit. A tile is never clipped toward a neighbour: a fractional clip edge antialiases into a one-pixel light line, and the tiles carry no filter edge effects that would need hiding. */
+  /** Recompute and (re)apply `mask-image` for `el`, the tile wrapper at `(x, y)` — the only place it is ever written, so it changes only by a call here, never on a plain `render()` pan. The mask works on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly, so a fade distance in canvas units (`tileEdgeMask`) lands in the right place regardless of `unitScale`/zoom, and fades the wrapper's raster AND its rivers overlay together as one composited unit. A tile is never clipped toward a neighbour: a fractional clip edge antialiases into a one-pixel light line, and the current vector clip context plus tile overlap must be verified before changing that edge policy. */
   private applyEdgeMask(el: HTMLElement, x: number, y: number): void {
     const mask = tileEdgeMask(x, y, this.nonFailedManifestCells(), this.options.k);
     el.style.maskImage = mask ?? "";

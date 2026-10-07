@@ -260,8 +260,8 @@ describe("exit fullscreen", () => {
     // In jsdom, transitionend doesn't fire automatically, so we dispatch it
     const wrapper = document.querySelector(".immersive-iframe-wrapper") as HTMLElement;
 
-    // Complete the enter animation so the button is re-enabled (button.disabled
-    // is set true inside rAF during enterFullscreen and cleared on transitionend).
+    // Complete the enter animation so the button is re-enabled; it stays
+    // disabled until the wrapper's transform transition ends.
     wrapper.dispatchEvent(createTransitionEndEvent("transform"));
 
     // Exit fullscreen
@@ -332,9 +332,8 @@ describe("exit fullscreen", () => {
     button.click();
     await flushMicrotasks();
 
-    // Complete the enter animation so the button is re-enabled
-    // (button.disabled is set true inside rAF during enterFullscreen and
-    // cleared on transitionend; without this the exit click is swallowed).
+    // Complete the enter animation so the button is re-enabled; otherwise the
+    // exit click is swallowed while the transform transition is running.
     const wrapper = document.querySelector(".immersive-iframe-wrapper") as HTMLElement;
     wrapper.dispatchEvent(createTransitionEndEvent("transform"));
 
@@ -391,6 +390,48 @@ describe("Fullscreen API integration", () => {
     expect(document.body.classList.contains("immersive-fs-active")).toBe(true);
   });
 
+  test("enter FLIP flushes its inverted transform and starts without waiting for animation frame", async () => {
+    createArticlePage();
+    initImmersiveMode();
+
+    const wrapper = document.querySelector(".immersive-iframe-wrapper") as HTMLElement;
+    wrapper.style.transitionProperty = "transform";
+    wrapper.style.transitionDuration = "300ms";
+    const button = document.querySelector(".immersive-fullscreen-btn") as HTMLButtonElement;
+    const requestAnimationFrame = vi.fn(() => 0);
+    vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
+    const styleReads: Array<{ entering: boolean; transform: string }> = [];
+    const getComputedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudoElement) => {
+      if (element === wrapper) {
+        styleReads.push({
+          entering: wrapper.classList.contains("fs-animating-enter"),
+          transform: wrapper.style.transform,
+        });
+      }
+      return getComputedStyle(element, pseudoElement);
+    });
+
+    try {
+      button.click();
+      await flushMicrotasks();
+
+      expect(requestAnimationFrame).not.toHaveBeenCalled();
+      expect(styleReads[0]).toMatchObject({ entering: false, transform: expect.stringMatching(/^translate\(/) });
+      expect(styleReads[1]).toEqual({ entering: true, transform: "" });
+      expect(wrapper.classList.contains("fs-animating-enter")).toBe(true);
+      expect(button.disabled).toBe(true);
+      expect(document.querySelector(".immersive-new-window-btn")?.getAttribute("aria-disabled")).toBe("true");
+
+      wrapper.dispatchEvent(createTransitionEndEvent("transform"));
+      expect(button.disabled).toBe(false);
+      expect(document.querySelector(".immersive-new-window-btn")?.hasAttribute("aria-disabled")).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("document.exitFullscreen is called when fullscreenElement is set", async () => {
     createArticlePage();
     initImmersiveMode();
@@ -405,9 +446,8 @@ describe("Fullscreen API integration", () => {
     // Simulate native fullscreen being active
     (document as any).fullscreenElement = document.documentElement;
 
-    // The enter animation's rAF may have fired by now (jsdom schedules rAF via
-    // setTimeout), disabling the button until its transitionend. Fire it so the
-    // next click isn't swallowed by the disabled state.
+    // The enter animation disables the button until its transitionend. Fire it
+    // so the next click isn't swallowed by the disabled state.
     const wrapper = document.querySelector(".immersive-iframe-wrapper") as HTMLElement;
     wrapper.dispatchEvent(createTransitionEndEvent("transform"));
 

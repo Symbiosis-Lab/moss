@@ -18,13 +18,14 @@
  * costing Chromium whole frames and WebKit whole SECONDS. Neither engine's
  * cost was really about the FILTER's own parameters (a spike here halving
  * blur radii changed nothing in WebKit); it was about a LIVE, filtered element sitting inside a transformed subtree. This file
- * now builds that layer as a decoded, opaque `<img>` instead (`raster.ts`'s
+ * now builds that layer as a fixed-pixel canvas instead (`raster.ts`'s
  * `splitMapSvg`/`rasterizeOrFallback`), composited once and then only ever
  * moved by the SAME transform, with the world's own box permanently
  * promoted to its own compositor layer (`places-explorer.css`) rather than
  * only for the span of a gesture — nothing left for either engine to
  * re-invalidate on a pan or a zoom click. `tiles.ts`'s `TileLayer` does the
- * same for each regional tile, which carries no filters of its own.
+ * same for each regional tile, baking its lighting and band shadows once
+ * when that tile is decoded.
  *
  * Two things the live SVG let CSS drive no longer can, because a
  * rasterised resource has no access to the page's own custom properties:
@@ -32,9 +33,9 @@
  * scales under them) stay a separate, live, UNFILTERED overlay — cheap,
  * since it is thin strokes, not fills with a shadow filter on every band —
  * and the old continuous `--moss-place-relief-strength` fade, which is gone
- * outright: the world is baked at full strength, and a tile is flat and
- * tinted against the same full ladder, so the hand-over from one to the
- * other changes detail, not tone.
+ * outright: the world and tiles bake the same lighting and tint ladder
+ * into their fixed-pixel canvases, so hand-over changes resolution, not
+ * terrain treatment.
  */
 import {
   clampCamera,
@@ -81,7 +82,7 @@ const WORLD_RASTER_REBAKE_RATIO = 1.3;
  * so only the final, truly-at-rest settle pays the decode cost, not every
  * one that led to it. Measured load-bearing: three real, back-to-back
  * clicks with no debounce each queued their own rebake, and the filter
- * pipeline behind `img.decode()` for a full-canvas relief/lighting pass
+ * pipeline behind an SVG image decode and full-canvas relief/lighting pass
  * was slow enough in WebKit that the SECOND click's own rebake was still
  * running when the THIRD click fired, delaying that click past a second —
  * an ablation (removing the rebake call entirely) confirmed it as the
@@ -187,7 +188,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   /** CSS px per world unit the current raster was baked for (`unitScale * zoom`), NOT the zoom alone: `zoom` is relative to the viewport's own cover scale, so the same zoom means a 4x larger raster once an embed goes fullscreen. */
   let worldBakedScale = 0;
   let worldBakePromise: Promise<void> | null = null;
-  let worldSurfaceEl: HTMLImageElement | SVGSVGElement | null = null;
+  let worldSurfaceEl: HTMLCanvasElement | SVGSVGElement | null = null;
   let worldRelease: () => void = () => {};
   let worldRebakeTimer: ReturnType<typeof setTimeout> | null = null;
 
