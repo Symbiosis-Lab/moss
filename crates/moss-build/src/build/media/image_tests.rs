@@ -2240,8 +2240,7 @@ fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
 
 #[test]
 fn format_probe_cache_ignores_empty_source_oid() {
-    // An unresolved `source_oid` (`""`, the stat-match-miss fallback used by
-    // both `collect_images_for_conversion` and `webp_converter_owns_base`)
+    // An unresolved `source_oid` (`""`, the collector's stat-match fallback)
     // must never be treated as a cache key: two different real files probed
     // with `""` in the same build must not leak one file's verdict into the
     // other's result.

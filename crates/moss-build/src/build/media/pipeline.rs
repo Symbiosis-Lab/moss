@@ -752,54 +752,35 @@ pub(crate) fn compute_expected_dirs(site_hashes: &SiteHashes) -> std::collection
     expected_dirs
 }
 
-/// True when the background image converter OWNS a webp source's resized base
-/// (`copy_deferred_assets` must then SKIP the verbatim copy, else the two writers
-/// collide on the same staged `photo.webp` — see the guard's call site).
-///
-/// The verdict MUST agree byte-for-byte with `collect_images_for_conversion`
-/// (the authority), which fed `should_skip` the scan-time `media_meta.size`.
-/// `size` is the fresh metadata read: `Some(len)` on success, `None` when the
-/// read fails mid-build (source vanished / iCloud dataless / transient stat
-/// error). On a read failure copy_deferred cannot recover the authority's scan
-/// size, so it fails SAFE toward "converter owns the base" rather than defaulting
-/// to `0` — a fabricated `0` is always `< min_size_kb` and flips a small-DIMENSION
-/// webp to `AlreadySmall` → verbatim copy, re-introducing the Task-12.6
-/// double-writer / full-res clobber. A converted webp whose source is truly
-/// unreadable fail-encodes → `set_failed` → warning SVG; never a double write or
-/// a full-res clobber. (Design follow-up #6: harden the `.unwrap_or(0)` TOCTOU.)
-///
-/// `source_oid` is the caller's cheap stat-match resolution (empty string on a
-/// miss) — passed through so this call and `collect_images_for_conversion`'s
-/// call consult the SAME `should_skip` format-probe cache entry instead of
-/// each recomputing the expensive probes independently.
-fn webp_converter_owns_base(
-    source_path: &Path,
-    ext: &str,
-    size: Option<u64>,
-    config: &crate::build::media::image::ImageCompressionConfig,
-    transforms: &crate::build::cache::TransformCache,
-    source_oid: &str,
-) -> bool {
-    match size {
-        Some(len) => crate::build::media::image::should_skip(
-            source_path,
-            ext,
-            len,
-            config,
-            transforms,
-            source_oid,
-            // A source still in the cloud is filtered out of the encoder's item
-            // list (`render/blocking.rs`), so the converter demonstrably does
-            // NOT own this base — `SourceInTheCloud` makes `is_none()` false,
-            // which is the answer that lets the loop below copy the verbatim
-            // blob it already has. Answering "the converter owns it" would
-            // leave the base with no writer at all and 404 it.
-            crate::build::icloud::is_evicted(source_path),
-        )
-        .is_none(),
-        // Unreadable source → fail safe: let the converter own it (skip verbatim).
-        None => true,
+/// Resolve source bytes once for both ordinary and theme assets. A cached
+/// blob remains usable while its source is evicted; a cold evicted source
+/// is requested and deferred without reading it.
+fn source_blob(
+    path: &Path,
+    cached: Option<&crate::build::types::SourceMetadata>,
+    previous_write: u64,
+    object_store: &crate::build::cache::ObjectStore,
+    cache_hits: &mut u32,
+    cache_misses: &mut u32,
+) -> Result<Option<(String, crate::build::stat::FileStat)>, String> {
+    let stat = fs::metadata(path)
+        .as_ref()
+        .map(crate::build::stat::FileStat::of)
+        .unwrap_or(crate::build::stat::FileStat::whole_second(0, 0));
+    if let Some(oid) = check_source_cache(cached, stat.size, stat.mtime, previous_write)
+        .filter(|oid| object_store.get_path(oid).is_some())
+    {
+        *cache_hits += 1;
+        return Ok(Some((oid, stat)));
     }
+    if crate::build::icloud::is_evicted(path) {
+        crate::build::cloud_readiness::request_download(path);
+        log::debug!("[background-assets] Deferring {} — still in the cloud", path.display());
+        return Ok(None);
+    }
+    *cache_misses += 1;
+    object_store.store_file(path, crate::build::cache::RecordMode::Wait)
+        .map(|oid| Some((oid, stat)))
 }
 
 /// Resolve the xxh3 manifest hash of a just-linked output file, consulting
@@ -1010,6 +991,10 @@ pub(crate) fn copy_deferred_assets(
     // WebP pass.
     let transforms = crate::build::cache::TransformCache::for_site(&deferred_paths);
     let image_config = crate::build::media::image::ImageCompressionConfig::default();
+    let converter_bases: std::collections::HashSet<&Path> = ctx.image_items.iter()
+        .filter(|item| item.owns_source_base())
+        .map(|item| item.source_path.as_path())
+        .collect();
     // Seeded from the PREVIOUS build's manifest, not from this build's.
     //
     // This walk owns exactly one slice of the manifest: static assets. It reads
@@ -1270,74 +1255,9 @@ pub(crate) fn copy_deferred_assets(
             continue;
         }
 
-        // Stat the source file once. We need (size, mtime) for the cache
-        // lookup AND the cache write-back; doing one stat instead of three
-        // (cache lookup, store_file, write-back) is a small but real saving.
-        // Moved above the WebP-ownership check below so that check can reuse
-        // `cached_oid` instead of resolving its own (see that check's comment).
-        let file_stat = fs::metadata(file_path);
-        // Preserves the "did the stat succeed" distinction separately from
-        // `file_size` below — a stat failure must NOT be confused with a
-        // genuine 0-byte file by the WebP-ownership check (see its comment).
-        let file_size_opt = file_stat.as_ref().ok().map(|m| m.len());
-        // A failed stat records as size 0, mtime 0 and no sub-second mtime, which
-        // the watcher gate never trusts: it always hashes (fail open).
-        let src_stat = file_stat
-            .as_ref()
-            .map(crate::build::stat::FileStat::of)
-            .unwrap_or(crate::build::stat::FileStat::whole_second(0, 0));
-        let (file_size, file_mtime_secs) = (src_stat.size, src_stat.mtime);
-
-        // Cache fast-path: if we already hashed this exact (size, mtime)
-        // last build AND the blob is still in the object store AND we
-        // weren't racing the previous hashes.json write, reuse the oid.
-        let cached_oid = check_source_cache(
-            prev_sources.get(&relative_path),
-            file_size,
-            file_mtime_secs,
-            prev_hashes_mtime_secs,
-        )
-        .filter(|oid| object_store.get_path(oid).is_some());
-
-        // WebP source ownership: a webp SOURCE's base output path IS the source
-        // path (`photo.webp`), so a verbatim copy here targets the SAME staged
-        // file that the background image worker (`convert_single_image`) writes
-        // the RESIZED base into. When the converter OWNS that base (large,
-        // non-animated → in the conversion set), a verbatim copy collides with
-        // it — and on a WARM build the fast cache-link copy wins the race,
-        // shipping the full-resolution source while the emitted `<img srcset>`
-        // base descriptor advertises the smaller deployed width. The converter
-        // is the SOLE writer of the resized base, so skip this webp entirely
-        // (no write, no manifest entry — the image worker registers it via the
-        // coordinator channel, exactly as it does for a jpg/png source whose
-        // `photo.webp` base is a differently-named, non-colliding file).
-        //
-        // The decision here MUST agree byte-for-byte with
-        // `collect_images_for_conversion` (which decides the webp IS converted).
-        // We call the SAME `should_skip` predicate with the SAME `Default`
-        // config both call sites use (this verbatim path + the collector above).
-        // `source_oid` is `cached_oid` resolved via the SAME cheap stat-match
-        // fast path `collect_images_for_conversion` uses (falls back to ""
-        // on a miss, exactly like that call site) — this lets both callers
-        // consult the same `should_skip` format-probe cache instead
-        // of one of them recomputing the expensive probes on every build:
-        //   • None    → webp is converted → converter owns the base → skip here.
-        //   • Some(_) → AlreadySmall / AnimatedWebp / NotAnImage / … → the
-        //     converter never writes it → fall through and copy verbatim, else
-        //     the base 404s. Small + animated webp rely on this.
-        //
-        // A read failure fails SAFE (converter owns the base) rather than the
-        // old `.unwrap_or(0)` — see `webp_converter_owns_base` (follow-up #6).
-        if ext == "webp"
-            && webp_converter_owns_base(
-                file_path,
-                &ext,
-                file_size_opt,
-                &image_config,
-                &transforms,
-                cached_oid.as_deref().unwrap_or(""),
-            )
-        {
+        // The encoder plan is the authority for base ownership. A later stat
+        // failure or cloud transition must never give this path a second writer.
+        if converter_bases.contains(Path::new(&relative_path)) {
             continue;
         }
 
@@ -1345,39 +1265,18 @@ pub(crate) fn copy_deferred_assets(
         // page-tree path (e.g., "交互/sketch.html" → "interactive/sketch.html")
         let mapped_path = resolve_path_with_overrides(&relative_path, &ctx.dir_overrides);
 
+        // Claim before any deferred read: cloud-only sources still exist.
         live_asset_keys.insert(mapped_path.clone());
         // Also record the *source-relative* path for `sources` map pruning
         // below. Sources is keyed by source path (pre-mapping), unlike
         // `files` which is keyed by output path (post-mapping).
         live_source_keys.insert(relative_path.clone());
 
-        // An asset whose bytes are still in the cloud is asked for and skipped,
-        // NOT read. `store_file` hashes the whole file, and on a miss that read
-        // waits out the materialize deadline — 90 s, once per file, in this
-        // sequential loop. A vault with a few hundred evicted photos would spend
-        // hours here. The supervisor is what waits now, and the arrival triggers
-        // the rebuild that stores the asset properly.
-        //
-        // Both key sets are inserted FIRST, deliberately: they are what tells
-        // the stale-cleanup below that this file still exists. Skipping past
-        // them would make an offline photo indistinguishable from a deleted one
-        // and drop the still-good output the last build produced.
-        if cached_oid.is_none() && crate::build::icloud::is_evicted(file_path) {
-            crate::build::cloud_readiness::request_download(file_path);
-            log::debug!("[background-assets] Deferring {} — still in the cloud", relative_path);
-            continue;
-        }
-
-        let oid_result = if let Some(oid) = cached_oid {
-            cache_hits += 1;
-            Ok(oid)
-        } else {
-            cache_misses += 1;
-            object_store.store_file(file_path, crate::build::cache::RecordMode::Wait)
-        };
-
-        match oid_result {
-            Ok(oid) => {
+        match source_blob(file_path, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
+            &object_store, &mut cache_hits, &mut cache_misses)
+        {
+            Ok(None) => continue,
+            Ok(Some((oid, src_stat))) => {
                 // Deploy a SIZED/optimized raster for raster originals
                 // (jpg/jpeg/png decodable stills) instead of the full-resolution
                 // source. The output stays in the SOURCE's own format — jpg/jpeg
@@ -1471,7 +1370,7 @@ pub(crate) fn copy_deferred_assets(
                             &target,
                             &borrowed,
                             &oid,
-                            file_size,
+                            src_stat.size,
                             &object_store,
                             &transforms,
                         ) {
@@ -1555,8 +1454,10 @@ pub(crate) fn copy_deferred_assets(
                 continue;
             }
             let file_path = entry.path();
-            let relative_path = match file_path.strip_prefix(&moss_assets_dir) {
-                Ok(rel) => rel.to_string_lossy().to_string(),
+            let stub_target = crate::build::icloud::icloud_stub_target(file_path);
+            let effective = stub_target.as_deref().unwrap_or(file_path);
+            let relative_path = match effective.strip_prefix(&moss_assets_dir) {
+                Ok(rel) => moss_core::slug::normalize_separators(&rel.to_string_lossy()),
                 Err(_) => continue,
             };
 
@@ -1588,20 +1489,17 @@ pub(crate) fn copy_deferred_assets(
 
             live_asset_keys.insert(out_path.as_str().to_string());
 
-            // Inserted into live_asset_keys first, so the previous build's copy
-            // is not read as deleted, and only then skipped. `store_file` hashes
-            // the whole file: on an evicted theme asset that is a full
-            // materialize wait, serially, for every one of them, while
-            // `ui_bound` holds publishing back. Defer instead — the supervisor
-            // rebuilds when it lands.
-            if crate::build::icloud::is_evicted(file_path) {
-                crate::build::cloud_readiness::request_download(file_path);
-                log::debug!("[background-assets] Deferring .moss/theme/{} — still in the cloud", relative_path);
+            let source_key = format!(".moss/theme/{relative_path}");
+            live_source_keys.insert(source_key.clone());
+            if stub_target.is_some() {
+                crate::build::cloud_readiness::request_download(effective);
                 continue;
             }
-
-            match object_store.store_file(file_path, crate::build::cache::RecordMode::Wait) {
-                Ok(oid) => {
+            match source_blob(file_path, prev_sources.get(&source_key), prev_hashes_mtime_secs,
+                &object_store, &mut cache_hits, &mut cache_misses)
+            {
+                Ok(None) => continue,
+                Ok(Some((oid, stat))) => {
                     let target = out_path.to_disk(output_dir);
                     let moss_ext = file_path
                         .extension()
@@ -1614,6 +1512,8 @@ pub(crate) fn copy_deferred_assets(
                     if !place_blob(&object_store, &mut staged, placement, reporter) {
                         continue;
                     }
+                    site_hashes.sources.insert(source_key,
+                        crate::build::types::SourceMetadata::from_stat(oid.clone(), stat));
                     let hash =
                         OutputHash { memo_key: &oid, target: &target, fallback_oid: &oid, log_context: ".moss/theme output" };
                     record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &oid);

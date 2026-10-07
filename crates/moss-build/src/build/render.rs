@@ -5,6 +5,7 @@ mod source_evidence;
 pub use source_evidence::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 pub mod config;
 pub mod blocking;
+mod page_chrome;
 pub mod build_shared;
 pub mod credits;
 pub mod empty_home;

@@ -45,6 +45,8 @@ fn empty_cell() -> ServedCell {
 #[test]
 fn incomplete_rebuild_uses_immutable_current_then_ready_stage() {
     let (_tmp, mp) = vault(&[("complete", "article")]);
+    // A real build holds its lifecycle record through its cache-write lease.
+    let _record = lock_for(&mp);
     mp.set_current_ptr("complete").unwrap();
     stage_page(&mp, "article");
     let cell = empty_cell();
@@ -58,6 +60,9 @@ fn incomplete_rebuild_uses_immutable_current_then_ready_stage() {
     assert_eq!(read(&cell), mp.current_ptr());
     assert_eq!(std::fs::read_to_string(read(&cell).join("article/index.html")).unwrap(), "<html>complete article</html>");
 
+    // Admitting another folder must not evict this active build's record.
+    let unrelated = tempfile::tempdir().unwrap();
+    let _ = lock_for(&MossPaths::new(unrelated.path()));
     show_render(&mp, true);
     assert_eq!(read(&cell), mp.staging_dir());
 }
