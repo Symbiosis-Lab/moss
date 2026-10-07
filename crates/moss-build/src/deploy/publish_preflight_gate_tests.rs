@@ -11,6 +11,7 @@ fn record(folder: &str, generation: u64, missing_references: Vec<MissingReferenc
         PublishPreflightProjection {
             build_generation: generation,
             missing_references,
+            unresolved_inputs: Vec::new(),
         },
     );
 }

@@ -184,6 +184,21 @@ pub fn download_failures_for(folder: &Path, pending: &std::collections::HashSet<
     PREFETCH.failures_for(folder, pending)
 }
 
+/// Full paths for concrete errors in the sweep's current pending set. The
+/// sweep uses this only to answer an explicit file-list disclosure; progress
+/// events continue to carry a count and a three-name sample.
+pub(crate) fn download_failure_paths_for(
+    folder: &Path,
+    pending: &std::collections::HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    PREFETCH.failure_paths_for(folder, pending)
+}
+
+#[cfg(test)]
+pub(crate) fn record_download_failure_for_test(path: PathBuf) {
+    PREFETCH.record_failure_for_test(path);
+}
+
 /// Default bound on how long the background worker waits for one file to
 /// materialize before giving up and deferring it to the next preview.
 pub const MATERIALIZE_DEADLINE: Duration = Duration::from_secs(90);

@@ -247,7 +247,9 @@ fn preview_readiness_for(
         return PreviewReadiness::Pending;
     }
     let mut needed = std::collections::BTreeSet::new();
-    let listing = matches!(&requirement.source, PreviewSource::Generated);
+    // Authored pages also compose nav and child/card listings from the
+    // corpus. Until the renderer records a narrower per-page metadata read
+    // set, every page depends on the page metadata it could not read.
     let mut source_pending = false;
     let mut source_rel = None;
     if let PreviewSource::File(source) = &requirement.source {
@@ -263,7 +265,7 @@ fn preview_readiness_for(
             }
         }
     }
-    let unresolved = unresolved_preview_entries(evidence, &needed, listing, uses_places, source_rel.as_deref());
+    let unresolved = unresolved_preview_entries(evidence, &needed, true, uses_places, source_rel.as_deref());
     if output.is_none() {
         return if source_pending || !unresolved.is_empty() { PreviewReadiness::Pending }
             else { PreviewReadiness::Missing };

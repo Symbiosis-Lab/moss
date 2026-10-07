@@ -590,18 +590,32 @@ async fn an_unreadable_page_keeps_its_published_address_until_a_fresh_render() {
         let (first, _) = vault.seal_and_tap().await;
         assert!(first.source_to_output().contains_key("about.md"), "sanity: the page built");
         vault.publish(&first);
+        let prior_page = std::fs::read(vault.mp.current_ptr().join("about/index.html")).unwrap();
 
         if unreadable {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         } else {
             std::fs::write(&path, b"---\ntitle: About\n---\n\n\xff\xfe\n").unwrap();
         }
-        let (second, set) = vault.seal_and_tap().await;
+        let mut host = vault.host();
+        let captured = crate::deploy::one_shot::capture(&mut host);
+        vault.build_with(host).await;
+        vault.drained().await;
+        settle(&vault.mp).await;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert!(second.source_to_output().contains_key("about.md"), "prior output must survive: unreadable={unreadable}");
-        assert!(removed_pairs(&set).is_empty(), "unreadable={unreadable}");
-        assert!(second.unresolved_inputs().iter().any(|path| path == "about.md"));
-        assert!(crate::deploy::refuse_unresolved_inputs(&second).is_err());
+        assert!(captured.sealed.lock().unwrap().is_none(), "incomplete attempt must not replace the selected seal");
+        assert_eq!(std::fs::read(vault.mp.current_ptr().join("about/index.html")).unwrap(), prior_page);
+        let projection = crate::system::build_records::records()
+            .publish_preflight(vault.folder.to_str().unwrap()).expect("latest attempt recorded");
+        assert!(projection.unresolved_inputs.iter().any(|source| source == "about.md"));
+        assert!(crate::deploy::refuse_publish(vault.folder.to_str().unwrap()).is_err());
+
+        std::fs::write(&path, "---\ntitle: About\n---\n\nrestored\n").unwrap();
+        let (recovered, set) = vault.seal_and_tap().await;
+        assert!(recovered.unresolved_inputs().is_empty());
+        assert!(removed_pairs(&set).is_empty());
+        assert!(crate::system::build_records::records()
+            .publish_preflight(vault.folder.to_str().unwrap()).unwrap().unresolved_inputs.is_empty());
     }
 }

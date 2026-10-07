@@ -76,6 +76,7 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// `NeedsSetup` short-circuits earlier in `push_site_command_body`, so reaching
 /// here is always a genuine deploy attempt.
 pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
+    crate::deploy::refuse_publish(&cx.folder_path.to_string_lossy())?;
     crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path)?;
     crate::deploy::refuse_unresolved_inputs(sealed)?;
     let full = uuid::Uuid::new_v4().simple().to_string();
@@ -782,8 +783,6 @@ pub async fn run_hosted_deploy(
     crate::deploy::refuse_publish(&folder_str)?;
 
     let sealed = super::one_shot::require_sealed(taken)?;
-    crate::deploy::refuse_foreign_inputs(&sealed, folder)?;
-    crate::deploy::refuse_unresolved_inputs(&sealed)?;
 
     let ports = super::one_shot::HeadlessDeployPorts;
     let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
@@ -923,6 +922,40 @@ mod tests {
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register(&sp, b"<html>Home</html>", HashBucket::Files);
         pending.seal()
+    }
+
+    #[tokio::test]
+    async fn old_clean_seal_cannot_publish_over_a_latest_pending_attempt() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let previous_url = std::env::var("MOSS_SETA_URL").ok();
+        std::env::set_var("MOSS_SETA_URL", "http://127.0.0.1:0");
+
+        let dir = tempfile::tempdir().unwrap();
+        let sealed = sealed_fixture(dir.path());
+        crate::system::build_records::records().install_publish_preflight(
+            dir.path().to_str().unwrap(),
+            crate::build::types::PublishPreflightProjection {
+                build_generation: 2,
+                missing_references: Vec::new(),
+                unresolved_inputs: vec!["about.md".into()],
+            },
+        );
+        let identity = Identity::generate().unwrap();
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(), identity: &identity, site_id: "pending-test",
+            sink: &sink, ports: &spy, events_lock: &events_lock,
+        };
+        let result = push_site_inner(&sealed, &cx).await;
+        match previous_url {
+            Some(url) => std::env::set_var("MOSS_SETA_URL", url),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        let error = result.expect_err("latest pending attempt must refuse before network");
+        assert!(error.contains("about.md"), "{error}");
+        assert!(spy.events.lock().unwrap().is_empty());
     }
 
     /// One recorded `begin_moss_verification` call.

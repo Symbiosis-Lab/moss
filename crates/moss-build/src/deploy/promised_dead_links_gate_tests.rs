@@ -86,7 +86,7 @@ fn a_rebuild_that_finds_nothing_pending_clears_an_earlier_refusal() {
 fn either_rule_alone_is_enough_to_refuse() {
     crate::system::build_records::records().install_publish_preflight(
         "/promise-either",
-        crate::build::types::PublishPreflightProjection { build_generation: 1, missing_references: Vec::new() },
+        crate::build::types::PublishPreflightProjection { build_generation: 1, missing_references: Vec::new(), unresolved_inputs: Vec::new() },
     );
     record("/promise-either", vec![dead("clip/index.html", "/videos/clip.thumb.jpg")]);
     let err = refuse_publish("/promise-either").expect_err("the in-flight rule alone must refuse");

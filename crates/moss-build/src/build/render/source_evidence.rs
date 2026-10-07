@@ -58,6 +58,10 @@ pub struct PublishPreflightProjection {
     /// an older build that happens to complete after it.
     pub build_generation: u64,
     pub missing_references: Vec<MissingReferenceOccurrence>,
+    /// Required inputs this attempt could not read. A clean later attempt
+    /// replaces this list, even while an older complete seal remains selected.
+    #[serde(default)]
+    pub unresolved_inputs: Vec<String>,
 }
 
 /// The one owner of a fresh source's bytes between parsing and the cache

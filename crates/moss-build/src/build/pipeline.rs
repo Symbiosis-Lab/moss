@@ -182,9 +182,30 @@ fn previous_route_present(
     previous: &crate::types::content::SiteHashes,
     current_dir: &Path,
 ) -> bool {
+    use crate::system::folder_session::PreviewSource;
     let output = previous.files.keys()
         .find(|key| crate::build::served_path::served_address(key) == requirement.url_path);
-    output.is_some_and(|key| crate::build::io_utils::output_present(&current_dir.join(key)))
+    output.is_some_and(|key| {
+        let source_matches = match &requirement.source {
+            PreviewSource::File(source) => {
+                let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
+                previous.source_to_output.get(&rel).is_some_and(|mapped| mapped == key)
+            }
+            PreviewSource::Generated => !previous.source_to_output.values().any(|mapped| mapped == key),
+            // An old generated page can share this URL with a newly authored
+            // source still in the cloud. The route alone proves no owner.
+            PreviewSource::Unresolved => false,
+        };
+        // `hashes.json` is advertised before materialization. A failed or
+        // superseded promotion can leave it ahead of `current`, so verify the
+        // immutable route's bytes before using that manifest as proof.
+        let matches_current = previous.files.get(key).is_some_and(|entry| {
+            let (mode, hash) = crate::types::content::parse_entry(entry);
+            mode == crate::types::content::MODE_FILE && std::fs::read(current_dir.join(key))
+                .is_ok_and(|bytes| format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&bytes)) == hash)
+        });
+        source_matches && matches_current
+    })
 }
 
 /// Promote the current page and shared configuration before background work.
@@ -349,6 +370,11 @@ fn run_notebook_processing(
     if items.is_empty() {
         return Vec::new();
     }
+    // Register before any asset-resolution fallback can leave the function.
+    // A skipped notebook must remain an unresolved input of this attempt.
+    for item in &items {
+        evidence.require(&std::path::Path::new(source_path).join(&item.source_path), super::cloud_ledger::InputRole::PageContent);
+    }
 
     // (Pre-Track A this called `svc.notebook_cancellation.start_new_conversion()`
     // to clear the legacy AtomicBool flag at the start of each batch. The
@@ -413,8 +439,21 @@ fn run_notebook_processing(
                 // produces relative paths under the source folder — known valid.
                 let out_path = crate::build::served_path::ServedPath::from_source(&item.source_path).unwrap();
                 match stage_copy(&source, &out_path, staging_dir) {
-                    Ok(hash) => fallback_paths.push((out_path, hash)),
-                    Err(e) => log::warn!("Failed to copy notebook {}: {}", item.source_path, e),
+                    Ok(hash) => {
+                        // Hash the bytes actually copied into staging using
+                        // the same source-evidence hash as other notebook reads.
+                        match std::fs::read(staging_dir.join(out_path.as_str())) {
+                            Ok(bytes) if crate::build::assets::paths::compute_binary_hash(&bytes) == hash =>
+                                evidence.read_bytes(&source, &bytes),
+                            Ok(_) => evidence.read_error(&source, "notebook changed during copy".into()),
+                            Err(e) => evidence.read_error(&source, e.to_string()),
+                        }
+                        fallback_paths.push((out_path, hash));
+                    }
+                    Err(e) => {
+                        evidence.read_error(&source, e.clone());
+                        log::warn!("Failed to copy notebook {}: {}", item.source_path, e);
+                    }
                 }
             }
             return fallback_paths;
@@ -588,7 +627,6 @@ fn run_notebook_processing(
         // staging/canonical dirs because the detached worker thread may
         // outlive this iteration's borrow.
         let source = std::path::Path::new(source_path).join(&item.source_path);
-        evidence.require(&source, super::cloud_ledger::InputRole::PageContent);
         let item_source_path = item.source_path.clone();
         let staging_owned = staging_dir.to_path_buf();
         let evidence_for_copy = evidence.clone();
@@ -637,6 +675,10 @@ fn run_notebook_processing(
         match notebook_paths {
             IoOutcome::Done(paths) => generated_paths.extend(paths),
             IoOutcome::TimedOut => {
+                // The detached reader may succeed after this build has already
+                // skipped its receipts. Keep that late success from clearing
+                // the exact attempt's unresolved-input evidence.
+                evidence.read_error(&std::path::Path::new(source_path).join(&item.source_path), "notebook processing timed out".into());
                 // Surface the skip to the UI as a warning attached to the
                 // notebooks progress channel. Without this, the user sees a
                 // notebook silently skipped (the log line is invisible from
@@ -661,6 +703,7 @@ fn run_notebook_processing(
                 continue;
             }
             IoOutcome::Errored(_) => {
+                evidence.read_error(&std::path::Path::new(source_path).join(&item.source_path), "notebook processing failed".into());
                 // Error already logged inside with_io_timeout. Don't surface
                 // as a UI warning yet — errored I/O is often transient (file
                 // deleted mid-build by cloud-sync) and noisy to toast. Future
@@ -837,6 +880,9 @@ pub struct PipelineRunOutput {
     /// Missing authored asset evidence from this exact build. Empty is the
     /// completed clean answer and is meaningful.
     pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    /// Structural inputs this attempt still needs before its generation can
+    /// replace the durable baseline.
+    pub unresolved_inputs: Vec<String>,
     pub cancelled: bool,
     /// Whether the build left a home page in the directory the preview serves.
     ///
@@ -850,18 +896,9 @@ pub struct PipelineRunOutput {
     /// `false` on an empty site too: there is genuinely nothing to show. The
     /// caller distinguishes the cases via `is_empty`.
     pub home_ready: bool,
-    /// Whether this build's output may replace the site already published.
-    ///
-    /// `false` only when the folder closed mid-build (`cancelled`) — this
-    /// build's own preview switch was already declined, and the seal tail
-    /// must decline to repoint `current` at it too
-    /// (`ship::Promotion::Withheld`). Until 2026-09-17 this was also `false`
-    /// whenever a structural source — a page, the config, the user
-    /// stylesheet — was still in the cloud; see the deleted `should_publish`
-    /// for why that stopped being this flag's job. Staleness from an
-    /// unreadable structural source is now recorded on the exact sealed
-    /// manifest for the publish preflight, not a
-    /// reason to withhold the build the user is looking at.
+    /// Whether this build's focused output may replace the preview. The seal
+    /// tail separately checks complete-generation evidence before changing
+    /// the durable manifest or `current` generation.
     pub publishable: bool,
     /// The render number `lifecycle::show_render` minted for this build, which
     /// the seal tail hands to `lifecycle::promote`. `None` for a build that
@@ -1112,6 +1149,21 @@ fn build_inner(
     // If we read after, we'd be comparing new hashes against themselves!
     let previous_hashes = load_previous_hashes(folder_path);
     log::debug!(target: "timing", "[build] staging: load_hashes: {:?}", build_start.elapsed());
+    let home_substituted = home_page_is_a_substitute(project_structure, folder_path);
+
+    let initial_request = services
+        .and_then(|s| s.session.as_ref())
+        .and_then(|s| s.preview_requirement());
+    let elected_home = crate::system::folder_session::PreviewRequirement {
+        url_path: "/".into(),
+        source: project_structure.homepage_file.as_ref()
+            .map(|path| crate::system::folder_session::PreviewSource::File(path.into()))
+            .unwrap_or(crate::system::folder_session::PreviewSource::Generated),
+        revision: 0,
+    };
+    let initial_route = initial_request.as_ref().unwrap_or(&elected_home);
+    let prior_route = !(home_substituted && initial_route.url_path == "/")
+        && previous_route_present(initial_route, &previous_hashes, &paths.current_ptr());
 
     // An evicted home page used to block this thread here for up to
     // HOME_PAGE_DEADLINE, polling for it to materialize before the build could
@@ -1169,6 +1221,11 @@ fn build_inner(
     let _stage_write_guard = services
         .and_then(|s| s.session.as_ref())
         .map(|s| s.blocking_lock_stage_write());
+    // A complete prior route can stay on immutable `current` while staging is
+    // rewritten. Final readiness below decides whether to show the new stage.
+    if prior_route {
+        crate::build::lifecycle::protect_current_before_rebuild(&paths);
+    }
     let lock_wait = t_lock.elapsed();
     log::log!(
         target: "timing",
@@ -1533,7 +1590,6 @@ fn build_inner(
     // gate after it would paint the substitute home page first and drop the
     // waiting screen over it a moment later — a flash of a site the user does
     // not have. Emitted here, the frontend never renders the wrong answer.
-    let home_substituted = home_page_is_a_substitute(project_structure, folder_path);
     let home_ready = crate::build::io_utils::output_present(&stage_dir.join("index.html")) && !home_substituted;
     // Raising the gate is a claim about the CLOUD, and `home_substituted` is
     // already exactly that claim: it is true only when a file still up there
@@ -1569,6 +1625,7 @@ fn build_inner(
             build_documents: documents,
             content_hashes: content_hashes_for_watch,
             missing_references: missing_references_for_publish,
+            unresolved_inputs: input_evidence.unresolved_structural(),
             cancelled: true,
             home_ready,
             // The folder is closed; nothing downstream should promote this
@@ -1590,28 +1647,23 @@ fn build_inner(
         .map(|source| (source.clone(), embed_graph.embed_closure(source).into_iter().collect()))
         .collect();
     pending.set_preview_dependencies(preview_embeds, place_maps_for_places_data.is_some());
+    // Navigation may change while this render runs; only the current request
+    // may decide which generation becomes visible.
     let current_request = services
         .and_then(|s| s.session.as_ref())
         .and_then(|s| s.preview_requirement());
-    let elected_home = crate::system::folder_session::PreviewRequirement {
-        url_path: "/".into(),
-        source: project_structure.homepage_file.as_ref()
-            .map(|path| crate::system::folder_session::PreviewSource::File(path.into()))
-            .unwrap_or(crate::system::folder_session::PreviewSource::Generated),
-        revision: 0,
-    };
     let request = current_request.as_ref().unwrap_or(&elected_home);
-    let prior_route = previous_route_present(request, &previous_hashes, &paths.current_ptr());
-    let waiting = matches!(pending.preview_readiness(request), crate::build::manifest::PreviewReadiness::Pending)
-        && !prior_route;
-    // Whether this build's output may replace what is already served — a
-    // different question from whether to cover the window with the waiting
-    // screen (`waiting`, above). Always true here: the only remaining reason
-    // to withhold is the folder-closed cancellation, which already returned
-    // above before this line runs. See the deleted `should_publish` for why
-    // structural completeness no longer decides this. Carried out to the seal
-    // tail in `PipelineRunOutput`.
-    let publishable = true;
+    let prior_route = !(home_substituted && request.url_path == "/")
+        && previous_route_present(request, &previous_hashes, &paths.current_ptr());
+    let focused_pending = matches!(pending.preview_readiness(request), crate::build::manifest::PreviewReadiness::Pending);
+    let waiting = focused_pending && !prior_route;
+    if focused_pending && prior_route {
+        crate::build::lifecycle::protect_current_before_rebuild(&paths);
+    }
+    // This flag describes the preview switch and watcher baseline. The seal
+    // tail separately checks the complete generation's input evidence before
+    // changing the durable build baseline or promoting `current`.
+    let publishable = !focused_pending;
     if waiting {
         super::cloud_readiness::mark_gated(folder_path);
         emit_cloud_gate(true, &project_structure.evicted_paths, cloud_outstanding);
@@ -1980,6 +2032,7 @@ fn build_inner(
         build_documents: documents,
         content_hashes: content_hashes_for_watch,
         missing_references: missing_references_for_publish,
+        unresolved_inputs: input_evidence.unresolved_structural(),
         cancelled: false,
         home_ready,
         publishable,

@@ -264,6 +264,32 @@ mod tests {
     }
 
     #[test]
+    fn skipped_notebook_cannot_be_cleared_by_a_late_reader() {
+        let root = Path::new("/site");
+        let notebook = root.join("analysis.ipynb");
+        for reason in ["notebook processing timed out", "notebook processing failed"] {
+            let attempt = InputEvidence::new(root);
+            attempt.require(&notebook, InputRole::PageContent);
+            let worker = attempt.clone();
+            let source = notebook.clone();
+            let (go, ready) = std::sync::mpsc::channel::<()>();
+            let thread = std::thread::spawn(move || {
+                ready.recv().unwrap();
+                worker.read_bytes(&source, b"late success");
+            });
+            attempt.read_error(&notebook, reason.into());
+            go.send(()).unwrap();
+            thread.join().unwrap();
+            assert_eq!(attempt.unresolved_structural(), ["analysis.ipynb"]);
+
+            let retry = InputEvidence::new(root);
+            retry.require(&notebook, InputRole::PageContent);
+            retry.read_bytes(&notebook, b"late success");
+            assert!(retry.unresolved_structural().is_empty());
+        }
+    }
+
+    #[test]
     fn two_different_reads_in_one_attempt_cannot_certify_either_version() {
         let root = Path::new("/site");
         let evidence = InputEvidence::new(root);

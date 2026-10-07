@@ -304,6 +304,7 @@ mod tests {
                     line: 1,
                 },
             }],
+            unresolved_inputs: vec![],
         }
     }
 
@@ -343,6 +344,25 @@ mod tests {
         let installed = records.publish_preflight("/tmp/ordered-vault").expect("newer projection remains");
         assert_eq!(installed.build_generation, 2);
         assert_eq!(installed.missing_references[0].reference, "newer.png");
+    }
+
+    #[test]
+    fn ordered_preflight_keeps_pending_inputs_until_a_cleaner_newer_attempt() {
+        let records = BuildRecords::default();
+        let folder = "/tmp/ordered-cloud-vault";
+        let mut pending = projection(2, "unused");
+        pending.missing_references.clear();
+        pending.unresolved_inputs = vec!["about.md".into()];
+        records.install_publish_preflight(folder, pending);
+        let mut old_clean = projection(1, "unused");
+        old_clean.missing_references.clear();
+        records.install_publish_preflight(folder, old_clean);
+        assert_eq!(records.publish_preflight(folder).unwrap().unresolved_inputs, ["about.md"]);
+
+        let mut new_clean = projection(3, "unused");
+        new_clean.missing_references.clear();
+        records.install_publish_preflight(folder, new_clean);
+        assert!(records.publish_preflight(folder).unwrap().unresolved_inputs.is_empty());
     }
 
 }

@@ -17,7 +17,7 @@
         "crates/moss-build/src/build/media/pipeline.rs": 1800,
         "crates/moss-build/src/build/media/video.rs": 2300,
         "crates/moss-build/src/build/page/meta.rs": 1700,
-        "crates/moss-build/src/build/pipeline.rs": 2200,
+        "crates/moss-build/src/build/pipeline.rs": 2300,
         "crates/moss-build/src/build/render/blocking.rs": 4000,
         "crates/moss-build/src/build/render/html.rs": 1800,
         "crates/moss-build/src/build/scan/scan.rs": 1600,

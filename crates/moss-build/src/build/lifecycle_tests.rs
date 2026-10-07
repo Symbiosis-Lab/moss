@@ -42,6 +42,26 @@ fn empty_cell() -> ServedCell {
     Arc::new(RwLock::new(PathBuf::new()))
 }
 
+#[test]
+fn incomplete_rebuild_uses_immutable_current_then_ready_stage() {
+    let (_tmp, mp) = vault(&[("complete", "article")]);
+    mp.set_current_ptr("complete").unwrap();
+    stage_page(&mp, "article");
+    let cell = empty_cell();
+    adopt_server(&mp, &cell);
+    show_render(&mp, true);
+    assert_eq!(read(&cell), mp.staging_dir());
+    assert!(park_for_rebuild(&mp, false, Default::default()).is_none());
+
+    protect_current_before_rebuild(&mp);
+    std::fs::write(mp.staging_dir().join("article/index.html"), "<html>partial</html>").unwrap();
+    assert_eq!(read(&cell), mp.current_ptr());
+    assert_eq!(std::fs::read_to_string(read(&cell).join("article/index.html")).unwrap(), "<html>complete article</html>");
+
+    show_render(&mp, true);
+    assert_eq!(read(&cell), mp.staging_dir());
+}
+
 /// A withheld render leaves the preview where the park put it, and the next
 /// build may not sweep while the withheld build's workers still write staging.
 ///

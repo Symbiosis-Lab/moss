@@ -2,12 +2,13 @@
 //! may unlink from staging, and which render `current` holds.
 //!
 //! One record per `.moss` directory, and the only writer of the served pointer.
-//! The rule it keeps: the preview never moves from a tree showing render r to a
-//! generation older than r. A rebuild parks the preview on `current` only once
-//! the last render shown on staging has been promoted there; otherwise the
-//! preview stays on staging and that build unlinks nothing. The one sanctioned
-//! step back is [`withdraw_render`], taken when the render on screen is itself
-//! the tree that could not be read.
+//! A rebuild normally parks on `current` only after that generation catches up
+//! with the render shown on staging; otherwise it leaves staging in place and
+//! grants no sweep permit. When the selected route has a verified copy in
+//! `current`, [`protect_current_before_rebuild`] may briefly show that older
+//! complete copy while staging is rewritten. A ready new render returns the
+//! preview to staging. [`withdraw_render`] also returns to the older copy when
+//! the visible render itself proves unreadable.
 //!
 //! Nothing here is persisted. Every render number was minted by this process,
 //! and the two that get compared are `Option`s that start `None`, so a number
@@ -298,6 +299,18 @@ pub(crate) fn park_for_rebuild(
         others_writing
     );
     None
+}
+
+/// Keep an exact prior route on the immutable current generation while a
+/// new render rewrites staging. This moves only the served pointer;
+/// it grants no sweep permit and changes no render or promotion epoch.
+pub(crate) fn protect_current_before_rebuild(mp: &MossPaths) {
+    let current = mp.current_ptr();
+    if !current.exists() { return }
+    let record = lock_for(mp);
+    if let Some(cell) = &record.state().served {
+        point(cell, &current);
+    };
 }
 
 /// Mint this render's number and, when it may be shown, point the preview at

@@ -21,7 +21,11 @@ use crate::system::folder_session::FolderSession;
 use super::{progress, walk};
 use super::{CLOUD_WALK_EVERY_TICKS, HEARTBEAT_EVERY, LOCAL_WALK_EVERY_TICKS, UNAVAILABLE_AFTER};
 
-pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
+pub(crate) async fn run(
+    session: Arc<FolderSession>,
+    host: super::SweepHost,
+    mut unavailable_rx: tokio::sync::mpsc::Receiver<super::UnavailableFilesQuery>,
+) {
     let super::SweepHost { dispatch, reporter, emit, cadence } = host;
     let folder = session.folder.clone();
     let folder_str = folder.to_string_lossy().to_string();
@@ -35,7 +39,13 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
 
     // Seed observations before the first sleep. Requests enter the shared
     // pool in small batches so foreground page inputs retain capacity.
-    let seed = walk::run_pass(&folder, None, None, None, false).await;
+    let seed = while_servicing_queries(
+        walk::run_pass(&folder, None, None, None, false),
+        &mut unavailable_rx,
+        &folder,
+        None,
+    )
+    .await;
     let mut pending: HashSet<PathBuf> = seed.walk.dataless.iter().cloned().collect();
     let mut background_cursor = 0;
     progress::request_downloads(&pending, &mut background_cursor);
@@ -117,9 +127,22 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
     let mut last_heartbeat = Instant::now();
 
     loop {
-        if tick_seam {
-            tokio::time::sleep(tick_every).await;
-        } else if let Tick::CadenceChanged(Cadence::Background) = ticker.next_tick().await {
+        let timer = async {
+            if tick_seam {
+                tokio::time::sleep(tick_every).await;
+                Tick::Elapsed
+            } else {
+                ticker.next_tick().await
+            }
+        };
+        let tick = while_servicing_queries(
+            timer,
+            &mut unavailable_rx,
+            &folder,
+            Some(&pending),
+        )
+        .await;
+        if !tick_seam && matches!(tick, Tick::CadenceChanged(Cadence::Background)) {
             // A fresh flip to Background lets the newly armed slow sleep
             // govern instead of running this tick's body immediately.
             continue;
@@ -229,12 +252,17 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
             force_walk = false;
             let drift_allowed = worker.is_some();
             let stash = walk::stashed_baseline(&folder_str);
-            let mut outcome = walk::run_pass(
+            let mut outcome = while_servicing_queries(
+                walk::run_pass(
+                    &folder,
+                    stash,
+                    baseline_cache.take(),
+                    resume_cursor.take(),
+                    drift_allowed,
+                ),
+                &mut unavailable_rx,
                 &folder,
-                stash,
-                baseline_cache.take(),
-                resume_cursor.take(),
-                drift_allowed,
+                Some(&pending),
             )
             .await;
             if session.cancel.is_cancelled() {
@@ -495,7 +523,13 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
                 (Some(t), false) => t,
                 _ => crate::build::BuildTrigger::Full,
             };
-            dispatch(worker::RebuildRequest { rename_pairs: Vec::new(), trigger, gate_paths: None }).await;
+            while_servicing_queries(
+                dispatch(worker::RebuildRequest { rename_pairs: Vec::new(), trigger, gate_paths: None }),
+                &mut unavailable_rx,
+                &folder,
+                Some(&pending),
+            )
+            .await;
             arrivals_since_rebuild = 0;
             first_arrival_at = None;
             // The dispatch is an ENQUEUE, so this stamp measures the
@@ -567,6 +601,53 @@ pub(crate) async fn run(session: Arc<FolderSession>, host: super::SweepHost) {
 /// doesn't have to drive the whole sweep loop.
 pub(crate) fn folder_degraded(worker: Option<&worker::WorkerHandle>, folder: &str) -> bool {
     worker.is_some_and(|h| h.is_degraded()) || supervision::get(folder).is_some_and(|h| h.is_degraded())
+}
+
+/// Wait for one existing owner future while answering detail requests from
+/// the last completed pending snapshot. Pinning preserves the original work
+/// across a request; a closed owner channel simply disables the side route.
+pub(super) async fn while_servicing_queries<F: std::future::Future>(
+    future: F,
+    unavailable_rx: &mut tokio::sync::mpsc::Receiver<super::UnavailableFilesQuery>,
+    folder: &std::path::Path,
+    pending: Option<&HashSet<PathBuf>>,
+) -> F::Output {
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            output = &mut future => return output,
+            query = unavailable_rx.recv() => match query {
+                Some(query) => answer_unavailable_query(query, folder, pending),
+                None => return future.await,
+            },
+        }
+    }
+}
+
+pub(super) fn answer_unavailable_query(
+    query: super::UnavailableFilesQuery,
+    folder: &std::path::Path,
+    pending: Option<&HashSet<PathBuf>>,
+) {
+    if query.reply.is_closed() {
+        return;
+    }
+    let Some(pending) = pending else {
+        let _ = query.reply.send(Err("Folder sweep is still collecting its status".to_string()));
+        return;
+    };
+    let paths = crate::build::cloud_readiness::download_failure_paths_for(folder, pending);
+    let files: Vec<String> = paths
+        .iter()
+        .filter_map(|path| path.strip_prefix(folder).ok())
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let result = if files.len() == paths.len() {
+        Ok(files)
+    } else {
+        Err("A failed file was outside the active folder".to_string())
+    };
+    let _ = query.reply.send(result);
 }
 
 /// A pending path leaves the unresolved set only after it can be opened.

@@ -448,14 +448,33 @@ impl Prefetcher {
     /// Concrete errors among the sweep's current pending set. Names are a
     /// short sample; the count always covers the whole intersection.
     pub fn failures_for(&self, folder: &Path, pending: &HashSet<PathBuf>) -> (usize, Vec<String>) {
-        let Ok(mut q) = self.inner.queue.lock() else { return (0, Vec::new()) };
-        q.failures.retain(|path| !path.starts_with(folder) || pending.contains(path));
-        let mut paths: Vec<_> = pending.iter().filter(|p| q.failures.contains(*p)).collect();
-        paths.sort();
+        let paths = self.failure_paths_for(folder, pending);
         let names = paths.iter().take(3).map(|p| {
             p.file_name().unwrap_or(p.as_os_str()).to_string_lossy().into_owned()
         }).collect();
         (paths.len(), names)
+    }
+
+    /// Full paths for the sweep's current pending read failures. The pending
+    /// intersection is the authority: old queue failures cannot outlive the
+    /// sweep's current view of the folder.
+    pub fn failure_paths_for(&self, folder: &Path, pending: &HashSet<PathBuf>) -> Vec<PathBuf> {
+        let Ok(mut q) = self.inner.queue.lock() else { return Vec::new() };
+        q.failures.retain(|path| !path.starts_with(folder) || pending.contains(path));
+        let mut paths: Vec<_> = pending
+            .iter()
+            .filter(|path| path.starts_with(folder) && q.failures.contains(*path))
+            .cloned()
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_failure_for_test(&self, path: PathBuf) {
+        if let Ok(mut q) = self.inner.queue.lock() {
+            q.failures.insert(path);
+        }
     }
 
     /// Stop accepting work and release every idle reader. Threads already

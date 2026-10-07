@@ -565,6 +565,16 @@ async fn arm_list_vault_terms(ctx: &Session, _args: Value) -> ArmResult {
     to_value(crate::build::terms::list_vault_terms_in(&map))
 }
 
+/// Full failed-file details use the active session root, never a caller-chosen
+/// path. The live sweep owns the pending/read-failure intersection.
+async fn arm_get_cloud_unavailable_files(ctx: &Session, _args: Value) -> ArmResult {
+    let root = ctx.vault().path();
+    let files = crate::ops::watch::sweep::unavailable_files_for(root)
+        .await
+        .map_err(ArmError::Command)?;
+    to_value(files)
+}
+
 // ── Versions arms (publish history) ───────────────────────────────────────────
 //
 // The five commands of the Versions surface, each calling the SAME
@@ -794,6 +804,7 @@ carrier! {
         validate_content => arm_validate_content,
         get_publish_preflight => arm_get_publish_preflight,
         list_vault_terms => arm_list_vault_terms,
+        get_cloud_unavailable_files => arm_get_cloud_unavailable_files,
         list_versions => arm_list_versions,
         read_version => arm_read_version,
         reveal_history_store => arm_reveal_history_store,
@@ -1065,6 +1076,16 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn cloud_unavailable_details_are_an_authenticated_session_read() {
+        let (_dir, ctx) = scratch();
+        let result = dispatch_authed_read(&ctx, "get_cloud_unavailable_files", Value::Null)
+            .await
+            .expect("the command is on the authed-read carrier");
+        let error = result.expect_err("a scratch vault has no active sweep");
+        assert!(matches!(error, ArmError::Command(message) if message == "No active folder sweep"));
+    }
+
     /// A listed pure-args command dispatches to `Some(Ok(_))` and returns the
     /// command's real result.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1088,7 +1109,7 @@ mod tests {
         let root = dir.path().to_string_lossy().to_string();
         crate::system::build_records::records().install_publish_preflight(
             &root,
-            crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![] },
+            crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![], unresolved_inputs: vec![] },
         );
 
         let out = dispatch_authed_read(&ctx, "get_publish_preflight", json!({ "folder": "/somewhere/else" }))

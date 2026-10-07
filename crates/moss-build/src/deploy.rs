@@ -380,6 +380,9 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
     let records = crate::system::build_records::records();
     if let Some(projection) = records.publish_preflight(folder_path) {
+        if !projection.unresolved_inputs.is_empty() {
+            return Err(stale_source_refusal_text(&projection.unresolved_inputs));
+        }
         if !projection.missing_references.is_empty() {
             return Err(refusal_text(projection.missing_references.len()));
         }

@@ -518,6 +518,9 @@ pub async fn start_server(
                                 // download lands (false on Linux, where no
                                 // sync client sets a stat-time bit).
                                 if is_evicted(&src_abs) {
+                                    crate::build::cloud_readiness::request_download_foreground(
+                                        &src_abs,
+                                    );
                                     log::debug!(
                                         "[preview] source passthrough for {} skipped — {} is cloud-evicted",
                                         normalized,

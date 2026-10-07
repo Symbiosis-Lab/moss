@@ -152,11 +152,15 @@ fn concrete_failures_keep_their_full_count_and_clear_after_success() {
     let (count, names) = p.failures_for(Path::new("/vault"), &pending);
     assert_eq!(count, 6);
     assert_eq!(names.len(), 3);
+    let all = p.failure_paths_for(Path::new("/vault"), &pending);
+    assert_eq!(all.len(), 6);
+    assert!(all.windows(2).all(|pair| pair[0] < pair[1]), "full paths are sorted");
     let other = PathBuf::from("/other/failed.md");
     p.read(&other);
     assert!(wait_until(|| p.snapshot().done == 7));
     let active = HashSet::from([pending.iter().next().unwrap().clone()]);
     assert_eq!(p.failures_for(Path::new("/vault"), &active).0, 1);
+    assert_eq!(p.failure_paths_for(Path::new("/vault"), &active), active.iter().cloned().collect::<Vec<_>>());
     assert_eq!(p.inner.queue.lock().unwrap().failures.len(), 2);
     assert_eq!(p.failures_for(Path::new("/other"), &HashSet::from([other])).0, 1);
 
@@ -164,6 +168,7 @@ fn concrete_failures_keep_their_full_count_and_clear_after_success() {
     for path in &pending { p.read(path); }
     assert!(wait_until(|| p.snapshot().done == 13));
     assert_eq!(p.failures_for(Path::new("/vault"), &pending), (0, Vec::new()));
+    assert!(p.failure_paths_for(Path::new("/vault"), &pending).is_empty(), "recovery clears the disclosed set");
 }
 
 #[test]

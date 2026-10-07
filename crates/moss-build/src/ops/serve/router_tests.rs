@@ -870,7 +870,7 @@ async fn source_passthrough_serves_full_original_for_pending_webp() {
 
     let site = TempDir::new().unwrap();
     let src = TempDir::new().unwrap();
-    // A distinctive, non-trivial original body (> the 50-byte stub).
+    // A distinctive, non-trivial original body (larger than the tiny stub).
     let original_bytes: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
     let source_file = src.path().join("hero.jpg");
     std::fs::write(&source_file, &original_bytes).unwrap();
@@ -1122,6 +1122,15 @@ async fn pending_passthrough_with_unreadable_source_falls_back_to_transparent_st
         "unreadable source falls back to the transparent-webp stub; got: {}",
         content_type
     );
+    let mut body = Vec::new();
+    std::io::Read::read_to_end(&mut response.into_reader(), &mut body).unwrap();
+    let decoded = webp::Decoder::new(&body)
+        .decode()
+        .expect("the HTTP body must be a valid WebP image")
+        .to_image()
+        .to_rgba8();
+    assert_eq!(decoded.dimensions(), (1, 1));
+    assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
 
     let _ = shutdown_tx.send(());
 }
@@ -1150,7 +1159,7 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
 
     let registry = Arc::new(AssetRegistry::new());
     registry.set_pending("assets/hero.webp".to_string(), Some((100, 100)), None);
-    registry.set_source_passthrough("assets/hero.webp".to_string(), source_file);
+    registry.set_source_passthrough("assets/hero.webp".to_string(), source_file.clone());
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
     let (port, shutdown_tx) = start_server(ServeConfig {
@@ -1177,8 +1186,13 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     std::io::Read::read_to_end(&mut response.into_reader(), &mut body).unwrap();
     assert!(
         body.len() < 100,
-        "the 50-byte stub, not the 4096-byte original: got {} bytes",
+        "the tiny WebP stub, not the 4096-byte original: got {} bytes",
         body.len()
+    );
+    assert_eq!(
+        crate::build::icloud::pretend::requests_for(&source_file),
+        1,
+        "viewing an evicted source must request its download at foreground priority"
     );
 
     let _ = shutdown_tx.send(());
@@ -1230,7 +1244,7 @@ async fn unreadable_video_passthrough_falls_back_to_the_sized_svg_not_an_image_s
     // for an image URL both the bare stub and the placeholder handler answer
     // `image/webp`. A VIDEO is where they diverge. Handing the failure to
     // `handle_asset_request` gets a `<rect>` SVG at the scanned dimensions —
-    // right media type, right box, no layout shift — instead of a 50-byte 1x1
+    // right media type, right box, no layout shift — instead of a tiny 1x1
     // WebP served as `image/webp` at a `.mp4` URL, which is not a video at all.
     use crate::types::assets::AssetRegistry;
     use tempfile::TempDir;
