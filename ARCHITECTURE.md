@@ -2,6 +2,16 @@
 
 What each crate in this repository is for, what it may depend on, and where new code goes. Read it before creating or moving a file.
 
+## What moss is designed for: a low floor and a high ceiling
+
+The floor is how little a person must learn to make a simple site. It should be close to nothing moss-specific: a folder of markdown files is the site, the folders are its structure, and the syntax is the one other tools already read — CommonMark, YAML frontmatter, wikilinks, pandoc-style fenced divs and attributes. A site written for moss should read correctly in Obsidian, on GitHub or in a plain editor, and a folder written for those should build in moss.
+
+The ceiling is what a site can ship. Anything a hand-built website can put on the web, a moss site can put there too. Where markdown cannot say something, there is an escape hatch — raw HTML in a page, a partial, the theme's own CSS and JavaScript, a plugin — and the hatch is still a better place to author than starting from scratch: the words stay in markdown a person can read and edit, and moss keeps doing everything else (images, navigation, feeds, publishing).
+
+Both hold at once, and neither is bought with the other. A capability that makes a simple site learn new syntax raises the floor; a convenience that makes some web feature impossible lowers the ceiling. When a site built with moss has to ship less than its hand-built version, or reach it only through a workaround, that is a moss defect, and it is fixed in moss rather than in the site. The logic stays small enough to say: a rule fits in one sentence ("a `footer.md` at the top of the site is the footer"), and a feature composes concepts moss already has before it adds a new one.
+
+Real sites are the test. Each site built with moss is checked against both goals: which simple parts needed anything moss-specific, and which parts of the design moss could not ship.
+
 ## Crates
 
 | Crate | What it's for | What it must never depend on |

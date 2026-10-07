@@ -16,6 +16,8 @@ markup, markup over code, shared rules over duplicated ones.
 it. Generation from scratch scatters one-off HTML and gradient-soup themes;
 both erode legibility.
 
+**Never ship less than the design needs.** moss has a low floor and a high ceiling: the simple parts of a site are plain markdown and folders, and anything a hand-built site can put on the web a moss site can put there too. When markdown cannot say something — an interactive drawing, a scroll-driven scene, a custom component — keep the words in markdown and take an escape hatch for the rest: raw `<svg>` or `<canvas>` in a partial, `.moss/theme/script.js`, a plugin. Do not cut the design down to what is easy in markdown. If moss blocks something the web can do, or forces a workaround, tell the user it is a moss gap and name the reproduction, rather than quietly shipping less.
+
 ## Start from a blank folder
 
 1. Create a folder. Its name becomes the site title — choose it deliberately.
