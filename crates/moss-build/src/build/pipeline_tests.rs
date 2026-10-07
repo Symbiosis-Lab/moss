@@ -5508,8 +5508,7 @@ fn generated_places_requires_the_emitted_route_in_this_attempt() {
     use crate::system::folder_session::{PreviewRequirement, PreviewSource};
     let dir = tempfile::tempdir().unwrap();
     let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
-    let mut pending = crate::build::manifest::PendingManifest::new(Default::default());
-    pending.set_input_evidence(evidence);
+    let mut pending = crate::build::manifest::PendingManifest::for_build(Default::default(), evidence);
     let requirement = PreviewRequirement { url_path: "/places/".into(), source: PreviewSource::Generated, revision: 1 };
     assert_eq!(pending.preview_readiness(&requirement), crate::build::manifest::PreviewReadiness::Missing);
     let path = crate::build::served_path::ServedPath::from_source("places/index.html").unwrap();

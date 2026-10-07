@@ -397,8 +397,9 @@ impl PendingManifest {
         }
     }
 
-    pub(crate) fn set_input_evidence(&mut self, evidence: crate::build::cloud_ledger::InputEvidence) {
-        self.input_evidence = Some(evidence);
+    /// Construct a render attempt with its existing input-read evidence.
+    pub fn for_build(carry_forward: SiteHashes, evidence: crate::build::cloud_ledger::InputEvidence) -> Self {
+        Self { input_evidence: Some(evidence), ..Self::new(carry_forward) }
     }
 
     pub(crate) fn input_evidence(&self) -> Option<crate::build::cloud_ledger::InputEvidence> {

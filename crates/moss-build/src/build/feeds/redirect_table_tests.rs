@@ -42,8 +42,7 @@ fn build(files: &[(&str, &str)]) -> Built {
     let out = dir.path().join(".moss").join("build.nosync").join("site");
     fs::create_dir_all(&out).unwrap();
     let structure = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
-    let mut pending = crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
-    pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(dir.path()));
+    let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(dir.path()));
     let _ = take_cli_problems();
     // What the pipeline does with its one parse of the config.
     let declared_redirects = fs::read_to_string(dir.path().join(".moss/config.toml"))

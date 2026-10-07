@@ -917,8 +917,7 @@ mod tests {
     /// `commit_sync` while the sync response below reports nothing to
     /// upload, so no bytes for it are ever read off disk.
     fn sealed_fixture(folder: &std::path::Path) -> SealedManifest {
-        let mut pending = PendingManifest::new(SiteHashes::default());
-        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(folder));
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(folder));
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register(&sp, b"<html>Home</html>", HashBucket::Files);
         pending.seal()
@@ -1186,8 +1185,7 @@ mod tests {
         // as if a background rebuild re-pointed the link after this manifest
         // was sealed.
         let dir = tempfile::tempdir().unwrap();
-        let mut pending = PendingManifest::new(SiteHashes::default());
-        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(dir.path()));
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(dir.path()));
         let sp = ServedPath::from_source("link").unwrap();
         pending.register_hashed(
             &sp,
@@ -1264,8 +1262,7 @@ mod tests {
         // background rebuild rewrote the file's real bytes after this
         // manifest was sealed.
         let dir = tempfile::tempdir().unwrap();
-        let mut pending = PendingManifest::new(SiteHashes::default());
-        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(dir.path()));
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(dir.path()));
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register_hashed(
             &sp,
@@ -1720,8 +1717,7 @@ mod tests {
         .await;
 
         let dir = tempfile::tempdir().unwrap();
-        let mut pending = PendingManifest::new(SiteHashes::default());
-        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(dir.path()));
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(dir.path()));
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register_hashed(&sp, &crate::types::content::file_entry("0000000000000000"), HashBucket::Files);
         let sealed = pending.seal();

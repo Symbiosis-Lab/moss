@@ -1481,8 +1481,7 @@ fn build_inner(
     // Construct PendingManifest seeded with previous_hashes (carry-forward).
     // Passed to generate_blocking_content so Pattern A emits register via ctx.emit.
     // After the call, pending holds the accumulated site_hashes + blocking_keys;
-    let mut pending = PendingManifest::new(previous_hashes.clone());
-    pending.set_input_evidence(input_evidence.clone());
+    let mut pending = PendingManifest::for_build(previous_hashes.clone(), input_evidence.clone());
     // Register exactly the bytes parsed above; a second read here could
     // certify different bytes from those that shaped the rendered pages.
     if let Some(content) = places_content.as_ref() {

@@ -5,8 +5,7 @@ fn pending_for_render(
     output_dir: &std::path::Path,
 ) -> crate::build::manifest::PendingManifest {
     let root = output_dir.parent().unwrap().parent().unwrap().parent().unwrap();
-    let mut pending = crate::build::manifest::PendingManifest::new(hashes);
-    pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(root));
+    let mut pending = crate::build::manifest::PendingManifest::for_build(hashes, crate::build::cloud_ledger::InputEvidence::new(root));
     pending
 }
 
@@ -21,8 +20,7 @@ fn render_for_build(
     std::fs::create_dir_all(&output_dir).unwrap();
     let project_structure =
         crate::build::scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
-    let mut pending = crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
-    pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(test_dir));
+    let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(test_dir));
     crate::build::render::generate_blocking_content_for_build(
         &crate::vault::paths::VaultRoot::resolve(test_dir),
         &project_structure,
@@ -6431,8 +6429,7 @@ mod video_path_mapping_integration_tests {
             lqip_data_uri: None,
         });
 
-        let mut pending = PendingManifest::new(SiteHashes::default());
-        pending.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(&test_dir));
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(&test_dir));
         let result = generate_blocking_content(
             &crate::vault::paths::VaultRoot::resolve(&test_dir),
             &project_structure,

@@ -11,10 +11,8 @@ fn empty_manifest() -> PendingManifest {
 fn sealed_origin_distinguishes_identical_output_generations_in_two_folders() {
     let first = tempdir().unwrap();
     let second = tempdir().unwrap();
-    let mut one = empty_manifest();
-    one.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(first.path()));
-    let mut two = empty_manifest();
-    two.set_input_evidence(crate::build::cloud_ledger::InputEvidence::new(second.path()));
+    let mut one = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(first.path()));
+    let mut two = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(second.path()));
     let output = crate::build::served_path::ServedPath::from_source("index.html").unwrap();
     one.register(&output, b"same", HashBucket::Files);
     two.register(&output, b"same", HashBucket::Files);
@@ -35,8 +33,7 @@ fn unresolved_route_needs_source_proof_before_reusing_selected_output() {
     let source = dir.path().join("article.md");
     evidence.require(&source, crate::build::cloud_ledger::InputRole::PageContent);
     evidence.pending(&source);
-    let mut pending = empty_manifest();
-    pending.set_input_evidence(evidence.clone());
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), evidence.clone());
     let output = crate::build::served_path::ServedPath::from_source("article/index.html").unwrap();
     pending.register(&output, b"old HTML", HashBucket::Files);
     pending.register_source_mapping("article.md".into(), &output);
@@ -44,9 +41,8 @@ fn unresolved_route_needs_source_proof_before_reusing_selected_output() {
     let unproven = pending.seal();
     assert!(!unproven.preview_route_present(&unresolved));
 
-    let mut fresh = empty_manifest();
     evidence.read(&source, "current".into());
-    fresh.set_input_evidence(evidence);
+    let mut fresh = PendingManifest::for_build(SiteHashes::default(), evidence);
     fresh.register(&output, b"old HTML", HashBucket::Files);
     fresh.register_source_mapping("article.md".into(), &output);
     let proven = fresh.seal();
@@ -62,8 +58,7 @@ fn generated_route_with_pending_metadata_cannot_clear_cold_preview_gate() {
     let pending_source = dir.path().join("index.md");
     evidence.require(&pending_source, crate::build::cloud_ledger::InputRole::PageMetadata);
     evidence.pending(&pending_source);
-    let mut pending = empty_manifest();
-    pending.set_input_evidence(evidence);
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), evidence);
     let output = crate::build::served_path::ServedPath::from_source("index.html").unwrap();
     pending.register(&output, b"synthetic home", HashBucket::Files);
     let requirement = PreviewRequirement { url_path: "/".into(), source: PreviewSource::Generated, revision: 1 };
