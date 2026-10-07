@@ -218,7 +218,7 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
   });
 });
 
-function fakeController(): PlacesMapController {
+function fakeController(waitForInitialPaint: () => Promise<boolean> = vi.fn(() => Promise.resolve(true))): PlacesMapController {
   return {
     setScope: vi.fn(),
     setCooperativeGestures: vi.fn(),
@@ -226,6 +226,7 @@ function fakeController(): PlacesMapController {
     setCurrentArticle: vi.fn(),
     setArticleMode: vi.fn(),
     viewportEl: document.createElement("div"),
+    waitForInitialPaint,
   };
 }
 
@@ -278,11 +279,37 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     expect(controller.setScope).not.toHaveBeenCalled();
   });
 
-  test("posts the ready message to the parent frame", () => {
+  test("posts the ready message only after the current viewport's tiles are ready", async () => {
     history.replaceState(null, "", "/places/?place=lisbon&embed=1");
     const postMessage = vi.spyOn(window.parent, "postMessage");
-    attachEmbedModeIfRequested(fakeController(), document.createElement("figure"));
+    let release!: () => void;
+    const waitForInitialPaint = vi.fn(() => new Promise<boolean>((resolve) => { release = () => resolve(true); }));
+    const attaching = attachEmbedModeIfRequested(fakeController(waitForInitialPaint), document.createElement("figure"));
+    expect(postMessage).not.toHaveBeenCalled();
+    release();
+    await attaching;
     expect(postMessage).toHaveBeenCalledWith({ type: "moss-places-embed-ready" }, location.origin);
+  });
+
+  test("chooses initial paint only after applying the article scope", async () => {
+    history.replaceState(null, "", "/places/?article=w1&embed=1");
+    const order: string[] = [];
+    const controller = fakeController(vi.fn(() => {
+      order.push("paint");
+      return Promise.resolve(true);
+    }));
+    vi.mocked(controller.setScope).mockImplementation(() => { order.push("scope"); });
+
+    await attachEmbedModeIfRequested(controller, document.createElement("figure"));
+
+    expect(order).toEqual(["scope", "paint"]);
+  });
+
+  test("does not replace the poster when a visible regional tile fails", async () => {
+    history.replaceState(null, "", "/places/?place=lisbon&embed=1");
+    const postMessage = vi.spyOn(window.parent, "postMessage");
+    await attachEmbedModeIfRequested(fakeController(() => Promise.resolve(false)), document.createElement("figure"));
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
   test("an expand message switches gesture mode, the figure's own attribute, and re-fits the camera", () => {

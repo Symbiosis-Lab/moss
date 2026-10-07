@@ -171,7 +171,7 @@ pub fn breadcrumb_ancestor_descendants(
         // treated as showing a trail today even when the site-wide answer
         // alone would have said no.
         .filter(|d| compute_breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some())
-        .filter_map(|d| d.source_path.clone())
+        .map(|d| crate::build::facade::PageKey::for_document(d).cache_key().into_owned())
         .collect()
 }
 

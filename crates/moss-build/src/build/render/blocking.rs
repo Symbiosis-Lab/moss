@@ -21,7 +21,7 @@ use crate::build::pipeline::send_progress;
 // Generator submodule imports
 use crate::build::scan::article_map::build_article_map;
 use crate::build::scan::classify::folder_index_keys;
-use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
+use crate::build::components::nav::NavigationBuilder;
 use crate::build::page::layout::LayoutConfig;
 use crate::build::markdown::{process_markdown_file, resolve_duplicate_slugs_with_lang, PageContext};
 use crate::build::folder_embed::{generate_children, resolve_children_config};
@@ -45,10 +45,11 @@ use crate::build::scan::sort_inference::populate_direct_children_sorts;
 // Sibling module imports (within build/render/)
 pub use super::config::SiteConfig;
 pub use crate::build::incremental_gates::IncrementalGates;
-use super::config::{resolve_logo_url, resolve_data_attr, resolve_comments_attr};
+use super::config::resolve_logo_url;
+use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily};
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
-use super::html::{generate_html_collect_og, tab_title};
+use super::html::{RenderCtx, render_page, tab_title};
 use super::source_evidence::{flatten_missing_reference_occurrences, FinalSourceRecord};
 
 /// # Note
@@ -185,6 +186,8 @@ fn synthetic_folder_doc(
         nav: hidden_root,
         listed: hidden_root,
         is_place_namespace_root: is_place_root,
+        term_sections: term_index.sections(folder).map(|sections| sections.to_vec()),
+        place_children: term_index.children(folder).map(|children| children.to_vec()),
         ..Default::default()
     }
 }
@@ -1116,7 +1119,7 @@ pub fn generate_blocking_content_for_build(
     // site default. Reuse it here.
     // Out here because the article map, written far below, carries these to the editor's `url` chip.
     let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
-    let (layout_config, site_url, has_rss, show_rss_in_footer, analytics_script, term_index) = {
+    let (layout_config, site_url, has_rss, show_rss_in_footer, term_index) = {
         // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
         // none of it is skippable by the parse cache — this is the floor on
@@ -1366,18 +1369,11 @@ pub fn generate_blocking_content_for_build(
                 .unwrap_or(None)
                 .unwrap_or(false);
 
-        // Generate analytics script tag from homepage frontmatter (if configured)
-        let homepage_for_analytics = documents.iter().find(|d| d.url_path == "index.html");
-        let analytics_script = homepage_for_analytics
-            .and_then(|d| d.analytics.as_ref())
-            .map(|analytics| analytics.to_script_tag());
-
         (
             layout_config,
             site_url,
             has_rss,
             show_rss_in_footer,
-            analytics_script,
             term_index,
         )
     };
@@ -1615,15 +1611,6 @@ pub fn generate_blocking_content_for_build(
     };
 
 
-    // Compute root-relative aux-JS paths (used in ShellVars for article/folder pages).
-    // These paths are constant for the build (content-hash is deterministic).
-    // Built from a temporary PathResolver to leverage the same URL construction logic.
-    let aux_path_resolver = PathResolver::new();
-    // The shell's whole runtime `<script>` block, from the SITE_SCRIPTS
-    // table: order, `defer` and gate all live on the row, so a seventh script
-    // is one row rather than a tag `let` here plus a `ShellVars` field plus
-    // a `shell.rs` mapping.
-    let runtime_js_tags = scripts.shell_tags(&layout_config.assets, &aux_path_resolver);
     // Compute site-wide sidebar layout flag: true when ANY document has `sidebar` set.
     // Used by templates to adjust content width (Task 3).
     let has_sidebar_layout = documents.iter().any(|d| d.sidebar.is_some());
@@ -1631,7 +1618,7 @@ pub fn generate_blocking_content_for_build(
     // Reverse map (slug folder-key → original on-disk leaf name) so every
     // auto-generated folder-index TITLE/H1 preserves the author's directory
     // casing ("Writings") even though the URL slug is lowercased ("writings").
-    // Consumed by both folder-index synthesis blocks below.
+    // Consumed by the generated folder plan below.
     let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
 
     // Term derivation already ran above, before `expand_markers_in_documents`
@@ -1642,109 +1629,25 @@ pub fn generate_blocking_content_for_build(
     // those pages exist (no source document).
     let mut generated_index_urls: Vec<String> = Vec::new();
 
-    // A directory whose only known page source is pending has no title or
-    // listing metadata yet. Do not synthesize a finished folder page from its
-    // name; the next render can create it after a source arrives. Genuine
-    // empty directories have no pending page and keep their index pages.
-    let pending_pages: Vec<String> = input_evidence.snapshot().into_iter()
-        .filter(|(_, entry)| matches!(entry.role,
-            crate::build::cloud_ledger::InputRole::PageMetadata | crate::build::cloud_ledger::InputRole::PageContent)
-            && matches!(entry.state,
-                crate::build::cloud_ledger::InputState::Pending { .. } | crate::build::cloud_ledger::InputState::ReadError { .. }))
-        .map(|(path, _)| path).collect();
-    let suppressed_folder_indexes: std::collections::HashSet<String> =
-        folder_index_keys(&project_structure.dirs, &dir_overrides)
-            .filter(|(raw, _)| {
-                let prefix = format!("{raw}/");
-                let pending_only = pending_pages.iter().any(|path| path.starts_with(&prefix))
-                    && !documents.iter().any(|doc| doc.source_path.as_ref().is_some_and(|path| path.starts_with(&prefix)));
-                let authored_index_pending = pending_pages.iter().any(|path| {
-                    let source = Path::new(path);
-                    source.parent().is_some_and(|parent| parent == Path::new(raw))
-                        && source.file_stem().and_then(|s| s.to_str()).is_some_and(|stem|
-                            moss_core::home::is_home_file(stem, raw.rsplit('/').next().unwrap_or(raw)))
-                });
-                pending_only || authored_index_pending
-            })
-            .map(|(_, key)| key).collect();
-
-    // Synthesize folder index entries for folders that have child documents but
-    // no explicit index file. This completes the page tree so parent folder pages
-    // can discover auto-generated subfolders as direct children during HTML rendering.
-    {
-        use std::collections::HashSet;
-
-        // Collect all folder prefixes that have child documents.
-        let mut folders_with_children: HashSet<String> = HashSet::new();
-        for doc in &documents {
-            if doc.url_path == "index.html" {
-                continue;
-            }
-            // Slot files are layout chrome, not content
-            // pages; they must not trigger synthetic folder-index creation.
-            if doc.slot_only {
-                continue;
-            }
-            let parts: Vec<&str> = doc.url_path.split('/').collect();
-            if parts.len() >= 2 {
-                let doc_dir_depth = parts.len() - 1;
-                for depth in 1..doc_dir_depth {
-                    let folder = parts[..depth].join("/");
-                    folders_with_children.insert(folder);
-                }
-            }
-        }
-
-        // Seed every index-page directory so folders with no doc footprint at
-        // all (completely empty folders, or folders holding only non-page
-        // assets) still get a synthetic folder-index document — and therefore
-        // appear as children of their parent and in nav/breadcrumb. A childless
-        // folder is never an ancestor prefix of any doc's `url_path`, so the
-        // loop above alone would miss it.
-        for (_, key) in folder_index_keys(&project_structure.dirs, &dir_overrides) {
-            if suppressed_folder_indexes.contains(&key) { continue; }
-            folders_with_children.insert(key);
-        }
-
-        // Seed every term pseudo-folder — unclaimed terms and the namespace
-        // roots in use — so each gets a synthetic folder document (page tree
-        // entry, breadcrumb ancestor) and, below, its index page. The roots
-        // are documents like any other synthetic folder, flagged `nav: false,
-        // listed: false` at creation: a 56-entry author folder is wrong as a
-        // nav item or a home-feed entry on every site, and the pages stay
-        // reachable through term links, the breadcrumb and search.
-        // (Until 2026-09-05 the roots were left out of `documents` entirely,
-        // and every breadcrumb under them fell back to the current page's
-        // own title: `Site › 林小滿 › 林小滿`.)
-        folders_with_children.extend(term_index.synthetic_folder_keys());
-
-        // Filter out lang-prefix directories (e.g., "zh-hans") — structural, not content.
-        folders_with_children.retain(|folder| {
-            let top_segment = folder.split('/').next().unwrap_or(folder);
-            crate::i18n::path::resolve_language_from_folder(top_segment).is_none()
-                && !suppressed_folder_indexes.contains(folder)
-        });
-
-        // Identify folders that already have an explicit index page (from a real .md file).
-        let folders_with_explicit_index: HashSet<String> = documents
-            .iter()
-            .filter(|d| d.url_path.ends_with("/index.html") && d.url_path != "index.html")
-            .map(|d| d.url_path.trim_end_matches("/index.html").to_string())
-            .collect();
-
-        // Create synthetic ParsedDocument entries for indexless folders.
-        for folder in &folders_with_children {
-            if folders_with_explicit_index.contains(folder) {
-                continue;
-            }
-
-            documents.push(synthetic_folder_doc(
-                folder,
-                &term_index,
-                &folder_display,
-                &folder_languages,
-                site_lang,
-            ));
+    // One resolved set owns both the page tree and index emission.
+    let folder_plan = super::build_shared::FolderIndexPlan::resolve(
+        &mut documents,
+        project_structure,
+        &dir_overrides,
+        &term_index,
+        &input_evidence,
+        |folder| {
+            let mut doc = synthetic_folder_doc(folder, &term_index, &folder_display, &folder_languages, site_lang);
+            doc.lang_tag = Some(crate::i18n::lang_tag_in_tree(&format!("{folder}/index.md"), doc.lang));
+            doc
+        },
+    );
+    // The resolved set now contains both authored and synthetic folders.
+    // Stamp every explorer root once so its facade includes the shared places
+    // asset URL that its own map markup renders below.
+    if let Some(hash) = site_config.place_maps.as_ref().and_then(|ctx| ctx.explorer_places_hash()) {
+        for doc in documents.iter_mut().filter(|doc| doc.is_place_namespace_root) {
+            doc.explorer_places_hash = Some(hash.to_string());
         }
     }
 
@@ -1779,6 +1682,28 @@ pub fn generate_blocking_content_for_build(
     // Built once here rather than once per page. See `BuildShared`.
     let shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
 
+    let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
+    let page_rss_link = has_rss.then(|| format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#));
+    let mut page_paths = PathResolver::new().with_css_version(&css_version)
+        .with_js_version(shared.scripts.hash("theme"))
+        .with_favicon_filename(&favicon_filename)
+        .with_favicon_has_raster_pngs(favicon_has_raster_pngs)
+        .with_dir_overrides(dir_overrides.clone());
+    if let Some(v) = user_css_version.as_deref() { page_paths = page_paths.with_user_css_version(v); }
+    if let Some(v) = user_js_version.as_deref() { page_paths = page_paths.with_user_js_version(v); }
+    let render_context = RenderCtx {
+        chrome: PageChromeContext {
+            documents: &documents, project: project_structure, layout: &layout_config, site_lang,
+            assets: ChromeAssets {
+                paths: page_paths, scripts: &shared.scripts, has_user_css, has_user_js,
+                rss_link: page_rss_link.as_deref(),
+            },
+            show_rss_in_footer, emit_source_lines, has_sidebar_layout,
+        },
+        content_graph: Some(&content_graph), dir_overrides: &dir_overrides,
+        site_url: &site_url, output_dir: Some(output_dir), source_root: source_path_buf, shared: &shared,
+    };
+
     // The render-prelude cut: the literal homepage (`index.html`)
     // is excluded from the to_render/to_carry partition below (it is looked
     // up via `documents.iter().find`, not iterated) and used to be rendered
@@ -1797,15 +1722,19 @@ pub fn generate_blocking_content_for_build(
     // carry-forward gate below (keyed on "was anything carried this build")
     // can see it too.
     let homepage_index_sp = ServedPath::from_source("index.html").unwrap();
-    let homepage_carried = documents
+    let homepage_carry_proof = documents
         .iter()
         .find(|d| d.url_path == "index.html")
-        .and_then(|d| d.source_path.as_ref())
-        .is_some_and(|src| {
-            verdict.may_skip(src)
-                && previous_hashes.files.contains_key(homepage_index_sp.as_str())
-                && crate::build::io_utils::output_present(&output_dir.join("index.html"))
+        .and_then(|doc| {
+            crate::build::render::incremental::CarryProof::for_document(
+                doc,
+                &verdict,
+                &previous_hashes,
+                output_dir,
+                &site_url,
+            )
         });
+    let homepage_carried = homepage_carry_proof.is_some();
 
     // Generate HTML files
     //
@@ -1867,23 +1796,28 @@ pub fn generate_blocking_content_for_build(
         // disk in the persistent stage dir, and the previous build's manifest
         // must still carry its entry. Missing either, we render — the skip has
         // to PROVE it is safe, not assume it.
-        let (mut to_render, mut to_carry): (Vec<&ParsedDocument>, Vec<&ParsedDocument>) = documents
+        let (mut to_render, mut to_carry): (
+            Vec<&ParsedDocument>,
+            Vec<(&ParsedDocument, crate::build::render::incremental::CarryProof)>,
+        ) = documents
             .iter()
             .filter(|doc| {
                 !(doc.url_path == "index.html"
                     || (doc.kind == PageKind::Folder && doc.source_path.is_none())
                     || doc.slot_only)
             })
-            .partition(|doc| {
-                let skippable = doc
-                    .source_path
-                    .as_ref()
-                    .is_some_and(|src| verdict.may_skip(src))
-                    && ServedPath::from_source(&doc.url_path).is_ok_and(|sp| {
-                        previous_hashes.files.contains_key(sp.as_str())
-                    })
-                    && crate::build::io_utils::output_present(&output_dir.join(&doc.url_path));
-                !skippable
+            .fold((Vec::new(), Vec::new()), |(mut render, mut carry), doc| {
+                match crate::build::render::incremental::CarryProof::for_document(
+                    doc,
+                    &verdict,
+                    &previous_hashes,
+                    output_dir,
+                    &site_url,
+                ) {
+                    Some(proof) => carry.push((doc, proof)),
+                    None => render.push(doc),
+                }
+                (render, carry)
             });
 
         // Shadow verification. Move the carried set into
@@ -1894,23 +1828,17 @@ pub fn generate_blocking_content_for_build(
         // which is precisely what the verdict exists to avoid.
         let verify_shadow: std::collections::HashSet<String> = if carry_verification.is_some() {
             let shadow: std::collections::HashSet<String> =
-                to_carry.iter().map(|d| d.url_path.clone()).collect();
+                to_carry.iter().map(|(d, _)| d.url_path.clone()).collect();
             log::info!(
                 target: "incremental",
                 "MOSS_INCREMENTAL_VERIFY=1: re-rendering {} carried pages to byte-compare them",
                 shadow.len(),
             );
-            to_render.append(&mut to_carry);
+            to_render.extend(to_carry.drain(..).map(|(doc, _)| doc));
             shadow
         } else {
             std::collections::HashSet::new()
         };
-
-        // page_rss_link doesn't depend on the doc — compute it once.
-        let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
-        let page_rss_link = if has_rss {
-            Some(format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#))
-        } else { None };
 
         // Fetch metadata for external grid-cell links THIS build's own pages
         // introduce, before ANY page below reads the cache — so a card is
@@ -1974,7 +1902,9 @@ pub fn generate_blocking_content_for_build(
         let rendered: Vec<Result<RenderedPage, BuildStopped>> = to_render
             .par_iter()
             .map(|doc| {
-                let output_file_path = output_dir.join(&doc.url_path);
+                let url_sp = ServedPath::from_source(&doc.url_path)
+                    .map_err(|e| format!("Failed to construct article URL path: {}", e))?;
+                let output_file_path = output_dir.join(url_sp.as_str());
                 let mut og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
                 // `is_homepage` used to be hardcoded false here, so only the
                 // site-default-locale home (rendered separately below, never
@@ -1985,61 +1915,26 @@ pub fn generate_blocking_content_for_build(
                 // language switcher already trusts it for the same
                 // locale-root question), so this is the one place that
                 // decides it, read instead of re-hardcoded.
-                let html_page = generate_html_collect_og(
+                let html_page = render_page(&render_context,
                     Some(doc),
-                    &documents,
-                    project_structure,
-                    &layout_config,
                     crate::build::render::lang_roots::is_language_root(&doc.url_path),
-                    page_rss_link.as_deref(),
-                    analytics_script.as_deref(),
-                    site_lang,
-                    Some(&css_version),
-                    has_user_css,
-                    has_sidebar_layout,
-                    user_css_version.as_deref(),
-                    has_user_js,
-                    user_js_version.as_deref(),
-                    Some(&content_graph),
-                    &dir_overrides,
-                    &site_url,
-                    show_rss_in_footer,
-                    emit_source_lines,
-                    &favicon_filename,
-                    favicon_has_raster_pngs,
-                    Some(output_dir),
-                    &mut og_outputs,
-                    source_path_buf,
-                    &shared,
+                    Some(&mut og_outputs),
                 )?;
 
                 // Snapshot BEFORE the slot pass replaces the file: these are
                 // the previous build's FINAL (post-slot-injection) bytes, and
                 // they are the only copy of them that survives this build.
                 let carried_previous = if verify_shadow.contains(&doc.url_path) {
-                    match std::fs::read(&output_file_path) {
-                        Ok(prev) => Some((doc.url_path.clone(), prev)),
-                        Err(e) => {
-                            log::warn!(
-                                target: "incremental",
-                                "MOSS_INCREMENTAL_VERIFY: cannot read {} to compare: {e}",
-                                doc.url_path,
-                            );
-                            None
-                        }
-                    }
+                    crate::build::render::incremental::CarryVerification::read_previous(
+                        url_sp.as_str(),
+                        &output_file_path,
+                    )
                 } else {
                     None
                 };
 
-                let url_sp = ServedPath::from_source(&doc.url_path)
-                    .map_err(|e| format!("Failed to construct article URL path: {}", e))?;
                 let source_mapping = match doc.source_path.as_ref() {
-                    Some(src) => {
-                        let url_sp2 = ServedPath::from_source(&doc.url_path)
-                            .map_err(|e| format!("Failed to construct article URL path for mapping: {}", e))?;
-                        Some((src.clone(), url_sp2))
-                    }
+                    Some(src) => Some((src.clone(), url_sp.clone())),
                     None => None,
                 };
                 let page_meta = doc.source_path.as_ref().map(|_| crate::types::content::PageMeta {
@@ -2127,19 +2022,10 @@ pub fn generate_blocking_content_for_build(
             // reused verbatim: the file on disk is literally the previous
             // build's bytes, so its hash is too, and the sealed manifest stays
             // identical to the previous build across the skipped region.
-            for doc in &to_carry {
-                let url_sp = ServedPath::from_source(&doc.url_path)
-                    .map_err(|e| format!("Failed to construct carried URL path: {}", e))?;
-                let Some(entry) = previous_hashes.files.get(url_sp.as_str()).cloned() else {
-                    // Unreachable: the partition above required this entry.
-                    return Err(BuildStopped::from(format!(
-                        "carry-forward lost the manifest entry for {}",
-                        url_sp.as_str()
-                    )));
-                };
-                pending.register_hashed(&url_sp, &entry, HashBucket::Files);
+            for (doc, proof) in &to_carry {
+                proof.register_all(pending);
                 if let Some(src) = doc.source_path.as_ref() {
-                    pending.register_source_mapping(src.clone(), &url_sp);
+                    pending.register_source_mapping(src.clone(), proof.html_path());
                     register_page_source(pending, &page_source_hashes, src);
                     pending.register_page_meta(
                         src.clone(),
@@ -2252,131 +2138,16 @@ pub fn generate_blocking_content_for_build(
     // but no explicit index.md. This implements Principle 2: "Folders and .md
     // files correspond to HTML pages."
     {
-        use std::collections::{HashMap, HashSet};
-
-        // Step 1: Collect all folder prefixes that have child documents.
-        // For each document, extract the parent folder from url_path.
-        // E.g., "videos/aimeili/index.html" -> "videos"
-        let mut folders_with_children: HashMap<String, Vec<usize>> = HashMap::new();
-        for (idx, doc) in documents.iter().enumerate() {
-            if doc.url_path == "index.html" {
-                continue; // Skip root homepage
-            }
-            // Extract the first-level parent folder
-            // url_path is like "videos/aimeili/index.html" or "articles/tutorials/getting-started/index.html"
-            // We want ALL ancestor folders, not just the immediate parent.
-            let parts: Vec<&str> = doc.url_path.split('/').collect();
-            // For "videos/aimeili/index.html", parts = ["videos", "aimeili", "index.html"]
-            // Parent folders are: "videos", "videos/aimeili" (but "videos/aimeili" IS the document's own folder)
-            // We want to register this doc as a child of all ancestor folders EXCEPT
-            // the folder that IS this document (if url_path ends with /index.html).
-            //
-            // For a doc at "videos/aimeili/index.html": register as child of "videos"
-            // For a doc at "articles/tutorials/getting-started/index.html": register as child of
-            //   "articles", "articles/tutorials"
-            if parts.len() >= 2 {
-                // Build ancestor paths, excluding the document's own directory
-                // The document's own directory is parts[0..parts.len()-1] joined
-                // (e.g., "videos/aimeili" for "videos/aimeili/index.html")
-                let doc_dir_depth = parts.len() - 1; // exclude "index.html"
-                for depth in 1..doc_dir_depth {
-                    let folder = parts[..depth].join("/");
-                    folders_with_children
-                        .entry(folder)
-                        .or_default()
-                        .push(idx);
-                }
-            }
-        }
-
-        // Seed every index-page directory (mapped to its page-tree key) with an
-        // empty child list so a folder that has no child documents at all still
-        // gets its index page emitted below. Block 1 already created a synthetic
-        // folder document for these; this registers them for HTML generation.
-        // Folders that DO have children were added by the loop above (an empty
-        // `or_default()` here is a no-op for them).
-        for (_, key) in folder_index_keys(&project_structure.dirs, &dir_overrides) {
-            if suppressed_folder_indexes.contains(&key) { continue; }
-            folders_with_children.entry(key).or_default();
-        }
-
-        // Term pseudo-folders: register for index-page emission from the
-        // same list Block 1 seeded its synthetic docs from. Their members
-        // live at unrelated URLs and claim membership via the derived
-        // `also_in`, so the ancestor loop above never registers them — and
-        // a vault whose every term is CLAIMED has no synthetic term doc at
-        // all, so the roots would otherwise silently drop out.
-        for key in term_index.synthetic_folder_keys() {
-            folders_with_children.entry(key).or_default();
-        }
-
-        // Drop empty language-named folders (e.g. an `en/` with no content of
-        // its own). Block 1 already excludes lang-prefix dirs from synthetic-doc
-        // creation via this same `resolve_language_from_folder` predicate, so a
-        // childless lang-named folder that survived here would emit an
-        // `en/index.html` with no synthetic doc — hence no nav/parent/breadcrumb
-        // entry — an orphan page. Restrict the retain to childless (dirs-seeded)
-        // folders: folders that DO have child documents are left to the
-        // translation-root filter below, which handles real translation trees.
-        folders_with_children.retain(|folder, child_indices| {
-            if suppressed_folder_indexes.contains(folder) { return false; }
-            if !child_indices.is_empty() {
-                return true;
-            }
-            let top_segment = folder.split('/').next().unwrap_or(folder);
-            crate::i18n::path::resolve_language_from_folder(top_segment).is_none()
-        });
-
-        // Filter out translation root directories from auto-index.
-        // A translation root is a folder whose index page is a translation of the
-        // site homepage (linked via translationKey or stem convention).
-        // These are structural URL directories for translations, not content folders.
-        folders_with_children.retain(|folder, _| {
-            let top_segment = folder.split('/').next().unwrap_or(folder);
-            let top_index = format!("{}/index.html", top_segment);
-            let is_translation_root = documents.iter()
-                .find(|d| d.url_path == top_index)
-                .map(|d| d.translations.iter().any(|t| t.url_path == "index.html"))
-                .unwrap_or(false);
-            !is_translation_root
-        });
-
-        // Step 2: Identify folders that already have an explicit index page
-        // from a real source file. Synthetic entries (source_path: None) inserted
-        // above are excluded — they still need HTML generated by this loop.
-        let folders_with_explicit_index: HashSet<String> = documents
-            .iter()
-            .filter(|d| d.url_path.ends_with("/index.html") && d.url_path != "index.html")
-            .filter(|d| d.source_path.is_some())
-            .map(|d| {
-                d.url_path
-                    .trim_end_matches("/index.html")
-                    .to_string()
-            })
-            .collect();
-
-        // Hoist root-homepage lookups (same for every folder)
-        let root_doc = documents.iter().find(|d| d.url_path == "index.html");
-        let root_analytics_script = root_doc
-            .and_then(|d| d.analytics.as_ref())
-            .map(|analytics| analytics.to_script_tag());
-
-        // The synthetic folder indexes — real directories with no `index.md`.
-        // Outside the skip machinery
-        // entirely (no source document → no facade entry → nothing to carry),
-        // so all of them re-render on every save. That is the target here. How many
-        // there are is a fact about the vault: an earlier count here (171 of
-        // 386 pages) matched neither vault measured since — a 226-post bench
-        // vault and a real 223-page site each emit exactly ONE.
+        // Generated folder documents now share the facade verdict with
+        // authored pages. Carry still proves the previous HTML and any
+        // expected QR output are present in both the manifest and stage tree;
+        // otherwise this loop renders the page from the resolved plan.
         let _phase_auto_index = PhaseTrace::start("render_auto_folder_indexes");
         let mut auto_index_count = 0usize;
+        let mut auto_index_carried = 0usize;
 
-        // Step 3: For each folder needing an auto-generated index, generate a page.
-        for (folder, _child_indices) in &folders_with_children {
-            if folders_with_explicit_index.contains(folder) {
-                continue; // Folder already has an explicit index.md
-            }
-
+        for entry in &folder_plan.entries {
+            let folder = &entry.folder;
             // Filter to direct children through the CANONICAL selector
             // (the listing-group model's rule 3). This loop used to carry an
             // inlined second copy of the membership filter — prefix test,
@@ -2403,36 +2174,34 @@ pub fn generate_blocking_content_for_build(
             // with no children are real on-disk directories seeded from the
             // scan; doc-derived folders always have ≥1 child.
 
-            // The synthetic document Block 1 created for this folder owns its
-            // title, language and breadcrumb, so the H1, the page-tree label
-            // and the chrome can never disagree. It is constructed afresh
-            // only for a folder that has no document: a language-named
-            // folder with content but no index, which Block 1 skips (see the
-            // retain there) and this loop keeps — an orphan page. The drift
-            // runs the other way too: this loop drops every folder under a
-            // translation root, Block 1 only language-named ones, so an
-            // arbitrarily named translation root's subfolder has a document
-            // and no page. Both are why this loop still computes its own
-            // folder set instead of iterating the synthetic documents.
-            let synthetic_path = format!("{}/index.md", folder);
             let auto_url_path = format!("{}/index.html", folder);
-            let matching_doc = documents.iter().find(|d| d.url_path == auto_url_path);
-            let orphan_doc;
-            let folder_doc: &ParsedDocument = match matching_doc {
-                Some(d) => d,
-                None => {
-                    orphan_doc = synthetic_folder_doc(folder, &term_index, &folder_display, &folder_languages, site_lang);
-                    &orphan_doc
+            let folder_doc = &documents[entry.document_index];
+            let mut verification_snapshot = None;
+            if let Some(proof) = crate::build::render::incremental::CarryProof::for_document(
+                folder_doc,
+                &verdict,
+                &previous_hashes,
+                output_dir,
+                &site_url,
+            ) {
+                if carry_verification.is_some() {
+                    verification_snapshot =
+                        crate::build::render::incremental::CarryVerification::read_previous(
+                            proof.html_path().as_str(),
+                            &output_dir.join(proof.html_path().as_str()),
+                        )
+                        .map(|(_, previous)| previous);
+                } else {
+                    proof.register_all(pending);
+                    generated_index_urls.push(format!("{}/", folder));
+                    page_count += 1;
+                    auto_index_carried += 1;
+                    continue;
                 }
-            };
+            }
             let folder_lang = folder_doc.lang;
             let page_title = folder_doc.title.clone();
-            let localized_site_name = super::html::localized_site_title(
-                &documents,
-                folder_lang,
-                site_lang,
-                &layout_config.site_name,
-            );
+            let localized_site_name = render_context.chrome.site_title(Some(folder_doc));
 
             // Generate the folder index content listing using generate_children
             // (folder-aware: distinguishes subfolders from articles)
@@ -2475,14 +2244,14 @@ pub fn generate_blocking_content_for_build(
             // `folder_lang`: a role heading is term chrome, and the term's
             // two pages have to say the same word.
             let article_list = crate::build::terms::render_term_sections(
-                term_index.sections(folder),
+                folder_doc.term_sections.as_deref(),
                 &folder_docs,
                 site_lang,
                 render_group,
             )
             .unwrap_or_else(|| render_group(&folder_docs));
             let place_children_html = crate::build::components::place_hierarchy::render_children(
-                term_index.children(folder).unwrap_or(&[]),
+                folder_doc.place_children.as_deref().unwrap_or(&[]),
             )
             .unwrap_or_default();
             // Synthetic folder index: no markdown source, so prepend the shared
@@ -2490,11 +2259,8 @@ pub fn generate_blocking_content_for_build(
             // helper used by folder_cover::render (cover branch) and
             // render/html.rs (no-cover branch).
             //
-            // Intentionally NOT nav-gated (unlike the no-cover branch in
-            // render/html.rs): a synthetic index has no `ParsedDocument`, and
-            // the nav bar lists only `ParsedDocument`s, so it can never be a
-            // nav item — there is no title to suppress here. Do not add an
-            // `is_nav_bar_item` guard using the document list at this site.
+            // Generated folder documents are not authored nav items, so their
+            // headings do not use the authored title-suppression rule.
             //
             // No `data-source-fm="title"` either: no markdown file backs
             // this heading, so a click on it in the editor preview has no
@@ -2503,7 +2269,7 @@ pub fn generate_blocking_content_for_build(
             // Heading/map ordering (design decision 7, "the map is the
             // page") lives in `render_explorer_folder_lead`, shared with
             // `is_explorer_root_for_doc` (`render/html.rs`'s authored path).
-            let (is_explorer_root, mut content_html) = crate::build::place_map::PlaceMapRenderContext::render_explorer_folder_lead(
+            let (is_explorer_root, content_html) = crate::build::place_map::PlaceMapRenderContext::render_explorer_folder_lead(
                 layout_config.place_maps.as_ref(),
                 folder_doc.is_place_namespace_root,
                 !folder_doc.shows_own_map(true),
@@ -2515,187 +2281,27 @@ pub fn generate_blocking_content_for_build(
                 &place_children_html,
             );
 
-            let path_resolver = {
-                let pr = match css_version.as_str() {
-                    "" => PathResolver::new(),
-                    version => PathResolver::new().with_css_version(version),
-                };
-                let pr = match &user_css_version {
-                    Some(v) => pr.with_user_css_version(v),
-                    None => pr,
-                };
-                let pr = match &user_js_version {
-                    Some(v) => pr.with_user_js_version(v),
-                    None => pr,
-                };
-                let pr = pr.with_js_version(&js_version);
-                pr.with_favicon_filename(&favicon_filename).with_dir_overrides(dir_overrides.clone())
-            };
-
-            let nav_builder = NavigationBuilder::new(
-                &documents,
-                &localized_site_name,
-                Some(auto_url_path.as_str()),
-                folder_lang,
-                project_structure.has_content_folders,
-            )
-            .with_search(layout_config.assets.search)
-            .with_header_mode(layout_config.header);
-            let nav_builder = if let Some(ref logo) = layout_config.logo_path {
-                nav_builder.with_logo(logo.clone())
-            } else {
-                nav_builder
-            };
-
-            // Breadcrumb: the same enable / opt-out / translation-root rule
-            // every authored page gets (`compute_breadcrumb_segments`). Until
-            // 2026-09-05 this loop carried its own copy that enabled only on
-            // an explicit `breadcrumb: true` and, for an ancestor with no
-            // document, printed the current page's title — so a nav-less
-            // site's articles had a trail their folder index lacked, and a
-            // term page read `Site › 林小滿 › 林小滿`. The home crumb is
-            // `site_name`, as it always was here; an authored page under a
-            // nested language folder derives a per-language site title
-            // instead (`render/html.rs`), a remaining twin noted elsewhere.
-            let nav_builder = match compute_breadcrumb_segments(
-                folder_doc,
-                &documents,
-                &localized_site_name,
-                project_structure.has_content_folders,
-                is_explorer_root,
-            ) {
-                Some(segments) => nav_builder.with_breadcrumb(segments, is_explorer_root),
-                None => nav_builder,
-            };
-
-            // Same split as an authored page: `folder_lang` picks the interface
-            // strings, this picks what `<html lang>` claims about the content.
-            // A synthetic index has no authored doc to read it from, so
-            // it takes its tree's.
-            let page_lang_tag = matching_doc.and_then(|d| d.lang_tag.clone())
-                .unwrap_or_else(|| crate::i18n::lang_tag_in_tree(&synthetic_path, folder_lang));
-
-            // Wire language toggle for auto-generated index pages through the
-            // same single source of truth as html.rs. Current language is
-            // `folder_lang` (the auto-index page's language, not site_lang), so
-            // the exclusion is correct for non-default-language folder indexes.
-            let nav_builder = {
-                let per_article = matching_doc.map(|d| d.translations.clone()).unwrap_or_default();
-                let lang_roots = super::lang_roots::site_lang_roots(&documents, site_lang);
-                let multi = super::lang_roots::site_publishes_multiple_languages(&documents, &lang_roots, site_lang);
-                let links = crate::i18n::site_languages::other_language_links(
-                    &page_lang_tag, &per_article, &lang_roots, multi);
-                // Always adopt the page's language (empty links → no toggle).
-                nav_builder.with_translations(folder_lang, &page_lang_tag, links)
-            };
-
-            let footer_html = nav_builder.generate_footer(show_rss_in_footer);
-            let navigation = nav_builder.generate_navigation();
-            let nav_island = if layout_config.floating_nav {
-                nav_builder.generate_nav_island()
-            } else {
-                String::new()
-            };
-
-            let processor = ShellProcessor::new();
-
-            // Use the Page template (same as homepages/index pages)
-            let shell_type = ShellType::Page;
-
-            let analytics_script = root_analytics_script.clone();
-
-            let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
-            let page_rss_link = if has_rss {
-                Some(format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#))
-            } else {
-                None
-            };
-
+            let chrome = render_context.chrome.shell_vars(
+                Some(folder_doc), PageFamily::GeneratedFolder, false, is_explorer_root,
+            );
+            // Generated bodies keep their term sections and place-map layout;
+            // they do not enter the authored children or metadata branches.
             let vars = ShellVars {
-                lazy_chunk_attrs: path_resolver.lazy_chunk_attrs(&share_card_hash, hls_attr_hash),
                 title: tab_title(&page_title, &localized_site_name, false),
-                css_path: path_resolver.css_path(),
-                js_path: path_resolver.js_path(),
-                navigation,
-                nav_island,
                 homepage_content: content_html,
-                latest_list: None,
-                latest_sidebar: None,
-                favicon: Some(path_resolver.favicon_link()),
-                rss_link: page_rss_link,
-                analytics: analytics_script,
-                footer: Some(footer_html),
-                body_attrs: if emit_source_lines { " data-moss-preview".to_string() } else { String::new() },
-                page_wrapper_class: String::new(),
-                hero_section: None,
-                // A synthetic folder index has no authored doc of its own to
-                // carry a cover; `matching_doc` is the authored counterpart
-                // when there is one, and it renders through html.rs instead.
-                share_cover_attr: String::new(),
-                // It does have a URL and a Share button, though, so it names
-                // its QR code like any other page. The file is written below.
                 share_qr_attr: qr::share_qr_attr(&auto_url_path, true, &site_url),
-                main_class: String::new(),
-                date: None,
-                formatted_date: None,
-                date_line: None,
-                short_date: None,
-                content: None, // Page template, not Article
-                description: None,
-                og_tags: None,
-                // Auto-generated folder indexes don't carry frontmatter, so
-                // there's no rich title/description to populate twitter cards
-                // or canonical links from.
-                twitter_tags: None,
-                canonical_link: None,
-                // Auto-generated folder indexes are not language-translated;
-                // they're collection landing pages built from the directory
-                // contents. No hreflang signal applies.
-                hreflang_links: None,
-                apple_touch_icon: None,
-                schema_json_ld: None,
-                content_width_attr: resolve_data_attr(None, layout_config.content_width.as_ref(), "content-width", None),
-                typesetting_attr: resolve_data_attr(None, layout_config.typesetting.as_ref(), "typesetting", Some("horizontal")),
-                comments_attr: resolve_comments_attr(None, layout_config.comments),
-                lang: page_lang_tag,
-                ui_lang: folder_lang,
-                user_css_link: if has_user_css {
-                    Some(format!(
-                        "\n    <link rel=\"stylesheet\" href=\"{}\" layer=\"themes\">",
-                        path_resolver.user_css_path()
-                    ))
-                } else {
-                    None
-                },
-                user_js_tag: if has_user_js {
-                    Some(path_resolver.user_js_tag())
-                } else {
-                    None
-                },
-                has_sidebar_layout, // Use site-wide flag (true if any doc has sidebar)
-                // Auto-generated folder indexes don't contain typed embeds,
-                // so they never need the <model-viewer> head script. Keep
-                // empty for consistency with the struct contract.
-                embed_head_assets: String::new(),
-                // Folder indexes are not article pages, so they never carry
-                // series-nav (or other native post-article modules).
-                post_article: String::new(),
-                runtime_js_tags: runtime_js_tags.clone(),
-                // Auto-generated folder indexes are always listable — no noindex.
-                robots_meta: None,
+                ..chrome
             };
+            let html_page = ShellProcessor::new().process(ShellType::Page, vars);
 
-            let html_page = processor.process(shell_type, vars);
 
             let auto_sp = ServedPath::from_source(&auto_url_path)
                 .map_err(|e| format!("Failed to construct auto-index path: {}", e))?;
             pending.register_unwritten_page(&auto_sp, html_page);
 
-            // …and its QR code, here rather than in the loop below, because a
-            // synthetic index has no entry in `documents` for that loop to walk.
-            // Attribute and file are written together so neither can exist
-            // without the other.
-            qr::emit_share_qr(&auto_url_path, true, &site_url, output_dir, pending)?;
+            if let (Some(verify), Some(previous)) = (carry_verification.as_mut(), verification_snapshot) {
+                verify.record(auto_sp.as_str().to_string(), previous);
+            }
             page_count += 1;
             auto_index_count += 1;
             // Per-folder DEBUG line removed 2026-09-15 (measured ~650
@@ -2705,8 +2311,8 @@ pub fn generate_blocking_content_for_build(
         }
         drop(_phase_auto_index);
         log::info!(
-            target: "timing",
-            "[render] auto folder indexes: {auto_index_count} rendered (none skippable — no source document, so no facade entry to carry)",
+            target: "incremental",
+            "{auto_index_count} generated folder indexes rendered, {auto_index_carried} carried",
         );
         // All vault SHAPE, so measure before optimizing: each index costs in
         // proportion to the children it lists. One flat `posts/` folder of 225
@@ -2884,81 +2490,12 @@ pub fn generate_blocking_content_for_build(
             // neither the homepage's own facade nor any listing group it
             // reads has moved — reuse the previous build's index.html
             // verbatim instead of re-running folder_embed's card synthesis.
-            let Some(entry) = previous_hashes.files.get(homepage_index_sp.as_str()).cloned() else {
-                // Unreachable: `homepage_carried` required this entry to exist.
-                return Err(BuildStopped::from(
-                    "carry-forward lost the manifest entry for index.html".to_string(),
-                ));
-            };
-            pending.register_hashed(&homepage_index_sp, &entry, HashBucket::Files);
+            homepage_carry_proof.as_ref().expect("homepage carry has proof").register_all(pending);
         } else {
             let mut homepage_og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
-            let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
-            let index_html = if homepage_doc.is_some() {
-                // There's a homepage document - use it as the homepage content
-                let homepage_rss = if has_rss {
-                    Some(format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#))
-                } else { None };
-                generate_html_collect_og(
-                    homepage_doc,
-                    &documents,
-                    project_structure,
-                    &layout_config,
-                    true,
-                    homepage_rss.as_deref(),
-                    analytics_script.as_deref(),
-                    site_lang,
-                    Some(&css_version),
-                    has_user_css,
-                    has_sidebar_layout,
-                    user_css_version.as_deref(),
-                    has_user_js,
-                    user_js_version.as_deref(),
-                    Some(&content_graph),
-                    &dir_overrides,
-                    &site_url,
-                    show_rss_in_footer,
-                    emit_source_lines,
-                    &favicon_filename,
-                    favicon_has_raster_pngs,
-                    Some(output_dir),
-                    &mut homepage_og_outputs,
-                    source_path_buf,
-                    &shared,
-                )?
-            } else {
-                // No homepage document found - generate auto-index page with year-grouped article list
-                let homepage_rss = if has_rss {
-                    Some(format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#))
-                } else { None };
-                generate_html_collect_og(
-                    None,
-                    &documents,
-                    project_structure,
-                    &layout_config,
-                    false,
-                    homepage_rss.as_deref(),
-                    analytics_script.as_deref(),
-                    site_lang,
-                    Some(&css_version),
-                    has_user_css,
-                    has_sidebar_layout,
-                    user_css_version.as_deref(),
-                    has_user_js,
-                    user_js_version.as_deref(),
-                    Some(&content_graph),
-                    &dir_overrides,
-                    &site_url,
-                    show_rss_in_footer,
-                    emit_source_lines,
-                    &favicon_filename,
-                    favicon_has_raster_pngs,
-                    Some(output_dir),
-                    &mut homepage_og_outputs,
-                    source_path_buf,
-                    &shared,
-                )?
-            };
+            let index_html = render_page(&render_context,
+                homepage_doc, homepage_doc.is_some(), Some(&mut homepage_og_outputs),
+            )?;
             // Site 14b: register the homepage's OG cards from their receipts.
             for card in homepage_og_outputs.into_cards() {
                 card.register(pending);

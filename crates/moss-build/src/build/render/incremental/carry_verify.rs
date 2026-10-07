@@ -69,6 +69,22 @@ impl CarryVerification {
         }
     }
 
+    /// Read the previous final bytes for a page selected for shadow
+    /// verification. Shared by the authored parallel loop and generated
+    /// folder-index loop so both report unreadable snapshots the same way.
+    pub fn read_previous(url_path: &str, path: &Path) -> Option<(String, Vec<u8>)> {
+        match std::fs::read(path) {
+            Ok(previous) => Some((url_path.to_string(), previous)),
+            Err(e) => {
+                log::warn!(
+                    target: "incremental",
+                    "MOSS_INCREMENTAL_VERIFY: cannot read {url_path} to compare: {e}",
+                );
+                None
+            }
+        }
+    }
+
     /// Record one carried page's previous-build bytes, read before the
     /// re-render overwrites the file.
     pub fn record(&mut self, url_path: String, previous_final_bytes: Vec<u8>) {

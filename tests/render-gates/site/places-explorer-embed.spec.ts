@@ -82,6 +82,107 @@ test.describe("style:map embed", () => {
     await expect(poster.locator("> svg")).toHaveCount(1);
   });
 
+  test("keeps the vector poster until every visible regional tile has decoded", async ({ page }) => {
+    const releaseTileRequests: Array<{ released: boolean; release: () => void }> = [];
+    await page.route(/\/tile-\d+-\d+\.svg(?:\?|$)/, async (route) => {
+      await new Promise<void>((resolve) => releaseTileRequests.push({ released: false, release: resolve }));
+      await route.continue();
+    });
+
+    try {
+      await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+      const poster = page.locator(POSTER);
+      await expect(poster.locator("> svg")).toHaveCount(1);
+      await expect(page.frameLocator(IFRAME).locator(".moss-places-viewport")).toHaveCount(1);
+      await expect.poll(() => releaseTileRequests.length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+      await expect(page.locator(SETTLED)).toHaveCount(0);
+      await expect(poster.locator("> svg")).toHaveCount(1);
+
+      // Let one cell at a time through until a tile that actually intersects
+      // the viewport has decoded. Keep all other visible cells blocked to
+      // prove that a partial regional paint is not enough to replace poster.
+      let loadedVisibleTiles = 0;
+      while (loadedVisibleTiles === 0) {
+        const next = releaseTileRequests.find((request) => !request.released);
+        if (!next) throw new Error("no held tile request remains");
+        next.released = true;
+        next.release();
+        await page.waitForTimeout(120);
+        loadedVisibleTiles = await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => {
+          const bounds = viewport.getBoundingClientRect();
+          return [...document.querySelectorAll<HTMLImageElement>(".moss-places-tile > img")].filter((img) => {
+            const box = img.getBoundingClientRect();
+            return img.complete && img.naturalWidth > 0 && box.right > bounds.left && box.left < bounds.right && box.bottom > bounds.top && box.top < bounds.bottom;
+          }).length;
+        });
+      }
+      await expect(page.locator(SETTLED)).toHaveCount(0);
+      await expect(poster.locator("> svg")).toHaveCount(1);
+
+      releaseTileRequests.filter(({ released }) => !released).forEach((request) => {
+        request.released = true;
+        request.release();
+      });
+      await waitForSettled(page);
+      const visibleTiles = await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => {
+        const bounds = viewport.getBoundingClientRect();
+        return [...document.querySelectorAll<HTMLImageElement>(".moss-places-tile > img")]
+          .map((img) => ({ img, box: img.getBoundingClientRect() }))
+          .filter(({ box }) => box.right > bounds.left && box.left < bounds.right && box.bottom > bounds.top && box.top < bounds.bottom)
+          .map(({ img }) => ({ complete: img.complete, width: img.naturalWidth }));
+      });
+      expect(visibleTiles.length).toBeGreaterThanOrEqual(2);
+      expect(visibleTiles.every((tile) => tile.complete && tile.width > 0)).toBe(true);
+    } finally {
+      releaseTileRequests.filter(({ released }) => !released).forEach((request) => request.release());
+    }
+  });
+
+  test("keeps the vector poster when a visible regional tile fails", async ({ page }) => {
+    let failedTileRequests = 0;
+    await page.route(/\/tile-\d+-\d+\.svg(?:\?|$)/, async (route) => {
+      failedTileRequests++;
+      await route.fulfill({ status: 503, body: "tile unavailable" });
+    });
+
+    await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+    const poster = page.locator(POSTER);
+    await expect(poster.locator("> svg")).toHaveCount(1);
+    await expect(page.frameLocator(IFRAME).locator(".moss-places-viewport")).toHaveCount(1);
+    await expect.poll(() => failedTileRequests, { timeout: 5000 }).toBeGreaterThan(0);
+    await expect(page.locator(SETTLED)).toHaveCount(0);
+    await expect(poster.locator("> svg")).toHaveCount(1);
+    // The host's existing bounded hydration timeout removes the failed
+    // iframe/wrapper and leaves the original accessible poster in place.
+    await expect(page.locator(IFRAME)).toHaveCount(0, { timeout: 10000 });
+    await expect(poster.locator("> svg")).toHaveCount(1);
+  });
+
+  test("rechecks the resized viewport after pending visible tiles are superseded", async ({ page }) => {
+    let holdTiles = true;
+    const pending: Array<() => void> = [];
+    await page.route(/\/tile-\d+-\d+\.svg(?:\?|$)/, async (route) => {
+      if (holdTiles) await new Promise<void>((resolve) => pending.push(resolve));
+      await route.continue();
+    });
+
+    await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+    const poster = page.locator(POSTER);
+    const viewport = page.frameLocator(IFRAME).locator(".moss-places-viewport");
+    await expect(viewport).toHaveCount(1);
+    await expect.poll(() => pending.length, { timeout: 5000 }).toBeGreaterThan(0);
+    const before = await viewport.boundingBox();
+    await page.setViewportSize({ width: 600, height: 800 });
+    await expect.poll(() => viewport.boundingBox()).not.toEqual(before);
+    await expect(page.locator(SETTLED)).toHaveCount(0);
+    await expect(poster.locator("> svg")).toHaveCount(1);
+
+    holdTiles = false;
+    pending.splice(0).forEach((release) => release());
+    await waitForSettled(page);
+    await expect(poster).toHaveAttribute("data-moss-place-embed-ready", "ready");
+  });
+
   test("the iframe's own explorer is scoped to the embedded place", async ({ page }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
@@ -203,6 +304,12 @@ test.describe("style:map embed", () => {
       const bg = channels((await read()).background);
       return bg.length === 3 ? 1 : bg[3];
     }, { timeout: 3000, message: "background must become opaque" }).toBe(1);
+    // Fullscreen moves the button away from the pointer location used to
+    // click it. Wait for that hover transform to finish before measuring its
+    // untransformed 36px hit target; the background's separate transition is
+    // not a proxy for this one.
+    await page.mouse.move(0, 0);
+    await expect.poll(() => button.evaluate((el) => getComputedStyle(el).transform)).toBe("none");
     const style = await read();
     const luminance = ([r, g, b]: number[]) => {
       const lin = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
@@ -335,7 +442,32 @@ test.describe("style:map embed", () => {
     await waitForSettled(page);
     await expect(page.locator(".immersive-new-window-btn")).toHaveCount(0);
 
-    await clickFullscreenButton(page, browserName);
+    const flipSettled = page.evaluate(() => new Promise<void>((resolve) => {
+      const wrapper = document.querySelector(".immersive-iframe-wrapper");
+      if (!wrapper) throw new Error("immersive wrapper is missing");
+      const className = "fs-animating-enter";
+      let entered = wrapper.classList.contains(className);
+      const cleanupWindow = window as typeof window & { __cleanupFullscreenFlipObserver?: () => void };
+      const observer = new MutationObserver((records) => {
+        entered ||= wrapper.classList.contains(className) || records.some((record) => record.oldValue?.split(/\s+/).includes(className));
+        if (entered && !wrapper.classList.contains(className)) {
+          cleanupWindow.__cleanupFullscreenFlipObserver?.();
+        }
+      });
+      cleanupWindow.__cleanupFullscreenFlipObserver = () => {
+        observer.disconnect();
+        delete cleanupWindow.__cleanupFullscreenFlipObserver;
+        resolve();
+      };
+      observer.observe(wrapper, { attributes: true, attributeFilter: ["class"], attributeOldValue: true });
+    }));
+    try {
+      await clickFullscreenButton(page, browserName);
+      await flipSettled;
+    } finally {
+      await page.evaluate(() => (window as typeof window & { __cleanupFullscreenFlipObserver?: () => void }).__cleanupFullscreenFlipObserver?.()).catch(() => {});
+      await flipSettled.catch(() => {});
+    }
     await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
     await page.mouse.move(0, 0);
     await expect(page.locator(".immersive-fullscreen-btn")).toHaveCSS("opacity", "1");
@@ -353,20 +485,11 @@ test.describe("style:map embed", () => {
     // to clear too — this caught the wrapper collapsing to a 0-height box
     // (site.css's own chrome-hiding rule hid the embed's whole containing
     // figure, not just the chrome) with the data attribute alone still
-    // reading "expanded". Waited against the FLIP enter transform settling
-    // (the wrapper's own `fs-animating-enter` class, cleared by
-    // immersive-mode.ts's `afterTransition`), not just a fixed delay. The
-    // class is added inside a `requestAnimationFrame` callback
-    // (immersive-mode.ts's `enterFullscreen`), one or more frames after this
-    // point, so waiting ONLY for its absence races the class's own
-    // addition: a poll landing before that rAF fires sees "no class" for
-    // the wrong reason and passes immediately, before the FLIP transform
-    // (let alone the transition it drives) has even started — measured
-    // landing mid-transform, iframe box far short of the viewport. Waiting
-    // for the class to be PRESENT first closes that race.
+    // reading "expanded". The FLIP class is added inside a requestAnimationFrame
+    // and removed by afterTransition; a polling assertion can miss this short
+    // interval entirely, so the observer above records its addition before
+    // the action and resolves only after the class has been removed.
     const wrapper = page.locator(".immersive-iframe-wrapper");
-    await expect(wrapper).toHaveClass(/fs-animating-enter/, { timeout: 2000 });
-    await expect(wrapper).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
 
     // Previously fixme'd on WebKit: the host document's own cross-document
     // layout/compositor flush for the <iframe> element was starved by the
@@ -946,4 +1069,3 @@ test("a second located-article page in the same context does not re-fetch the wo
   // mean the network never served the bytes a second time.
   expect(afterSecondNav.every((fromCache) => fromCache)).toBe(true);
 });
-

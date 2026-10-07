@@ -59,6 +59,8 @@ pub(crate) fn fill_missing_lang_tags(docs: &mut [ParsedDocument], site_lang: &st
 /// match the directory name, so trusting the directory (or the `site_lang`
 /// parameter) would mislabel the root. Dedup by language — first occurrence
 /// wins. `site_lang` only orders the result (the site-default homepage first).
+/// A synthesized edition root requires a public source descendant with the
+/// same declared tag; an emitted draft-only index is not a published edition.
 pub(crate) fn site_lang_roots(
     all_docs: &[ParsedDocument],
     site_lang: Language,
@@ -70,8 +72,15 @@ pub(crate) fn site_lang_roots(
         // `en`+`fr`+`de` site minted ONE root, `site_publishes_multiple_languages`
         // then said no, and no switcher rendered at all — while hreflang, already
         // tag-keyed, advertised all three editions (the other half of that bug).
-        if is_language_root(&d.url_path)
-            && !roots.iter().any(|r| Some(&r.lang_tag) == d.lang_tag.as_ref())
+        if !is_language_root(&d.url_path) { continue; }
+        // Generated indexes represent an edition's front door, but cannot
+        // publish an edition by themselves (their descendants may all be drafts).
+        let published_root = d.source_path.is_some() || d.url_path == "index.html"
+            || d.url_path.strip_suffix("index.html").is_some_and(|prefix| {
+                all_docs.iter().any(|page| page.source_path.is_some() && page.is_public_page()
+                    && page.url_path.starts_with(prefix) && page.lang_tag == d.lang_tag)
+            });
+        if published_root && !roots.iter().any(|r| Some(&r.lang_tag) == d.lang_tag.as_ref())
         {
             roots.push(LangRoot {
                 // `fill_missing_lang_tags` runs before rendering, so this is
@@ -108,16 +117,12 @@ pub(crate) fn site_lang_roots(
 /// 2. **A public document has a translation counterpart in ANOTHER language** —
 ///    a `foo.zh-hans.md` beside `foo.md`, or a shared `translationKey:`. The
 ///    multilingual fixture is this shape: one root doc (`index.md`) but a
-///    genuine second edition reachable at `/zh-hans/`, whose home is
-///    synthesized and so never appears in `lang_roots`. Root count alone would
-///    call that site monolingual and strip its switcher.
+///    genuine second edition reachable at `/zh-hans/`. Its synthesized home
+///    appears in `lang_roots` only when a published source page supports it.
 /// 3. **A public document lives in a `<code>/` tree, is written in the language
 ///    `<code>` names, and that language is not the site default** — the edition
-///    exists as a whole subtree. `zh-hans/index.md` is optional: the build never
-///    synthesizes a folder doc for a language tree (`blocking.rs`,
-///    synthetic-index pass), so an authored-index-less tree contributes no root
-///    and its pages group with nothing, satisfying neither 1 nor 2 — yet the
-///    build still emits `/zh-hans/` and its readers still need a way back out.
+///    exists as a whole subtree. `zh-hans/index.md` is optional: its generated
+///    index represents the same published edition and gives readers a front door.
 ///
 /// None of the three holds on a single-language site, and that is the point.
 /// Every comparison here reads the page's DECLARED tag (`lang_tag`), which
@@ -133,8 +138,9 @@ pub(crate) fn site_lang_roots(
 /// - Evidence 2 compares the two tags. `build_translation_links` groups by
 ///   stem/`translationKey` with no language comparison, so a same-language pair
 ///   is one page's variants, not an edition.
-/// - Evidence 2 and 3 both require `is_public_page()`: a draft or a `slot_only`
-///   layout fragment is not something a reader can switch to.
+/// - Evidence 2 and 3 require a source-backed `is_public_page()`: a draft or
+///   `slot_only` layout fragment is not a published edition. Generated indexes
+///   derive their eligibility from such pages and never supply independent evidence.
 ///
 /// A third narrowing is gone with the enum. Evidence 3 used to require the
 /// folder's code to resolve through [`Language::from_code`], which knows six
@@ -180,10 +186,10 @@ pub(crate) fn site_publishes_multiple_languages(
     }
     lang_roots.len() > 1
         || all_docs.iter().any(|d| {
-            d.is_public_page() && d.translations.iter().any(|t| t.lang_tag != tag(d, site_tag))
+            d.source_path.is_some() && d.is_public_page() && d.translations.iter().any(|t| t.lang_tag != tag(d, site_tag))
         })
         || all_docs.iter().any(|d| {
-            d.is_public_page()
+            d.source_path.is_some() && d.is_public_page()
                 && tag(d, site_tag) != site_tag
                 && moss_core::home::lang_tree_prefix(&d.url_path)
                     .is_some_and(|p| crate::i18n::lang_tag(p) == tag(d, site_tag))
@@ -268,7 +274,7 @@ mod tests {
     /// A doc whose language was only DETECTED from its prose — the state the
     /// gate exists to refuse, so `lang_tag` stays `None`.
     fn doc_with_lang_url(lang: Language, url: &str) -> ParsedDocument {
-        ParsedDocument { lang, url_path: url.to_string(), ..Default::default() }
+        ParsedDocument { lang, url_path: url.to_string(), source_path: Some(url.to_string()), ..Default::default() }
     }
 
     /// A doc that DECLARED its language — frontmatter, filename suffix or
@@ -280,7 +286,31 @@ mod tests {
             lang,
             lang_tag: Some(tag.to_string()),
             url_path: url.to_string(),
+            source_path: Some(url.to_string()),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn generated_language_root_without_public_sources_is_not_an_edition() {
+        let mut generated = declaring(Language::ZhHans, "zh-Hans", "zh-hans/index.html");
+        generated.source_path = None;
+        let docs = vec![declaring(Language::En, "en", "index.html"), generated];
+        assert_eq!(site_lang_roots(&docs, Language::En).len(), 1,
+            "a generated assets-only or empty index cannot publish an edition");
+        assert!(!publishes_multiple(&docs, Language::En));
+    }
+
+    #[test]
+    fn generated_language_root_requires_same_tag_public_descendant() {
+        for (tag, published) in [("en", false), ("zh-Hans", true)] {
+            let mut generated = declaring(Language::ZhHans, "zh-Hans", "zh-hans/index.html");
+            generated.source_path = None;
+            let docs = vec![declaring(Language::En, "en", "index.html"), generated,
+                declaring(Language::En, tag, "zh-hans/story/index.html")];
+            assert_eq!(site_lang_roots(&docs, Language::En).len(), if published { 2 } else { 1 },
+                "a generated root represents only the edition its public source declares");
+            assert_eq!(publishes_multiple(&docs, Language::En), published);
         }
     }
 
@@ -452,10 +482,9 @@ mod tests {
     }
 
     // Evidence 3: a `<code>/` tree with NO authored `<code>/index.md`. The
-    // build declines to synthesize a folder doc for a language tree, so the
-    // tree contributes no root (evidence 1) and its pages group with nothing
-    // (evidence 2) — but `/zh-hans/` is still emitted and still needs a way
-    // back to the root edition.
+    // source-only corpus here has no represented root (evidence 1), while
+    // the real build adds its generated root. Both forms publish the edition
+    // and let readers return to the root edition.
     #[test]
     fn lang_tree_without_an_authored_index_still_publishes_an_edition() {
         let docs = vec![

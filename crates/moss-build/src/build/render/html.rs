@@ -3,14 +3,15 @@
 //! The `generate_html` function converts a `ParsedDocument` (plus site context)
 //! into a complete HTML page using the template system.
 
-use crate::{build::types::ParsedDocument, types::content::ProjectStructure};
+use crate::build::types::ParsedDocument;
+#[cfg(test)]
+use crate::types::content::ProjectStructure;
 use moss_core::PageKind;
 
 // Generator submodule imports
 use crate::build::components;
 use crate::build::render::grid_cells;
 use crate::build::markdown::html_post::splice_after_title_block;
-use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
 use crate::build::page::layout::LayoutConfig;
 use crate::build::page::page::generate_year_grouped_article_list;
 use crate::build::assets::paths::PathResolver;
@@ -21,7 +22,9 @@ use crate::build::page::shell::{
 };
 
 // Sibling module imports (within build/render/)
-use super::config::{resolve_logo_url, resolve_data_attr, resolve_comments_attr};
+use super::page_chrome::{PageChromeContext, PageFamily};
+#[cfg(test)]
+use super::page_chrome::ChromeAssets;
 use super::build_shared::BuildShared;
 use super::credits;
 
@@ -85,7 +88,7 @@ pub(crate) fn localized_site_title(
         return fallback.to_string();
     }
     find_homepage_doc(all_docs, page_lang, site_lang)
-        .filter(|d| d.url_path != "index.html")
+        .filter(|d| d.url_path != "index.html" && d.source_path.is_some())
         .map(|d| d.title.clone())
         .filter(|t| !t.is_empty() && !moss_core::home::is_index_stem(t))
         .unwrap_or_else(|| fallback.to_string())
@@ -137,6 +140,7 @@ pub fn generate_html(
 /// generated OG card PNG that was written under `output_dir/_moss/og/`. The
 /// caller appends those paths to `site_hashes.image_outputs` so blocking-
 /// phase stale cleanup preserves them.
+#[cfg(test)]
 pub fn generate_html_collect_og<'d>(
     doc: Option<&ParsedDocument>,
     all_docs: &'d [ParsedDocument],
@@ -321,6 +325,7 @@ fn is_explorer_root_doc(doc: Option<&ParsedDocument>, layout_config: &LayoutConf
     })
 }
 
+#[cfg(test)]
 fn generate_html_inner<'d>(
     doc: Option<&ParsedDocument>,
     all_docs: &'d [ParsedDocument],
@@ -344,69 +349,10 @@ fn generate_html_inner<'d>(
     favicon_filename: &str,
     favicon_has_raster_pngs: bool,
     output_dir: Option<&std::path::Path>,
-    mut og_outputs: Option<&mut crate::build::page::og_card::OgSink<'_>>,
+    og_outputs: Option<&mut crate::build::page::og_card::OgSink<'_>>,
     source_root: &std::path::Path,
     shared: &BuildShared<'d>,
 ) -> Result<String, String> {
-    let BuildShared { scripts, media_lookup, sequences } = shared;
-    // The language moss's own interface is drawn in: the page's own when it
-    // declares one moss has strings for, else the site default. Distinct from
-    // `<html lang>`, which describes the content and may name a language moss
-    // has no interface for at all.
-    let ui_lang = doc.map(|d| d.lang).unwrap_or(site_lang);
-
-    // The page's effective typesetting — its own, else the site's. Computed
-    // here (not beside its original use below) because `resolve_page_body`,
-    // which also needs it for card-meta dates, runs before that point.
-    let resolved_typesetting: Option<&str> = super::config::effective_typesetting(
-        doc.and_then(|d| d.typesetting.as_deref()),
-        layout_config.typesetting.as_deref(),
-    );
-    let vertical_typesetting = resolved_typesetting == Some("vertical");
-
-    // `<html lang>`, hreflang and Schema.org `inLanguage` all emit THIS one
-    // string, so they cannot contradict each other — deriving it three times
-    // below is how they drifted apart.
-    let page_lang_tag = doc
-        .and_then(|d| d.lang_tag.clone())
-        .unwrap_or_else(|| layout_config.lang_tag.clone());
-
-    // Get homepage document for metadata
-    let homepage_doc = project
-        .homepage_file
-        .as_ref()
-        .and_then(|_| all_docs.iter().find(|d| d.url_path == "index.html"));
-
-    // Use site_name from LayoutConfig (which handles folder name for Minimal layout)
-    let site_title = if layout_config.site_name.is_empty() {
-        // For Full layout, fall back to homepage title (skip filename-derived stems)
-        homepage_doc
-            .map(|d| d.title.clone())
-            .filter(|t| !moss_core::home::is_index_stem(t))
-            .unwrap_or_else(|| crate::i18n::t(site_lang, "site").to_string())
-    } else {
-        layout_config.site_name.clone()
-    };
-
-    // Per-language site name: if the current page is non-default language,
-    // look for the translated homepage and use its title as site_name.
-    // e.g., Chinese pages use "青苔" instead of "moss".
-    let site_title = doc.map_or(site_title.clone(), |d| {
-        localized_site_title(all_docs, d.lang, site_lang, &site_title)
-    });
-
-    // Generate analytics script tag from homepage frontmatter
-    let analytics_script = homepage_doc
-        .and_then(|d| d.analytics.as_ref())
-        .map(|analytics| analytics.to_script_tag());
-
-    // Cache-busted script filenames come from the caller's snapshot, never from
-    // a fresh read here. Under `#[cfg(dev)]` `load_js_asset` reads from disk, so
-    // re-resolving per page raced `npm run dev`'s esbuild: a rebuild landing
-    // mid-render gave later pages a `theme.<hash>.js` URL the emitter — which
-    // wrote from the snapshot taken at the top of the build — never produced.
-
-    // Initialize path resolver early — used for feed path, series nav, CSS/JS, etc.
     let path_resolver = {
         let pr = match css_version {
             Some(version) => PathResolver::new().with_css_version(version),
@@ -420,91 +366,60 @@ fn generate_html_inner<'d>(
             Some(v) => pr.with_user_js_version(v),
             None => pr,
         };
-        let pr = pr.with_js_version(scripts.hash("theme"));
+        let pr = pr.with_js_version(shared.scripts.hash("theme"));
         pr.with_favicon_filename(favicon_filename)
             .with_favicon_has_raster_pngs(favicon_has_raster_pngs)
             .with_dir_overrides(dir_overrides.clone())
     };
 
-    let current_page_url = doc.map(|d| d.url_path.as_str());
-    // `logo:` is a whole-site field read from a homepage. The nav shows it on
-    // every page, but only the homepage that DECLARES it has the field in the
-    // file being edited — only there may the nav logo carry
-    // `data-source-fm="logo"` (a chip absent from the open file cannot be
-    // revealed, so annotating any other page would be a lie).
-    let logo_is_own_field = doc.is_some_and(|d| {
-        d.logo.is_some()
-            && (d.url_path == "index.html"
-                || d.url_path == format!("{}/index.html", d.lang.code()))
-    });
-    let nav_builder = NavigationBuilder::new(
-        all_docs,
-        &site_title,
-        current_page_url,
-        site_lang,
-        project.has_content_folders,
-    )
-    .with_search(layout_config.assets.search)
-    .with_source_fm(emit_source_lines, emit_source_lines && logo_is_own_field)
-    .with_header_mode(layout_config.header);
-    // Per-language logo: check if the translated homepage has its own logo,
-    // otherwise fall back to the default homepage's logo.
-    let logo_for_page = if let Some(d) = doc {
-        if d.lang != site_lang {
-            let lang_homepage = format!("{}/index.html", d.lang.code());
-            let lang_logo = all_docs.iter()
-                .find(|dd| dd.url_path == lang_homepage)
-                .and_then(|dd| dd.logo.as_ref())
-                .map(|l| resolve_logo_url(l));
-            lang_logo.or_else(|| layout_config.logo_path.clone())
-        } else {
-            layout_config.logo_path.clone()
-        }
-    } else {
-        layout_config.logo_path.clone()
+    let context = RenderCtx {
+        chrome: PageChromeContext {
+            documents: all_docs, project, layout: layout_config, site_lang,
+            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, rss_link },
+            show_rss_in_footer, emit_source_lines, has_sidebar_layout,
+        },
+        content_graph, dir_overrides, site_url, output_dir, source_root, shared,
     };
-    let nav_builder = if let Some(logo) = logo_for_page {
-        nav_builder.with_logo(logo)
-    } else {
-        nav_builder
-    };
+    render_page(&context, doc, is_homepage, og_outputs)
+}
 
-    // Compute breadcrumb segments if the page qualifies. Forced on for a
-    // places-explorer root regardless of the site's own breadcrumb setting:
-    // its `<h1>` is `.visually-hidden` (design decision 7), so with no other
-    // visible title anywhere in the page, the breadcrumb is the only thing
-    // left to name the section at all.
-    let nav_builder = if let Some(d) = doc {
-        let force_breadcrumb = is_explorer_root_doc(doc, layout_config);
-        match compute_breadcrumb_segments(d, all_docs, &site_title, project.has_content_folders, force_breadcrumb) {
-            Some(segments) => nav_builder.with_breadcrumb(segments, force_breadcrumb),
-            None => nav_builder,
-        }
-    } else {
-        nav_builder
-    };
+/// Build inputs shared by authored pages and the generated-folder shell.
+pub(super) struct RenderCtx<'a, 'd> {
+    pub chrome: PageChromeContext<'a, 'd>,
+    pub content_graph: Option<&'a moss_core::content_graph::ContentGraph>,
+    pub dir_overrides: &'a std::collections::HashMap<String, String>,
+    pub site_url: &'a crate::build::site_url::SiteUrl,
+    pub output_dir: Option<&'a std::path::Path>,
+    pub source_root: &'a std::path::Path,
+    pub shared: &'a BuildShared<'d>,
+}
 
-    // Wire language toggle into nav. Single source of truth for switcher
-    // languages: per-article translations, gap-filled with each OTHER language's
-    // homepage root, current language always excluded (see
-    // i18n::site_languages::other_language_links). Replaces the old
-    // homepage-translations fallback that inherited the homepage's POV and
-    // duplicated the current language (e.g. "EN / EN").
-    let nav_builder = if let Some(d) = doc {
-        let lang_roots = super::lang_roots::site_lang_roots(all_docs, site_lang);
-        let multi = super::lang_roots::site_publishes_multiple_languages(all_docs, &lang_roots, site_lang);
-        let links = crate::i18n::site_languages::other_language_links(
-            &page_lang_tag, &d.translations, &lang_roots, multi);
-        // Always adopt the page's own language (nav-item scoping + localized
-        // labels), whether or not translation links exist. An empty `links`
-        // simply renders no language toggle.
-        nav_builder.with_translations(d.lang, &page_lang_tag, links)
-    } else {
-        nav_builder
-    };
-
-    let footer_html = Some(nav_builder.generate_footer(show_rss_in_footer));
-
+pub(super) fn render_page<'d>(
+    context: &RenderCtx<'_, 'd>,
+    doc: Option<&ParsedDocument>,
+    is_homepage: bool,
+    mut og_outputs: Option<&mut crate::build::page::og_card::OgSink<'_>>,
+) -> Result<String, String> {
+    let all_docs = context.chrome.documents;
+    let project = context.chrome.project;
+    let layout_config = context.chrome.layout;
+    let site_lang = context.chrome.site_lang;
+    let emit_source_lines = context.chrome.emit_source_lines;
+    let content_graph = context.content_graph;
+    let dir_overrides = context.dir_overrides;
+    let site_url = context.site_url;
+    let output_dir = context.output_dir;
+    let source_root = context.source_root;
+    let BuildShared { media_lookup, sequences, .. } = context.shared;
+    let path_resolver = &context.chrome.assets.paths;
+    let ui_lang = doc.map(|d| d.lang).unwrap_or(site_lang);
+    let page_lang_tag = doc.and_then(|d| d.lang_tag.clone()).unwrap_or_else(|| layout_config.lang_tag.clone());
+    let site_title = context.chrome.site_title(doc);
+    let resolved_typesetting = super::config::effective_typesetting(
+        doc.and_then(|d| d.typesetting.as_deref()), layout_config.typesetting.as_deref(),
+    );
+    let vertical_typesetting = resolved_typesetting == Some("vertical");
+    let chrome = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root_doc(doc, layout_config));
     let processor = ShellProcessor::new();
 
     // Determine template type based on layout and content folders
@@ -990,17 +905,6 @@ fn generate_html_inner<'d>(
     // Templates all use a bare `{title}` — there is no `{site_name}` template var.
     let title_for_tab = tab_title(&page_title, &site_title, is_homepage);
 
-    // Single unified navigation for all pages
-    let navigation = nav_builder.generate_navigation();
-    // …plus its floating continuation for long pages. Empty unless
-    // this page has a breadcrumb trail, and empty site-wide when the author
-    // turned the island off in Settings → Services.
-    let nav_island = if layout_config.floating_nav {
-        nav_builder.generate_nav_island()
-    } else {
-        String::new()
-    };
-
     // Generate series navigation for article pages in ordered folders.
     //
     // Output routing: article pages emit series-nav into the `{post_article}`
@@ -1399,20 +1303,7 @@ fn generate_html_inner<'d>(
     // Build template variables
     let vars = ShellVars {
         title: title_for_tab,
-        css_path: path_resolver.css_path(),
-        js_path: path_resolver.js_path(),
-        lazy_chunk_attrs: path_resolver.lazy_chunk_attrs(
-            scripts.hash("share-card"),
-            layout_config.assets.video_ladder.then(|| scripts.hash("hls")),
-        ),
-        navigation,
-        nav_island,
         homepage_content: homepage_content.clone(),
-        latest_list: None,
-        favicon: Some(path_resolver.favicon_link()),
-        rss_link: rss_link.map(|s| s.to_string()),
-        analytics: analytics_script.map(|s| s.to_string()),
-        footer: footer_html,
         // Article-specific variables
         date: if is_article_page && doc.is_some() {
             doc.unwrap().date.clone()
@@ -1441,21 +1332,6 @@ fn generate_html_inner<'d>(
             Some(homepage_content)
         } else {
             None
-        },
-        // `data-page="home"` is the only thing that tells a stylesheet which
-        // page it is on. A site's front page is routinely treated differently
-        // from the rest of it — a hero that fills the screen, no footer under
-        // it — and without a marker on <body> a theme has to guess from
-        // content that happens to be unique to the homepage today.
-        body_attrs: {
-            let mut attrs = String::new();
-            if emit_source_lines {
-                attrs.push_str(" data-moss-preview");
-            }
-            if is_homepage {
-                attrs.push_str(r#" data-page="home""#);
-            }
-            attrs
         },
         page_wrapper_class,
         // Hero section from document (placed outside <main> for full-width).
@@ -1656,12 +1532,6 @@ fn generate_html_inner<'d>(
         } else {
             None
         },
-        // Populated when the blocking phase rasterized PNG favicon sizes
-        // (`favicon_has_raster_pngs`).
-        // None when no SVG was available to rasterize from — emitting an
-        // SVG-pointing tag would be worse than no tag (Apple Link Presentation
-        // can't use SVG and would fail more loudly than just falling back).
-        apple_touch_icon: path_resolver.apple_touch_icon_link(),
         schema_json_ld: if is_article_page && is_card_eligible {
             let d = doc.unwrap();
             // Same pretty-URL derivation as og:url: build from full url_path,
@@ -1706,40 +1576,10 @@ fn generate_html_inner<'d>(
         } else {
             None
         },
-        content_width_attr: resolve_data_attr(
-            doc.and_then(|d| d.content_width.as_ref()),
-            layout_config.content_width.as_ref(), "content-width", None),
-        typesetting_attr: resolve_data_attr(
-            doc.and_then(|d| d.typesetting.as_ref()),
-            layout_config.typesetting.as_ref(), "typesetting", Some("horizontal")),
-        comments_attr: resolve_comments_attr(
-            doc.and_then(|d| d.comments), layout_config.comments),
-        // The content's language, not the chrome's: `ui_lang`'s three variants
-        // said `en` on a `fr` site while site-languages.json said `fr`.
-        lang: page_lang_tag.clone(),
-        ui_lang,
-        user_css_link: if has_user_css {
-            Some(format!(
-                r#"<link rel="stylesheet" href="{}" layer="themes">"#,
-                path_resolver.user_css_path()
-            ))
-        } else {
-            None
-        },
-        user_js_tag: if has_user_js {
-            Some(path_resolver.user_js_tag())
-        } else {
-            None
-        },
-        has_sidebar_layout,
         embed_head_assets,
         post_article,
-        // The same block `render::blocking` emits, from the same table and
-        // the same gate facts — `LayoutConfig::assets` is now the one place
-        // those facts live, so the two render paths cannot disagree about
-        // which scripts a page loads.
-        runtime_js_tags: scripts.shell_tags(&layout_config.assets, &path_resolver),
         robots_meta,
+        ..chrome
     };
 
     Ok(processor.process(shell_type, vars))

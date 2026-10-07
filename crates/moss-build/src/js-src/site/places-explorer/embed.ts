@@ -249,7 +249,7 @@ function readEmbedParams(): { embed: boolean; place: string | null; article: str
  * full places root, every render-gate fixture that isn't this one).
  * Called once, right after `mountPlacesMap` succeeds, by `index.ts`.
  */
-export function attachEmbedModeIfRequested(controller: PlacesMapController, figure: HTMLElement): void {
+export async function attachEmbedModeIfRequested(controller: PlacesMapController, figure: HTMLElement): Promise<void> {
   const { embed, place, article } = readEmbedParams();
   if (!embed) return;
 
@@ -297,8 +297,9 @@ export function attachEmbedModeIfRequested(controller: PlacesMapController, figu
     controller.refitScopeIfClipped();
   });
 
-  // The explorer has mounted and applied its initial camera — tell the
-  // host page's own lazy-hydration wrapper (`buildIframe` above) it may
-  // cross-fade the iframe over the static poster now.
+  // Keep the vector poster visible until the world raster and every regional
+  // tile under the initial frame have decoded. The world raster is capped
+  // for pan performance and can be soft at an article's local zoom.
+  if (!(await controller.waitForInitialPaint())) return;
   window.parent.postMessage({ type: READY_MESSAGE }, location.origin);
 }

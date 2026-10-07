@@ -14,6 +14,17 @@ import { project } from "../projection";
 import { readUrlState } from "../state";
 import type { LabelsData, Place, Work } from "../types";
 
+const raster = vi.hoisted(() => ({
+  rasterizeOrFallback: vi.fn(),
+  restore: () => {},
+}));
+vi.mock("../raster", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../raster")>();
+  raster.rasterizeOrFallback.mockImplementation(actual.rasterizeOrFallback);
+  raster.restore = () => raster.rasterizeOrFallback.mockImplementation(actual.rasterizeOrFallback);
+  return { ...actual, rasterizeOrFallback: raster.rasterizeOrFallback };
+});
+
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const VIEWPORT = { width: 800, height: 500 };
 // Lng 20..30, lat 10..20 — a tile cell nowhere near the world-centre corner
@@ -36,6 +47,7 @@ afterEach(() => {
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  raster.restore();
   history.replaceState(null, "", "/places/");
 });
 
@@ -75,6 +87,28 @@ describe("mountPlacesMap — embed seams", () => {
     })!;
     return { figure, controller };
   }
+
+  test("world-only initial paint waits for a current-size bake after a viewport resize", async () => {
+    let viewport = { ...VIEWPORT };
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(() => ({
+      width: viewport.width, height: viewport.height, top: 0, left: 0,
+      right: viewport.width, bottom: viewport.height, x: 0, y: 0, toJSON() {},
+    } as DOMRect));
+    const pending: Array<(surface: { el: HTMLImageElement; release: () => void }) => void> = [];
+    raster.rasterizeOrFallback.mockImplementation(() => new Promise((resolve) => pending.push(resolve)));
+    const { controller } = mount();
+    let ready = false;
+    const waiting = controller.waitForInitialPaint().then((result) => { ready = result; });
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+
+    viewport = { width: 1600, height: 500 };
+    pending[0]!({ el: document.createElement("img"), release: vi.fn() });
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    expect(ready).toBe(false);
+    pending[1]!({ el: document.createElement("img"), release: vi.fn() });
+    await waiting;
+    expect(ready).toBe(true);
+  });
 
   test("camera paint coalesces while wheel input keeps the final camera", () => {
     vi.useFakeTimers();
