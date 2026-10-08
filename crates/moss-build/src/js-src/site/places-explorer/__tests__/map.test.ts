@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { coverCamera, detailMaxZoom, resizeCamera, screenScale, tileDetailMaxZoom, worldToScreen } from "../camera";
 import { mountPlacesMap } from "../map";
+import { TileLayer } from "../tiles";
 import { project } from "../projection";
 import { readUrlState } from "../state";
 import type { LabelsData, Place, Work } from "../types";
@@ -108,6 +109,14 @@ describe("mountPlacesMap — embed seams", () => {
     pending[1]!({ el: document.createElement("canvas"), release: vi.fn() });
     await waiting;
     expect(ready).toBe(true);
+  });
+
+  test("initial paint can hand off on complete regional coverage while the world bake continues", async () => {
+    raster.rasterizeOrFallback.mockImplementation(() => new Promise(() => {}));
+    vi.spyOn(TileLayer.prototype, "hasOpaqueViewportCoverage").mockReturnValue(true);
+    const { controller } = mount();
+    await expect(controller.waitForInitialPaint()).resolves.toBe(true);
+    expect(raster.rasterizeOrFallback).toHaveBeenCalled();
   });
 
   test("camera paint coalesces while wheel input keeps the final camera", () => {

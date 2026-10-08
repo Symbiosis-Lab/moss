@@ -769,9 +769,9 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       // Scope changes and ResizeObserver callbacks can land while a surface is
       // decoding. Re-read the actual frame after each await; a stale world
       // bake must never announce readiness for a larger/current viewport.
-      // The world still fills gaps between available cells and under the tile
-      // fade band, so it is a required part of the first paint even when
-      // regional tiles cover the places themselves.
+      // Regional tiles can stand in for the world only when decoded opaque
+      // canvases cover the complete frame beyond their faded outer edges.
+      // Otherwise the world remains a required first-paint dependency.
       while (true) {
         applyCamera(true);
         const viewport = getViewport();
@@ -784,15 +784,28 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
         const visibleTilesReady = requiresVisibleTiles
           ? tileLayer.waitForVisibleTiles()
           : Promise.resolve("ready" as const);
+        let tilesReady: Awaited<typeof visibleTilesReady>;
         try {
-          const [, tilesReady] = await Promise.all([rebakeWorld(unitScale, camera.zoom), visibleTilesReady]);
-          if (tilesReady === "failed") return false;
-          if (tilesReady === "superseded") {
-            // A resize can go A→B→A while the old request is pending. The
-            // generation changed regardless of the final geometry, so always
-            // capture and await dependencies for the current frame again.
-            continue;
-          }
+          tilesReady = await visibleTilesReady;
+        } catch {
+          return false;
+        }
+        if (tilesReady === "failed") return false;
+        if (tilesReady === "superseded") {
+          // A resize can go A→B→A while the old request is pending. The
+          // generation changed regardless of the final geometry, so always
+          // capture and await dependencies for the current frame again.
+          continue;
+        }
+        applyCamera(true);
+        const afterTilesViewport = getViewport();
+        if (
+          camera.x !== awaitedCamera.x || camera.y !== awaitedCamera.y || camera.zoom !== awaitedCamera.zoom ||
+          afterTilesViewport.width !== viewport.width || afterTilesViewport.height !== viewport.height
+        ) continue;
+        const tilesCoverFrame = tileLayer.hasOpaqueViewportCoverage(camera, afterTilesViewport);
+        try {
+          if (!tilesCoverFrame) await rebakeWorld(unitScale, camera.zoom);
         } catch {
           return false;
         }
@@ -803,7 +816,9 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
           latest.width !== viewport.width || latest.height !== viewport.height
         ) continue;
         const latestUnitScale = screenScale({ x: 0, y: 0, zoom: 1 }, latest);
-        if (!worldBakeIsSharpEnough(latestUnitScale, camera.zoom)) continue;
+        const latestTilesCoverFrame = tileLayer.hasOpaqueViewportCoverage(camera, latest);
+        if (tilesCoverFrame && !latestTilesCoverFrame) continue;
+        if (!latestTilesCoverFrame && !worldBakeIsSharpEnough(latestUnitScale, camera.zoom)) continue;
         return true;
       }
     },

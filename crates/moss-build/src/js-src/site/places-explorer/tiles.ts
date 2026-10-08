@@ -37,6 +37,7 @@ const MAX_CONCURRENT_TILE_LOADS = 6;
 
 /** The last fraction of the world layer's own zoom range (`0`..`detailMaxZoom`, NOT the raised ceiling `hasVisibleTiles` unlocks) where the tile layer fades in. */
 const TILE_FADE_BAND = 0.2;
+const WORLD_TILE_CELLS: Array<[number, number]> = Array.from({ length: 36 * 18 }, (_, index) => [index % 36, Math.floor(index / 36)]);
 
 /**
  * How visible the regional-tile layer should be at `camera`, 0..1 — the
@@ -125,6 +126,7 @@ export function tilesForView(cells: Array<[number, number]>, camera: Camera, vie
 
 /** How far, in canvas units (world units times `k`), the outer edge of a tile's own covered region fades toward the bare world layer past it — a cell about 23 world units wide, so this is a short distance against it, not a redraw of the whole tile. */
 const OUTER_FADE_WORLD_UNITS = 1.5;
+const TILE_OPAQUE_COVERAGE_PAD = OUTER_FADE_WORLD_UNITS + 0.5;
 
 /**
  * The `mask-image` that fades a tile's own OUTER edges only — the sides
@@ -249,6 +251,46 @@ export class TileLayer {
   /** Whether the manifest has tile coverage under this view, including cells whose fetch failed. Initial embed readiness must fail closed for those cells, while the zoom ceiling may correctly ignore them. */
   hasManifestTiles(camera: Camera, viewport: Viewport): boolean {
     return tilesForView(this.options.availableTiles, camera, viewport, 0).length > 0;
+  }
+
+  /** True only when already-decoded regional canvases cover the whole frame beyond their outer-edge fades. The world raster remains required for partial coverage, fade frames, failed cells, or any tile that still needs a sharper bake. */
+  hasOpaqueViewportCoverage(camera: Camera, viewport: Viewport): boolean {
+    if (tileFadeOpacity(camera, viewport) !== 1) return false;
+    const required = tilesForView(WORLD_TILE_CELLS, camera, viewport, 0);
+    if (required.length === 0) return false;
+    const available = new Set(this.options.availableTiles.map(([x, y]) => `${x},${y}`));
+    const scale = screenScale(camera, viewport);
+    const view = {
+      left: camera.x - viewport.width / (2 * scale),
+      right: camera.x + viewport.width / (2 * scale),
+      top: camera.y - viewport.height / (2 * scale),
+      bottom: camera.y + viewport.height / (2 * scale),
+    };
+    return required.every(([x, y]) => {
+      const key = `${x},${y}`;
+      if (!available.has(key)) return false;
+      const entry = this.elements.get(key);
+      if (entry === undefined || entry === "loading" || entry === "failed" || entry.bakeState !== "ready") return false;
+      const surface = entry.el.firstElementChild;
+      if (surface?.tagName.toLowerCase() !== "canvas" || (surface as HTMLCanvasElement).width < 1 || (surface as HTMLCanvasElement).height < 1) return false;
+      const wantedDensity = this.bakeableDensity(entry.split, this.density);
+      if (entry.bakedDensity * TILE_REBAKE_RATIO < wantedDensity) return false;
+      const bounds = tileCellBounds(x, y);
+      const hasUsableNeighbour = (nx: number, ny: number): boolean => {
+        if (!available.has(`${nx},${ny}`)) return false;
+        return this.elements.get(`${nx},${ny}`) !== "failed";
+      };
+      // Outer tile edges fade across 1.5 world units. Include a small
+      // rounding margin for the tile's bleed and independently transformed
+      // CSS boxes; if any faded strip reaches the frame, the world is still
+      // needed underneath it.
+      return !(
+        (!hasUsableNeighbour(x - 1, y) && view.left < bounds.minX + TILE_OPAQUE_COVERAGE_PAD) ||
+        (!hasUsableNeighbour(x + 1, y) && view.right > bounds.maxX - TILE_OPAQUE_COVERAGE_PAD) ||
+        (!hasUsableNeighbour(x, y + 1) && view.top < bounds.minY + TILE_OPAQUE_COVERAGE_PAD) ||
+        (!hasUsableNeighbour(x, y - 1) && view.bottom > bounds.maxY - TILE_OPAQUE_COVERAGE_PAD)
+      );
+    });
   }
 
   /** Waits for the captured visible cells; padding-only neighbours never hold first paint. Cleared generations are superseded so the caller can recheck the resized frame. */

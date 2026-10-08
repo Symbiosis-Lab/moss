@@ -51,6 +51,7 @@ const READY_MESSAGE = "moss-places-embed-ready";
 const MODE_MESSAGE = "moss-places-embed-mode";
 const HYDRATE_TIMEOUT_MS = 8000;
 const NEAR_VIEWPORT_MARGIN = "200px";
+const activeHostAttempts = new WeakMap<HTMLElement, () => void>();
 
 /** The one or two fields this module reads off `navigator.connection` — not in lib.dom.d.ts. */
 interface NetworkInformationLike {
@@ -72,7 +73,7 @@ function prefersMinimalData(): boolean {
  * failures inside the iframe are not observable here, so timeout restores
  * the host's static SVG fallback.
  */
-function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
+function buildIframe(poster: HTMLElement, hydrateUrl: string): () => void {
   const iframe = document.createElement("iframe");
   iframe.className = "moss-places-embed-frame";
   iframe.setAttribute("aria-hidden", "true"); // expose the map only after its own ready handshake
@@ -88,6 +89,7 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
   }
 
   let settled = false;
+  let active = true;
   let timeout = 0;
 
   function cleanup(): void {
@@ -96,7 +98,7 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
   }
 
   function onMessage(event: MessageEvent): void {
-    if (settled) return;
+    if (!active || settled) return;
     if (event.origin !== location.origin) return;
     if (event.source !== iframe.contentWindow) return;
     const data = event.data as { type?: unknown } | null;
@@ -128,9 +130,17 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
     iframe.classList.add("moss-places-embed-frame--settled");
   }
 
+  function cancel(): void {
+    if (!active) return;
+    active = false;
+    cleanup();
+    (iframe.parentElement ?? iframe).remove();
+  }
+
   window.addEventListener("message", onMessage);
   timeout = window.setTimeout(() => {
-    if (settled) return;
+    if (!active || settled) return;
+    active = false;
     cleanup();
     // `setupImmersiveIframe` (below) always wraps the iframe before this
     // timeout can ever fire, so by now its parent is always the wrapper it
@@ -177,13 +187,26 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
     false, // no open-in-new-tab control on a places embed — only expand/collapse
   );
   iframe.src = hydrateUrl;
+  return cancel;
 }
 
 function setupPoster(poster: HTMLElement): void {
   if (poster.dataset.mossPlaceEmbedBound) return;
-  poster.dataset.mossPlaceEmbedBound = "1";
+  activeHostAttempts.get(poster)?.();
   const hydrateUrl = poster.dataset.hydrateUrl;
   if (!hydrateUrl) return;
+  let disposed = false;
+  let observer: IntersectionObserver | null = null;
+  let cancelIframe = (): void => {};
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    observer?.disconnect();
+    cancelIframe();
+    if (activeHostAttempts.get(poster) === dispose) activeHostAttempts.delete(poster);
+  };
+  activeHostAttempts.set(poster, dispose);
+  poster.dataset.mossPlaceEmbedBound = "1";
 
   const strings = copyFor(document.documentElement.lang);
   const name = poster.dataset.embedName;
@@ -202,16 +225,15 @@ function setupPoster(poster: HTMLElement): void {
   poster.appendChild(status);
 
   let hydrated = false;
-  let observer: IntersectionObserver | null = null;
   const hydrate = (): void => {
-    if (hydrated) return;
+    if (disposed || hydrated) return;
     hydrated = true;
     observer?.disconnect();
     poster.dataset.mossPlaceEmbedState = "loading";
     poster.setAttribute("aria-busy", "true");
     status.textContent = strings.mapEmbedLoading;
     poster.querySelector<HTMLButtonElement>(":scope > .moss-places-embed-load")?.remove();
-    buildIframe(poster, hydrateUrl);
+    cancelIframe = buildIframe(poster, hydrateUrl);
   };
 
   if (prefersMinimalData()) {
@@ -225,6 +247,14 @@ function setupPoster(poster: HTMLElement): void {
     if (name) button.setAttribute("aria-label", `${strings.mapEmbedLoad}: ${name}`);
     button.addEventListener("click", hydrate, { once: true });
     poster.appendChild(button);
+    return;
+  }
+  // An article carries exactly one locator and its own scoped URL, so it
+  // should start with the article itself. Folder `style:map` embeds remain
+  // near-viewport lazy to avoid fetching maps for distant rows.
+  const isArticleMap = new URL(hydrateUrl, location.href).searchParams.has("article");
+  if (isArticleMap) {
+    hydrate();
     return;
   }
   if (typeof IntersectionObserver !== "function") {
@@ -252,6 +282,8 @@ export function initPlaceEmbeds(root: ParentNode = document): void {
     setupPoster(poster);
   }
 }
+
+document.addEventListener("moss-morph-patched", () => initPlaceEmbeds());
 
 // ---------------------------------------------------------------------------
 // The iframe-content half: this is the SAME places root page `index.ts`
@@ -318,9 +350,9 @@ export async function attachEmbedModeIfRequested(controller: PlacesMapController
     controller.refitScopeIfClipped();
   });
 
-  // Post READY only after the world raster and every visible regional tile
-  // under the initial frame have decoded. The world raster is capped for pan
-  // performance and can be soft at an article's local zoom.
+  // Post READY once visible regional tiles are decoded and either the world
+  // raster is sharp enough or fully opaque regional tile canvases cover the
+  // current viewport.
   if (!(await controller.waitForInitialPaint())) return;
   window.parent.postMessage({ type: READY_MESSAGE }, location.origin);
 }

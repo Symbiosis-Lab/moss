@@ -845,3 +845,65 @@ describe("TileLayer — re-bakes follow the density needed, within the same conc
     expect(container.dataset.mossPlacesTilesState).toBe("idle");
   });
 });
+
+describe("TileLayer — complete first-frame coverage", () => {
+  const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"></svg>';
+  const cells: Array<[number, number]> = [[10, 5]];
+  const viewport = { width: 100, height: 100 };
+  const bounds = tileCellBounds(10, 5);
+  const camera = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2, zoom: detailMaxZoom(viewport) };
+  const unitScale = screenScale({ ...camera, zoom: 1 }, viewport);
+
+  async function readyLayer(availableTiles = cells) {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: () => Promise.resolve(TILE_SVG) }) as unknown as Response));
+    rasterizeOrFallbackSpy.mockImplementation(async (_markup, _fallback, width, height) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(width));
+      canvas.height = Math.max(1, Math.round(height));
+      return { el: canvas, release() {} };
+    });
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, {
+      tilesBaseUrl: "/_moss/tiles/", availableTiles, k: 4,
+      origins: originsFor(availableTiles, 4, 0.1), ...GRID,
+    });
+    layer.render(camera, viewport, unitScale, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return layer;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rasterizeOrFallbackSpy.mockReset();
+  });
+
+  test("allows the ready regional surface only when opaque tile interiors cover the full frame", async () => {
+    const layer = await readyLayer();
+    expect(layer.hasOpaqueViewportCoverage(camera, viewport)).toBe(true);
+
+    const edgeCamera = { ...camera, x: bounds.minX + 1 };
+    layer.render(edgeCamera, viewport, unitScale, true);
+    expect(layer.hasOpaqueViewportCoverage(edgeCamera, viewport)).toBe(false);
+
+    const wideViewport = { width: 3000, height: 100 };
+    const wideCamera = { ...camera, zoom: detailMaxZoom(wideViewport) };
+    layer.render(wideCamera, wideViewport, screenScale({ ...wideCamera, zoom: 1 }, wideViewport), true);
+    expect(layer.hasOpaqueViewportCoverage(wideCamera, wideViewport)).toBe(false);
+
+    const fadingCamera = { ...camera, zoom: camera.zoom * 0.95 };
+    layer.render(fadingCamera, viewport, unitScale, true);
+    expect(layer.hasOpaqueViewportCoverage(fadingCamera, viewport)).toBe(false);
+  });
+
+  test("fails closed when a required regional tile failed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, text: () => Promise.resolve("") }) as unknown as Response));
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, {
+      tilesBaseUrl: "/_moss/tiles/", availableTiles: cells, k: 4,
+      origins: originsFor(cells, 4, 0.1), ...GRID,
+    });
+    layer.render(camera, viewport, unitScale, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(layer.hasOpaqueViewportCoverage(camera, viewport)).toBe(false);
+  });
+});

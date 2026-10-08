@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use scraper::{Html, Selector};
 
 fn build_sync(folder_path: &str) -> Result<String, String> {
     use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
@@ -76,8 +77,10 @@ fn synthetic_places_root_gets_the_explorer_bundle_and_handshake() {
     let out = tmp.join(".moss/build.nosync/staging");
 
     let places_html = read_page(&out, "places/index.html");
+    let document = Html::parse_document(&places_html);
+    let explorer_script = Selector::parse("script[src^='/_moss/js/places-explorer.']").unwrap();
     assert!(
-        places_html.contains("<script src=\"/_moss/js/places-explorer."),
+        document.select(&explorer_script).next().is_some(),
         "synthetic places root must load the places-explorer bundle, got:\n{places_html}"
     );
     assert!(
