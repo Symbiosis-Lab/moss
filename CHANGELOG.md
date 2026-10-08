@@ -161,6 +161,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- The series navigation's previous and next links show a visible "Previous" / "Next" label (localized) above each title, so the direction no longer rests on the arrow alone. A theme selector that targets the title as a direct child of the link now goes through `.moss-series-nav-text`, which wraps the label and the title.
 - A folder shown as a card in a grid now shows its folder note's `description:` under its title, beside its page count.
 
 - A page's card with no `description:` now shows its first `byline:` row under its title, in the description slot. An explicit `description:` still wins, and the page itself is unchanged. Folder listings in the non-grid styles take the row as written before they fall back to a body excerpt.

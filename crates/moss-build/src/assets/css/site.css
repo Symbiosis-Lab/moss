@@ -7517,6 +7517,18 @@ main.has-sidebar > .moss-series-nav {
   /* inherits line-height from parent */
 }
 
+/* Direction label stacked above the title, since the arrow alone does not say which way a link goes. */
+.moss-series-nav-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.moss-series-nav-label {
+  font-size: var(--moss-size-xs);
+  line-height: 1.2;
+  color: var(--moss-color-muted);
+}
+
 /* Hover: only underline the title, not the arrow */
 .moss-series-nav-link:hover .moss-series-nav-title {
   text-decoration: underline;

@@ -174,3 +174,72 @@ fn position_uses_chinese_numerals_under_vertical_cjk_typesetting() {
         zh_vertical
     );
 }
+
+/// Arrows alone do not say which neighbour is which, and a screen reader
+/// reads the title with no direction; each link carries its own visible label.
+#[test]
+fn direction_labels_are_rendered_in_english() {
+    let html = render(
+        "My Series",
+        "index.html",
+        Some(("Prev Title", "/p/")),
+        Some(("Next Title", "/n/")),
+        None,
+        Language::En,
+        None,
+    );
+    assert!(
+        html.contains(r#"<span class="moss-series-nav-label">Previous</span>"#),
+        "Got: {}",
+        html
+    );
+    assert!(
+        html.contains(r#"<span class="moss-series-nav-label">Next</span>"#),
+        "Got: {}",
+        html
+    );
+}
+
+/// The direction labels use the page's language, not English.
+#[test]
+fn direction_labels_are_localized() {
+    let hans = render(
+        "作品",
+        "index.html",
+        Some(("上篇", "/p/")),
+        Some(("下篇", "/n/")),
+        None,
+        Language::ZhHans,
+        None,
+    );
+    assert!(
+        hans.contains(r#"<span class="moss-series-nav-label">上一个</span>"#),
+        "Got: {}",
+        hans
+    );
+    assert!(
+        hans.contains(r#"<span class="moss-series-nav-label">下一个</span>"#),
+        "Got: {}",
+        hans
+    );
+
+    let hant = render(
+        "作品",
+        "index.html",
+        Some(("上篇", "/p/")),
+        Some(("下篇", "/n/")),
+        None,
+        Language::ZhHant,
+        None,
+    );
+    assert!(
+        hant.contains(r#"<span class="moss-series-nav-label">上一個</span>"#),
+        "Got: {}",
+        hant
+    );
+    assert!(
+        hant.contains(r#"<span class="moss-series-nav-label">下一個</span>"#),
+        "Got: {}",
+        hant
+    );
+}
