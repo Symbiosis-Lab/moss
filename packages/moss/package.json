@@ -1,6 +1,6 @@
 {
   "name": "@symbiosis-lab/moss",
-  "version": "0.14.1",
+  "version": "0.15.9",
   "description": "moss on your PATH — npm wrapper that installs the moss CLI binary from moss",
   "bin": {
     "moss": "bin/moss.js"
