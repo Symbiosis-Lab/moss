@@ -459,7 +459,7 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
     }
 }
 
-/// Publish the dominant colour of a cell's cover image as `--moss-cover-color`
+/// Publish the dominant colour of a cell's cover image as `--item-cover-color`
 /// on the cell's own `.moss-grid-card`.
 ///
 /// A collection card gets this already; a hand-built cell — image on top, then

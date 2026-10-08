@@ -369,7 +369,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-cover-color",
                 values: &[],
                 default: "",
-                description: "Presence flag: emitted IFF the cover-colour ladder produced a colour, which arrives alongside it as `--moss-cover-color` in the element's `style`. Absent for a card with no cover, and for an image cover whose file moss could not read.",
+                description: "Presence flag: emitted IFF the cover-colour ladder produced a colour, which arrives alongside it as `--item-cover-color` in the element's `style` (the theme-facing token `--moss-cover-color` takes precedence over it when a theme sets it). Absent for a card with no cover, and for an image cover whose file moss could not read.",
             },
             DataAttr {
                 name: "data-external",
@@ -1400,7 +1400,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-cover-color",
                 values: &[],
                 default: "",
-                description: "Presence flag: emitted IFF the cell's first block is an image, alone in a paragraph or in a figure. The image's dominant colour arrives alongside it as `--moss-cover-color` in the element's `style`. moss paints nothing with it — the attribute exists so a theme can give a hand-built cell (cover, then the author's own text) the same colour band a collection card gets.",
+                description: "Presence flag: emitted IFF the cell's first block is an image, alone in a paragraph or in a figure. The image's dominant colour arrives alongside it as `--item-cover-color` in the element's `style`; a theme reads it as `var(--moss-cover-color, var(--item-cover-color))`, so setting `--moss-cover-color` overrides it. moss paints nothing with it — the attribute exists so a theme can give a hand-built cell (cover, then the author's own text) the same colour band a collection card gets.",
             },
         ],
         example_html: r#"<a class="moss-grid-card" data-kind="link" href="...">...</a>"#,

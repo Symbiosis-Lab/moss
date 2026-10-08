@@ -132,7 +132,7 @@ fn render_item(
         root,
         media_lookup,
     )
-        .map(|c| format!(r#" data-cover-color style="--moss-cover-color: {}""#, html_escape(&c)))
+        .map(|c| format!(r#" data-cover-color style="--item-cover-color: {}""#, html_escape(&c)))
         .unwrap_or_default();
 
     let kicker_html = props.kicker.as_deref()

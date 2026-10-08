@@ -357,7 +357,7 @@ fn unique_suffix_match<'a, V>(
 /// that returns an arbitrary OTHER article's value — and reshuffles it every
 /// build, because `HashMap` iteration order is not stable across processes.
 /// Measured on the riverbend vault (2026-08-19): 46 built pages differed
-/// between two consecutive generations in `--moss-cover-color` and nothing
+/// between two consecutive generations in `--item-cover-color` and nothing
 /// else, with two unrelated articles landing on the identical wrong colour.
 /// Every one of those covers is also re-uploaded on every publish.
 ///
@@ -515,7 +515,7 @@ mod tests {
     /// the whole map for ANY entry sharing a stem and returned the first the
     /// `HashMap` yielded, so covers borrowed each other's colours and the
     /// borrowing reshuffled every build: 46 pages differed between two
-    /// consecutive generations in `--moss-cover-color` and nothing else.
+    /// consecutive generations in `--item-cover-color` and nothing else.
     #[test]
     fn covers_sharing_a_stem_never_borrow_each_others_color() {
         let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);

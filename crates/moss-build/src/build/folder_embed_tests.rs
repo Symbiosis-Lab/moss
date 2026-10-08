@@ -1751,7 +1751,7 @@ fn grid_embed_iframe_cover_gets_dark_default_color() {
         out
     );
     assert!(
-        out.contains(r#"--moss-cover-color: hsla(0, 0%, 18%, 1)"#),
+        out.contains(r#"--item-cover-color: hsla(0, 0%, 18%, 1)"#),
         "iframe cover card must get the dark default band. Got: {}",
         out
     );

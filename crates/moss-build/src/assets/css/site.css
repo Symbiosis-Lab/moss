@@ -5907,12 +5907,14 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* Cover color background: applied when parent card carries a dominant color
-   extracted from its cover image. --moss-cover-color is set on the outer
-   <a class="moss-card"> by the Rust emitter.
-   allow:runtime-token --moss-cover-color set inline beside data-cover-color by
+   extracted from its cover image. The Rust emitter sets --item-cover-color on
+   the outer <a class="moss-card"> and reads it only as the fallback: the
+   public --moss-cover-color wins whenever a theme sets it, which an inline
+   --moss-cover-color could never allow (inline beats every stylesheet rule).
+   allow:runtime-token --item-cover-color set inline beside data-cover-color by
    build/render/grid_cells.rs — the selector is gated on the same attribute. */
 [data-cover-color] .moss-card-content {
-    background: var(--moss-cover-color);
+    background: var(--moss-cover-color, var(--item-cover-color));
     color: #fff;
 }
 
@@ -6456,7 +6458,7 @@ article a:where(:not(.moss-btn)):focus {
      the photo. */
   color: #ffffff;
   text-shadow: 0 1px 3px rgba(0,0,0,0.35);
-  background: var(--moss-hero-panel-bg, rgba(20, 16, 12, 0.82)); /* tinted panel; see color_extract::panel_background */
+  background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82))); /* tinted panel; see color_extract::panel_background */
 }
 
 /* Elements that carry their OWN colour from the base stylesheet have to hand
@@ -6769,7 +6771,7 @@ article a:where(:not(.moss-btn)):focus {
     padding-block: var(--moss-space-md);
     padding-inline: var(--moss-container-padding);
     max-inline-size: none;
-    background: var(--moss-cover-color, var(--moss-bg, var(--moss-color-bg, #fff)));
+    background: var(--moss-cover-color, var(--item-cover-color, var(--moss-bg, var(--moss-color-bg, #fff))));
     /* Stacked below the image on the page background, so the container's
        white (set for the overlay case) has to be handed back to body text.
        [data-cover-color] below re-asserts white when a cover tint is set. */
@@ -6845,7 +6847,7 @@ article a:where(:not(.moss-btn)):focus {
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content {
     position: static;
-    background: var(--moss-hero-panel-bg, rgba(20, 16, 12, 0.82)); /* see "Backing panel" above */
+    background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82))); /* see "Backing panel" above */
     /* Back over the image, so back to white — and the children inherit it
        via the `:is(h1…blockquote)` rule in the base block. */
     color: #fff;
@@ -6896,7 +6898,7 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero[data-hero-tone="light"] .moss-hero-content {
     color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
-    background: var(--moss-hero-panel-bg, rgba(250, 248, 244, 0.82)); /* pale panel for dark text */
+    background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(250, 248, 244, 0.82))); /* pale panel for dark text */
   }
 
   .moss-hero[data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
@@ -6908,7 +6910,7 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content {
     color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
-    background: var(--moss-hero-panel-bg, rgba(250, 248, 244, 0.82));
+    background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(250, 248, 244, 0.82)));
   }
 
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {

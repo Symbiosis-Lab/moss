@@ -153,7 +153,7 @@ const shelfCard = (name, count, covered) => {
   const cover = covered
     ? `<div class="moss-card-cover"><img src="${PORTRAIT_IMG}" width="2339" height="3994" alt=""></div>`
     : '<div class="moss-card-cover moss-card-no-cover"></div>';
-  return `<a href="#${name}" class="moss-card"${covered ? ' data-cover-color style="--moss-cover-color: hsla(38,26%,42%,1)"' : ''}>`
+  return `<a href="#${name}" class="moss-card"${covered ? ' data-cover-color style="--item-cover-color: hsla(38,26%,42%,1)"' : ''}>`
     + `${cover}<div class="moss-card-content"><span class="moss-card-meta">${count}</span>`
     + `<span class="moss-card-title">${name}</span></div></a>`;
 };

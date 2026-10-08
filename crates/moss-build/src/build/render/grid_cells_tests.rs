@@ -1078,7 +1078,7 @@ fn a_hand_built_cell_publishes_its_cover_images_color() {
     let html = page.cover_colors(md);
     assert!(html.contains("data-cover-color"), "got: {html}");
     assert!(
-        html.contains(r#"<div class="moss-grid-card" data-cover-color style="--moss-cover-color: hsla(214, 54%, 41%, 1)">"#),
+        html.contains(r#"<div class="moss-grid-card" data-cover-color style="--item-cover-color: hsla(214, 54%, 41%, 1)">"#),
         "got: {html}"
     );
 }
@@ -1106,7 +1106,7 @@ fn a_cell_that_became_a_card_keeps_the_cards_own_color() {
     let page = Page::new("index.html", &docs).with_root(tmp.path());
     let html = page.cover_colors(":::grid 1\n[Harbour](works/harbour/)\n:::\n");
     assert_eq!(html.matches("data-cover-color").count(), 1, "got: {html}");
-    assert!(html.contains("--moss-cover-color: hsla(203, 73%, 14%, 1)"), "got: {html}");
+    assert!(html.contains("--item-cover-color: hsla(203, 73%, 14%, 1)"), "got: {html}");
 }
 
 /// A `:::grid` folder card counts in Chinese numerals on a vertical CJK page.

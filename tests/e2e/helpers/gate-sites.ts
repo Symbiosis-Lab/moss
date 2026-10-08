@@ -1151,7 +1151,7 @@ Scratch site; the assertions run against the probe page.
   <!-- Pale cover, stacked on mobile with a cover tint: text is BELOW the image
        on the darkened band, so it must stay white. -->
   <section class="moss-hero" data-hero-tone="light" data-cover-color
-           style="--moss-cover-color: hsla(203, 73%, 14%, 1)" id="light-stacked-hero">
+           style="--item-cover-color: hsla(203, 73%, 14%, 1)" id="light-stacked-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
       <h2 id="light-stacked-heading">Stacked heading</h2>

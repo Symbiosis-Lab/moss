@@ -701,7 +701,7 @@ fn a_card_takes_its_band_color_from_the_covers_color_override() {
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
     // The colour rides on the outer <a>, not on .moss-card-content.
     assert!(
-        html.contains(r#"<a href="/research/" class="moss-card" data-cover-color style="--moss-cover-color: hsla(203, 73%, 14%, 1)">"#),
+        html.contains(r#"<a href="/research/" class="moss-card" data-cover-color style="--item-cover-color: hsla(203, 73%, 14%, 1)">"#),
         "outer <a> must carry the band colour, got: {html}"
     );
     // A cover with no override, no root and no cache yields no colour at all.
