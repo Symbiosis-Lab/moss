@@ -415,8 +415,8 @@ async fn an_unextractable_page_is_counted_as_failed_not_written_empty() {
 /// `.md` page. A real site's own links routinely point at a PDF, an
 /// image, a calendar file, and the site's own RSS feed — all four are
 /// fetched alongside one real HTML page here, and only the HTML page may
-/// become a note. The rest are counted as skipped, not failed, and
-/// produce no file on disk at all.
+/// become a note. The feed is counted as skipped, not failed; the PDF, TIFF
+/// and calendar are content, so they are downloaded as linked files.
 #[tokio::test]
 async fn non_html_responses_are_skipped_not_written_as_pages() {
     let mut server = mockito::Server::new_async().await;
@@ -478,7 +478,8 @@ async fn non_html_responses_are_skipped_not_written_as_pages() {
 
     assert_eq!(res.total_pages, 1, "only the real HTML page is imported");
     assert_eq!(res.failed_pages, 0);
-    assert_eq!(res.skipped_pages, 4, "the PDF, TIFF, .ics and feed are all skipped");
+    assert_eq!(res.skipped_pages, 1, "only the feed is skipped");
+    assert_eq!(res.linked_files_downloaded, 3, "the PDF, TIFF and .ics are carried");
 
     let written: Vec<_> = std::fs::read_dir(tmp.path())
         .unwrap()
@@ -584,6 +585,304 @@ async fn a_failed_fetch_of_a_non_page_extension_is_not_stubbed_but_an_ordinary_f
         !relative_paths.iter().any(|p| p.contains("doc")),
         "a failed fetch of a non-page extension must never produce a stub file: \
          {relative_paths:?}"
+    );
+    let index = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert!(
+        index.contains(&format!("]({base}/s/doc.pdf)")),
+        "a file that could not be downloaded keeps its original link: {index}"
+    );
+}
+
+/// Importing the same site into the same folder twice keeps each file's
+/// plain name (no hash suffix because the first run left it on disk), and a
+/// `?dl=1` variant of a link is the same file, downloaded once.
+#[tokio::test]
+async fn a_reimport_keeps_plain_names_and_a_query_variant_is_one_file() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let _index = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><article><p>Real page body, long enough to be extracted as content.</p>\
+             <a href=\"/files/score.pdf\">A</a><a href=\"/files/score.pdf?dl=1\">B</a>\
+             </article></body></html>",
+        )
+        .expect(2)
+        .create_async()
+        .await;
+    let pdf = server
+        .mock("GET", "/files/score.pdf")
+        .with_status(200)
+        .with_header("content-type", "application/pdf")
+        .with_body("%PDF-1.4 score")
+        .expect(2)
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    for _ in 0..2 {
+        let res = scrape_to_folder(ScrapeConfig::new(format!("{base}/"), tmp.path()), |_| {})
+            .await
+            .expect("the crawl itself succeeds");
+        assert_eq!(res.linked_files_downloaded, 1, "the query variant is the same file");
+    }
+    pdf.assert_async().await;
+    let names: Vec<String> = std::fs::read_dir(tmp.path().join("assets/imported"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".pdf"))
+        .collect();
+    assert_eq!(names, vec!["score.pdf".to_string()]);
+    let index = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert_eq!(index.matches("](./assets/imported/score.pdf)").count(), 2, "{index}");
+}
+
+/// Images and the cover on a nested page are named relative to that page, the
+/// same as files — not only found again by moss's search fallback.
+#[tokio::test]
+async fn a_nested_pages_images_and_cover_are_page_relative() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let _home = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><article><p>Home body, long enough to be extracted as content.</p>\
+             <a href=\"/events/\">Events</a></article></body></html>",
+        )
+        .create_async()
+        .await;
+    let _events = server
+        .mock("GET", "/events/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><article><p>Events body, long enough to be extracted as content.</p>\
+             <img src=\"/img/poster.png\" alt=\"Poster\"></article></body></html>",
+        )
+        .create_async()
+        .await;
+    let _poster = server
+        .mock("GET", "/img/poster.png")
+        .with_status(200)
+        .with_header("content-type", "image/png")
+        .with_body("png")
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+    config.recursive = true;
+    scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    let md = std::fs::read_to_string(tmp.path().join("events/index.md")).unwrap();
+    assert!(md.contains("cover: \"../assets/imported/"), "{md}");
+    assert!(md.contains("![Poster](../assets/imported/"), "{md}");
+}
+
+/// A lightbox image is both embedded and linked to itself. The media pass
+/// downloads it once; the wrapping link must point at that copy too, not stay
+/// a root-relative path to a file the folder does not serve.
+#[tokio::test]
+async fn an_image_that_is_embedded_and_linked_is_one_file_with_both_references_local() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let _index = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><article><p>Real page body, long enough to be extracted as content.</p>\
+             <a href=\"/s/pic.png\"><img src=\"/s/pic.png\" alt=\"Pic\"></a></article></body></html>",
+        )
+        .create_async()
+        .await;
+    let pic = server
+        .mock("GET", "/s/pic.png")
+        .with_status(200)
+        .with_header("content-type", "image/png")
+        .with_body("png bytes")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    scrape_to_folder(ScrapeConfig::new(format!("{base}/"), tmp.path()), |_| {})
+        .await
+        .expect("the crawl itself succeeds");
+    pic.assert_async().await;
+
+    let files: Vec<_> = std::fs::read_dir(tmp.path().join("assets/imported")).unwrap().collect();
+    assert_eq!(files.len(), 1, "one file on disk: {files:?}");
+    let index = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert!(!index.contains("/s/pic.png"), "no reference may stay remote: {index}");
+    let body = index.rsplit("---").next().unwrap();
+    assert_eq!(body.matches("./assets/imported/").count(), 2, "image and link both local: {index}");
+}
+
+/// An image embedded as `pic.png?v=2` and lightbox-linked to the same URL is
+/// keyed identically by both passes: one request, one file.
+#[tokio::test]
+async fn an_image_with_a_query_embedded_and_linked_is_downloaded_once() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let _index = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><article><p>Real page body, long enough to be extracted as content.</p>\
+             <a href=\"/s/pic.png?v=2\"><img src=\"/s/pic.png?v=2\" alt=\"Pic\"></a></article></body></html>",
+        )
+        .create_async()
+        .await;
+    let pic = server
+        .mock("GET", "/s/pic.png?v=2")
+        .with_status(200)
+        .with_header("content-type", "image/png")
+        .with_body("png bytes")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    scrape_to_folder(ScrapeConfig::new(format!("{base}/"), tmp.path()), |_| {})
+        .await
+        .expect("the crawl itself succeeds");
+    pic.assert_async().await;
+    let index = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert!(!index.contains("pic.png?v=2"), "no reference may stay remote: {index}");
+    assert_eq!(std::fs::read_dir(tmp.path().join("assets/imported")).unwrap().count(), 1);
+}
+
+/// A linked file over the size cap is not written, is counted on its own
+/// (not as a skipped non-HTML page), and its link keeps pointing at the
+/// original.
+#[tokio::test]
+async fn an_oversized_linked_file_is_counted_on_its_own_and_keeps_its_link() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let _index = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(format!(
+            "<html><body><article><p>Real page body, long enough to be extracted as content.</p>\
+             <a href=\"{base}/big.pdf\">Big</a></article></body></html>"
+        ))
+        .create_async()
+        .await;
+    let _big = server
+        .mock("GET", "/big.pdf")
+        .with_status(200)
+        .with_header("content-type", "application/pdf")
+        .with_body("%PDF-1.4 0123456789")
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+    config.linked_file_max_bytes = 8;
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+
+    assert_eq!(res.oversized_files, 1);
+    assert_eq!(res.skipped_pages, 0);
+    assert_eq!(res.linked_files_downloaded, 0);
+    assert!(!tmp.path().join("assets/imported/big.pdf").exists());
+    let index = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert!(index.contains(&format!("]({base}/big.pdf)")), "{index}");
+}
+
+/// Gap: a page's link to a file on its own site (a score PDF, here) used to
+/// be left pointing at a file the folder never got. The file is downloaded
+/// once under its own name, and every link to it — absolute or root-relative,
+/// from the home page or from a nested one — points at the copy by a path
+/// relative to the page that holds the link.
+#[tokio::test]
+async fn linked_files_are_downloaded_once_and_linked_relative_to_each_page() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+
+    let home = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(format!(
+            "<html><body><article><p>Home page body, long enough to be extracted as content.</p>\
+             <a href=\"/files/score.pdf\">Score</a>\
+             <a href=\"{base}/files/score.pdf#page=2\">Score, page two</a>\
+             <a href=\"/music/\">Music</a>\
+             </article></body></html>"
+        ))
+        .create_async()
+        .await;
+    let music = server
+        .mock("GET", "/music/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><article><p>Music page body, long enough to be extracted as content.</p>\
+             <a href=\"/files/score.pdf\">Score</a>\
+             <a href=\"/files/Violin%20Part.PDF\">Violin</a>\
+             <a href=\"/theme.css\">Theme</a>\
+             </article></body></html>",
+        )
+        .create_async()
+        .await;
+    let score = server
+        .mock("GET", "/files/score.pdf")
+        .with_status(200)
+        .with_header("content-type", "application/pdf")
+        .with_body("%PDF-1.4 score")
+        .expect(1)
+        .create_async()
+        .await;
+    let violin = server
+        .mock("GET", "/files/Violin%20Part.PDF")
+        .with_status(200)
+        .with_header("content-type", "application/pdf")
+        .with_body("%PDF-1.4 violin")
+        .expect(1)
+        .create_async()
+        .await;
+    let css = server
+        .mock("GET", "/theme.css")
+        .with_status(200)
+        .with_header("content-type", "text/css")
+        .with_body("body{}")
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+    config.recursive = true;
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    home.assert_async().await;
+    music.assert_async().await;
+    score.assert_async().await;
+    violin.assert_async().await;
+    css.assert_async().await;
+
+    assert_eq!(res.linked_files_downloaded, 2);
+    assert_eq!(res.unreachable_files, 0);
+    let assets = tmp.path().join("assets/imported");
+    assert_eq!(std::fs::read(assets.join("score.pdf")).unwrap(), b"%PDF-1.4 score");
+    assert_eq!(std::fs::read(assets.join("Violin Part.pdf")).unwrap(), b"%PDF-1.4 violin");
+
+    let home_md = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert!(home_md.contains("[Score](./assets/imported/score.pdf)"), "{home_md}");
+    assert!(
+        home_md.contains("[Score, page two](./assets/imported/score.pdf#page=2)"),
+        "{home_md}"
+    );
+    let music_md = std::fs::read_to_string(tmp.path().join("music/index.md")).unwrap();
+    assert!(music_md.contains("[Score](../assets/imported/score.pdf)"), "{music_md}");
+    assert!(music_md.contains("[Violin](../assets/imported/Violin%20Part.pdf)"), "{music_md}");
+    assert!(
+        !music_md.contains("theme.css.md"),
+        "a stylesheet link must not become a page link: {music_md}"
     );
 }
 

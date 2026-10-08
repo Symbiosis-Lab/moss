@@ -84,7 +84,7 @@ impl Frontier {
     fn seeded(start_url: String, sitemap_urls: &[String]) -> Self {
         let mut queue = VecDeque::new();
         queue.push_back(start_url);
-        queue.extend(sitemap_urls.iter().cloned());
+        queue.extend(sitemap_urls.iter().filter(|u| is_page_candidate(u)).cloned());
         Self { queue, visited: HashSet::new() }
     }
 
@@ -111,11 +111,12 @@ impl Frontier {
         self.queue.push_front(url);
     }
 
-    /// Queues `url` unless it has already been processed. Scope is not
-    /// this type's concern — the caller filters with `is_within_scope`
-    /// first.
+    /// Queues `url` unless it has already been processed or names a content
+    /// file (a PDF, an image): that is fetched once by the asset pass of the
+    /// page that links it, never as a page. Scope is not this type's
+    /// concern — the caller filters with `is_within_scope` first.
     pub(crate) fn enqueue_if_unvisited(&mut self, url: String) {
-        if !self.visited.contains(&url) {
+        if is_page_candidate(&url) && !self.visited.contains(&url) {
             self.queue.push_back(url);
         }
     }
@@ -258,24 +259,87 @@ impl Dedupe {
     }
 }
 
+fn is_page_candidate(url: &str) -> bool {
+    !crate::vault::import::media::is_linked_content_file_url(url)
+}
+
 /// Remote media URL → local relative path, filled in as each page's media
 /// downloads. Read by `compose_note`, which is shared with the single-file
 /// import arm — that arm builds its own short-lived map with no crawl
 /// state at all, so this type exists only for the crawl's loop-scoped one.
 #[derive(Default)]
-pub(crate) struct AssetMap(HashMap<String, String>);
+pub(crate) struct AssetMap {
+    assets: HashMap<String, Asset>,
+    /// File name in the assets folder → the URL that owns it in this run.
+    names: HashMap<String, String>,
+}
+
+/// What became of one remote URL the crawl tried to carry in.
+enum Asset {
+    Local(String),
+    /// Tried and left remote (failed, or over the size cap): the next page
+    /// linking it keeps the remote link without asking the host again or
+    /// counting the file twice.
+    KeptRemote,
+}
 
 impl AssetMap {
-    pub(crate) fn contains(&self, remote: &str) -> bool {
-        self.0.contains_key(remote)
+    /// Already downloaded, or already tried and given up on.
+    pub(crate) fn is_settled(&self, remote: &str) -> bool {
+        self.assets.contains_key(remote)
+    }
+
+    /// The file name `url` is saved under: `preferred` unless a different
+    /// URL already owns it in this run, then `preferred` with the URL's
+    /// hash before the extension. A name left over from an earlier import
+    /// is not an owner — the new file replaces it, so a re-import keeps its
+    /// links stable.
+    pub(crate) fn claim_name(&mut self, preferred: String, url: &str) -> String {
+        let owner = self.names.get(&preferred).map(String::as_str);
+        let name = if owner.is_none_or(|o| o == url) {
+            preferred
+        } else {
+            let hash = super::fetch::hash_url(url);
+            match preferred.rsplit_once('.') {
+                Some((stem, ext)) => format!("{stem}-{}.{ext}", &hash[..8]),
+                None => format!("{preferred}-{}", &hash[..8]),
+            }
+        };
+        self.names.insert(name.clone(), url.to_string());
+        name
     }
 
     pub(crate) fn insert(&mut self, remote: String, local: String) {
-        self.0.insert(remote, local);
+        self.assets.insert(remote, Asset::Local(local));
     }
 
-    pub(crate) fn as_map(&self) -> &HashMap<String, String> {
-        &self.0
+    pub(crate) fn keep_remote(&mut self, remote: String) {
+        // The name it reserved goes back to the pool.
+        self.names.retain(|_, owner| *owner != remote);
+        self.assets.insert(remote, Asset::KeptRemote);
+    }
+
+    pub(crate) fn local(&self, remote: &str) -> Option<&str> {
+        match self.assets.get(remote)? {
+            Asset::Local(local) => Some(local),
+            Asset::KeptRemote => None,
+        }
+    }
+
+    /// The remote → local pairs, the shape `compose_note` reads, with each
+    /// local path relative to a page `page_depth` folders below the site
+    /// root — the one place that decides how a page names an imported file.
+    pub(crate) fn local_map(&self, page_depth: usize) -> HashMap<String, String> {
+        let up = if page_depth == 0 { "./".to_string() } else { "../".repeat(page_depth) };
+        self.assets
+            .iter()
+            .filter_map(|(remote, a)| match a {
+                Asset::Local(local) => {
+                    Some((remote.clone(), format!("{up}{}", local.trim_start_matches("./"))))
+                }
+                Asset::KeptRemote => None,
+            })
+            .collect()
     }
 }
 
@@ -496,11 +560,29 @@ pub(crate) struct Tally {
     duplicate: usize,
     unreachable_variants: usize,
     unreachable_files: usize,
+    linked_files_downloaded: usize,
+    oversized_files: usize,
     widgets_carried: usize,
     widgets_dropped: usize,
 }
 
 impl Tally {
+    pub(crate) fn linked_files_downloaded(&self) -> usize {
+        self.linked_files_downloaded
+    }
+
+    pub(crate) fn oversized_files(&self) -> usize {
+        self.oversized_files
+    }
+
+    pub(crate) fn record_oversized_file(&mut self) {
+        self.oversized_files += 1;
+    }
+
+    pub(crate) fn record_linked_file_downloaded(&mut self) {
+        self.linked_files_downloaded += 1;
+    }
+
     pub(crate) fn scraped(&self) -> usize {
         self.scraped
     }
@@ -709,17 +791,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_frontier_never_queues_a_content_file_as_a_page() {
+        let mut frontier = Frontier::seeded(
+            "https://example.com/".to_string(),
+            &["https://example.com/a".to_string(), "https://example.com/parts.pdf".to_string()],
+        );
+        frontier.enqueue_if_unvisited("https://example.com/scan.tiff".to_string());
+        frontier.enqueue_if_unvisited("https://example.com/b".to_string());
+        let mut popped = Vec::new();
+        while let Some(u) = frontier.pop() {
+            popped.push(u);
+        }
+        assert_eq!(popped, ["https://example.com/", "https://example.com/a", "https://example.com/b"]);
+    }
+
     // ── AssetMap ──────────────────────────────────────────────────────
+
+    #[test]
+    fn local_paths_are_relative_to_the_page_that_reads_them() {
+        let mut assets = AssetMap::default();
+        assets.insert("https://example.com/a.png".into(), "./assets/imported/x.png".into());
+        let path = |depth| assets.local_map(depth)["https://example.com/a.png"].clone();
+        assert_eq!(path(0), "./assets/imported/x.png");
+        assert_eq!(path(2), "../../assets/imported/x.png");
+    }
+
+    #[test]
+    fn a_name_is_shared_only_by_the_url_that_owns_it() {
+        let mut assets = AssetMap::default();
+        assert_eq!(assets.claim_name("score.pdf".into(), "https://e.test/a/score.pdf"), "score.pdf");
+        assert_eq!(assets.claim_name("score.pdf".into(), "https://e.test/a/score.pdf"), "score.pdf");
+        let other = assets.claim_name("score.pdf".into(), "https://e.test/b/score.pdf");
+        assert!(other.starts_with("score-") && other.ends_with(".pdf"), "{other}");
+    }
 
     #[test]
     fn asset_map_records_and_looks_up_a_local_path() {
         let mut assets = AssetMap::default();
-        assert!(!assets.contains("https://example.com/a.png"));
+        assert!(!assets.is_settled("https://example.com/a.png"));
         assets
             .insert("https://example.com/a.png".to_string(), "./assets/imported/x.png".to_string());
-        assert!(assets.contains("https://example.com/a.png"));
+        assert!(assets.is_settled("https://example.com/a.png"));
         assert_eq!(
-            assets.as_map().get("https://example.com/a.png").map(String::as_str),
+            assets.local("https://example.com/a.png"),
             Some("./assets/imported/x.png")
         );
     }

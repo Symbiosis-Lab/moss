@@ -119,24 +119,10 @@ fn sniffs_like_html(body: &str) -> bool {
     head.starts_with("<!doctype html") || head.starts_with("<html")
 }
 
-/// Extension families [`is_non_page_file_url`] refuses a stub for — every
-/// one a real site routinely links to without it ever being a page of its
-/// own. Grouped by kind for readability; the check itself just flattens
-/// them. PDF and audio are not repeated here — they are
-/// [`crate::vault::import::media::PDF_EXTENSIONS`] and
-/// [`crate::vault::import::media::AUDIO_EXTENSIONS`], the same two rows
-/// [`crate::vault::import::media::is_localizable_file_url`] already uses, so
-/// "is this a PDF" has one answer instead of two extension lists that could
-/// drift apart.
-const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "tiff", "tif", "ico", "avif", "heic", "heif",
-];
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mov", "avi", "mkv", "m4v", "wmv", "flv"];
-const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "rar", "7z", "tar", "gz", "tgz", "bz2"];
-const OFFICE_EXTENSIONS: &[&str] = &[
-    "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf",
-];
-const CALENDAR_EXTENSIONS: &[&str] = &["ics"];
+/// The non-page extension families that are the site's machinery rather
+/// than content to carry: feeds and data endpoints, stylesheets and scripts.
+/// The content families (documents, images, audio, video, archives,
+/// calendars) live in `media`; [`is_non_page_file_url`] is both together.
 const FEED_DATA_EXTENSIONS: &[&str] = &["xml", "rss", "atom", "json"];
 const STYLE_SCRIPT_EXTENSIONS: &[&str] = &["css", "js", "mjs"];
 
@@ -167,21 +153,11 @@ const STYLE_SCRIPT_EXTENSIONS: &[&str] = &["css", "js", "mjs"];
 /// `log::warn!` below, the same trade-off `VariantFetchFailed` already
 /// makes for a query-string variant.
 pub fn is_non_page_file_url(url_str: &str) -> bool {
-    let Ok(url) = Url::parse(url_str) else {
-        return false;
-    };
-    let path = url.path().to_ascii_lowercase();
-    crate::vault::import::media::PDF_EXTENSIONS
-        .iter()
-        .chain(crate::vault::import::media::AUDIO_EXTENSIONS)
-        .chain(IMAGE_EXTENSIONS)
-        .chain(VIDEO_EXTENSIONS)
-        .chain(ARCHIVE_EXTENSIONS)
-        .chain(OFFICE_EXTENSIONS)
-        .chain(CALENDAR_EXTENSIONS)
-        .chain(FEED_DATA_EXTENSIONS)
-        .chain(STYLE_SCRIPT_EXTENSIONS)
-        .any(|ext| path.ends_with(&format!(".{ext}")))
+    crate::vault::import::media::is_linked_content_file_url(url_str)
+        || crate::vault::import::media::path_has_extension(
+            url_str,
+            &[FEED_DATA_EXTENSIONS, STYLE_SCRIPT_EXTENSIONS],
+        )
 }
 
 /// Normalize a URL for comparison and storage
@@ -266,6 +242,7 @@ pub fn extract_canonical_url(html: &str, page_url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vault::import::media::is_linked_content_file_url;
 
     #[test]
     fn host_of_lowercases_and_strips_scheme_and_path() {
@@ -495,6 +472,30 @@ mod tests {
         );
         assert!(!is_non_page_file_url("https://example.test/"));
         assert!(!is_non_page_file_url("not a url at all"));
+    }
+
+    #[test]
+    fn linked_content_files_are_documents_media_and_archives_not_machinery() {
+        for url in [
+            "https://example.test/s/doc.pdf",
+            "https://example.test/a/track.MP3",
+            "https://example.test/i/scan.tiff",
+            "https://example.test/v/clip.mp4",
+            "https://example.test/d/bundle.zip",
+            "https://example.test/f/report.docx",
+            "https://example.test/c/event.ics",
+        ] {
+            assert!(is_linked_content_file_url(url), "{url}");
+        }
+        for url in [
+            "https://example.test/style.css",
+            "https://example.test/app.js",
+            "https://example.test/feed.xml",
+            "https://example.test/data.json",
+            "https://example.test/about",
+        ] {
+            assert!(!is_linked_content_file_url(url), "{url}");
+        }
     }
 
     // ── extract_canonical_url (the page-identity signal the run loop dedupes

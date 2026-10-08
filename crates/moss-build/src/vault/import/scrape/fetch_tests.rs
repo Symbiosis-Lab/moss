@@ -353,6 +353,44 @@ async fn a_media_download_sends_the_media_accept_header() {
 }
 
 #[tokio::test]
+async fn a_linked_file_over_the_cap_is_not_written_and_one_under_it_keeps_its_name() {
+    let mut server = mockito::Server::new_async().await;
+    let _big = server
+        .mock("GET", "/files/big.pdf")
+        .with_status(200)
+        .with_header("content-type", "application/pdf")
+        .with_body("0123456789")
+        .create_async()
+        .await;
+    let _small = server
+        .mock("GET", "/files/small.pdf")
+        .with_status(200)
+        .with_header("content-type", "application/pdf")
+        .with_body("012345")
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let big = download_linked_file(&format!("{}/files/big.pdf", server.url()), tmp.path(), "t", 8, "big.pdf".into())
+        .await
+        .unwrap();
+    assert!(matches!(big, Downloaded::TooLarge));
+    assert!(!tmp.path().join("big.pdf").exists(), "an oversized file is never written");
+
+    let small =
+        download_linked_file(&format!("{}/files/small.pdf", server.url()), tmp.path(), "t", 8, "small.pdf".into())
+            .await
+            .unwrap();
+    assert!(matches!(small, Downloaded::Saved(name) if name == "small.pdf"));
+}
+
+#[test]
+fn a_linked_file_keeps_the_name_its_url_gave_it() {
+    assert_eq!(linked_filename("https://example.test/s/Violin%20Part.PDF"), "Violin Part.pdf");
+    assert_eq!(linked_filename("https://example.test/f/score.pdf"), "score.pdf");
+}
+
+#[tokio::test]
 async fn a_page_fetch_keeps_the_default_accept_header() {
     let mut server = mockito::Server::new_async().await;
     let _m = server

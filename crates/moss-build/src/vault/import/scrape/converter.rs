@@ -17,7 +17,9 @@ use std::sync::LazyLock;
 use url::Url;
 
 use super::extractor::extract_main_content;
+use crate::vault::import::media::{is_image_url, is_linked_content_file_url};
 use super::metadata::{derive, ArticleMetadata};
+use super::scope::{is_same_origin, UrlScope};
 use crate::vault::import::widgets::{carry_widgets, html_to_markdown, WidgetCount};
 
 /// Output of the extraction pipeline.
@@ -250,6 +252,74 @@ pub fn rewrite_image_links(
         .to_string()
 }
 
+fn link_dest<'a>(caps: &regex::Captures<'a>) -> &'a str {
+    caps.get(1).or_else(|| caps.get(2)).map_or("", |m| m.as_str())
+}
+
+/// A markdown link destination that names a content file on the page's own
+/// site: its absolute URL without the fragment (the download and dedupe key)
+/// and the fragment to put back (`#page=2`). `None` for anything else — a
+/// page, another host, a stylesheet.
+fn linked_file_target(dest: &str, base: &Option<Url>, scope: &UrlScope) -> Option<(String, String)> {
+    let mut url = Url::parse(&resolve_url(dest, base)?).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !is_same_origin(scope, url.as_str())
+        || !is_linked_content_file_url(url.as_str())
+    {
+        return None;
+    }
+    let fragment = url.fragment().map(|f| format!("#{f}")).unwrap_or_default();
+    url.set_fragment(None);
+    // `/x.pdf` and `/x.pdf?dl=1` are one file. An image keeps its query: a
+    // CDN reads it as a rendition, and the media pass keys the same image
+    // by the same URL.
+    if !is_image_url(url.as_str()) {
+        url.set_query(None);
+    }
+    Some((url.to_string(), fragment))
+}
+
+/// Absolute URLs of the files a page's links point at that the import should
+/// carry into the site, in document order, each once. Written absolute
+/// (`https://host/s/x.pdf`) or root-relative (`/s/x.pdf`) in the source, they
+/// resolve to the same URL.
+pub(crate) fn linked_file_urls(markdown: &str, page_url: &str, scope: &UrlScope) -> Vec<String> {
+    let base = Url::parse(page_url).ok();
+    let mut seen = HashSet::new();
+    LINK_DEST_PATTERN
+        .captures_iter(markdown)
+        .filter_map(|c| linked_file_target(link_dest(&c), &base, scope))
+        .filter(|(url, _)| seen.insert(url.clone()))
+        .map(|(url, _)| url)
+        .collect()
+}
+
+/// Point every link to a downloaded file (`remote_to_local`, values already
+/// relative to the page that holds the link) at the local copy. Links to
+/// files that did not download are left as written.
+pub(crate) fn rewrite_file_links(
+    markdown: &str,
+    page_url: &str,
+    scope: &UrlScope,
+    remote_to_local: &std::collections::HashMap<String, String>,
+) -> String {
+    let base = Url::parse(page_url).ok();
+    LINK_DEST_PATTERN
+        .replace_all(markdown, |caps: &regex::Captures| {
+            let local = linked_file_target(link_dest(caps), &base, scope)
+                .and_then(|(url, fragment)| Some((remote_to_local.get(&url)?, fragment)));
+            match local {
+                Some((path, fragment)) => format!(
+                    "]({}{fragment}{})",
+                    moss_core::resolve::fuzzy_path::escape_md_destination(path, false),
+                    &caps[3]
+                ),
+                None => caps[0].to_string(),
+            }
+        })
+        .to_string()
+}
+
 fn extract_image_urls_in_markdown(md: &str) -> Vec<String> {
     IMG_PATTERN
         .captures_iter(md)
@@ -274,8 +344,21 @@ pub(crate) fn resolve_url(href: &str, base: &Option<Url>) -> Option<String> {
 // non-paren, non-whitespace character OR a single balanced `(…)` group, which
 // covers the full CommonMark spec allowance for one level of nested parens in
 // link destinations (CommonMark spec §6.6, link destination grammar).
+const MD_DESTINATION: &str = r#"(?:[^()\s"'<>]|\([^()]*\))+"#;
+
 pub(crate) static IMG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"!\[([^\]]*)\]\(((?:[^()\s"'<>]|\([^()]*\))+)\)"#).expect("img regex")
+    Regex::new(&format!(r#"!\[([^\]]*)\]\(({MD_DESTINATION})\)"#)).expect("img regex")
+});
+
+// The `](destination "title")` tail of any markdown link or image. The
+// destination is either `<…>` (spaces allowed) or the same plain form images
+// use; the label is not needed, which also covers an image wrapped in a link.
+// Captures: 1 angle destination, 2 plain destination, 3 title.
+static LINK_DEST_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r#"\]\((?:<([^>\n]*)>|({MD_DESTINATION}))((?:\s+"[^"]*")?)\)"#
+    ))
+    .expect("link dest regex")
 });
 
 // Matches `![[https://…]]` wikilink embeds with an absolute URL target (no
@@ -320,6 +403,27 @@ mod tests {
         assert!(art.markdown.contains("Lede paragraph"));
         assert!(!art.markdown.contains("site logo"));
         assert!(!art.markdown.contains("site footer"));
+    }
+
+    #[test]
+    fn linked_files_with_parentheses_or_angle_destinations_are_found_and_rewritten() {
+        let scope = UrlScope::new("https://example.test/").unwrap();
+        let md = "[a](/f/Score%20(final).pdf) [b](</f/My Score.pdf> \"t\")";
+        let urls = linked_file_urls(md, "https://example.test/p", &scope);
+        assert_eq!(
+            urls,
+            vec![
+                "https://example.test/f/Score%20(final).pdf".to_string(),
+                "https://example.test/f/My%20Score.pdf".to_string()
+            ]
+        );
+        let map: HashMap<String, String> = urls
+            .iter()
+            .zip(["./assets/imported/a.pdf", "./assets/imported/b.pdf"])
+            .map(|(u, l)| (u.clone(), l.to_string()))
+            .collect();
+        let out = rewrite_file_links(md, "https://example.test/p", &scope, &map);
+        assert_eq!(out, "[a](./assets/imported/a.pdf) [b](./assets/imported/b.pdf \"t\")");
     }
 
     #[test]

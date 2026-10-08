@@ -153,6 +153,8 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         duplicate_pages: 0,
         unreachable_variants: 0,
         unreachable_files: 0,
+        linked_files_downloaded: 0,
+        oversized_files: 0,
         widgets_carried: article.widgets.carried,
         widgets_dropped: article.widgets.dropped,
         capped: false,

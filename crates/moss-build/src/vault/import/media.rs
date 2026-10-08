@@ -147,14 +147,58 @@ pub(crate) fn drive_download_from_preview(url: &str) -> Option<String> {
 /// share one list instead of each carrying its own copy of `"pdf"`.
 pub(crate) const PDF_EXTENSIONS: &[&str] = &["pdf"];
 
-/// Audio file extensions — same reasoning as [`PDF_EXTENSIONS`]. Kept to the
-/// four this module already recognized rather than grown with this split, so
-/// [`is_localizable_file_url`]'s behavior is unchanged.
+/// Audio file extensions — same reasoning as [`PDF_EXTENSIONS`].
 pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["mp3", "m4a", "wav", "ogg"];
+
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "tiff", "tif", "ico", "avif", "heic", "heif",
+];
+const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mov", "avi", "mkv", "m4v", "wmv", "flv"];
+const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "rar", "7z", "tar", "gz", "tgz", "bz2"];
+const OFFICE_EXTENSIONS: &[&str] = &[
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf",
+];
+const CALENDAR_EXTENSIONS: &[&str] = &["ics"];
+
+/// The non-page families worth carrying into the site when a page links to
+/// one: documents, images, audio, video, archives, calendars. Feeds, data
+/// files, stylesheets and scripts are not (see `scrape::crawler`).
+const CONTENT_FILE_EXTENSION_GROUPS: &[&[&str]] = &[
+    PDF_EXTENSIONS,
+    AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    ARCHIVE_EXTENSIONS,
+    OFFICE_EXTENSIONS,
+    CALENDAR_EXTENSIONS,
+];
+
+/// Whether `url`'s path ends in one of the extensions in `groups`, ignoring
+/// case, the query string and the fragment.
+pub(crate) fn path_has_extension(url: &str, groups: &[&[&str]]) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let path = parsed.path().to_ascii_lowercase();
+    groups
+        .iter()
+        .flat_map(|g| g.iter())
+        .any(|ext| path.ends_with(&format!(".{ext}")))
+}
+
+pub(crate) fn is_image_url(url: &str) -> bool {
+    path_has_extension(url, &[IMAGE_EXTENSIONS])
+}
+
+/// Whether `url`'s path names a file a page's link should carry into the
+/// site (see [`CONTENT_FILE_EXTENSION_GROUPS`]).
+pub(crate) fn is_linked_content_file_url(url: &str) -> bool {
+    path_has_extension(url, CONTENT_FILE_EXTENSION_GROUPS)
+}
 
 /// Whether a remote URL names a downloadable FILE that the import should
 /// localize into the vault (as opposed to a provider embed, which stays
-/// remote). Drive direct-downloads and bare file-extension URLs qualify.
+/// remote). Drive direct-downloads and bare PDF or audio URLs qualify.
 pub(crate) fn is_localizable_file_url(url: &str) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
@@ -167,11 +211,7 @@ pub(crate) fn is_localizable_file_url(url: &str) -> bool {
     {
         return true;
     }
-    let path = parsed.path().to_ascii_lowercase();
-    PDF_EXTENSIONS
-        .iter()
-        .chain(AUDIO_EXTENSIONS)
-        .any(|ext| path.ends_with(&format!(".{ext}")))
+    path_has_extension(url, &[PDF_EXTENSIONS, AUDIO_EXTENSIONS])
 }
 
 #[cfg(test)]

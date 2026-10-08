@@ -15,13 +15,18 @@ use std::path::Path;
 use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 
-use super::converter::{extract_article_with_snapshot, rewrite_image_links};
+use super::converter::{
+    extract_article_with_snapshot, linked_file_urls, rewrite_file_links, rewrite_image_links,
+};
 use super::crawl_state::CrawlState;
 use super::design::{self, norm_url, Capture, ChromeSummary, HomePage};
 use super::crawler::{
-    extract_canonical_url, extract_links, host_of, is_non_page_file_url, looks_like_html_page,
+    extract_canonical_url, extract_links, host_of, is_non_page_file_url,
+    looks_like_html_page,
 };
-use super::fetch::{download_asset, fetch_page, observe_pace};
+use super::fetch::{
+    download_asset, download_linked_file, fetch_page, linked_filename, observe_pace, Downloaded,
+};
 use super::scope::{is_within_scope, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
 use super::writer::{rename_for_collision, url_to_file_path};
@@ -100,6 +105,14 @@ pub struct ScrapeResult {
     /// and — like `skipped_pages` — never counted against `max_pages`: the
     /// URL was never a page candidate to begin with, fetch or no fetch.
     pub unreachable_files: usize,
+    /// Files an imported page links to on its own site (a PDF, a score, an
+    /// office document, an image, audio, an archive) downloaded into the
+    /// assets folder, with the link rewritten to the copy. A file that
+    /// failed to download counts in `unreachable_files` instead; one over
+    /// the size cap counts in `oversized_files`. Both keep the original link.
+    pub linked_files_downloaded: usize,
+    /// Linked files over the size cap: not downloaded, link left as written.
+    pub oversized_files: usize,
     /// Iframes and forms replaced by a link (a hosted page, or the page's
     /// contact address) because a static site cannot run them.
     pub widgets_carried: usize,
@@ -204,6 +217,13 @@ fn hash_body(body: &str) -> u64 {
     xxhash_rust::xxh3::xxh3_64(body.as_bytes())
 }
 
+/// The site a note's links are resolved against.
+pub(crate) struct LinkScope<'a> {
+    pub(crate) scope: &'a UrlScope,
+    /// Whether in-scope page links become links to the notes written beside it.
+    pub(crate) rewrite_pages: bool,
+}
+
 /// Compose one imported note: pick its cover, point every media reference at
 /// whatever landed in `remote_to_local`, and prepend frontmatter.
 ///
@@ -213,14 +233,14 @@ fn hash_body(body: &str) -> u64 {
 /// and reported success. `None` here is that refusal, and each arm answers it
 /// the way its own failures are answered.
 ///
-/// `scope` is `Some` only for a recursive crawl, where an in-scope link can be
-/// rewritten to the sibling file the crawl is also writing.
+/// `links` is `None` for a local-file import (no site to resolve links
+/// against). `remote_to_local` holds paths already relative to the note.
 pub(crate) fn compose_note(
     article: &mut super::converter::Article,
     remote_to_local: &HashMap<String, String>,
     cover_remote: Option<String>,
     source_url: &str,
-    scope: Option<&UrlScope>,
+    links: Option<LinkScope<'_>>,
 ) -> Option<String> {
     if let Some(remote) = cover_remote {
         if let Some(local) = remote_to_local.get(&remote) {
@@ -230,8 +250,13 @@ pub(crate) fn compose_note(
 
     let mut markdown = rewrite_image_links(&article.markdown, remote_to_local);
     markdown = super::converter::rewrite_embed_links(&markdown, remote_to_local);
-    if let Some(scope) = scope {
-        markdown = rewrite_links(&markdown, scope);
+    if let Some(LinkScope { scope, rewrite_pages }) = links {
+        markdown = rewrite_file_links(&markdown, source_url, scope, remote_to_local);
+        // Only a recursive crawl can point an in-scope link at the sibling
+        // note it is also writing.
+        if rewrite_pages {
+            markdown = rewrite_links(&markdown, scope);
+        }
     }
 
     if markdown.trim().is_empty() {
@@ -467,7 +492,7 @@ where
             });
 
         for media_url in &article.media_urls {
-            if state.assets.contains(media_url) {
+            if state.assets.is_settled(media_url) {
                 continue;
             }
             // Keyed by the asset's OWN host, not the page's — a page's
@@ -487,20 +512,60 @@ where
                 // but never fail silently.
                 Err(e) => {
                     log::warn!("import: asset download failed, keeping remote URL: {media_url}: {e}");
+                    state.assets.keep_remote(media_url.clone());
                     continue;
                 }
             }
         }
 
-        let scope_for_links = config.recursive.then_some(&scope);
+        // Files the page links to (a score, a document) get the same
+        // treatment as its images: downloaded once into the assets folder,
+        // the link pointed at the copy by `compose_note`.
+        for file_url in linked_file_urls(&article.markdown, &url, &scope) {
+            if !state.assets.is_settled(&file_url) {
+                let asset_host = host_of(&file_url);
+                state.pacer.wait(&asset_host).await;
+                let filename = state.assets.claim_name(linked_filename(&file_url), &file_url);
+                let result = download_linked_file(
+                    &file_url,
+                    &assets_dir,
+                    &config.user_agent,
+                    config.linked_file_max_bytes,
+                    filename,
+                )
+                .await;
+                observe_pace(&mut state.pacer, &asset_host, &result);
+                match result {
+                    Ok(Downloaded::Saved(filename)) => {
+                        state.assets.insert(file_url.clone(), format!("./{ASSETS_SUBDIR}/{filename}"));
+                        state.tally.record_linked_file_downloaded();
+                    }
+                    Ok(Downloaded::TooLarge) => {
+                        log::warn!(
+                            "import: linked file over {} MB, not downloaded and left as a remote link: {file_url}",
+                            config.linked_file_max_bytes / (1024 * 1024)
+                        );
+                        state.assets.keep_remote(file_url.clone());
+                        state.tally.record_oversized_file();
+                    }
+                    Err(e) => {
+                        log::warn!("import: linked file download failed, keeping remote URL: {file_url}: {e}");
+                        state.assets.keep_remote(file_url.clone());
+                        state.tally.record_unreachable_file();
+                    }
+                }
+            }
+        }
+
+        let page_depth = url_to_file_path(&url, &scope).matches('/').count();
         // Nothing extracted is a page failure, not a crawl failure: one
         // unparseable page in a hundred must not cost the other ninety-nine.
         match compose_note(
             &mut article,
-            state.assets.as_map(),
+            &state.assets.local_map(page_depth),
             cover_remote,
             &url,
-            scope_for_links,
+            Some(LinkScope { scope: &scope, rewrite_pages: config.recursive }),
         ) {
             Some(note) => {
                 // Record this page's identity so a later duplicate of it —
@@ -609,6 +674,8 @@ where
         duplicate_pages: state.tally.duplicate(),
         unreachable_variants: state.tally.unreachable_variants(),
         unreachable_files: state.tally.unreachable_files(),
+        linked_files_downloaded: state.tally.linked_files_downloaded(),
+        oversized_files: state.tally.oversized_files(),
         widgets_carried: state.tally.widgets_carried(),
         widgets_dropped: state.tally.widgets_dropped(),
         capped: state.cap.capped(),

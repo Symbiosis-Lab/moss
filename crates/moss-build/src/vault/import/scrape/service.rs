@@ -11,6 +11,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use url::Url;
 
+use super::crawler::is_non_page_file_url;
 use super::metadata::ArticleMetadata;
 use super::scope::{is_within_scope, UrlScope};
 
@@ -49,6 +50,8 @@ pub struct ScrapeConfig {
     pub max_pages: Option<usize>,
     /// User-Agent used for HTTP requests.
     pub user_agent: String,
+    /// Largest single file a page's link may pull into the site.
+    pub(crate) linked_file_max_bytes: u64,
 }
 
 impl ScrapeConfig {
@@ -60,6 +63,7 @@ impl ScrapeConfig {
             recursive: false,
             max_pages: Some(DEFAULT_MAX_PAGES),
             user_agent: default_user_agent(),
+            linked_file_max_bytes: super::fetch::LINKED_FILE_MAX_BYTES,
         }
     }
 }
@@ -147,7 +151,9 @@ pub fn rewrite_links(markdown: &str, scope: &UrlScope) -> String {
         .replace_all(markdown, |caps: &regex::Captures| {
             let text = &caps[1];
             let url = &caps[2];
-            if is_within_scope(scope, url) {
+            // A file link (`.pdf`, …) has no `.md` twin; it is the file
+            // downloader's to rewrite, and stays as written when that failed.
+            if is_within_scope(scope, url) && !is_non_page_file_url(url) {
                 if let Some(rel) = url_to_relative_md_path(url, scope) {
                     return format!("[{}]({})", text, rel);
                 }
