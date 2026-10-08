@@ -905,3 +905,47 @@ fn grid_and_summary_folder_cards_carry_the_same_count() {
     assert!(summary.contains("4 articles"), "{summary}");
     assert!(grid.contains("4 articles"), "{grid}");
 }
+
+fn event_when(start: &str) -> String {
+    let start = moss_core::event::EventTime::parse(start).unwrap();
+    crate::build::components::event_meta::render_when(start, None, crate::i18n::Language::En)
+}
+
+#[test]
+fn event_summary_card_shows_its_time_before_the_place() {
+    let mut props = article_props("Opening Night", "/events/opening/");
+    props.date_display = None;
+    props.date_raw = Some("2026-11-01 14:00".to_string());
+    props.place = Some("Example Hall".to_string());
+    props.when_html = Some(event_when("2026-11-01 14:00"));
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(
+        html.contains(r#"<div class="moss-card-meta"><time class="moss-when""#)
+            && html.contains("</time> · Example Hall</div>"),
+        "the meta slot should be the event's time then its place, got: {html}"
+    );
+}
+
+#[test]
+fn event_summary_card_with_a_publisher_kicker_keeps_its_time() {
+    let mut props = article_props("Opening Night", "/events/opening/");
+    props.kicker = Some("Museum Press".to_string());
+    props.place = Some("Example Hall".to_string());
+    props.when_html = Some(event_when("2026-11-01 14:00"));
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(
+        html.contains(r#"<div class="moss-card-meta"><time class="moss-when""#)
+            && html.contains("Example Hall</div>"),
+        "the kicker takes the year, the meta slot keeps the time and place, got: {html}"
+    );
+}
+
+#[test]
+fn non_event_summary_card_is_unchanged_by_the_event_time() {
+    let mut props = article_props("Plain Post", "/blog/plain/");
+    props.kicker = Some("Museum Press".to_string());
+    props.place = Some("Example Hall".to_string());
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(!html.contains("moss-when"), "got: {html}");
+    assert!(html.contains(r#"<div class="moss-card-kicker">Museum Press · 2025</div><div class="moss-card-meta">Example Hall</div>"#), "got: {html}");
+}
