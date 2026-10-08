@@ -5,17 +5,6 @@ All notable changes to this crate are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.16.1] - 2026-10-08
-
-### Added
-
-- Exposed `link_completions::relative_destination` and the transclusion-site and remote-media classification helpers for downstream consumers.
-
-### Fixed
-
-- Standard Markdown images and wiki references now share the written-path resolver across page rendering and shortcode parsing. Escaped image syntax stays literal, and destinations with balanced parentheses or angle brackets are parsed consistently.
-- Reference edits now preserve and resolve standard Markdown destinations with query strings, reference definitions, and encoded spaces, keeping rename and delete behavior aligned with rendered links.
-
 ## [Unreleased]
 
 ### Added
@@ -81,6 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A video embed no longer prints a "Download video" link.** The HLS-ladder form of `synthesize_video_html` appended `<p class="moss-embed-video-download"><a … download>Download video</a></p>` after the player; it was never part of the design, it hard-coded English regardless of the site's language, and the progressive MP4 was already the last `<source>` for a browser that plays neither HLS nor hls.js. The `.moss-embed-video-download` class is removed from the `COMPONENTS` contract table.
 - **A video, audio, pdf, iframe or 3D-model embed that shares its paragraph with other text now gets its own element again, instead of falling back to `<img>`.** `dispatch_wikilink_embeds`' kind dispatch only ran for a paragraph whose sole content was the embed; one with sibling text (most often a caption on the next line, joined by a soft break) fell through to the generic image render path regardless of its real extension. `EmitKind` also splits `Html` (a bare element — phrasing content, safe to splice into that paragraph) from the new `HtmlFigure` (a captioned embed's block-level `<figure>`, which is not); only `Html` is ever spliced mid-paragraph, so a `Deferred` post-pass marker or a captioned `<figure>` still degrades to the pre-fix behavior rather than nesting block HTML inside a `<p>`.
 - **`ladder_rungs` no longer offers any responsive rung for a source whose deployed base is more than `MAX_LADDER_ASPECT` (10) times as long as it is short, on either axis.** A rung is a uniform scale of the same source, so it is exactly as elongated as the base — an ordinary photo or hero far past 2:1 (2400×316, or a 6000×1500 hero) keeps its full, ordinary ladder either way, landscape or portrait. Past that ratio a rung stops being useful: a 38415×1400 handscroll's base clamps to 16383×597 (27:1), and its `w800` rung would be 800×29; a 1300×23660 hanging scroll clamps the same way (18:1), and its only rung would be narrower than the already-compromised base, making a bad ratio worse rather than offering a genuinely smaller variant — neither needs WebP's 16383px limit to clamp, either: an unresized 2200×100 source (22:1) is just as unusable at `w800` (800×36). Widening a rung would break the `wN` srcset contract (`validate_webp_output` pins the exact width) and cropping would lose content, so past the ratio limit the ladder is empty and only the base is offered; `deployed_scaled_dim` factors the ratio-scale arithmetic `deployed_width` already used, now shared with this check.
+
+## [0.16.1] - 2026-10-08
+
+### Added
+
+- Exposed `link_completions::relative_destination` and the transclusion-site and remote-media classification helpers for downstream consumers.
+
+### Fixed
+
+- Standard Markdown images and wiki references now share the written-path resolver across page rendering and shortcode parsing. Escaped image syntax stays literal, and destinations with balanced parentheses or angle brackets are parsed consistently.
+- Reference edits now preserve and resolve standard Markdown destinations with query strings, reference definitions, and encoded spaces, keeping rename and delete behavior aligned with rendered links.
 
 ## [0.15.0] - 2026-09-06
 
