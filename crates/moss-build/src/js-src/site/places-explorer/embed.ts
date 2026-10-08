@@ -351,9 +351,8 @@ export async function attachEmbedModeIfRequested(controller: PlacesMapController
     controller.refitScopeIfClipped();
   });
 
-  // Post READY once visible regional tiles are decoded and either the world
-  // raster is sharp enough or fully opaque regional tile canvases cover the
-  // current viewport.
+  // Post READY when the world can carry this zoom, or required regional
+  // tiles have decoded with a ready world or complete opaque coverage.
   if (!(await controller.waitForInitialPaint())) return;
   window.parent.postMessage({ type: READY_MESSAGE }, location.origin);
 }

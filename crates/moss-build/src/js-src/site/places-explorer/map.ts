@@ -55,24 +55,14 @@ import { ScopeChip } from "./chip";
 import { LabelLayer } from "./labels";
 import { MarkerLayer, pointsForWorks, workIdOf } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
-import { rasterizeOrFallback, splitMapSvg } from "./raster";
+import { rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP } from "./raster";
 import { inScope } from "./scope";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
-import { TileLayer, tileFadeOpacity } from "./tiles";
+import { TileLayer } from "./tiles";
 import * as urlState from "./state";
 import { hasPoint, type Camera, type LabelsData, type PlacesData, type Place, type Point, type Rect, type Scope, type Viewport } from "./types";
 
-/**
- * The world raster stays sharp up to this many zoom-ones past the cover
- * floor before it is left to go soft under whatever tiles cover that area
- * — baking all the way to the world's own (let alone the tile-raised)
- * ceiling would mean a raster several times the linear size of the
- * viewport sitting in memory for the entire session just to cover a zoom
- * level most views never reach. Named rather than inlined so the actual
- * trade this makes is visible at the call site.
- */
-const WORLD_RASTER_ZOOM_CAP = 1.6;
 /** Device pixel ratio honoured up to this for the world raster — a 3x phone gains nothing from tripling an already roomy budget. */
 const WORLD_RASTER_DPR_CAP = 2;
 /** A rebake only fires once the zoom that would drive it has grown past the last bake by this ratio — without a deadband, panning at a steady zoom (which never needs a sharper texture) would still schedule a decode on every settle. */
@@ -814,10 +804,11 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
         const viewport = getViewport();
         const awaitedCamera = { ...camera };
         const unitScale = screenScale({ x: 0, y: 0, zoom: 1 }, viewport);
+        // Within the raster budget, the world can carry the frame while tiles load.
         // Capture dependencies before awaiting the world surface. A visible
         // tile failure can lower the camera's zoom ceiling and hide its own
         // requirement; the poster must still remain for that original view.
-        const requiresVisibleTiles = tileFadeOpacity(camera, viewport) > 0 && tileLayer.hasManifestTiles(camera, viewport);
+        const requiresVisibleTiles = camera.zoom > WORLD_RASTER_ZOOM_CAP && tileLayer.hasManifestTiles(camera, viewport);
         const visibleTilesReady = requiresVisibleTiles
           ? tileLayer.waitForVisibleTiles()
           : Promise.resolve("ready" as const);

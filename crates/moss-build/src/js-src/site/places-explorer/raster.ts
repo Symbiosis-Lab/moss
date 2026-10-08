@@ -16,6 +16,9 @@
  * rasterising and the part that must stay live.
  */
 
+/** World bitmap allocation and the regional handoff share this zoom budget; beyond it, detail must come from tiles rather than an enlarged world texture. */
+export const WORLD_RASTER_ZOOM_CAP = 1.6;
+
 const XML_NS = "http://www.w3.org/2000/svg" as const;
 
 /**
