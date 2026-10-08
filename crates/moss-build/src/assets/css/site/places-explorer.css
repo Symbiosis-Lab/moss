@@ -26,7 +26,7 @@
 
 /* `?embed=1`: this is still the full places-root page, just loaded into a
    small hydrated iframe (embed.ts's own lazy iframe, always kept at
-   opacity 0 until its content posts ready — so hiding chrome here, rather
+   hidden until its content posts ready — so hiding chrome here, rather
    than earlier, causes no visible flash; nothing outside this iframe's own
    document is ever shown with its chrome on). Without this, the site's own
    header/nav/footer/colophon render crammed into whatever small box the
@@ -256,15 +256,9 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   will-change: transform;
 }
 
-/* Opacity is the cross-fade `tiles.ts`'s `TileLayer.render` drives through
-   this one custom property (`tileFadeOpacity`) — 0 below the fade band
-   short of the world layer's own detail ceiling, where `render` also
-   removes every tile element outright, so the property reaching 0 and the
-   layer having nothing in it to fade happen together. The transition only
-   has to smooth the RISE through the band (the fall is already silent: by
-   the time `render` clears the DOM, opacity has already ramped to 0), but
-   guarding it is still correct for the reduced-motion reader regardless of
-   direction. */
+/* Camera zoom already drives the continuous detail fade. Do not animate it
+   again: WebKit suspends opacity transitions inside a hidden iframe and can
+   reveal the low-resolution world surface even after detail has decoded. */
 .moss-places-tiles {
   position: absolute;
   inset: 0;
@@ -273,11 +267,6 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
      is no stacking context of its own, so without this they would compete
      with the markers and cards above the layer. */
   isolation: isolate;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .moss-places-tiles {
-    transition: opacity 150ms ease-out;
-  }
 }
 
 /* Each regional tile is now a plain positioned wrapper (map.ts's module
@@ -1330,29 +1319,10 @@ button.moss-places-chip-crumb {
 }
 
 /* ---------------------------------------------------------------------------
-   Embeds: a style:map card or an article's own locator, hydrated to a live
-   map behind its static poster (embed.ts). `[data-moss-place-embed]` and
-   `[data-hydrate-url]` are the one exception to this file's own module
-   doc — they are Rust-emitted attributes (`folder_embed.rs`'s `style:map`
-   dispatch, `place_map/context.rs`'s `render_locator`), not runtime-created
-   selectors. The poster itself stays exactly the plain `.moss-place-map`
-   figure it always was: the no-JS floor, and the loading state, in one.
+   Route-free embeds use the existing stable 3:2 host for both the no-JS SVG
+   fallback and the interactive iframe. JS-enabled pages hide the SVG from
+   first paint; the iframe becomes visible only after its READY handshake.
    --------------------------------------------------------------------------- */
-
-/* `aspect-ratio` (not a height read off either child) is what makes the
-   poster and the live frame cover the EXACT same box: every map canvas this
-   crate ever draws, locator or listing, is the fixed 720x480 (3:2) SVG_WIDTH
-   x SVG_HEIGHT, the same ratio site.css's own generic `.moss-place-map svg`
-   rule already assumes for the no-JS case. Giving the FIGURE itself that
-   ratio (rather than letting the static svg's own `block-size: auto`
-   establish the figure's height, with the frame then reading that same
-   computed height back via `block-size: 100%`) removes the indirection
-   entirely: both children size against one definite box the figure sets up
-   on its own, so neither can end up a pixel off from the other. `overflow:
-   hidden` is what makes the one `border-radius` below ALSO apply to the
-   static poster, which carries none of its own — needed as soon as the
-   frame is sized exactly to the figure (unlike before, nothing left the
-   poster peeking past a frame that was a few pixels smaller). */
 .moss-place-map[data-moss-place-embed] {
   position: relative;
   aspect-ratio: 3 / 2;
@@ -1364,6 +1334,35 @@ button.moss-places-chip-crumb {
   inset: 0;
   inline-size: 100%;
   block-size: 100%;
+  display: none;
+}
+.moss-place-map[data-moss-place-embed][data-moss-place-embed-state="fallback"] > svg {
+  display: block;
+}
+.moss-places-embed-status,
+.moss-places-embed-load {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+}
+.moss-places-embed-status {
+  color: var(--moss-color-text-secondary);
+  font-size: var(--moss-read-caption);
+}
+.moss-places-embed-load {
+  min-block-size: 44px;
+  padding-inline: var(--moss-space-m);
+  border: 1px solid var(--moss-color-ui-accent);
+  border-radius: 999px;
+  background: var(--moss-color-surface);
+  color: var(--moss-color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.moss-places-embed-load:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 3px;
 }
 .moss-places-embed-frame {
   position: absolute;
@@ -1371,18 +1370,16 @@ button.moss-places-chip-crumb {
   inline-size: 100%;
   block-size: 100%;
   border: 0;
-  opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transition: opacity 240ms ease;
 }
 .moss-places-embed-frame--settled {
-  opacity: 1;
+  visibility: visible;
   pointer-events: auto;
 }
-@media (prefers-reduced-motion: reduce) {
-  .moss-places-embed-frame {
-    transition: none;
-  }
+.moss-place-map[data-moss-place-embed][data-moss-place-embed-state]:not([data-moss-place-embed-state="ready"]) .immersive-fullscreen-btn {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 

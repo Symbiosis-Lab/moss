@@ -1,22 +1,21 @@
 /**
  * embed.ts — progressive-enhancement wiring for a `style:map` card or an
  * article's own locator, both built as a plain `<figure class="moss-place-map">`
- * poster by the Rust build (`folder_embed.rs`'s `style:map` dispatch,
+ * host by the Rust build (`folder_embed.rs`'s `style:map` dispatch,
  * `place_map/context.rs`'s `render_locator`) and hydrated here, lazily, to
- * a live map behind that poster.
+ * the canonical interactive map.
  *
  * Two independent halves share this one file because they are two ends of
  * the SAME iframe, never two different features:
  *
  * - `initPlaceEmbeds` runs on the HOST page (an article, a folder listing)
- *   and finds every poster the build marked `data-moss-place-embed`. Near
- *   the viewport (or on tap, under Save-Data/a slow connection) it creates
- *   a same-origin iframe pointed at the poster's own `data-hydrate-url` —
+ *   and finds every host the build marked `data-moss-place-embed`. Near
+ *   the viewport (or after an explicit Save-Data/slow-connection action) it creates
+ *   a same-origin iframe pointed at the host's own `data-hydrate-url` —
  *   the places root, scoped by `place=`/`article=` and carrying `embed=1`
- *   — behind the static poster, and cross-fades it in once (and only once)
- *   that iframe's own explorer posts back ready. A failed, slow or
- *   timed-out load just leaves the poster exactly as it always was: never
- *   a blank or half-built iframe left on screen.
+ *   — in the same stable host. A loading state remains until the iframe's
+ *   own explorer posts ready; then the iframe becomes the only visible map.
+ *   A failed or timed-out load restores the static SVG fallback.
  * - `attachEmbedModeIfRequested` runs INSIDE that iframe — it is the SAME
  *   `index.ts` boot, on the SAME places root page, just loaded with
  *   `embed=1` in its own URL — and switches the freshly-mounted
@@ -68,17 +67,15 @@ function prefersMinimalData(): boolean {
 }
 
 /**
- * Create the lazy iframe behind `poster`, wire the ready handshake, and
- * cross-fade it in once (and only once) the iframe's own explorer confirms
- * it mounted. A fetch failure inside the iframe never reaches this page as
- * an error at all — nothing here can see it — so a timeout is the only
- * backstop: past it, the iframe is removed and the poster, never altered,
- * is the whole story.
+ * Create the lazy iframe in `poster`, wire the ready handshake, and expose
+ * it only after the iframe's own explorer confirms it mounted. Fetch
+ * failures inside the iframe are not observable here, so timeout restores
+ * the host's static SVG fallback.
  */
 function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
   const iframe = document.createElement("iframe");
   iframe.className = "moss-places-embed-frame";
-  iframe.setAttribute("aria-hidden", "true"); // the poster is the accessible figure until this settles
+  iframe.setAttribute("aria-hidden", "true"); // expose the map only after its own ready handshake
   // `data-embed-name` (`context.rs`'s `with_embed_hydration`) is the plain
   // place/article display name, never a finished sentence — this HOST page
   // may be a different locale than the embedded places root (a `style:map`
@@ -108,6 +105,9 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
     cleanup();
     iframe.removeAttribute("aria-hidden");
     poster.setAttribute("data-moss-place-embed-ready", "ready");
+    poster.dataset.mossPlaceEmbedState = "ready";
+    poster.setAttribute("aria-busy", "false");
+    poster.querySelector<HTMLElement>(":scope > .moss-places-embed-status")?.remove();
     // Hand off the accessible description: the poster figure's own
     // `role="img" aria-label="Map of X…"` (baked in by the Rust build for
     // the no-JS floor — its `<svg>` itself is already `aria-hidden`, a
@@ -118,25 +118,13 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
     // ever reaching the iframe's own content at all. `inert` on the static
     // `<svg>` is this handoff's only remaining job: not focusable even if
     // that ever changes (theme.ts's own `.nav-links` pattern for "closed but
-    // still in the DOM"). Pointer events need no help either way — the
-    // settled iframe's own `pointer-events: auto` (CSS) already covers the
-    // identical box on top of it.
+    // still in the DOM").
     poster.removeAttribute("role");
     poster.removeAttribute("aria-label");
     const staticFloor = poster.querySelector<SVGElement>(":scope > svg");
     staticFloor?.setAttribute("inert", "");
-    // No `requestAnimationFrame` indirection: unlike the classic "force a
-    // reflow before transitioning a just-created element" case, this class
-    // add runs in response to an ASYNC event (the ready postMessage, after a
-    // full round trip through the iframe's own boot) — the iframe's
-    // pre-transition `opacity: 0` has already been painted many times over
-    // by then, so the CSS transition on this class still fires correctly
-    // off a synchronous add. Deferring it through `requestAnimationFrame`
-    // instead left it never applied at all on one real run (a fresh
-    // navigation at a narrow viewport, WebKit): the callback queued but the
-    // class never landed, and `waitForSettled` timed out with
-    // `data-moss-place-embed-ready="ready"` already set — the cross-fade
-    // simply never got its own frame.
+    // This class is the ready/pointer-events gate only; CSS does not fade
+    // between two maps. The iframe is the sole visible map after READY.
     iframe.classList.add("moss-places-embed-frame--settled");
   }
 
@@ -148,8 +136,13 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
     // timeout can ever fire, so by now its parent is always the wrapper it
     // built — never `poster` directly. Removing just the bare iframe would
     // leave that wrapper (and its now-dangling expand control) behind, which
-    // is not "the poster exactly as it always was".
+    // would leave a dead control in the host. Restore the static fallback.
     (iframe.parentElement ?? iframe).remove();
+    poster.dataset.mossPlaceEmbedState = "fallback";
+    poster.setAttribute("aria-busy", "false");
+    poster.querySelector<HTMLElement>(":scope > .moss-places-embed-status")?.remove();
+    poster.setAttribute("role", poster.dataset.fallbackRole ?? "img");
+    if (poster.dataset.fallbackLabel) poster.setAttribute("aria-label", poster.dataset.fallbackLabel);
   }, HYDRATE_TIMEOUT_MS);
 
   // Attach before setting `src`: WebKit starts (and, once actually
@@ -166,7 +159,7 @@ function buildIframe(poster: HTMLElement, hydrateUrl: string): void {
   // this iframe ever gets. Calling it from the ready handler (the previous
   // shape of this function) re-parented an already-loaded, already-mounted
   // iframe, which is a second real navigation in every browser — readers
-  // saw the live map reset right after the cross-fade, and in WebKit a real
+  // saw the live map reset as soon as it first appeared, and in WebKit a real
   // `hover()`/`click()` during that second load hung forever waiting for
   // content that kept getting replaced out from under it.
   // `setupImmersiveIframe` itself requires `iframe.parentNode` to already
@@ -192,18 +185,46 @@ function setupPoster(poster: HTMLElement): void {
   const hydrateUrl = poster.dataset.hydrateUrl;
   if (!hydrateUrl) return;
 
+  const strings = copyFor(document.documentElement.lang);
+  const name = poster.dataset.embedName;
+  const fallbackRole = poster.getAttribute("role");
+  const fallbackLabel = poster.getAttribute("aria-label");
+  if (fallbackRole) poster.dataset.fallbackRole = fallbackRole;
+  if (fallbackLabel) poster.dataset.fallbackLabel = fallbackLabel;
+  poster.dataset.mossPlaceEmbedState = "waiting";
+  poster.setAttribute("role", "region");
+  poster.setAttribute("aria-busy", "false");
+  if (name) poster.setAttribute("aria-label", strings.mapEmbedTitle.replace("{name}", name));
+  const status = document.createElement("span");
+  status.className = "moss-places-embed-status";
+  status.setAttribute("role", "status");
+  status.textContent = strings.mapEmbedWaiting;
+  poster.appendChild(status);
+
   let hydrated = false;
   let observer: IntersectionObserver | null = null;
   const hydrate = (): void => {
     if (hydrated) return;
     hydrated = true;
     observer?.disconnect();
-    poster.removeEventListener("click", hydrate);
+    poster.dataset.mossPlaceEmbedState = "loading";
+    poster.setAttribute("aria-busy", "true");
+    status.textContent = strings.mapEmbedLoading;
+    poster.querySelector<HTMLButtonElement>(":scope > .moss-places-embed-load")?.remove();
     buildIframe(poster, hydrateUrl);
   };
 
   if (prefersMinimalData()) {
-    poster.addEventListener("click", hydrate);
+    poster.dataset.mossPlaceEmbedState = "consent";
+    poster.setAttribute("aria-busy", "false");
+    status.remove();
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "moss-places-embed-load";
+    button.textContent = strings.mapEmbedLoad;
+    if (name) button.setAttribute("aria-label", `${strings.mapEmbedLoad}: ${name}`);
+    button.addEventListener("click", hydrate, { once: true });
+    poster.appendChild(button);
     return;
   }
   if (typeof IntersectionObserver !== "function") {
@@ -255,8 +276,8 @@ export async function attachEmbedModeIfRequested(controller: PlacesMapController
 
   // This is still the full places-root page — header, nav, footer, the
   // moss colophon — just loaded into a small hydrated iframe (an `embed.ts`
-  // host page always keeps the iframe at opacity 0 until this very module
-  // posts ready, so there is no flash: a reader never sees this page with
+  // host page keeps the iframe hidden until this very module posts ready,
+  // so there is no flash: a reader never sees this page with
   // its own chrome, on or off). places-explorer.css's own rule, scoped to
   // this same attribute, is what actually hides it.
   document.documentElement.setAttribute("data-moss-embed", "");
@@ -297,9 +318,9 @@ export async function attachEmbedModeIfRequested(controller: PlacesMapController
     controller.refitScopeIfClipped();
   });
 
-  // Keep the vector poster visible until the world raster and every regional
-  // tile under the initial frame have decoded. The world raster is capped
-  // for pan performance and can be soft at an article's local zoom.
+  // Post READY only after the world raster and every visible regional tile
+  // under the initial frame have decoded. The world raster is capped for pan
+  // performance and can be soft at an article's local zoom.
   if (!(await controller.waitForInitialPaint())) return;
   window.parent.postMessage({ type: READY_MESSAGE }, location.origin);
 }

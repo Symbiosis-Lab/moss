@@ -89,32 +89,42 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
     expect(iframe.title).toBe("");
   });
 
-  test("on a slow/Save-Data connection, hydration waits for a tap instead of the viewport", () => {
+  test("on a slow/Save-Data connection, hydration waits for an explicit accessible button", () => {
     vi.stubGlobal("navigator", { connection: { saveData: true } });
     const el = poster();
     initPlaceEmbeds();
     expect(FakeIntersectionObserver.instances).toHaveLength(0);
     expect(el.querySelector("iframe")).toBeNull();
-    el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(el.dataset.mossPlaceEmbedState).toBe("consent");
+    expect(el.querySelector("[role=status]")).toBeNull();
+    const button = el.querySelector<HTMLButtonElement>("button.moss-places-embed-load")!;
+    expect(button.textContent).toBe("Load interactive map");
+    button.click();
     expect(el.querySelector("iframe")).not.toBeNull();
+    expect(el.dataset.mossPlaceEmbedState).toBe("loading");
+    expect(el.getAttribute("aria-busy")).toBe("true");
   });
 
-  test("cross-fades the iframe in only once it posts the ready message from the right source", () => {
+  test("exposes the iframe only once it posts the ready message from the right source", () => {
     const el = poster();
     initPlaceEmbeds();
     FakeIntersectionObserver.instances[0]!.trigger(el);
     const iframe = el.querySelector("iframe") as HTMLIFrameElement;
     expect(iframe.classList.contains("moss-places-embed-frame--settled")).toBe(false);
 
-    // A message from some other source must not settle it.
+    // A message from some other source must not reveal it.
     window.dispatchEvent(new MessageEvent("message", { data: { type: "moss-places-embed-ready" }, origin: location.origin, source: window }));
     vi.advanceTimersByTime(50); // flush the rAF polyfill, if any is pending
     expect(iframe.classList.contains("moss-places-embed-frame--settled")).toBe(false);
+    expect(el.dataset.mossPlaceEmbedState).toBe("loading");
 
     window.dispatchEvent(new MessageEvent("message", { data: { type: "moss-places-embed-ready" }, origin: location.origin, source: iframe.contentWindow }));
     vi.advanceTimersByTime(50);
     expect(iframe.classList.contains("moss-places-embed-frame--settled")).toBe(true);
     expect(el.getAttribute("data-moss-place-embed-ready")).toBe("ready");
+    expect(el.dataset.mossPlaceEmbedState).toBe("ready");
+    expect(el.getAttribute("aria-busy")).toBe("false");
+    expect(el.querySelector("[role=status]")).toBeNull();
   });
 
   test("hands the accessible description off to the live map once settled: the figure's own role/label (the no-JS image description) is dropped, and the static floor is made inert — never announced or focusable alongside the iframe's own (titled) content", () => {
@@ -123,7 +133,7 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
     initPlaceEmbeds();
     FakeIntersectionObserver.instances[0]!.trigger(el);
     const iframe = el.querySelector("iframe") as HTMLIFrameElement;
-    expect(el.getAttribute("role")).toBe("img");
+    expect(el.getAttribute("role")).toBe("region");
     expect(el.hasAttribute("aria-label")).toBe(true);
     expect(staticFloor.hasAttribute("inert")).toBe(false);
 
@@ -135,7 +145,7 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
     expect(staticFloor.hasAttribute("inert")).toBe(true);
   });
 
-  test("a ready message that never arrives removes the iframe and leaves the poster untouched", () => {
+  test("a ready message that never arrives removes the iframe and restores the static fallback", () => {
     const el = poster();
     const originalHtml = el.innerHTML;
     initPlaceEmbeds();
@@ -144,7 +154,12 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
 
     vi.advanceTimersByTime(8001);
     expect(el.querySelector("iframe")).toBeNull();
-    expect(el.innerHTML).toBe(originalHtml);
+    expect(el.dataset.mossPlaceEmbedState).toBe("fallback");
+    expect(el.getAttribute("aria-busy")).toBe("false");
+    expect(el.getAttribute("role")).toBe("img");
+    expect(el.querySelector("[data-static-floor]")).not.toBeNull();
+    expect(el.querySelector(".moss-places-embed-status")).toBeNull();
+    expect(el.innerHTML).toBe(originalHtml); // failed iframe and temporary status/button are fully removed
   });
 
   test("attaches the iframe to the DOM before setting its src (WebKit double-navigates a src set while still detached)", () => {

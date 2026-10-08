@@ -302,12 +302,18 @@ fn tag_for(
     assets: &SiteAssets,
     resolver: &PathResolver,
 ) -> String {
-    resolver.runtime_js_tag(
+    let tag = resolver.runtime_js_tag(
         script.name,
         hash,
         (script.gate)(assets),
         matches!(script.load, Load::Shell { defer: true }),
-    )
+    );
+    // A missing explorer bundle cannot run the embed's own failure handler.
+    if script.name == "places-explorer" {
+        tag.replacen("<script", r#"<script onerror="document.querySelectorAll('[data-moss-place-embed]').forEach(el=>el.dataset.mossPlaceEmbedState='fallback')""#, 1)
+    } else {
+        tag
+    }
 }
 
 // There is deliberately no `hash_of(name) -> String` convenience here. One

@@ -44,6 +44,12 @@ export interface PlacesStrings {
   chipShowHidden: string;
   /** `{name}` placeholder, filled with the embed's own place or article display name (`data-embed-name`, Rust-emitted, never translated — it is a proper noun) — the `title` on a `style:map`/locator embed's lazily-hydrated iframe (`embed.ts`'s `buildIframe`). */
   mapEmbedTitle: string;
+  /** Visible loading status while the interactive embed boots. */
+  mapEmbedLoading: string;
+  /** Status before a lazy embed enters the viewport. */
+  mapEmbedWaiting: string;
+  /** Accessible opt-in button on Save-Data / slow connections. */
+  mapEmbedLoad: string;
   /** Between the names of several authors on a card; the author-to-date separator is a fixed middle dot instead (`cards.ts`). */
   listSeparator: string;
 }
@@ -68,6 +74,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeAllArticles: "Showing all articles.",
     chipShowHidden: "Show hidden places",
     mapEmbedTitle: "Map: {name}",
+    mapEmbedLoading: "Loading interactive map…",
+    mapEmbedWaiting: "The map loads when it is near the screen.",
+    mapEmbedLoad: "Load interactive map",
     listSeparator: ", ",
   },
   "zh-hans": {
@@ -89,6 +98,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeAllArticles: "已显示全部文章。",
     chipShowHidden: "显示隐藏地点",
     mapEmbedTitle: "地图：{name}",
+    mapEmbedLoading: "正在加载互动地图…",
+    mapEmbedWaiting: "地图进入视野后会自动加载。",
+    mapEmbedLoad: "加载互动地图",
     listSeparator: "、",
   },
   "zh-hant": {
@@ -110,6 +122,9 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeAllArticles: "已顯示全部文章。",
     chipShowHidden: "顯示隱藏地點",
     mapEmbedTitle: "地圖：{name}",
+    mapEmbedLoading: "正在載入互動地圖…",
+    mapEmbedWaiting: "地圖進入視野後會自動載入。",
+    mapEmbedLoad: "載入互動地圖",
     listSeparator: "、",
   },
 };
