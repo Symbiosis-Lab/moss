@@ -822,6 +822,11 @@ main > article.container {
   max-inline-size: var(--moss-content-width);
   line-break: strict;
   word-break: normal;
+  /* Overflow here is not cosmetic: a phone widens its layout viewport to fit
+     an unbreakable run (a URL in an endnote), and the fixed nav island is then
+     sized and folded against a screen wider than the device. `break-word`, not
+     `anywhere`, so tables and grids keep their min-content columns. */
+  overflow-wrap: break-word;
   text-autospace: normal;
 }
 
