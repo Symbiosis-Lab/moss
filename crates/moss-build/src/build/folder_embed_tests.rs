@@ -2821,3 +2821,86 @@ fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
     assert!(!out.contains("moss-embed-missing"), "got: {out}");
     assert!(out.contains("Kyoto Temple"), "got: {out}");
 }
+
+fn dated_event(url_path: &str, label: &str, start: moss_core::event::EventTime) -> ParsedDocument {
+    let mut doc = make_doc(url_path, label, None);
+    doc.event = Some(crate::build::types::EventFields {
+        start,
+        end: None,
+        when: start.sort_key(),
+        status: None,
+        tickets: None,
+        online: None,
+        timezone: None,
+    });
+    doc
+}
+
+#[test]
+fn upcoming_limit_counts_after_soonest_first_ordering() {
+    use moss_core::event::EventTime::Date;
+    let docs = vec![
+        make_folder_doc("events/index.html", "Events"),
+        dated_event("events/summer.html", "Summer Fair", Date(2099, 6, 1)),
+        dated_event("events/spring.html", "Spring Gala", Date(2099, 3, 1)),
+        dated_event("events/autumn.html", "Autumn Talk", Date(2099, 9, 1)),
+        dated_event("events/old.html", "Winter Concert", Date(2020, 1, 1)),
+    ];
+
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        limit: Some(1),
+        group: Some("upcoming".to_string()),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker("/events/", "index.md", &params);
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &project,
+        &dir_overrides,
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("Spring Gala"), "the soonest future event is shown: {}", out);
+    for other in ["Summer Fair", "Autumn Talk", "Winter Concert"] {
+        assert!(!out.contains(other), "{} is not the next event: {}", other, out);
+    }
+}
+
+#[test]
+fn children_upcoming_limit_counts_after_soonest_first_ordering() {
+    use moss_core::event::EventTime::Date;
+    let mut folder = make_folder_doc("events/index.html", "Events");
+    folder.children_group = Some(moss_core::Resolved::frontmatter("upcoming".to_string()));
+    folder.children_limit = Some(1);
+    let docs = vec![
+        folder.clone(),
+        dated_event("events/summer.html", "Summer Fair", Date(2099, 6, 1)),
+        dated_event("events/spring.html", "Spring Gala", Date(2099, 3, 1)),
+        dated_event("events/autumn.html", "Autumn Talk", Date(2099, 9, 1)),
+    ];
+
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let marker = synthesize_children_marker(&folder, "/events/", "index.md");
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &project,
+        &dir_overrides,
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("Spring Gala"), "the soonest future event is shown: {}", out);
+    for other in ["Summer Fair", "Autumn Talk"] {
+        assert!(!out.contains(other), "{} is not the next event: {}", other, out);
+    }
+}

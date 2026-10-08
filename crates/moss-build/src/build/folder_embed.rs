@@ -1372,6 +1372,14 @@ fn render_one(
     let effective_group = effective_group_for_axis(&group_resolved, resolved.axis);
 
     let sorted = moss_core::sort::sort_by_resolved(&folder_docs, &resolved);
+    // Upcoming events lead whatever the folder's sort is, so `limit` cuts
+    // from that order (the same grouping `generate_children` applies later).
+    let sorted = if effective_group == "upcoming" {
+        let upcoming_urls = upcoming::urls(&effective_group, &folder_docs);
+        upcoming::order_docs(sorted, &upcoming_urls, skip_resort)
+    } else {
+        sorted
+    };
 
     let (limited, truncated): (Vec<&ParsedDocument>, bool) = match parsed.limit {
         Some(n) if n > 0 && n < sorted.len() => (sorted.iter().take(n).copied().collect(), true),

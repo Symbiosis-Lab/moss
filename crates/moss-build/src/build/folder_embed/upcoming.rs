@@ -49,6 +49,26 @@ pub(super) fn order<'a>(
     soon.into_iter().chain(rest).collect()
 }
 
+/// `order` for whole documents, run before `limit` cuts the list, so the
+/// limit counts from the upcoming run rather than from the folder's sort.
+pub(super) fn order_docs<'a>(
+    docs: Vec<&'a ParsedDocument>,
+    upcoming: &HashSet<&str>,
+    keep_order: bool,
+) -> Vec<&'a ParsedDocument> {
+    use moss_core::sort::{sort_by_resolved, ResolvedSort, SortAxis};
+    let (soon, rest): (Vec<_>, Vec<_>) =
+        docs.into_iter().partition(|d| upcoming.contains(d.url_path.as_str()));
+    if keep_order {
+        return soon.into_iter().chain(rest).collect();
+    }
+    let by = |axis| ResolvedSort { axis, explicit_order: None, series_default: false };
+    sort_by_resolved(&soon, &by(SortAxis::DateAsc))
+        .into_iter()
+        .chain(sort_by_resolved(&rest, &by(SortAxis::Date)))
+        .collect()
+}
+
 /// The two runs as `<section class="moss-cards-group" data-group="…">`; an
 /// empty run is not emitted. `render` draws one item.
 pub(super) fn sections(
