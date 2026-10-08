@@ -146,7 +146,7 @@ impl PageChromeContext<'_, '_> {
             date: None, formatted_date: None, date_line: None, short_date: None, content: None,
             description: None, og_tags: None, twitter_tags: None, canonical_link: None,
             hreflang_links: None, schema_json_ld: None, embed_head_assets: String::new(),
-            post_article: String::new(), robots_meta: None,
+            post_article: String::new(), lightbox: String::new(), robots_meta: None,
         }
     }
 }

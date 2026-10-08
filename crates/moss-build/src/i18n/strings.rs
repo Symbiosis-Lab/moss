@@ -391,6 +391,12 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "下一个",
             Language::ZhHant => "下一個",
         },
+        // Gallery image link name; {n} is the 1-based position, {m} the total.
+        "gallery_open_image" => match lang {
+            Language::En => "Open image {n} of {m}",
+            Language::ZhHans => "打开第 {n} 张图片，共 {m} 张",
+            Language::ZhHant => "開啟第 {n} 張圖片，共 {m} 張",
+        },
         "view_in_article" => match lang {
             Language::En => "View in article",
             Language::ZhHans => "在文章中查看",

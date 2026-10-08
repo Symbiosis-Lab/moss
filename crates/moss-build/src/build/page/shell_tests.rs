@@ -1578,6 +1578,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         embed_head_assets: String::new(),
         post_article: String::new(),
         runtime_js_tags: String::new(),
+        lightbox: String::new(),
         robots_meta: None,
     }
 }

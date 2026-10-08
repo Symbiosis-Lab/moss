@@ -1087,6 +1087,8 @@ pub fn process_markdown_file(
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
+    let has_gallery =
+        moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Gallery);
 
     // Defensive sweep: `Block::Other` raw HTML (e.g. `<div class="callout">`
     // from upstream Stage 1) may still contain `href="moss-resolved:..."` /
@@ -1482,6 +1484,7 @@ pub fn process_markdown_file(
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
+            galleries: has_gallery,
         },
         slot: frontmatter.slot.clone(),
         // Reserved-name convention: `footer.md` at the project root parses
@@ -1984,12 +1987,17 @@ impl<'a> PipelineHooks<'a> {
             None => moss_core::ast::DefaultHooks::new(),
         }
         .vertical(self.vertical)
+        .with_gallery_link_template(crate::i18n::t(self.lang, "gallery_open_image"))
     }
 }
 
 impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     fn permalink_section_label(&self) -> &str {
         self.permalink_section_label
+    }
+
+    fn gallery_link_template(&self) -> &str {
+        crate::i18n::t(self.lang, "gallery_open_image")
     }
 
     fn emit_heading_anchors(&self, level: u8) -> bool {

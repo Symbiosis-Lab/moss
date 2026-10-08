@@ -7,7 +7,7 @@
 // superseded. What must NOT happen is the reveal firing twice, which is what
 // the detail>1 suppression is for.
 import { describe, test, expect } from 'vitest';
-import { classifyClickGesture } from '../click-vocabulary';
+import { classifyClickGesture, shouldLeaveClickToPage } from '../click-vocabulary';
 
 describe('classifyClickGesture', () => {
   test('a lone click is the reveal, with zero latency', () => {
@@ -32,5 +32,17 @@ describe('classifyClickGesture', () => {
       .map((type, i) => classifyClickGesture(type, type === 'click' ? i + 1 : 2))
       .filter((x) => x !== null);
     expect(posted).toEqual(['click', 'dblclick']);
+  });
+});
+
+describe('shouldLeaveClickToPage', () => {
+  test('a click inside a gallery image link is left to the page', () => {
+    document.body.innerHTML = '<a class="moss-gallery-link" href="/img/a.png"><img alt="a"></a>';
+    expect(shouldLeaveClickToPage(document.querySelector('img')!)).toBe(true);
+  });
+
+  test('a click inside a plain link is not left to the page', () => {
+    document.body.innerHTML = '<a href="/about">About</a>';
+    expect(shouldLeaveClickToPage(document.querySelector('a')!)).toBe(false);
   });
 });

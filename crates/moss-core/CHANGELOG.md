@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Each `:::gallery` image is now wrapped in `<a class="moss-gallery-link" href="<full image>" data-title="<alt>">`, inside the `.moss-gallery-item`. With `fullscreen.js` (shipped site-wide when any page has a gallery) the link opens the image in the full-screen viewer and the arrow keys step through that gallery; without it the link opens the image. A theme that styled `.moss-gallery-item > img` by child combinator needs to target `img` as a descendant.
 - **BREAKING:** Content and asset references now share the canonical written-path resolver. Replace removed `ContentGraph::asset_contains`, `asset_contains_ci` and `asset_find_by_suffix` calls with `contains_path` for exact membership or `resolve_path` for reference lookup. Resolution tries the written page-relative path, then a site-root path, then the nearest matching filename; standard Markdown and wiki references use the same rules. Literal paths are tried before percent-decoded paths.
 - `resolve_path_with_ties` returns `PathResolution`; read its `path`, `ties` and `matched` fields. `PathMatch` distinguishes written, root-relative and searched matches. Use `normalize_path` and `join_written` when constructing canonical written paths.
 

@@ -281,6 +281,10 @@ pub struct ShellVars {
     /// than one var per script because every gate is SITE-level: the set is
     /// identical on every page of a build.
     pub runtime_js_tags: String,
+    /// The full-screen viewer's markup (`media_collection::lightbox_html`),
+    /// set only on a page that has a `:::gallery`; empty elsewhere. Dropped in
+    /// just before the runtime scripts, which `fullscreen.js` finds it through.
+    pub lightbox: String,
     /// Robots meta tag (e.g. noindex for drafts). Empty when omitted.
     pub robots_meta: Option<String>,
 }
@@ -406,6 +410,7 @@ impl ShellProcessor {
             ("post_article", vars.post_article),
             // Every gated runtime script tag, in SITE_SCRIPTS order
             ("runtime_js_tags", vars.runtime_js_tags),
+            ("lightbox", vars.lightbox),
             // User JS tag (placed after theme.js, before body-end slot)
             ("user_js_tag", vars.user_js_tag.unwrap_or_default()),
         ]);

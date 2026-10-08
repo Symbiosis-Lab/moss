@@ -727,6 +727,11 @@ pub struct PageFeatures {
     /// runtime script via [`SiteAssets`]. Read from the typed AST
     /// (`moss_core::ast::has_scroll_row_recursive`).
     pub scroll_rows: bool,
+    /// True if the page has a `:::gallery`. Gates the full-screen viewer
+    /// (`fullscreen.js`) via [`SiteAssets`] and puts the viewer's markup on
+    /// this page. Read from the typed AST
+    /// (`moss_core::ast::has_shortcode_recursive`).
+    pub galleries: bool,
 }
 
 impl PageFeatures {
@@ -739,6 +744,7 @@ impl PageFeatures {
             callouts: self.callouts || other.callouts,
             footnotes: self.footnotes || other.footnotes,
             scroll_rows: self.scroll_rows || other.scroll_rows,
+            galleries: self.galleries || other.galleries,
         }
     }
 }
@@ -790,6 +796,9 @@ pub struct SiteAssets {
     /// (`/photography`, `/videos`, `/experiments`), which is what
     /// `fullscreen.js` attaches to.
     pub media_pages: bool,
+    /// Some page has a `:::gallery`, whose images open in the same
+    /// full-screen viewer (`fullscreen.js`) as the media collection pages.
+    pub galleries: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
     /// the nav button, the search-index emitter and `search.js`'s tag alike.
@@ -844,6 +853,7 @@ impl SiteAssets {
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
+            galleries: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
@@ -855,6 +865,7 @@ impl SiteAssets {
             ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
+            out.galleries |= page.features.galleries;
         }
         out
     }

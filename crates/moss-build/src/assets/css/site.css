@@ -7392,6 +7392,14 @@ a.moss-grid-card:hover {
   }
 }
 
+/* The image's link: opens the full-screen viewer (fullscreen.js), or the
+   full-size image where the script has not run. Block so the link is exactly
+   as tall as the picture it wraps. */
+.moss-gallery-link {
+  display: block;
+  cursor: zoom-in;
+}
+
 .moss-gallery-item img {
   width: 100%;
   height: auto;

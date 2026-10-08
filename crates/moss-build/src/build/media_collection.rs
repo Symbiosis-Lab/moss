@@ -279,6 +279,32 @@ fn generate_grid_item(
     )
 }
 
+/// The full-screen viewer's markup, which `fullscreen.js` drives. Shared by the
+/// media collection pages and by any page with a `:::gallery`.
+pub(crate) fn lightbox_html(lang: crate::i18n::Language) -> String {
+    format!(
+        r##"<!-- Lightbox -->
+  <div id="lightbox" class="lightbox" hidden tabindex="-1">
+    <button class="lightbox-close" aria-label="{close_label}">&times;</button>
+    <div class="lightbox-content">
+      <img class="lightbox-image" src="" alt="" hidden />
+      <video class="lightbox-video" controls playsinline hidden></video>
+      <iframe class="lightbox-iframe" hidden></iframe>
+    </div>
+    <div class="lightbox-caption">
+      <p class="lightbox-title"></p>
+      <a class="lightbox-article-link" href="">{view_in_article} &rarr;</a>
+    </div>
+    <button class="lightbox-nav lightbox-prev" aria-label="{previous_label}">&lsaquo;</button>
+    <button class="lightbox-nav lightbox-next" aria-label="{next_label}">&rsaquo;</button>
+  </div>"##,
+        close_label = crate::i18n::t(lang, "close"),
+        view_in_article = crate::i18n::t(lang, "view_in_article"),
+        previous_label = crate::i18n::t(lang, "previous"),
+        next_label = crate::i18n::t(lang, "next"),
+    )
+}
+
 /// Generates the full media collection page HTML.
 pub fn generate_media_page(
     media_type: &MediaType,
@@ -342,31 +368,14 @@ pub fn generate_media_page(
     </div>
   </main>
 
-  <!-- Lightbox -->
-  <div id="lightbox" class="lightbox" hidden tabindex="-1">
-    <button class="lightbox-close" aria-label="{close_label}">&times;</button>
-    <div class="lightbox-content">
-      <img class="lightbox-image" src="" alt="" hidden />
-      <video class="lightbox-video" controls playsinline hidden></video>
-      <iframe class="lightbox-iframe" hidden></iframe>
-    </div>
-    <div class="lightbox-caption">
-      <p class="lightbox-title"></p>
-      <a class="lightbox-article-link" href="">{view_in_article} &rarr;</a>
-    </div>
-    <button class="lightbox-nav lightbox-prev" aria-label="{previous_label}">&lsaquo;</button>
-    <button class="lightbox-nav lightbox-next" aria-label="{next_label}">&rsaquo;</button>
-  </div>
+  {lightbox}
 
   <script src="{js_theme_path}"{lazy_chunk_attrs}></script>
 {js_fullscreen_script}{search_js_tag}
 </body>
 </html>"##,
         html_lang = site_lang_tag,
-        close_label = crate::i18n::t(lang, "close"),
-        view_in_article = crate::i18n::t(lang, "view_in_article"),
-        previous_label = crate::i18n::t(lang, "previous"),
-        next_label = crate::i18n::t(lang, "next"),
+        lightbox = lightbox_html(lang),
         js_theme_path = js_theme_path,
         lazy_chunk_attrs = lazy_chunk_attrs,
         js_fullscreen_script = js_fullscreen_path
