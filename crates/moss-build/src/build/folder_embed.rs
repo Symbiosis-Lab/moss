@@ -890,10 +890,16 @@ fn resolve_markers_impl(
                 is_embed,
                 place_maps,
             ),
-            None => format!(
-                r#"<div class="moss-embed-missing">Invalid folder-embed marker: {}</div>"#,
-                html_escape(body),
-            ),
+            None => Err(format!("Invalid folder-embed marker: {body}")),
+        };
+        // The placeholder stays visible; the problem is also reported where
+        // `--strict` counts it, naming the page and the target.
+        let rendered = match rendered {
+            Ok(html) => html,
+            Err(problem) => {
+                crate::build::cli_output::log_warn_problem!("[{from_md_path}] unresolved folder embed: {problem}");
+                format!(r#"<div class="moss-embed-missing">{}</div>"#, html_escape(&problem))
+            }
         };
         out.push_str(&rendered);
         remaining = rest;
@@ -1135,8 +1141,8 @@ pub(crate) fn home_scope(url_path: &str) -> (&str, bool) {
     (moss_core::home::lang_tree_prefix(url_path).unwrap_or(""), url_path == "index.html")
 }
 
-/// Render a single resolved marker. Falls back to a `moss-embed-missing` div
-/// on lookup failure. `is_embed` — see [`resolve_markers_impl`] — passes
+/// Render a single resolved marker. `Err` carries the plain-text problem when
+/// the target does not resolve; the caller renders the placeholder and reports it. `is_embed` — see [`resolve_markers_impl`] — passes
 /// straight through to [`generate_children`], which is where it actually
 /// shapes output.
 #[allow(clippy::too_many_arguments)]
@@ -1153,7 +1159,7 @@ fn render_one(
     math: bool,
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
-) -> String {
+) -> Result<String, String> {
     // Prefer the marker's `from=` (the original markdown source); the
     // page-level `from_md_path` is a safe fallback when older markers omit it.
     let from = if parsed.from.is_empty() {
@@ -1162,7 +1168,7 @@ fn render_one(
         parsed.from
     };
     if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
-        return maps::render(parsed, ordinal, all_docs, place_maps);
+        return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
     }
     let folder_id = resolve_folder_id(parsed.path, from);
     // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
@@ -1212,12 +1218,7 @@ fn render_one(
                 Some(d) => Some(d),
                 // Unreachable: dir_has_markdown_index ⇒ this find succeeds. Keep
                 // the missing-div fallback so a future predicate drift is safe.
-                None => {
-                    return format!(
-                        r#"<div class="moss-embed-missing">Folder not found: {}</div>"#,
-                        html_escape(parsed.path),
-                    );
-                }
+                None => return Err(not_found(parsed.path)),
             }
         }
         ReferenceKind::FolderIndexIframe => {
@@ -1233,13 +1234,10 @@ fn render_one(
                 parsed.size.as_deref(),
                 all_docs,
             ) {
-                return iframe;
+                return Ok(iframe);
             }
             // Defensive: predicate said iframe but the synthesizer declined.
-            return format!(
-                r#"<div class="moss-embed-missing">Folder not found: {}</div>"#,
-                html_escape(parsed.path),
-            );
+            return Err(not_found(parsed.path));
         }
         _ => {
             // Branch 3: no folder doc and no static index. One more shape is
@@ -1247,16 +1245,19 @@ fn render_one(
             // `also_in` memberships — a CLAIMED term (`build::terms`), whose
             // page is a real doc elsewhere so no `<key>/index.html` doc
             // exists. The memberships are real; list them with default sort.
+            //
+            // The same rule covers a real folder with pages but no home file:
+            // its index page is synthesized after markers expand, so no
+            // `<key>/index.html` doc exists yet, but pages sit under it.
+            let under = format!("{folder_id_slug}/");
             let has_members = all_docs.iter().any(|d| {
                 d.also_in
                     .as_ref()
                     .is_some_and(|f| f.iter().any(|k| *k == folder_id_slug))
+                    || (!folder_id_slug.is_empty() && d.url_path.starts_with(&under))
             });
             if !has_members {
-                return format!(
-                    r#"<div class="moss-embed-missing">Folder not found: {}</div>"#,
-                    html_escape(parsed.path),
-                );
+                return Err(format!("No pages under {}", parsed.path));
             }
             None
         }
@@ -1305,7 +1306,7 @@ fn render_one(
     };
 
     if folder_docs.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
 
     if parsed.style.as_deref() == Some("map") {
@@ -1314,7 +1315,7 @@ fn render_one(
             // same as any other aggregate/listing surface (rule: listing
             // cards never draw a route).
             if let Some(svg) = map.render_term_map(&folder_id_slug, folder_docs.iter().copied(), from, ordinal, false, true) {
-                return place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref());
+                return Ok(place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref()));
             }
             warn_map_fallback_once(parsed.path, "has no coordinate-bearing places");
         } else {
@@ -1507,14 +1508,18 @@ fn render_one(
         ),
         None => listing,
     };
-    match parsed.caption.as_deref() {
+    Ok(match parsed.caption.as_deref() {
         Some(caption) => moss_core::render::placement::wrap_embed_with_caption(
             &listing,
             &parsed.placement,
             caption,
         ),
         None => listing,
-    }
+    })
+}
+
+fn not_found(path: &str) -> String {
+    format!("Folder not found: {path}")
 }
 
 /// Resolve a `children_more:` reference to the page it names. Mirrors

@@ -187,9 +187,9 @@ pub fn generate_html_collect_og<'d>(
 /// `<h1 class="moss-folder-title">`, unless something else on the page is
 /// already showing the title. Three things can be —
 ///
-/// - the body opens with its own `# Title`, which is then both the visible
-///   title and the heading landmark: nothing is emitted, for nav and non-nav
-///   folders alike,
+/// - the body has its own `# Title` (anywhere outside a code fence), which is
+///   then both the visible title and the heading landmark: nothing is
+///   emitted, for nav and non-nav folders alike,
 /// - the body opens with a `:::hero` that carries its own heading: nothing is
 ///   emitted, since the hero already supplies the `<h1>`, or
 /// - the folder renders as a nav item, so the nav bar shows its title: the
@@ -206,22 +206,10 @@ fn no_cover_folder_heading(
     has_content_folders: bool,
     emit_source_fm: bool,
 ) -> String {
-    if moss_core::heading::body_opens_with_h1(&doc.content) {
+    if moss_core::heading::body_supplies_title(&doc.content) {
         String::new()
     } else if crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders) {
         crate::build::components::folder_title::render(h1_text, emit_source_fm, true)
-    } else if moss_core::heading::hero_at_top_owns_title(&doc.content) {
-        // The same rule the article path applies, which this site never asked.
-        // A folder note that opens with a hero carrying its own heading got
-        // BOTH that heading and an injected `moss-folder-title` — two titles,
-        // one above the other, on every season index of the site that adopted
-        // full-bleed covers.
-        //
-        // `heading::compute`'s `visible` cannot be reused here: it is false for
-        // every folder note regardless (`!is_index_file`), so it answers a
-        // different question. The hero predicate is the shared part, and it is
-        // the part that was missing.
-        String::new()
     } else {
         crate::build::components::folder_title::render(h1_text, emit_source_fm, false)
     }
@@ -485,6 +473,14 @@ pub(super) fn render_page<'d>(
             // `layout: article` homepage is the article path's page, not this one.
             if !is_article_page {
                 content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement);
+
+                // The home injects no visible title of its own, but a page
+                // needs one top-level heading: when the body supplies none,
+                // add the folder-index heading, visually hidden.
+                if !moss_core::heading::body_supplies_title(&doc.content) {
+                    let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, true);
+                    content = format!("{h1}\n{content}");
+                }
             }
 
             // Folder card <img> tags inherit width/height/loading/LQIP/color

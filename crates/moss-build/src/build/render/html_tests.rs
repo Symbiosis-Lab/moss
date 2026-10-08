@@ -3497,7 +3497,8 @@ mod children_field_tests {
             // is nothing to annotate there.
             if html.contains("moss-folder-title") {
                 assert!(
-                    html.contains(r#"class="moss-folder-title" data-source-fm="title""#),
+                    html.contains(r#"class="moss-folder-title" data-source-fm="title""#)
+                        || html.contains(r#"class="moss-folder-title visually-hidden" data-source-fm="title""#),
                     "{label}: the folder heading must name `title`. Got: {html}"
                 );
             }
