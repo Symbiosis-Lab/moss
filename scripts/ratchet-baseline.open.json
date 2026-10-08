@@ -9,7 +9,7 @@
       "value": {
         "crates/moss-build/src/build/assets/binary_resolver.rs": 1100,
         "crates/moss-build/src/build/cache.rs": 1800,
-        "crates/moss-build/src/build/folder_embed.rs": 1600,
+        "crates/moss-build/src/build/folder_embed.rs": 1700,
         "crates/moss-build/src/build/markdown/html_post.rs": 1100,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2300,
         "crates/moss-build/src/build/media/ffmpeg.rs": 1800,
@@ -37,7 +37,7 @@
         "crates/moss-core/src/ast/render.rs": 900,
         "crates/moss-core/src/ast/resolve_urls.rs": 1000,
         "crates/moss-core/src/ast/shortcode_extract.rs": 1700,
-        "crates/moss-core/src/contract/components.rs": 4500,
+        "crates/moss-core/src/contract/components.rs": 4600,
         "crates/moss-core/src/frontmatter_typed.rs": 1200,
         "crates/moss-core/src/render/image.rs": 1100,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,

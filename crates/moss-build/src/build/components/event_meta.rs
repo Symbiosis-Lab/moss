@@ -64,28 +64,51 @@ fn is_web_url(u: &str) -> bool {
     l.starts_with("https://") || l.starts_with("http://")
 }
 
-fn ymd(t: EventTime) -> (u16, u8, u8) {
-    match t {
-        EventTime::Date(y, m, d) | EventTime::DateTime(y, m, d, _, _) => (y, m, d),
-    }
+/// A run of the written time. `Part` runs are the pieces a theme may lay out
+/// on their own (a large day numeral, a small weekday); `Text` is punctuation.
+enum Seg {
+    Text(String),
+    Part(&'static str, String),
 }
 
-fn hm(t: EventTime) -> Option<(u8, u8)> {
-    match t {
-        EventTime::DateTime(_, _, _, h, m) => Some((h, m)),
-        EventTime::Date(..) => None,
-    }
+fn text(s: &str) -> Seg {
+    Seg::Text(s.to_string())
 }
 
-/// `Sunday, November 1, 2026` / `2026年11月1日 星期日`.
-fn long_date(t: EventTime, lang: Language) -> String {
-    let (y, m, d) = ymd(t);
-    let date = crate::build::components::format_article_date(&t.day_key(), lang);
-    let Some(day) = NaiveDate::from_ymd_opt(y as i32, m as u32, d as u32) else { return date };
-    let wd = crate::i18n::t(lang, &format!("weekday_{}", day.weekday().num_days_from_monday()));
+/// `Sunday, November 1, 2026` / `2026年11月1日 星期日`, as runs.
+fn long_date(t: EventTime, lang: Language) -> Vec<Seg> {
+    let (y, m, d) = t.ymd();
+    let month = crate::i18n::t(lang, &format!("month_{m}")).to_string();
+    let weekday = NaiveDate::from_ymd_opt(y as i32, m as u32, d as u32)
+        .map(|day| crate::i18n::t(lang, &format!("weekday_{}", day.weekday().num_days_from_monday())));
     match lang {
-        Language::En => format!("{wd}, {date}"),
-        Language::ZhHans | Language::ZhHant => format!("{date} {wd}"),
+        Language::En => {
+            let mut v = Vec::new();
+            if let Some(wd) = weekday {
+                v.push(Seg::Part("weekday", wd.to_string()));
+                v.push(text(", "));
+            }
+            v.extend([
+                Seg::Part("month", month),
+                text(" "),
+                Seg::Part("day", d.to_string()),
+                text(", "),
+                Seg::Part("year", y.to_string()),
+            ]);
+            v
+        }
+        Language::ZhHans | Language::ZhHant => {
+            let mut v = vec![
+                Seg::Part("year", format!("{y}年")),
+                Seg::Part("month", month),
+                Seg::Part("day", format!("{d}日")),
+            ];
+            if let Some(wd) = weekday {
+                v.push(text(" "));
+                v.push(Seg::Part("weekday", wd.to_string()));
+            }
+            v
+        }
     }
 }
 
@@ -100,48 +123,78 @@ fn clock(h: u8, m: u8, lang: Language, meridiem: bool) -> String {
     }
 }
 
-fn format_range(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
+fn sep(lang: Language) -> Seg {
+    text(match lang {
+        Language::En => ", ",
+        Language::ZhHans | Language::ZhHant => " ",
+    })
+}
+
+/// The event's written time as runs: a date, a time of day when the start has
+/// one, and the end when it is after `start`.
+fn segments(start: EventTime, end: Option<EventTime>, lang: Language) -> Vec<Seg> {
     // An `end` that is not after `start` adds nothing (the build warns about it).
     let end = end.filter(|e| e.sort_key() > start.sort_key());
     let same_day = end.is_some_and(|e| e.day_key() == start.day_key());
-    let day = long_date(start, lang);
-    match (hm(start), end) {
-        // All-day, one day.
-        (None, None) => day,
-        (None, Some(_)) if same_day => day,
-        (None, Some(e)) => format!("{day} – {}", long_date(e, lang)),
-        // Timed.
-        (Some((h, m)), None) => format!("{day}{}{}", sep(lang), clock(h, m, lang, true)),
-        (Some((h, m)), Some(e)) => match hm(e) {
+    let mut out = long_date(start, lang);
+    let time = |out: &mut Vec<Seg>, s: String| {
+        out.push(sep(lang));
+        out.push(Seg::Part("time", s));
+    };
+    match (start.hm(), end) {
+        (None, None) => {}
+        (None, Some(_)) if same_day => {}
+        (None, Some(e)) => {
+            out.push(text(" – "));
+            out.extend(long_date(e, lang));
+        }
+        (Some((h, m)), None) => time(&mut out, clock(h, m, lang, true)),
+        (Some((h, m)), Some(e)) => match e.hm() {
             Some((eh, em)) if same_day => {
                 // "2:00–4:00 PM" when both fall in the same half of the day.
                 let shared = lang == Language::En && (h < 12) == (eh < 12);
-                format!(
-                    "{day}{}{}–{}",
-                    sep(lang),
-                    clock(h, m, lang, !shared),
-                    clock(eh, em, lang, true),
-                )
+                time(&mut out, format!("{}–{}", clock(h, m, lang, !shared), clock(eh, em, lang, true)));
             }
-            Some((eh, em)) => format!(
-                "{day}{}{} – {}{}{}",
-                sep(lang),
-                clock(h, m, lang, true),
-                long_date(e, lang),
-                sep(lang),
-                clock(eh, em, lang, true),
-            ),
-            // Timed start, all-day end: through the end of that day.
-            None => format!("{day}{}{} – {}", sep(lang), clock(h, m, lang, true), long_date(e, lang)),
+            end_time => {
+                time(&mut out, clock(h, m, lang, true));
+                out.push(text(" – "));
+                out.extend(long_date(e, lang));
+                // A timed start with an all-day end runs through that day.
+                if let Some((eh, em)) = end_time {
+                    time(&mut out, clock(eh, em, lang, true));
+                }
+            }
         },
     }
+    out
 }
 
-fn sep(lang: Language) -> &'static str {
-    match lang {
-        Language::En => ", ",
-        Language::ZhHans | Language::ZhHant => " ",
+fn format_range(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
+    segments(start, end, lang)
+        .into_iter()
+        .map(|s| match s {
+            Seg::Text(t) | Seg::Part(_, t) => t,
+        })
+        .collect()
+}
+
+/// The same written time as [`render`] puts in the page's meta line, as a
+/// `<time>` whose pieces (`moss-when-weekday`, `-day`, `-month`, `-year`,
+/// `-time`) sit in their own spans so a theme can lay a listing's date out as
+/// it likes. `datetime` is the start as written; the visible text is the same
+/// words the page shows.
+pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
+    let mut html = format!(r#"<time class="moss-when" datetime="{}">"#, start.sort_key());
+    for seg in segments(start, end, lang) {
+        match seg {
+            Seg::Text(t) => html.push_str(&html_escape(&t)),
+            Seg::Part(class, t) => {
+                html.push_str(&format!(r#"<span class="moss-when-{class}">{}</span>"#, html_escape(&t)))
+            }
+        }
     }
+    html.push_str("</time>");
+    html
 }
 
 #[cfg(test)]

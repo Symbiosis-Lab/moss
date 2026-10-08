@@ -19,6 +19,9 @@ pub use crate::build::render::{MissingReferenceOccurrence, PublishPreflightProje
 pub struct EventFields {
     pub start: moss_core::event::EventTime,
     pub end: Option<moss_core::event::EventTime>,
+    /// `start` normalized so that string order is chronological: the page's
+    /// "when", which listings sort by in place of `date`.
+    pub when: String,
     pub status: Option<String>,
     pub tickets: Option<String>,
     pub online: Option<String>,
@@ -913,7 +916,8 @@ impl SourceMetadata {
 
 impl moss_core::sort::SortableDoc for ParsedDocument {
     fn url_path(&self) -> &str { &self.url_path }
-    fn date(&self) -> Option<&str> { self.date.as_deref() }
+    /// The page's one "when": its event `start` if it has one, else its `date`.
+    fn date(&self) -> Option<&str> { self.event.as_ref().map(|e| e.when.as_str()).or(self.date.as_deref()) }
     fn weight(&self) -> Option<i32> { self.weight }
     fn declared_sort(&self) -> Option<&moss_core::sort::SortField> { self.sort.as_ref() }
     fn clean_stem(&self) -> &str { &self.clean_stem }

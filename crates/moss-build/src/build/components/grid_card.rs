@@ -95,6 +95,7 @@ fn render_item(
         .map(|count| i18n::article_count_label(lang, count, typesetting));
     let count_text = super::child_list::meta_text(
         props.date_display.as_deref(),
+        props.when_html.as_deref(),
         props.place.as_deref(),
         count_label.as_deref(),
     );

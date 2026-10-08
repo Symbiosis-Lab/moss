@@ -1415,6 +1415,7 @@ pub fn process_markdown_file(
         jury: frontmatter.jury.unwrap_or_default(),
         location: frontmatter.location.unwrap_or_default(),
         event: frontmatter.start.as_deref().and_then(|s| moss_core::event::EventTime::parse(s).ok()).map(|start| crate::build::types::EventFields {
+            when: start.sort_key(),
             start,
             end: frontmatter.end.as_deref().and_then(|e| moss_core::event::EventTime::parse(e).ok()),
             status: frontmatter.status.clone(),

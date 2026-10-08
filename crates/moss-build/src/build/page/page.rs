@@ -103,6 +103,7 @@ pub fn generate_year_grouped_article_list(
                 title: doc.label.clone(),
                 url_path: doc.url_path.clone(),
                 place: doc.place_names.clone(),
+                when_html: None,
             }
         })
         .collect();

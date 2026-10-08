@@ -2413,3 +2413,44 @@ fn event_page_shows_event_facts_in_the_meta_line() {
     assert!(!date_line(&review).contains("moss-event"), "an ordinary dated article has no event markup");
     assert!(date_line(&review).contains("September 15, 2026"));
 }
+
+/// Titles of the listing items in `html`, in document order.
+fn listing_titles(html: &str) -> Vec<String> {
+    let re = regex::Regex::new(r#"moss-prefix-link-title">([^<]*)<"#).unwrap();
+    re.captures_iter(html).map(|c| c[1].to_string()).collect()
+}
+
+/// `children_group: upcoming` and the embed's `group:upcoming` put events that
+/// have not ended first, soonest first, then everything else newest first; an
+/// event with `start` and no `date` sorts by `start`; an item shows its `<time>`
+/// with the parts in their own spans, plus its place.
+#[test]
+fn upcoming_group_orders_events_by_when_and_marks_the_time() {
+    let (_cleanup, output) = build_fixture("event-listing-site");
+    for page in ["events/index.html", "index.html"] {
+        let html = fs::read_to_string(output.join(page)).unwrap();
+        assert_eq!(
+            listing_titles(&html),
+            ["Open Day", "Spring Gala", "Programme Notes", "Old Concert", "Loose Note"],
+            "{page}"
+        );
+        assert!(html.contains(r#"<section class="moss-cards-group" data-group="upcoming">"#), "{page}");
+        assert!(html.contains(r#"<section class="moss-cards-group" data-group="earlier">"#), "{page}");
+        assert!(
+            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span>, <span class="moss-when-time">7:30–10:00 PM</span></time> · Grand Hall"#),
+            "{page}"
+        );
+    }
+}
+
+/// An ungrouped date-sorted listing orders by the when, newest first, and an
+/// undated page comes after every dated one.
+#[test]
+fn ungrouped_date_listing_puts_undated_pages_last() {
+    let (_cleanup, output) = build_fixture("event-listing-site");
+    let html = fs::read_to_string(output.join("plain/index.html")).unwrap();
+    assert_eq!(
+        listing_titles(&html),
+        ["Spring Gala", "Open Day", "Programme Notes", "Old Concert", "Loose Note"]
+    );
+}

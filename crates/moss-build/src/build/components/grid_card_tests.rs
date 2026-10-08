@@ -15,6 +15,7 @@ fn blank() -> ChildItemProps {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn grid_card_shows_the_resolved_place_next_to_the_date() {
         url: "lectures/1924/".to_string(),
         date_display: Some("1924".to_string()),
         place: Some("Cambridge".to_string()),
+        when_html: None,
         ..blank()
     };
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
@@ -169,6 +171,7 @@ fn grid_card_never_shows_a_place_beside_a_folders_count() {
         url: "works/kyoto-walk/".to_string(),
         child_count: Some(2),
         place: Some("Kyoto".to_string()),
+        when_html: None,
         ..blank()
     };
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);

@@ -5,6 +5,7 @@ fn doc(start: &str, end: Option<&str>) -> ParsedDocument {
     ParsedDocument {
         event: Some(EventFields {
             start: EventTime::parse(start).unwrap(),
+            when: EventTime::parse(start).unwrap().sort_key(),
             end: end.map(|e| EventTime::parse(e).unwrap()),
             status: None,
             tickets: None,

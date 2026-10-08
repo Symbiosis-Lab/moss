@@ -35,6 +35,9 @@ pub struct ArticleListItemProps {
     /// — shown next to the date by [`with_place`]. `None` for a page with no
     /// resolved `location:`.
     pub place: Option<String>,
+    /// An event's written time as a `<time>` with its parts in spans
+    /// (`event_meta::render_when`); shown in place of `date_display`.
+    pub when_html: Option<String>,
 }
 
 impl ArticleListItemProps {
@@ -108,7 +111,7 @@ pub fn render(
     // before the empty check below: a bare-year row under a `minimal` month
     // prefix can have no month text at all, and a place is still worth a row
     // on its own rather than vanishing alongside the empty date.
-    let date_display = with_place(&date_display, props.place.as_deref());
+    let date_display = leaf_meta(&date_display, props.when_html.as_deref(), props.place.as_deref());
 
     // An empty prefix means a year-only date under its own year heading, and
     // no place either; emit no span at all rather than one that lays out as
@@ -173,6 +176,9 @@ pub struct ChildItemProps {
     /// folder's count, which is not a date. `None` for a page with no
     /// resolved `location:`.
     pub place: Option<String>,
+    /// An event's written time as a `<time>` with its parts in spans
+    /// (`event_meta::render_when`); shown in place of `date_display`.
+    pub when_html: Option<String>,
 }
 
 impl ChildItemProps {
@@ -200,11 +206,24 @@ impl ChildItemProps {
 /// `text` is escaped even with no place to append, so every caller can stop
 /// escaping it separately.
 pub(crate) fn with_place(text: &str, place: Option<&str>) -> String {
-    let text = html_escape(text);
+    with_place_html(&html_escape(text), place)
+}
+
+/// [`with_place`] for a date that is already HTML.
+fn with_place_html(date_html: &str, place: Option<&str>) -> String {
     match place.map(str::trim).filter(|p| !p.is_empty()) {
-        None => text,
-        Some(p) if text.is_empty() => html_escape(p),
-        Some(p) => format!("{} · {}", text, html_escape(p)),
+        None => date_html.to_string(),
+        Some(p) if date_html.is_empty() => html_escape(p),
+        Some(p) => format!("{} · {}", date_html, html_escape(p)),
+    }
+}
+
+/// A leaf's date-and-place text: the event's `<time>` when it has one, else
+/// the plain date. The one choice between the two, for every listing form.
+pub(crate) fn leaf_meta(date_text: &str, when_html: Option<&str>, place: Option<&str>) -> String {
+    match when_html {
+        Some(h) => with_place_html(h, place),
+        None => with_place(date_text, place),
     }
 }
 
@@ -219,13 +238,18 @@ pub(crate) fn with_place(text: &str, place: Option<&str>) -> String {
 /// `count_label` is `None` for a leaf (no count at all) and `Some` for a
 /// folder (always shown, with or without a date of its own) — a folder's
 /// place only ever shows beside ITS OWN date, never beside a bare count.
-pub(crate) fn meta_text(date_display: Option<&str>, place: Option<&str>, count_label: Option<&str>) -> String {
+pub(crate) fn meta_text(
+    date_display: Option<&str>,
+    when_html: Option<&str>,
+    place: Option<&str>,
+    count_label: Option<&str>,
+) -> String {
     match count_label {
         Some(count) => match date_display {
             Some(date) => format!("{} · {}", with_place(date, place), html_escape(count)),
             None => html_escape(count),
         },
-        None => with_place(date_display.unwrap_or(""), place),
+        None => leaf_meta(date_display.unwrap_or(""), when_html, place),
     }
 }
 
@@ -334,7 +358,14 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
         permalink,
         url_path: doc.url_path.clone(),
-        place: doc.place_names.clone(),
+        place: doc.place_names.clone().or_else(|| {
+            // An event's place is shown even when it names no place page.
+            doc.event.as_ref()?;
+            Some(doc.location.join(", ")).filter(|p| !p.is_empty())
+        }),
+        when_html: doc.event.as_ref().map(|e| {
+            crate::build::components::event_meta::render_when(e.start, e.end, doc.lang)
+        }),
     }
 }
 
@@ -354,7 +385,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
 
     if let Some(count) = props.child_count {
         let count_label = crate::i18n::article_count_label(lang, count, typesetting);
-        let count_text = meta_text(props.date_display.as_deref(), props.place.as_deref(), Some(&count_label));
+        let count_text = meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label));
 
         if let Some(ref desc) = props.description {
             // Folder WITH description: title + count suffix, description below
@@ -377,7 +408,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // it has. Same compact form grid cards use. The page's resolved
         // place, if any, goes right next to it — see `with_place`.
         let date = date_formatters::format_compact_date(date_raw, lang, typesetting);
-        let date = with_place(&date, props.place.as_deref());
+        let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref());
         format!(
             r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
             escaped_url, date, escaped_title
@@ -386,7 +417,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // Article with a display date but no raw date. `date_display` is
         // already the compact "year · month"/"year" form —
         // `props_for_document` formatted it with `format_compact_date`.
-        let date = with_place(date_display, props.place.as_deref());
+        let date = leaf_meta(date_display, props.when_html.as_deref(), props.place.as_deref());
         format!(
             r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
             escaped_url, date, escaped_title

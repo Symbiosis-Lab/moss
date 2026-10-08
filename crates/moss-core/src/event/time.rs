@@ -53,6 +53,21 @@ impl EventTime {
         }
     }
 
+    /// Year, month and day.
+    pub fn ymd(&self) -> (u16, u8, u8) {
+        match *self {
+            EventTime::Date(y, m, d) | EventTime::DateTime(y, m, d, _, _) => (y, m, d),
+        }
+    }
+
+    /// Hour and minute; `None` for an all-day value.
+    pub fn hm(&self) -> Option<(u8, u8)> {
+        match *self {
+            EventTime::DateTime(_, _, _, h, m) => Some((h, m)),
+            EventTime::Date(..) => None,
+        }
+    }
+
     /// The calendar day, as `YYYY-MM-DD`.
     pub fn day_key(&self) -> String {
         match *self {

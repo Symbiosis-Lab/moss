@@ -91,7 +91,7 @@ pub fn render_with_sort(
         // `date:`, if any, is exactly that.
         (Some(count), _) => {
             let count_label = crate::i18n::article_count_label(lang, count, typesetting);
-            let text = child_list::meta_text(props.date_display.as_deref(), props.place.as_deref(), Some(&count_label));
+            let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label));
             format!(r#"<div class="moss-card-meta">{}</div>"#, text)
         }
         (None, axis) if axis.shows_date() && date_merged_into_kicker => {
@@ -106,7 +106,7 @@ pub fn render_with_sort(
         (None, axis) if axis.shows_date() => props
             .date_display
             .as_deref()
-            .map(|date| format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::with_place(date, props.place.as_deref())))
+            .map(|date| format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::leaf_meta(date, props.when_html.as_deref(), props.place.as_deref())))
             .unwrap_or_default(),
         _ => String::new(),
     };

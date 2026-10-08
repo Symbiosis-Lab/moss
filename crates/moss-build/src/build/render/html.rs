@@ -1082,7 +1082,7 @@ pub(super) fn render_page<'d>(
                     d.url_path.starts_with(&target_prefix)
                         && d.url_path != target_doc.url_path
                         && d.is_listable()
-                        && d.date.is_some()
+                        && (d.date.is_some() || d.event.is_some())
                 })
                 // Sidebar always shows direct children only, regardless of children_depth.
                 // Nested subfolder articles are excluded from sidebar listings.
@@ -1097,6 +1097,7 @@ pub(super) fn render_page<'d>(
                         title: d.label.clone(),
                         url_path: d.url_path.clone(),
                         place: d.place_names.clone(),
+                        when_html: None,
                     }
                 })
                 .collect();

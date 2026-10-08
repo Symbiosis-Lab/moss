@@ -30,6 +30,7 @@
 //! `folder_id` because those carry on-disk paths.
 
 mod maps;
+mod upcoming;
 use maps::place_map_with_placement;
 
 use std::path::Path;
@@ -231,7 +232,7 @@ pub(crate) fn resolve_children_config(
                 || crate::build::page::meta::resolve_page_description(
                     d.description.as_deref(), &d.content, math).is_some()).count();
             let has_rich = rich > 0 && (rich * 2 > docs.len() || docs.len() - rich <= 3);
-            let any_has_date = docs.iter().any(|d| d.date.is_some());
+            let any_has_date = docs.iter().any(|d| d.date.is_some() || d.event.is_some());
             // Nothing at all is an INDEX of bare labels, not an archive, and "summary" lays
             // those out one per row.
             let auto_value = match (has_rich, any_has_date) {
@@ -250,7 +251,7 @@ pub(crate) fn resolve_children_config(
             // contract). A single dated post gets a year heading too; a
             // dateless listing stays flat. Auto-detected `year` is still
             // suppressed under a non-Date sort axis in `effective_group_for_axis`.
-            let auto_value = if style.value != "summary" && docs.iter().any(|d| d.date.is_some()) {
+            let auto_value = if style.value != "summary" && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
                 "year".to_string()
             } else {
                 "none".to_string()
@@ -435,14 +436,14 @@ pub(crate) fn generate_children(
     let mut sorted: Vec<&ChildItemProps> = items.iter().collect();
     if !skip_resort {
         let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
-        sorted.sort_by(|a, b| {
-            // Undated children list first here on purpose: in practice they are
-            // the folder's subfolders, which lead its page. The series chain
-            // puts undated pages last, but it never contains subfolders, so the
-            // two disagree only over an undated article inside a series.
-            a.date_raw.is_some().cmp(&b.date_raw.is_some())
-                .then_with(|| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending))
-        });
+        // Dated pages first, undated after (`cmp_date_axis`). Subfolders lead
+        // the page regardless: they are partitioned out below.
+        sorted.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending));
+    }
+
+    let upcoming = upcoming::urls(group, folder_docs);
+    if group == "upcoming" {
+        sorted = upcoming::order(sorted, &upcoming, skip_resort);
     }
 
     // Grid style: render as collection cards.
@@ -504,7 +505,15 @@ pub(crate) fn generate_children(
 
     // Articles: year-grouped if group == "year", otherwise flat in
     // partition order (already caller order or date-desc, set above).
-    if group == "year" && !articles.is_empty() {
+    if group == "upcoming" {
+        html.push_str(&upcoming::sections(&articles, &upcoming, |article| {
+            if style == "summary" {
+                components::child_summary::render_with_sort(article, lang, typesetting, Some(media_lookup_ref), parent_axis)
+            } else {
+                components::child_list::render_child(article, lang, typesetting)
+            }
+        }));
+    } else if group == "year" && !articles.is_empty() {
         if style == "summary" {
             // Summary style: group articles by year, render summary cards
             // within year sections. `bucket_articles_by_year` is find-or-
@@ -559,6 +568,7 @@ pub(crate) fn generate_children(
                     title: item.title.clone(),
                     url_path: item.url_path.clone(),
                     place: item.place.clone(),
+                    when_html: item.when_html.clone(),
                 })
                 .collect();
             let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
@@ -650,6 +660,7 @@ fn render_minimal_year_section(
                 title: a.title.clone(),
                 url_path: a.url_path.clone(),
                 place: a.place.clone(),
+                when_html: a.when_html.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
         })
