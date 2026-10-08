@@ -63,10 +63,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
 
-      # Node 20 bundles npm 10, which cannot do Trusted Publishing (11.5.1+).
+      # Trusted Publishing requires Node 22.14+ and npm 11.5.1+.
       - run: npm install -g npm@^11.5.1
 
       - name: Which version are we publishing
