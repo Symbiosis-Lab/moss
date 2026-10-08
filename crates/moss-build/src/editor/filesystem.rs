@@ -768,6 +768,10 @@ mod tests {
 
         assert!(error.contains(file.to_str().unwrap()), "{error}");
         assert!(error.contains("opening directory listing"), "{error}");
+        assert!(error.contains("is not a directory"), "{error}");
+        let unavailable = list_directory_counted(file.to_str().unwrap(), dir.path().to_str().unwrap(), false).unwrap_err();
+        assert_eq!(unavailable.pending, None);
+        assert_eq!(unavailable.failure.io_error().unwrap().kind(), std::io::ErrorKind::NotADirectory);
     }
 
     #[test]
