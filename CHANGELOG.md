@@ -30,6 +30,8 @@ All notable changes to moss will be documented here.
 - A chapter or companion page in the same folder as a located work's home page now inherits that work's place, unless it declares its own `location:`. A folder's home page is the page named exactly after the folder itself; a page that instead declares its own `location:` keeps it, and a folder whose home is `index.md` or another index file is unaffected — none of its children inherit anything.
 - A listing card now shows a page's resolved place next to its compact date — a grid card, a summary card, and a plain date-and-title row alike — so a folder of dated, located pages (a chronology of lectures, say) reads as a chronology of places rather than just a column of dates. It's the same name, or names, the page's own automatic place line already shows, joined the same way; a folder's own article count is unaffected, since a count isn't a date to sit beside.
 - `sort: date-asc` orders a folder's children oldest-first — the reverse of `sort: date`'s newest-first default — for a chronology meant to be read in the order it happened, like a sequence of lectures. Year-grouped listings lead with the oldest year under it, same as the rows within each year; `sort: date` and every other axis are unchanged, and `date-asc` works the same way in a `![[folder|sort:date-asc]]` embed.
+- An import writes a source page's gallery as one `:::gallery` block with each image once, in source order, instead of a column of separate images.
+- An image whose alt text is only a file name is imported with an empty alt, so the file name does not show as a caption under the photo.
 
 ### Fixed
 

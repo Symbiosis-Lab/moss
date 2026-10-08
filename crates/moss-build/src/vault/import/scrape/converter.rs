@@ -124,7 +124,7 @@ pub fn extract_article_with_snapshot(
             overrides,
         }) => {
             apply_overrides(&mut metadata, overrides);
-            htmd::convert(&h).unwrap_or(h)
+            html_to_markdown(&h).unwrap_or(h)
         }
         None => {
             // Widgets are classified before the strip removes them.

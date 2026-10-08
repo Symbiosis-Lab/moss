@@ -725,7 +725,7 @@ mod tests {
             </article>
         </body></html>"#;
         let inner = extract_main_content(html);
-        let md = htmd::convert(&inner).unwrap();
+        let md = crate::vault::import::widgets::html_to_markdown(&inner).unwrap();
         assert!(
             md.contains("https://cdn.example.com/gallery1.jpg"),
             "got: {md}"
@@ -832,7 +832,7 @@ mod tests {
         );
         assert!(inner.contains("Event title survives"));
 
-        let md = htmd::convert(&inner).unwrap();
+        let md = crate::vault::import::widgets::html_to_markdown(&inner).unwrap();
         assert!(
             !md.contains("[](https://example.test/events/1)"),
             "no bare empty link should reach the markdown: {md}"
@@ -851,7 +851,7 @@ mod tests {
             </article>
         </body></html>"#;
         let inner = extract_main_content(html);
-        let md = htmd::convert(&inner).unwrap();
+        let md = crate::vault::import::widgets::html_to_markdown(&inner).unwrap();
         assert!(
             md.contains("[Search](https://example.test/search)"),
             "got: {md}"
@@ -862,7 +862,7 @@ mod tests {
         let html = format!(
             "<html><body><article><p>Some text to satisfy the content scorer here.</p>{body}</article></body></html>"
         );
-        htmd::convert(&extract_main_content(&html)).unwrap()
+        crate::vault::import::widgets::html_to_markdown(&extract_main_content(&html)).unwrap()
     }
 
     #[test]
@@ -917,7 +917,7 @@ mod tests {
             inner.contains(r#"id="section-2""#),
             "fragment target must survive untouched: {inner}"
         );
-        let md = htmd::convert(&inner).unwrap();
+        let md = crate::vault::import::widgets::html_to_markdown(&inner).unwrap();
         assert!(!md.contains("[]"), "got: {md}");
         assert!(md.contains("Section two body text"));
     }
@@ -939,7 +939,7 @@ mod tests {
             </article>
         </body></html>"#;
         let inner = extract_main_content(html);
-        let md = htmd::convert(&inner).unwrap();
+        let md = crate::vault::import::widgets::html_to_markdown(&inner).unwrap();
         assert!(
             md.contains("[![Gallery photo](https://example.test/img/1.jpg)](https://example.test/gallery/1)"),
             "got: {md}"
@@ -959,7 +959,7 @@ mod tests {
             </article>
         </body></html>"#;
         let inner = extract_main_content(html);
-        let md = htmd::convert(&inner).unwrap();
+        let md = crate::vault::import::widgets::html_to_markdown(&inner).unwrap();
         assert!(
             md.contains("[Tips & Tricks <3](https://example.test/tips)"),
             "got: {md}"
@@ -988,7 +988,7 @@ mod tests {
             </article>
         </body></html>"#;
         let inner = extract_main_content(html);
-        let md = htmd::convert(&inner).unwrap();
+        let md = crate::vault::import::widgets::html_to_markdown(&inner).unwrap();
         assert!(!md.contains("example.test/1"), "1 should be dropped: {md}");
         assert!(
             md.contains("[Second link text](https://example.test/2)"),

@@ -182,3 +182,30 @@ fn host_markers_match_by_suffix_only_on_a_label_boundary() {
     assert!(host_matches("vimeo.com", "vimeo.com"));
     assert!(!host_matches("notvimeo.com", "vimeo.com"));
 }
+
+#[test]
+fn an_image_whose_alt_is_a_file_name_is_written_without_alt() {
+    let html = page(
+        "",
+        r#"<p><img src="/img/harbour.jpg" alt="My+Photo+2015.JPG"></p><p><img src="/img/quay.jpg" alt="A quay at dusk"></p>"#,
+    );
+    let md = run(&html).0;
+    assert!(md.contains("![](https://site.example/img/harbour.jpg)"), "{md}");
+    assert!(md.contains("![A quay at dusk](https://site.example/img/quay.jpg)"), "{md}");
+}
+
+#[test]
+fn a_gallery_container_is_one_gallery_block_with_each_image_once() {
+    let html = page(
+        "",
+        r#"<div class="gallery"><div class="gallery-strips"><div class="gallery-strips-wrapper">
+<figure><a href="/full/one.jpg" class="lightbox-link"><img data-src="/img/one.jpg" alt="one.jpg"><span>View fullsize</span></a></figure>
+<figure><a href="/full/two.jpg" class="lightbox-link"><img data-src="/img/two.jpg" alt="Two boats"></a></figure>
+<figure><img src="/img/one.jpg" alt="one.jpg"></figure>
+</div></div></div>"#,
+    );
+    let md = run(&html).0;
+    let block = ":::gallery\n![](https://site.example/img/one.jpg)\n![Two boats](https://site.example/img/two.jpg)\n:::";
+    assert!(md.contains(block), "{md}");
+    assert_eq!(md.matches("one.jpg").count(), 1, "{md}");
+}

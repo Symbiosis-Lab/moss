@@ -44,6 +44,10 @@ pub(crate) enum NodeRule {
         slots: &'static [(&'static str, &'static str)],
         default_slot: &'static str,
     },
+    /// Wrapper whose collection of image children is one gallery: the
+    /// images found under each field are written as a single `:::gallery`
+    /// block, in source order.
+    Gallery(&'static [&'static str]),
     /// Known chrome / dynamic widget: skip silently, by decision.
     Chrome,
 }
@@ -131,7 +135,7 @@ pub(crate) static STRIKINGLY: JsonDialect = JsonDialect {
         ("Buttons", NodeRule::Container(&["components"])),
         ("BlockComponent", NodeRule::Container(&["items"])),
         ("Repeatable", NodeRule::Container(&["list"])),
-        ("Gallery", NodeRule::Container(&["sources"])),
+        ("Gallery", NodeRule::Gallery(&["sources"])),
         ("Spacer", NodeRule::Chrome),
         ("SlideSettings", NodeRule::Chrome),
         ("EmailForm", NodeRule::Chrome),

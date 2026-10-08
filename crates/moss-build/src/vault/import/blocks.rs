@@ -23,6 +23,11 @@ pub(crate) enum Block {
         src: String,
         alt: String,
     },
+    /// A set of pictures shown together — emitted as a `:::gallery` fence,
+    /// one image per line, as `(src, alt)` pairs in source order.
+    Gallery {
+        images: Vec<(String, String)>,
+    },
     /// External video URL — emitted as a `![[url]]` moss embed
     /// (provider-aware players via moss-core `url_embed`).
     Video {
