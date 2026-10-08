@@ -247,6 +247,38 @@ fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     );
 }
 
+/// An event's listing row puts its place after the `<time>` as its own span,
+/// behind a separator span; a non-event row keeps the bare text.
+#[test]
+fn render_child_wraps_an_event_place_in_its_own_span() {
+    let when = crate::build::components::event_meta::render_when(
+        moss_core::event::EventTime::parse("2026-11-01 14:00").unwrap(),
+        None,
+        crate::i18n::Language::En,
+    );
+    let props = ChildItemProps {
+        title: "Opening".to_string(),
+        url: "/events/opening.html".to_string(),
+        date_display: None,
+        date_raw: Some("2026-11-01".to_string()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: Some("Example Hall".to_string()),
+        when_html: Some(when),
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(
+        html.contains(r#"</time><span class="moss-event-sep"> · </span><span class="moss-event-place">Example Hall</span>"#),
+        "{html}"
+    );
+    assert!(!html.contains("</time> · "), "bare separator text must not remain: {html}");
+}
+
 /// A folder's count is not a date — its own `location:` (e.g. a self-named
 /// work folder) must never leak into the count slot.
 #[test]

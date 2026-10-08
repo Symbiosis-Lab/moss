@@ -2084,6 +2084,66 @@ fn test_extract_color_and_lqip_returns_none_lqip_for_svg() {
     fs::remove_dir_all(&temp_dir).ok();
 }
 
+/// A logo with a transparent half: the blur-up is an opaque JPEG and would
+/// show through the clear pixels after the real image loads.
+#[test]
+fn test_extract_color_and_lqip_has_no_lqip_for_png_with_transparent_pixels() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("moss_test_lqip_alpha_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let logo_path = temp_dir.join("logo.png");
+    let logo = image::RgbaImage::from_fn(64, 64, |x, _| {
+        image::Rgba([200, 30, 30, if x < 32 { 0 } else { 255 }])
+    });
+    logo.save(&logo_path).unwrap();
+
+    let (color, lqip) = extract_color_and_lqip(&logo_path);
+
+    assert!(color.is_some(), "a transparent image still has a dominant color");
+    assert!(lqip.is_none(), "a PNG with transparent pixels must get no LQIP");
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
+/// An alpha channel that is fully opaque is not transparency: the LQIP stays.
+#[test]
+fn test_extract_color_and_lqip_keeps_lqip_for_png_with_opaque_alpha() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("moss_test_lqip_opaque_alpha_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let path = temp_dir.join("solid.png");
+    image::RgbaImage::from_pixel(64, 64, image::Rgba([0, 0, 255, 255]))
+        .save(&path)
+        .unwrap();
+
+    let (_, lqip) = extract_color_and_lqip(&path);
+    assert!(lqip.is_some(), "an alpha channel with no transparent pixel keeps its LQIP");
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
+#[test]
+fn test_extract_color_and_lqip_keeps_lqip_for_opaque_jpeg() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("moss_test_lqip_jpeg_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let path = temp_dir.join("photo.jpg");
+    image::RgbImage::from_pixel(64, 64, image::Rgb([10, 200, 10]))
+        .save(&path)
+        .unwrap();
+
+    let (_, lqip) = extract_color_and_lqip(&path);
+    assert!(
+        lqip.as_deref().is_some_and(|u| u.starts_with("data:image/jpeg;base64,")),
+        "an opaque JPEG keeps its LQIP"
+    );
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
 #[test]
 fn test_extract_media_metadata_includes_lqip() {
     let temp_dir = std::env::temp_dir().join(format!("moss_test_meta_lqip_{}", std::process::id()));

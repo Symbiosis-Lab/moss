@@ -48,10 +48,14 @@ pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, cal
             html_escape(&doc.location.join(", ")),
         ));
     }
-    for (url, key) in [(&ev.tickets, "event_tickets"), (&ev.online, "event_online")] {
+    for (url, key, class) in [
+        (&ev.tickets, "event_tickets", "moss-event-tickets"),
+        (&ev.online, "event_online", "moss-event-online"),
+    ] {
         if let Some(url) = url.as_deref().map(str::trim).filter(|u| is_web_url(u)) {
             html.push_str(&format!(
-                r#"<a class="moss-event-link" href="{}">{}</a>"#,
+                r#"<a class="moss-event-link {}" href="{}">{}</a>"#,
+                class,
                 html_escape(url),
                 t(lang, key),
             ));

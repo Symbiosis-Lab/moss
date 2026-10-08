@@ -49,6 +49,22 @@ fn unsafe_link_schemes_are_not_linked() {
 }
 
 #[test]
+fn tickets_and_online_links_each_carry_their_own_class() {
+    let mut d = doc("2026-11-01", None);
+    d.event.as_mut().unwrap().tickets = Some("https://example.test/tickets".into());
+    d.event.as_mut().unwrap().online = Some("https://example.test/live".into());
+    let html = render(&d, Language::En, false, None).unwrap();
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-tickets" href="https://example.test/tickets">"#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-online" href="https://example.test/live">"#),
+        "{html}"
+    );
+}
+
+#[test]
 fn a_page_without_an_event_renders_nothing() {
     assert!(render(&ParsedDocument::default(), Language::En, false, None).is_none());
 }

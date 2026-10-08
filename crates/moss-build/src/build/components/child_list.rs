@@ -222,8 +222,22 @@ fn with_place_html(date_html: &str, place: Option<&str>) -> String {
 /// the plain date. The one choice between the two, for every listing form.
 pub(crate) fn leaf_meta(date_text: &str, when_html: Option<&str>, place: Option<&str>) -> String {
     match when_html {
-        Some(h) => with_place_html(h, place),
+        Some(h) => with_event_place(h, place),
         None => with_place(date_text, place),
+    }
+}
+
+/// [`with_place`] for an event's `<time>`. The place is its own span after a
+/// separator span, so a theme can position it; the text is the same as
+/// `with_place` gives.
+fn with_event_place(time_html: &str, place: Option<&str>) -> String {
+    match place.map(str::trim).filter(|p| !p.is_empty()) {
+        None => time_html.to_string(),
+        Some(p) => format!(
+            r#"{}<span class="moss-event-sep"> · </span><span class="moss-event-place">{}</span>"#,
+            time_html,
+            html_escape(p),
+        ),
     }
 }
 

@@ -36,6 +36,33 @@ fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
     }
 }
 
+/// The card's meta slot carries an event's place as its own span after the
+/// time, the same as a listing row does.
+#[test]
+fn an_event_card_wraps_its_place_after_the_time() {
+    let when = crate::build::components::event_meta::render_when(
+        moss_core::event::EventTime::parse("2026-11-01 14:00").unwrap(),
+        None,
+        crate::i18n::Language::En,
+    );
+    let props = ChildItemProps {
+        place: Some("Example Hall".to_string()),
+        when_html: Some(when),
+        ..article_props("Opening", "/events/opening/")
+    };
+    let html = render_with_sort(
+        &props,
+        crate::i18n::Language::En,
+        None,
+        None,
+        moss_core::sort::SortAxis::Date,
+    );
+    assert!(
+        html.contains(r#"</time><span class="moss-event-sep"> · </span><span class="moss-event-place">Example Hall</span>"#),
+        "{html}"
+    );
+}
+
 #[test]
 fn test_render_article_card_basic() {
     let props = article_props("My Article", "/blog/my-article/");
@@ -921,7 +948,7 @@ fn event_summary_card_shows_its_time_before_the_place() {
     let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
     assert!(
         html.contains(r#"<div class="moss-card-meta"><time class="moss-when""#)
-            && html.contains("</time> · Example Hall</div>"),
+            && html.contains(r#"</time><span class="moss-event-sep"> · </span><span class="moss-event-place">Example Hall</span></div>"#),
         "the meta slot should be the event's time then its place, got: {html}"
     );
 }
@@ -935,7 +962,7 @@ fn event_summary_card_with_a_publisher_kicker_keeps_its_time() {
     let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
     assert!(
         html.contains(r#"<div class="moss-card-meta"><time class="moss-when""#)
-            && html.contains("Example Hall</div>"),
+            && html.contains("Example Hall</span></div>"),
         "the kicker takes the year, the meta slot keeps the time and place, got: {html}"
     );
 }

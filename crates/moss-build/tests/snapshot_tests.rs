@@ -2390,8 +2390,8 @@ fn event_page_shows_event_facts_in_the_meta_line() {
         "{line}"
     );
     assert!(line.contains(r#"<span class="moss-event-place">Town Hall</span>"#), "{line}");
-    assert!(line.contains(r#"<a class="moss-event-link" href="https://tickets.example.org/autumn">Tickets</a>"#), "{line}");
-    assert!(line.contains(r#"<a class="moss-event-link" href="https://stream.example.org/autumn">Online</a>"#), "{line}");
+    assert!(line.contains(r#"<a class="moss-event-link moss-event-tickets" href="https://tickets.example.org/autumn">Tickets</a>"#), "{line}");
+    assert!(line.contains(r#"<a class="moss-event-link moss-event-online" href="https://stream.example.org/autumn">Online</a>"#), "{line}");
     assert!(!line.contains("October"), "the posted date is not shown beside the event time: {line}");
 
     let cancelled = date_line(&page("events/cancelled")).to_string();
@@ -2437,7 +2437,7 @@ fn upcoming_group_orders_events_by_when_and_marks_the_time() {
         assert!(html.contains(r#"<section class="moss-cards-group" data-group="upcoming">"#), "{page}");
         assert!(html.contains(r#"<section class="moss-cards-group" data-group="earlier">"#), "{page}");
         assert!(
-            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span>, <span class="moss-when-time">7:30–10:00 PM</span></time> · Grand Hall"#),
+            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span>, <span class="moss-when-time">7:30–10:00 PM</span></time><span class="moss-event-sep"> · </span><span class="moss-event-place">Grand Hall</span>"#),
             "{page}"
         );
     }
