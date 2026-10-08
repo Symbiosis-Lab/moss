@@ -230,7 +230,7 @@ pub(crate) fn resolve_children_config(
             // bulk_style_tests.
             let rich = docs.iter().filter(|d| d.cover.is_some()
                 || crate::build::page::meta::resolve_page_description(
-                    d.description.as_deref(), &d.content, math).is_some()).count();
+                    crate::build::components::child_list::explicit_card_text(d).as_deref(), &d.content, math).is_some()).count();
             let has_rich = rich > 0 && (rich * 2 > docs.len() || docs.len() - rich <= 3);
             let any_has_date = docs.iter().any(|d| d.date.is_some() || d.event.is_some());
             // Nothing at all is an INDEX of bare labels, not an archive, and "summary" lays
@@ -380,12 +380,13 @@ pub(crate) fn generate_children(
                 dir_overrides,
                 typesetting,
             );
-            // The grid card is one of those paths: its description slot is
-            // frontmatter-only, like the `:::grid` card it shares a renderer
-            // with, so the excerpt stays out of it.
+            // The grid card is one of those paths: its description comes from
+            // `props_for_document` (frontmatter, then the first byline row) and
+            // never from the body excerpt, like the `:::grid` card it shares a
+            // renderer with.
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
-                    doc.description.as_deref(),
+                    crate::build::components::child_list::explicit_card_text(doc).as_deref(),
                     &doc.content,
                     math,
                 );

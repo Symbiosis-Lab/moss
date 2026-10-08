@@ -267,6 +267,19 @@ pub(crate) fn meta_text(
     }
 }
 
+/// The text a card shows when the author wrote no excerpt: the frontmatter
+/// `description:`, else the page's first `byline:` row. The folder listing's
+/// excerpt fallback and the incremental listing hash read it too, so a card's
+/// text is chosen here and nowhere else.
+pub(crate) fn explicit_card_text(doc: &ParsedDocument) -> Option<String> {
+    doc.description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| doc.byline.first().map(|row| row.trim()).filter(|s| !s.is_empty()))
+        .map(str::to_string)
+}
+
 /// Build one card's props from the document it describes.
 ///
 /// The shared reading of a `ParsedDocument` that both listing styles and the
@@ -274,9 +287,11 @@ pub(crate) fn meta_text(
 /// branch, the pipe-encoded cover split-resolve-rejoin, the `external_url:`
 /// linkblog pair, and the publisher kicker.
 ///
-/// `description` comes from frontmatter only. A caller that wants the
-/// auto-extracted excerpt fallback (the folder-listing path does) overrides
-/// that one field with `page::meta::resolve_page_description` afterwards —
+/// `description` comes from `explicit_card_text`: frontmatter, else the first
+/// byline row. A caller that wants the auto-extracted excerpt as a last resort
+/// (the folder-listing path does) overrides that one field with
+/// `page::meta::resolve_page_description` afterwards, which takes the same
+/// text first —
 /// which is also what keeps this function out of the `math: bool` the excerpt
 /// resolver needs.
 pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
@@ -364,7 +379,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         date_display,
         date_raw,
         child_count,
-        description: doc.description.clone().filter(|s| !s.trim().is_empty()),
+        description: explicit_card_text(doc),
         cover,
         cover_type: cover_path_for_type
             .as_deref()

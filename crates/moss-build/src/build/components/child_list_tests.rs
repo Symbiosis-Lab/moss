@@ -664,6 +664,67 @@ fn frontmatter_description_only_and_blank_is_none() {
     assert_eq!(props(&docs[1], &docs).description.as_deref(), Some("Real."));
 }
 
+#[test]
+fn a_card_with_no_description_shows_the_first_byline_row() {
+    let docs = vec![ParsedDocument {
+        byline: vec!["Riverside Hall, 2024".into(), "Directed by A. Name".into()],
+        ..doc("a/index.html", "A")
+    }];
+    assert_eq!(props(&docs[0], &docs).description.as_deref(), Some("Riverside Hall, 2024"));
+}
+
+#[test]
+fn an_explicit_description_wins_over_the_byline_on_a_card() {
+    let docs = vec![ParsedDocument {
+        description: Some("The described text.".into()),
+        byline: vec!["Riverside Hall, 2024".into()],
+        ..doc("a/index.html", "A")
+    }];
+    assert_eq!(props(&docs[0], &docs).description.as_deref(), Some("The described text."));
+}
+
+#[test]
+fn a_byline_beats_the_body_excerpt_in_a_folder_listing() {
+    let text = crate::build::components::child_list::explicit_card_text(&ParsedDocument {
+        byline: vec!["Riverside Hall, 2024".into()],
+        ..doc("a/index.html", "A")
+    });
+    assert_eq!(
+        crate::build::page::meta::resolve_page_description(text.as_deref(), "A long body paragraph.", false).as_deref(),
+        Some("Riverside Hall, 2024"),
+    );
+}
+
+#[test]
+fn an_event_card_keeps_its_meta_line_and_takes_the_byline_only_as_description() {
+    let make = |byline: Vec<String>| ParsedDocument {
+        event: Some(crate::build::types::EventFields {
+            start: moss_core::event::EventTime::parse("2024-05-01").unwrap(),
+            end: None,
+            when: moss_core::event::EventTime::parse("2024-05-01").unwrap().sort_key(),
+            timezone: None,
+            status: None,
+            tickets: None,
+            online: None,
+        }),
+        location: vec!["Riverside Hall".into()],
+        byline,
+        ..doc("a/index.html", "A")
+    };
+    let bare = vec![make(vec![])];
+    let with_byline = vec![make(vec!["Riverside Hall, 2024".into()])];
+    let (a, b) = (props(&bare[0], &bare), props(&with_byline[0], &with_byline));
+
+    assert_eq!(a.description, None);
+    assert_eq!(b.description.as_deref(), Some("Riverside Hall, 2024"));
+    assert_eq!(a.date_display, b.date_display);
+    assert_eq!(a.date_raw, b.date_raw);
+    assert_eq!(a.place, b.place);
+    assert_eq!(a.when_html, b.when_html);
+    assert_eq!(a.child_count, b.child_count);
+    assert_eq!(a.title, b.title);
+}
+
 /// `props_for_document` reads the page's resolved place straight off
 /// `ParsedDocument::place_names` — the same field `build::terms::set_place_lines`
 /// fills — rather than re-deriving it.

@@ -253,6 +253,39 @@ fn limit_emits_more_link_automatically() {
 }
 
 #[test]
+fn folder_listing_shows_the_byline_row_before_a_body_excerpt() {
+    let folder = make_folder_doc("journal/index.html", "Journal");
+    let a = ParsedDocument {
+        content: "A long body paragraph.".to_string(),
+        byline: vec!["Riverside Hall, 2024".to_string()],
+        ..make_doc("journal/a.html", "A", Some("2025-01-01"))
+    };
+    let docs = vec![folder, a];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        style: Some("summary".to_string()),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "/journal/",
+        "index.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("Riverside Hall, 2024"), "byline row missing: {}", out);
+    assert!(!out.contains("A long body paragraph."), "body excerpt used instead: {}", out);
+}
+
+#[test]
 fn explicit_order_listing_omits_card_dates() {
     // A curated `sort: [list]` folder is a manual sequence, not a
     // chronological feed: its summary cards must not carry the per-card
