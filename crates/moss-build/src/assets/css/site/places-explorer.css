@@ -1352,7 +1352,7 @@ button.moss-places-chip-crumb {
 }
 .moss-places-embed-load {
   min-block-size: 44px;
-  padding-inline: var(--moss-space-m);
+  padding-inline: var(--moss-space-md);
   border: 1px solid var(--moss-color-ui-accent);
   border-radius: 999px;
   background: var(--moss-color-surface);
