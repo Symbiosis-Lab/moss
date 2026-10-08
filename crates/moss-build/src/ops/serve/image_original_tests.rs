@@ -207,7 +207,7 @@ async fn generation_original_unreadable_known_source_is_retryable() {
     use std::os::unix::fs::PermissionsExt;
     let site = Site::new(false);
     let source = site.mp.project_root().join(SOURCE);
-    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o0)).unwrap();
     let (port, shutdown) = site.server(|_| false).await;
     let url = format!("http://localhost:{port}/{ALIAS}");
     let pending = status(&url);
