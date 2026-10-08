@@ -13,6 +13,17 @@ use specta::Type;
 pub use moss_core::frontmatter_typed::SeriesField;
 pub use crate::build::render::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
+/// The event fields a page's meta line shows. Present exactly when the page
+/// has a `start` that parses; `end` is kept only when it parses too.
+#[derive(Debug, Clone)]
+pub struct EventFields {
+    pub start: moss_core::event::EventTime,
+    pub end: Option<moss_core::event::EventTime>,
+    pub status: Option<String>,
+    pub tickets: Option<String>,
+    pub online: Option<String>,
+}
+
 /// Parsed markdown document with frontmatter and content.
 ///
 /// Represents a processed markdown file ready for HTML generation.
@@ -191,6 +202,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub location: Vec<String>,
+    /// The event fields (`start`, `end`, `status`, `tickets`, `online`), present
+    /// exactly when the page has a valid `start`. Read by the article meta line.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub event: Option<EventFields>,
     /// Term-page claim from `author_page:` — this page is the author page
     /// for the claimed name (see `moss_core::terms::TermClaim`). Resolved by
     /// `build::terms::derive_terms` into [`Self::term_listing`] on the

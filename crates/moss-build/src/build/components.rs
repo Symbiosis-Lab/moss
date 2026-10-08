@@ -18,6 +18,7 @@ pub mod folder_cover;
 pub mod folder_title;
 pub mod color_extract;
 pub mod date;
+pub mod event_meta;
 pub mod nav;
 
 pub mod series_nav;

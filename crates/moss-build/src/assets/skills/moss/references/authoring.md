@@ -319,6 +319,8 @@ A page becomes an event by carrying `start:`. `date:` stays the posted date; `st
 
 Times are venue-local wall-clock time: write `14:00`, never an offset or `Z`, and name the zone in `timezone:`.
 
+What an event page shows: the meta line under the title carries the event instead of the posted date. It reads the time in the page's language (`Sunday, November 1, 2026, 2:00–4:00 PM`; an all-day or multi-day event shows dates only), a label for `status` beside it (a cancelled event's time is struck through), the `location` as text when it is not a known place (a place with its own page keeps the linked "Location:" line below), and `Tickets` / `Online` links for `tickets` / `online` (http and https only). The `<time datetime>` is the start as written, with no zone offset; `timezone:` is not shown on the page. Theme these through `.moss-event-meta` and its children (`moss describe --css .moss-event-meta`).
+
 ### Long archives
 
 moss has **no pagination**: no `paginate:`, no `offset`, no `/page/2/`. Do not

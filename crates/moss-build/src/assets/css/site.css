@@ -2647,6 +2647,35 @@ header:has(+ .moss-hero) .main-nav {
   margin-block: 0 var(--moss-space-md);
 }
 
+/*
+ * Event facts in the meta line (a page with `start`): time, status label,
+ * place and links share the row's muted colour and wrap on a narrow screen.
+ * A cancelled event keeps its time legible but struck through; the status
+ * label beside it carries the meaning in text.
+ */
+.moss-event-meta {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--moss-space-sm);
+}
+.moss-event-meta[data-status="cancelled"] .moss-event-time {
+  text-decoration: line-through;
+}
+.moss-event-status {
+  font-weight: 600;
+}
+.moss-event-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-event-link:hover {
+  border-bottom-color: currentColor;
+}
+
 /* Date and byline are one masthead unit: when both are present the date row
    stops holding the body's worth of space between them. */
 .date-line:has(+ .moss-byline) {

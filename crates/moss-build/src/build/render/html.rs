@@ -1203,18 +1203,24 @@ pub(super) fn render_page<'d>(
     // reader sees: H1 → optional blockquote-deck → date row + reading prefs →
     // body. The {date_line} template token is left empty so the template's
     // legacy "above the body" position is no longer used.
+    // An event page shows its event facts here instead of the posted date.
+    let event_meta_html = doc
+        .filter(|_| is_article_page)
+        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines));
     let article_date_line_html: Option<String> = if is_article_page
         && doc.is_some()
-        && doc.unwrap().date.is_some()
+        && (doc.unwrap().date.is_some() || event_meta_html.is_some())
     {
         let d = doc.unwrap();
-        let date_str = d.date.as_ref().unwrap();
         let doc_lang = d.lang;
-        let formatted = components::format_display_date(date_str, doc_lang, resolved_typesetting);
-        let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
+        let when_html = event_meta_html.unwrap_or_else(|| {
+            let formatted = components::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
+            let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
+            format!(r#"<span class="date"{}>{}</span>"#, date_fm_attr, formatted)
+        });
         Some(format!(
-            r#"<div class="date-line"><span class="date"{}>{}</span><div class="font-anchor"><button class="font-trigger size-std" aria-label="{}" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="{}"></button><button data-scale="" class="active" aria-label="{}"></button><button data-scale="large" aria-label="{}"></button><button data-scale="xlarge" aria-label="{}"></button></div></div></div>"#,
-            date_fm_attr, formatted,
+            r#"<div class="date-line">{}<div class="font-anchor"><button class="font-trigger size-std" aria-label="{}" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="{}"></button><button data-scale="" class="active" aria-label="{}"></button><button data-scale="large" aria-label="{}"></button><button data-scale="xlarge" aria-label="{}"></button></div></div></div>"#,
+            when_html,
             crate::i18n::t(doc_lang, "reading_preferences"),
             crate::i18n::t(doc_lang, "text_small"),
             crate::i18n::t(doc_lang, "text_standard"),
