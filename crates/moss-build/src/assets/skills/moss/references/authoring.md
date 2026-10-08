@@ -168,6 +168,8 @@ All media via embeds — never raw `<img>`, `<video>`, or `<audio>`. The standar
 
 `![[photo.jpg]]`, `![[clip.mp4]]` and `![[track.mp3]]` are the wiki spelling of the same three embeds. Write the path relative to the page; if the file is not there moss tries the site root, then the nearest file with that name, and `%20` stands for a space. A wikilink needs only the file name. Text in the brackets plays the role the text after the pipe plays in a wikilink: `![640x360 loop](clip.mp4)` equals `![[clip.mp4|640x360 loop]]`, and on an image it is the caption. A page, table, notebook or folder embeds the same way in either spelling: `![](notes/essay.md)` equals `![[essay]]`, and `![limit:2](journal/)` equals `![[journal/|limit:2]]`. On a page, table or notebook the bracket text is ignored. One word is not interchangeable: `cover` (and the other display keywords) crops an image after the pipe but captions it in the standard brackets.
 
+A folder embed takes comma-separated options after the pipe: `limit:N`, `sort:date|date-asc|weight|title`, `style:list|summary|grid`, `group:year|none`, `depth:all` (every descendant, not just the direct children), `covers:only` (only pages that have a cover) and `more:<folder>` (where the "More" link points). `style:list` is the compact dated index; `style:summary` is rows with covers and descriptions.
+
 moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions)
 if you use raw HTML tags for media that moss owns.
 
@@ -204,6 +206,8 @@ Embed a video or pen by URL. The standard form makes the same player as the wiki
 The wiki spelling is `![[https://www.youtube.com/watch?v=dQw4w9WgXcQ|640x360]]`. YouTube, Vimeo, and CodePen get provider-aware players; only the wiki form turns another https page URL into a generic iframe.
 
 ## Content structure
+
+The home page's title is the site's name; moss adds it as a hidden heading for screen readers unless the page opens with its own `# ` heading or a hero.
 
 ### Shortcodes
 
@@ -361,6 +365,8 @@ The automatic "More" link only appears on a **cross-folder** feed that actually 
 ### Moved and removed pages
 
 Every page carries a `uid:`, and each build compares that uid's current address against the one recorded at the last deploy — an address that changed gets an automatic redirect, a small page at the old address forwarding to the new one. Never hand-write one of these: it isn't tracked as a redirect, so moss cannot retire it later, and a stray one at the site root gets crawled and can leak into the sitemap. The comparison is against what was actually *deployed*, so a first port with no deploy on record yet gets no redirect for anything renamed before that first publish — only a move made after at least one deploy is caught automatically.
+
+`url:` is one path segment that renames the page inside its folder; a `/` becomes `-`. To change a page's folder, move the file, then keep the old address with a `[redirects]` entry (below).
 
 A page you removed, or merged into a section of another, leaves nothing for moss to compare uids against, so add the forwarding link yourself: edit `.moss/data/redirects.json`, a flat JSON object mapping the old address to the new one, neither with a leading slash — `{"old-page/": "new-page/#section"}` (a fragment on the target works). This takes effect on an ordinary local `moss build`; no deploy is required for a hand-written entry to start forwarding. If a real page now exists at the old address, moss leaves it alone — the redirect is dropped rather than overwriting it.
 

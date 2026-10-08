@@ -539,7 +539,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=5, Importance=4 → score=54 (same tier as cover)
         score: 55,
-        description: "Custom URL slug (e.g. `links` → /links/). Pin a stable ASCII slug when the filename isn't one — moss's convention is to name files after the page title in their own language, then pin `url:` here (`隐私.md` + `url: privacy` → /privacy). Keeps `[[wikilinks]]` working across a rename.",
+        description: "Custom URL slug (e.g. `links` → /links/). Pin a stable ASCII slug when the filename isn't one — moss's convention is to name files after the page title in their own language, then pin `url:` here (`隐私.md` + `url: privacy` → /privacy). Keeps `[[wikilinks]]` working across a rename. It is one path segment that renames the page inside its folder (a `/` becomes `-`); to change the folder, move the file and keep the old address with a `[redirects]` entry.",
         label_key: "chip.url.label",
         group: "This Page",
         ..FIELD_DEFAULTS

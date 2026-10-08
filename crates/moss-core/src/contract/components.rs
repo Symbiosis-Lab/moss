@@ -422,7 +422,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Text content slot inside a grid-layout `.moss-card` (kicker + title + meta).",
+        description: "Text content slot inside a grid-layout `.moss-card` (kicker + title + meta). A card with a cover has a tinted content band (`--moss-cover-color`) with white title, meta and description. A theme that clears that band's background must also set the card's text colours, or the text is white on the page.",
     },
     ComponentEntry {
         class: "moss-card-row",
@@ -1917,7 +1917,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Body content slot inside `.moss-collection-cover`.",
+        description: "Body content slot inside `.moss-collection-cover`. On a folder home with a cover this slot holds the whole body, embedded listings included; to style only the prose, target its paragraphs.",
     },
     // -------------------------------------------------------------------
     // Form primitives (input, label, field, link).
