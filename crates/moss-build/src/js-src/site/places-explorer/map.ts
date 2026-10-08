@@ -18,13 +18,14 @@
  * costing Chromium whole frames and WebKit whole SECONDS. Neither engine's
  * cost was really about the FILTER's own parameters (a spike here halving
  * blur radii changed nothing in WebKit); it was about a LIVE, filtered element sitting inside a transformed subtree. This file
- * now builds that layer as a decoded, opaque `<img>` instead (`raster.ts`'s
+ * now builds that layer as a fixed-pixel canvas instead (`raster.ts`'s
  * `splitMapSvg`/`rasterizeOrFallback`), composited once and then only ever
  * moved by the SAME transform, with the world's own box permanently
  * promoted to its own compositor layer (`places-explorer.css`) rather than
  * only for the span of a gesture — nothing left for either engine to
  * re-invalidate on a pan or a zoom click. `tiles.ts`'s `TileLayer` does the
- * same for each regional tile, which carries no filters of its own.
+ * same for each regional tile, baking its lighting and band shadows once
+ * when that tile is decoded.
  *
  * Two things the live SVG let CSS drive no longer can, because a
  * rasterised resource has no access to the page's own custom properties:
@@ -32,14 +33,15 @@
  * scales under them) stay a separate, live, UNFILTERED overlay — cheap,
  * since it is thin strokes, not fills with a shadow filter on every band —
  * and the old continuous `--moss-place-relief-strength` fade, which is gone
- * outright: the world is baked at full strength, and a tile is flat and
- * tinted against the same full ladder, so the hand-over from one to the
- * other changes detail, not tone.
+ * outright: the world and tiles bake the same lighting and tint ladder
+ * into their fixed-pixel canvases, so hand-over changes resolution, not
+ * terrain treatment.
  */
 import {
   clampCamera,
   coverCamera,
   detailMaxZoom,
+  openingMaxZoom,
   fitPoints,
   fitWork,
   MIN_ZOOM,
@@ -57,7 +59,7 @@ import { rasterizeOrFallback, splitMapSvg } from "./raster";
 import { inScope } from "./scope";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
-import { TileLayer } from "./tiles";
+import { TileLayer, tileFadeOpacity } from "./tiles";
 import * as urlState from "./state";
 import { hasPoint, type Camera, type LabelsData, type PlacesData, type Place, type Point, type Rect, type Scope, type Viewport } from "./types";
 
@@ -81,7 +83,7 @@ const WORLD_RASTER_REBAKE_RATIO = 1.3;
  * so only the final, truly-at-rest settle pays the decode cost, not every
  * one that led to it. Measured load-bearing: three real, back-to-back
  * clicks with no debounce each queued their own rebake, and the filter
- * pipeline behind `img.decode()` for a full-canvas relief/lighting pass
+ * pipeline behind an SVG image decode and full-canvas relief/lighting pass
  * was slow enough in WebKit that the SECOND click's own rebake was still
  * running when the THIRD click fired, delaying that click past a second —
  * an ablation (removing the rebake call entirely) confirmed it as the
@@ -122,6 +124,8 @@ export interface PlacesMapController {
   setScope(scope: Scope): void;
   /** The element gestures attach to and `getBoundingClientRect` sizes against — exposed so `embed.ts` can toggle cooperative-gesture mode and observe resizes without map.ts knowing anything about embeds. */
   readonly viewportEl: HTMLElement;
+  /** Waits for the initial viewport's actual paint after embed scope and size are applied. */
+  waitForInitialPaint(): Promise<boolean>;
   /** Switch `gestures.ts` between its ordinary mode (a lone touch pans the map, the only mode the full explorer page ever uses) and cooperative mode (a lone touch defers to the page's own scroll; two fingers pan as well as pinch) — see `gestures.ts`'s own `GestureCallbacks.cooperative` doc. Also reflects the mode onto the viewport as `data-gesture-mode="cooperative"` for `places-explorer.css`'s own `touch-action` rule. */
   setCooperativeGestures(enabled: boolean): void;
   /** Re-clamp is already automatic on every resize (the `ResizeObserver`/`window.resize` listeners below re-run `applyCamera`, which re-clamps zoom/pan around the UNCHANGED camera centre). What is not automatic: a resize that changes the viewport's aspect ratio sharply enough — the embed's own expand/collapse transition, far larger than an ordinary window resize — can leave the current scope's own points outside the new frame even though the camera centre didn't move. Call after such a transition settles; a no-op when every in-scope point is still in view. */
@@ -185,16 +189,21 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   /** CSS px per world unit the current raster was baked for (`unitScale * zoom`), NOT the zoom alone: `zoom` is relative to the viewport's own cover scale, so the same zoom means a 4x larger raster once an embed goes fullscreen. */
   let worldBakedScale = 0;
   let worldBakePromise: Promise<void> | null = null;
-  let worldSurfaceEl: HTMLImageElement | SVGSVGElement | null = null;
+  let worldSurfaceEl: HTMLCanvasElement | SVGSVGElement | null = null;
   let worldRelease: () => void = () => {};
   let worldRebakeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function worldBakeIsSharpEnough(unitScale: number, zoom: number): boolean {
+    const targetZoom = Math.min(Math.max(zoom, MIN_ZOOM), WORLD_RASTER_ZOOM_CAP);
+    return worldBakedScale > 0 && unitScale * targetZoom <= worldBakedScale * WORLD_RASTER_REBAKE_RATIO;
+  }
 
   /** Resolves once the world raster is sharp enough for `zoom` — a no-op returning the already-resolved past bake once it is. */
   function rebakeWorld(unitScale: number, zoom: number): Promise<void> {
     if (worldBakePromise) return worldBakePromise;
     const targetZoom = Math.min(Math.max(zoom, MIN_ZOOM), WORLD_RASTER_ZOOM_CAP);
     const targetScale = unitScale * targetZoom;
-    if (worldBakedScale > 0 && targetScale <= worldBakedScale * WORLD_RASTER_REBAKE_RATIO) return Promise.resolve();
+    if (worldBakeIsSharpEnough(unitScale, zoom)) return Promise.resolve();
     worldBakePromise = (async () => {
       try {
         const dpr = Math.min(window.devicePixelRatio || 1, WORLD_RASTER_DPR_CAP);
@@ -430,12 +439,12 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   function fitForScope(viewport: Viewport, frame?: Rect): Camera {
     if (scope.kind === "article" || scope.kind !== "place") {
       const points = workPoints(scope.kind === "article" ? scope.id : selectedId);
-      return points.length ? fitWorkCamera(points, viewport, frame && workFrame(viewport)) : coverCamera(allPoints(), viewport, frame);
+      return points.length ? fitWorkCamera(points, viewport, frame && workFrame(viewport)) : fitAllCamera(viewport, frame);
     }
     const points = pointsForWorks(options.places.works, options.places.places, scope);
     return points.length
       ? fitPoints(points, viewport, detailMaxZoom(viewport), frame)
-      : coverCamera(allPoints(), viewport, frame);
+      : fitAllCamera(viewport, frame);
   }
 
   /** The collapsed embed is too small to give up any of itself to overlays, so a work's fit uses the whole frame there. */
@@ -447,6 +456,23 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   function fitWorkCamera(points: Point[], viewport: Viewport, frame: Rect | undefined): Camera {
     const deep = fitWork(points, viewport, frame, tileDetailMaxZoom(viewport));
     return tileLayer.hasVisibleTiles(deep, viewport) ? deep : fitWork(points, viewport, frame, detailMaxZoom(viewport));
+  }
+
+  /** Set once the tiles under the opening view have decoded (or never, if they fail): until then the opening view stays within the world layer's own resolution, since past it the world image is a stretched, low-poly picture. */
+  let openingTilesReady = false;
+
+  /** The opening and reset view of every place: fitted to their bounds, so places in one region open on that region. Places spread wider than the viewport fall back to the cover view panned to their densest window. */
+  function fitAllCamera(viewport: Viewport, frame?: Rect): Camera {
+    const points = allPoints();
+    // One frame for both cameras, so comparing their zooms compares like with like (the collapsed embed gives up no part of itself to overlays).
+    const fitFrame = frame && workFrame(viewport);
+    const cover = coverCamera(points, viewport, fitFrame);
+    if (!points.length) return cover;
+    // Past the world layer's ceiling only once tiles can draw it, and never past the depth where the bundled data still looks clean.
+    const world = fitWork(points, viewport, fitFrame, detailMaxZoom(viewport));
+    const deep = openingTilesReady ? fitWork(points, viewport, fitFrame, openingMaxZoom(viewport)) : world;
+    const fitted = tileLayer.hasVisibleTiles(deep, viewport) ? deep : world;
+    return fitted.zoom > cover.zoom ? fitted : cover;
   }
 
   function selectWork(id: string | null): void {
@@ -702,7 +728,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     markerLayer.closeRing();
     scopedIds = null;
     const viewport = getViewport();
-    camera = coverCamera(allPoints(), viewport, freeFrame(viewport));
+    camera = fitAllCamera(viewport, freeFrame(viewport));
     applyCamera(true);
   });
 
@@ -753,6 +779,89 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const viewport = getViewport();
     camera = fitForScope(viewport, freeFrame(viewport));
     applyCamera(true);
+    // The deeper opening fit waits for the tiles under this first view. If a clear supersedes that wait, retry only while the captured camera and viewport are still current; a failure keeps the shallow view.
+    const opening = { ...camera };
+    const openingViewport = getViewport();
+    void (async () => {
+      let result = await tileLayer.waitForVisibleTiles();
+      while (result === "superseded") {
+        const viewport = getViewport();
+        if (camera.x !== opening.x || camera.y !== opening.y || camera.zoom !== opening.zoom || viewport.width !== openingViewport.width || viewport.height !== openingViewport.height) return;
+        result = await tileLayer.waitForVisibleTiles();
+      }
+      if (result !== "ready") return;
+      const latest = getViewport();
+      if (latest.width !== openingViewport.width || latest.height !== openingViewport.height) return;
+      openingTilesReady = true;
+      // Only this opening view's completed tile wait unlocks the deeper fit; any user move or resize leaves the current camera alone.
+      if (camera.x !== opening.x || camera.y !== opening.y || camera.zoom !== opening.zoom) return;
+      camera = fitForScope(latest, freeFrame(latest));
+      applyCamera(true);
+    })();
   }
-  return { setScope, viewportEl, setCooperativeGestures, refitScopeIfClipped, setCurrentArticle, setArticleMode: (articleOnly) => setArticleMode(articleOnly, articleOnly) };
+  return {
+    setScope,
+    viewportEl,
+    waitForInitialPaint: async () => {
+      // Scope changes and ResizeObserver callbacks can land while a surface is
+      // decoding. Re-read the actual frame after each await; a stale world
+      // bake must never announce readiness for a larger/current viewport.
+      // Regional tiles can stand in for the world only when decoded opaque
+      // canvases cover the complete frame beyond their faded outer edges.
+      // Otherwise the world remains a required first-paint dependency.
+      while (true) {
+        applyCamera(true);
+        const viewport = getViewport();
+        const awaitedCamera = { ...camera };
+        const unitScale = screenScale({ x: 0, y: 0, zoom: 1 }, viewport);
+        // Capture dependencies before awaiting the world surface. A visible
+        // tile failure can lower the camera's zoom ceiling and hide its own
+        // requirement; the poster must still remain for that original view.
+        const requiresVisibleTiles = tileFadeOpacity(camera, viewport) > 0 && tileLayer.hasManifestTiles(camera, viewport);
+        const visibleTilesReady = requiresVisibleTiles
+          ? tileLayer.waitForVisibleTiles()
+          : Promise.resolve("ready" as const);
+        let tilesReady: Awaited<typeof visibleTilesReady>;
+        try {
+          tilesReady = await visibleTilesReady;
+        } catch {
+          return false;
+        }
+        if (tilesReady === "failed") return false;
+        if (tilesReady === "superseded") {
+          // A resize can go A→B→A while the old request is pending. The
+          // generation changed regardless of the final geometry, so always
+          // capture and await dependencies for the current frame again.
+          continue;
+        }
+        applyCamera(true);
+        const afterTilesViewport = getViewport();
+        if (
+          camera.x !== awaitedCamera.x || camera.y !== awaitedCamera.y || camera.zoom !== awaitedCamera.zoom ||
+          afterTilesViewport.width !== viewport.width || afterTilesViewport.height !== viewport.height
+        ) continue;
+        const tilesCoverFrame = tileLayer.hasOpaqueViewportCoverage(camera, afterTilesViewport);
+        try {
+          if (!tilesCoverFrame) await rebakeWorld(unitScale, camera.zoom);
+        } catch {
+          return false;
+        }
+        applyCamera(true);
+        const latest = getViewport();
+        if (
+          camera.x !== awaitedCamera.x || camera.y !== awaitedCamera.y || camera.zoom !== awaitedCamera.zoom ||
+          latest.width !== viewport.width || latest.height !== viewport.height
+        ) continue;
+        const latestUnitScale = screenScale({ x: 0, y: 0, zoom: 1 }, latest);
+        const latestTilesCoverFrame = tileLayer.hasOpaqueViewportCoverage(camera, latest);
+        if (tilesCoverFrame && !latestTilesCoverFrame) continue;
+        if (!latestTilesCoverFrame && !worldBakeIsSharpEnough(latestUnitScale, camera.zoom)) continue;
+        return true;
+      }
+    },
+    setCooperativeGestures,
+    refitScopeIfClipped,
+    setCurrentArticle,
+    setArticleMode: (articleOnly) => setArticleMode(articleOnly, articleOnly),
+  };
 }

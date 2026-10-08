@@ -220,6 +220,46 @@ async fn settle_forces_a_synchronous_seal_before_generation_id_is_read() {
     );
 }
 
+/// A local stylesheet can reach staging only in the deferred asset-copy
+/// worker. The first preview projection must wait; once the merged seal has
+/// its bytes, the matching render may be revealed and promoted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selected_page_with_late_copied_local_stylesheet_becomes_servable() {
+    use crate::system::folder_session::PreviewSource;
+    let vault = Vault::new();
+    vault.session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
+    std::fs::write(vault.folder.join("critical.css"), "body { color: navy; }\n").unwrap();
+    vault.edit("<link rel=\"stylesheet\" href=\"/critical.css\">\n\nready");
+
+    vault.build().await;
+    vault.drained().await;
+    assert!(vault.mp.staging_dir().join("critical.css").is_file(), "deferred copy must land before the seal projection");
+    assert!(std::fs::read_to_string(vault.mp.staging_dir().join("index.html")).unwrap().contains("critical.css"));
+    assert_eq!(*vault.served.read().unwrap(), vault.mp.staging_dir(), "the ready stage should be revealed before the materialize debounce");
+    crate::build::seal_phase::settle(&vault.mp).await;
+
+    assert!(vault.mp.current_generation_id().is_ok(), "a complete selected page should promote");
+    assert_eq!(*vault.served.read().unwrap(), vault.mp.staging_dir(), "the late-ready latest render should be revealed");
+}
+
+/// The selected page cannot promote a generation while its linked local CSS
+/// is absent from the sealed file set and actual served root.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selected_page_with_missing_local_stylesheet_cannot_promote() {
+    use crate::system::folder_session::PreviewSource;
+    let vault = Vault::new();
+    vault.session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
+    vault.edit("<link rel=\"stylesheet\" href=\"/missing.css\">\n\nnot ready");
+
+    vault.build().await;
+    vault.drained().await;
+    assert!(std::fs::read_to_string(vault.mp.staging_dir().join("index.html")).unwrap().contains("missing.css"));
+    crate::build::seal_phase::settle(&vault.mp).await;
+
+    assert!(vault.mp.current_generation_id().is_err(), "a selected route with a missing required stylesheet must not promote");
+    assert!(!vault.mp.hashes().exists(), "a withheld incomplete attempt must not replace the incremental baseline");
+}
+
 /// (f) An app that bounds its quit with a `tokio::time::timeout` around
 /// `settle` must get control back at that bound even while a slow
 /// materialize is still copying. That holds only because the copy runs on
@@ -577,13 +617,11 @@ async fn a_folder_file_deleted_after_a_publish_reads_author_removed() {
     assert_eq!(removed_pairs(&set), [("guide.pdf".to_string(), AuthorRemoved)]);
 }
 
-/// A page still in the folder that drops out of the build — bytes that are not
-/// UTF-8, or a file the process cannot read — is not something the author
-/// removed. The existence test reads the folder, not the build's source list.
+/// Unreadable authored bytes retain the prior page and refuse this seal for
+/// publication; only verified absence can remove its output.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_page_that_stops_building_is_not_blamed_on_the_author() {
-    use crate::build::manifest::change_set::RemovalReason::Unexplained;
+async fn an_unreadable_page_keeps_its_published_address_until_a_fresh_render() {
     use std::os::unix::fs::PermissionsExt;
     for unreadable in [false, true] {
         let vault = Vault::new();
@@ -592,20 +630,58 @@ async fn a_page_that_stops_building_is_not_blamed_on_the_author() {
         let (first, _) = vault.seal_and_tap().await;
         assert!(first.source_to_output().contains_key("about.md"), "sanity: the page built");
         vault.publish(&first);
+        let prior_page = std::fs::read(vault.mp.current_ptr().join("about/index.html")).unwrap();
 
         if unreadable {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         } else {
             std::fs::write(&path, b"---\ntitle: About\n---\n\n\xff\xfe\n").unwrap();
         }
-        let (second, set) = vault.seal_and_tap().await;
+        let mut host = vault.host();
+        let captured = crate::deploy::one_shot::capture(&mut host);
+        vault.build_with(host).await;
+        vault.drained().await;
+        settle(&vault.mp).await;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert!(!second.source_to_output().contains_key("about.md"), "sanity: it dropped out of the build");
-        assert_eq!(
-            removed_pairs(&set),
-            [("about/index.html".to_string(), Unexplained)],
-            "unreadable={unreadable}"
-        );
+        assert!(captured.sealed.lock().unwrap().is_none(), "incomplete attempt must not replace the selected seal");
+        assert_eq!(std::fs::read(vault.mp.current_ptr().join("about/index.html")).unwrap(), prior_page);
+        let projection = crate::system::build_records::records()
+            .publish_preflight(vault.folder.to_str().unwrap()).expect("latest attempt recorded");
+        assert!(projection.unresolved_inputs.iter().any(|source| source == "about.md"));
+        assert!(crate::deploy::refuse_publish(vault.folder.to_str().unwrap()).is_err());
+
+        std::fs::write(&path, "---\ntitle: About\n---\n\nrestored\n").unwrap();
+        let (recovered, set) = vault.seal_and_tap().await;
+        assert!(recovered.unresolved_inputs().is_empty());
+        assert!(removed_pairs(&set).is_empty());
+        assert!(crate::system::build_records::records()
+            .publish_preflight(vault.folder.to_str().unwrap()).unwrap().unresolved_inputs.is_empty());
     }
+}
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generation_original_receipt_flows_from_headless_render_through_promote() {
+    let vault = Vault::new();
+    let source = "Pictures/Portrait, Tomorrow/assets/cover.png";
+    let source_path = vault.folder.join(source);
+    std::fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+    let image = image::RgbImage::from_fn(800, 600, |x, y| {
+        image::Rgb([(x.wrapping_mul(17) ^ y.wrapping_mul(53)) as u8,
+            (x.wrapping_mul(71) ^ y.wrapping_mul(11)) as u8, (x ^ y) as u8])
+    });
+    image.save(&source_path).unwrap();
+    std::fs::write(vault.folder.join("Pictures/Portrait, Tomorrow/Portrait, Tomorrow.md"),
+        "---\ntitle: Portrait\nurl: portrait-display\n---\n\n![portrait](assets/cover.png)\n").unwrap();
+    vault.edit("![portrait](<Pictures/Portrait, Tomorrow/assets/cover.png>)");
+    let generation = vault.promote().await;
+    let path = crate::build::manifest::preview_originals::receipt_path(&vault.mp.generations_dir(), &generation);
+    let receipt: crate::build::manifest::preview_originals::Originals =
+        serde_json::from_slice(&std::fs::read(&path).expect("render and promotion persisted originals")).unwrap();
+    let original = receipt.images.get("pictures/portrait-display/assets/cover.webp")
+        .unwrap_or_else(|| panic!("canonical URL override missing from {:?}", receipt.images.keys().collect::<Vec<_>>()));
+    assert_eq!(original.source, source);
+    assert_eq!(original.oid, crate::build::cache::ObjectStore::hash_file(&source_path).unwrap());
+    assert!(!vault.mp.current_ptr().join(path.file_name().unwrap()).exists(), "receipt is outside the served tree");
 }

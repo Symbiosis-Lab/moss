@@ -57,6 +57,61 @@ test("the synthetic root's own heading is visually hidden, with the map directly
   expect(Math.abs(figureTop - headerBottom)).toBeLessThan(1);
 });
 
+test("dragging map imagery pans without native image drag, and dragging a label does not select its text", async ({ page }) => {
+  await gotoReady(page);
+  const viewport = page.locator(".moss-places-viewport");
+  const world = page.locator(".moss-places-world");
+  const surface = page.locator(".moss-places-world-surface");
+  await page.locator('.moss-places-control[data-control="zoom-in"]').click();
+  await expect(surface).toBeVisible();
+
+  const start = await surface.evaluate((surface) => {
+    surface.addEventListener("dragstart", () => {
+      document.body.dataset.mapImageDragStarted = "true";
+    });
+    const world = surface.closest(".moss-places-world")!;
+    world.querySelectorAll(".moss-places-rivers, .moss-places-tiles").forEach((layer) => {
+      (layer as HTMLElement | SVGElement).style.pointerEvents = "none";
+    });
+    const box = surface.closest(".moss-places-viewport")!.getBoundingClientRect();
+    for (let y = box.top + box.height * 0.35; y < box.bottom - 80; y += 40) {
+      for (let x = box.left + 40; x < box.right - 40; x += 40) {
+        if (document.elementFromPoint(x, y) === surface) return { x, y };
+      }
+    }
+    throw new Error("could not find an unobstructed point on the map image");
+  });
+  const before = await world.getAttribute("style");
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 60, start.y + 24, { steps: 6 });
+  await page.mouse.up();
+
+  expect(await page.locator("body").getAttribute("data-map-image-drag-started")).toBeNull();
+  await expect.poll(() => world.getAttribute("style")).not.toBe(before);
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+  await expect(viewport).not.toHaveAttribute("data-dragging", "");
+
+  const label = page.locator(".moss-places-label").first();
+  await expect(label).toBeVisible();
+  await label.evaluate((el) => {
+    // Labels are decorative and normally pass pointer input through to the
+    // map. Make this real text hit-testable so the drag below exercises the
+    // selection rule itself, rather than only beginning on the SVG surface.
+    (el.closest(".moss-places-labels") as HTMLElement).style.pointerEvents = "auto";
+  });
+  const labelBox = (await label.boundingBox())!;
+  const labelStart = { x: labelBox.x + labelBox.width / 2, y: labelBox.y + labelBox.height / 2 };
+  const afterImageDrag = await world.getAttribute("style");
+  await page.mouse.move(labelStart.x, labelStart.y);
+  await page.mouse.down();
+  await page.mouse.move(labelStart.x + 60, labelStart.y + 12, { steps: 6 });
+  await page.mouse.up();
+
+  await expect.poll(() => world.getAttribute("style")).not.toBe(afterImageDrag);
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+});
+
 // Fix 1: a synthetic (config-only) root hosts no children/term listing —
 // same design-decision-7 rule as an authored root — and, since no authored
 // body separates them here, the map's bottom edge meets the footer's top

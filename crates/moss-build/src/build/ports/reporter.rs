@@ -27,6 +27,9 @@ pub struct CloudSync<'a> {
     pub phase: &'a str,
     pub provider: Option<crate::build::cloud_provider::CloudProvider>,
     pub total: usize,
+    /// Files actually observed to arrive during this episode. A timeout or
+    /// decision to stop waiting cannot increase this count.
+    pub downloaded: usize,
     pub remaining: usize,
     /// How many of `remaining` the render actually waits on — the subset the
     /// full-window waiting screen is keyed on.
@@ -40,6 +43,9 @@ pub struct CloudSync<'a> {
     /// Named files the provider will not hand over, base names only. Empty for
     /// every phase but `unavailable`.
     pub unavailable: &'a [String],
+    /// Full count of concrete provider/read failures; `unavailable` is only
+    /// a short sample of names.
+    pub unavailable_count: usize,
 }
 
 /// Sink for everything the build wants to say.

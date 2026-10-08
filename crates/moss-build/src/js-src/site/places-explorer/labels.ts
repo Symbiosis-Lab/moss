@@ -310,6 +310,7 @@ export class LabelLayer {
       const built = this.buildRiver(`river-${nextId++}`, river, vertical);
       if (built) this.labels.push(built);
     }
+    this.measureAll();
   }
 
   /** Reposition (and show/hide) every label for the current camera/viewport/markers. Never called mid-gesture — `places-explorer.css` hides this whole layer while `.moss-places-world` carries `[data-gesture]`, so a stale position is never visible, and skipping the work here is what "cheaply during a gesture" means in practice. */
@@ -409,8 +410,7 @@ export class LabelLayer {
       this.container.append(dot);
     }
 
-    const { width, height } = this.measure(el);
-    return { id, kind, name: label.name, priority: label.rank, point: project(label.lat, label.lng), el, dot, width, height };
+    return { id, kind, name: label.name, priority: label.rank, point: project(label.lat, label.lng), el, dot, width: 0, height: 0 };
   }
 
   private buildRiver(id: string, river: LabelRiver, vertical: boolean): BuiltLabel | null {
@@ -441,22 +441,28 @@ export class LabelLayer {
     el.hidden = true;
     this.container.append(el);
 
-    // `getBoundingClientRect` already reads the POST-transform box — a
-    // rotated river label's real on-screen footprint — so, unlike measuring
-    // `offsetWidth`/`offsetHeight` (the UNrotated layout box), nothing here
-    // has to re-derive an axis-aligned bounding box from the rotation angle
-    // by hand.
-    const { width, height } = this.measure(el);
-    return { id, kind: "river", name: river.name, priority: river.rank, point: anchor.point, el, dot: null, width, height };
+    return { id, kind: "river", name: river.name, priority: river.rank, point: anchor.point, el, dot: null, width: 0, height: 0 };
   }
 
-  /** Measure `el`'s real rendered box: briefly shown (`visibility: hidden`, so it takes layout space without flashing or affecting hit-testing) just long enough for `getBoundingClientRect`, then returned to `hidden` (removed from layout, the resting state every label starts and ends a render in unless `render()` chose it). */
-  private measure(el: HTMLElement): { width: number; height: number } {
-    el.hidden = false;
-    el.style.visibility = "hidden";
-    const rect = el.getBoundingClientRect();
-    el.hidden = true;
-    el.style.visibility = "";
-    return { width: rect.width, height: rect.height };
+  /** Measure every label in one layout pass. Showing or hiding one label
+   * between geometry reads forces the browser to recalculate layout for each
+   * label in this large, globally shared gazetteer. Keep the whole batch
+   * invisible while measuring and hide it again before the first paint. */
+  private measureAll(): void {
+    for (const label of this.labels) {
+      label.el.hidden = false;
+      label.el.style.visibility = "hidden";
+    }
+    for (const label of this.labels) {
+      // Read the post-transform box so rotated river labels keep their real
+      // axis-aligned footprint for collision placement.
+      const rect = label.el.getBoundingClientRect();
+      label.width = rect.width;
+      label.height = rect.height;
+    }
+    for (const label of this.labels) {
+      label.el.hidden = true;
+      label.el.style.visibility = "";
+    }
   }
 }

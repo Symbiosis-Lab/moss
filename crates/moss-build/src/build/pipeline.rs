@@ -174,98 +174,60 @@ fn is_home_candidate_path(p: &std::path::Path) -> bool {
 /// Re-running the election over (what the scan elected ∪ the evicted root
 /// candidates) answers both with one rule: if a name that is still in the cloud
 /// outranks what we published, the published home page is a substitute.
-/// Should this build raise the cloud waiting screen?
-///
-/// Pure so the policy can be tested without a vault, a Tauri app handle, or a
-/// File Provider — none of which exist on CI, where `is_evicted` is a
-/// compile-time `false`.
-///
-/// Two properties, both of which were found missing:
-///
-/// **It is monotonic.** `has_sealed_generation` comes from `current_ptr`, which
-/// resolves to the last generation moss sealed for this folder, and a sealed
-/// generation never becomes unsealed. So the gate can hold on a cold open and
-/// never again — which is what makes a screen with no dismissal control safe.
-/// `home_waiting` is re-emitted by every build and the supervisor triggers a
-/// build on file arrival, so a re-armable gate can slam a full-window screen
-/// back over a site the user is already reading. An earlier redesign removed
-/// the escape hatch to contain that hazard; a first-run gate cannot re-arm at all. It also
-/// matches what `KEEP_GENERATIONS_FLOOR = 2` already guarantees in
-/// `store_gc.rs`: from build 2 onward something is always servable.
-///
-/// **It asks about now, not about scan time.** `cloud_outstanding` folds in the
-/// ledger, so an eviction that happened after the scan still counts. The scan
-/// count alone is why 578 evicted images could not influence the gate on the
-/// incident vault.
-///
-/// The trade this makes is deliberate: with a servable generation and a home
-/// page that has since been evicted, the user sees the substitute home page and
-/// the titlebar's download counter rather than the waiting screen. An honest
-/// partial state beats a modal blocking a site moss can actually serve.
-///
-/// **A site rendered without its sources is not a servable site.** `home_ready`
-/// asks only whether an `index.html` was written, and every structural source is
-/// deliberately optional to the render — `read_optional_build_input` for the
-/// theme, `read_page_source` for each page (failing the build over one file
-/// would leave nothing at all to look at). Those together mean a first preview
-/// whose sources were still downloading painted a site made of directory names
-/// and `Unknown` dates, with no stylesheet, and called it ready. That was the
-/// reported symptom: "the preview showed, but the styling and layout are all
-/// wrong". `structural_incomplete` is that condition — see
-/// [`cloud_ledger::structural_missing_count`], which takes it from what the build recorded
-/// rather than re-stat'ing anything here, so the answer is the one the render
-/// pass actually acted on. A second opinion taken at gate time could disagree
-/// with the HTML already written.
-///
-/// Both readers request the download, and both `.moss/theme` and the page tree
-/// are inside the watcher's allowlist, so the arrival does schedule the rebuild
-/// that lowers this — a bounded wait with a live loop behind it, not the
-/// unclearable kind `outcome::Disposition::Report` warns about.
-///
-/// It composes with monotonicity rather than defeating it: `has_sealed_generation`
-/// still short-circuits, so this can only ever hold on a cold open, never slam a
-/// screen over a site the user is already reading.
-///
-/// **This is not the publish decision.** `has_sealed_generation` short-circuits
-/// here because a sealed generation means there is something to *look at*, which
-/// is all a full-window screen needs to know. It says nothing about whether this
-/// build's output is fit to replace it — publishing stopped asking
-/// `structural_incomplete` at all as of a 2026-09-17 revision (see the
-/// deleted `should_publish`), which is the question the same fact was silently
-/// answering before that fix.
-fn cloud_gate_should_hold(
-    home_ready: bool,
-    has_sealed_generation: bool,
-    cloud_outstanding: usize,
-    structural_incomplete: bool,
+/// The last promoted generation may keep a requested page usable while a
+/// newer attempt carries it forward. Its route must exist, not merely a
+/// generation pointer for another page.
+fn previous_route_present(
+    requirement: &crate::system::folder_session::PreviewRequirement,
+    previous: &crate::types::content::SiteHashes,
+    current_dir: &Path,
 ) -> bool {
-    let presentable = home_ready && !structural_incomplete;
-    let servable = presentable || has_sealed_generation;
-    !servable && cloud_outstanding > 0
+    use crate::system::folder_session::PreviewSource;
+    let output = previous.files.keys()
+        .find(|key| crate::build::served_path::served_address(key) == requirement.url_path);
+    output.is_some_and(|key| {
+        let source_matches = match &requirement.source {
+            PreviewSource::File(source) => {
+                let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
+                previous.source_to_output.get(&rel).is_some_and(|mapped| mapped == key)
+            }
+            PreviewSource::Generated => !previous.source_to_output.values().any(|mapped| mapped == key),
+            // An old generated page can share this URL with a newly authored
+            // source still in the cloud. The route alone proves no owner.
+            PreviewSource::Unresolved => false,
+        };
+        // `hashes.json` is advertised before materialization. A failed or
+        // superseded promotion can leave it ahead of `current`, so verify the
+        // immutable route's bytes before using that manifest as proof.
+        let matches_current = previous.files.get(key).is_some_and(|entry| {
+            let (mode, hash) = crate::types::content::parse_entry(entry);
+            mode == crate::types::content::MODE_FILE && std::fs::read(current_dir.join(key))
+                .is_ok_and(|bytes| format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&bytes)) == hash)
+        });
+        source_matches && matches_current
+            && crate::build::manifest::required_page_outputs_present(&previous.files, key, current_dir)
+    })
 }
 
-// `should_publish` (deleted 2026-09-17) used to withhold
-// publishing whenever `structural_incomplete` was true — the same rule
-// `cloud_gate_should_hold` still uses for the SHOWING question. It existed to
-// solve this: a build whose page sources were still downloading
-// rendered directory names and `Unknown` dates in place of real titles, and
-// that placeholder used to be allowed to overwrite a real sealed generation.
-// Withholding fixed the regression, but every call site read the SAME
-// `publishable` flag it produced, so a single structural-source eviction
-// anywhere on the site — one image-heavy page still syncing, `config.toml`
-// mid-write, `footer.md` unreadable — froze the site's published output at
-// its last-arrived state for as long as the eviction lasted, silently.
-//
-// The fix is upstream of this decision, not in it: every structural source
-// now has somewhere real to fall back to when a build cannot read it — a
-// page carries forward its last output (`carry_forward_deferred_page`),
-// `config.toml` already defaulted, the stylesheet already defaulted
-// (`read_optional_build_input`), and a slot-only source falls back to its own
-// last-known-good (`footer::apply_last_known_good_fallback`). A build built
-// this way is no longer a *wrong* rendering of the site, only a possibly
-// stale one — and staleness is a publish-time gate on its own
-// (`BuildRecords::stale_sources` / `deploy::refuse_publish`), not a reason to
-// stop showing the user their own site.
+/// Promote the current page and shared configuration before background work.
+/// The renderer's later reads can promote newly discovered transclusions.
+fn request_preview_inputs(
+    root: &Path,
+    requirement: Option<&crate::system::folder_session::PreviewRequirement>,
+) {
+    use crate::system::folder_session::PreviewSource;
+    if let Some(crate::system::folder_session::PreviewRequirement { source: PreviewSource::File(source), .. }) = requirement {
+        let focused = root.join(source);
+        if crate::build::icloud::is_still_in_the_cloud(&focused) {
+            crate::build::cloud_readiness::request_download_foreground(&focused);
+        }
+    }
+    for shared in [root.join(".moss/config.toml"), root.join(".moss/places.toml"), root.join(".moss/theme/style.css"), root.join(".moss/theme/script.js")] {
+        if crate::build::icloud::is_still_in_the_cloud(&shared) {
+            crate::build::cloud_readiness::request_download_foreground(&shared);
+        }
+    }
+}
 
 fn emit_initial_build_complete(services: Option<&BuildServices>, site_path: Option<&Path>) {
     let (Some(svc), Some(site_path)) = (services, site_path) else {
@@ -329,20 +291,33 @@ fn home_page_is_a_substitute(project_structure: &ProjectStructure, folder_path: 
 /// for, so it stayed degraded until the user happened to touch the file.
 /// Asking is what makes it self-healing: the supervisor sees the arrival and
 /// rebuilds.
-fn read_notebook_sibling(source: &std::path::Path) -> Option<String> {
+fn read_notebook_sibling(source: &std::path::Path, evidence: &super::cloud_ledger::InputEvidence) -> Option<String> {
+    evidence.require(source, super::cloud_ledger::InputRole::PageContent);
     if crate::build::icloud::is_evicted(source) {
+        evidence.pending(source);
         crate::build::cloud_readiness::request_download(source);
         log::warn!("notebook {} is still in the cloud — building without it", source.display());
         return None;
     }
     match fs::read_to_string(source) {
-        Ok(text) => Some(text),
+        Ok(text) => {
+            evidence.read_bytes(source, text.as_bytes());
+            Some(text)
+        },
         Err(e) if crate::build::icloud::is_offline_not_absent(source, &e) => {
+            evidence.pending(source);
             crate::build::cloud_readiness::request_download(source);
             log::warn!("notebook {} is unreadable but not gone — building without it", source.display());
             None
         }
-        Err(_) => None,
+        Err(e) => {
+            if crate::build::icloud::is_definitely_absent(source, &e) {
+                evidence.absent(source);
+            } else {
+                evidence.read_error(source, e.to_string());
+            }
+            None
+        },
     }
 }
 
@@ -387,6 +362,7 @@ fn run_notebook_processing(
     source_path: &str,
     staging_dir: &std::path::Path,
     cancel_flag: Option<&std::sync::atomic::AtomicBool>,
+    evidence: &super::cloud_ledger::InputEvidence,
 ) -> Vec<NotebookReceipt> {
     use crate::build::assets::asset_resolver::resolve_asset_directory;
     use crate::build::notebook::{collect_notebooks, generate_contents_manifest, generate_viewer_html_with_content, jupyterlite_asset_config, patch_jupyterlite_config, CONTENTS_ALL_JSON_FILE};
@@ -394,6 +370,11 @@ fn run_notebook_processing(
     let items = collect_notebooks(notebook_files);
     if items.is_empty() {
         return Vec::new();
+    }
+    // Register before any asset-resolution fallback can leave the function.
+    // A skipped notebook must remain an unresolved input of this attempt.
+    for item in &items {
+        evidence.require(&std::path::Path::new(source_path).join(&item.source_path), super::cloud_ledger::InputRole::PageContent);
     }
 
     // (Pre-Track A this called `svc.notebook_cancellation.start_new_conversion()`
@@ -459,8 +440,21 @@ fn run_notebook_processing(
                 // produces relative paths under the source folder — known valid.
                 let out_path = crate::build::served_path::ServedPath::from_source(&item.source_path).unwrap();
                 match stage_copy(&source, &out_path, staging_dir) {
-                    Ok(hash) => fallback_paths.push((out_path, hash)),
-                    Err(e) => log::warn!("Failed to copy notebook {}: {}", item.source_path, e),
+                    Ok(hash) => {
+                        // Hash the bytes actually copied into staging using
+                        // the same source-evidence hash as other notebook reads.
+                        match std::fs::read(staging_dir.join(out_path.as_str())) {
+                            Ok(bytes) if crate::build::assets::paths::compute_binary_hash(&bytes) == hash =>
+                                evidence.read_bytes(&source, &bytes),
+                            Ok(_) => evidence.read_error(&source, "notebook changed during copy".into()),
+                            Err(e) => evidence.read_error(&source, e.to_string()),
+                        }
+                        fallback_paths.push((out_path, hash));
+                    }
+                    Err(e) => {
+                        evidence.read_error(&source, e.clone());
+                        log::warn!("Failed to copy notebook {}: {}", item.source_path, e);
+                    }
                 }
             }
             return fallback_paths;
@@ -636,6 +630,7 @@ fn run_notebook_processing(
         let source = std::path::Path::new(source_path).join(&item.source_path);
         let item_source_path = item.source_path.clone();
         let staging_owned = staging_dir.to_path_buf();
+        let evidence_for_copy = evidence.clone();
         let notebook_paths = with_io_timeout(&item.source_path, move || {
             let mut produced = Vec::new();
             // Copy .ipynb to its natural served path. Both this path and the
@@ -665,7 +660,7 @@ fn run_notebook_processing(
 
             // Generate viewer HTML alongside the .ipynb.
             // Read notebook content to extract title from metadata or first heading.
-            let notebook_content = read_notebook_sibling(&source);
+            let notebook_content = read_notebook_sibling(&source, &evidence_for_copy);
             let viewer_html = generate_viewer_html_with_content(
                 &notebook_filename,
                 "/jupyter",
@@ -681,6 +676,10 @@ fn run_notebook_processing(
         match notebook_paths {
             IoOutcome::Done(paths) => generated_paths.extend(paths),
             IoOutcome::TimedOut => {
+                // The detached reader may succeed after this build has already
+                // skipped its receipts. Keep that late success from clearing
+                // the exact attempt's unresolved-input evidence.
+                evidence.read_error(&std::path::Path::new(source_path).join(&item.source_path), "notebook processing timed out".into());
                 // Surface the skip to the UI as a warning attached to the
                 // notebooks progress channel. Without this, the user sees a
                 // notebook silently skipped (the log line is invisible from
@@ -705,6 +704,7 @@ fn run_notebook_processing(
                 continue;
             }
             IoOutcome::Errored(_) => {
+                evidence.read_error(&std::path::Path::new(source_path).join(&item.source_path), "notebook processing failed".into());
                 // Error already logged inside with_io_timeout. Don't surface
                 // as a UI warning yet — errored I/O is often transient (file
                 // deleted mid-build by cloud-sync) and noisy to toast. Future
@@ -774,7 +774,7 @@ fn run_notebook_processing(
         let mut contents: Vec<String> = Vec::new();
         for item in &items {
             let source = std::path::Path::new(source_path).join(&item.source_path);
-            if let Some(content) = read_notebook_sibling(&source) {
+            if let Some(content) = read_notebook_sibling(&source, evidence) {
                 let fname = std::path::Path::new(&item.source_path)
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -881,6 +881,9 @@ pub struct PipelineRunOutput {
     /// Missing authored asset evidence from this exact build. Empty is the
     /// completed clean answer and is meaningful.
     pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    /// Structural inputs this attempt still needs before its generation can
+    /// replace the durable baseline.
+    pub unresolved_inputs: Vec<String>,
     pub cancelled: bool,
     /// Whether the build left a home page in the directory the preview serves.
     ///
@@ -894,32 +897,14 @@ pub struct PipelineRunOutput {
     /// `false` on an empty site too: there is genuinely nothing to show. The
     /// caller distinguishes the cases via `is_empty`.
     pub home_ready: bool,
-    /// Whether this build's output may replace the site already published.
-    ///
-    /// `false` only when the folder closed mid-build (`cancelled`) — this
-    /// build's own preview switch was already declined, and the seal tail
-    /// must decline to repoint `current` at it too
-    /// (`ship::Promotion::Withheld`). Until 2026-09-17 this was also `false`
-    /// whenever a structural source — a page, the config, the user
-    /// stylesheet — was still in the cloud; see the deleted `should_publish`
-    /// for why that stopped being this flag's job. Staleness from an
-    /// unreadable structural source is now a publish-time gate of its own
-    /// (`BuildRecords::stale_sources` / `deploy::refuse_publish`), not a
-    /// reason to withhold the build the user is looking at.
+    /// Whether this build's focused output may replace the preview. The seal
+    /// tail separately checks complete-generation evidence before changing
+    /// the durable manifest or `current` generation.
     pub publishable: bool,
     /// The render number `lifecycle::show_render` minted for this build, which
     /// the seal tail hands to `lifecycle::promote`. `None` for a build that
     /// stopped before it rendered.
     pub render_seq: Option<u64>,
-    /// Structural sources (a page, `config.toml`, the user stylesheet) this
-    /// build could not read, relative to `folder_path` — empty when this
-    /// build read everything it needed. Recorded unconditionally into
-    /// `BuildRecords::stale_sources` and read back by
-    /// `deploy::refuse_publish`: a page carrying forward its last output is a
-    /// real page, but a stranger reading it is reading last build's content,
-    /// and a publish landing while that is true should say so rather than
-    /// ship silently. See `cloud_ledger::structural_stale_paths`.
-    pub stale_sources: Vec<String>,
 }
 
 /// Resolves all native/plugin slot content after marked HTML and article-map
@@ -1057,7 +1042,19 @@ fn build_inner(
     // This build's record of what it could not read starts empty. The gate is
     // the build's own output, recomputed fresh on every attempt — a file that
     // arrived since the last build must not still be counted against it.
-    super::cloud_ledger::begin_build(Path::new(folder_path));
+    let input_evidence = super::cloud_ledger::InputEvidence::new(Path::new(folder_path));
+    request_preview_inputs(
+        root.path(),
+        services.and_then(|s| s.session.as_ref()).and_then(|s| s.preview_requirement()).as_ref(),
+    );
+    for path in &project_structure.evicted_paths {
+        if path.file_name().is_some_and(|name| name == "footer.md") {
+            input_evidence.require(path, super::cloud_ledger::InputRole::Layout);
+        } else if super::cloud_ledger::is_structural_source(path) {
+            input_evidence.require(path, super::cloud_ledger::InputRole::PageMetadata);
+        }
+        input_evidence.pending(path);
+    }
 
     let icloud_count = project_structure.evicted_count;
     // Detected unconditionally, not only when the scan found something.
@@ -1088,11 +1085,7 @@ fn build_inner(
         // `is_still_in_the_cloud`, not `is_evicted`: a pre-Sonoma placeholder
         // leaves no file at the real path at all, so the plain eviction check
         // would count a file that has not arrived as arrived.
-        let remaining = evicted
-            .iter()
-            .filter(|p| crate::build::icloud::is_still_in_the_cloud(p))
-            .count()
-            .max(super::cloud_ledger::outstanding(Path::new(folder_path)));
+        let remaining = input_evidence.pending_count();
         // A total below `remaining` would render as "700 of 3 downloaded".
         let total = total.max(remaining);
         let phase = if waiting { "home_waiting" } else { "home_ready" };
@@ -1108,11 +1101,13 @@ fn build_inner(
             phase,
             provider: cloud_provider,
             total,
+            downloaded: 0,
             remaining,
             // The build does not compute the blocking subset; its own gate
             // verdict is the answer to that question.
             blocking: None,
             unavailable: &[],
+            unavailable_count: 0,
         });
     };
 
@@ -1155,6 +1150,21 @@ fn build_inner(
     // If we read after, we'd be comparing new hashes against themselves!
     let previous_hashes = load_previous_hashes(folder_path);
     log::debug!(target: "timing", "[build] staging: load_hashes: {:?}", build_start.elapsed());
+    let home_substituted = home_page_is_a_substitute(project_structure, folder_path);
+
+    let initial_request = services
+        .and_then(|s| s.session.as_ref())
+        .and_then(|s| s.preview_requirement());
+    let elected_home = crate::system::folder_session::PreviewRequirement {
+        url_path: "/".into(),
+        source: project_structure.homepage_file.as_ref()
+            .map(|path| crate::system::folder_session::PreviewSource::File(path.into()))
+            .unwrap_or(crate::system::folder_session::PreviewSource::Generated),
+        revision: 0,
+    };
+    let initial_route = initial_request.as_ref().unwrap_or(&elected_home);
+    let prior_route = !(home_substituted && initial_route.url_path == "/")
+        && previous_route_present(initial_route, &previous_hashes, &paths.current_ptr());
 
     // An evicted home page used to block this thread here for up to
     // HOME_PAGE_DEADLINE, polling for it to materialize before the build could
@@ -1212,6 +1222,11 @@ fn build_inner(
     let _stage_write_guard = services
         .and_then(|s| s.session.as_ref())
         .map(|s| s.blocking_lock_stage_write());
+    // A complete prior route can stay on immutable `current` while staging is
+    // rewritten. Final readiness below decides whether to show the new stage.
+    if prior_route {
+        crate::build::lifecycle::protect_current_before_rebuild(&paths);
+    }
     let lock_wait = t_lock.elapsed();
     log::log!(
         target: "timing",
@@ -1263,7 +1278,34 @@ fn build_inner(
     // independent parses of the same file. Still timed so it can be weighed
     // against the lock wait.
     let t_config = std::time::Instant::now();
-    let cfg = crate::build::site_config::read_project_config(folder_path).ok();
+    let config_path = paths.config();
+    input_evidence.require(&config_path, super::cloud_ledger::InputRole::SharedConfig);
+    let cfg = match crate::build::site_config::read_managed_toml_no_wait(&config_path) {
+        Ok(Some(text)) => {
+            input_evidence.read_bytes(&config_path, text.as_bytes());
+            match crate::config::ConfigFile::parse(&text) {
+                Ok(parsed) => Some(parsed),
+                Err(error) => {
+                    input_evidence.read_error(&config_path, error.clone());
+                    log::warn!("config.toml could not be parsed: {error}");
+                    None
+                }
+            }
+        }
+        Ok(None) => {
+            input_evidence.absent(&config_path);
+            None
+        }
+        Err(error) => {
+            if super::icloud::is_still_in_the_cloud(&config_path) {
+                input_evidence.pending(&config_path);
+            } else {
+                input_evidence.read_error(&config_path, error.clone());
+            }
+            log::warn!("config.toml could not be read: {error}");
+            None
+        }
+    };
     crate::build::progress::report_config_version_ahead(progress_sender, cfg.as_ref());
     let site_str =
         |field: &str| cfg.as_ref().and_then(|c| c.site_str(field)).map(str::to_string);
@@ -1289,7 +1331,36 @@ fn build_inner(
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
         crate::i18n::Language::from_code(&site_lang).unwrap_or(crate::i18n::Language::En),
     );
-    let gazetteer = crate::vault::places::load_gazetteer(&paths.places());
+    let places_toml_path = paths.places();
+    input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
+    let (places_toml_stat, places_read) =
+        crate::build::stat::stat_then(&places_toml_path, crate::build::site_config::read_managed_toml_no_wait);
+    let (gazetteer, places_content) = match places_read {
+        Ok(Some(content)) => match toml::from_str::<toml::value::Table>(&content) {
+            Ok(table) => {
+                input_evidence.read_bytes(&places_toml_path, content.as_bytes());
+                (crate::vault::places::parse_gazetteer(&table), Some(content))
+            }
+            Err(e) => {
+                input_evidence.read_error(&places_toml_path, e.to_string());
+                log::warn!("places.toml could not be parsed: {e}");
+                (crate::vault::places::Gazetteer::default(), None)
+            }
+        },
+        Ok(None) => {
+            input_evidence.absent(&places_toml_path);
+            (crate::vault::places::Gazetteer::default(), None)
+        }
+        Err(e) => {
+            if super::icloud::is_still_in_the_cloud(&places_toml_path) {
+                input_evidence.pending(&places_toml_path);
+            } else {
+                input_evidence.read_error(&places_toml_path, e.clone());
+            }
+            log::warn!("places.toml could not be read: {e}");
+            (crate::vault::places::Gazetteer::default(), None)
+        }
+    };
     crate::build::terms::places::attach_parents(&mut kinds, &gazetteer);
     let place_maps = kinds
         .iter()
@@ -1411,25 +1482,14 @@ fn build_inner(
     // Construct PendingManifest seeded with previous_hashes (carry-forward).
     // Passed to generate_blocking_content so Pattern A emits register via ctx.emit.
     // After the call, pending holds the accumulated site_hashes + blocking_keys;
-    let mut pending = PendingManifest::new(previous_hashes.clone());
-    // `.moss/places.toml`: same reasoning as `.moss/config.toml`'s
-    // registration inside `generate_blocking_content` — read fresh (a
-    // second, cheap read; `load_gazetteer` above already parsed it but kept
-    // no raw bytes to hash) and registered here, the earliest point
-    // `pending` exists, rather than inside `generate_blocking_content` where
-    // the file has no other reader. A read error that is not "genuinely
-    // absent" degrades the same way `load_gazetteer` itself does above:
-    // skip, keep building. See `manifest::is_reload_tracked_source_key`.
-    let places_toml_path = paths.places();
-    let (places_toml_stat, places_toml) =
-        crate::build::stat::stat_then(&places_toml_path, crate::build::site_config::read_managed_toml);
-    match places_toml {
-        Ok(Some(content)) => pending.register_page_source_hash(
+    let mut pending = PendingManifest::for_build(previous_hashes.clone(), input_evidence.clone());
+    // Register exactly the bytes parsed above; a second read here could
+    // certify different bytes from those that shaped the rendered pages.
+    if let Some(content) = places_content.as_ref() {
+        pending.register_page_source_hash(
             crate::build::manifest::PLACES_TOML_SOURCE_KEY.to_string(),
             crate::build::render::blocking::source_metadata(places_toml_stat, content.as_bytes()),
-        ),
-        Ok(None) => {}
-        Err(e) => log::warn!("[modified_paths] places.toml unreadable, not tracked this build: {e}"),
+        );
     }
     // `documents` is the parsed page slice (production type `ParsedDocument`,
     // not yet the typed-AST `moss_core::ast::Document`). An earlier change
@@ -1530,7 +1590,6 @@ fn build_inner(
     // gate after it would paint the substitute home page first and drop the
     // waiting screen over it a moment later — a flash of a site the user does
     // not have. Emitted here, the frontend never renders the wrong answer.
-    let home_substituted = home_page_is_a_substitute(project_structure, folder_path);
     let home_ready = crate::build::io_utils::output_present(&stage_dir.join("index.html")) && !home_substituted;
     // Raising the gate is a claim about the CLOUD, and `home_substituted` is
     // already exactly that claim: it is true only when a file still up there
@@ -1544,26 +1603,6 @@ fn build_inner(
     // nothing is evicted any more, so a symmetric condition would leave the
     // waiting screen up over a finished site forever.
     //
-    // Computed here, ahead of the cancellation check below, so a cancelled
-    // build reports it too — `BuildRecords::stale_sources` describes what THIS
-    // build learned about the folder, on the same "always record real data"
-    // footing as publish preflight evidence (`build.rs`'s projection install), not a
-    // verdict scoped to builds that went on to publish. The render pass that
-    // populates the ledger has already run by this point either way.
-    let still_in_the_cloud_at_scan: Vec<std::path::PathBuf> = project_structure
-        .evicted_paths
-        .iter()
-        .filter(|p| super::icloud::is_still_in_the_cloud(p))
-        .cloned()
-        .collect();
-    let stale_sources: Vec<String> = super::cloud_ledger::structural_stale_paths(
-        &still_in_the_cloud_at_scan,
-        Path::new(folder_path),
-    )
-    .iter()
-    .filter_map(|p| p.strip_prefix(folder_path).ok())
-    .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
-    .collect();
     // The last cancellation check before this build touches app-global state.
     //
     // `SiteDirectoryState` is shared across folders, so `switch_to` below
@@ -1586,51 +1625,45 @@ fn build_inner(
             build_documents: documents,
             content_hashes: content_hashes_for_watch,
             missing_references: missing_references_for_publish,
+            unresolved_inputs: input_evidence.unresolved_structural(),
             cancelled: true,
             home_ready,
             // The folder is closed; nothing downstream should promote this
             // build's generation over whatever the user opens next.
             publishable: false,
             render_seq: None,
-            stale_sources,
         });
     }
 
-    // How much of this site is still in the cloud, as of NOW.
-    //
-    // `icloud_count` alone is a known blindness: it comes from the
-    // source scan, which runs before the build and prunes dot-directories, so it
-    // is stale by construction for anything the provider evicted afterwards. On
-    // the incident vault it was the reason 578 evicted images could not
-    // influence the gate. The ledger is the live half — every read site that
-    // classified a cloud failure during THIS build wrote to it — so the two are
-    // combined rather than one replacing the other: the scan sees files no read
-    // site reached, and the ledger sees evictions the scan predates.
-    let cloud_outstanding = icloud_count.max(super::cloud_ledger::outstanding(Path::new(folder_path)));
+    // This attempt's observed pending inputs, including scan candidates and
+    // read failures, determine the progress shown for this render.
+    let cloud_outstanding = input_evidence.pending_count();
 
-    // Did this build render without sources it needed — a page, the config, the
-    // user stylesheet — because they are still downloading? See
-    // `cloud_ledger::structural_missing_count` for why both halves are
-    // consulted (`still_in_the_cloud_at_scan` computed above, ahead of the
-    // cancellation check).
-    let structural_missing = super::cloud_ledger::structural_missing_count(
-        &still_in_the_cloud_at_scan,
-        super::cloud_ledger::structural_outstanding(Path::new(folder_path)),
+    let embed_graph = moss_core::dep_graph::DepGraph::default().with_embed_pairs(
+        documents.iter().flat_map(|doc| doc.embed_deps.iter()
+            .map(|(target, embedder)| (target.as_str(), embedder.as_str()))),
     );
-    let structural_incomplete = structural_missing > 0;
-
-    // The policy — monotonic, and asking about now rather than about scan time
-    // — lives in `cloud_gate_should_hold`, next to its own reasoning and tests.
-    let waiting =
-        cloud_gate_should_hold(home_ready, current_ptr_exists, cloud_outstanding, structural_incomplete);
-    // Whether this build's output may replace what is already served — a
-    // different question from whether to cover the window with the waiting
-    // screen (`waiting`, above). Always true here: the only remaining reason
-    // to withhold is the folder-closed cancellation, which already returned
-    // above before this line runs. See the deleted `should_publish` for why
-    // structural completeness no longer decides this. Carried out to the seal
-    // tail in `PipelineRunOutput`.
-    let publishable = true;
+    let preview_embeds = documents.iter().filter_map(|doc| doc.source_path.as_ref())
+        .map(|source| (source.clone(), embed_graph.embed_closure(source).into_iter().collect()))
+        .collect();
+    pending.set_preview_dependencies(preview_embeds, place_maps_for_places_data.is_some());
+    // Navigation may change while this render runs; only the current request
+    // may decide which generation becomes visible.
+    let current_request = services
+        .and_then(|s| s.session.as_ref())
+        .and_then(|s| s.preview_requirement());
+    let request = current_request.as_ref().unwrap_or(&elected_home);
+    let prior_route = !(home_substituted && request.url_path == "/")
+        && previous_route_present(request, &previous_hashes, &paths.current_ptr());
+    let focused_pending = matches!(pending.preview_readiness(request, &stage_dir), crate::build::manifest::PreviewReadiness::Pending);
+    let waiting = focused_pending && !prior_route;
+    if focused_pending && prior_route {
+        crate::build::lifecycle::protect_current_before_rebuild(&paths);
+    }
+    // This flag describes the preview switch and watcher baseline. The seal
+    // tail separately checks the complete generation's input evidence before
+    // changing the durable build baseline or promoting `current`.
+    let publishable = !focused_pending;
     if waiting {
         super::cloud_readiness::mark_gated(folder_path);
         emit_cloud_gate(true, &project_structure.evicted_paths, cloud_outstanding);
@@ -1727,6 +1760,7 @@ fn build_inner(
             &background_ctx.source_path,
             &background_ctx.staging_dir,
             cancel,
+            &input_evidence,
         );
         // Register the receipts. `pending` is still alive here (constructed in
         // build_inner before generate_blocking_content and passed as &mut); the
@@ -1998,11 +2032,11 @@ fn build_inner(
         build_documents: documents,
         content_hashes: content_hashes_for_watch,
         missing_references: missing_references_for_publish,
+        unresolved_inputs: input_evidence.unresolved_structural(),
         cancelled: false,
         home_ready,
         publishable,
         render_seq,
-        stale_sources,
     })
 }
 

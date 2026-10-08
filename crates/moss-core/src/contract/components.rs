@@ -3823,13 +3823,19 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-moss-place-embed",
                 values: &[],
                 default: "",
-                description: "Presence-only. Set on a `style:map` embed's own figure, or an article's locator figure, when the explorer is on — never alongside `data-moss-places-explorer` on the same figure. `places-explorer/embed.ts` reads this (and `data-hydrate-url`) to build its own lazy iframe behind the static figure.",
+                description: "Presence-only. Set on a route-free `style:map` embed or article locator when the explorer is on. The stable 3:2 host shows the interactive iframe after READY, with the static SVG reserved for no-JS and failure fallback.",
             },
             DataAttr {
                 name: "data-hydrate-url",
                 values: &[],
                 default: "",
                 description: "The places root's own URL, scoped by `place=<key>` (a `style:map` embed) or `article=<url>` (the locator's own hosting page) and carrying `embed=1`. Present only alongside `data-moss-place-embed`.",
+            },
+            DataAttr {
+                name: "data-moss-place-embed-state",
+                values: &["waiting", "consent", "loading", "ready", "fallback"],
+                default: "",
+                description: "Runtime host lifecycle. `waiting` is near-viewport lazy load, `consent` waits for the Save-Data action, `loading` is the READY handshake, `ready` exposes the iframe, and `fallback` restores the static SVG after timeout.",
             },
             DataAttr {
                 name: "data-moss-places-embed-mode",
@@ -4096,7 +4102,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-places-chip",
         data_attrs: &[],
-        example_html: r#"<div class="moss-places-chip-trail"><button class="moss-places-chip-crumb">All articles</button></div>"#,
+        example_html: r#"<div class="moss-places-chip-trail"><button class="moss-places-chip-crumb">All places</button></div>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "1",
@@ -4306,8 +4312,8 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         since: "1",
         description: "Visually-hidden polite live region announcing scope and selection changes — never pan or zoom, and never a visible status line.",
     },
-    // Embeds: `places-explorer/embed.ts`'s own lazy-hydrated iframe, behind
-    // a `style:map` or locator poster. Created by that runtime, like the
+    // Embeds: `places-explorer/embed.ts`'s own lazy-hydrated iframe, in the
+    // stable host for a `style:map` or locator. Created by that runtime, like the
     // rest of this section — `data-moss-place-embed`/`data-hydrate-url`
     // above, on `moss-place-map`, are the one exception (Rust-emitted).
     ComponentEntry {
@@ -4319,7 +4325,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "1",
-        description: "The lazy-hydrated iframe `embed.ts` creates behind a `style:map`/locator poster once it nears the viewport (or on tap, under Save-Data). Transparent and non-interactive until it cross-fades in.",
+        description: "The lazy-hydrated iframe `embed.ts` creates in the stable 3:2 host when near the viewport (or after an explicit Save-Data action). Hidden and non-interactive until its explorer posts READY.",
     },
     ComponentEntry {
         class: "moss-places-embed-frame--settled",
@@ -4330,7 +4336,29 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "1",
-        description: "Added once the iframe's own explorer posts back ready: cross-fades it over the static poster. Never added at all when the fetch fails or times out — the poster stays exactly as it was.",
+        description: "Added once the iframe's own explorer posts READY. Enables the canonical iframe as the sole visible map; it does not animate between two map surfaces.",
+    },
+    ComponentEntry {
+        class: "moss-places-embed-status",
+        kind: "instance",
+        parent: "moss-place-map",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-places-embed-status" role="status">Loading interactive map…</span>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "Localized waiting/loading status inside the stable embed host; removed when the iframe posts READY or the static fallback is restored.",
+    },
+    ComponentEntry {
+        class: "moss-places-embed-load",
+        kind: "instance",
+        parent: "moss-place-map",
+        data_attrs: &[],
+        example_html: r#"<button type="button" class="moss-places-embed-load">Load interactive map</button>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "Localized keyboard-accessible opt-in action for Save-Data or slow connections. No iframe request starts until this button is activated.",
     },
     ComponentEntry {
         class: "moss-places-coop-hint",

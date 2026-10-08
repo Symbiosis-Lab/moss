@@ -30,8 +30,10 @@ export interface PlacesStrings {
   worksInView: string;
   /** Link text to a work's own article. */
   readArticle: string;
-  /** The scope chip's root crumb — every other crumb widens toward this. */
+  /** The scope chip's root crumb — every other crumb widens toward this. Names the places the map shows, not the pages: a site's located pages need not be articles. */
   chipAll: string;
+  /** The "All articles" segment of the "This article | All articles" switch, which exists only on an article's own map. */
+  chipAllArticles: string;
   /** The scope chip's "this article" segment (the article scope's own crumb). */
   chipThisArticle: string;
   /** `aria-label` on the "This article | All articles" switch's group. */
@@ -44,6 +46,12 @@ export interface PlacesStrings {
   chipShowHidden: string;
   /** `{name}` placeholder, filled with the embed's own place or article display name (`data-embed-name`, Rust-emitted, never translated — it is a proper noun) — the `title` on a `style:map`/locator embed's lazily-hydrated iframe (`embed.ts`'s `buildIframe`). */
   mapEmbedTitle: string;
+  /** Visible loading status while the interactive embed boots. */
+  mapEmbedLoading: string;
+  /** Status before a lazy embed enters the viewport. */
+  mapEmbedWaiting: string;
+  /** Accessible opt-in button on Save-Data / slow connections. */
+  mapEmbedLoad: string;
   /** Between the names of several authors on a card; the author-to-date separator is a fixed middle dot instead (`cards.ts`). */
   listSeparator: string;
 }
@@ -61,13 +69,17 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "Showing all works again.",
     worksInView: "Works in view",
     readArticle: "Read article",
-    chipAll: "All articles",
+    chipAll: "All places",
+    chipAllArticles: "All articles",
     chipThisArticle: "This article",
     chipScopeGroup: "Which articles to show",
     scopeThisArticle: "Showing only this article.",
     scopeAllArticles: "Showing all articles.",
     chipShowHidden: "Show hidden places",
     mapEmbedTitle: "Map: {name}",
+    mapEmbedLoading: "Loading interactive map…",
+    mapEmbedWaiting: "The map loads when it is near the screen.",
+    mapEmbedLoad: "Load interactive map",
     listSeparator: ", ",
   },
   "zh-hans": {
@@ -82,13 +94,17 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "已显示全部作品。",
     worksInView: "视野中的作品",
     readArticle: "阅读原文",
-    chipAll: "全部文章",
+    chipAll: "全部地点",
+    chipAllArticles: "全部文章",
     chipThisArticle: "本文",
     chipScopeGroup: "显示哪些文章",
     scopeThisArticle: "只显示本文。",
     scopeAllArticles: "已显示全部文章。",
     chipShowHidden: "显示隐藏地点",
     mapEmbedTitle: "地图：{name}",
+    mapEmbedLoading: "正在加载互动地图…",
+    mapEmbedWaiting: "地图进入视野后会自动加载。",
+    mapEmbedLoad: "加载互动地图",
     listSeparator: "、",
   },
   "zh-hant": {
@@ -103,13 +119,17 @@ const STRINGS: Record<Lang, PlacesStrings> = {
     scopeCleared: "已顯示全部作品。",
     worksInView: "視野中的作品",
     readArticle: "閱讀原文",
-    chipAll: "全部文章",
+    chipAll: "全部地點",
+    chipAllArticles: "全部文章",
     chipThisArticle: "本文",
     chipScopeGroup: "顯示哪些文章",
     scopeThisArticle: "只顯示本文。",
     scopeAllArticles: "已顯示全部文章。",
     chipShowHidden: "顯示隱藏地點",
     mapEmbedTitle: "地圖：{name}",
+    mapEmbedLoading: "正在載入互動地圖…",
+    mapEmbedWaiting: "地圖進入視野後會自動載入。",
+    mapEmbedLoad: "載入互動地圖",
     listSeparator: "、",
   },
 };

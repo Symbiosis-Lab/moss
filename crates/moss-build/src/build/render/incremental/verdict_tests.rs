@@ -48,6 +48,16 @@ fn doc(url: &str, kind: PageKind, body: &str, description: Option<&str>) -> Pars
     }
 }
 
+fn generated_folder(url: &str, label: &str) -> ParsedDocument {
+    ParsedDocument {
+        url_path: url.to_string(),
+        title: label.to_string(),
+        label: label.to_string(),
+        kind: PageKind::Folder,
+        ..Default::default()
+    }
+}
+
 /// One folder index (a listing host) over two described articles, plus the
 /// root home. The two hosts are what re-rendered unconditionally before
 /// this model.
@@ -140,6 +150,121 @@ fn a_no_op_rebuild_skips_every_page_including_every_listing_host() {
             assert_eq!((*tracked, *changed, *by_listing_group), (4, 0, 0));
         }
         other => panic!("expected an incremental verdict, got {other:?}"),
+    }
+}
+
+#[test]
+fn generated_folder_pages_get_stable_facade_identities_and_skip_on_noop() {
+    let h = Harness::new();
+    let docs = vec![
+        doc("index.html", PageKind::Folder, "home body", Some("Home")),
+        generated_folder("writings/index.html", "Writings"),
+        doc("writings/alpha/index.html", PageKind::Article, "Alpha lede.\n\nTail.", None),
+    ];
+
+    assert_full(&h.run(&docs), FullCause::ColdCache);
+    let verdict = h.run(&docs);
+    let generated = docs.iter().find(|d| d.source_path.is_none()).unwrap();
+    assert!(verdict.may_skip_document(generated));
+    assert!(verdict.may_skip("index.md"));
+    assert!(verdict.may_skip("writings/alpha/index.md"));
+}
+
+#[test]
+fn generated_place_data_hash_invalidates_only_the_explorer_root() {
+    let h = Harness::new();
+    let mut place_root = generated_folder("places/index.html", "Places");
+    place_root.is_place_namespace_root = true;
+    place_root.explorer_places_hash = Some("places-hash-a".into());
+    let unrelated = generated_folder("writings/index.html", "Writings");
+    let docs = vec![place_root.clone(), unrelated.clone()];
+
+    assert_full(&h.run(&docs), FullCause::ColdCache);
+    assert!(h.run(&docs).may_skip_document(&place_root));
+
+    place_root.explorer_places_hash = Some("places-hash-b".into());
+    let verdict = h.run(&[place_root.clone(), unrelated.clone()]);
+    assert!(matches!(verdict.basis(), VerdictBasis::Incremental { .. }));
+    assert!(!verdict.may_skip_document(&place_root), "the root embeds the changed places-data URL");
+    assert!(verdict.may_skip_document(&unrelated), "unrelated generated pages do not embed that URL");
+}
+
+#[test]
+fn generated_folder_listing_rerenders_when_a_child_excerpt_moves() {
+    let h = Harness::new();
+    let folder = generated_folder("writings/index.html", "Writings");
+    let home = doc("index.html", PageKind::Folder, "home", Some("Home"));
+    let child = doc("writings/alpha/index.html", PageKind::Article, "Alpha lede.\n\nTail.", None);
+    let initial = vec![home.clone(), folder.clone(), child.clone()];
+    assert_full(&h.run(&initial), FullCause::ColdCache);
+    assert!(h.run(&initial).may_skip_document(&folder));
+
+    let mut changed_child = child;
+    changed_child.content = "A changed first paragraph.\n\nTail.".to_string();
+    let changed = vec![home, folder.clone(), changed_child];
+    let verdict = h.run(&changed);
+    assert!(!verdict.may_skip_document(&folder), "a generated listing must follow its child's resolved excerpt");
+}
+
+#[test]
+fn generated_term_listing_rerenders_when_an_also_in_member_excerpt_moves() {
+    let h = Harness::new();
+    let mut term_page = generated_folder("tags/craft/index.html", "Craft");
+    term_page.term_sections = Some(vec![(Some("tags".into()), vec!["posts/alpha/".into()])]);
+    let home = doc("index.html", PageKind::Folder, "home", Some("Home"));
+    let mut member = doc("posts/alpha/index.html", PageKind::Article, "First paragraph.\n\nTail.", None);
+    member.also_in = Some(vec!["tags/craft".into()]);
+    let initial = vec![home.clone(), term_page.clone(), member.clone()];
+
+    assert_full(&h.run(&initial), FullCause::ColdCache);
+    assert!(h.run(&initial).may_skip_document(&term_page));
+
+    member.content = "Updated first paragraph.\n\nTail.".into();
+    let verdict = h.run(&[home, term_page.clone(), member]);
+    assert!(!verdict.may_skip_document(&term_page), "the canonical also_in listing must invalidate its generated term page");
+}
+
+#[test]
+fn place_member_location_change_forces_generated_map_rerender() {
+    let h = Harness::new();
+    let mut place_root = generated_folder("places/index.html", "Places");
+    place_root.is_place_namespace_root = true;
+    place_root.place_children = Some(vec![("Riverside".into(), "places/riverside/".into(), 1)]);
+    let home = doc("index.html", PageKind::Folder, "home", Some("Home"));
+    let mut member = doc("posts/alpha/index.html", PageKind::Article, "Alpha", None);
+    member.location = vec!["Riverside".into()];
+    let initial = vec![home.clone(), place_root.clone(), member.clone()];
+
+    assert_full(&h.run(&initial), FullCause::ColdCache);
+    assert!(h.run(&initial).may_skip_document(&place_root));
+
+    member.location = vec!["North Shore".into()];
+    let mut changed_root = place_root.clone();
+    changed_root.place_children = Some(vec![("North Shore".into(), "places/north-shore/".into(), 1)]);
+    let verdict = h.run(&[home, changed_root.clone(), member]);
+    assert_full(&verdict, FullCause::SurfaceChanged);
+    assert!(!verdict.may_skip_document(&changed_root), "an unclassified location move must refresh the generated map");
+}
+
+#[test]
+fn generated_page_becoming_authored_forces_a_structural_full_render() {
+    let h = Harness::new();
+    let generated = generated_folder("writings/index.html", "Writings");
+    let authored = ParsedDocument {
+        source_path: Some("writings/index.md".into()),
+        content: "Writings".into(),
+        html_content: "<p>Writings</p>".into(),
+        ..generated.clone()
+    };
+    assert_full(&h.run(&[generated]), FullCause::ColdCache);
+    let verdict = h.run(&[authored]);
+    assert_full(&verdict, FullCause::PathSetMoved);
+    match verdict.basis() {
+        VerdictBasis::Full(_, Some(witness)) => {
+            assert!(witness.contains("writings/index.html"), "{witness:?}");
+            assert!(!witness.contains('\0'), "cache identity leaked into a user-facing verdict: {witness:?}");
+        }
+        other => panic!("expected a named path-set change, got {other:?}"),
     }
 }
 

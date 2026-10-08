@@ -54,6 +54,8 @@ export interface Work {
   title: string;
   url: string;
   date?: string;
+  /** The page's `weight:`: lower comes first in the card row. */
+  weight?: number;
   byline: string[];
   /** The page's `author:` names, `[]` when it has none (see {@link normalizePlacesData}). */
   authors: string[];
@@ -88,6 +90,7 @@ export interface WorkWire {
   title: string;
   url: string;
   date?: string;
+  weight?: number;
   byline?: string[];
   authors?: string[];
   description?: string;

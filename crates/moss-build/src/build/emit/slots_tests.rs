@@ -358,9 +358,10 @@ fn an_unwritable_object_store_costs_the_pages_their_oid_not_the_build() {
     site.write("about.md", "# About");
     // A file where the object store's directory should be: every write beneath
     // it fails, on every platform, whoever runs the test.
-    let objects = site.paths().cache_objects();
-    std::fs::create_dir_all(objects.parent().unwrap()).unwrap();
-    std::fs::write(&objects, "not a directory").unwrap();
+    for objects in [site.paths().cache_objects(), site.paths().cache_local_objects()] {
+        std::fs::create_dir_all(objects.parent().unwrap()).unwrap();
+        std::fs::write(&objects, "not a directory").unwrap();
+    }
 
     let mut sealed = site.build(IncrementalGates::default());
 

@@ -205,6 +205,8 @@ async fn run_materialize_phase(req: PendingSeal) {
         cache_lease,
         build_root_identity,
     } = req;
+    let mut sealed = sealed;
+    let mut verdict = verdict;
 
     let mp = MossPaths::new(Path::new(&folder_path));
     let announcer = ports.announcer.as_ref();
@@ -220,6 +222,22 @@ async fn run_materialize_phase(req: PendingSeal) {
         Some(s) => Some(s.lock_stage_write().await),
         None => None,
     };
+
+    // Background asset copying has drained by the time this seal is handed
+    // off. Refuse promotion if the currently selected page still names a
+    // local stylesheet or script whose sealed bytes are absent or mismatched.
+    // This is page-scoped; media and unrelated pages remain optional here.
+    let selected_requirement = session.as_ref().and_then(|s| s.preview_requirement());
+    if matches!(&verdict, ShipVerdict::Ship) {
+        if let Some(requirement) = selected_requirement.as_ref() {
+            if let Some(sample) = sealed.mark_missing_preview_outputs(requirement, &stage_dir) {
+                verdict = ShipVerdict::Withhold(crate::build::ship::WithholdReason::Unverified {
+                    entries: 1,
+                    sample: vec![sample],
+                });
+            }
+        }
+    }
 
     // Copy stage_dir → generations/<gen-id>/ and swap `current`. `mat_ok`
     // gates advertisement to deploy: a failed materialize must NOT publish a

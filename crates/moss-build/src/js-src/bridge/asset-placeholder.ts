@@ -50,6 +50,7 @@
 import {
   bustSrcset,
   normPath,
+  srcsetUrls,
   srcsetMatches,
   stripBust,
 } from "./asset-urls";
@@ -79,6 +80,8 @@ const STASH_POSTER = "data-moss-ph-poster";
  * both because the undo is the same operation on both.
  */
 const STASH_SRCSET = "data-moss-ph-srcset";
+/** URL the browser chose when this image failed. */
+const FAILED_URL = "data-moss-ph-failed-url";
 
 /** The <source> children of an enclosing <picture>, or [] when there is none. */
 function pictureSources(img: HTMLImageElement): HTMLSourceElement[] {
@@ -104,7 +107,11 @@ export function place(
     return;
   }
   const img = el as HTMLImageElement;
+  const chosen = img.currentSrc ||
+    pictureSources(img).flatMap((source) => srcsetUrls(source.getAttribute("srcset") ?? ""))[0] ||
+    img.src;
   img.setAttribute(MARK, "1");
+  img.setAttribute(FAILED_URL, chosen);
 
   // Stash before touching anything.
   img.setAttribute(STASH_SRC, img.getAttribute("src") ?? "");
@@ -196,6 +203,7 @@ export function restore(absPath: string, doc: Document = document): number {
     img.classList.remove("moss-img-fallback");
     img.removeAttribute(MARK);
     img.removeAttribute(STASH_SRC);
+    img.removeAttribute(FAILED_URL);
     if (stashedSrc !== "") img.src = stashedSrc + bust;
 
     restored++;
@@ -239,6 +247,50 @@ export function install(doc: Document = document, win: Window = window): () => v
   };
   doc.addEventListener("error", onError, true);
 
+  // A 503 after the bounded HTTP wait does not make a browser retry an <img>.
+  // The same placeholder owner probes only visible, still-connected failures.
+  // 404 and terminal errors keep the grid; an arriving original restores the
+  // stashed URL without a new build or a page reload.
+  const terminal = new WeakMap<HTMLImageElement, string>();
+  const probing = new WeakSet<HTMLImageElement>();
+  const active = new Set<AbortController>();
+  let disposed = false;
+  let cursor = 0;
+  const retry = (): void => {
+    if (disposed || typeof win.fetch !== "function" || doc.visibilityState === "hidden") return;
+    const images = Array.from(doc.querySelectorAll<HTMLImageElement>(`img[${MARK}]`))
+      .filter((img) => {
+        if (!img.isConnected || probing.has(img)) return false;
+        if (terminal.get(img) === img.getAttribute(FAILED_URL)) return false;
+        const box = img.getBoundingClientRect();
+        return box.bottom > 0 && box.right > 0 && box.top < win.innerHeight && box.left < win.innerWidth;
+      });
+    if (images.length === 0) return;
+    for (let offset = 0; offset < Math.min(2, images.length); offset++) {
+      const img = images[(cursor + offset) % images.length];
+      const failedUrl = img.getAttribute(FAILED_URL);
+      if (!failedUrl) continue;
+      probing.add(img);
+      const abort = new AbortController();
+      active.add(abort);
+      const timeout = win.setTimeout(() => abort.abort(), 4000);
+      void win.fetch(failedUrl, { method: "HEAD", cache: "no-store", signal: abort.signal })
+        .then((response) => {
+          if (disposed || !img.isConnected || img.getAttribute(FAILED_URL) !== failedUrl) return;
+          if (response.ok) restore(normPath(failedUrl), doc);
+          else if (response.status !== 503) terminal.set(img, failedUrl);
+        })
+        .catch(() => {})
+        .finally(() => {
+          win.clearTimeout(timeout);
+          active.delete(abort);
+          probing.delete(img);
+        });
+    }
+    cursor += 2;
+  };
+  const retryTimer = win.setInterval(retry, 10000);
+
   // The bridge calls through this handle rather than bundling a second copy of
   // the stash attribute names — two spellings of `data-moss-ph-srcset` would
   // fail silently and look exactly like the bug this replaced.
@@ -247,7 +299,11 @@ export function install(doc: Document = document, win: Window = window): () => v
   };
 
   return () => {
+    disposed = true;
+    for (const abort of active) abort.abort();
+    active.clear();
     doc.removeEventListener("error", onError, true);
+    win.clearInterval(retryTimer);
     delete (win as unknown as Record<string, unknown>).__mossAssetPlaceholder;
   };
 }

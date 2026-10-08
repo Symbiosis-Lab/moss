@@ -83,6 +83,116 @@ fn a_fully_local_vault_has_nothing_dataless() {
     assert!(walk(&root, None, None).dataless.is_empty());
 }
 
+#[test]
+fn arrival_accounting_does_not_call_a_deleted_file_downloaded() {
+    let dir = tempfile::tempdir().unwrap();
+    let arrived = dir.path().join("arrived.md");
+    let deleted = dir.path().join("deleted.md");
+    std::fs::write(&arrived, "# Here").unwrap();
+    let mut pending = HashSet::from([arrived, deleted]);
+    assert_eq!(observe_pending(&mut pending), (1, 1));
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn navigation_promotes_only_the_resolved_requested_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("posts/first.md");
+    let second = dir.path().join("posts/second.md");
+    std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+    std::fs::write(&first, "# First").unwrap();
+    std::fs::write(&second, "# Second").unwrap();
+    let _first = crate::build::icloud::pretend::evicted_until_requested(&first);
+    let _second = crate::build::icloud::pretend::evicted_until_requested(&second);
+    let session = FolderSession::new(dir.path().to_path_buf());
+    let mut revision = 0;
+
+    session.set_preview_requirement("/unresolved/".into(), crate::system::folder_session::PreviewSource::Unresolved).unwrap();
+    promote_focused_source(&session, &mut revision);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&first), 0);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&second), 0);
+
+    session.set_preview_requirement("/generated/".into(), crate::system::folder_session::PreviewSource::Generated).unwrap();
+    promote_focused_source(&session, &mut revision);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&first), 0);
+
+    session.set_preview_requirement("/first/".into(), crate::system::folder_session::PreviewSource::File(PathBuf::from("posts/first.md"))).unwrap();
+    promote_focused_source(&session, &mut revision);
+    promote_focused_source(&session, &mut revision);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&first), 1);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&second), 0);
+
+    session.set_preview_requirement("/second/".into(), crate::system::folder_session::PreviewSource::File(PathBuf::from("posts/second.md"))).unwrap();
+    promote_focused_source(&session, &mut revision);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&second), 1);
+}
+
+#[tokio::test]
+async fn unavailable_file_owner_returns_full_live_failure_intersection() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("vault");
+    let other = dir.path().join("other");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let failed: Vec<_> = (0..5)
+        .map(|n| folder.join(format!("nested/記事-{n}.md")))
+        .collect();
+    let unrelated = other.join("outside.md");
+    let mut pending: HashSet<_> = failed.iter().cloned().collect();
+    pending.insert(folder.join("nested/still-pending.md"));
+    pending.insert(unrelated.clone());
+    for path in failed.iter().chain(std::iter::once(&unrelated)) {
+        crate::build::cloud_readiness::record_download_failure_for_test(path.clone());
+    }
+
+    let (reply, response) = tokio::sync::oneshot::channel();
+    answer_unavailable_query(
+        UnavailableFilesQuery { reply },
+        &folder,
+        Some(&pending),
+    );
+    let files = response.await.unwrap().unwrap();
+    assert_eq!(files.len(), 5, "details must not be capped at the three-name summary sample");
+    assert_eq!(files, (0..5).map(|n| format!("nested/記事-{n}.md")).collect::<Vec<_>>());
+    assert!(files.iter().all(|path| !Path::new(path).is_absolute()));
+
+    pending.remove(&failed[0]); // recovered since the current pending snapshot
+    let (reply, response) = tokio::sync::oneshot::channel();
+    answer_unavailable_query(UnavailableFilesQuery { reply }, &folder, Some(&pending));
+    assert_eq!(response.await.unwrap().unwrap().len(), 4);
+
+    // The next request prunes the recovered failure from the shared read queue.
+    pending.clear();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    answer_unavailable_query(UnavailableFilesQuery { reply }, &folder, Some(&pending));
+    assert!(response.await.unwrap().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn unavailable_query_does_not_restart_a_pinned_long_walk() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().to_path_buf();
+    let pending = HashSet::new();
+    let (query_tx, mut query_rx) = tokio::sync::mpsc::channel(1);
+    let work_started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let work_started_in_future = work_started.clone();
+    let work = async move {
+        work_started_in_future.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        7
+    };
+    let folder_for_task = folder.clone();
+    let join = tokio::spawn(async move {
+        while_servicing_queries(work, &mut query_rx, &folder_for_task, Some(&pending)).await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (reply, response) = tokio::sync::oneshot::channel();
+    query_tx.send(UnavailableFilesQuery { reply }).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_millis(100), response).await.unwrap().unwrap().unwrap().is_empty());
+    assert_eq!(join.await.unwrap(), 7);
+    assert_eq!(work_started.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 /// `.moss/` is dot-prefixed, so the obvious dir filter prunes it — and with
 /// it every user-authored build input moss reads from there. The files that
 /// hard-fail a build were the only ones nobody was downloading.
@@ -360,31 +470,12 @@ fn the_first_rebuild_of_an_episode_is_not_held_back() {
     ));
 }
 
-// ── Progress phases (ported verbatim) ─────────────────────────────────────
+// ── Progress phases ────────────────────────────────────────────────────────
 
-/// The stall notice and the unavailable notice answer different questions,
-/// and a tick that could be either must pick the stall — see `phase_for`.
 #[test]
-fn a_stall_outranks_a_refused_file() {
-    assert_eq!(phase_for(5, true, 1), "stalled");
-    // Even with nothing left to wait for: `stalled` is only set when
-    // something IS awaited, so this pins the ordering, not the caller.
-    assert_eq!(phase_for(0, true, 1), "stalled");
-}
-
-/// The reported case: the download is over in every sense that
-/// matters to the site, and one file is never coming.
-#[test]
-fn nothing_left_to_wait_for_but_a_refused_file_is_its_own_phase() {
-    assert_eq!(phase_for(0, false, 1), "unavailable");
-}
-
-/// A refused file must not end the download episode early for the files
-/// that ARE still arriving.
-#[test]
-fn files_still_arriving_keep_the_ordinary_phase() {
-    assert_eq!(phase_for(3, false, 1), "materializing");
-    assert_eq!(phase_for(0, false, 0), "materializing");
+fn a_long_wait_is_stalled_but_still_pending() {
+    assert_eq!(phase_for(true), "stalled");
+    assert_eq!(phase_for(false), "materializing");
 }
 
 // ── What the site is waiting for ──────────────────────────────
@@ -408,21 +499,14 @@ fn only_render_relevant_files_are_counted_as_blocking() {
     .map(PathBuf::from)
     .collect();
 
-    assert_eq!(blocking_count(&pending, &[]), 3);
+    assert_eq!(blocking_count(&pending), 3);
 }
 
-/// Same rule `remaining` follows: a file moss has stopped waiting for is not
-/// something the user is waiting for either. Without this a structural file
-/// the provider refuses would pin the screen for the rest of the session, with
-/// nothing left that could ever bring it down.
 #[test]
-fn a_refused_structural_file_no_longer_blocks() {
+fn a_long_wait_never_removes_a_structural_file_from_the_count() {
     let pending: HashSet<PathBuf> =
         ["/V/posts/hello.md", "/V/config.toml"].iter().map(PathBuf::from).collect();
-    let refused = PathBuf::from("/V/posts/hello.md");
-    let refused_refs: Vec<&PathBuf> = pending.iter().filter(|p| **p == refused).collect();
-
-    assert_eq!(blocking_count(&pending, &refused_refs), 1);
+    assert_eq!(blocking_count(&pending), 2);
 }
 
 /// The two counts and the phase, read together on the incident's own shape:
@@ -435,27 +519,14 @@ fn a_pending_set_with_nothing_render_relevant_never_stalls() {
     let pending: HashSet<PathBuf> =
         ["/V/.moss/data/deployed-article-map.json"].iter().map(PathBuf::from).collect();
 
-    let blocking = blocking_count(&pending, &[]);
+    let blocking = blocking_count(&pending);
     assert_eq!(blocking, 0);
 
     // What the sweep does with it: no stall however long the silence runs,
     // because the stall test is `blocking > 0`.
     let stalled = blocking > 0;
     assert!(!stalled);
-    assert_eq!(phase_for(pending.len(), stalled, 0), "materializing");
-    // And once it is refused, the episode ends in `unavailable` as before.
-    assert_eq!(phase_for(0, false, 1), "unavailable");
-}
-
-/// The notice names files to be actionable; a wall of forty names is not,
-/// and the full path is in the log for the support case that needs it.
-#[test]
-fn the_notice_names_a_few_files_by_base_name() {
-    let paths: Vec<PathBuf> = (0..6)
-        .map(|i| PathBuf::from(format!("/Vault/.hidden-ancestor/xyz/doc{i}.md")))
-        .collect();
-    let refs: Vec<&PathBuf> = paths.iter().collect();
-    assert_eq!(unavailable_names(&refs), vec!["doc0.md", "doc1.md", "doc2.md"]);
+    assert_eq!(phase_for(stalled), "materializing");
 }
 
 // ── The pass deadline and root health ─────────────────────────────────────
@@ -881,13 +952,10 @@ async fn a_sweep_straight_after_a_build_finds_no_drift() {
 }
 
 /// A rebuild dispatched for a genuine edit must not be
-/// permanently sticky-suppressed just because an UNRELATED structural
-/// source went briefly unreadable (cloud eviction) during that same
-/// rebuild. Since a build always promotes and seals (carrying `other.md`
-/// forward instead of withholding), `keeper.md`'s edit actually lands in
-/// the new baseline, so the next pass's compare finds it quiet — the sticky
-/// breaker's own assumption (an unchanged stamp means the dispatch it saw
-/// already succeeded) holds.
+/// permanently sticky-suppressed just because a structural sibling is in the
+/// cloud. The incomplete attempt keeps the visible baseline unchanged, so the
+/// edit remains drifted without repeated dispatch. An arrival triggers a
+/// complete rebuild that applies it.
 #[cfg(target_os = "macos")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_evicted_sibling_does_not_strand_a_genuine_edit_as_sticky() {
@@ -934,7 +1002,8 @@ async fn an_evicted_sibling_does_not_strand_a_genuine_edit_as_sticky() {
     // The dispatched rebuild: `other.md` is still unreadable throughout.
     build_once(folder_path).await;
     let baseline2 = read_baseline_from_disk(&test_dir)
-        .expect("the dispatched rebuild must still write a readable hashes.json");
+        .expect("the complete prior baseline remains readable");
+    assert_eq!(baseline2.files, baseline1.files);
 
     // Nothing on disk changes further before the next pass.
     let walked2 = walk(&test_dir, None, None);
@@ -947,17 +1016,24 @@ async fn an_evicted_sibling_does_not_strand_a_genuine_edit_as_sticky() {
         None,
         true,
     );
-    assert!(
-        !report2.drifted.contains_key("keeper.md"),
-        "the dispatched rebuild must have actually captured keeper.md's edit \
-         into the new baseline — a build withheld by other.md's eviction \
-         would leave keeper.md drifting at its already-dispatched stamp: {:?}",
-        report2.drifted
-    );
+    assert!(report2.drifted.contains_key("keeper.md"), "an unserved edit remains drifted");
     assert!(
         undispatched_paths(&report2.drifted, &dispatched_drift).is_empty(),
-        "keeper.md's edit must not need re-dispatch — it already landed"
+        "the same stamp waits for the sibling's arrival without a rebuild loop"
     );
+
+    std::fs::remove_file(test_dir.join(".other.md.icloud")).unwrap();
+    std::fs::write(test_dir.join("other.md"), "# Other\n\nOriginal.\n").unwrap();
+    build_once(folder_path).await;
+    let baseline3 = read_baseline_from_disk(&test_dir).expect("arrival writes a complete baseline");
+    let walked3 = walk(&test_dir, None, None);
+    let report3 = crate::build::watch::drift::detect_drift(
+        &baseline3, &walked3.files, &[], &test_dir,
+        crate::build::watch::drift::probe_missing, None, true,
+    );
+    assert!(report3.is_quiet(), "the arrival rebuild must clear the genuine edit");
+    let mp = crate::moss_paths::MossPaths::new(&test_dir);
+    assert!(std::fs::read_to_string(mp.current_ptr().join("keeper/index.html")).unwrap().contains("Edited."));
 }
 
 // ── Folder health: degraded is an OR, not just the worker watchdog ─────────
@@ -1017,6 +1093,42 @@ async fn cancelling_the_session_stops_the_sweep_and_frees_its_claim() {
         assert!(Instant::now() < deadline, "the sweep outlived its cancelled session");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_failure_query_uses_the_live_sweep_without_waiting_for_a_progress_event() {
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-query-").tempdir().unwrap();
+    let folder = tmp.path().to_path_buf();
+    std::fs::write(folder.join("index.md"), "# Local").unwrap();
+    let session = FolderSession::new(folder.clone());
+    let dispatch: crate::ops::watch::RebuildDispatch = std::sync::Arc::new(|_| Box::pin(async {}));
+    start(session.clone(), host(dispatch)).await;
+
+    let files = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            match unavailable_files_for(&folder.join(".")).await {
+                Ok(files) => break files,
+                Err(error) if error == "Folder sweep is still collecting its status" => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("unexpected query error: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("the sleeping sweep must answer a disclosure query");
+    assert!(files.is_empty());
+
+    let other = tempfile::tempdir().unwrap();
+    assert!(unavailable_files_for(other.path()).await.is_err(), "a different folder has no matching owner");
+
+    session.cancel.cancel();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sweeps().contains_key(&folder.to_string_lossy().to_string()) {
+        assert!(Instant::now() < deadline, "the cancelled sweep kept its query route");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(unavailable_files_for(&folder).await.is_err(), "a closed owner is reported as unavailable");
 }
 
 /// A reopen registers its new session before the old session's cancellation

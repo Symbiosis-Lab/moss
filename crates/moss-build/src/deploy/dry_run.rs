@@ -221,7 +221,9 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
-    let refusal = crate::deploy::refuse_publish(&folder_str).err();
+    let refusal = crate::deploy::refuse_publish(&folder_str)
+        .and_then(|_| crate::deploy::refuse_foreign_inputs(&sealed, folder))
+        .and_then(|_| crate::deploy::refuse_unresolved_inputs(&sealed)).err();
     Ok(DryRun {
         change_set,
         transfer,

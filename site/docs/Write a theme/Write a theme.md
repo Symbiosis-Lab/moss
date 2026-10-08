@@ -99,6 +99,21 @@ Do not write `@media (prefers-color-scheme: dark)`. Write this instead, which ap
 }
 ```
 
+## Scrollbars
+
+moss leaves scrollbar visibility and appearance to the browser and the reader’s operating system, including on vertical pages and nested scroll rows. Scrollbars work independently of link previews and other optional scripts.
+
+To keep a vertical reading surface free of a page bar, put this override in your theme. It preserves sideways column navigation and leaves nested scrollbars native:
+
+```css
+body[data-typesetting="vertical"] {
+  scrollbar-width: none;
+}
+body[data-typesetting="vertical"]::-webkit-scrollbar {
+  display: none;
+}
+```
+
 ## Self-hosted fonts
 
 Drop `.woff2` files in `.moss/theme/fonts/` and reference them from `style.css`:

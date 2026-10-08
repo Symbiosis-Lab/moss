@@ -125,6 +125,10 @@ impl PlaceMapRenderContext {
         self
     }
 
+    pub(crate) fn explorer_places_hash(&self) -> Option<&str> {
+        self.explorer_places_hash.as_deref()
+    }
+
     pub fn is_place_key(&self, key: &str) -> bool {
         key == self.namespace || key.starts_with(&format!("{}/", self.namespace))
     }
@@ -395,9 +399,8 @@ impl PlaceMapRenderContext {
     /// places root, carrying `scope_query` (`place=<key>` for a `style:map`
     /// embed, `article=<url>` for the article locator) plus `embed=1` — the
     /// two attributes `places-explorer/embed.ts`'s host-page half reads to
-    /// build its own lazy iframe. The static figure underneath is
-    /// untouched either way: a reader with JavaScript off, or whose
-    /// hydration fetch fails, sees exactly the figure this always drew.
+    /// build its own lazy iframe. The static SVG remains the no-JS and
+    /// explicit-failure fallback; it stays hidden while the live map loads.
     ///
     /// A no-op — the plain static figure — when the figure carries a route
     /// (`data-map-route`), when the explorer is off
@@ -425,12 +428,20 @@ impl PlaceMapRenderContext {
         // of runtime UI text in this explorer is localised. Baking a finished
         // English sentence in here instead would leave every other locale's
         // embed with an English-only iframe title.
-        Self::splice_figure_attrs(
+        let html = Self::splice_figure_attrs(
             svg,
             &format!(
                 "data-moss-place-embed data-hydrate-url=\"{root}?{scope_query}&embed=1\" data-embed-name=\"{}\"",
                 escape_attr(name),
             ),
+        );
+        // JS-enabled pages hide the fallback SVG from first paint. This
+        // reveals it with scripting disabled; runtime timeout reveals the
+        // same SVG by switching the host into `fallback` state.
+        html.replacen(
+            ">",
+            "><noscript><style>.moss-place-map[data-moss-place-embed] > svg { display: block; }</style></noscript>",
+            1,
         )
     }
 
@@ -1079,6 +1090,7 @@ mod tests {
         assert!(html.contains("data-moss-place-embed"), "{html:.200}");
         assert!(html.contains(r#"data-hydrate-url="/places/?place=places/harbor&embed=1""#), "{html:.200}");
         assert!(html.contains(r#"data-embed-name="Harbor""#), "{html:.200}");
+        assert!(html.contains("<noscript><style>"), "no-JS embeds must reveal the static SVG: {html:.300}");
         // Never BOTH handshakes on one figure.
         assert!(!html.contains("data-moss-places-explorer"), "{html:.200}");
     }
@@ -1125,6 +1137,7 @@ mod tests {
         assert!(html.contains("data-moss-place-embed"), "{html}");
         assert!(html.contains(r#"data-hydrate-url="/places/?article=/story/&embed=1""#), "{html}");
         assert!(html.contains(r#"data-embed-name="Harbor""#), "{html}");
+        assert!(html.contains("<noscript><style>"), "no-JS locators must reveal the static SVG: {html}");
     }
 
     #[test]

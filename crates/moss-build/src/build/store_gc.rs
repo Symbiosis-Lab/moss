@@ -192,6 +192,14 @@ enum Take {
 }
 
 impl GenerationWriteLock {
+    pub(crate) fn try_acquire(generations_dir: &Path, gen_id: &str) -> std::io::Result<Option<Self>> {
+        match Self::take(generations_dir, gen_id, false)? {
+            Take::Locked(lock) => Ok(Some(lock)),
+            Take::Busy => Ok(None),
+            Take::Unlockable(_, _) => Err(std::io::Error::other("generation identities require a lock")),
+        }
+    }
+
     /// Take `gen_id`'s write lock for a copy, waiting while anyone else holds
     /// it. If the filesystem cannot lock at all, the file is still created
     /// and the copy proceeds: GC cannot lock there either, so it keeps the
@@ -560,6 +568,8 @@ pub fn gc_old_generations(
         // pinned by a deploy, nor being indexed, removed under its write lock
         match crate::build::io_utils::remove_output_dir_all(path) {
             Ok(()) => {
+                // allow:unlink the original identities of this removed generation
+                let _ = std::fs::remove_file(crate::build::manifest::preview_originals::receipt_path(generations_dir, name));
                 lock.finish();
                 removed.push(name.to_string());
             }
@@ -613,7 +623,7 @@ fn save_watermark(build_dir: &Path, objects_after_gc: usize) {
     }
 }
 
-/// Count blobs in `cache/objects`.
+/// Count blobs in one sharded object store root.
 ///
 /// The store is one fanout level deep (`objects/ab/cdef…`), so this walks the
 /// fanout directories rather than recursing arbitrarily.
@@ -659,7 +669,7 @@ fn should_gc_cache(objects_on_disk: usize, watermark: Option<usize>) -> bool {
 /// Blocking — walks and unlinks. Async callers wrap it in `spawn_blocking`.
 pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResult> {
     let build_dir = &mp.build_dir();
-    let before = count_objects(&mp.cache_objects());
+    let before = count_objects(&mp.cache_objects()) + count_objects(&mp.cache_local_objects());
     if !should_gc_cache(before, load_watermark(build_dir)) {
         return None;
     }

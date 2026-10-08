@@ -20,7 +20,7 @@
  * 2/3 split.
  */
 import { worldToScreen } from "./camera";
-import { byDateDescThenTitle } from "./cards";
+import { byWeightThenDateThenTitle } from "./cards";
 import {
   CLUSTER_DISTANCE,
   RING_MAX,
@@ -315,11 +315,11 @@ export class MarkerLayer {
     // Row order, not cluster.ids' own id-sorted order (clusters.ts sorts by
     // id purely for deterministic merging, see its own doc) — the ring's
     // dots must read in the SAME order the scoped card row below shows the
-    // same members in, both derived from the one date-desc-then-title rule.
+    // same members in, both derived from the one weight-then-date-then-title rule.
     const orderedIds = [...cluster.ids].sort((a, b) => {
       const workA = works.get(a);
       const workB = works.get(b);
-      return workA && workB ? byDateDescThenTitle(workA, workB) : 0;
+      return workA && workB ? byWeightThenDateThenTitle(workA, workB) : 0;
     });
     const layout = ringLayout(orderedIds.length, anchorScreen);
     const positions = layout.positions ?? orderedIds.map(() => anchorScreen);

@@ -342,11 +342,21 @@ fn dispatch_embed_form(
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     // External URL embed: bypass ContentGraph resolution entirely.
-    // Any http:// or https:// URL is synthesized as an iframe directly.
-    // Provider detection (YouTube/Vimeo/CodePen) happens inside
-    // synthesize_url_embed_html; unrecognised URLs get a generic <iframe>.
+    // Any http:// or https:// URL other than an image file is synthesized as
+    // an iframe directly. Provider detection (YouTube/Vimeo/CodePen) happens
+    // inside synthesize_url_embed_html; unrecognised URLs get a generic
+    // <iframe>.
     if split.file.starts_with("http://") || split.file.starts_with("https://") {
         let full_url = reassemble_url(split);
+        // A link to an image file is an image, not a frame around one: it
+        // lowers to the standard spelling, which renders it as `<img>`.
+        if crate::resolve::ext_kind::is_remote_image_url(&full_url) {
+            return WikilinkEmit {
+                output: EmitKind::Inline(format!("![](<{full_url}>)")),
+                outgoing_link: None,
+                diagnostics: vec![],
+            };
+        }
         let html = crate::render::url_embed::synthesize_url_embed_html(
             &full_url,
             &pothole,
@@ -568,29 +578,42 @@ fn dispatch_embed_form(
                     .size
                     .clone()
                     .or_else(|| placement.width.map(str::to_string));
-                let figure = crate::ast::node::Block::Figure {
-                    image: crate::ast::node::Inline::Image {
-                        // `Asset` is the canonical kind for an `<img src>`
-                        // (matches resolve_urls' image-URL classification).
-                        src: crate::ast::url::Url::resolved(
-                            url.clone(),
-                            crate::ast::url::UrlKind::Asset,
-                        ),
-                        alt,
-                        title: None,
-                        is_wikilink: true,
-                        wikilink_pothole: None,
-                    },
-                    caption,
-                    // Named token OR `"NN%"` percent; the node stores
-                    // `Option<String>` (for Deserialize).
-                    width: figure_width,
-                    align,
-                    class_names: media.class_names,
-                    img_style,
+                let image = crate::ast::node::Inline::Image {
+                    // `Asset` is the canonical kind for an `<img src>`
+                    // (matches resolve_urls' image-URL classification).
+                    src: crate::ast::url::Url::resolved(
+                        url.clone(),
+                        crate::ast::url::UrlKind::Asset,
+                    ),
+                    alt,
+                    title: None,
+                    is_wikilink: true,
+                    wikilink_pothole: None,
+                };
+                // An image with nothing to say about its display is the same
+                // decorative image `![](x.png)` is: a bare paragraph, not a
+                // figure (the parser's empty-alt rule).
+                let block = if caption.is_none()
+                    && figure_width.is_none()
+                    && align.is_none()
+                    && media.class_names.is_empty()
+                    && img_style.is_none()
+                {
+                    crate::ast::node::Block::Paragraph(vec![image])
+                } else {
+                    crate::ast::node::Block::Figure {
+                        image,
+                        caption,
+                        // Named token OR `"NN%"` percent; the node stores
+                        // `Option<String>` (for Deserialize).
+                        width: figure_width,
+                        align,
+                        class_names: media.class_names,
+                        img_style,
+                    }
                 };
                 return WikilinkEmit {
-                    output: EmitKind::Block(Box::new(figure)),
+                    output: EmitKind::Block(Box::new(block)),
                     outgoing_link: Some(outgoing),
                     diagnostics,
                 };

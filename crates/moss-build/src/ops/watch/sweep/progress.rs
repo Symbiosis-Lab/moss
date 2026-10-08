@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::build::ports::reporter::{BuildReporter, CloudSync};
 
-use super::{MIN_REBUILD_INTERVAL, REFUSED_RETRY, STALL_AFTER};
+use super::{MIN_REBUILD_INTERVAL, STALL_AFTER};
 
 // ---------------------------------------------------------------------------
 // Rebuild pacing (carried from the cloud supervisor, semantics unchanged)
@@ -37,28 +37,24 @@ pub(crate) fn should_rebuild(
     }
 }
 
-/// Hand the pending set to the cloud readers, so the OS downloads them —
-/// the same trigger Finder uses; order, concurrency and retry are the
-/// provider's business. Anything already queued or being read is
-/// suppressed by the readers, so re-handing the set costs a hash lookup per
-/// file. **Refused** files (in the cloud past `REFUSED_AFTER`) are the
-/// exception: they ride `REFUSED_RETRY`'s slower clock instead of every
-/// pass.
+/// Feed the existing reader pool in bounded batches. The cursor gives every
+/// pending file a turn without putting the entire site ahead of a newly
+/// requested page input.
 pub(crate) fn request_downloads(
     pending: &HashSet<PathBuf>,
-    refused: &HashSet<PathBuf>,
-    last_refused_ask: &mut Instant,
-    now: Instant,
+    cursor: &mut usize,
 ) {
-    let ask_refused = now.duration_since(*last_refused_ask) >= REFUSED_RETRY;
-    if ask_refused {
-        *last_refused_ask = now;
+    if pending.is_empty() {
+        *cursor = 0;
+        return;
     }
-    for path in pending {
-        if ask_refused || !refused.contains(path) {
-            crate::build::cloud_readiness::request_download(path);
-        }
+    let count = pending.len().min(6);
+    let mut paths: Vec<_> = pending.iter().collect();
+    paths.sort();
+    for offset in 0..count {
+        crate::build::cloud_readiness::request_download(paths[(*cursor + offset) % paths.len()]);
     }
+    *cursor = (*cursor + count) % paths.len();
 }
 
 /// The stall WARN, with the pool snapshot that separates the three stalls a
@@ -83,35 +79,34 @@ pub(crate) fn report_stall(awaiting: usize) {
     );
 }
 
-/// Three phases, and which one this is turns on what is left rather than on
-/// how long it has been. `unavailable` is reported even though the download
-/// is, in every sense that matters to the site, finished: the user is owed
-/// the difference between "moss is still fetching this" and "this file is
-/// missing and always will be".
+/// Report the observed cloud set. Age changes the advisory phase, never the
+/// pending count or the number observed to arrive.
 pub(crate) fn emit_progress(
     reporter: &dyn BuildReporter,
     folder: &std::path::Path,
     total: usize,
+    downloaded: usize,
     remaining: usize,
     blocking: usize,
     stalled: bool,
-    refused: &[&PathBuf],
+    pending: &HashSet<PathBuf>,
 ) {
-    // No window, no browser, nobody to tell: skip the per-file name-trimming
-    // work below, exactly the gate `cloud_readiness.rs` and `pipeline.rs`
-    // already use for this same predicate.
+    let (unavailable_count, unavailable) = crate::build::cloud_readiness::download_failures_for(folder, pending);
+    // The CLI has no cloud-sync panel.
     if !reporter.shell_listening() {
         return;
     }
-    let phase = phase_for(remaining, stalled, refused.len());
+    let phase = phase_for(stalled);
     reporter.cloud_sync(&CloudSync {
         folder: &folder.to_string_lossy(),
         phase,
         provider: crate::build::cloud_provider::detect_from_path(folder),
         total,
+        downloaded,
         remaining,
         blocking: Some(blocking),
-        unavailable: &unavailable_names(refused),
+        unavailable: &unavailable,
+        unavailable_count,
     });
 }
 
@@ -123,39 +118,18 @@ pub(crate) fn emit_progress(
 /// ledger's set and so correctly declined to gate on a bookkeeping file,
 /// while the progress stream asked nothing at all.
 ///
-/// Refused files are excluded for the reason they are excluded from
-/// `remaining`: once moss has stopped waiting for a file, nothing it holds up
-/// could ever come down again.
-pub(crate) fn blocking_count(pending: &HashSet<PathBuf>, refused: &[&PathBuf]) -> usize {
+pub(crate) fn blocking_count(pending: &HashSet<PathBuf>) -> usize {
     pending
         .iter()
-        .filter(|p| !refused.contains(p))
         .filter(|p| crate::build::cloud_ledger::is_structural_source(p))
         .count()
 }
 
-/// Which phase one tick describes. Pure, so the ordering is pinned by a test
-/// rather than by reading the call site. `stalled` outranks `unavailable`:
-/// while anything is still believed to be arriving, silence is the more
-/// urgent fact.
-pub(crate) fn phase_for(awaiting: usize, stalled: bool, unavailable: usize) -> &'static str {
+/// A quiet provider is a waiting advisory, not evidence of failure.
+pub(crate) fn phase_for(stalled: bool) -> &'static str {
     if stalled {
         "stalled"
-    } else if awaiting == 0 && unavailable > 0 {
-        "unavailable"
     } else {
         "materializing"
     }
-}
-
-/// File names for the notice — base name only, capped: the notice names
-/// files to be actionable, and a wall of forty
-/// hidden-ancestor paths is not. Full paths are in the log.
-pub(crate) fn unavailable_names(refused: &[&PathBuf]) -> Vec<String> {
-    const NAMED: usize = 3;
-    refused
-        .iter()
-        .take(NAMED)
-        .map(|p| p.file_name().unwrap_or(p.as_os_str()).to_string_lossy().into_owned())
-        .collect()
 }

@@ -128,3 +128,152 @@ test.describe("grid mobile collapse", () => {
     await assertCardComposition(page, ".moss-grid .moss-card", false);
   });
 });
+
+// Optional scripts cannot own whether readers can see a scroll affordance.
+test.describe("native scrollbar policy without scripts", () => {
+  test.use({ javaScriptEnabled: false });
+  for (const vertical of [false, true]) {
+    test(`${vertical ? "vertical" : "horizontal"} pages and nested scrollers retain native bars`, async ({ page, browserName }) => {
+      await page.goto(vertical ? "/vertical/" : "/");
+      await expect(page.locator('script[src*="/preview."]')).toHaveCount(0);
+      const metrics = await page.evaluate(() => {
+        const nested = document.createElement("div");
+        nested.style.cssText = "overflow:auto;width:128px;height:64px";
+        nested.innerHTML = '<div style="width:256px;height:256px">Scrollable content</div>';
+        document.body.append(nested);
+        nested.scrollTop = 32;
+        // Headless Firefox can suppress bars in its native stylesheet. Compare
+        // with an unstyled document rather than overriding that browser choice.
+        const reference = document.createElement("iframe");
+        document.body.append(reference);
+        const nativeWidth = reference.contentWindow!.getComputedStyle(reference.contentDocument!.body).scrollbarWidth;
+        return {
+          defaultWidth: nativeWidth,
+          bodyWidth: getComputedStyle(document.body).scrollbarWidth,
+          nestedWidth: getComputedStyle(nested).scrollbarWidth,
+          nativeWidth: getComputedStyle(nested, "::-webkit-scrollbar").width,
+          scrollTop: nested.scrollTop,
+        };
+      });
+      expect(metrics.bodyWidth).toBe(metrics.defaultWidth);
+      expect(metrics.nestedWidth).toBe(metrics.defaultWidth);
+      if (browserName !== "firefox") expect(metrics.nativeWidth).toBe("auto");
+      expect(metrics.scrollTop).toBe(32);
+    });
+  }
+});
+
+for (const vertical of [false, true]) {
+  for (const width of [767, 768, 769]) {
+    test(`grid tracks, peek and fit resets follow ${vertical ? "vertical" : "horizontal"} layout at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(vertical ? "/vertical/" : "/");
+      const rows = await page.evaluate((vertical) => {
+        const host = document.querySelector("article.container")!;
+        return [1, 2, 3, 4].map((count) => {
+          const measure = (scroll: boolean, fits: boolean) => {
+            const row = document.createElement("div");
+            row.className = "moss-grid";
+            row.dataset.columns = String(count);
+            if (scroll) row.dataset.scroll = "";
+            if (fits) row.dataset.fits = "";
+            row.style.cssText = "inline-size:480px;block-size:80px;--moss-grid-scroll-peek:32px;--moss-space-md:12px";
+            const total = fits || !scroll ? count : count + 2;
+            row.innerHTML = Array.from({ length: total }, (_, i) => `<a href="#cell-${i}" style="min-inline-size:0">Cell ${i}</a>`).join("");
+            host.append(row);
+            const css = getComputedStyle(row);
+            const last = row.lastElementChild!;
+            if (scroll) {
+              if (vertical) row.scrollTop = row.scrollHeight;
+              else row.scrollLeft = row.scrollWidth;
+            }
+            const end = last.getBoundingClientRect();
+            const frame = row.getBoundingClientRect();
+            const result = {
+              tracks: css.gridTemplateColumns.split(" "),
+              track: vertical ? end.height : end.width,
+              inline: vertical ? row.clientHeight : row.clientWidth,
+              padding: css.paddingBlockStart,
+              overflowX: css.overflowX,
+              overflowY: css.overflowY,
+              snap: css.scrollSnapType,
+              flow: css.gridAutoFlow,
+              reachable: vertical ? end.bottom <= frame.bottom + 1 : end.right <= frame.right + 1,
+            };
+            row.remove();
+            return result;
+          };
+          return { count, wrap: measure(false, false), scroll: measure(true, false), fits: measure(true, true) };
+        });
+      }, vertical);
+      for (const { count, wrap, scroll, fits } of rows) {
+        const mobile = width <= 768;
+        expect(wrap.tracks).toHaveLength(!vertical && mobile ? 1 : count);
+        const expected = !vertical && mobile ? scroll.inline / 1.3 : (scroll.inline - 32 - count * 12) / count;
+        expect(scroll.track).toBeCloseTo(expected, 0);
+        expect(scroll.reachable, `last card reachable for count ${count}`).toBe(true);
+        if (mobile) {
+          expect(fits.flow).toBe("column");
+          expect(fits.track).toBeCloseTo(expected, 0);
+          expect(fits.padding).toBe("4px");
+        } else {
+          expect(fits.tracks).toHaveLength(count);
+          expect(fits.padding).toBe("0px");
+          expect(fits.overflowX).toBe("visible");
+          expect(fits.overflowY).toBe("visible");
+          expect(fits.snap).toBe("none");
+        }
+      }
+    });
+  }
+}
+
+test("nested grids reset their count and print scrolling rows as authored tracks", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    const outer = document.createElement("div");
+    outer.className = "moss-grid";
+    outer.dataset.columns = "4";
+    outer.innerHTML = '<div><div class="moss-grid nested" data-columns="2"><span>One</span><span>Two</span></div></div><div><div class="moss-grid implicit"><span>One</span></div></div><span>Three</span><span>Four</span>';
+    document.querySelector("article.container")!.append(outer);
+  });
+  expect(await tracks(page, ".nested")).toHaveLength(2);
+  expect(await tracks(page, ".implicit")).toHaveLength(1);
+  await page.evaluate(() => document.querySelector(".nested")!.setAttribute("data-scroll", ""));
+  await page.emulateMedia({ media: "print" });
+  expect(await tracks(page, ".nested")).toHaveLength(2);
+});
+
+for (const vertical of [false, true]) {
+  test(`higher-count ratio grids retain the ${vertical ? "vertical" : "horizontal"} fitting fallback`, async ({ page }) => {
+    await page.setViewportSize({ width: 769, height: 900 });
+    await page.goto(vertical ? "/vertical/" : "/");
+    await page.evaluate(() => {
+      const row = document.createElement("div");
+      row.className = "moss-grid higher-count";
+      row.dataset.columns = "5";
+      row.dataset.scroll = "";
+      row.dataset.fits = "";
+      row.style.cssText = "--moss-grid-ratio:repeat(5,minmax(0,1fr))";
+      row.innerHTML = "<span>Cell</span>".repeat(5);
+      document.querySelector("article.container")!.append(row);
+    });
+    expect(await tracks(page, ".higher-count")).toHaveLength(1);
+  });
+}
+
+test("a single-column vertical grid keeps its mobile stretch with an authored ratio", async ({ page }) => {
+  await page.setViewportSize(MOBILE);
+  await page.goto("/vertical/");
+  await page.evaluate(() => {
+    const row = document.createElement("div");
+    row.className = "moss-grid single-column";
+    row.dataset.columns = "1";
+    row.style.cssText = "inline-size:480px;--moss-grid-ratio:20px";
+    row.innerHTML = "<span>One</span>";
+    document.querySelector("article.container")!.append(row);
+  });
+  const widths = await tracks(page, ".single-column");
+  expect(widths).toHaveLength(1);
+  expect(widths[0]).toBeCloseTo(480, 0);
+});

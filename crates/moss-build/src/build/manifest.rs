@@ -61,12 +61,19 @@ pub mod link_audit;
 /// Durable record of what the last confirmed publish shipped, one per target
 /// under `.moss/deploy/records/`. The other half of `change_set`'s diff.
 pub mod published_record;
+/// Selected-page input and required-output readiness projections for preview.
+mod preview_readiness;
+pub(crate) use preview_readiness::required_page_outputs_present;
+pub use preview_readiness::PreviewReadiness;
+use preview_readiness::preview_readiness_for;
 /// How `ship_phase` reads one entry's staged bytes: [`ShipSource`] and its accessors.
 mod ship_source;
 use ship_source::ShipSource;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+pub(crate) mod preview_originals;
 
 use crate::build::assets::paths::{compute_binary_hash, compute_manifest_generation_id};
 use crate::types::content::{file_entry, SiteHashes};
@@ -132,6 +139,10 @@ pub enum HashBucket {
 #[derive(Debug)]
 pub struct PendingManifest {
     inner: SiteHashes,
+    input_evidence: Option<crate::build::cloud_ledger::InputEvidence>,
+    preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    preview_uses_places: bool,
+    preview_originals: std::collections::BTreeMap<String, Option<String>>,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -327,6 +338,10 @@ impl PendingManifest {
             .collect();
         Self {
             inner,
+            input_evidence: None,
+            preview_embeds: std::collections::BTreeMap::new(),
+            preview_uses_places: false,
+            preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
             carried_source_to_output,
@@ -337,6 +352,24 @@ impl PendingManifest {
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Construct a render attempt with its existing input-read evidence.
+    pub fn for_build(carry_forward: SiteHashes, evidence: crate::build::cloud_ledger::InputEvidence) -> Self {
+        Self { input_evidence: Some(evidence), ..Self::new(carry_forward) }
+    }
+
+    pub(crate) fn input_evidence(&self) -> Option<crate::build::cloud_ledger::InputEvidence> {
+        self.input_evidence.clone()
+    }
+
+    pub(crate) fn set_preview_dependencies(
+        &mut self,
+        embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+        uses_places: bool,
+    ) {
+        self.preview_embeds = embeds;
+        self.preview_uses_places = uses_places;
     }
 
     /// Record that `rel_path`'s output could not be verified this build.
@@ -383,6 +416,9 @@ impl PendingManifest {
         // until a build that can read it runs — no worse than before this field.
         if let Some(meta) = self.carried_page_meta.get(source_rel) {
             self.inner.page_meta.insert(source_rel.to_string(), meta.clone());
+        }
+        if let Some(evidence) = &self.input_evidence {
+            evidence.retained(&evidence.root_path().join(source_rel));
         }
         Some(key)
     }
@@ -511,6 +547,9 @@ impl PendingManifest {
     /// `sources` is asset-only otherwise: the deferred asset walk skips markdown
     /// before it ever inserts. This is the only writer of page entries.
     pub fn register_page_source_hash(&mut self, source_path: String, meta: crate::build::types::SourceMetadata) {
+        if let Some(evidence) = &self.input_evidence {
+            evidence.read(&evidence.root_path().join(&source_path), meta.hash.clone());
+        }
         self.page_sources.insert(source_path.clone());
         self.inner.sources.insert(source_path, meta);
     }
@@ -528,6 +567,9 @@ impl PendingManifest {
     /// hash-carry-gap valve in `deploy::change_set`.
     pub fn carry_forward_page_source(&mut self, source_rel: &str) -> Option<()> {
         let meta = self.carried_page_sources.get(source_rel)?.clone();
+        if let Some(evidence) = &self.input_evidence {
+            evidence.known_unchanged(&evidence.root_path().join(source_rel), meta.hash.clone());
+        }
         self.page_sources.insert(source_rel.to_string());
         self.inner.sources.insert(source_rel.to_string(), meta);
         Some(())
@@ -806,6 +848,8 @@ impl PendingManifest {
             }),
             "blocking_keys ⊆ (files ∪ image_outputs) invariant violated at seal time"
         );
+        let input_root = self.input_evidence.as_ref().map(|e| e.root_path().to_path_buf());
+        let input_evidence = self.input_evidence.as_ref().map(|e| e.snapshot());
         let mut inner = self.inner;
         let touched = self.touched;
         // A page the previous build hashed and this build neither re-read nor
@@ -832,6 +876,11 @@ impl PendingManifest {
         let generation_id = compute_manifest_generation_id(&inner.files);
         SealedManifest {
             inner,
+            input_root,
+            input_evidence,
+            preview_embeds: self.preview_embeds,
+            preview_uses_places: self.preview_uses_places,
+            preview_originals: self.preview_originals,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
@@ -852,6 +901,11 @@ impl PendingManifest {
 #[derive(Debug, Clone)]
 pub struct SealedManifest {
     inner: SiteHashes,
+    input_root: Option<std::path::PathBuf>,
+    input_evidence: Option<std::collections::BTreeMap<String, crate::build::cloud_ledger::InputEntry>>,
+    preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    preview_uses_places: bool,
+    preview_originals: std::collections::BTreeMap<String, Option<String>>,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
@@ -878,6 +932,74 @@ pub struct SealedManifest {
 }
 
 impl SealedManifest {
+    /// Whether this selected generation has an exact route backed by the
+    /// requested source. An unresolved navigation may keep a previously
+    /// selected route only when this seal proves its source or generated inputs.
+    pub fn preview_route_present(
+        &self,
+        requirement: &crate::system::folder_session::PreviewRequirement,
+    ) -> bool {
+        use crate::system::folder_session::PreviewSource;
+        let Some(output) = self.inner.files.keys()
+            .find(|key| crate::build::served_path::served_address(key) == requirement.url_path)
+        else { return false; };
+        match &requirement.source {
+            PreviewSource::Unresolved => {
+                let mapped_source = self.inner.source_to_output.iter()
+                    .find(|(_, mapped)| *mapped == output).map(|(source, _)| source);
+                if let Some(source) = mapped_source {
+                    return self.input_evidence.as_ref()
+                        .and_then(|entries| entries.get(source))
+                        .is_some_and(|entry| matches!(entry.state,
+                            crate::build::cloud_ledger::InputState::Read { .. }
+                            | crate::build::cloud_ledger::InputState::Pending { retained: true }
+                            | crate::build::cloud_ledger::InputState::ReadError { retained: true, .. }));
+                }
+                let generated = crate::system::folder_session::PreviewRequirement {
+                    source: PreviewSource::Generated, ..requirement.clone()
+                };
+                self.preview_readiness(&generated) == PreviewReadiness::Usable
+            }
+            PreviewSource::Generated => self.preview_readiness(requirement) == PreviewReadiness::Usable,
+            PreviewSource::File(source) => {
+                let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
+                self.inner.source_to_output.get(&rel) == Some(output)
+            }
+        }
+    }
+
+    pub fn preview_readiness(
+        &self,
+        requirement: &crate::system::folder_session::PreviewRequirement,
+    ) -> PreviewReadiness {
+        preview_readiness_for(
+            &self.inner.files, &self.inner.source_to_output, self.input_evidence.as_ref(),
+            &self.preview_embeds, self.preview_uses_places, requirement, |_| true,
+        )
+    }
+
+    pub fn input_evidence(&self) -> Option<&std::collections::BTreeMap<String, crate::build::cloud_ledger::InputEntry>> {
+        self.input_evidence.as_ref()
+    }
+
+    /// The vault whose source bytes this exact seal consumed. Legacy seals
+    /// have no origin and cannot prove ownership of an active folder.
+    pub fn input_origin(&self) -> Option<&Path> { self.input_root.as_deref() }
+
+    pub fn belongs_to(&self, root: &Path) -> bool {
+        self.input_origin()
+            .and_then(|origin| std::fs::canonicalize(origin).ok())
+            .zip(std::fs::canonicalize(root).ok())
+            .is_some_and(|(origin, active)| origin == active)
+    }
+
+    pub fn unresolved_inputs(&self) -> Vec<String> {
+        self.input_evidence.iter().flat_map(|entries| entries.iter())
+            .filter(|(_, entry)| entry.role.required_for_publish()
+                && matches!(entry.state, crate::build::cloud_ledger::InputState::Pending { .. } | crate::build::cloud_ledger::InputState::ReadError { .. }))
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
     /// Outputs this generation could not verify, path → error. Non-empty means
     /// the generation must not be promoted (`ship::ShipVerdict`).
     pub fn unverified(&self) -> &std::collections::BTreeMap<String, String> {

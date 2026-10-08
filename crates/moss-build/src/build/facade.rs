@@ -26,9 +26,43 @@
 use crate::build::types::ParsedDocument;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+
+/// Identity of a rendered document in the facade cache. Editorial provenance
+/// remains on `ParsedDocument::source_path`; generated pages use their served
+/// URL only for this cache's identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PageKey<'a> {
+    Source(&'a str),
+    Generated(&'a str),
+}
+
+impl<'a> PageKey<'a> {
+    const GENERATED_PREFIX: &'static str = "\0generated:";
+
+    pub(crate) fn for_document(doc: &'a ParsedDocument) -> Self {
+        match doc.source_path.as_deref() {
+            Some(path) => Self::Source(path),
+            None => Self::Generated(&doc.url_path),
+        }
+    }
+
+    /// Cache encoding only. A NUL cannot occur in a filesystem path, so the
+    /// generated namespace cannot alias an authored source path.
+    pub(crate) fn cache_key(self) -> Cow<'a, str> {
+        match self {
+            Self::Source(path) => Cow::Borrowed(path),
+            Self::Generated(url) => Cow::Owned(format!("{}{url}", Self::GENERATED_PREFIX)),
+        }
+    }
+
+    pub(crate) fn display_cache_key(key: &str) -> &str {
+        key.strip_prefix(Self::GENERATED_PREFIX).unwrap_or(key)
+    }
+}
 
 /// Compute a page's facade fingerprint (see module docs for what "facade" covers).
 ///
@@ -201,6 +235,10 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `ParsedDocument` (`pipeline.rs` sets it once per doc) and every other
     // hit is a test fixture. It stays in the FACADE and out of the surface.
     stripped.reading_time = 0;
+    // The places JSON URL is embedded in the explorer-root map on this page
+    // only. Its hash belongs in this page's facade, but it has no downstream
+    // reader and must not widen a shared surface invalidation.
+    stripped.explorer_places_hash = None;
     // `slug` moves in lockstep with `title` (`markdown/pipeline.rs`'s
     // `generate_slug(&title)`) but, unlike `title`, has NO reader at all:
     // grepping every `.slug` access across `moss-build` and `moss-core`
@@ -412,7 +450,7 @@ impl PageFingerprints {
     }
 }
 
-/// Cross-build cache of per-page fingerprints, keyed by source path.
+/// Cross-build cache of per-page fingerprints, keyed by `PageKey::cache_key`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FacadeCache {
     entries: HashMap<String, PageFingerprints>,
@@ -700,7 +738,7 @@ impl FacadeCache {
         self.entries.is_empty()
     }
 
-    /// True when this cache covers exactly the same set of source paths as
+    /// True when this cache covers exactly the same set of page identities as
     /// `current`. A page appearing or disappearing is a structural change no
     /// per-page diff can reason about, so the caller falls back to a full
     /// render.
@@ -708,7 +746,7 @@ impl FacadeCache {
         self.entries.len() == current.len() && current.keys().all(|p| self.entries.contains_key(p))
     }
 
-    /// The paths [`covers_same_paths`] disagreed on — appeared in `current`, or
+    /// The keys [`covers_same_paths`] disagreed on — appeared in `current`, or
     /// vanished from it. Diagnostic only: "a page appeared or disappeared" is
     /// not actionable on a 226-page vault until it says which one.
     ///
@@ -722,11 +760,9 @@ impl FacadeCache {
         appeared.chain(vanished).cloned().collect()
     }
 
-    /// Source paths whose facade in `current` differs from (or is absent
-    /// from) this cache. A path present in `self` but absent from `current`
-    /// (the source was deleted) is NOT reported here — deletions are a
-    /// structural change the caller already has via `BuildTrigger`, not a
-    /// facade-diff concern.
+    /// Page identities whose facade in `current` differs from (or is absent
+    /// from) this cache. An identity present in `self` but absent from
+    /// `current` is a structural change the caller handles separately.
     pub fn changed_paths(&self, current: &HashMap<String, PageFingerprints>) -> Vec<String> {
         current
             .iter()
@@ -735,7 +771,7 @@ impl FacadeCache {
             .collect()
     }
 
-    /// Source paths whose **surface** differs — the cross-page-visible
+    /// Page identities whose **surface** differs — the cross-page-visible
     /// fingerprint. Non-empty means some page's change could reach another
     /// page's HTML by a route the dependency graph cannot see (site nav,
     /// breadcrumbs, series siblings, listings, translation counterparts),
@@ -760,6 +796,26 @@ impl FacadeCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_page_cache_keys_cannot_alias_source_paths() {
+        let source = ParsedDocument {
+            source_path: Some("folder/index.md".into()),
+            url_path: "folder/index.html".into(),
+            ..Default::default()
+        };
+        let generated = ParsedDocument {
+            url_path: "folder/index.html".into(),
+            ..Default::default()
+        };
+        assert_eq!(PageKey::for_document(&source).cache_key(), "folder/index.md");
+        assert_eq!(PageKey::for_document(&generated).cache_key(), "\0generated:folder/index.html");
+        assert_eq!(PageKey::display_cache_key("\0generated:folder/index.html"), "folder/index.html");
+        assert_ne!(
+            PageKey::for_document(&source).cache_key(),
+            PageKey::for_document(&generated).cache_key(),
+        );
+    }
 
     fn fp(facade: &str, surface: &str) -> PageFingerprints {
         PageFingerprints {

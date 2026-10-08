@@ -16,7 +16,7 @@
  * `pointsForWorks`/`clusters.ts` (pure) — so a test can exercise the
  * geometry without a camera or a DOM ever existing.
  *
- * Each loaded tile is a decoded raster `<img>` plus a small live rivers
+ * Each loaded tile is a fixed-pixel canvas plus a small live rivers
  * overlay (`raster.ts`'s `splitMapSvg`/`rasterize`). A raster is baked for the
  * density its tile is shown at (up to a size cap) and re-baked, through the
  * same concurrency limit as loads, when that density moves away from it.
@@ -37,6 +37,7 @@ const MAX_CONCURRENT_TILE_LOADS = 6;
 
 /** The last fraction of the world layer's own zoom range (`0`..`detailMaxZoom`, NOT the raised ceiling `hasVisibleTiles` unlocks) where the tile layer fades in. */
 const TILE_FADE_BAND = 0.2;
+const WORLD_TILE_CELLS: Array<[number, number]> = Array.from({ length: 36 * 18 }, (_, index) => [index % 36, Math.floor(index / 36)]);
 
 /**
  * How visible the regional-tile layer should be at `camera`, 0..1 — the
@@ -125,6 +126,7 @@ export function tilesForView(cells: Array<[number, number]>, camera: Camera, vie
 
 /** How far, in canvas units (world units times `k`), the outer edge of a tile's own covered region fades toward the bare world layer past it — a cell about 23 world units wide, so this is a short distance against it, not a redraw of the whole tile. */
 const OUTER_FADE_WORLD_UNITS = 1.5;
+const TILE_OPAQUE_COVERAGE_PAD = OUTER_FADE_WORLD_UNITS + 0.5;
 
 /**
  * The `mask-image` that fades a tile's own OUTER edges only — the sides
@@ -195,9 +197,17 @@ interface LoadedTile {
   split: MapSvgSplit;
   /** CSS px per canvas px the current raster was actually baked for (after the size cap). */
   bakedDensity: number;
-  /** A re-bake of this tile is queued or decoding. */
-  rebaking: boolean;
+  /** Whether the current-density raster is ready, being decoded, or failed. */
+  bakeState: "ready" | "baking" | "failed";
 }
+
+interface VisibleTileWaiter {
+  keys: Set<string>;
+  generation: number;
+  resolve: (result: VisibleTilesResult) => void;
+}
+
+export type VisibleTilesResult = "ready" | "failed" | "superseded";
 
 /** The regional-tile DOM layer: fetches each cell's SVG once, caches the result (including a failure, so a 404 is never retried every frame), and keeps every loaded element positioned over its own cell as the camera moves. */
 export class TileLayer {
@@ -217,10 +227,16 @@ export class TileLayer {
   private unitScale = 1;
   /** Keys of the tiles actually on screen right now (the loaded set also holds a margin of neighbours). Only these are baked sharp: a raster at full density is far larger than the screen it serves, so spending it on every neighbour would cost memory for nothing. */
   private onScreen = new Set<string>();
+  /** Callbacks waiting for every tile in the current viewport to finish decoding. */
+  private visibleTileWaiters = new Set<VisibleTileWaiter>();
   /** Whether the latest `render()` was a settled one: re-bakes are only discovered then, so a layer is not idle before its first settled render. */
   private settledRender = false;
   /** Whether the latest `render()` was inside the fade band, i.e. tiles are wanted at all. */
   private shown = false;
+  /** One pending two-frame handoff before padding work; paint and input get a chance between visible and background detail. */
+  private backgroundFrame: number | null = null;
+  /** Padding is serial so one low-priority raster cannot occupy the shared load slots when a gesture exposes a new cell. */
+  private activeBackgroundLoads = 0;
 
   constructor(container: HTMLElement, options: TileLayerOptions) {
     this.container = container;
@@ -230,6 +246,59 @@ export class TileLayer {
   /** Whether any of this layer's own cells (manifest minus failed fetches) are in view at `camera`/`viewport` — `map.ts`'s own detail-ceiling switch (`currentMaxZoom`) reads this rather than reaching into `availableTiles` itself. */
   hasVisibleTiles(camera: Camera, viewport: Viewport): boolean {
     return tilesForView(this.nonFailedManifestCells(), camera, viewport).length > 0;
+  }
+
+  /** Whether the manifest has tile coverage under this view, including cells whose fetch failed. Initial embed readiness must fail closed for those cells, while the zoom ceiling may correctly ignore them. */
+  hasManifestTiles(camera: Camera, viewport: Viewport): boolean {
+    return tilesForView(this.options.availableTiles, camera, viewport, 0).length > 0;
+  }
+
+  /** True only when already-decoded regional canvases cover the whole frame beyond their outer-edge fades. The world raster remains required for partial coverage, fade frames, failed cells, or any tile that still needs a sharper bake. */
+  hasOpaqueViewportCoverage(camera: Camera, viewport: Viewport): boolean {
+    if (tileFadeOpacity(camera, viewport) !== 1) return false;
+    const required = tilesForView(WORLD_TILE_CELLS, camera, viewport, 0);
+    if (required.length === 0) return false;
+    const available = new Set(this.options.availableTiles.map(([x, y]) => `${x},${y}`));
+    const scale = screenScale(camera, viewport);
+    const view = {
+      left: camera.x - viewport.width / (2 * scale),
+      right: camera.x + viewport.width / (2 * scale),
+      top: camera.y - viewport.height / (2 * scale),
+      bottom: camera.y + viewport.height / (2 * scale),
+    };
+    return required.every(([x, y]) => {
+      const key = `${x},${y}`;
+      if (!available.has(key)) return false;
+      const entry = this.elements.get(key);
+      if (entry === undefined || entry === "loading" || entry === "failed" || entry.bakeState !== "ready") return false;
+      const surface = entry.el.firstElementChild;
+      if (surface?.tagName.toLowerCase() !== "canvas" || (surface as HTMLCanvasElement).width < 1 || (surface as HTMLCanvasElement).height < 1) return false;
+      const wantedDensity = this.bakeableDensity(entry.split, this.density);
+      if (entry.bakedDensity * TILE_REBAKE_RATIO < wantedDensity) return false;
+      const bounds = tileCellBounds(x, y);
+      const hasUsableNeighbour = (nx: number, ny: number): boolean => {
+        if (!available.has(`${nx},${ny}`)) return false;
+        return this.elements.get(`${nx},${ny}`) !== "failed";
+      };
+      // Outer tile edges fade across 1.5 world units. Include a small
+      // rounding margin for the tile's bleed and independently transformed
+      // CSS boxes; if any faded strip reaches the frame, the world is still
+      // needed underneath it.
+      return !(
+        (!hasUsableNeighbour(x - 1, y) && view.left < bounds.minX + TILE_OPAQUE_COVERAGE_PAD) ||
+        (!hasUsableNeighbour(x + 1, y) && view.right > bounds.maxX - TILE_OPAQUE_COVERAGE_PAD) ||
+        (!hasUsableNeighbour(x, y + 1) && view.top < bounds.minY + TILE_OPAQUE_COVERAGE_PAD) ||
+        (!hasUsableNeighbour(x, y - 1) && view.bottom > bounds.maxY - TILE_OPAQUE_COVERAGE_PAD)
+      );
+    });
+  }
+
+  /** Waits for the captured visible cells; padding-only neighbours never hold first paint. Cleared generations are superseded so the caller can recheck the resized frame. */
+  waitForVisibleTiles(): Promise<VisibleTilesResult> {
+    const keys = new Set(this.onScreen);
+    const ready = this.visibleTilesOutcome(keys);
+    if (ready !== null) return Promise.resolve(ready ? "ready" : "failed");
+    return new Promise((resolve) => this.visibleTileWaiters.add({ keys, generation: this.generation, resolve }));
   }
 
   /**
@@ -267,14 +336,6 @@ export class TileLayer {
       this.elements.set(key, "loading");
       this.queue.push(key);
     }
-    // Every loaded tile, not only the visible ones: a tile left outside the view when the frame shrinks must give its large raster back too.
-    if (settled) {
-      for (const [key, entry] of this.elements) {
-        if (entry === "loading" || entry === "failed" || entry.rebaking || !this.needsRebake(key, entry)) continue;
-        entry.rebaking = true;
-        this.rebakeQueue.push(key);
-      }
-    }
     this.drainQueue();
     this.publishState();
   }
@@ -284,39 +345,124 @@ export class TileLayer {
     const working = this.activeLoads > 0 || this.queue.length > 0 || this.rebakeQueue.length > 0;
     const idle = !this.shown || (this.settledRender && !working);
     this.container.dataset.mossPlacesTilesState = idle ? "idle" : "busy";
+    for (const waiter of this.visibleTileWaiters) {
+      if (waiter.generation !== this.generation) {
+        waiter.resolve("superseded");
+        this.visibleTileWaiters.delete(waiter);
+        continue;
+      }
+      const visibleTiles = this.visibleTilesOutcome(waiter.keys);
+      if (visibleTiles === null) continue;
+      waiter.resolve(visibleTiles ? "ready" : "failed");
+      this.visibleTileWaiters.delete(waiter);
+    }
   }
 
-  /**
-   * Start loading queued cells up to `MAX_CONCURRENT_TILE_LOADS` at once —
-   * navigating straight to a deep zoom can put every one of ~38 tiles into
-   * the queue in the same `render()` call, and letting all of them fetch,
-   * decode and insert at once was measured landing their combined DOM work
-   * in a single frame, a stall this layer's whole point is to avoid. Each
-   * finished `load` (success or failure) re-calls this to pull the next
-   * one, so the pool stays full without this layer polling for work.
-   */
+  private visibleTilesOutcome(keys: Set<string>): boolean | null {
+    const state = this.visibleTilesState(keys);
+    if (state.failed) return false;
+    return state.pending ? null : true;
+  }
+
+  private visibleTilesState(keys: Set<string>): { pending: boolean; failed: boolean } {
+    let pending = false;
+    let failed = false;
+    for (const key of keys) {
+      const state = this.elements.get(key);
+      if (state === "failed" || (typeof state === "object" && state.bakeState === "failed")) {
+        failed = true;
+        continue;
+      }
+      if (state === undefined || state === "loading" || state.bakeState === "baking" || this.needsRebake(key, state)) pending = true;
+    }
+    return { pending, failed };
+  }
+
+  /** Start current-frame work first; padding runs one job after a paint opportunity. */
   private drainQueue(): void {
-    while (this.activeLoads < MAX_CONCURRENT_TILE_LOADS) {
-      const key = this.queue.shift();
-      if (key === undefined) break;
-      if (this.elements.get(key) !== "loading") continue; // a clear() already dropped it
-      const [x, y] = key.split(",").map(Number);
-      this.run(this.load(key, x, y));
+    // Reconcile after both renders and async completions. A render during an
+    // in-flight load/rebake cannot enqueue that key while its state is
+    // "loading"/"baking"; its completion comes back through this same drain.
+    if (this.settledRender) {
+      for (const [key, entry] of this.elements) {
+        if (entry === "loading" || entry === "failed" || entry.bakeState !== "ready" || !this.needsRebake(key, entry)) continue;
+        entry.bakeState = "baking";
+        this.rebakeQueue.push(key);
+      }
     }
-    // Re-bakes decode as large as loads do, so they take slots from the same pool.
     while (this.activeLoads < MAX_CONCURRENT_TILE_LOADS) {
-      const key = this.rebakeQueue.shift();
-      if (key === undefined) return;
-      const entry = this.elements.get(key);
-      if (!entry || entry === "loading" || entry === "failed") continue; // a clear() already dropped it
-      this.run(this.rebake(key, entry));
+      const visibleLoadIndex = this.queue.findIndex((key) => this.onScreen.has(key));
+      if (visibleLoadIndex >= 0) {
+        const [key] = this.queue.splice(visibleLoadIndex, 1);
+        if (this.elements.get(key) !== "loading") continue; // a clear() already dropped it
+        const [x, y] = key.split(",").map(Number);
+        this.run(this.load(key, x, y));
+        continue;
+      }
+
+      const visibleRebakeIndex = this.rebakeQueue.findIndex((key) => this.onScreen.has(key));
+      if (visibleRebakeIndex >= 0) {
+        const [key] = this.rebakeQueue.splice(visibleRebakeIndex, 1);
+        const entry = this.elements.get(key);
+        if (!entry || entry === "loading" || entry === "failed") continue; // a clear() already dropped it
+        this.run(this.rebake(key, entry));
+        continue;
+      }
+
+      // Do not fill free slots with neighbours while any visible dependency
+      // is still queued or decoding; visible loads and re-bakes both settle
+      // through the same state this layer uses for initial readiness.
+      if (this.visibleTilesState(this.onScreen).pending) return;
+      if (this.queue.length > 0 || this.rebakeQueue.length > 0) this.scheduleBackgroundWork();
+      return;
     }
   }
 
-  private run(job: Promise<void>): void {
+  private scheduleBackgroundWork(): void {
+    if (this.backgroundFrame !== null || this.activeBackgroundLoads > 0 || !this.shown || !this.settledRender) return;
+    // Two RAFs give the current visible paint a browser frame before a
+    // padding SVG decode. This works consistently in WebKit without a timer;
+    // the next render can always promote newly visible work synchronously.
+    this.backgroundFrame = window.requestAnimationFrame(() => {
+      this.backgroundFrame = window.requestAnimationFrame(() => {
+        this.backgroundFrame = null;
+        this.startBackgroundWork();
+      });
+    });
+  }
+
+  private startBackgroundWork(): void {
+    if (!this.shown || !this.settledRender || this.activeBackgroundLoads > 0 || this.activeLoads >= MAX_CONCURRENT_TILE_LOADS) return;
+    if (this.visibleTilesState(this.onScreen).pending) {
+      this.drainQueue();
+      return;
+    }
+    const key = this.queue.shift();
+    if (key !== undefined) {
+      if (this.elements.get(key) !== "loading") {
+        this.drainQueue();
+        return;
+      }
+      const [x, y] = key.split(",").map(Number);
+      this.run(this.load(key, x, y), true);
+      return;
+    }
+    const rebakeKey = this.rebakeQueue.shift();
+    if (rebakeKey === undefined) return;
+    const entry = this.elements.get(rebakeKey);
+    if (!entry || entry === "loading" || entry === "failed") {
+      this.drainQueue();
+      return;
+    }
+    this.run(this.rebake(rebakeKey, entry), true);
+  }
+
+  private run(job: Promise<void>, background = false): void {
     this.activeLoads++;
+    if (background) this.activeBackgroundLoads++;
     void job.finally(() => {
       this.activeLoads--;
+      if (background) this.activeBackgroundLoads--;
       this.drainQueue();
       this.publishState();
     });
@@ -335,7 +481,10 @@ export class TileLayer {
       if (generation !== this.generation || this.elements.get(key) !== "loading") return; // dropped out of the fade band mid-fetch
       const split = splitMapSvg(text);
       if (!split || !this.options.origins[key]) throw new Error("invalid tile svg");
-      const { surface, baked } = await this.bake(split, this.onScreen.has(key) ? this.density : 1);
+      // Visible cells use current density; off-screen prefetch stays at or
+      // below 1× until promotion to bound memory.
+      const density = this.onScreen.has(key) ? this.density : Math.min(this.density, 1);
+      const { surface, baked } = await this.bake(split, density);
       if (generation !== this.generation || this.elements.get(key) !== "loading") {
         surface.release();
         return; // dropped out of the fade band while the raster decoded, or superseded by a clear() + re-queue
@@ -353,7 +502,8 @@ export class TileLayer {
       }
       wrapper.style.zIndex = String(tileDrawOrder(x, y, this.options.columns, this.options.rows));
       this.container.append(wrapper);
-      this.elements.set(key, { el: wrapper, release: surface.release, split, bakedDensity: baked, rebaking: false });
+      const entry: LoadedTile = { el: wrapper, release: surface.release, split, bakedDensity: baked, bakeState: "ready" };
+      this.elements.set(key, entry);
       this.position(wrapper, x, y, this.unitScale);
       // A cell the manifest names counts as present while it loads, so its
       // own load changes no neighbour's mask; only its own edges need one.
@@ -371,10 +521,10 @@ export class TileLayer {
     }
   }
 
-  /** CSS px per canvas px a raster of `split` can actually be baked for when `density` is wanted: never below 1, never past the size cap. */
+  /** CSS px per canvas px a raster of `split` can actually be baked for when `density` is wanted, never past the size cap. */
   private bakeableDensity(split: MapSvgSplit, density: number): number {
     const dpr = Math.min(window.devicePixelRatio || 1, TILE_RASTER_DPR_CAP);
-    return Math.min(Math.max(1, density), TILE_RASTER_MAX_SIDE / (Math.max(split.width, split.height) * dpr));
+    return Math.min(density, TILE_RASTER_MAX_SIDE / (Math.max(split.width, split.height) * dpr));
   }
 
   /** Decode `split` at the pixel size a tile shown at `density` CSS px per canvas px needs, and return the density that size actually gives. */
@@ -398,10 +548,10 @@ export class TileLayer {
     try {
       result = await this.bake(entry.split, this.density);
     } catch {
-      entry.rebaking = false;
+      entry.bakeState = "failed";
       return;
     }
-    entry.rebaking = false;
+    entry.bakeState = "ready";
     if (generation !== this.generation || this.elements.get(key) !== entry) {
       result.surface.release();
       return;
@@ -415,6 +565,10 @@ export class TileLayer {
   /** Remove every tile element this layer has added and forget its own fetch/load state, so a later `render()` re-fetches from scratch — the "no DOM" half of the fade-band contract above. Bumps `generation` unconditionally, even with nothing to remove, so a `load()` already in flight (always tracked in `elements` by the time it runs — see `render()`) is invalidated regardless of this call's own early return. */
   private clear(): void {
     this.generation++;
+    if (this.backgroundFrame !== null) window.cancelAnimationFrame(this.backgroundFrame);
+    this.backgroundFrame = null;
+    for (const waiter of this.visibleTileWaiters) waiter.resolve("superseded");
+    this.visibleTileWaiters.clear();
     if (this.elements.size === 0) return;
     for (const value of this.elements.values()) {
       if (value !== "loading" && value !== "failed") {
@@ -445,7 +599,7 @@ export class TileLayer {
     return this.options.availableTiles.filter(([cx, cy]) => this.elements.get(`${cx},${cy}`) !== "failed");
   }
 
-  /** Recompute and (re)apply `mask-image` for `el`, the tile wrapper at `(x, y)` — the only place it is ever written, so it changes only by a call here, never on a plain `render()` pan. The mask works on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly, so a fade distance in canvas units (`tileEdgeMask`) lands in the right place regardless of `unitScale`/zoom, and fades the wrapper's raster AND its rivers overlay together as one composited unit. A tile is never clipped toward a neighbour: a fractional clip edge antialiases into a one-pixel light line, and the tiles carry no filter edge effects that would need hiding. */
+  /** Recompute and (re)apply `mask-image` for `el`, the tile wrapper at `(x, y)` — the only place it is ever written, so it changes only by a call here, never on a plain `render()` pan. The mask works on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly, so a fade distance in canvas units (`tileEdgeMask`) lands in the right place regardless of `unitScale`/zoom, and fades the wrapper's raster AND its rivers overlay together as one composited unit. A tile is never clipped toward a neighbour: a fractional clip edge antialiases into a one-pixel light line, and the current vector clip context plus tile overlap must be verified before changing that edge policy. */
   private applyEdgeMask(el: HTMLElement, x: number, y: number): void {
     const mask = tileEdgeMask(x, y, this.nonFailedManifestCells(), this.options.k);
     el.style.maskImage = mask ?? "";

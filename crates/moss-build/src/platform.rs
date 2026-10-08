@@ -39,6 +39,13 @@ pub fn set_dataless_fail_fast() -> bool {
     false
 }
 
+/// Keep ordinary blocking workers from implicitly downloading cloud files.
+#[cfg(target_os = "macos")]
+pub fn fail_fast_on_this_thread() -> bool { iopolicy::fail_fast_on_this_thread() }
+
+#[cfg(not(target_os = "macos"))]
+pub fn fail_fast_on_this_thread() -> bool { true }
+
 /// Ask the file provider for a dataless file's **whole** contents, via
 /// Foundation file coordination, and block until it has them.
 ///

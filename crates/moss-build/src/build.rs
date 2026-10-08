@@ -1158,7 +1158,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, cancelled, home_ready: _home_ready, publishable, render_seq, stale_sources } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq } = {
         // moss's own generator, always. A plugin could replace it wholesale
         // through the `generate` capability until that capability was
         // retired: three months, no implementation, and the branch had
@@ -1245,6 +1245,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         crate::build::types::PublishPreflightProjection {
             build_generation,
             missing_references,
+            unresolved_inputs,
         },
     );
 
@@ -1252,7 +1253,6 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // than read. Same unconditional-write reasoning as the preflight projection:
     // a source that arrives fixes nothing if the CLEAN verdict never lands
     // because only failures were ever recorded.
-    crate::system::build_records::records().record_stale_sources(&folder_path, stale_sources);
 
     // The seal shares the admission-time generation with the projection. A
     // content-hash `generation_id` can never say which build is newer.
@@ -1364,7 +1364,6 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             promotion_epoch,
                             admission_nanos,
                             render_seq,
-                            publishable,
                             seal_freshness,
                             &folder_path_for_mat,
                             SealGuards {
@@ -1454,7 +1453,6 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         promotion_epoch,
                         admission_nanos,
                         render_seq,
-                        publishable,
                         crate::build::feeds::search_lane::Freshness::Now,
                         &folder_path,
                         SealGuards {
@@ -1743,11 +1741,9 @@ pub(crate) struct SealGuards {
     pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
 }
 
-/// `publishable` is `false` only for a build the folder-closed cancellation
-/// caught (see `PipelineRunOutput::publishable`). That makes the promotion
-/// below a no-op (`ship::Promotion::Withheld`) and, through
-/// `tail_owns_shared_state`, keeps this tail off `hashes.json` and the
-/// staging sweep as well.
+/// The focused preview switch is separate from the whole-generation evidence
+/// checked at seal time. A pending input withholds the durable generation even
+/// when the selected route was safe to show from staging.
 /// Run the whole-site link audit, then record which of its dead links are
 /// THIS build's own still-pending promise: a video, or its poster, that
 /// `blocking.rs`'s synchronous render already referenced but whose background
@@ -1846,7 +1842,6 @@ async fn advertise_sealed(
     admission_nanos: u64, // `promotion_epoch`'s cross-process-comparable counterpart.
     // The render `lifecycle::show_render` minted for this build.
     render_seq: Option<u64>,
-    publishable: bool,
     freshness: crate::build::feeds::search_lane::Freshness,
     // The exact key `folder_session::registry()` and `ops::watch::worker`
     // register under — passed rather than derived from `mp.project_root()`
@@ -1914,17 +1909,65 @@ async fn advertise_sealed(
     // here because it is the only thing in this phase that needs one — see
     // `degrade::repair_staged_html` for the four sources and why their order
     // is what it is.
-    let presence_verdict = crate::build::degrade::repair_staged_html(
+    let mut presence_verdict = crate::build::degrade::repair_staged_html(
         mp,
         stage_dir,
         &mut sealed,
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
     );
-    let verdict = if publishable {
-        presence_verdict
-    } else {
-        crate::build::ship::ShipVerdict::Withhold(crate::build::ship::WithholdReason::SourcesDownloading)
-    };
+    // Background assets have drained. Validate only the selected page's
+    // direct local CSS/script outputs before writing hashes.json or scheduling
+    // promotion; media and unrelated pages do not affect preview readiness.
+    let active_session = session.as_ref().filter(|s| {
+        !s.cancel.is_cancelled()
+            && crate::system::folder_session::registry()
+                .get(folder_path)
+                .is_some_and(|current| std::sync::Arc::ptr_eq(&current, s))
+    });
+    let selected_requirement = active_session.and_then(|s| s.preview_requirement());
+    if matches!(&presence_verdict, crate::build::ship::ShipVerdict::Ship) {
+        if let Some(requirement) = selected_requirement.as_ref() {
+            if let Some(sample) = sealed.mark_missing_preview_outputs(requirement, stage_dir) {
+                presence_verdict = crate::build::ship::ShipVerdict::Withhold(
+                    crate::build::ship::WithholdReason::Unverified {
+                        entries: 1,
+                        sample: vec![sample],
+                    },
+                );
+            }
+        }
+    }
+    let selected_preview_ready = selected_requirement.as_ref().is_some_and(|requirement| {
+        sealed.preview_readiness_with_outputs(requirement, stage_dir)
+            == crate::build::manifest::PreviewReadiness::Usable
+    });
+    if active_session.is_some()
+        && selected_preview_ready
+        && crate::build::lifecycle::reveal_render_if_latest(mp, render_seq)
+    {
+        if ports.events.shell_listening()
+            && crate::build::cloud_readiness::take_gate(folder_path)
+        {
+            let remaining = sealed.unresolved_inputs().len();
+            let provider = crate::build::cloud_provider::detect_from_path(mp.project_root());
+            ports.events.cloud_sync(&crate::build::ports::reporter::CloudSync {
+                folder: folder_path,
+                phase: "home_ready",
+                provider,
+                total: remaining,
+                downloaded: 0,
+                remaining,
+                blocking: None,
+                unavailable: &[],
+                unavailable_count: 0,
+            });
+        }
+        ports.events.stage_ready(stage_dir);
+    }
+    // The focused preview may be usable while another page's metadata is
+    // still in the cloud. Keep the last complete hashes/generation as the
+    // durable baseline until this attempt has read every required input.
+    let verdict = presence_verdict;
 
     // `sealed` is now final — every pass that can drop a manifest entry has
     // run, so a one-shot build reclaims its orphans against it.

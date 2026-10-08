@@ -174,6 +174,16 @@ export function tileDetailMaxScale(): number {
   return 360 / (TILE_DETAIL_DEGREES_PER_PX * WORLD_WIDTH);
 }
 
+/**
+ * The deepest the opening view of all places (and Fit all places) zooms: one CSS px covers 0.015 degrees of longitude, so a 1280 px map opens about 19 degrees across. The bundled map data is simplified for frames about 10 degrees across, and below this the land turns into 10 to 30 px polygon steps and blocky relief, so the opening view stops where it still looks clean. A reader can still zoom in by hand up to the tile ceiling (`TILE_DETAIL_DEGREES_PER_PX`).
+ */
+export const OPENING_DEGREES_PER_PX = 0.015;
+
+/** The zoom multiplier at which `screenScale` reaches the opening view's depth limit for this viewport. */
+export function openingMaxZoom(viewport: Viewport): number {
+  return 360 / (OPENING_DEGREES_PER_PX * WORLD_WIDTH * coverScale(viewport));
+}
+
 /** The zoom multiplier at which `screenScale` reaches `tileDetailMaxScale()` for this viewport — the raised ceiling once the camera has tiles to show. The zoom controls disable here. */
 export function tileDetailMaxZoom(viewport: Viewport): number {
   return tileDetailMaxScale() / coverScale(viewport);

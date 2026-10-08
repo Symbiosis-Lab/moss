@@ -7,6 +7,114 @@ fn empty_manifest() -> PendingManifest {
     PendingManifest::new(SiteHashes::default())
 }
 
+#[test]
+fn sealed_origin_distinguishes_identical_output_generations_in_two_folders() {
+    let first = tempdir().unwrap();
+    let second = tempdir().unwrap();
+    let mut one = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(first.path()));
+    let mut two = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(second.path()));
+    let output = crate::build::served_path::ServedPath::from_source("index.html").unwrap();
+    one.register(&output, b"same", HashBucket::Files);
+    two.register(&output, b"same", HashBucket::Files);
+    let first_seal = one.seal();
+    let second_seal = two.seal();
+    assert_eq!(first_seal.generation_id(), second_seal.generation_id());
+    assert!(first_seal.belongs_to(first.path()));
+    assert!(!first_seal.belongs_to(second.path()));
+    assert!(crate::deploy::refuse_foreign_inputs(&first_seal, second.path()).is_err());
+    assert!(crate::deploy::refuse_foreign_inputs(&second_seal, second.path()).is_ok());
+}
+
+#[test]
+fn unresolved_route_needs_source_proof_before_reusing_selected_output() {
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempdir().unwrap();
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+    let source = dir.path().join("article.md");
+    evidence.require(&source, crate::build::cloud_ledger::InputRole::PageContent);
+    evidence.pending(&source);
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), evidence.clone());
+    let output = crate::build::served_path::ServedPath::from_source("article/index.html").unwrap();
+    pending.register(&output, b"old HTML", HashBucket::Files);
+    pending.register_source_mapping("article.md".into(), &output);
+    let unresolved = PreviewRequirement { url_path: "/article/".into(), source: PreviewSource::Unresolved, revision: 1 };
+    let unproven = pending.seal();
+    assert!(!unproven.preview_route_present(&unresolved));
+
+    evidence.read(&source, "current".into());
+    let mut fresh = PendingManifest::for_build(SiteHashes::default(), evidence);
+    fresh.register(&output, b"old HTML", HashBucket::Files);
+    fresh.register_source_mapping("article.md".into(), &output);
+    let proven = fresh.seal();
+    assert_eq!(unproven.generation_id(), proven.generation_id());
+    assert!(proven.preview_route_present(&unresolved));
+}
+
+#[test]
+fn generated_route_with_pending_metadata_cannot_clear_cold_preview_gate() {
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempdir().unwrap();
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+    let pending_source = dir.path().join("index.md");
+    evidence.require(&pending_source, crate::build::cloud_ledger::InputRole::PageMetadata);
+    evidence.pending(&pending_source);
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), evidence);
+    let output = crate::build::served_path::ServedPath::from_source("index.html").unwrap();
+    pending.register(&output, b"synthetic home", HashBucket::Files);
+    let requirement = PreviewRequirement { url_path: "/".into(), source: PreviewSource::Generated, revision: 1 };
+    let sealed = pending.seal();
+    assert_eq!(sealed.preview_readiness(&requirement), PreviewReadiness::Pending);
+    assert!(!sealed.preview_route_present(&requirement));
+}
+
+#[test]
+fn pending_preview_requires_manifested_stylesheet_and_script_bytes_only() {
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempdir().unwrap();
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), evidence);
+    let page = crate::build::served_path::ServedPath::from_source("article/index.html").unwrap();
+    let css = crate::build::served_path::ServedPath::from_source("assets/site.css").unwrap();
+    let framework_css = crate::build::served_path::ServedPath::from_cached("_moss/style.test.css").unwrap();
+    let relative_framework_css = crate::build::served_path::ServedPath::from_cached("_moss/style.relative.css").unwrap();
+    let preview_js = crate::build::served_path::ServedPath::from_cached("_moss/js/preview.test.js").unwrap();
+    let html = br#"<link rel="stylesheet" href="../assets/site.css">
+        <link rel="stylesheet" href="/_moss/style.test.css">
+        <link rel="stylesheet" href="../_moss/style.relative.css">
+        <script src="/_moss/js/preview.test.js"></script>
+        <a href="/missing.css">a normal link</a>
+        <img src="/background.png">
+        <p>&lt;script src="/inline-code.js"&gt;</p>
+        <script>const example = "<script src='/inline-code.js'>";</script>
+        <script src="/assets/site.js"></script>"#;
+    pending.register(&page, html, HashBucket::Files);
+    pending.register(&css, b"body { color: red; }
+", HashBucket::Files);
+    pending.register(&framework_css, b"framework css\n", HashBucket::Files);
+    pending.register(&relative_framework_css, b"relative framework css\n", HashBucket::Files);
+    pending.register(&preview_js, b"window.preview = true;", HashBucket::Files);
+    std::fs::create_dir_all(dir.path().join("article")).unwrap();
+    std::fs::create_dir_all(dir.path().join("assets")).unwrap();
+    std::fs::create_dir_all(dir.path().join("_moss/js")).unwrap();
+    std::fs::write(dir.path().join("article/index.html"), html).unwrap();
+    std::fs::write(dir.path().join("assets/site.css"), b"body { color: red; }
+").unwrap();
+    std::fs::write(dir.path().join("_moss/style.test.css"), b"framework css\n").unwrap();
+    std::fs::write(dir.path().join("_moss/style.relative.css"), b"relative framework css\n").unwrap();
+    std::fs::write(dir.path().join("_moss/js/preview.test.js"), b"window.preview = true;").unwrap();
+    let requirement = PreviewRequirement {
+        url_path: "/article/".into(), source: PreviewSource::Generated, revision: 1,
+    };
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), PreviewReadiness::Pending);
+
+    let js = crate::build::served_path::ServedPath::from_source("assets/site.js").unwrap();
+    pending.register(&js, b"window.ready = true;", HashBucket::Files);
+    std::fs::write(dir.path().join("assets/site.js"), b"wrong bytes").unwrap();
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), PreviewReadiness::Pending);
+    std::fs::write(dir.path().join("assets/site.js"), b"window.ready = true;").unwrap();
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), PreviewReadiness::Usable);
+}
+
 // -----------------------------------------------------------------------
 // Bucket registration semantics
 // -----------------------------------------------------------------------

@@ -285,12 +285,7 @@ pub fn extract_media_metadata(
     // video would record "no dimensions, no colour" as if that were the truth
     // about the file. Ask for it back and leave the fields empty; the watcher
     // rebuilds once it lands.
-    // The ask is deliberately unconditional but *not* unbounded: the scan visits
-    // every media file, and media is the bulk of an evicted vault, so a cold
-    // open of a 700-photo folder asks 700 times. `request_download` holds every
-    // build caller to a global burst cap for exactly this reason — and the
-    // supervisor, which asks in Home-first order, bypasses it so this can never
-    // starve the file the gate is waiting on.
+    // Every producer shares the reader pool's background admission bound.
     let evicted = crate::build::icloud::is_evicted(path);
     if evicted {
         crate::build::cloud_readiness::request_download(path);
@@ -908,9 +903,6 @@ pub fn scan_folder(folder_path: &str) -> Result<ProjectStructure, String> {
     scan_folder_with_dedup(folder_path, None)
 }
 
-/// Build/deploy default: extract image placeholders synchronously (no deferral).
-/// Preview callers use `scan_folder_with_dedup_emit(.., defer_placeholders=true)`.
-
 /// Scan a folder with optional singleflight dedup for metadata extraction.
 ///
 /// When `metadata_dedup` is `Some`, concurrent calls that hit a TransformCache
@@ -1024,8 +1016,7 @@ pub fn scan_folder_with_dedup_emit(
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
-                log::warn!("Failed to read entry: {}", e);
-                continue;
+                return Err(format!("Failed to scan site entry: {}", e));
             }
         };
 
@@ -1444,7 +1435,7 @@ pub fn scan_folder_with_dedup_emit(
     let attachment_folder = crate::build::site_config::load_attachment_folder(folder_path);
     dirs.retain(|d| crate::build::scan::classify::gets_index_page(d, &passthrough_roots, &attachment_folder));
 
-    Ok(ProjectStructure {
+    let structure = ProjectStructure {
         root_path: folder_path.to_string(),
         markdown_files,
         html_files,
@@ -1461,7 +1452,9 @@ pub fn scan_folder_with_dedup_emit(
         has_language_trees,
         passthrough_roots,
         dirs,
-    })
+    };
+    crate::build::scan::case_collision::warn_case_colliding_files(&structure);
+    Ok(structure)
 }
 
 // =========================================================================

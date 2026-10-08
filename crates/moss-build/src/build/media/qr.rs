@@ -192,6 +192,16 @@ pub fn emit_share_qr(
     let Some(qr) = share_qr_for_page(url_path, is_public_page, site_url) else {
         return Ok(());
     };
+    let sp = crate::build::served_path::ServedPath::from_source(&qr.served_path)
+        .map_err(|e| format!("Failed to construct QR path: {}", e))?;
+    // Carry registration proves both this build's manifest entry and the
+    // existing stage file. The touched mark is current-build state, unlike
+    // `files()`, which still includes stale prior entries.
+    if pending.is_registered(sp.as_str())
+        && crate::build::io_utils::output_present(&output_dir.join(sp.as_str()))
+    {
+        return Ok(());
+    }
     let svg = match generate_qr_svg(&qr.payload) {
         Ok(svg) => svg,
         Err(e) => {
@@ -199,8 +209,6 @@ pub fn emit_share_qr(
             return Ok(());
         }
     };
-    let sp = crate::build::served_path::ServedPath::from_source(&qr.served_path)
-        .map_err(|e| format!("Failed to construct QR path: {}", e))?;
     crate::build::context::BuildContext::for_render(output_dir, pending)
         .emit(&sp, svg.as_bytes(), crate::build::manifest::HashBucket::Files)
         .map_err(|e| format!("Failed to emit QR SVG: {}", e))

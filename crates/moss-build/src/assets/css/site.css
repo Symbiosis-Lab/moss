@@ -207,32 +207,6 @@
   box-sizing: border-box;
 }
 
-/* Thin scrollbar — transparent track, subtle thumb */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-.is-scrolling ::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.25);
-}
-.is-scrolling ::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.5);
-}
-
 /* Text selection - moss green tint */
 ::selection {
   background: rgba(45, 90, 45, 0.15);
@@ -4220,11 +4194,18 @@ article figure.moss-image:not(.moss-align-left):not(.moss-align-right):not(:has(
 article figure.moss-image:not(.moss-align-left):not(.moss-align-right):not(:has(.moss-align-left)):not(:has(.moss-align-right)) img {
   margin-inline: auto;
 }
-/* Bare-paragraph (uncaptioned) standalone image: center the lone img. */
+/* Bare-paragraph (uncaptioned) standalone image: center the lone img. The
+   `<picture>` shrinks to the image so the auto margins have room to act
+   (a block picture at full width left a narrow image at the start edge),
+   and stops at the column so a wide image still fills it. */
 article p:has(> img:only-child) > img,
 article p:has(> picture:only-child) > picture {
   display: block;
   margin-inline: auto;
+}
+article p:has(> picture:only-child) > picture {
+  inline-size: fit-content;
+  max-inline-size: 100%;
 }
 
 /* Figcaption typography. Sits below the picture/img with a tight
@@ -4283,6 +4264,8 @@ article p:has(> picture:only-child) + p:has(> picture:only-child) {
 article p:has(> img:only-child) > img,
 article p:has(> picture:only-child) > picture > img {
   margin-block: var(--moss-space-xs);
+}
+article p:has(> picture:only-child) > picture > img {
   margin-inline: 0;
 }
 
@@ -6916,10 +6899,18 @@ article a:where(:not(.moss-btn)):focus {
      after the grid, which a vertical page reads along its own block axis. */
   margin-block: var(--moss-space-md) var(--moss-space-lg);
   margin-inline: 0;
-  /* An author ratio applies whatever the column count is — the per-count rules
-     below only enumerate 1–4. `initial` (= none) keeps a ratio-less grid on the
-     default single implicit track, exactly as before this line existed. */
-  grid-template-columns: var(--moss-grid-ratio, initial);
+  /* Reset derived values here so nested grids use their own count. Counts
+     outside the built-in 1–4 range still accept an authored ratio. */
+  --_grid-count: initial;
+  --_grid-template: var(--moss-grid-ratio, repeat(var(--_grid-count), minmax(0, 1fr)));
+  --_grid-authored-track: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - var(--_grid-count) * var(--moss-space-md)) / var(--_grid-count)
+  );
+  --_grid-wrap: var(--_grid-template, none);
+  --_grid-track: var(--_grid-authored-track, auto);
+  --_grid-overflow-x: auto;
+  --_grid-overflow-y: visible;
+  grid-template-columns: var(--_grid-wrap);
 }
 
 /* Ma 間: a heading BINDS to the grid it owns at `sm` (16px) — tighter than the
@@ -6938,38 +6929,12 @@ article a:where(:not(.moss-btn)):focus {
   margin-block-start: var(--moss-space-sm);
 }
 
-/* Column configurations.
-   `minmax(0, 1fr)`, not `1fr`: a bare `1fr` track is `minmax(auto, 1fr)`, whose
-   automatic minimum is the item's min-content contribution. Grid cells hold
-   author media, so any child that reports a large intrinsic width — a wide
-   image, a `contain-intrinsic-size` placeholder, a long unbroken string — blows
-   the track past its container and overflows the page horizontally. Flooring the
-   minimum at 0 makes the tracks obey the container unconditionally; it changes
-   nothing when content already fits.
-
-   `var(--moss-grid-ratio, …)`: an author ratio (`:::grid 2 1:2`) arrives as
-   that custom property on the element, NOT as an inline
-   `grid-template-columns`. An inline declaration beats every stylesheet rule,
-   including the mobile collapse below, so a ratio grid used to stay
-   multi-column at every width — 320px-wide viewport, two tracks, unreadable.
-   Read as a variable it is an ordinary value in an ordinary rule, and the
-   media query below (which does not read the variable) wins on source order.
-   Same shape as `--moss-gallery-columns`. */
-.moss-grid[data-columns="1"] {
-  grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
-}
-
-.moss-grid[data-columns="2"] {
-  grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
-}
-
-.moss-grid[data-columns="3"] {
-  grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
-}
-
-.moss-grid[data-columns="4"] {
-  grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
-}
+/* Zero track minima keep intrinsic media from widening the page. The
+   template reads the author ratio as a variable so responsive rules can win. */
+.moss-grid[data-columns="1"] { --_grid-count: 1; }
+.moss-grid[data-columns="2"] { --_grid-count: 2; }
+.moss-grid[data-columns="3"] { --_grid-count: 3; }
+.moss-grid[data-columns="4"] { --_grid-count: 4; }
 
 /* Grid card styling */
 .moss-grid-card {
@@ -7087,16 +7052,12 @@ a.moss-grid-card:hover {
   text-decoration: underline;
 }
 
-/* Collapses `:::grid N` to 1 column below 768px: the default (horizontal)
-   inline axis is viewport WIDTH, which shrinks sharply on mobile, so N
-   side-by-side cards get too narrow to read. Unconditional here — vertical
-   typesetting counters it in vertical.css (its inline axis is HEIGHT,
-   which barely shrinks, so it never needed to collapse) rather than this
-   rule excluding it, so core never has to name the `vertical` partial's
-   own `data-typesetting` token. See preview-cards.md. */
+/* Horizontal inline space narrows on phones. Vertical typesetting keeps
+   the authored tracks because its inline space follows viewport height. */
 @media (max-width: 768px) {
   .moss-grid[data-columns] {
-    grid-template-columns: 1fr;
+    --_grid-wrap: 1fr;
+    --_grid-track: calc(100% / 1.3);
   }
 }
 
@@ -7113,7 +7074,8 @@ a.moss-grid-card:hover {
      theme's visually-hidden `figcaption`), so this row clips it. */
   position: relative;
   grid-auto-flow: column;
-  overflow-x: auto;
+  overflow-x: var(--_grid-overflow-x);
+  overflow-y: var(--_grid-overflow-y);
   scroll-snap-type: inline proximity;
   overscroll-behavior-inline: contain;
   /* CSS Overflow §3: once one axis is non-`visible`, the other computes to
@@ -7133,14 +7095,9 @@ a.moss-grid-card:hover {
   margin-block-end: 0;
 }
 
-/* `[data-columns]` (present, any value) matches the same specificity as the
-   per-count `.moss-grid[data-columns="N"]` rules above (one class + two
-   attributes each) and sits later in the file, so it wins regardless of N —
-   an ordinary `.moss-grid[data-scroll]` selector is one attribute lighter
-   and would lose every one of them. Sizing comes from `grid-auto-columns`
-   below instead. */
 .moss-grid[data-scroll][data-columns] {
   grid-template-columns: none;
+  grid-auto-columns: var(--_grid-track);
 }
 
 /* `min-inline-size`, not `min-width`: a grid item's automatic minimum size
@@ -7166,105 +7123,24 @@ a.moss-grid-card:hover {
   scroll-snap-align: start;
 }
 
-/* Every track is the same size, including the one peeking past the edge, so
-   `.moss-grid-card` widths stay uniform whether a card is fully visible or
-   half cut off: `grid-auto-columns` applies to ALL columns alike under
-   `grid-auto-flow: column`, not just the ones a fixed template would have
-   named. Discrete per-count rules — not a `calc()` division reading
-   `data-columns` through a custom property — to match the existing
-   `.moss-grid[data-columns="N"]` rules this counters.
+/* N visible cards need N gaps: the last gap precedes the peeking card.
+   Each implicit track therefore uses (inline space - peek - N * gap) / N,
+   defined once on the grid above and shared by both writing modes.
 
-   N visible cards need N gaps subtracted, not N-1: one between each pair of
-   the N cards, PLUS one more between the Nth card and the peeking card after
-   it. Solving N·card + N·gap + peek = 100% for card gives
-   `card = (100% - peek - N·gap) / N` — drop a gap and the peek promised by
-   `--moss-grid-scroll-peek` silently shrinks by one gap's width, because the
-   peeking card starts a whole gap earlier than the formula assumed. */
-.moss-grid[data-scroll][data-columns="1"] {
-  grid-auto-columns: calc(
-    100% - var(--moss-grid-scroll-peek, 2.5rem) - var(--moss-space-md)
-  );
-}
-.moss-grid[data-scroll][data-columns="2"] {
-  grid-auto-columns: calc(
-    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 2 * var(--moss-space-md)) / 2
-  );
-}
-.moss-grid[data-scroll][data-columns="3"] {
-  grid-auto-columns: calc(
-    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 3 * var(--moss-space-md)) / 3
-  );
-}
-.moss-grid[data-scroll][data-columns="4"] {
-  grid-auto-columns: calc(
-    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 4 * var(--moss-space-md)) / 4
-  );
-}
-
-/* The wrapping-grid collapse above is wrong for a scroll row — collapsing to
-   `1fr` would leave one full-width card per implicit column, so a keyboard
-   or trackpad drag away from it. It stays a scroller, just showing less: a
-   card and a third, the same "there's more" cue at a size a phone can read.
-   `[data-scroll][data-columns]` (presence) ties the desktop per-count rules'
-   specificity and sits later in the file, so it overrides all four. */
-@media (max-width: 768px) {
-  .moss-grid[data-scroll][data-columns] {
-    grid-auto-columns: calc(100% / 1.3);
-  }
-}
-
-/* A `{scroll}` row whose cells already fit its column count (`data-fits`,
-   from `GridShortcode::fits_without_scrolling` — moss-core) renders exactly
-   like the plain wrapping grid above 768px: N equal tracks, no drag, no
-   peek. It only becomes the scroller the rest of this section builds once
-   the viewport narrows past the SAME breakpoint the plain grid collapses
-   at (`min-width: 769px` here is that breakpoint's complement, not a
-   second number to keep in sync by hand) — `scroll-row.js` still attaches
-   at every width (`data-scroll` is unconditional, `is_scroll_row` is what
-   gates the script), so the reader gets the dots and the keyboard affordance
-   the moment the row actually starts scrolling, with no reload needed.
-   `grid-auto-flow: row` un-does the column-flow the always-scrolling rule
-   above sets — with an explicit `grid-template-columns` restored below,
-   row-flow is what makes N cards wrap into N tracks instead of one long row.
-   `.moss-grid[data-scroll][data-fits][data-columns="N"]` (one class + 3
-   attributes) outranks the always-scrolling `[data-scroll][data-columns]`
-   rule above (one class + 2 attributes) regardless of source order, so this
-   media query doesn't need `!important` or a rewrite of that rule.
-
-   The other three declarations undo box-model residue the always-scrolling
-   rule leaves behind once its own reason for each is gone at this width:
-   `padding-block: 4px` there exists only to keep the row's overflow clip
-   from cutting a focus ring, a concern that stops applying the moment
-   `overflow-x` goes back to `visible` two lines up — left alone, a plain
-   `.moss-grid` carries no padding at all, so a fitting row would sit 8px
-   taller than its plain twin and inset every card 4px further from the top
-   and bottom edges. `grid-auto-columns` only ever sized an IMPLICIT track,
-   which `grid-auto-flow: row` plus the explicit per-count
-   `grid-template-columns` below never create, so it is already inert here —
-   reset anyway so a later change to either can't silently wake a stale
-   peek-sized value back up. `overscroll-behavior-inline` is likewise inert
-   on a box that isn't a scroll container once `overflow-x: visible` applies,
-   same reasoning, same anyway. */
+   A fitting row uses the same wrapping template above the existing 768px
+   breakpoint. Reset both overflow axes together, including the vertical
+   transpose, and remove scroll-only padding so it matches a plain grid. */
 @media (min-width: 769px) {
   .moss-grid[data-scroll][data-fits] {
     grid-auto-flow: row;
-    overflow-x: visible;
+    overflow: visible;
     scroll-snap-type: none;
     grid-auto-columns: auto;
     overscroll-behavior-inline: auto;
     padding-block: 0;
   }
-  .moss-grid[data-scroll][data-fits][data-columns="1"] {
-    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
-  }
-  .moss-grid[data-scroll][data-fits][data-columns="2"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
-  }
-  .moss-grid[data-scroll][data-fits][data-columns="3"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
-  }
-  .moss-grid[data-scroll][data-fits][data-columns="4"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+  .moss-grid[data-scroll][data-fits]:is([data-columns="1"], [data-columns="2"], [data-columns="3"], [data-columns="4"]) {
+    grid-template-columns: var(--_grid-wrap);
   }
 }
 
@@ -8474,6 +8350,9 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   background: var(--moss-color-surface);
   box-shadow: var(--moss-elevation-1);
   color: var(--moss-color-text);
+  /* Safari can leave background-color transitions pending while entering
+     native fullscreen. The exit surface must become opaque immediately. */
+  transition: transform 0.15s ease;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -8608,17 +8487,8 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   .moss-scroll-dots {
     display: none;
   }
-  .moss-grid[data-scroll][data-columns="1"] {
-    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
-  }
-  .moss-grid[data-scroll][data-columns="2"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
-  }
-  .moss-grid[data-scroll][data-columns="3"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
-  }
-  .moss-grid[data-scroll][data-columns="4"] {
-    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+  .moss-grid[data-scroll]:is([data-columns="1"], [data-columns="2"], [data-columns="3"], [data-columns="4"]) {
+    grid-template-columns: var(--_grid-template);
   }
 }
 

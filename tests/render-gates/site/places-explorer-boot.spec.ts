@@ -21,6 +21,90 @@ test("the static figure is replaced by the interactive layer once ready", async 
   await expect(figure.locator("> svg")).toHaveCount(0);
   await expect(figure.locator(".moss-places-viewport")).toHaveCount(1);
   await expect(figure.locator(".moss-places-status")).toHaveCount(1);
+  const bars = await figure.locator(".moss-places-cards").evaluate((row) => {
+    const reference = document.createElement("div");
+    document.body.append(reference);
+    const native = getComputedStyle(reference).scrollbarWidth;
+    reference.remove();
+    return { actual: getComputedStyle(row).scrollbarWidth, native };
+  });
+  expect(bars.actual, "the timeline should retain the browser's native scrollbar").toBe(bars.native);
+});
+
+test("the full label set mounts quickly and keeps its measured point and river boxes", async ({ page }) => {
+  await page.addInitScript(() => {
+    const started = performance.now();
+    const measurements = new Map<HTMLElement, { kind: string; width: number; height: number; visibility: string; hidden: boolean }>();
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      const rect = originalRect.call(this);
+      if (this.classList.contains("moss-places-label")) {
+        measurements.set(this, {
+          kind: this.dataset.kind ?? "",
+          width: rect.width,
+          height: rect.height,
+          visibility: this.style.visibility,
+          hidden: this.hidden,
+        });
+      }
+      return rect;
+    };
+    let readyMs: number | null = null;
+    const observer = new MutationObserver((records) => {
+      if (records.some((record) => record.target instanceof Element
+        && record.target.matches(".moss-place-map[data-moss-places-explorer]")
+        && record.target.getAttribute("data-moss-places-explorer-ready") === "ready")) {
+        readyMs = performance.now() - started;
+        observer.disconnect();
+      }
+    });
+    observer.observe(document, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-moss-places-explorer-ready"],
+    });
+    (window as typeof window & { __placesLabelAudit?: () => unknown }).__placesLabelAudit = () => {
+      const labels = [...document.querySelectorAll<HTMLElement>(".moss-places-label")];
+      const visible = labels.filter((label) => !label.hidden);
+      const mismatches = visible.filter((label) => {
+        const measured = measurements.get(label);
+        const actual = originalRect.call(label);
+        return !measured || Math.abs(measured.width - actual.width) > 0.5 || Math.abs(measured.height - actual.height) > 0.5;
+      });
+      const values = [...measurements.values()];
+      return {
+        readyMs,
+        labelCount: labels.length,
+        pointMeasurements: values.filter((value) => value.kind !== "river").length,
+        riverMeasurements: values.filter((value) => value.kind === "river").length,
+        positiveMeasurements: values.filter((value) => value.width > 0 && value.height > 0).length,
+        measuredInvisible: values.every((value) => !value.hidden && value.visibility === "hidden"),
+        visibleCount: visible.length,
+        dimensionMismatches: mismatches.length,
+      };
+    };
+  });
+  await page.goto("places/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(FIGURE)).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+  const audit = await page.evaluate(() => (window as typeof window & { __placesLabelAudit: () => {
+    readyMs: number | null;
+    labelCount: number;
+    pointMeasurements: number;
+    riverMeasurements: number;
+    positiveMeasurements: number;
+    measuredInvisible: boolean;
+    visibleCount: number;
+    dimensionMismatches: number;
+  } }).__placesLabelAudit());
+  expect(audit.readyMs, "the complete label layer should reach ready within 3 seconds").not.toBeNull();
+  expect(audit.readyMs!).toBeLessThan(3000);
+  expect(audit.labelCount).toBeGreaterThan(1000);
+  expect(audit.pointMeasurements).toBeGreaterThan(0);
+  expect(audit.riverMeasurements).toBeGreaterThan(0);
+  expect(audit.positiveMeasurements).toBe(audit.labelCount);
+  expect(audit.measuredInvisible, "measurement must keep labels invisible until placement").toBe(true);
+  expect(audit.visibleCount).toBeGreaterThan(0);
+  expect(audit.dimensionMismatches, "point and rotated river boxes must match their measured bounds").toBe(0);
 });
 
 // Tile rasters are cut from one continuous map: a rounded corner on any of

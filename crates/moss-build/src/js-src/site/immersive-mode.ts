@@ -263,19 +263,21 @@ export function setupImmersiveIframe(
 
     wrapper.style.transform =
       `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`;
+    // Commit the inverted transform before adding the transition class. Do
+    // this synchronously: WebKit may pause requestAnimationFrame while it
+    // enters native fullscreen, leaving the wrapper stuck at this transform.
+    void getComputedStyle(wrapper).transform;
 
     // FLIP: Play -- animate to identity transform
-    requestAnimationFrame(() => {
-      wrapper.classList.add("fs-animating-enter");
-      wrapper.style.transform = "";
-      button.disabled = true;
-      newWindowBtn?.setAttribute("aria-disabled", "true");
+    wrapper.classList.add("fs-animating-enter");
+    wrapper.style.transform = "";
+    button.disabled = true;
+    newWindowBtn?.setAttribute("aria-disabled", "true");
 
-      afterTransition(wrapper, "transform", () => {
-        wrapper.classList.remove("fs-animating-enter");
-        button.disabled = false;
-        newWindowBtn?.removeAttribute("aria-disabled");
-      });
+    afterTransition(wrapper, "transform", () => {
+      wrapper.classList.remove("fs-animating-enter");
+      button.disabled = false;
+      newWindowBtn?.removeAttribute("aria-disabled");
     });
   }
 

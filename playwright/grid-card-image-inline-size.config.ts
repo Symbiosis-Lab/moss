@@ -17,6 +17,7 @@ const serveDir = buildScratchSite(GRID_CARD_IMAGE_INLINE_SIZE_GATE);
 
 export default defineGateConfig({
   gate: 'grid-card-image-inline-size',
+  engines: ['chromium', 'webkit', 'firefox'],
   use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light' },
   webServer: { serveDir, port: PORT },
 });

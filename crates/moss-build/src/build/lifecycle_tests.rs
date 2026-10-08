@@ -42,6 +42,63 @@ fn empty_cell() -> ServedCell {
     Arc::new(RwLock::new(PathBuf::new()))
 }
 
+#[test]
+fn incomplete_rebuild_uses_immutable_current_then_ready_stage() {
+    let (_tmp, mp) = vault(&[("complete", "article")]);
+    // A real build holds its lifecycle record through its cache-write lease.
+    let _record = lock_for(&mp);
+    mp.set_current_ptr("complete").unwrap();
+    stage_page(&mp, "article");
+    let cell = empty_cell();
+    adopt_server(&mp, &cell);
+    show_render(&mp, true);
+    assert_eq!(read(&cell), mp.staging_dir());
+    assert!(park_for_rebuild(&mp, false, Default::default()).is_none());
+
+    protect_current_before_rebuild(&mp);
+    std::fs::write(mp.staging_dir().join("article/index.html"), "<html>partial</html>").unwrap();
+    assert_eq!(read(&cell), mp.current_ptr());
+    assert_eq!(std::fs::read_to_string(read(&cell).join("article/index.html")).unwrap(), "<html>complete article</html>");
+
+    // Admitting another folder must not evict this active build's record.
+    let unrelated = tempfile::tempdir().unwrap();
+    let _ = lock_for(&MossPaths::new(unrelated.path()));
+    show_render(&mp, true);
+    assert_eq!(read(&cell), mp.staging_dir());
+}
+
+#[test]
+fn late_ready_render_is_revealed_once_and_stale_tails_cannot_switch_stage() {
+    let (_tmp, mp) = vault(&[]);
+    let cell = empty_cell();
+    adopt_server(&mp, &cell);
+    let (first, _) = show_render(&mp, false);
+    assert!(reveal_render_if_latest(&mp, Some(first)));
+    assert_eq!(read(&cell), mp.staging_dir());
+    assert!(!reveal_render_if_latest(&mp, Some(first)), "the same tail must not reannounce its render");
+
+    let (newer, _) = show_render(&mp, false);
+    assert!(!reveal_render_if_latest(&mp, Some(first)), "an older tail must not reveal staging over a newer render");
+    assert!(reveal_render_if_latest(&mp, Some(newer)));
+}
+
+#[test]
+fn late_ready_tail_cannot_repoint_shared_cell_after_another_folder_adopts_it() {
+    let (_tmp_a, mp_a) = vault(&[]);
+    let (_tmp_b, mp_b) = vault(&[]);
+    let cell = empty_cell();
+
+    adopt_server(&mp_a, &cell);
+    let (render_a, _) = show_render(&mp_a, false);
+    assert_eq!(read(&cell), mp_a.initial_serve_dir());
+
+    adopt_server(&mp_b, &cell);
+    let served_b = read(&cell);
+    assert!(served_b.starts_with(&mp_b.build_dir()));
+    assert!(!reveal_render_if_latest(&mp_a, Some(render_a)));
+    assert_eq!(read(&cell), served_b, "a stale folder tail must leave the new folder's shared cell untouched");
+}
+
 /// A withheld render leaves the preview where the park put it, and the next
 /// build may not sweep while the withheld build's workers still write staging.
 ///

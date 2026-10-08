@@ -89,32 +89,60 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
     expect(iframe.title).toBe("");
   });
 
-  test("on a slow/Save-Data connection, hydration waits for a tap instead of the viewport", () => {
+  test("on a slow/Save-Data connection, hydration waits for an explicit accessible button", () => {
     vi.stubGlobal("navigator", { connection: { saveData: true } });
     const el = poster();
     initPlaceEmbeds();
     expect(FakeIntersectionObserver.instances).toHaveLength(0);
     expect(el.querySelector("iframe")).toBeNull();
-    el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(el.dataset.mossPlaceEmbedState).toBe("consent");
+    expect(el.querySelector("[role=status]")).toBeNull();
+    const button = el.querySelector<HTMLButtonElement>("button.moss-places-embed-load")!;
+    expect(button.textContent).toBe("Load interactive map");
+    button.click();
     expect(el.querySelector("iframe")).not.toBeNull();
+    expect(el.dataset.mossPlaceEmbedState).toBe("loading");
+    expect(el.getAttribute("aria-busy")).toBe("true");
   });
 
-  test("cross-fades the iframe in only once it posts the ready message from the right source", () => {
+  test("article locators hydrate eagerly, place cards stay near-viewport lazy, and Save-Data still requires opt-in", () => {
+    const article = poster("/places/?article=work-1&embed=1");
+    initPlaceEmbeds();
+    expect(article.querySelector("iframe")).not.toBeNull();
+    expect(FakeIntersectionObserver.instances).toHaveLength(0);
+
+    document.body.innerHTML = `<figure class="moss-place-map" data-moss-place-embed data-hydrate-url="/places/?place=lisbon&embed=1"><svg></svg></figure>`;
+    initPlaceEmbeds();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(FakeIntersectionObserver.instances).toHaveLength(1);
+
+    vi.stubGlobal("navigator", { connection: { saveData: true } });
+    document.body.innerHTML = `<figure class="moss-place-map" data-moss-place-embed data-hydrate-url="/places/?article=work-1&embed=1"><svg></svg></figure>`;
+    initPlaceEmbeds();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(document.querySelector("button.moss-places-embed-load")).not.toBeNull();
+  });
+
+  test("exposes the iframe only once it posts the ready message from the right source", () => {
     const el = poster();
     initPlaceEmbeds();
     FakeIntersectionObserver.instances[0]!.trigger(el);
     const iframe = el.querySelector("iframe") as HTMLIFrameElement;
     expect(iframe.classList.contains("moss-places-embed-frame--settled")).toBe(false);
 
-    // A message from some other source must not settle it.
+    // A message from some other source must not reveal it.
     window.dispatchEvent(new MessageEvent("message", { data: { type: "moss-places-embed-ready" }, origin: location.origin, source: window }));
     vi.advanceTimersByTime(50); // flush the rAF polyfill, if any is pending
     expect(iframe.classList.contains("moss-places-embed-frame--settled")).toBe(false);
+    expect(el.dataset.mossPlaceEmbedState).toBe("loading");
 
     window.dispatchEvent(new MessageEvent("message", { data: { type: "moss-places-embed-ready" }, origin: location.origin, source: iframe.contentWindow }));
     vi.advanceTimersByTime(50);
     expect(iframe.classList.contains("moss-places-embed-frame--settled")).toBe(true);
     expect(el.getAttribute("data-moss-place-embed-ready")).toBe("ready");
+    expect(el.dataset.mossPlaceEmbedState).toBe("ready");
+    expect(el.getAttribute("aria-busy")).toBe("false");
+    expect(el.querySelector("[role=status]")).toBeNull();
   });
 
   test("hands the accessible description off to the live map once settled: the figure's own role/label (the no-JS image description) is dropped, and the static floor is made inert — never announced or focusable alongside the iframe's own (titled) content", () => {
@@ -123,7 +151,7 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
     initPlaceEmbeds();
     FakeIntersectionObserver.instances[0]!.trigger(el);
     const iframe = el.querySelector("iframe") as HTMLIFrameElement;
-    expect(el.getAttribute("role")).toBe("img");
+    expect(el.getAttribute("role")).toBe("region");
     expect(el.hasAttribute("aria-label")).toBe(true);
     expect(staticFloor.hasAttribute("inert")).toBe(false);
 
@@ -135,7 +163,7 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
     expect(staticFloor.hasAttribute("inert")).toBe(true);
   });
 
-  test("a ready message that never arrives removes the iframe and leaves the poster untouched", () => {
+  test("a ready message that never arrives removes the iframe and restores the static fallback", () => {
     const el = poster();
     const originalHtml = el.innerHTML;
     initPlaceEmbeds();
@@ -144,7 +172,12 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
 
     vi.advanceTimersByTime(8001);
     expect(el.querySelector("iframe")).toBeNull();
-    expect(el.innerHTML).toBe(originalHtml);
+    expect(el.dataset.mossPlaceEmbedState).toBe("fallback");
+    expect(el.getAttribute("aria-busy")).toBe("false");
+    expect(el.getAttribute("role")).toBe("img");
+    expect(el.querySelector("[data-static-floor]")).not.toBeNull();
+    expect(el.querySelector(".moss-places-embed-status")).toBeNull();
+    expect(el.innerHTML).toBe(originalHtml); // failed iframe and temporary status/button are fully removed
   });
 
   test("attaches the iframe to the DOM before setting its src (WebKit double-navigates a src set while still detached)", () => {
@@ -216,9 +249,64 @@ describe("initPlaceEmbeds — host page lazy hydration", () => {
     FakeIntersectionObserver.instances[0]!.trigger(el);
     expect(el.querySelectorAll("iframe")).toHaveLength(1);
   });
+
+  test("rebinds an embed host after the preview morph restores its served markup", () => {
+    const el = poster();
+    initPlaceEmbeds();
+    expect(el.dataset.mossPlaceEmbedBound).toBe("1");
+
+    // The bridge morph removes the runtime iframe wrapper and attributes
+    // absent from the served figure, then fires this event without re-running
+    // the page's already-loaded script.
+    el.innerHTML = '<svg data-static-floor aria-hidden="true"></svg>';
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", "Map of Lisbon, city precision");
+    el.removeAttribute("data-moss-place-embed-bound");
+    el.removeAttribute("data-moss-place-embed-state");
+    el.removeAttribute("data-moss-place-embed-ready");
+    el.removeAttribute("aria-busy");
+    document.dispatchEvent(new Event("moss-morph-patched"));
+
+    expect(el.dataset.mossPlaceEmbedBound).toBe("1");
+    expect(el.dataset.mossPlaceEmbedState).toBe("waiting");
+    expect(el.getAttribute("role")).toBe("region");
+    expect(el.querySelector(".moss-places-embed-status")).not.toBeNull();
+    expect(FakeIntersectionObserver.instances).toHaveLength(2);
+    FakeIntersectionObserver.instances[1]!.trigger(el);
+    expect(el.querySelector("iframe")).not.toBeNull();
+  });
+
+  test("a morph cancels the old iframe timeout and message listener before rebinding the same host", () => {
+    const el = poster();
+    initPlaceEmbeds();
+    FakeIntersectionObserver.instances[0]!.trigger(el);
+    const oldIframe = el.querySelector("iframe")!;
+    vi.advanceTimersByTime(7000);
+
+    el.innerHTML = '<svg data-static-floor aria-hidden="true"></svg>';
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", "Map of Lisbon, city precision");
+    el.removeAttribute("data-moss-place-embed-bound");
+    el.removeAttribute("data-moss-place-embed-state");
+    el.removeAttribute("data-moss-place-embed-ready");
+    el.removeAttribute("aria-busy");
+    document.dispatchEvent(new Event("moss-morph-patched"));
+    expect(FakeIntersectionObserver.instances[0]!.disconnect).toHaveBeenCalled();
+
+    FakeIntersectionObserver.instances[1]!.trigger(el);
+    const currentIframe = el.querySelector("iframe")!;
+    expect(currentIframe).not.toBe(oldIframe);
+    vi.advanceTimersByTime(1001); // the old attempt's original 8s deadline has passed
+    expect(el.dataset.mossPlaceEmbedState).toBe("loading");
+    expect(currentIframe.isConnected).toBe(true);
+
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "moss-places-embed-ready" }, origin: location.origin, source: oldIframe.contentWindow }));
+    expect(el.dataset.mossPlaceEmbedState).toBe("loading");
+    expect(currentIframe.classList.contains("moss-places-embed-frame--settled")).toBe(false);
+  });
 });
 
-function fakeController(): PlacesMapController {
+function fakeController(waitForInitialPaint: () => Promise<boolean> = vi.fn(() => Promise.resolve(true))): PlacesMapController {
   return {
     setScope: vi.fn(),
     setCooperativeGestures: vi.fn(),
@@ -226,6 +314,7 @@ function fakeController(): PlacesMapController {
     setCurrentArticle: vi.fn(),
     setArticleMode: vi.fn(),
     viewportEl: document.createElement("div"),
+    waitForInitialPaint,
   };
 }
 
@@ -278,11 +367,37 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     expect(controller.setScope).not.toHaveBeenCalled();
   });
 
-  test("posts the ready message to the parent frame", () => {
+  test("posts the ready message only after the current viewport's tiles are ready", async () => {
     history.replaceState(null, "", "/places/?place=lisbon&embed=1");
     const postMessage = vi.spyOn(window.parent, "postMessage");
-    attachEmbedModeIfRequested(fakeController(), document.createElement("figure"));
+    let release!: () => void;
+    const waitForInitialPaint = vi.fn(() => new Promise<boolean>((resolve) => { release = () => resolve(true); }));
+    const attaching = attachEmbedModeIfRequested(fakeController(waitForInitialPaint), document.createElement("figure"));
+    expect(postMessage).not.toHaveBeenCalled();
+    release();
+    await attaching;
     expect(postMessage).toHaveBeenCalledWith({ type: "moss-places-embed-ready" }, location.origin);
+  });
+
+  test("chooses initial paint only after applying the article scope", async () => {
+    history.replaceState(null, "", "/places/?article=w1&embed=1");
+    const order: string[] = [];
+    const controller = fakeController(vi.fn(() => {
+      order.push("paint");
+      return Promise.resolve(true);
+    }));
+    vi.mocked(controller.setScope).mockImplementation(() => { order.push("scope"); });
+
+    await attachEmbedModeIfRequested(controller, document.createElement("figure"));
+
+    expect(order).toEqual(["scope", "paint"]);
+  });
+
+  test("does not replace the poster when a visible regional tile fails", async () => {
+    history.replaceState(null, "", "/places/?place=lisbon&embed=1");
+    const postMessage = vi.spyOn(window.parent, "postMessage");
+    await attachEmbedModeIfRequested(fakeController(() => Promise.resolve(false)), document.createElement("figure"));
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
   test("an expand message switches gesture mode, the figure's own attribute, and re-fits the camera", () => {

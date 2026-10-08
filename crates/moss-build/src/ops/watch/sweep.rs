@@ -18,6 +18,14 @@
 //!   the reporter method that already exists for exactly this signal — its
 //!   own doc names this module as the second producer. No new port method:
 //!   `BuildReporter` is at its four-method abort threshold.
+//! - **Expanded unavailable-file details** are requested from the same
+//!   per-folder owner. The query reads the live intersection of its pending
+//!   files and the bounded reader's current failures; it does not keep a
+//!   second failure list or depend on the next progress event. Progress
+//!   remains a count plus a short filename sample. If no sweep owns the folder
+//!   or its snapshot is still initializing, the query returns an explicit
+//!   unavailable result. Retrying continues through the existing bounded
+//!   background reader pool.
 //! - **Rebuild dispatch** takes a [`crate::ops::watch::RebuildDispatch`]
 //!   instead of a host-owned rebuild handle — the same enqueue closure
 //!   `ops/watch/headless.rs` already builds for the watcher, so a sweep
@@ -75,6 +83,7 @@
 //! (`sweep/progress.rs`), and the per-folder tick loop (`sweep/tick.rs`).
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -126,19 +135,6 @@ pub(crate) const MIN_REBUILD_INTERVAL: Duration = Duration::from_secs(8);
 /// Silence across the whole pending set before the user is told.
 pub(crate) const STALL_AFTER: Duration = Duration::from_secs(90);
 
-/// How long a file may stay dataless across sweep passes before moss stops
-/// calling it "arriving" and starts calling it **unavailable** (provider-native docs, withheld shared files: they never come, and a
-/// stall notice that says "moss keeps trying" forever over a complete site
-/// is a lie). The supervisor counted 3 of its 60s sweeps; the sweep's walk
-/// cadence is 2–20s, so the count became a clock — same ~3 minutes, and
-/// still only accrued while the folder is open and being asked about.
-pub(crate) const REFUSED_AFTER: Duration = Duration::from_secs(180);
-
-/// How often a **refused** file is re-asked for. The provider has already
-/// said no for [`REFUSED_AFTER`]; waking it on every 2s pass is 30x the old
-/// supervisor's pressure for zero extra arrivals.
-pub(crate) const REFUSED_RETRY: Duration = Duration::from_secs(60);
-
 /// The tick the loop actually sleeps. `MOSS_TEST_SWEEP_TICK_MS` is a test seam: it
 /// shortens the tick and makes every tick a walk, so a process-level test sees
 /// a reconciliation in seconds instead of a local root's ~20s cadence.
@@ -162,6 +158,11 @@ pub(crate) fn tick_and_walk_every(default_walk_every: u64) -> (Duration, u64) {
 pub(crate) struct ClaimInfo {
     pub(crate) gen: u64,
     pub(crate) token: tokio_util::sync::CancellationToken,
+    unavailable_tx: tokio::sync::mpsc::Sender<UnavailableFilesQuery>,
+}
+
+struct UnavailableFilesQuery {
+    reply: tokio::sync::oneshot::Sender<Result<Vec<String>, String>>,
 }
 
 static SWEEPS: LazyLock<Mutex<HashMap<String, ClaimInfo>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -219,24 +220,55 @@ pub struct SweepHost {
 ///
 /// `host` is everything the host supplies: see [`SweepHost`].
 pub async fn start(session: Arc<FolderSession>, host: SweepHost) {
-    let key = session.folder.to_string_lossy().to_string();
+    let key = crate::vault_root::VaultRoot::resolve(&session.folder)
+        .path()
+        .to_string_lossy()
+        .to_string();
     let gen = NEXT_GEN.fetch_add(1, Ordering::SeqCst);
+    let (unavailable_tx, unavailable_rx) = tokio::sync::mpsc::channel(4);
     {
         let mut map = sweeps();
         if map.get(&key).is_some_and(|c| !c.token.is_cancelled()) {
             return;
         }
-        map.insert(key.clone(), ClaimInfo { gen, token: session.cancel.clone() });
+        map.insert(key.clone(), ClaimInfo {
+            gen,
+            token: session.cancel.clone(),
+            unavailable_tx,
+        });
     }
     let claim = Claim { key, gen };
     let fut = {
         let session = session.clone();
         async move {
             let _claim = claim; // released whenever the future ends or drops
-            tick::run(session, host).await;
+            tick::run(session, host, unavailable_rx).await;
         }
     };
     session.spawn_ui_bound(fut).await;
+}
+
+/// Ask the active folder sweep for the full set of current concrete read
+/// failures. The sweep owns the pending set, so a query never relies on a
+/// second failure ledger or on the bounded names in its progress event.
+/// Returned paths are relative to `folder` and safe to display in the UI.
+pub async fn unavailable_files_for(folder: &Path) -> Result<Vec<String>, String> {
+    let folder = crate::vault_root::VaultRoot::resolve(folder);
+    let key = folder.path().to_string_lossy().to_string();
+    let sender = sweeps()
+        .get(&key)
+        .map(|claim| claim.unavailable_tx.clone())
+        .ok_or_else(|| "No active folder sweep".to_string())?;
+    let (reply, response) = tokio::sync::oneshot::channel();
+    sender
+        .try_send(UnavailableFilesQuery { reply })
+        .map_err(|err| match err {
+            tokio::sync::mpsc::error::TrySendError::Full(_) => "Folder sweep is busy".to_string(),
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => "Folder sweep is unavailable".to_string(),
+        })?;
+    response
+        .await
+        .map_err(|_| "Folder sweep is unavailable".to_string())?
 }
 
 #[cfg(test)]

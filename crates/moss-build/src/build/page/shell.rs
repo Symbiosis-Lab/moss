@@ -422,31 +422,35 @@ impl ShellProcessor {
             );
         }
 
-        // In preview mode, mark template chrome (nav, footer, series-nav,
-        // reading-preferences widget) as unmappable so the iframe-bridge can
-        // suppress click-to-source on these elements. These post-passes run on
-        // the substituted document ON PURPOSE: series-nav and the font-anchor
-        // widget arrive via substituted values ({post_article}, {date_line}).
+        // In preview mode, mark template chrome (nav, nav island, footer,
+        // series-nav, reading-preferences widget, colophon, skip link) as
+        // unmappable so the iframe-bridge can suppress click-to-source on
+        // them. These post-passes run on the substituted document ON PURPOSE:
+        // series-nav and the font-anchor widget arrive via substituted values
+        // ({post_article}, {date_line}).
         if is_preview {
-            // Main site nav — the FIRST <nav> in every template is the
-            // <nav class="main-nav container"> header bar.
-            result = result.replacen("<nav ", "<nav data-source-none ", 1);
-            // Footer chrome — always a single <footer> per page.
-            result = result.replacen("<footer ", "<footer data-source-none ", 1);
-            // Series-nav — emitted as a SECOND <nav class="moss-series-nav">
-            // via {post_article}; replacen with count=1 would hit main-nav
-            // first, so target the class-prefixed opening tag directly.
-            result = result.replace(
-                r#"<nav class="moss-series-nav""#,
-                r#"<nav class="moss-series-nav" data-source-none"#,
-            );
-            // Reading-preferences widget (font-trigger + font-pill) — injected
-            // as template chrome alongside the article date.  Not author-
-            // editable; suppress source-mapping for the whole anchor div.
-            result = result.replace(
-                r#"<div class="font-anchor""#,
-                r#"<div class="font-anchor" data-source-none"#,
-            );
+            // Each piece of chrome is named by its own opening tag, never by
+            // position: the nav island is emitted before <header> with a <nav>
+            // of its own, and series-nav and the font-anchor arrive through
+            // substituted values, so "the first <nav>" is not reliably anything.
+            for (open, marked) in [
+                (r#"<nav class="main-nav "#, r#"<nav data-source-none class="main-nav "#),
+                (r#"<div class="moss-nav-island">"#, r#"<div class="moss-nav-island" data-source-none>"#),
+                (r#"<nav class="moss-series-nav""#, r#"<nav class="moss-series-nav" data-source-none"#),
+                (r#"<div class="font-anchor""#, r#"<div class="font-anchor" data-source-none"#),
+                (r#"<div class="moss-colophon">"#, r#"<div class="moss-colophon" data-source-none>"#),
+                (r#"<a class="moss-skip-link" "#, r#"<a class="moss-skip-link" data-source-none "#),
+            ] {
+                result = result.replace(open, marked);
+            }
+            // The site footer has no distinguishing tag, so it is found inside
+            // its `<!-- moss:footer -->` bounds. A review colophon or an
+            // author's raw-HTML <footer> in the body comes earlier.
+            if let Some(bound) = result.find("<!-- moss:footer -->") {
+                if let Some(rel) = result[bound..].find("<footer ") {
+                    result.insert_str(bound + rel + "<footer".len(), " data-source-none");
+                }
+            }
         }
 
         result

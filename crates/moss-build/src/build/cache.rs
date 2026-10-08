@@ -25,7 +25,9 @@
 //!     └── ab/cd/<source_hash>.json
 //! ```
 //!
-//! Synced, a sibling of `.moss/build.nosync/` — build both via `for_site`, not a hand join.
+//! The shared cache is an optional replica. Site stores keep regenerated blobs
+//! in `.moss/build.nosync/cache/local-objects/` when shared writes are unavailable.
+//! Build both stores via `for_site`, not a hand join.
 
 use crate::build::stat::{recording_clock, FileStat};
 use serde::{Deserialize, Serialize};
@@ -36,7 +38,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-mod blob_wait;
+mod blob_residency;
 mod records;
 mod shard_wait;
 use shard_wait::Touch;
@@ -67,7 +69,7 @@ const HASH_BUF_SIZE: usize = 64 * 1024;
 /// repositories with hundreds of thousands of objects (the same strategy
 /// git uses).
 ///
-/// `Clone` is cheap and deliberate: both fields are just `PathBuf`s, no open
+/// `Clone` shares a bounded validation index and copies paths, with no open
 /// handles, so a caller that needs to hand a store across a lock boundary
 /// (e.g. the math render cache's process-global "current site" pointer) can
 /// clone it out under the lock and do the actual I/O unsynchronized.
@@ -75,6 +77,8 @@ const HASH_BUF_SIZE: usize = 64 * 1024;
 pub struct ObjectStore {
     /// Root directory — typically `.moss/cache/objects/`.
     base: PathBuf,
+    local_base: Option<PathBuf>,
+    verified: std::sync::Arc<std::sync::Mutex<HashIndex>>,
 }
 
 impl ObjectStore {
@@ -83,13 +87,23 @@ impl ObjectStore {
     /// `base` is typically `.moss/cache/objects/`. The directory is created
     /// lazily (on first write), not here.
     pub fn new(base: PathBuf) -> Self {
-        Self { base }
+        Self { base, local_base: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())) }
     }
 
     /// `mp`'s content-addressed object store — `.moss/cache/objects/`. Prefer this
     /// over `ObjectStore::new(mp.cache_objects())` at every call site that has an `mp`.
     pub fn for_site(mp: &crate::moss_paths::MossPaths) -> Self {
-        Self::new(mp.cache_objects())
+        let mut store = Self::new(mp.cache_objects());
+        store.local_base = Some(mp.cache_local_objects());
+        store
+    }
+
+    fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
+        self.local_base.as_ref().map(|base| Self::blob_path_in(base, oid))
+    }
+
+    fn resident_local_blob(&self, oid: &str) -> Option<PathBuf> {
+        self.local_blob_path(oid).filter(|p| crate::build::io_utils::output_present(p))
     }
 
     /// Returns the root directory of this object store.
@@ -116,6 +130,8 @@ impl ObjectStore {
     }
 
     fn hash_file_once(path: &Path) -> std::io::Result<String> {
+        #[cfg(test)]
+        blob_residency::HASH_READS.with(|count| count.set(count.get() + 1));
         let mut file = fs::File::open(path)?;
         let mut hasher = Sha256::new();
         let mut buf = vec![0u8; HASH_BUF_SIZE];
@@ -201,6 +217,17 @@ impl ObjectStore {
     /// `mode` says what a refusal because the shard is still in the cloud
     /// costs: see [`RecordMode`].
     pub fn store_file(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
+        match self.store_file_in_base(source, mode) {
+            Ok(oid) => Ok(oid),
+            Err(shared_error) => {
+                let Some(base) = &self.local_base else { return Err(shared_error) };
+                ObjectStore::new(base.clone()).store_file_in_base(source, RecordMode::Request)
+                    .map_err(|local_error| format!("Shared CAS: {shared_error}; local CAS: {local_error}"))
+            }
+        }
+    }
+
+    fn store_file_in_base(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
         let oid = Self::hash_file(source)?;
         let dest = self.blob_path(&oid);
         let source_size = fs::metadata(source).map(|m| m.len()).unwrap_or(0);
@@ -210,10 +237,11 @@ impl ObjectStore {
         // Best-effort: a probe that cannot tell (permission, not-a-directory,
         // an undownloaded shard) reads as absent and falls through to the
         // write, which handles its own directory failures and reports them.
-        if dest.exists() && !crate::build::icloud::is_still_in_the_cloud(&dest) {
-            if self.validate_blob(&oid, source_size).is_ok() {
-                return Ok(oid);
-            }
+        if dest.exists() && !crate::build::icloud::is_still_in_the_cloud(&dest)
+            && self.validate_blob(&oid, source_size).is_ok()
+            && Self::hash_file_once(&dest).is_ok_and(|hash| hash == oid)
+        {
+            return Ok(oid);
         }
 
         // Ensure the parent directory (e.g., `base/ab/cd/`) exists.
@@ -267,6 +295,17 @@ impl ObjectStore {
     /// an intermediate file when the caller already has bytes in memory —
     /// e.g., a small JSON metadata blob. `mode` is as for `store_file`.
     pub fn store_bytes(&self, data: &[u8], mode: RecordMode) -> Result<String, String> {
+        match self.store_bytes_in_base(data, mode) {
+            Ok(oid) => Ok(oid),
+            Err(shared_error) => {
+                let Some(base) = &self.local_base else { return Err(shared_error) };
+                ObjectStore::new(base.clone()).store_bytes_in_base(data, RecordMode::Request)
+                    .map_err(|local_error| format!("Shared CAS: {shared_error}; local CAS: {local_error}"))
+            }
+        }
+    }
+
+    fn store_bytes_in_base(&self, data: &[u8], mode: RecordMode) -> Result<String, String> {
         let oid = {
             let mut hasher = Sha256::new();
             hasher.update(data);
@@ -274,7 +313,9 @@ impl ObjectStore {
         };
         let dest = self.blob_path(&oid);
 
-        if crate::build::io_utils::output_present(&dest) {
+        if crate::build::io_utils::output_present(&dest)
+            && Self::hash_file_once(&dest).is_ok_and(|hash| hash == oid)
+        {
             return Ok(oid);
         }
 
@@ -301,23 +342,7 @@ impl ObjectStore {
     /// Providers evict file data, leaving a 0-byte stub or a dataless
     /// placeholder; `find_cached_output()` would serve those as cache hits.
     pub fn get_path(&self, oid: &str) -> Option<PathBuf> {
-        let p = self.blob_path(oid);
-        if crate::build::io_utils::output_present(&p) {
-            return Some(p);
-        }
-        // A plain miss is ordinary and silent; one line per object would be a
-        // cold cache's worth of noise. Only a blob that is there is logged. One
-        // the cloud holds is normal on a second machine: asked for so a later
-        // build finds it, recomputed now.
-        if p.exists() {
-            if crate::build::icloud::is_evicted(&p) {
-                crate::build::cloud_readiness::request_download(&p);
-                log::debug!("[CAS] blob {} is in the cloud, requested; treating as missing", oid);
-            } else {
-                log::warn!("[CAS] unusable blob at {}, treating as missing", oid);
-            }
-        }
-        None
+        self.ready_blob(oid)
     }
 
     /// Validate a stored blob's size against the expected source size.
@@ -417,32 +442,11 @@ impl ObjectStore {
     /// where the platform reports one — so a caller recording the target's
     /// stat can tell its own link from one a concurrent build renamed over it.
     pub(crate) fn link_to_inode(&self, oid: &str, target: &Path, local: Option<&Path>) -> Result<Option<u64>, String> {
-        let mut blob = self.blob_path(oid);
-        // A blob in the cloud is never read as it is. Where the caller holds
-        // the same bytes (`local`: a file whose content is `oid`) they are the
-        // source and the blob is only asked for, so a later build finds it;
-        // otherwise it is waited for, once, and checked against its name.
-        if crate::build::icloud::is_still_in_the_cloud(&blob) {
-            match local.filter(|l| !crate::build::icloud::is_evicted(l)) {
-                Some(local) => {
-                    crate::build::cloud_readiness::request_download(&blob);
-                    blob = local.to_path_buf();
-                }
-                None if self.ready_blob(oid).is_none() => {
-                    return Err(format!(
-                        "Failed to copy {} -> {}: blob {} is in the cloud and did not arrive intact in time",
-                        blob.display(),
-                        target.display(),
-                        oid
-                    ));
-                }
-                None => {}
-            }
-        }
-        if !blob.exists() {
-            log::warn!("CAS link of {} failed, blob absent: {}", oid, self.failure_context(&blob, None));
-            return Err(format!("Blob {} does not exist in object store", oid));
-        }
+        let blob = self.ready_blob(oid).or_else(|| {
+            local.filter(|p| !crate::build::icloud::is_still_in_the_cloud(p))
+                .filter(|p| Self::hash_file_once(p).is_ok_and(|hash| hash == oid))
+                .map(Path::to_path_buf)
+        }).ok_or_else(|| format!("Blob {} is not resident in the object store", oid))?;
 
         // Defense-in-depth: reject 0-byte blobs even though get_path() already
         // filters them on the cache-hit path. This protects the cache-miss path
@@ -532,8 +536,12 @@ impl ObjectStore {
     /// fan-out: `base/ab/cd/<full_hash>`. OIDs are ASCII hex, so `get` always
     /// hits — it is used so a malformed OID cannot abort the build.
     pub fn blob_path(&self, oid: &str) -> PathBuf {
+        Self::blob_path_in(&self.base, oid)
+    }
+
+    fn blob_path_in(base: &Path, oid: &str) -> PathBuf {
         let (p1, p2) = (oid.get(..2).unwrap_or(oid), oid.get(2..4).unwrap_or(oid));
-        self.base.join(p1).join(p2).join(oid)
+        base.join(p1).join(p2).join(oid)
     }
 }
 
@@ -613,7 +621,7 @@ impl TransformCache {
     /// `mp`'s transform cache, paired with `mp`'s object store. Prefer this over
     /// hand-assembling `TransformCache::new(mp.cache_transforms(), ObjectStore::new(mp.cache_objects()))`.
     pub fn for_site(mp: &crate::moss_paths::MossPaths) -> Self {
-        Self::new(mp.cache_transforms(), ObjectStore::for_site(mp))
+        Self { base: mp.cache_transforms(), objects: ObjectStore::for_site(mp) }
     }
 
     /// Returns the root directory of this transform cache — typically `.moss/cache/transforms/`.
@@ -633,8 +641,9 @@ impl TransformCache {
 
     /// Read and deserialize a transform record for the given source OID: `None` if it
     /// is absent, unreadable or unparsable. Writers that merge into a record use
-    /// [`merge`](Self::merge), which tells those apart. There is no default mode:
-    /// a lookup that guards an encode must say [`RecordMode::Wait`].
+    /// [`merge`](Self::merge), which tells those apart. Record lookups return
+    /// promptly on a cloud miss so the required transform can be recomputed;
+    /// `mode` still governs blob and write-shard waits at their own call sites.
     pub fn get_with(&self, source_oid: &str, mode: RecordMode) -> Option<TransformRecord> {
         self.read(source_oid, mode).present()
     }
@@ -730,8 +739,8 @@ impl TransformCache {
     /// 2. That record contains an entry for the given `transform` name.
     /// 3. The entry's `params` match `current_params` exactly (deep
     ///    equality on `serde_json::Value`).
-    /// 4. The output blob is usable now, or is in the cloud and arrives within
-    ///    its deadline hashing to its OID ([`ObjectStore::ready_blob`]).
+    /// 4. The output blob is resident now and hashes to its OID
+    ///    ([`ObjectStore::ready_blob`]). A cloud-only blob is a cache miss.
     ///
     /// If any check fails, `None` is returned and the caller should
     /// re-run the transform.
@@ -1516,6 +1525,7 @@ fn last_gc_summary(objects_dir: &Path) -> String {
 /// sweep beside one deletes what it just wrote.
 pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifecycle::CacheGcToken) -> Result<GcResult, String> {
     let objects_dir = mp.cache_objects();
+    let local_objects_dir = mp.cache_local_objects();
     let transforms_dir = mp.cache_transforms();
     let hash_index_path = mp.cache_hash_index();
     let hashes_path = mp.hashes();
@@ -1535,6 +1545,14 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
     // may be stored in objects/); a live record's outputs are live.
     let mut referenced_oids: std::collections::HashSet<String> =
         live_source_oids.iter().map(|oid| (*oid).to_string()).collect();
+    for generation in read_dir_strict(&mp.generations_dir()).map_err(|error| unreadable(&mp.generations_dir(), error))? {
+        let path = mp.generation_dir(&generation);
+        if !fs::metadata(&path).map_err(|error| unreadable(&path, error))?.is_dir() { continue; }
+        if let Some(receipt) = crate::build::manifest::preview_originals::Originals::read(&mp.generations_dir(), &generation)
+            .map_err(|error| format!("original identities unreadable: {error}"))? {
+            referenced_oids.extend(receipt.images.into_values().map(|original| original.oid));
+        }
+    }
     let mut condemned_records: Vec<PathBuf> = Vec::new();
     let mut shard_dirs: Vec<PathBuf> = Vec::new();
     // transforms/ab/cd/<source_oid>.json
@@ -1606,7 +1624,10 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
     let mut objects_removed: usize = 0;
     let mut bytes_freed: u64 = 0;
 
-    if objects_dir.is_dir() {
+    for objects_dir in [&objects_dir, &local_objects_dir] {
+        if !objects_dir.is_dir() {
+            continue;
+        }
         // Walk the sharded directory: objects/ab/cd/<full_hash>
         for prefix1 in read_dir_entries(&objects_dir) {
             let p1 = objects_dir.join(&prefix1);

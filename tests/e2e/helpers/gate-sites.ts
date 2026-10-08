@@ -734,6 +734,7 @@ cover: tile.svg
 [site]
 lang = "en"
 implicit_figure = false
+link_preview = false
 `,
     // No user theme: this gate is about moss's own defaults.
     ".moss/theme/style.css": null,
@@ -2550,6 +2551,19 @@ description: "A short note from the fjords."
 
 A short note from the fjords.
 `,
+    "tile-boundary-story.md": `---
+title: Tile boundary story
+uid: "pex016pp"
+location:
+  - "West Reach"
+  - "East Reach"
+date: 2023-08-01
+---
+
+# Tile boundary story
+
+A short note with its two places on opposite sides of a regional-map tile boundary.
+`,
     ".moss/config.toml": `schema_version = 6
 
 [site]
@@ -2569,6 +2583,16 @@ precision = "city"
 lat = 60.19
 lng = 5.47
 precision = "region"
+
+["West Reach"]
+lat = 25.0
+lng = 119.5
+precision = "city"
+
+["East Reach"]
+lat = 24.8
+lng = 120.5
+precision = "city"
 
 ["Lisbon"]
 lat = 38.722

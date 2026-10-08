@@ -25,6 +25,7 @@ import { startSiteAccent } from "./site-accent";
 import type { ThemeSettled } from "./theme-settled";
 import { classifyClickGesture } from "./click-vocabulary";
 import { installContextMenu } from "./context-menu";
+import { installCaptureResponder } from "./capture/responder";
 
 (function () {
   "use strict";
@@ -465,6 +466,10 @@ import { installContextMenu } from "./context-menu";
         title: document.title,
         notFound: isNotFoundPage(),
         navType,
+        // Additive capability flag: this bridge answers `moss-capture-request`
+        // (capture/responder.ts). A parent talking to an older bridge sees it
+        // undefined.
+        capture: true,
       },
       "*"
     );
@@ -1026,6 +1031,8 @@ import { installContextMenu } from "./context-menu";
   }
   // Initial sync push so the shell has dimensions before any user input
   reportIframeScroll();
+
+  installCaptureResponder();
 
   window.addEventListener("message", (e: MessageEvent) => {
     if (e.data?.type !== "moss-iframe-scroll-to") return;

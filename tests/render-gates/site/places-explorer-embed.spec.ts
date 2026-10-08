@@ -1,9 +1,8 @@
 /**
  * Render gate: the places-explorer embed — a `style:map` card and an
- * article's own locator, both lazily hydrated to a live map behind their
- * static poster (`embed.ts`), collapsed to cooperative gestures, with an
- * expand control and an open-in-new-tab control reusing the existing
- * immersive/fullscreen mechanism.
+ * article's own locator, hydrated to the canonical live map (`embed.ts`).
+ * Article locators start with the page; place cards hydrate near the
+ * viewport. Both reuse the existing immersive/fullscreen mechanism.
  *
  * The scratch site comes from tests/e2e/helpers/gate-sites.ts
  * (PLACES_EXPLORER_GATE), built by the playwright config at parse time.
@@ -16,10 +15,125 @@ import { test, expect, type Page } from "@playwright/test";
 const POSTER = "[data-moss-place-embed]";
 const IFRAME = "iframe.moss-places-embed-frame";
 const SETTLED = "iframe.moss-places-embed-frame.moss-places-embed-frame--settled";
+const PREVIEW_BRIDGE = new URL("../../../crates/moss-build/src/ops/serve/js/iframe-bridge.js", import.meta.url).pathname;
 
-/** Waits for the lazy iframe to appear and cross-fade in — the ordinary, un-throttled path every test but the Save-Data/failure ones takes. */
+/** Waits for the iframe to become the host's visible map after READY. */
 async function waitForSettled(page: Page): Promise<void> {
   await expect(page.locator(SETTLED)).toHaveCount(1, { timeout: 10000 });
+}
+
+/** Holds map raster decoding in the real browser. Most first-frame tests
+ * hold only the world raster so complete regional coverage remains usable;
+ * the morph deadline test also holds tiles to guarantee this view needs both
+ * raster paths before it can become ready. */
+async function holdMapRasterDecode(page: Page, holdTiles = false): Promise<void> {
+  await page.addInitScript((holdTiles: boolean) => {
+    const blobs = new Map<string, Blob>();
+    const createObjectURL = URL.createObjectURL.bind(URL);
+    const decode = HTMLImageElement.prototype.decode;
+    const waiting: Array<{ image: HTMLImageElement; resolve: () => void; reject: (reason: unknown) => void; isWorld: boolean }> = [];
+    const audit = { worldDecodeCount: 0, tileDecodeCount: 0, released: false, releasedWorld: false, releasedTiles: false };
+    const release = (isWorld: boolean): void => {
+      if (isWorld) {
+        audit.releasedWorld = true;
+        audit.released = true;
+      }
+      else audit.releasedTiles = true;
+      for (const pending of waiting.splice(0)) {
+        if (pending.isWorld ? audit.releasedWorld : audit.releasedTiles) {
+          decode.call(pending.image).then(pending.resolve, pending.reject);
+        } else {
+          waiting.push(pending);
+        }
+      }
+    };
+    (window as unknown as { __mapRasterAudit: typeof audit; __releaseWorldRaster: () => void; __releaseTileRaster: () => void }).__mapRasterAudit = audit;
+    (window as unknown as { __releaseWorldRaster: () => void; __releaseTileRaster: () => void }).__releaseWorldRaster = () => release(true);
+    (window as unknown as { __releaseTileRaster: () => void }).__releaseTileRaster = () => release(false);
+    URL.createObjectURL = (blob: Blob) => {
+      const url = createObjectURL(blob);
+      blobs.set(url, blob);
+      return url;
+    };
+    HTMLImageElement.prototype.decode = function (): Promise<void> {
+      const url = this.currentSrc || this.src;
+      const blob = blobs.get(url);
+      if (!blob) return decode.call(this);
+      return blob.text().then((svg) => {
+        const root = /<svg\b([^>]*)>/i.exec(svg)?.[1] ?? "";
+        const viewBox = /\bviewBox=["']([^"']+)["']/i.exec(root)?.[1]?.trim().split(/[\s,]+/).map(Number);
+        const isWorld = !!viewBox && viewBox.length === 4 && Math.abs(viewBox[2] - 842.035025) < 0.001 && Math.abs(viewBox[3] - 480) < 0.001;
+        if (!isWorld) {
+          audit.tileDecodeCount++;
+          if (holdTiles && !audit.releasedTiles) {
+            return new Promise<void>((resolve, reject) => waiting.push({ image: this, resolve, reject, isWorld: false }));
+          }
+          return decode.call(this);
+        }
+        audit.worldDecodeCount++;
+        if (audit.releasedWorld) return decode.call(this);
+        return new Promise<void>((resolve, reject) => waiting.push({ image: this, resolve, reject, isWorld: true }));
+      });
+    };
+  }, holdTiles);
+}
+
+async function holdWorldRasterDecode(page: Page): Promise<void> {
+  await holdMapRasterDecode(page);
+}
+
+async function worldRasterAudit(page: Page) {
+  return page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate(() =>
+    (window as unknown as { __mapRasterAudit: { worldDecodeCount: number; tileDecodeCount: number; released: boolean } }).__mapRasterAudit,
+  );
+}
+
+async function releaseWorldRaster(page: Page): Promise<void> {
+  await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate(() =>
+    (window as unknown as { __releaseWorldRaster: () => void }).__releaseWorldRaster(),
+  );
+}
+
+async function releaseTileRaster(page: Page): Promise<void> {
+  await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate(() =>
+    (window as unknown as { __releaseTileRaster: () => void }).__releaseTileRaster(),
+  );
+}
+
+async function regionalCanvasCoverage(page: Page) {
+  return page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => {
+    const bounds = viewport.getBoundingClientRect();
+    const canvases = [...document.querySelectorAll<HTMLCanvasElement>(".moss-places-tile > canvas")].filter((canvas) => {
+      const box = canvas.getBoundingClientRect();
+      return canvas.width > 0 && canvas.height > 0 && box.right > bounds.left && box.left < bounds.right && box.bottom > bounds.top && box.top < bounds.bottom;
+    });
+    const boxes = canvases.map((canvas) => canvas.getBoundingClientRect());
+    const xEdges = [...new Set([bounds.left, bounds.right, ...boxes.flatMap((box) => [Math.max(bounds.left, box.left), Math.min(bounds.right, box.right)])])].sort((a, b) => a - b);
+    const complete = xEdges.slice(1).every((right, index) => {
+      const left = xEdges[index]!;
+      if (right <= left) return true;
+      const middle = (left + right) / 2;
+      const spans = boxes.filter((box) => box.left <= middle && box.right >= middle).sort((a, b) => a.top - b.top);
+      let coveredTo = bounds.top;
+      for (const span of spans) {
+        if (span.bottom <= coveredTo) continue;
+        if (span.top > coveredTo + 0.01) return false;
+        coveredTo = Math.max(coveredTo, span.bottom);
+        if (coveredTo >= bounds.bottom - 0.01) return true;
+      }
+      return false;
+    });
+    const dpr = window.devicePixelRatio || 1;
+    const backingAtDpr = canvases.every((canvas, index) => canvas.width + 1 >= boxes[index]!.width * dpr && canvas.height + 1 >= boxes[index]!.height * dpr);
+    const tiles = document.querySelector<HTMLElement>(".moss-places-tiles")!;
+    return {
+      visibleCanvasCount: canvases.length,
+      complete,
+      backingAtDpr,
+      opacity: Number(getComputedStyle(tiles).opacity),
+      targetOpacity: Number(tiles.style.getPropertyValue("--moss-place-tile-opacity")),
+    };
+  });
 }
 
 // World geometry the live camera and the static poster share
@@ -66,19 +180,159 @@ async function clickFullscreenButton(page: Page, browserName: string): Promise<v
     await page.locator(".immersive-fullscreen-btn").evaluate((el) => (el as HTMLElement).focus());
     await page.keyboard.press("Enter");
   } else {
+    await page.locator(POSTER).hover();
     await page.locator(".immersive-fullscreen-btn").click();
   }
 }
 
+/** Wait for the controls' own completion state, including reduced-motion entry. */
+async function clickAndWaitForFullscreen(
+  page: Page,
+  browserName: string,
+  afterActivation?: () => Promise<void>,
+): Promise<void> {
+  await clickFullscreenButton(page, browserName);
+  await afterActivation?.();
+  await expect(page.locator("body")).toHaveClass(/immersive-fs-active/, { timeout: 2000 });
+  const wrapper = page.locator(POSTER).locator(".immersive-iframe-wrapper");
+  await expect(wrapper).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+  await expect(wrapper.locator(".immersive-fullscreen-btn")).toBeEnabled({ timeout: 2000 });
+}
+
 test.describe("style:map embed", () => {
-  test("hydrates near the viewport and cross-fades over the static poster", async ({ page }) => {
+  test("keeps one stable host, shows a loading state, then reveals only the ready iframe", async ({ page }) => {
+    let releaseWorld!: () => void;
+    const worldHeld = new Promise<void>((resolve) => (releaseWorld = resolve));
+    await page.route("**/world.svg", async (route) => {
+      await worldHeld;
+      await route.continue();
+    });
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     const poster = page.locator(POSTER);
-    await expect(poster.locator("> svg")).toHaveCount(1); // the static floor, present from the first paint
+    await expect(page.locator(IFRAME)).toHaveCount(1);
+    await expect(poster).toHaveAttribute("data-moss-place-embed-state", "loading");
+    await expect(poster).toHaveAttribute("aria-busy", "true");
+    await expect(poster.locator(":scope > .moss-places-embed-status")).toBeVisible();
+    await expect(poster.locator(":scope > svg")).toHaveCSS("display", "none");
+    releaseWorld();
     await waitForSettled(page);
     await expect(poster).toHaveAttribute("data-moss-place-embed-ready", "ready");
-    // The static svg is untouched underneath — cross-fade, never a replace.
+    await expect(poster).toHaveAttribute("data-moss-place-embed-state", "ready");
+    await expect(poster).toHaveAttribute("aria-busy", "false");
+    await expect(poster.locator(":scope > .moss-places-embed-status")).toHaveCount(0);
+    await expect(poster.locator(":scope > svg")).toHaveCSS("display", "none");
+    await expect(page.locator(IFRAME)).toHaveCSS("visibility", "visible");
+    await expect(page.locator(IFRAME)).toHaveCSS("opacity", "1");
+    const tilePaint = await page.frameLocator(IFRAME).locator(".moss-places-tiles").evaluate((tiles) => ({
+      actual: Number(getComputedStyle(tiles).opacity),
+      target: Number.parseFloat(getComputedStyle(tiles).getPropertyValue("--moss-place-tile-opacity")),
+      count: tiles.childElementCount,
+    }));
+    expect(tilePaint.count).toBeGreaterThan(0);
+    expect(tilePaint.actual).toBeCloseTo(tilePaint.target, 3); // READY must not rely on hover to finish the tiles' opacity transition
+  });
+
+  test("keeps the host in its loading state until every visible regional tile has decoded", async ({ page }) => {
+    const releaseTileRequests: Array<{ released: boolean; release: () => void }> = [];
+    await page.route(/\/tile-\d+-\d+\.svg(?:\?|$)/, async (route) => {
+      await new Promise<void>((resolve) => releaseTileRequests.push({ released: false, release: resolve }));
+      await route.continue();
+    });
+
+    try {
+      await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+      const poster = page.locator(POSTER);
+      await expect(poster.locator("> svg")).toHaveCount(1);
+      await expect(page.frameLocator(IFRAME).locator(".moss-places-viewport")).toHaveCount(1);
+      await expect.poll(() => releaseTileRequests.length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+      await expect(page.locator(SETTLED)).toHaveCount(0);
+      await expect(poster.locator("> svg")).toHaveCount(1);
+
+      // Let one cell at a time through until a tile that actually intersects
+      // the viewport has decoded. Keep all other visible cells blocked to
+      // prove that a partial regional paint is not enough to expose the iframe.
+      let loadedVisibleTiles = 0;
+      while (loadedVisibleTiles === 0) {
+        const next = releaseTileRequests.find((request) => !request.released);
+        if (!next) throw new Error("no held tile request remains");
+        next.released = true;
+        next.release();
+        await page.waitForTimeout(120);
+        loadedVisibleTiles = await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => {
+          const bounds = viewport.getBoundingClientRect();
+          return [...document.querySelectorAll<HTMLCanvasElement>(".moss-places-tile > canvas")].filter((canvas) => {
+            const box = canvas.getBoundingClientRect();
+            return canvas.width > 0 && box.right > bounds.left && box.left < bounds.right && box.bottom > bounds.top && box.top < bounds.bottom;
+          }).length;
+        });
+      }
+      await expect(page.locator(SETTLED)).toHaveCount(0);
+      await expect(poster.locator("> svg")).toHaveCount(1);
+
+      releaseTileRequests.filter(({ released }) => !released).forEach((request) => {
+        request.released = true;
+        request.release();
+      });
+      await waitForSettled(page);
+      const visibleTiles = await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => {
+        const bounds = viewport.getBoundingClientRect();
+        return [...document.querySelectorAll<HTMLCanvasElement>(".moss-places-tile > canvas")]
+          .map((canvas) => ({ canvas, box: canvas.getBoundingClientRect() }))
+          .filter(({ box }) => box.right > bounds.left && box.left < bounds.right && box.bottom > bounds.top && box.top < bounds.bottom)
+          .map(({ canvas }) => ({ width: canvas.width, height: canvas.height, hidden: canvas.getAttribute("aria-hidden") }));
+      });
+      expect(visibleTiles.length).toBeGreaterThanOrEqual(2);
+      expect(visibleTiles.every((tile) => tile.width > 0 && tile.height > 0 && tile.hidden === "true")).toBe(true);
+    } finally {
+      releaseTileRequests.filter(({ released }) => !released).forEach((request) => request.release());
+    }
+  });
+
+  test("restores the static fallback when a visible regional tile fails", async ({ page }) => {
+    let failedTileRequests = 0;
+    await page.route(/\/tile-\d+-\d+\.svg(?:\?|$)/, async (route) => {
+      failedTileRequests++;
+      await route.fulfill({ status: 503, body: "tile unavailable" });
+    });
+
+    await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+    const poster = page.locator(POSTER);
     await expect(poster.locator("> svg")).toHaveCount(1);
+    await expect(page.frameLocator(IFRAME).locator(".moss-places-viewport")).toHaveCount(1);
+    await expect.poll(() => failedTileRequests, { timeout: 5000 }).toBeGreaterThan(0);
+    await expect(page.locator(SETTLED)).toHaveCount(0);
+    await expect(poster.locator("> svg")).toHaveCount(1);
+    // The host's bounded hydration timeout removes the failed iframe/wrapper
+    // and restores the accessible static fallback.
+    await expect(page.locator(IFRAME)).toHaveCount(0, { timeout: 10000 });
+    await expect(poster.locator("> svg")).toHaveCount(1);
+    await expect(poster).toHaveAttribute("data-moss-place-embed-state", "fallback");
+    await expect(poster.locator(":scope > svg")).toHaveCSS("display", "block");
+  });
+
+  test("rechecks the resized viewport after pending visible tiles are superseded", async ({ page }) => {
+    let holdTiles = true;
+    const pending: Array<() => void> = [];
+    await page.route(/\/tile-\d+-\d+\.svg(?:\?|$)/, async (route) => {
+      if (holdTiles) await new Promise<void>((resolve) => pending.push(resolve));
+      await route.continue();
+    });
+
+    await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+    const poster = page.locator(POSTER);
+    const viewport = page.frameLocator(IFRAME).locator(".moss-places-viewport");
+    await expect(viewport).toHaveCount(1);
+    await expect.poll(() => pending.length, { timeout: 5000 }).toBeGreaterThan(0);
+    const before = await viewport.boundingBox();
+    await page.setViewportSize({ width: 600, height: 800 });
+    await expect.poll(() => viewport.boundingBox()).not.toEqual(before);
+    await expect(page.locator(SETTLED)).toHaveCount(0);
+    await expect(poster.locator("> svg")).toHaveCount(1);
+
+    holdTiles = false;
+    pending.splice(0).forEach((release) => release());
+    await waitForSettled(page);
+    await expect(poster).toHaveAttribute("data-moss-place-embed-ready", "ready");
   });
 
   test("the iframe's own explorer is scoped to the embedded place", async ({ page }) => {
@@ -91,8 +345,8 @@ test.describe("style:map embed", () => {
     expect(src).toContain("embed=1");
   });
 
-  test("the hydrated iframe covers the static poster exactly, at a narrow and a wide viewport", async ({ page }) => {
-    // Forces the tap-to-hydrate path (same as the Save-Data test below)
+  test("the hydrated iframe fills the stable host exactly, at a narrow and a wide viewport", async ({ page }) => {
+    // Forces the explicit load path (same as the Save-Data test below)
     // instead of the IntersectionObserver one: at the narrow width the
     // article column reflows taller, so the embed can start outside the
     // observer's near-viewport margin at scrollY 0, and scrolling it into
@@ -107,15 +361,15 @@ test.describe("style:map embed", () => {
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
-      await page.locator(POSTER).evaluate((el) => (el as HTMLElement).click());
+      await page.locator(`${POSTER} > .moss-places-embed-load`).click();
       await waitForSettled(page);
-      const posterBox = (await page.locator(`${POSTER} > svg`).boundingBox())!;
+      const hostBox = (await page.locator(POSTER).boundingBox())!;
       const frameBox = (await page.locator(IFRAME).boundingBox())!;
       const SLACK = 1;
-      expect(Math.abs(posterBox.x - frameBox.x)).toBeLessThanOrEqual(SLACK);
-      expect(Math.abs(posterBox.y - frameBox.y)).toBeLessThanOrEqual(SLACK);
-      expect(Math.abs(posterBox.width - frameBox.width)).toBeLessThanOrEqual(SLACK);
-      expect(Math.abs(posterBox.height - frameBox.height)).toBeLessThanOrEqual(SLACK);
+      expect(Math.abs(hostBox.x - frameBox.x)).toBeLessThanOrEqual(SLACK);
+      expect(Math.abs(hostBox.y - frameBox.y)).toBeLessThanOrEqual(SLACK);
+      expect(Math.abs(hostBox.width - frameBox.width)).toBeLessThanOrEqual(SLACK);
+      expect(Math.abs(hostBox.height - frameBox.height)).toBeLessThanOrEqual(SLACK);
     }
   });
 
@@ -188,8 +442,6 @@ test.describe("style:map embed", () => {
   test("the exit-fullscreen control is an opaque surface with a legible icon", async ({ page, browserName }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
-    await clickFullscreenButton(page, browserName);
-    await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
     const button = page.locator(".immersive-fullscreen-btn");
     const channels = (css: string) => css.match(/[\d.]+/g)!.map(Number);
     const read = () => button.evaluate((el) => {
@@ -197,11 +449,22 @@ test.describe("style:map embed", () => {
       const box = el.getBoundingClientRect();
       return { background: cs.backgroundColor, color: cs.color, width: box.width, height: box.height };
     });
-    // Waits out the colour transition the base rule starts from.
-    await expect.poll(async () => {
-      const bg = channels((await read()).background);
-      return bg.length === 3 ? 1 : bg[3];
-    }, { timeout: 3000, message: "background must become opaque" }).toBe(1);
+    // The exit surface must be opaque on the first fullscreen computed-style
+    // read. Safari can leave a background transition pending forever during
+    // native fullscreen, so check before waiting for the ancestor FLIP to settle.
+    await clickAndWaitForFullscreen(page, browserName, async () => {
+      await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
+      const transitionProperties = await button.evaluate((el) => getComputedStyle(el).transitionProperty.split(",").map((property) => property.trim()));
+      expect(transitionProperties).not.toContain("background");
+      const immediateBackground = channels((await read()).background);
+      expect(immediateBackground.length === 3 ? 1 : immediateBackground[3]).toBe(1);
+    });
+    // Fullscreen moves the button away from the pointer location used to
+    // click it. Wait for that hover transform to finish before measuring its
+    // untransformed 36px hit target; the background's separate transition is
+    // not a proxy for this one.
+    await page.mouse.move(0, 0);
+    await expect.poll(() => button.evaluate((el) => getComputedStyle(el).transform), { timeout: 2000 }).toBe("none");
     const style = await read();
     const luminance = ([r, g, b]: number[]) => {
       const lin = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
@@ -230,6 +493,37 @@ test.describe("style:map embed", () => {
     await waitForSettled(page);
     const viewport = page.frameLocator(IFRAME).locator(".moss-places-viewport");
     await expect(viewport).toHaveAttribute("data-gesture-mode", "cooperative");
+  });
+
+  test("map controls reveal on hover and focus, and remain visible on touch", async ({ page, browser, baseURL }) => {
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    const expand = page.locator(".immersive-fullscreen-btn");
+    const mapControls = page.frameLocator(IFRAME).locator(".moss-places-controls");
+    await expect(expand).toHaveCSS("opacity", "0");
+    await expect(mapControls).toHaveCSS("opacity", "0");
+
+    const posterBox = (await page.locator(POSTER).boundingBox())!;
+    await page.mouse.move(posterBox.x + posterBox.width / 2, posterBox.y + posterBox.height / 2);
+    await expect(expand).toHaveCSS("opacity", "1");
+    await expect(mapControls).toHaveCSS("opacity", "1");
+
+    await page.mouse.move(0, 0);
+    await expand.focus();
+    await expect(expand).toHaveCSS("opacity", "1");
+    await mapControls.locator("button").first().focus();
+    await expect(mapControls).toHaveCSS("opacity", "1");
+
+    const touchContext = await browser.newContext({ baseURL, hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+    try {
+      const touchPage = await touchContext.newPage();
+      await touchPage.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+      await waitForSettled(touchPage);
+      await expect(touchPage.locator(".immersive-fullscreen-btn")).toHaveCSS("opacity", "1");
+      await expect(touchPage.frameLocator(IFRAME).locator(".moss-places-controls")).toHaveCSS("opacity", "1");
+    } finally {
+      await touchContext.close();
+    }
   });
 
   test("the embedded iframe's document is requested exactly once — the wrapper built for the expand/open controls must not re-navigate an already-loaded iframe", async ({ page }) => {
@@ -304,8 +598,10 @@ test.describe("style:map embed", () => {
     await waitForSettled(page);
     await expect(page.locator(".immersive-new-window-btn")).toHaveCount(0);
 
-    await clickFullscreenButton(page, browserName);
+    await clickAndWaitForFullscreen(page, browserName);
     await expect(page.locator("body")).toHaveClass(/immersive-fs-active/);
+    await page.mouse.move(0, 0);
+    await expect(page.locator(".immersive-fullscreen-btn")).toHaveCSS("opacity", "1");
     const embedFrame = page.frames().find((f) => f.url().includes("place=places%2Flisbon"))!;
     await expect
       .poll(async () => embedFrame.locator("[data-moss-places-explorer]").getAttribute("data-moss-places-embed-mode"))
@@ -320,20 +616,11 @@ test.describe("style:map embed", () => {
     // to clear too — this caught the wrapper collapsing to a 0-height box
     // (site.css's own chrome-hiding rule hid the embed's whole containing
     // figure, not just the chrome) with the data attribute alone still
-    // reading "expanded". Waited against the FLIP enter transform settling
-    // (the wrapper's own `fs-animating-enter` class, cleared by
-    // immersive-mode.ts's `afterTransition`), not just a fixed delay. The
-    // class is added inside a `requestAnimationFrame` callback
-    // (immersive-mode.ts's `enterFullscreen`), one or more frames after this
-    // point, so waiting ONLY for its absence races the class's own
-    // addition: a poll landing before that rAF fires sees "no class" for
-    // the wrong reason and passes immediately, before the FLIP transform
-    // (let alone the transition it drives) has even started — measured
-    // landing mid-transform, iframe box far short of the viewport. Waiting
-    // for the class to be PRESENT first closes that race.
+    // reading "expanded". The FLIP class is added inside a requestAnimationFrame
+    // and removed by afterTransition; a polling assertion can miss this short
+    // interval entirely, so the observer above records its addition before
+    // the action and resolves only after the class has been removed.
     const wrapper = page.locator(".immersive-iframe-wrapper");
-    await expect(wrapper).toHaveClass(/fs-animating-enter/, { timeout: 2000 });
-    await expect(wrapper).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
 
     // Previously fixme'd on WebKit: the host document's own cross-document
     // layout/compositor flush for the <iframe> element was starved by the
@@ -402,6 +689,76 @@ test.describe("card links inside an embed", () => {
 });
 
 test.describe("article locator embed", () => {
+  test("hands off on fully covering regional canvases while the real world raster decode is held", async ({ page }) => {
+    await holdWorldRasterDecode(page);
+    await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+    const audit = () => worldRasterAudit(page);
+    try {
+      await expect.poll(async () => (await audit()).worldDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+      await waitForSettled(page);
+
+      const state = await audit();
+      expect(state.worldDecodeCount).toBeGreaterThan(0);
+      expect(state.tileDecodeCount).toBeGreaterThan(0);
+      expect(state.released).toBe(false);
+      const firstFrame = await regionalCanvasCoverage(page);
+      expect(firstFrame.visibleCanvasCount).toBeGreaterThan(0);
+      expect(firstFrame.complete).toBe(true);
+      expect(firstFrame.backingAtDpr).toBe(true);
+      expect(firstFrame.opacity).toBe(1);
+      expect(firstFrame.targetOpacity).toBe(1);
+      await expect(page.locator(SETTLED)).toHaveCSS("visibility", "visible");
+    } finally {
+      await releaseWorldRaster(page);
+    }
+  });
+
+  test("waits for the world raster when regional tiles cannot cover a resized frame", async ({ page }) => {
+    await holdWorldRasterDecode(page);
+    const pendingTiles: Array<() => void> = [];
+    let releaseTiles = false;
+    await page.route(/\/tile-\d+-\d+\.svg(?:\?|$)/, async (route) => {
+      if (!releaseTiles) await new Promise<void>((resolve) => pendingTiles.push(resolve));
+      await route.continue();
+    });
+    await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+    const audit = () => worldRasterAudit(page);
+    try {
+      await expect.poll(async () => (await audit()).worldDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+      await expect.poll(() => pendingTiles.length, { timeout: 5000 }).toBeGreaterThan(0);
+
+      // Widen the real embed frame while tile fetches are held. Check the
+      // actual decoded coverage rather than assuming a tile count: the
+      // world must remain required wherever the regional surface has gaps.
+      await page.locator(POSTER).evaluate((poster) => {
+        const locator = poster.closest<HTMLElement>(".moss-place-locator");
+        if (locator) {
+          locator.style.width = "2400px";
+          locator.style.maxWidth = "none";
+          locator.style.float = "none";
+        }
+        poster.style.width = "2400px";
+        poster.style.height = "420px";
+        poster.style.maxWidth = "none";
+        poster.style.aspectRatio = "auto";
+      });
+      await expect.poll(() => page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => viewport.getBoundingClientRect().width), { timeout: 3000 }).toBeGreaterThan(2000);
+      releaseTiles = true;
+      pendingTiles.splice(0).forEach((release) => release());
+      await expect.poll(async () => (await audit()).tileDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+      const incompleteFrame = await regionalCanvasCoverage(page);
+      expect(incompleteFrame.complete, JSON.stringify(incompleteFrame)).toBe(false);
+      await expect(page.locator(SETTLED)).toHaveCount(0);
+      await expect(page.locator(POSTER)).toHaveAttribute("data-moss-place-embed-state", "loading");
+      expect((await audit()).released).toBe(false);
+
+      await releaseWorldRaster(page);
+      await waitForSettled(page);
+    } finally {
+      await releaseWorldRaster(page);
+    }
+  });
+
   test("scopes to the article's own work and keeps it off its own card row", async ({ page }) => {
     await page.goto("lisbon-walk/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
@@ -704,8 +1061,7 @@ test.describe("chip beside the host's exit control (fullscreen locator embed)", 
   async function expand(page: Page, browserName: string): Promise<void> {
     await page.goto("fjord-crossing/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
-    await clickFullscreenButton(page, browserName);
-    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await clickAndWaitForFullscreen(page, browserName);
     await expect(page.frameLocator(IFRAME).locator(".moss-places-chip")).toBeVisible();
   }
 
@@ -737,8 +1093,8 @@ test.describe("chip beside the host's exit control (fullscreen locator embed)", 
     const frame = page.frameLocator(IFRAME);
     await frame.locator("html").evaluate((el) => el.setAttribute("dir", "rtl"));
     const chip = frame.locator(".moss-places-chip");
-    const frameBox = (await page.locator(IFRAME).boundingBox())!;
     await expect.poll(async () => {
+      const frameBox = (await page.locator(IFRAME).boundingBox())!;
       const box = (await chip.boundingBox())!;
       return frameBox.x + frameBox.width - (box.x + box.width);
     }).toBeLessThanOrEqual(20);
@@ -755,17 +1111,17 @@ test.describe("chip beside the host's exit control (fullscreen locator embed)", 
 test.describe("fullscreen embed", () => {
   test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
 
-  /** The world raster's natural width and every regional tile on screen, as natural px over displayed device px (>= 1 is sharp). */
+  /** The world canvas backing width and every regional tile on screen, as backing px over displayed device px (>= 1 is sharp). */
   async function sharpness(page: Page, embedFrame: ReturnType<Page["frames"]>[number]) {
     return embedFrame.evaluate(() => {
       const viewport = document.querySelector(".moss-places-viewport")!.getBoundingClientRect();
       const dpr = window.devicePixelRatio;
-      const world = document.querySelector<HTMLImageElement>(".moss-places-world-surface");
-      const tiles = [...document.querySelectorAll<HTMLImageElement>(".moss-places-tile > img")]
-        .map((img) => ({ img, box: img.getBoundingClientRect() }))
+      const world = document.querySelector<HTMLCanvasElement>(".moss-places-world-surface");
+      const tiles = [...document.querySelectorAll<HTMLCanvasElement>(".moss-places-tile > canvas")]
+        .map((canvas) => ({ canvas, box: canvas.getBoundingClientRect() }))
         .filter(({ box }) => box.right > viewport.left && box.left < viewport.right && box.bottom > viewport.top && box.top < viewport.bottom)
-        .map(({ img, box }) => img.naturalWidth / (box.width * dpr));
-      return { worldWidth: world?.naturalWidth ?? 0, tiles };
+        .map(({ canvas, box }) => canvas.width / (box.width * dpr));
+      return { worldWidth: world?.width ?? 0, tiles };
     });
   }
 
@@ -779,9 +1135,8 @@ test.describe("fullscreen embed", () => {
     const bakedEmbed = (await sharpness(page, embedFrame)).worldWidth;
     expect(bakedEmbed).toBeGreaterThan(0);
 
-    await clickFullscreenButton(page, browserName);
-    await expect(page.locator(".immersive-iframe-wrapper")).toHaveClass(/fs-animating-enter/, { timeout: 2000 });
-    await expect(page.locator(".immersive-iframe-wrapper")).not.toHaveClass(/fs-animating-enter/, { timeout: 2000 });
+    await clickAndWaitForFullscreen(page, browserName);
+    await expect.poll(async () => (await page.locator(IFRAME).boundingBox())!.width / widthEmbed, { timeout: 2000 }).toBeGreaterThan(1.3);
     const widthFull = (await page.locator(IFRAME).boundingBox())!.width;
 
     // The scale (px per degree) is kept, so the visible range grows with the
@@ -840,7 +1195,7 @@ test.describe("full-page ?article= locator", () => {
 });
 
 test.describe("hydration degrades to the static poster", () => {
-  test("on Save-Data, hydration waits for a tap instead of the viewport", async ({ page }) => {
+  test("on Save-Data, hydration waits for an accessible load button", async ({ page }) => {
     await page.addInitScript(() => {
       Object.defineProperty(window.navigator, "connection", {
         value: { saveData: true },
@@ -850,12 +1205,43 @@ test.describe("hydration degrades to the static poster", () => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(500); // the ordinary path would have an iframe well within this
     await expect(page.locator(IFRAME)).toHaveCount(0);
-    await page.locator(POSTER).click();
+    const loadButton = page.locator(`${POSTER} > .moss-places-embed-load`);
+    await expect(loadButton).toBeVisible();
+    await expect(loadButton).toHaveAttribute("aria-label", /Lisbon/);
+    await expect(page.locator(POSTER)).toHaveAttribute("aria-busy", "false");
+    await loadButton.focus();
+    await page.keyboard.press("Enter");
     await expect(page.locator(IFRAME)).toHaveCount(1);
+    await expect(page.locator(POSTER)).toHaveAttribute("aria-busy", "true");
     await waitForSettled(page);
   });
 
-  test("a failed data fetch inside the iframe leaves the poster untouched, never a blank frame", async ({ page }) => {
+  test("without JavaScript, the accessible static SVG fallback remains visible", async ({ page }) => {
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    const url = page.url();
+    const browser = page.context().browser();
+    if (!browser) throw new Error("browser context is unavailable");
+    const noJsPage = await browser.newPage({ javaScriptEnabled: false });
+    try {
+      await noJsPage.goto(url, { waitUntil: "domcontentloaded" });
+      await expect(noJsPage.locator(POSTER)).toHaveAttribute("role", "img");
+      await expect(noJsPage.locator(`${POSTER} > svg`)).toHaveCSS("display", "block");
+      await expect(noJsPage.locator(IFRAME)).toHaveCount(0);
+    } finally {
+      await noJsPage.close();
+    }
+  });
+
+  test("if the explorer bundle fails to load, the static fallback remains available", async ({ page }) => {
+    await page.route("**/places-explorer*.js", (route) => route.abort());
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    const host = page.locator(POSTER);
+    await expect(host).toHaveAttribute("data-moss-place-embed-state", "fallback");
+    await expect(host.locator(":scope > svg")).toHaveCSS("display", "block");
+    await expect(page.locator(IFRAME)).toHaveCount(0);
+  });
+
+  test("a failed data fetch inside the iframe restores the accessible static fallback", async ({ page }) => {
     await page.route("**/world.svg", (route) => route.abort());
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     const poster = page.locator(POSTER);
@@ -863,6 +1249,8 @@ test.describe("hydration degrades to the static poster", () => {
     await page.waitForTimeout(8500); // ...then removed once the ready handshake times out
     await expect(page.locator(IFRAME)).toHaveCount(0);
     await expect(poster.locator("> svg")).toHaveCount(1);
+    await expect(poster).toHaveAttribute("data-moss-place-embed-state", "fallback");
+    await expect(poster.locator(":scope > svg")).toHaveCSS("display", "block");
     await expect(poster).not.toHaveAttribute("data-moss-place-embed-ready", "ready");
   });
 });
@@ -874,10 +1262,10 @@ test.describe("the hero", () => {
     const frame = page.locator('.moss-place-map-frame[data-width="screen"]');
     await expect(frame).toHaveCount(1);
     const box = (await frame.boundingBox())!;
-    const viewportSize = page.viewportSize()!;
+    const contentWidth = await page.evaluate(() => document.documentElement.clientWidth);
     const SLACK = 8; // scrollbar-gutter slack, same margin places-explorer-boot.spec.ts already allows
     expect(box.x).toBeLessThanOrEqual(SLACK);
-    expect(box.x + box.width).toBeGreaterThanOrEqual(viewportSize.width - SLACK);
+    expect(box.x + box.width).toBeGreaterThanOrEqual(contentWidth - SLACK);
   });
 });
 
@@ -914,3 +1302,78 @@ test("a second located-article page in the same context does not re-fetch the wo
   expect(afterSecondNav.every((fromCache) => fromCache)).toBe(true);
 });
 
+test("the real preview bridge rehydrates an article embed after a morph and cancels the old READY deadline", async ({ page }) => {
+  await holdMapRasterDecode(page, true);
+  await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(IFRAME)).toHaveCount(1);
+  // The host's 8s READY deadline starts when it creates this first iframe;
+  // capture its conservative deadline before raster setup/audits take time.
+  const oldDeadline = Date.now() + 8000;
+  await expect(page.locator(POSTER)).toHaveAttribute("data-moss-place-embed-state", "loading");
+  await expect.poll(async () => (await worldRasterAudit(page)).worldDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await worldRasterAudit(page)).tileDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect(page.locator(POSTER)).not.toHaveAttribute("data-moss-place-embed-ready", "ready");
+  await expect(page.locator(SETTLED)).toHaveCount(0);
+  // Leave a clear gap between the original deadline and the replacement's
+  // own deadline, while both actual raster dependencies remain held.
+  await page.waitForTimeout(2000);
+  await page.addScriptTag({ path: PREVIEW_BRIDGE });
+
+  const oldIframe = await page.locator(IFRAME).elementHandle();
+  if (!oldIframe) throw new Error("initial article map iframe was not created");
+  const oldScope = await oldIframe.evaluate((iframe) => new URL((iframe as HTMLIFrameElement).src).searchParams.get("article"));
+  expect(oldScope).toBeTruthy();
+  const oldHostBox = await page.locator(POSTER).boundingBox();
+  const morph = await page.evaluate(() =>
+    new Promise<{ patched: boolean; applied: boolean; initCount: number }>((resolve, reject) => {
+      let patched = false;
+      let applied = false;
+      const timeout = window.setTimeout(() => reject(new Error("preview bridge morph did not complete")), 10000);
+      const finish = (): void => {
+        if (!patched || !applied) return;
+        window.clearTimeout(timeout);
+        resolve({ patched, applied, initCount: (window as unknown as { __bridgeInitCount: number }).__bridgeInitCount });
+      };
+      document.addEventListener("moss-morph-patched", () => { patched = true; finish(); }, { once: true });
+      window.addEventListener("message", (event) => {
+        if (event.data?.type !== "moss-morph-applied" || event.data?.gen !== 8417) return;
+        applied = true;
+        finish();
+      });
+      window.postMessage({ type: "moss-morph", gen: 8417 }, "*");
+    }),
+  );
+  expect(morph).toEqual({ patched: true, applied: true, initCount: 1 });
+
+  const nextIframe = await page.locator(IFRAME).elementHandle();
+  if (!nextIframe) throw new Error("article map iframe was not re-created after morph");
+  // Keep the old-deadline assertion strictly before the replacement attempt's
+  // own timeout, so a locator poll cannot cross the new deadline.
+  const newDeadline = Date.now() + 8000;
+  expect(oldDeadline + 100).toBeLessThan(newDeadline);
+  expect(await oldIframe.evaluate((iframe) => iframe.isConnected)).toBe(false);
+  expect(await nextIframe.evaluate((iframe) => new URL((iframe as HTMLIFrameElement).src).searchParams.get("article"))).toBe(oldScope);
+  expect(await page.locator(POSTER).boundingBox()).toEqual(oldHostBox);
+  await expect(page.locator(POSTER)).toHaveAttribute("data-moss-place-embed-state", "loading");
+  await expect.poll(async () => (await worldRasterAudit(page)).worldDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await worldRasterAudit(page)).tileDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect(page.locator(POSTER)).not.toHaveAttribute("data-moss-place-embed-ready", "ready");
+
+  const timeUntilOldDeadline = oldDeadline - Date.now() + 100;
+  if (timeUntilOldDeadline > 0) await page.waitForTimeout(timeUntilOldDeadline);
+  expect(await page.locator(IFRAME).count()).toBe(1);
+  expect(await page.locator(SETTLED).count()).toBe(0);
+  expect(await page.locator(POSTER).getAttribute("data-moss-place-embed-state")).toBe("loading");
+
+  await releaseTileRaster(page);
+  await releaseWorldRaster(page);
+  await waitForSettled(page);
+  await expect(
+    page.frameLocator(IFRAME).locator('.moss-places-tiles[data-moss-places-tiles-state="idle"]'),
+  ).toHaveCount(1, { timeout: 15000 });
+  const afterMorph = await regionalCanvasCoverage(page);
+  expect(afterMorph.visibleCanvasCount).toBeGreaterThan(0);
+  expect(afterMorph.complete).toBe(true); // the fixture's two visible regional tiles fully cover the viewport
+  expect(afterMorph.backingAtDpr).toBe(true);
+  expect(afterMorph.opacity).toBe(afterMorph.targetOpacity);
+});

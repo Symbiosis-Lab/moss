@@ -6,8 +6,8 @@
 //! that it is not read twice, that a wedged read costs one thread and not the
 //! pool, and that the concurrency bound holds.
 //!
-//! There are deliberately no *ordering* tests: moss does not schedule, so
-//! asserting an order would pin behavior it should not have.
+//! Foreground requests can promote queued inputs; native reads cannot be
+//! interrupted, so the pool reserves capacity for them.
 //!
 //! Retry is tested, but it lives one level up — the supervisor's sweep re-hands
 //! every file each reconcile, and the pool's job is only to not make that
@@ -66,6 +66,27 @@ fn park_the_reader(p: &Prefetcher, seen: &Arc<Mutex<Vec<PathBuf>>>) {
 }
 
 #[test]
+fn background_admission_is_bounded_for_every_producer_and_preserves_demand() {
+    let (m, tx, seen) = gated();
+    let p = Prefetcher::with_materializer(1, m, false);
+    park_the_reader(&p, &seen);
+    for n in 0..3603 {
+        p.read(&PathBuf::from(format!("/vault/background-{n}.jpg")));
+    }
+    assert_eq!(p.snapshot().waiting, BACKGROUND_WAITING);
+    p.read_foreground(Path::new("/vault/requested.md"));
+    assert_eq!(p.snapshot().waiting, BACKGROUND_WAITING + 1);
+    tx.send(()).unwrap();
+    assert!(wait_until(|| !seen.lock().unwrap().is_empty()));
+    assert_eq!(seen.lock().unwrap()[0], PathBuf::from("/vault/requested.md"));
+    for _ in 0..BACKGROUND_WAITING + 1 { let _ = tx.send(()); }
+    assert!(wait_until(|| p.snapshot().done == (BACKGROUND_WAITING + 2) as u64));
+    p.read(Path::new("/vault/previously-rejected.jpg"));
+    assert!(wait_until(|| p.snapshot().in_flight == 1));
+    tx.send(()).unwrap();
+}
+
+#[test]
 fn a_file_handed_over_gets_read() {
     let (m, seen) = recording();
     let p = Prefetcher::with_materializer(2, m, false);
@@ -96,6 +117,79 @@ fn the_same_file_is_not_read_twice() {
 
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(seen.lock().unwrap().len(), 1, "read once, not five times");
+}
+
+#[test]
+fn a_needed_page_promotes_an_already_queued_background_file() {
+    let (m, tx, seen) = gated();
+    let p = Prefetcher::with_materializer(1, m, false);
+    park_the_reader(&p, &seen);
+    p.read(Path::new("/vault/unrelated.jpg"));
+    p.read(Path::new("/vault/index.md"));
+    p.read_foreground(Path::new("/vault/index.md"));
+    assert_eq!(p.snapshot().waiting, 2, "promotion must not duplicate the read");
+
+    tx.send(()).unwrap();
+    assert!(wait_until(|| !seen.lock().unwrap().is_empty()));
+    assert_eq!(seen.lock().unwrap()[0], PathBuf::from("/vault/index.md"));
+    tx.send(()).unwrap();
+    tx.send(()).unwrap();
+    assert!(wait_until(|| p.snapshot().done == 3));
+}
+
+#[test]
+fn foreground_has_capacity_when_background_reads_are_stuck() {
+    let (m, tx, seen) = gated();
+    let p = Prefetcher::with_materializer(8, m, false);
+    for n in 0..20 {
+        p.read(&PathBuf::from(format!("/vault/other-{n}.jpg"))); // allow:served-path-url-construct
+    }
+    assert!(wait_until(|| p.snapshot().in_flight == 6));
+    p.read_foreground(Path::new("/vault/index.md"));
+    assert!(wait_until(|| seen.lock().unwrap().contains(&PathBuf::from("/vault/index.md"))));
+    p.read_foreground(Path::new("/vault/posts/second.md"));
+    assert!(wait_until(|| seen.lock().unwrap().contains(&PathBuf::from("/vault/posts/second.md"))));
+    assert_eq!(p.snapshot().in_flight, 8);
+    for _ in 0..22 {
+        let _ = tx.send(());
+    }
+}
+
+#[test]
+fn concrete_failures_keep_their_full_count_and_clear_after_success() {
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let failing = Arc::clone(&fail);
+    let m: Materializer = Arc::new(move |_| {
+        if failing.load(Ordering::SeqCst) {
+            Err(std::io::Error::other("provider refused read"))
+        } else {
+            Ok(())
+        }
+    });
+    let p = Prefetcher::with_materializer(1, m, false);
+    let pending: HashSet<PathBuf> = (0..6).map(|n| PathBuf::from(format!("/vault/post-{n}.md"))).collect();
+    for path in &pending { p.read(path); }
+    assert!(wait_until(|| p.snapshot().done == 6));
+    let (count, names) = p.failures_for(Path::new("/vault"), &pending);
+    assert_eq!(count, 6);
+    assert_eq!(names.len(), 3);
+    let all = p.failure_paths_for(Path::new("/vault"), &pending);
+    assert_eq!(all.len(), 6);
+    assert!(all.windows(2).all(|pair| pair[0] < pair[1]), "full paths are sorted");
+    let other = PathBuf::from("/other/failed.md");
+    p.read(&other);
+    assert!(wait_until(|| p.snapshot().done == 7));
+    let active = HashSet::from([pending.iter().next().unwrap().clone()]);
+    assert_eq!(p.failures_for(Path::new("/vault"), &active).0, 1);
+    assert_eq!(p.failure_paths_for(Path::new("/vault"), &active), active.iter().cloned().collect::<Vec<_>>());
+    assert_eq!(p.inner.queue.lock().unwrap().failures.len(), 2);
+    assert_eq!(p.failures_for(Path::new("/other"), &HashSet::from([other])).0, 1);
+
+    fail.store(false, Ordering::SeqCst);
+    for path in &pending { p.read(path); }
+    assert!(wait_until(|| p.snapshot().done == 13));
+    assert_eq!(p.failures_for(Path::new("/vault"), &pending), (0, Vec::new()));
+    assert!(p.failure_paths_for(Path::new("/vault"), &pending).is_empty(), "recovery clears the disclosed set");
 }
 
 #[test]
@@ -151,7 +245,7 @@ fn one_wedged_read_does_not_block_the_others() {
     let p = Prefetcher::with_materializer(2, m, false);
     p.read(Path::new("/vault/wedged.md"));
     for n in 0..5 {
-        p.read(&PathBuf::from(format!("/vault/{n}.md"))); // allow:served-path-url-construct
+        p.read_foreground(&PathBuf::from(format!("/vault/{n}.md"))); // allow:served-path-url-construct
     }
 
     assert!(wait_until(|| p.snapshot().done == 5));
@@ -170,9 +264,9 @@ fn no_more_than_the_reader_count_are_read_at_once() {
         p.read(&PathBuf::from(format!("/vault/{n}.md"))); // allow:served-path-url-construct
     }
 
-    assert!(wait_until(|| p.snapshot().in_flight == 3));
+    assert!(wait_until(|| p.snapshot().in_flight == 1));
     std::thread::sleep(Duration::from_millis(50));
-    assert_eq!(p.snapshot().in_flight, 3, "never more than the reader count");
+    assert_eq!(p.snapshot().in_flight, 1, "background reads leave room for foreground inputs");
 }
 
 #[test]
@@ -185,7 +279,7 @@ fn the_snapshot_accounts_for_every_file_handed_over() {
         p.read(&PathBuf::from(format!("/vault/{n}.md"))); // allow:served-path-url-construct
     }
 
-    assert!(wait_until(|| p.snapshot().in_flight == 2));
+    assert!(wait_until(|| p.snapshot().in_flight == 1));
     let s = p.snapshot();
     assert_eq!(s.waiting + s.in_flight + s.done as usize, 10);
 
@@ -253,7 +347,7 @@ fn the_oldest_read_is_the_earliest_still_outstanding() {
     let p = Prefetcher::with_materializer(2, m, false);
     p.read(Path::new("/vault/first.md"));
     assert!(wait_until(|| seen.lock().unwrap().len() == 1));
-    p.read(Path::new("/vault/second.md"));
+    p.read_foreground(Path::new("/vault/second.md"));
     assert!(wait_until(|| p.snapshot().in_flight == 2));
 
     let (path, _) = p.snapshot().oldest_read.expect("two reads are outstanding");

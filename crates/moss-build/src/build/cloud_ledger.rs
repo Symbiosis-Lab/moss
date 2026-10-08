@@ -1,249 +1,335 @@
-//! The one place a build writes down "these bytes were not here."
+//! Evidence about inputs consumed by one build attempt.
 //!
-//! An evicted file raises one question — *the bytes are not here; now what?* —
-//! and moss answers it at seven sites in five ways. Before this module none of
-//! those answers were recorded anywhere the rest of the build could see, with
-//! two consequences measured on a live Google Drive vault:
-//!
-//! 1. **The gate could not see the images.** `pipeline.rs`'s cloud gate read
-//!    `ProjectStructure::evicted_count`, a count taken by the *source scan* —
-//!    before the build, pruning dot-directories — so it is stale by construction
-//!    for anything the provider evicted afterwards. 578 evicted images could not
-//!    influence it, and the user was shown a finished site.
-//! 2. **The build rediscovered every absence, once per file per build.** The
-//!    supervisor knows exactly which files are in flight, but its pending set is
-//!    a `Vec<Pending>` local to `async fn run` with no handle and no state slot
-//!    (now `build_shell::watch::sweep`), so the image pipeline could only find out by
-//!    trying the read and taking the `EDEADLK`. 6,967 warnings in one log.
-//!
-//! Both are the same missing structure: [`note_unavailable`] writes down what a
-//! build had to do without, and [`outstanding`] is what the gate reads.
-//!
-//! ## Why there is no shared "in flight" set
-//!
-//! An earlier shape of this module also republished the supervisor's pending set
-//! so the build could ask "is it worth even trying this read?". It was dropped
-//! before it shipped: `icloud::is_evicted` answers the same question with one
-//! `lstat` that never materializes anything, and it answers it about *now*
-//! rather than about the supervisor's last tick. A cache that is slower to be
-//! right than the thing it caches is not worth the coherence problem, and moss
-//! does not carry modules without consumers.
-//!
-//! ## Why it is keyed by path and not by folder
-//!
-//! The call sites that discover an absence are deep in the media pipeline —
-//! `fallback_raster`, `rungs`, `collect_images_for_conversion` — and most of
-//! them hold a source path and nothing else. Threading a folder root down to
-//! each of them would be a wide, mechanical diff whose only purpose is to
-//! re-derive something the path already contains. So the store is keyed by
-//! absolute path and [`outstanding`] answers a folder question with a prefix
-//! scan. At the scale this runs (hundreds to low thousands of paths, consulted
-//! once per build) that is far below measurable.
-//!
-//! ## Why recording is not the caller's job to *remember*
-//!
-//! Each call site keeps its own rendering decision — `fallback_raster` may still
-//! ship the verbatim original, which is the right call for a CMYK JPEG and the
-//! right call here too. What it may not do is stay silent. The callers with the
-//! most reason to fail open are the ones with the least reason to remember they
-//! did, so this module is deliberately a single free function they can call
-//! without holding any context.
+//! The scan can find a cloud placeholder that no renderer reaches. A later
+//! arrival does not change what that attempt rendered: only a new read can
+//! replace its pending entry. The mutable collector belongs to the attempt;
+//! `snapshot` freezes its answer before the manifest seals.
 
-use std::collections::HashSet;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-/// Sources *this build* could not read because they are still in the cloud.
-///
-/// Cleared per-root by [`begin_build`] rather than wholesale: two folders can be
-/// open at once, and a build of one must not erase what the other recorded.
-static UNAVAILABLE: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
-
-fn with<R>(cell: &Mutex<Option<HashSet<PathBuf>>>, f: impl FnOnce(&mut HashSet<PathBuf>) -> R) -> R {
-    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
-    f(guard.get_or_insert_with(HashSet::new))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputState {
+    Read { hash: String },
+    Pending { retained: bool },
+    ReadError { detail: String, retained: bool },
+    ConfirmedAbsent,
 }
 
-/// Drop everything the previous build of `root` recorded.
-///
-/// Called once at the top of the pipeline. The record describes *this* build —
-/// a file that arrived since the last one must not still be counted against the
-/// gate, and the whole point of the gate being the build's own output is that it
-/// is recomputed fresh every attempt rather than accumulated.
-pub fn begin_build(root: &Path) {
-    with(&UNAVAILABLE, |set| set.retain(|p| !p.starts_with(root)));
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputRole {
+    PageMetadata,
+    PageContent,
+    SharedConfig,
+    Theme,
+    Layout,
+    GeneratedData,
+    Media,
 }
 
-/// Record that `path` could not be read because its content is in the cloud.
-///
-/// Call this from any site that classifies a read failure as
-/// `icloud::is_offline_not_absent` (or that skips a read because
-/// `icloud::is_evicted` said the bytes are not there). Cheap and idempotent —
-/// call it every time you notice, not only the first.
-pub fn note_unavailable(path: &Path) {
-    with(&UNAVAILABLE, |set| {
-        set.insert(path.to_path_buf());
-    });
+impl InputRole {
+    pub fn required_for_publish(self) -> bool { !matches!(self, Self::Media) }
 }
 
-/// How many of `root`'s sources this build had to do without.
-///
-/// This is the gate's live input, and the reason it is not the scan count: the
-/// scan runs before the build and prunes dot-directories, so it cannot see an
-/// eviction that happened afterwards. Paths that have since materialized are
-/// filtered out, so a count taken after a long build is honest about the present
-/// rather than about when each absence was noticed.
-pub fn outstanding(root: &Path) -> usize {
-    with(&UNAVAILABLE, |set| {
-        set.iter()
-            .filter(|p| p.starts_with(root))
-            .filter(|p| crate::build::icloud::is_still_in_the_cloud(p))
-            .count()
-    })
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputEntry {
+    pub role: InputRole,
+    pub state: InputState,
 }
 
-/// Does `path` decide the site's *shape*?
-///
-/// The split that decides whether a build is worth publishing. An absent image
-/// costs the reader a picture; an absent markdown file costs them the page —
-/// its title becomes the directory name and its date becomes `Unknown`, because
-/// every rung of `components::date::extract_date_from_doc` falls through on
-/// empty frontmatter. The second is not a partial site, it is a wrong one, and
-/// moss must not publish it over a site it already has.
-///
-/// **Listed positively, and the list is what moss renders from**: page sources,
-/// `config.toml`, the user stylesheet. The tempting inverse — "structural means
-/// anything that is not media" — fails on the vaults this is for. A user's
-/// folder holds `.zip`, `.psd`, `.key`, `.sketch`; the provider evicts them like
-/// anything else and will not download one nothing ever opens. Under the
-/// inverse, one such file withholds every publish forever, and the user has no
-/// site at all — the unclearable gate `outcome::Disposition::Report` warns
-/// about, reached by a different door. Everything on this list is something
-/// moss itself reads, so an arrival always schedules the rebuild that clears it.
-///
-/// The cost of the positive form is that a *new* page format is decoration
-/// until someone adds it here. That is a real gap, and the reason it is
-/// acceptable is that a new format has to be added to the scan's classification
-/// to be built at all — the same commit passes through here.
+#[derive(Debug, Clone, Default)]
+pub struct InputEvidence {
+    root: PathBuf,
+    entries: Arc<Mutex<BTreeMap<String, InputEntry>>>,
+}
+
+impl InputEvidence {
+    pub fn new(root: &Path) -> Self {
+        Self { root: root.to_path_buf(), entries: Arc::default() }
+    }
+
+    pub fn root_path(&self) -> &Path { &self.root }
+
+    fn key(&self, path: &Path) -> Option<String> {
+        path.strip_prefix(&self.root).ok()
+            .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+    }
+
+    fn record(&self, path: &Path, state: InputState) {
+        if let Some(key) = self.key(path) {
+            let mut entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if matches!(entries.get(&key), Some(InputEntry { state: InputState::Pending { retained: true } | InputState::ReadError { retained: true, .. }, .. })) {
+                return;
+            }
+            let role = entries.get(&key).map_or(InputRole::Media, |entry| entry.role);
+            if matches!(entries.get(&key), Some(InputEntry { state: InputState::Read { .. }, .. }))
+                && !matches!(state, InputState::Read { .. }) {
+                entries.insert(key, InputEntry { role, state: InputState::ReadError {
+                    detail: "input changed during build".into(), retained: false,
+                } });
+                return;
+            }
+            entries.insert(key, InputEntry { role, state });
+        }
+    }
+
+    pub fn require(&self, path: &Path, role: InputRole) {
+        if let Some(key) = self.key(path) {
+            let mut entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            entries.entry(key).and_modify(|entry| entry.role = role)
+                .or_insert(InputEntry { role, state: InputState::Pending { retained: false } });
+        }
+    }
+
+    pub fn pending(&self, path: &Path) {
+        if let Some(key) = self.key(path) {
+            let mut entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !matches!(entries.get(&key), Some(InputEntry { state: InputState::Read { .. } | InputState::Pending { retained: true } | InputState::ReadError { retained: true, .. }, .. })) {
+                let role = entries.get(&key).map_or(InputRole::Media, |entry| entry.role);
+                entries.insert(key, InputEntry { role, state: InputState::Pending { retained: false } });
+            }
+        }
+    }
+
+    pub fn read(&self, path: &Path, hash: String) {
+        if let Some(key) = self.key(path) {
+            let mut entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            // A later successful re-read cannot make an earlier fallback
+            // disappear from output that already used it.
+            let role = entries.get(&key).map_or(InputRole::Media, |entry| entry.role);
+            match entries.get(&key).map(|entry| &entry.state) {
+                Some(InputState::ReadError { .. } | InputState::Pending { retained: true }) => return,
+                Some(InputState::Read { hash: previous }) if previous != &hash => {
+                    entries.insert(key, InputEntry { role, state: InputState::ReadError {
+                        detail: "input changed during build".into(), retained: false,
+                    } });
+                }
+                _ => { entries.insert(key, InputEntry { role, state: InputState::Read { hash } }); }
+            }
+        }
+    }
+
+    pub fn read_bytes(&self, path: &Path, bytes: &[u8]) {
+        use sha2::{Digest, Sha256};
+        self.read(path, format!("{:x}", Sha256::digest(bytes)));
+    }
+
+    /// A renderer-owned source normalization replaces bytes it just read.
+    /// Only that exact predecessor hash may advance; an independent write or
+    /// an earlier retained fallback remains unresolved for this attempt.
+    pub fn owned_rewrite(&self, path: &Path, original: &[u8], final_bytes: &[u8]) {
+        use sha2::{Digest, Sha256};
+        let Some(key) = self.key(path) else { return; };
+        let before = format!("{:x}", Sha256::digest(original));
+        let after = format!("{:x}", Sha256::digest(final_bytes));
+        let mut entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(entry) = entries.get_mut(&key) else { return; };
+        match &mut entry.state {
+            InputState::Read { hash } if hash.as_str() == before => *hash = after,
+            InputState::Read { .. } => entry.state = InputState::ReadError {
+                detail: "input changed during build".into(), retained: false,
+            },
+            _ => {}
+        }
+    }
+
+    pub fn known_unchanged(&self, path: &Path, hash: String) {
+        if let Some(key) = self.key(path) {
+            self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(key).or_insert(InputEntry { role: InputRole::PageContent, state: InputState::Read { hash } });
+        }
+    }
+
+    pub fn read_error(&self, path: &Path, detail: String) {
+        self.record(path, InputState::ReadError { detail, retained: false });
+    }
+
+    pub fn absent(&self, path: &Path) {
+        self.record(path, InputState::ConfirmedAbsent);
+    }
+
+    pub fn retained(&self, path: &Path) {
+        if let Some(key) = self.key(path) {
+            let mut entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            match entries.get_mut(&key).map(|entry| &mut entry.state) {
+                Some(InputState::Pending { retained }) | Some(InputState::ReadError { retained, .. }) => *retained = true,
+                _ => {}
+            }
+        }
+    }
+
+    pub fn snapshot(&self) -> BTreeMap<String, InputEntry> {
+        self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    pub fn unresolved_structural(&self) -> Vec<String> {
+        self.snapshot().into_iter()
+            .filter(|(_, entry)| entry.role.required_for_publish()
+                && matches!(entry.state, InputState::Pending { .. } | InputState::ReadError { .. }))
+            .map(|(path, _)| path)
+            .collect()
+    }
+
+    pub fn unresolved_for_preview(
+        &self,
+        needed_pages: &std::collections::BTreeSet<String>,
+        include_listing_metadata: bool,
+        include_places: bool,
+    ) -> Vec<String> {
+        unresolved_preview_entries(&self.snapshot(), needed_pages, include_listing_metadata, include_places, None)
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.snapshot().values().filter(|entry| matches!(entry.state, InputState::Pending { .. })).count()
+    }
+
+}
+
+pub fn unresolved_preview_entries(
+    entries: &BTreeMap<String, InputEntry>,
+    needed_pages: &std::collections::BTreeSet<String>,
+    include_listing_metadata: bool,
+    include_places: bool,
+    retained_source: Option<&str>,
+) -> Vec<String> {
+        entries.iter()
+            .filter(|(path, entry)| {
+                let needed = match entry.role {
+                    InputRole::SharedConfig | InputRole::Theme | InputRole::Layout => true,
+                    InputRole::GeneratedData => include_places,
+                    InputRole::PageMetadata | InputRole::PageContent =>
+                        include_listing_metadata || needed_pages.contains(*path),
+                    InputRole::Media => false,
+                };
+                let retained_page = retained_source == Some(path.as_str())
+                    && matches!(entry.role, InputRole::PageContent | InputRole::PageMetadata)
+                    && matches!(entry.state, InputState::Pending { retained: true }
+                        | InputState::ReadError { retained: true, .. });
+                needed && !retained_page
+                    && matches!(entry.state, InputState::Pending { .. } | InputState::ReadError { .. })
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+}
+
+/// Inputs whose absence can change page identity, layout, or site structure.
 pub fn is_structural_source(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return false;
-    };
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else { return false; };
     let ext = ext.to_ascii_lowercase();
-    // Page sources — the formats `read_page_source` renders from — then
-    // `config.toml`, and `.moss/theme/style.css` plus its partials.
     crate::build::scan::classify::is_page_source(&ext)
         || matches!(ext.as_str(), "html" | "htm" | "docx" | "doc" | "pages" | "ipynb" | "toml" | "css")
 }
 
-/// How many of `root`'s **structural** sources this build had to do without.
-///
-/// [`outstanding`] answers "how much of this site is still arriving", which is
-/// the right question for a progress counter and for whether to say anything at
-/// all. This answers the different question the publish decision turns on: is
-/// what this build produced a *true* rendering of the site, or a rendering of
-/// the parts that happened to be local? Same `is_still_in_the_cloud` filter, so
-/// a source that landed mid-build does not hold anything back.
-pub fn structural_outstanding(root: &Path) -> usize {
-    with(&UNAVAILABLE, |set| {
-        set.iter()
-            .filter(|p| p.starts_with(root))
-            .filter(|p| is_structural_source(p))
-            .filter(|p| crate::build::icloud::is_still_in_the_cloud(p))
-            .count()
-    })
-}
-
-/// Did this build go without a source that decides the site's *shape*?
-///
-/// The publish decision's own count, above what [`structural_outstanding`] can
-/// see on its own. Both halves, for the same reason the gate's `cloud_outstanding`
-/// combines them rather than picking one. `ledger_structural` is what a read site actually tried and
-/// could not get. `evicted_at_scan` is what was dataless when the walk ran,
-/// which is the only half that can see a source **no read site ever reached** —
-/// and that is not a corner case, it is the other reported shape: a vault whose
-/// page sources were all still downloading produced no documents at all, so the
-/// render pass synthesized the empty-folder home page and the user was shown
-/// moss's onboarding blueprint grid with their whole site missing behind it.
-/// No `read_page_source` call happened, so the ledger alone would
-/// still have called that build complete.
-///
-/// **`evicted_at_scan` must already be filtered to what is still in the cloud**
-/// — the caller does it, because this stays pure so the policy is testable off
-/// macOS. That filter is what keeps the two decisions in step: it makes
-/// "withheld" imply the gate's own count is non-zero, so a build that declines
-/// to publish is always one the gate can raise a screen for. Without it a
-/// source that arrived mid-build would withhold the publish *and* leave the
-/// gate down, and the user would get neither a site nor an explanation.
-///
-/// Returns a COUNT, not a flag, because the decision has to be explainable.
-/// The log that says why a build was withheld used to re-query
-/// `cloud_ledger::structural_outstanding()` — a live read, asking about a
-/// different moment than the one the decision was made in — so a build
-/// withheld on the scan's evidence alone printed "0 structural source(s) are
-/// still downloading". The number is now the decision's own.
-///
-/// The two halves are combined with `max`, exactly as `cloud_outstanding`
-/// combines its own two: they are overlapping views of one set, so a source
-/// both the scan and a read site saw must not be counted twice.
-pub fn structural_missing_count(
-    evicted_at_scan: &[std::path::PathBuf],
-    ledger_structural: usize,
-) -> usize {
-    let at_scan = evicted_at_scan
-        .iter()
-        .filter(|p| is_structural_source(p))
-        .count();
-    ledger_structural.max(at_scan)
-}
-
-/// Every structural source under `root` this build had to do without, as of
-/// now.
-///
-/// The path-returning twin of [`structural_missing_count`]: that function
-/// answers "is the build's own decision required" with a count meant to
-/// explain itself in a log line; this answers the different
-/// question a publish-time refusal has to — which files, so a person can act
-/// on the list rather than a number. Same two sources, **unioned** rather than
-/// `max`'d, because a name is either on the list or not — there is no double
-/// counting to avoid the way there is with two counts of possibly the same set.
-///
-/// `evicted_at_scan` carries the same contract as
-/// [`structural_missing_count`]'s: already filtered to what is still in the
-/// cloud, because that filtering needs `icloud::is_still_in_the_cloud`, which
-/// stays out of this module so the policy here is testable off macOS.
-pub fn structural_stale_paths(evicted_at_scan: &[std::path::PathBuf], root: &Path) -> Vec<PathBuf> {
-    let mut stale: HashSet<PathBuf> = evicted_at_scan
-        .iter()
-        .filter(|p| is_structural_source(p))
-        .cloned()
-        .collect();
-    with(&UNAVAILABLE, |set| {
-        stale.extend(
-            set.iter()
-                .filter(|p| p.starts_with(root))
-                .filter(|p| is_structural_source(p))
-                .filter(|p| crate::build::icloud::is_still_in_the_cloud(p))
-                .cloned(),
-        );
-    });
-    let mut v: Vec<PathBuf> = stale.into_iter().collect();
-    v.sort();
-    v
-}
-
-/// Every path this build recorded under `root`, materialized or not.
-///
-/// Unfiltered, unlike [`outstanding`] — for diagnostics and tests that want to
-/// know what was noticed rather than what is still outstanding.
-pub fn noted_under(root: &Path) -> Vec<PathBuf> {
-    with(&UNAVAILABLE, |set| {
-        let mut v: Vec<PathBuf> = set.iter().filter(|p| p.starts_with(root)).cloned().collect();
-        v.sort();
-        v
-    })
-}
-
 #[cfg(test)]
-#[path = "cloud_ledger_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn late_arrival_does_not_rewrite_an_attempt() {
+        let root = Path::new("/site");
+        let evidence = InputEvidence::new(root);
+        evidence.require(&root.join("index.md"), InputRole::PageContent);
+        evidence.pending(&root.join("index.md"));
+        assert_eq!(evidence.unresolved_structural(), ["index.md"]);
+        evidence.retained(&root.join("index.md"));
+        assert_eq!(evidence.unresolved_structural(), ["index.md"]);
+        let sealed = evidence.snapshot();
+        evidence.read(&root.join("index.md"), "fresh".into());
+        assert!(matches!(sealed["index.md"].state, InputState::Pending { retained: true }));
+        assert_eq!(evidence.unresolved_structural(), ["index.md"]);
+    }
+
+    #[test]
+    fn read_after_scan_replaces_pending() {
+        let root = Path::new("/site");
+        let evidence = InputEvidence::new(root);
+        evidence.pending(&root.join("page.md"));
+        evidence.read(&root.join("page.md"), "bytes-hash".into());
+        evidence.pending(&root.join("page.md"));
+        assert!(matches!(evidence.snapshot()["page.md"].state, InputState::Read { .. }));
+    }
+
+    #[test]
+    fn fallback_stays_unresolved_after_another_consumer_reads_late_bytes() {
+        let root = Path::new("/site");
+        let evidence = InputEvidence::new(root);
+        let page = root.join("page.md");
+        evidence.require(&page, InputRole::PageContent);
+        evidence.pending(&page);
+        evidence.retained(&page);
+        evidence.read(&page, "late bytes".into());
+        assert_eq!(evidence.unresolved_structural(), ["page.md"]);
+        assert!(matches!(evidence.snapshot()["page.md"].state, InputState::Pending { retained: true }));
+    }
+
+    #[test]
+    fn skipped_notebook_cannot_be_cleared_by_a_late_reader() {
+        let root = Path::new("/site");
+        let notebook = root.join("analysis.ipynb");
+        for reason in ["notebook processing timed out", "notebook processing failed"] {
+            let attempt = InputEvidence::new(root);
+            attempt.require(&notebook, InputRole::PageContent);
+            let worker = attempt.clone();
+            let source = notebook.clone();
+            let (go, ready) = std::sync::mpsc::channel::<()>();
+            let thread = std::thread::spawn(move || {
+                ready.recv().unwrap();
+                worker.read_bytes(&source, b"late success");
+            });
+            attempt.read_error(&notebook, reason.into());
+            go.send(()).unwrap();
+            thread.join().unwrap();
+            assert_eq!(attempt.unresolved_structural(), ["analysis.ipynb"]);
+
+            let retry = InputEvidence::new(root);
+            retry.require(&notebook, InputRole::PageContent);
+            retry.read_bytes(&notebook, b"late success");
+            assert!(retry.unresolved_structural().is_empty());
+        }
+    }
+
+    #[test]
+    fn two_different_reads_in_one_attempt_cannot_certify_either_version() {
+        let root = Path::new("/site");
+        let evidence = InputEvidence::new(root);
+        let config = root.join(".moss/config.toml");
+        evidence.require(&config, InputRole::SharedConfig);
+        evidence.read(&config, "first".into());
+        evidence.read(&config, "second".into());
+        assert_eq!(evidence.unresolved_structural(), [".moss/config.toml"]);
+    }
+
+    #[test]
+    fn renderer_owned_rewrite_advances_only_the_exact_consumed_version() {
+        let root = Path::new("/site");
+        let page = root.join("index.md");
+        let evidence = InputEvidence::new(root);
+        evidence.require(&page, InputRole::PageContent);
+        evidence.read_bytes(&page, b"# Home");
+        evidence.owned_rewrite(&page, b"# Home", b"---\nuid: fresh\n---\n# Home");
+        evidence.read_bytes(&page, b"---\nuid: fresh\n---\n# Home");
+        assert!(evidence.unresolved_structural().is_empty());
+
+        evidence.owned_rewrite(&page, b"different predecessor", b"third");
+        assert_eq!(evidence.unresolved_structural(), ["index.md"]);
+    }
+
+    #[test]
+    fn roles_select_generated_data_and_scripts_without_extension_guessing() {
+        let root = Path::new("/site");
+        let evidence = InputEvidence::new(root);
+        let script = root.join(".moss/theme/script.js");
+        let places = root.join(".moss/places.toml");
+        let media = root.join("cover.jpg");
+        evidence.require(&script, InputRole::Theme);
+        evidence.pending(&script);
+        evidence.require(&places, InputRole::GeneratedData);
+        evidence.pending(&places);
+        evidence.pending(&media);
+        let needed = std::collections::BTreeSet::new();
+        assert_eq!(evidence.unresolved_for_preview(&needed, false, false), [".moss/theme/script.js"]);
+        assert_eq!(evidence.unresolved_for_preview(&needed, false, true), [".moss/places.toml", ".moss/theme/script.js"]);
+        assert_eq!(evidence.unresolved_structural(), [".moss/places.toml", ".moss/theme/script.js"]);
+    }
+}

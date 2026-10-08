@@ -11,7 +11,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test, expect, vi } from "vitest";
-import { detailMaxZoom, MIN_ZOOM } from "../camera";
+import { detailMaxZoom, MIN_ZOOM, screenScale } from "../camera";
 import { WORLD_WIDTH, WORLD_HEIGHT } from "../projection";
 import { TileLayer, tileCellBounds, tileEdgeMask, tileFadeOpacity, tileOverlayTransform, tilesForView } from "../tiles";
 
@@ -264,6 +264,150 @@ describe("tileEdgeMask", () => {
  * it shared fades like any other outer edge. A tile is never clipped toward
  * a neighbour: the clip edge antialiased into a light line between tiles.
  */
+describe("TileLayer — current-frame cells get priority over padding", () => {
+  const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"></svg>';
+  const BASE_URL = "/_moss/tiles/";
+  const CELLS: Array<[number, number]> = [[10, 5], [11, 5]];
+  const VIEWPORT = { width: 800, height: 500 };
+  const bounds = tileCellBounds(10, 5);
+  const CAMERA = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2, zoom: 40 };
+
+  function stubControllableFetch(): Map<string, { resolve: () => void; reject: () => void }> {
+    const requests = new Map<string, { resolve: () => void; reject: () => void }>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => new Promise((resolve, reject) => {
+      requests.set(url, {
+        resolve: () => resolve({ ok: true, text: () => Promise.resolve(TILE_SVG) } as unknown as Response),
+        reject: () => reject(new Error("tile fetch failed")),
+      });
+    })));
+    return requests;
+  }
+
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("loads and decodes the visible cell before scheduling one padding tile after two frames", async () => {
+    const requests = stubControllableFetch();
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: CELLS, k: 4, origins: originsFor(CELLS, 4, 0.1), ...GRID });
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      expect(tilesForView(CELLS, CAMERA, VIEWPORT, 0)).toEqual([[10, 5]]);
+      expect(tilesForView(CELLS, CAMERA, VIEWPORT)).toEqual(CELLS);
+      layer.render(CAMERA, VIEWPORT, 1, true);
+      expect([...requests.keys()]).toEqual([`${BASE_URL}tile-10-5.svg`]);
+
+      const ready = layer.waitForVisibleTiles();
+      requests.get(`${BASE_URL}tile-10-5.svg`)!.resolve();
+      await flush();
+      await expect(ready).resolves.toBe("ready");
+      expect(container.querySelectorAll(".moss-places-tile")).toHaveLength(1);
+      expect(requests.has(`${BASE_URL}tile-11-5.svg`)).toBe(false);
+
+      frames.shift()!(0);
+      expect(requests.has(`${BASE_URL}tile-11-5.svg`)).toBe(false);
+      frames.shift()!(16);
+      expect(requests.has(`${BASE_URL}tile-11-5.svg`)).toBe(true);
+      expect(raf).toHaveBeenCalledTimes(2);
+      requests.get(`${BASE_URL}tile-11-5.svg`)!.resolve();
+      await flush();
+    } finally {
+      raf.mockRestore();
+    }
+  });
+
+  test("a pan after clear starts its newly visible tile while stale padding decode is held", async () => {
+    const requests = stubControllableFetch();
+    const container = document.createElement("div");
+    const cells: Array<[number, number]> = [[10, 4], [10, 5], [10, 6], [11, 5], [12, 5]];
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cells, k: 4, origins: originsFor(cells, 4, 0.1), ...GRID });
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    let releaseBackgroundBake!: () => void;
+    const originalRasterize = rasterizeOrFallbackSpy.getMockImplementation()!;
+    let rasterizeCalls = 0;
+    rasterizeOrFallbackSpy.mockImplementation(async () => {
+      rasterizeCalls++;
+      if (rasterizeCalls === 2) await new Promise<void>((resolve) => { releaseBackgroundBake = resolve; });
+      return { el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} };
+    });
+    try {
+      layer.render(CAMERA, VIEWPORT, 1, true);
+      requests.get(`${BASE_URL}tile-10-5.svg`)!.resolve();
+      await flush();
+      expect(frames).toHaveLength(1);
+
+      frames.shift()!(0);
+      frames.shift()!(16);
+      const background = [...requests.keys()].find((url) => url !== `${BASE_URL}tile-10-5.svg`)!;
+      expect(background).toBeDefined();
+      expect(requests.size).toBe(2); // only one padding load can occupy the background slot
+      requests.get(background)!.resolve();
+      await flush();
+      expect(rasterizeCalls).toBe(2);
+
+      const nextBounds = tileCellBounds(12, 5);
+      layer.render({ ...CAMERA, zoom: 1 }, VIEWPORT, 1, true); // invalidate the in-flight background generation
+      layer.render({ ...CAMERA, x: (nextBounds.minX + nextBounds.maxX) / 2 }, VIEWPORT, 1, true);
+      expect(requests.has(`${BASE_URL}tile-12-5.svg`)).toBe(true);
+      expect(requests.size).toBe(3); // the new visible tile starts while the background decode is still held
+      releaseBackgroundBake();
+      requests.get(`${BASE_URL}tile-12-5.svg`)!.resolve();
+      await flush();
+      layer.render({ ...CAMERA, zoom: 1 }, VIEWPORT, 1, true);
+      await flush();
+    } finally {
+      releaseBackgroundBake?.();
+      rasterizeOrFallbackSpy.mockImplementation(originalRasterize);
+      raf.mockRestore();
+    }
+  });
+
+  test("a failed visible tile does not release padding while another visible tile is still pending", async () => {
+    const requests = stubControllableFetch();
+    const cells: Array<[number, number]> = [[10, 5], [11, 5], [12, 5]];
+    const camera = { ...CAMERA, zoom: 20 };
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cells, k: 4, origins: originsFor(cells, 4, 0.1), ...GRID });
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      expect(tilesForView(cells, camera, VIEWPORT, 0)).toEqual([[10, 5], [11, 5]]);
+      expect(tilesForView(cells, camera, VIEWPORT)).toEqual(cells);
+      layer.render(camera, VIEWPORT, 1, true);
+      const ready = layer.waitForVisibleTiles();
+      requests.get(`${BASE_URL}tile-10-5.svg`)!.reject();
+      await flush();
+      await expect(ready).resolves.toBe("failed");
+      expect(requests.has(`${BASE_URL}tile-12-5.svg`)).toBe(false);
+
+      requests.get(`${BASE_URL}tile-11-5.svg`)!.resolve();
+      await flush();
+      expect(requests.has(`${BASE_URL}tile-12-5.svg`)).toBe(false);
+      frames.shift()!(0);
+      frames.shift()!(16);
+      expect(requests.has(`${BASE_URL}tile-12-5.svg`)).toBe(true);
+      requests.get(`${BASE_URL}tile-12-5.svg`)!.resolve();
+      await flush();
+    } finally {
+      raf.mockRestore();
+    }
+  });
+});
+
 describe("TileLayer — a failed neighbour turns its shared edge into a fading outer edge", () => {
   const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>';
   const BASE_URL = "/_moss/tiles/";
@@ -326,6 +470,37 @@ describe("TileLayer — a failed neighbour turns its shared edge into a fading o
     // that edge now reads as this layer's own outer edge and fades toward
     // the world layer instead of ending in a hard, undrawn line.
     expect(main.style.maskImage).toContain("to right");
+  });
+
+  test("a failed visible cell remains an initial-paint dependency even when zoom coverage ignores it", async () => {
+    const controllers = stubControllableFetch();
+    const container = document.createElement("div");
+    const cells: Array<[number, number]> = [[9, 5]];
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cells, k: K, origins: originsFor(cells, K, BLEED), ...GRID });
+
+    layer.render(CAMERA, VIEWPORT, 1, true);
+    const ready = layer.waitForVisibleTiles();
+    controllers.get(`${BASE_URL}tile-9-5.svg`)!.reject(new Error("503"));
+    await flush();
+
+    await expect(ready).resolves.toBe("failed");
+    expect(layer.hasVisibleTiles(CAMERA, VIEWPORT)).toBe(false);
+    expect(layer.hasManifestTiles(CAMERA, VIEWPORT)).toBe(true);
+  });
+
+  test("clearing a pending visible-cell request reports superseded rather than a tile failure", async () => {
+    const controllers = stubControllableFetch();
+    const container = document.createElement("div");
+    const cells: Array<[number, number]> = [[9, 5]];
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cells, k: K, origins: originsFor(cells, K, BLEED), ...GRID });
+
+    layer.render(CAMERA, VIEWPORT, 1, true);
+    const ready = layer.waitForVisibleTiles();
+    layer.render({ ...CAMERA, zoom: 1 }, VIEWPORT, 1, true);
+
+    await expect(ready).resolves.toBe("superseded");
+    controllers.get(`${BASE_URL}tile-9-5.svg`)!.reject(new Error("stale request"));
+    await flush();
   });
 
   test("a pan — render() called again with only the camera moved — never reassigns an already-loaded tile's mask-image", async () => {
@@ -521,6 +696,114 @@ describe("TileLayer — re-bakes follow the density needed, within the same conc
     expect(rasterizeOrFallbackSpy).not.toHaveBeenCalled();
   });
 
+  test.each([
+    { label: "small embed", density: 0.33, dpr: 2, expected: [[66, 66], [66, 66]] },
+    { label: "deep zoom", density: 10, dpr: 1, expected: [[1000, 1000], [100, 100]] },
+  ])("$label bakes one visible and one padding tile at the intended density", async ({ density, dpr: devicePixelRatio, expected }) => {
+    const requests = new Map<string, () => void>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => new Promise((resolve) => {
+      requests.set(url, () => resolve({ ok: true, text: () => Promise.resolve(TILE_SVG) } as unknown as Response));
+    })));
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
+    const dpr = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: devicePixelRatio });
+    const cells: Array<[number, number]> = [[9, 5], [10, 5]];
+    const viewport = { width: 200, height: 200 };
+    const bounds = tileCellBounds(9, 5);
+    const zoom = detailMaxZoom(viewport);
+    const scale = screenScale({ x: 0, y: 0, zoom }, viewport);
+    const camera = {
+      x: bounds.maxX - 10 - viewport.width / (2 * scale),
+      y: (bounds.minY + bounds.maxY) / 2,
+      zoom,
+    };
+    expect(tilesForView(cells, camera, viewport, 0)).toEqual([[9, 5]]);
+    expect(tilesForView(cells, camera, viewport)).toEqual(cells);
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cells, k: K, origins: originsFor(cells, K, 0.1), ...GRID });
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      layer.render(camera, viewport, (density * K) / zoom, true);
+      requests.get(`${BASE_URL}tile-9-5.svg`)!();
+      await flush();
+      expect(frames).toHaveLength(1);
+      frames.shift()!(0);
+      frames.shift()!(16);
+      requests.get(`${BASE_URL}tile-10-5.svg`)!();
+      await flush();
+      const dimensions = rasterizeOrFallbackSpy.mock.calls.map(([, , width, height]) => [Math.round(width), Math.round(height)]);
+      expect(dimensions).toEqual(expected);
+    } finally {
+      raf.mockRestore();
+      if (dpr) Object.defineProperty(window, "devicePixelRatio", dpr);
+      else Reflect.deleteProperty(window, "devicePixelRatio");
+    }
+  });
+
+  test("a density increase during a visible load queues the current sharpness bake before readiness", async () => {
+    stubFetch();
+    const cell: Array<[number, number]> = [[9, 5]];
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cell, k: K, origins: originsFor(cell, K, 0.1), ...GRID });
+    const releases: Array<() => void> = [];
+    const surface = () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} });
+    rasterizeOrFallbackSpy.mockImplementation(() => new Promise((resolve) => releases.push(() => resolve(surface()))));
+
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(0.33), true);
+    const ready = layer.waitForVisibleTiles();
+    await flush();
+    expect(releases).toHaveLength(1);
+
+    // Same cell stays visible, but the viewport now needs >1.3× more detail.
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(1), true);
+    releases.shift()!();
+    await flush();
+    expect(rasterizeOrFallbackSpy).toHaveBeenCalledTimes(2);
+    let settled = false;
+    void ready.then(() => { settled = true; });
+    await flush();
+    expect(settled).toBe(false);
+
+    releases.shift()!();
+    await expect(ready).resolves.toBe("ready");
+  });
+
+  test("a density increase during a visible rebake is reconciled before readiness", async () => {
+    stubFetch();
+    const cell: Array<[number, number]> = [[9, 5]];
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: cell, k: K, origins: originsFor(cell, K, 0.1), ...GRID });
+    const surface = () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} });
+    rasterizeOrFallbackSpy.mockImplementation(async () => surface());
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(0.33), true);
+    await flush();
+    await expect(layer.waitForVisibleTiles()).resolves.toBe("ready");
+    rasterizeOrFallbackSpy.mockClear();
+
+    const releases: Array<() => void> = [];
+    rasterizeOrFallbackSpy.mockImplementation(() => new Promise((resolve) => releases.push(() => resolve(surface()))));
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(1), true);
+    await flush();
+    expect(releases).toHaveLength(1);
+    const ready = layer.waitForVisibleTiles();
+
+    // The first rebake is in flight when the same cell's demand rises again.
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(2), true);
+    releases.shift()!();
+    await flush();
+    expect(releases.length).toBeGreaterThan(0); // a current-density bake followed the stale one
+    let settled = false;
+    void ready.then(() => { settled = true; });
+    await flush();
+    expect(settled).toBe(false);
+    while (releases.length) releases.shift()!();
+    await expect(ready).resolves.toBe("ready");
+  });
+
   test("a raster is baked smaller again once the density needed falls well below it", async () => {
     stubFetch();
     rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
@@ -560,5 +843,67 @@ describe("TileLayer — re-bakes follow the density needed, within the same conc
     expect(container.dataset.mossPlacesTilesState).toBe("busy");
     await flush();
     expect(container.dataset.mossPlacesTilesState).toBe("idle");
+  });
+});
+
+describe("TileLayer — complete first-frame coverage", () => {
+  const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"></svg>';
+  const cells: Array<[number, number]> = [[10, 5]];
+  const viewport = { width: 100, height: 100 };
+  const bounds = tileCellBounds(10, 5);
+  const camera = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2, zoom: detailMaxZoom(viewport) };
+  const unitScale = screenScale({ ...camera, zoom: 1 }, viewport);
+
+  async function readyLayer(availableTiles = cells) {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: () => Promise.resolve(TILE_SVG) }) as unknown as Response));
+    rasterizeOrFallbackSpy.mockImplementation(async (_markup, _fallback, width, height) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(width));
+      canvas.height = Math.max(1, Math.round(height));
+      return { el: canvas, release() {} };
+    });
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, {
+      tilesBaseUrl: "/_moss/tiles/", availableTiles, k: 4,
+      origins: originsFor(availableTiles, 4, 0.1), ...GRID,
+    });
+    layer.render(camera, viewport, unitScale, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return layer;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rasterizeOrFallbackSpy.mockReset();
+  });
+
+  test("allows the ready regional surface only when opaque tile interiors cover the full frame", async () => {
+    const layer = await readyLayer();
+    expect(layer.hasOpaqueViewportCoverage(camera, viewport)).toBe(true);
+
+    const edgeCamera = { ...camera, x: bounds.minX + 1 };
+    layer.render(edgeCamera, viewport, unitScale, true);
+    expect(layer.hasOpaqueViewportCoverage(edgeCamera, viewport)).toBe(false);
+
+    const wideViewport = { width: 3000, height: 100 };
+    const wideCamera = { ...camera, zoom: detailMaxZoom(wideViewport) };
+    layer.render(wideCamera, wideViewport, screenScale({ ...wideCamera, zoom: 1 }, wideViewport), true);
+    expect(layer.hasOpaqueViewportCoverage(wideCamera, wideViewport)).toBe(false);
+
+    const fadingCamera = { ...camera, zoom: camera.zoom * 0.95 };
+    layer.render(fadingCamera, viewport, unitScale, true);
+    expect(layer.hasOpaqueViewportCoverage(fadingCamera, viewport)).toBe(false);
+  });
+
+  test("fails closed when a required regional tile failed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, text: () => Promise.resolve("") }) as unknown as Response));
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, {
+      tilesBaseUrl: "/_moss/tiles/", availableTiles: cells, k: 4,
+      origins: originsFor(cells, 4, 0.1), ...GRID,
+    });
+    layer.render(camera, viewport, unitScale, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(layer.hasOpaqueViewportCoverage(camera, viewport)).toBe(false);
   });
 });

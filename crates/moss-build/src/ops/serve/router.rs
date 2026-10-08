@@ -5,7 +5,8 @@
 //! injection, conditional-request stripping, and the HTML 404 fallback that keeps
 //! the iframe-bridge script alive on missing pages.
 
-use super::placeholder::{handle_asset_request, transparent_stub_response};
+use super::placeholder::{handle_asset_request, pending_image_response, is_image_variant_url};
+use super::image_original;
 use super::port::{verify_server_ready, MOSS_HEALTH_PATH};
 use super::asset_rewriter;
 use super::content_wrapper;
@@ -110,7 +111,7 @@ fn cloud_offline_response(
     if !crate::build::icloud::is_still_in_the_cloud(&disk) {
         return None;
     }
-    crate::build::cloud_readiness::request_download(&disk);
+    crate::build::cloud_readiness::request_download_foreground(&disk);
     Response::builder()
         // 503, not 500: the page is temporarily unavailable and will come
         // back, which is exactly what this status means.
@@ -470,9 +471,41 @@ pub async fn start_server(
                     // This is the key to zero-flicker: we resolve the path on each request
                     let current_dir = state.read().unwrap().clone();
                     let path = request.uri().path().to_string();
+                    let encoded = path.trim_start_matches('/');
+                    let normalized = urlencoding::decode(encoded)
+                        .map(|s| s.into_owned())
+                        .unwrap_or_else(|_| encoded.to_string());
+                    // A withheld rebuild can replace the process registry
+                    // while `current` still serves an older page. Resolve a
+                    // missing image from that selected generation before
+                    // considering the new attempt's Failed/Pending state.
+                    let valid_image = is_image_variant_url(&normalized)
+                        .then(|| crate::build::served_path::ServedPath::from_source(&normalized).ok())
+                        .flatten().filter(|served| served.as_str() == normalized);
+                    let serves_current = valid_image.is_some()
+                        && image_original::serves_current(&current_dir);
+                    let image_output = valid_image.as_ref().map(|served| current_dir.join(served.as_str()));
+                    if serves_current && image_output.as_ref().is_some_and(|output|
+                        !output.exists() || crate::build::icloud::is_still_in_the_cloud(output)) {
+                        if let Some(original) = image_original::recorded_original(&current_dir, &normalized).await {
+                            return original.serve(request, is_evicted)
+                                .await.unwrap_or_else(pending_image_response);
+                        }
+                        if let Some(original) = image_original::original_in_served_root(&current_dir, &normalized) {
+                            return image_original::serve_original(&original, request, is_evicted)
+                                .await.unwrap_or_else(pending_image_response);
+                        }
+                        if let Some(output) = image_output.as_ref().filter(|output|
+                            crate::build::icloud::is_still_in_the_cloud(output)) {
+                            return image_original::serve_original(output, request, is_evicted)
+                                .await.unwrap_or_else(pending_image_response);
+                        }
+                        return source_asset_404();
+                    }
 
-                    // Check if this is a request for an asset being processed
-                    // If so, serve a placeholder SVG instead of 404
+                    // Only the selected staging render can use this build's
+                    // registry. It serves original images while they arrive
+                    // and keeps video placeholders during processing.
                     if let Some(ref reg) = registry {
                         // SOURCE PASSTHROUGH (instant sharp preview).
                         //
@@ -494,16 +527,16 @@ pub async fn start_server(
                         // client-joined. A terminally FAILED variant is EXCLUDED
                         // so its warning SVG (handle_asset_request) still wins —
                         // the encode failure stays visible.
-                        let encoded = path.trim_start_matches('/');
-                        let normalized = urlencoding::decode(encoded)
-                            .map(|s| s.into_owned())
-                            .unwrap_or_else(|_| encoded.to_string());
                         let is_failed = matches!(
                             reg.get(&normalized),
                             Some(crate::types::assets::AssetState::Failed(_))
                         );
                         if !is_failed && !current_dir.join(&normalized).exists() {
                             if let Some(src_abs) = reg.source_passthrough(&normalized) {
+                                if is_image_variant_url(&normalized) {
+                                    return image_original::serve_original(&src_abs, request, is_evicted)
+                                        .await.unwrap_or_else(pending_image_response);
+                                }
                                 // A cloud-evicted original is NOT servable, and
                                 // finding that out from `ServeFile` is too late:
                                 // it opens the file (a plain `open` succeeds
@@ -518,13 +551,16 @@ pub async fn start_server(
                                 // download lands (false on Linux, where no
                                 // sync client sets a stat-time bit).
                                 if is_evicted(&src_abs) {
+                                    crate::build::cloud_readiness::request_download_foreground(
+                                        &src_abs,
+                                    );
                                     log::debug!(
                                         "[preview] source passthrough for {} skipped — {} is cloud-evicted",
                                         normalized,
                                         src_abs.display()
                                     );
                                     return handle_asset_request(&path, reg, &current_dir)
-                                        .unwrap_or_else(transparent_stub_response);
+                                        .unwrap_or_else(pending_image_response);
                                 }
                                 // Strip conditional headers so we always return a
                                 // fresh 200/206 with the real bytes (mirrors the
@@ -557,17 +593,9 @@ pub async fn start_server(
                                         );
                                         return resp;
                                     }
-                                    // Source missing / iCloud-dataless / unreadable.
-                                    // Hand off to the placeholder handler, which
-                                    // knows what each media type should stand
-                                    // behind (a neutral box for video; the 1×1
-                                    // transparent stub for an image variant —
-                                    // never anything that could be mistaken for
-                                    // the author's own picture), and stub if it
-                                    // declines. Never 404 a chosen <source>,
-                                    // and never block the request
-                                    // thread on a synchronous materialize
-                                    // (build/media/icloud.rs rule).
+                                    // A video source cannot be read. Keep its
+                                    // registry placeholder without making a
+                                    // synchronous materialization call here.
                                     _ => {
                                         log::debug!(
                                             "[preview] source passthrough for {} could not read {} — \
@@ -576,7 +604,7 @@ pub async fn start_server(
                                             src_abs.display()
                                         );
                                         return handle_asset_request(&path, reg, &current_dir)
-                                            .unwrap_or_else(transparent_stub_response);
+                                            .unwrap_or_else(pending_image_response);
                                     }
                                 }
                             }

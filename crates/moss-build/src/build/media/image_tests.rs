@@ -2240,8 +2240,7 @@ fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
 
 #[test]
 fn format_probe_cache_ignores_empty_source_oid() {
-    // An unresolved `source_oid` (`""`, the stat-match-miss fallback used by
-    // both `collect_images_for_conversion` and `webp_converter_owns_base`)
+    // An unresolved `source_oid` (`""`, the collector's stat-match fallback)
     // must never be treated as a cache key: two different real files probed
     // with `""` in the same build must not leak one file's verdict into the
     // other's result.
@@ -2448,7 +2447,7 @@ fn test_collect_images_filters_skipped() {
         ..Default::default()
     };
 
-    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg, None);
 
     // svg and heic get a bare <img> and drop here; the html-as-png is a
     // promised `<picture>` source, so it is collected WITH its verdict for the
@@ -2501,7 +2500,7 @@ fn test_collect_images_reuses_stat_matched_hash_without_rehashing() {
         "deadbeef".to_string(),
     );
 
-    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg, None);
 
     assert_eq!(items.len(), 1);
     assert_eq!(
@@ -2528,7 +2527,7 @@ fn collect_trusts_an_entry_only_for_the_files_whole_stat_record() {
         let mut hash_index = crate::build::cache::HashIndex::new();
         hash_index.update("photo.jpg".to_string(), &changed, "planted".to_string());
 
-        let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+        let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg, None);
 
         assert_eq!(items.len(), 1);
         assert!(items[0].source_oid.is_empty(), "an entry recorded for another {field} was trusted: {:?}", items[0].source_oid);
@@ -2556,7 +2555,7 @@ fn collect_does_not_take_the_oid_of_an_image_replaced_by_rename() {
     bytes[middle] ^= 0xff;
     crate::build::stat::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
 
-    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg, None);
 
     assert_eq!(items.len(), 1);
     assert!(items[0].source_oid.is_empty(), "took the recorded oid of the file that was replaced: {:?}", items[0].source_oid);
@@ -2584,7 +2583,7 @@ fn a_cmyk_jpeg_is_collected_with_its_verdict_so_its_source_can_be_settled() {
         ..Default::default()
     };
 
-    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg, None);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].skip, Some(SkipReason::Cmyk));
 }
@@ -6459,7 +6458,7 @@ impl RewriteVault {
             crate::build::cache::ObjectStore::new(paths.cache_objects()),
         );
         let mut index = crate::build::cache::HashIndex::load(&paths.cache_hash_index());
-        collect_images_for_conversion(&structure, &transforms, &mut index, &ImageCompressionConfig::default())
+        collect_images_for_conversion(&structure, &transforms, &mut index, &ImageCompressionConfig::default(), None)
             .into_iter()
             .filter(|item| item.skip.is_none())
             .collect()

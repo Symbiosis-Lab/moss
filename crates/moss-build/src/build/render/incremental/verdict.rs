@@ -53,7 +53,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::build::facade::{self, DigestMap, FacadeCache, PageFingerprints};
+use crate::build::facade::{self, DigestMap, FacadeCache, PageFingerprints, PageKey};
 use crate::build::phase::PhaseTrace;
 use crate::build::types::ParsedDocument;
 use crate::types::content::ProjectStructure;
@@ -140,6 +140,14 @@ impl RenderVerdict {
         self.skip.contains(source_path)
     }
 
+    /// True when this build may leave this document's output alone. Generated
+    /// documents use a private cache identity derived from their served URL;
+    /// that identity is never exposed as source provenance.
+    pub fn may_skip_document(&self, doc: &ParsedDocument) -> bool {
+        self.skip
+            .contains(crate::build::facade::PageKey::for_document(doc).cache_key().as_ref())
+    }
+
     pub fn basis(&self) -> &VerdictBasis {
         &self.basis
     }
@@ -203,7 +211,7 @@ fn name_a_few(mut items: Vec<String>, noun: &str) -> Option<String> {
     let shown = items
         .iter()
         .take(3)
-        .map(|p| format!("\"{p}\""))
+        .map(|p| format!("\"{}\"", PageKey::display_cache_key(p)))
         .collect::<Vec<_>>()
         .join(", ");
     Some(if total > 3 {
@@ -259,25 +267,27 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // 2026-08-01).
     let current: HashMap<String, PageFingerprints> = documents
         .par_iter()
-        .filter_map(|doc| {
-            doc.source_path
-                .as_ref()
-                .map(|p| (p.clone(), PageFingerprints::of(doc)))
-        })
+        .map(|doc| (
+            crate::build::facade::PageKey::for_document(doc).cache_key().into_owned(),
+            PageFingerprints::of(doc),
+        ))
         .collect();
 
     let previous = FacadeCache::load(inputs.cache_path);
     let changed = previous.changed_paths(&current);
     let surface_changed = previous.surface_changed_paths(&current);
 
-    // Path -> document, for the two lookups the dependents narrowing below
+    // Cache identity -> document, for the two lookups the dependents narrowing below
     // needs: which fields moved on a given surface-changed page, and which
     // folder document a breadcrumb-ancestor scan starts from. Built once
     // rather than at each call site, since `documents` is scanned linearly
     // either way.
-    let doc_by_path: HashMap<&str, &ParsedDocument> = documents
+    let doc_by_path: HashMap<String, &ParsedDocument> = documents
         .iter()
-        .filter_map(|doc| doc.source_path.as_deref().map(|p| (p, doc)))
+        .map(|doc| (
+            crate::build::facade::PageKey::for_document(doc).cache_key().into_owned(),
+            doc,
+        ))
         .collect();
     let surface_field_names = facade::surface_field_names();
 
@@ -285,8 +295,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // and read by both this section (is the move unclassified?) and the
     // breadcrumb-ancestor scan below (did `label` move?), rather than
     // re-running the same diff for the same page twice. A page missing from
-    // `doc_by_path` (no source path, hence no facade entry) has no entry
-    // here either.
+    // `doc_by_path` has no entry here either if an identity is missing.
     let moved_fields_by_path: HashMap<&str, Vec<String>> = surface_changed
         .iter()
         .filter_map(|path| {
@@ -447,9 +456,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             let path_and_links: Vec<(String, &[moss_core::resolve::OutgoingLink])> = documents
                 .iter()
                 .filter_map(|doc| {
-                    doc.source_path
-                        .as_ref()
-                        .map(|p| (p.clone(), doc.outgoing_links.as_slice()))
+                    doc.source_path.as_ref().map(|p| (p.clone(), doc.outgoing_links.as_slice()))
                 })
                 .collect();
             // Transclusion edges. Until `embed_deps` was
@@ -500,12 +507,8 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 if !listing::hosts_listing(doc) && !listing::is_series_member(doc, documents) {
                     continue;
                 }
-                let Some(source) = doc.source_path.as_ref() else {
-                    // No source path, hence no facade entry and nothing to
-                    // skip. The synthetic folder-index loop renders these.
-                    continue;
-                };
-                if render_set.contains(source) {
+                let page_key = crate::build::facade::PageKey::for_document(doc).cache_key().into_owned();
+                if render_set.contains(&page_key) {
                     continue;
                 }
                 let dirty = match listing::groups_read_by(doc, documents) {
@@ -518,7 +521,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                         .any(|key| previous.listing_digest(key) != groups.digest(key)),
                 };
                 if dirty {
-                    render_set.insert(source.clone());
+                    render_set.insert(page_key);
                     by_listing_group += 1;
                 }
             }
@@ -532,14 +535,14 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             let mut by_dependents = 0usize;
             if !widen_langs.is_empty() || breadcrumb_enable_moved {
                 for doc in documents {
-                    let Some(path) = doc.source_path.as_ref() else { continue };
-                    if render_set.contains(path) {
+                    let path = crate::build::facade::PageKey::for_document(doc).cache_key().into_owned();
+                    if render_set.contains(&path) {
                         continue;
                     }
                     let widen = breadcrumb_enable_moved
                         || widen_langs.contains(dependents::effective_lang(doc, inputs.site_lang).code());
                     if widen {
-                        render_set.insert(path.clone());
+                        render_set.insert(path);
                         by_dependents += 1;
                     }
                 }
@@ -643,8 +646,8 @@ fn pages_showing(
     documents
         .par_iter()
         .filter_map(|doc| {
-            let source = doc.source_path.as_ref()?;
-            if render_set.contains(source) {
+            let page_key = crate::build::facade::PageKey::for_document(doc).cache_key().into_owned();
+            if render_set.contains(&page_key) {
                 return None;
             }
             let shows = match std::fs::read_to_string(inputs.output_dir.join(&doc.url_path)) {
@@ -653,7 +656,7 @@ fn pages_showing(
                     .any(|r| keys.contains(r)),
                 Err(_) => true,
             };
-            shows.then(|| source.clone())
+            shows.then_some(page_key)
         })
         .collect()
 }
@@ -676,9 +679,7 @@ fn global_contributions(
 ) -> std::collections::BTreeMap<String, String> {
     let mut parts: Vec<(String, String)> = Vec::new();
     for doc in documents {
-        let Some(path) = doc.source_path.as_ref() else {
-            continue;
-        };
+        let path = crate::build::facade::PageKey::for_document(doc).cache_key().into_owned();
         let is_slot = doc.slot_only || doc.slot.is_some();
         // `is_language_root`, not a bare `url_path == "index.html"`: every
         // locale's own home page carries the same global-listing content

@@ -12,22 +12,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-/// What a cache access does about a record, blob or directory that is a
-/// placeholder in the cloud, for a lookup and for a write alike.
-///
-/// Either way the file or directory is requested, so a later build finds it
-/// downloaded. The modes differ only in whether this access waits for it: wait
-/// only where a miss costs an image or video encode, or where the data cannot be
-/// regenerated (original assets, version history). Every other miss (a typeset
-/// equation, an injected slot, a map tile, a metadata probe) is recomputed in
-/// milliseconds, and a wait of seconds per file, each in a different directory,
-/// would hold up the build phase a preview is waiting on; a write in this mode
-/// that is refused is skipped and the caller carries on without it.
+/// Compatibility policy for cache calls. Cache reads and writes now request
+/// cloud-only entries and return promptly in both modes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordMode {
-    /// Request it and wait for it, up to a short deadline.
+    /// Legacy caller intent. Equivalent to `Request` for optional caches.
     Wait,
-    /// Request it and carry on: a record reads as unreadable now, a write is refused now.
+    /// Request and carry on: an unavailable record misses; a write is refused.
     Request,
 }
 
@@ -84,12 +75,12 @@ fn report_once(path: &Path, what: &str) -> bool {
 
 impl TransformCache {
     /// The one place a record's text is read from disk.
-    fn load(&self, path: &Path, mode: RecordMode) -> io::Result<String> {
-        crate::build::cloud_readiness::read_record_text(path, self.root(), mode)
+    fn load(&self, path: &Path) -> io::Result<String> {
+        crate::build::io_utils::read_record_file(path)
     }
 
     pub(crate) fn read(&self, source_oid: &str, mode: RecordMode) -> RecordRead {
-        self.read_via(source_oid, mode, &|path, mode| self.load(path, mode))
+        self.read_via(source_oid, mode, &|path, _mode| self.load(path))
     }
 
     pub(super) fn read_via(
@@ -125,8 +116,8 @@ impl TransformCache {
             },
             Err(e) if crate::build::icloud::is_definitely_absent(&path, &e) => RecordRead::Absent,
             Err(e) => {
-                // A placeholder that did not arrive is routine and was already
-                // requested; anything else is worth saying once.
+                // An optional cloud record is a cache miss; other read
+                // failures are worth saying once.
                 if !crate::build::icloud::is_offline_not_absent(&path, &e) {
                     report_once(&path, &format!("cannot be read ({e}); it is left as it is"));
                 } else {
@@ -148,7 +139,7 @@ impl TransformCache {
         mode: RecordMode,
         edit: impl FnOnce(&mut TransformRecord),
     ) -> Result<Merged, String> {
-        self.merge_via(source_oid, source_size, mode, &|path, mode| self.load(path, mode), edit)
+        self.merge_via(source_oid, source_size, mode, &|path, _mode| self.load(path), edit)
     }
 
     pub(super) fn merge_via(
@@ -180,9 +171,6 @@ impl TransformCache {
 mod tests {
     use super::*;
     use crate::build::cache::{ObjectStore, TransformEntry};
-    use crate::build::cloud_readiness::{read_record_text_with, RecordIo, WaitBreaker};
-    use std::cell::Cell;
-    use std::time::Instant;
 
     const OID: &str = "abcdef0123456789";
 
@@ -194,54 +182,6 @@ mod tests {
         TransformEntry { oid: tag.to_string(), size: 1, params: serde_json::Value::Null }
     }
 
-    /// A record file the provider has not downloaded: reads are refused until a
-    /// request has been made, or for ever when `arrives` is false. The breaker
-    /// and the read wrapper are the production code; the request, the wait and
-    /// the classification are scripted.
-    struct Placeholder {
-        requested: Cell<u32>,
-        arrives: Cell<bool>,
-        breaker: WaitBreaker,
-    }
-
-    impl Placeholder {
-        fn new(arrives: bool) -> Self {
-            Self { requested: Cell::new(0), arrives: Cell::new(arrives), breaker: WaitBreaker::new() }
-        }
-
-        fn load(&self, path: &Path, mode: RecordMode) -> io::Result<String> {
-            let read = || {
-                if self.requested.get() > 0 && self.arrives.get() {
-                    std::fs::read_to_string(path)
-                } else {
-                    Err(io::Error::other("in the cloud"))
-                }
-            };
-            let wait = |attempt: &dyn Fn() -> io::Result<String>| {
-                let first = attempt();
-                if first.is_ok() {
-                    return (first, false);
-                }
-                self.requested.set(self.requested.get() + 1);
-                match attempt() {
-                    Ok(text) => (Ok(text), false),
-                    Err(_) => (first, true),
-                }
-            };
-            read_record_text_with(
-                mode,
-                &self.breaker,
-                &RecordIo {
-                    now: &Instant::now,
-                    read: &read,
-                    in_cloud: &|_| true,
-                    request: &|| self.requested.set(self.requested.get() + 1),
-                    wait: &wait,
-                },
-            )
-        }
-    }
-
     fn seeded(dir: &Path, entries: &[&str]) -> TransformCache {
         let c = cache(dir);
         c.merge(OID, 10, RecordMode::Request, |r| {
@@ -251,47 +191,6 @@ mod tests {
         })
         .unwrap();
         c
-    }
-
-    #[test]
-    fn a_waiting_read_fetches_a_placeholder_and_reads_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = seeded(dir.path(), &["image/webp"]);
-        let p = Placeholder::new(true);
-        let RecordRead::Present(record) = c.read_via(OID, RecordMode::Wait, &|path, mode| p.load(path, mode)) else {
-            panic!("the record should have been fetched and read")
-        };
-        assert!(record.transforms.contains_key("image/webp"));
-        assert_eq!(p.requested.get(), 1);
-    }
-
-    #[test]
-    fn a_requesting_read_asks_for_the_placeholder_and_does_not_wait_for_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = seeded(dir.path(), &["image/webp"]);
-        let p = Placeholder::new(true);
-        let load = |path: &Path, mode| p.load(path, mode);
-        assert!(matches!(c.read_via(OID, RecordMode::Request, &load), RecordRead::Unreadable));
-        assert_eq!(p.requested.get(), 1, "requested");
-        // The next build finds it downloaded.
-        assert!(matches!(c.read_via(OID, RecordMode::Request, &load), RecordRead::Present(_)));
-    }
-
-    #[test]
-    fn a_record_that_stays_in_the_cloud_is_unreadable_and_left_alone_in_either_mode() {
-        for mode in [RecordMode::Wait, RecordMode::Request] {
-            let dir = tempfile::tempdir().unwrap();
-            let c = seeded(dir.path(), &["image/webp", "image/webp-w800", "image/webp-w1600"]);
-            let before = std::fs::read(c.record_path(OID)).unwrap();
-            let p = Placeholder::new(false);
-            let load = |path: &Path, mode| p.load(path, mode);
-            assert!(matches!(c.read_via(OID, mode, &load), RecordRead::Unreadable));
-            let merged = c.merge_via(OID, 10, mode, &load, |r| {
-                r.transforms.insert("media/meta".into(), entry("m"));
-            });
-            assert_eq!(merged, Ok(Merged::Kept));
-            assert_eq!(std::fs::read(c.record_path(OID)).unwrap(), before);
-        }
     }
 
     #[test]
@@ -430,20 +329,19 @@ mod tests {
         assert!(c.get_with(OID, RecordMode::Wait).is_some());
     }
 
-    /// macOS only: the fail-fast policy's answer for a placeholder is `EDEADLK`,
-    /// and only macOS classifies that as "in the cloud". The wait runs for real
-    /// here; the file is local, so the provider "delivers" at once.
+    /// A cache record is optional even when its caller asked for Wait. The
+    /// build can regenerate its work, so a cloud refusal returns at once.
     #[cfg(target_os = "macos")]
     #[test]
-    fn through_the_real_read_path_a_placeholder_is_waited_for_or_only_requested_by_mode() {
+    fn record_lookup_requests_a_placeholder_without_waiting_in_either_mode() {
         let dir = tempfile::tempdir().unwrap();
         let c = seeded(dir.path(), &["image/webp"]);
         let path = c.record_path(OID);
-        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
-        assert!(c.get_with(OID, RecordMode::Wait).is_some(), "Wait fetches the record and reads it");
-        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
-        assert!(c.get_with(OID, RecordMode::Request).is_none(), "Request does not wait");
-        assert!(c.get_with(OID, RecordMode::Request).is_some(), "and the record is there for the next read");
+        for mode in [RecordMode::Wait, RecordMode::Request] {
+            crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+            assert!(c.get_with(OID, mode).is_none());
+            assert!(c.get_with(OID, mode).is_some(), "the next lookup can use the record");
+        }
     }
 
     #[test]

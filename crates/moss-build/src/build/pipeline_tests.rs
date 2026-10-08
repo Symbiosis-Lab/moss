@@ -172,11 +172,11 @@ fn build_test_full_with_gates(
             build_documents: _documents,
             content_hashes: _content_hashes,
             missing_references,
+            unresolved_inputs: _unresolved_inputs,
             cancelled: _cancelled,
             home_ready: _home_ready,
             publishable: _publishable,
             render_seq: _render_seq,
-            stale_sources: _stale_sources,
         } = run(
             &root,
             site_dir_state,
@@ -2033,14 +2033,13 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
 }
 
 /// The rebuild sweep, through two real builds of one folder: it unlinks from
-/// staging only once the render the preview shows has been promoted, and it
-/// never parks the preview on an older `current` to do it.
+/// staging only once the render the preview shows has been promoted.
 ///
 /// Build 2 starts after build 1's seal tail promoted build 1's render, so it
 /// parks on `current` and sweeps an orphan out of staging. Then a render is put
 /// on screen that nothing has promoted — what a rebuild meets when it starts
-/// before the last tail lands — and build 3 must leave both the orphan and the
-/// preview alone for its whole length.
+/// before the last tail lands — and build 3 must leave the orphan intact.
+/// The preview may use the immutable prior route while staging is rewritten.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
     use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
@@ -2114,22 +2113,9 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
     crate::build::lifecycle::show_render(&mp, true);
     let orphan = mp.staging_dir().join("orphan-2.txt");
     fs::write(&orphan, "left behind").unwrap();
-    let watching = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let watcher = {
-        let (cell, watching, current) = (cell.clone(), watching.clone(), mp.current_ptr());
-        std::thread::spawn(move || {
-            let mut moved = false;
-            while watching.load(std::sync::atomic::Ordering::Relaxed) {
-                moved |= *cell.read().unwrap() == current;
-                std::thread::sleep(std::time::Duration::from_micros(200));
-            }
-            moved
-        })
-    };
     build().await.expect("build 3");
-    watching.store(false, std::sync::atomic::Ordering::Relaxed);
-    assert!(!watcher.join().unwrap(), "the preview must never move to an older current");
     assert!(orphan.exists(), "and a rebuild ahead of the promotion unlinks nothing");
+    assert_eq!(*cell.read().unwrap(), mp.staging_dir(), "a ready render returns to staging");
     drained().await;
     crate::system::folder_session::registry().remove(&folder_key);
 }
@@ -3864,7 +3850,8 @@ fn test_video_served_path_derivation_with_overrides() {
 
 #[test]
 fn test_notebook_processing_noop_when_empty() {
-    let outputs = run_notebook_processing(None, &[], "/test", Path::new("/test/output"), None);
+    let outputs = run_notebook_processing(None, &[], "/test", Path::new("/test/output"), None,
+        &crate::build::cloud_ledger::InputEvidence::new(Path::new("/test")));
     assert!(outputs.is_empty(), "No notebooks = no outputs");
 }
 
@@ -3887,7 +3874,8 @@ fn test_notebook_processing_copies_ipynb_and_generates_viewer() {
         modified: None,
     }];
 
-    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None);
+    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None,
+        &crate::build::cloud_ledger::InputEvidence::new(&source));
 
     assert!(
         output.join("test.ipynb").exists(),
@@ -3922,13 +3910,42 @@ fn test_data_files_copied_to_jupyter_files() {
         modified: None,
     }];
 
-    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None);
+    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None,
+        &crate::build::cloud_ledger::InputEvidence::new(&source));
 
     // Data file should be in jupyter/files/ (fallback path without JupyterLite)
     // Note: without JupyterLite assets, the function takes the fallback path
     // and only copies .ipynb files. Data file co-location runs in the full path.
     // This test verifies the notebook itself is copied.
     assert!(receipt_paths(&outputs).contains(&"analysis.ipynb".to_string()));
+}
+
+#[test]
+fn skipped_notebook_copy_stays_unresolved_after_a_later_manifest_read() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let staging = temp.path().join("staging");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(staging.join("analysis.ipynb")).unwrap();
+    let notebook = source.join("analysis.ipynb");
+    let content = r#"{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}"#;
+    fs::write(&notebook, content).unwrap();
+    let files = vec![crate::types::content::FileInfo {
+        path: "analysis.ipynb".into(), file_type: "ipynb".into(),
+        size: content.len() as u64, modified: None,
+    }];
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(&source);
+    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence);
+    assert!(!receipt_paths(&outputs).contains(&"analysis.ipynb".to_string()));
+    assert_eq!(evidence.unresolved_structural(), ["analysis.ipynb"]);
+    assert!(read_notebook_sibling(&notebook, &evidence).is_some());
+    assert_eq!(evidence.unresolved_structural(), ["analysis.ipynb"],
+        "a later contents-manifest read cannot certify the skipped notebook");
+
+    let retry = crate::build::cloud_ledger::InputEvidence::new(&source);
+    retry.require(&notebook, crate::build::cloud_ledger::InputRole::PageContent);
+    retry.read_bytes(&notebook, content.as_bytes());
+    assert!(retry.unresolved_structural().is_empty());
 }
 
 #[test]
@@ -3964,7 +3981,8 @@ fn test_notebook_processing_cancel_flag_returns_early() {
     // Set cancel flag before starting
     let cancel = AtomicBool::new(true);
     let outputs =
-        run_notebook_processing(None, &files, &source.to_string_lossy(), &output, Some(&cancel));
+        run_notebook_processing(None, &files, &source.to_string_lossy(), &output, Some(&cancel),
+            &crate::build::cloud_ledger::InputEvidence::new(&source));
 
     assert!(
         outputs.is_empty(),
@@ -5194,27 +5212,36 @@ fn build_test_shipped(
     })
 }
 
-/// `build_test_shipped`, but the promotion verdict follows THIS build's own
-/// `publishable` the way `build.rs::advertise_sealed` does, instead of always
-/// shipping. `build_test_shipped` hardcodes `ShipVerdict::Ship` because none
-/// of its callers care about the withhold branch; the tests that care about
-/// `publishable` (the 2026-09-17 revision) need exactly
-/// the branch it skips.
+/// `build_test_shipped`, but use the seal's durable input verdict.
 ///
 /// Deliberately does not call `degrade::repair_staged_html` — the presence
 /// pass is a separate, already-tested concern (`ship_tests.rs`), and folding
 /// it in here would make a test that only cares about `publishable` also
 /// depend on presence-pass behavior it isn't exercising.
 ///
-/// Returns `(Promotion, sealed file keys, stale_sources)`. The third element
-/// is this build's own `PipelineRunOutput::stale_sources` — the value
-/// `build.rs`'s seal tail hands to `BuildRecords::record_stale_sources` — for
-/// tests that check the publish-time staleness gate rather than promotion
-/// itself.
+/// Returns the promotion, file keys, build report, and exact sealed manifest.
 fn build_test_promoted_or_withheld(
     folder_path: &str,
-) -> Result<(crate::build::ship::Promotion, Vec<String>, Vec<String>), String> {
+) -> Result<(crate::build::ship::Promotion, Vec<String>, Vec<String>, crate::build::manifest::SealedManifest), String> {
     let ps = scan_folder(folder_path)?;
+    build_test_with_structure(folder_path, ps)
+}
+
+fn build_test_with_structure(
+    folder_path: &str,
+    ps: crate::types::content::ProjectStructure,
+) -> Result<(crate::build::ship::Promotion, Vec<String>, Vec<String>, crate::build::manifest::SealedManifest), String> {
+    build_test_with_focus(folder_path, ps, None, None, None, None)
+}
+
+fn build_test_with_focus(
+    folder_path: &str,
+    ps: crate::types::content::ProjectStructure,
+    state: Option<&SiteDirectoryState>,
+    session: Option<std::sync::Arc<crate::system::folder_session::FolderSession>>,
+    navigate_during_render: Option<(String, crate::system::folder_session::PreviewSource)>,
+    expected_served_during_render: Option<std::path::PathBuf>,
+) -> Result<(crate::build::ship::Promotion, Vec<String>, Vec<String>, crate::build::manifest::SealedManifest), String> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -5222,21 +5249,32 @@ fn build_test_promoted_or_withheld(
         .map_err(|e| format!("test runtime build failed: {}", e))?;
     let root = crate::vault::paths::VaultRoot::resolve(folder_path);
     let preview_port = crate::build::ports::port_of_this_build(None, None);
-    let services = BuildServices::headless();
+    let mut services = BuildServices::headless();
+    services.session = session;
+    let navigation_session = services.session.clone();
+    let served_cell = state.map(|state| state.current_dir.clone());
     rt.block_on(async move {
-        let PipelineRunOutput { bg_handle, publishable, stale_sources, .. } = run(
+        let PipelineRunOutput { bg_handle, .. } = tokio::task::block_in_place(|| run(
             &root,
-            None,
+            state,
             None,
             &preview_port,
             Some(&services),
-            Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
+            Some(Box::new(move |_, _, _| {
+                if let (Some(cell), Some(expected)) = (&served_cell, expected_served_during_render) {
+                    assert_eq!(*cell.read().unwrap(), expected, "staging must be hidden while it is rewritten");
+                }
+                if let (Some(session), Some((url, source))) = (navigation_session, navigate_during_render) {
+                    session.set_preview_requirement(url, source)?;
+                }
+                Ok(ResolvedSlots::empty())
+            })),
             &ps,
             None,
             crate::build::render::IncrementalGates::default(),
             crate::build::feeds::search_lane::Freshness::Now,
             &test_cache_keys(),
-        )
+        ))
         .map_err(crate::build::outcome::BuildStopped::into_message)?;
         let Some(handle) = bg_handle else {
             return Err("build produced no background handle to seal".to_string());
@@ -5248,14 +5286,12 @@ fn build_test_promoted_or_withheld(
         let mp = crate::moss_paths::MossPaths::new(root.path());
         let stage_dir = mp.staging_dir();
         crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
-        let _ = sealed.write_to_disk(&mp.hashes());
         let mut keys: Vec<String> = sealed.files().keys().cloned().collect();
         keys.sort();
-        let verdict = if publishable {
-            crate::build::ship::ShipVerdict::Ship
-        } else {
-            crate::build::ship::ShipVerdict::Withhold(crate::build::ship::WithholdReason::SourcesDownloading)
-        };
+        let verdict = crate::build::ship::ShipVerdict::after_presence_pass(&sealed, keys.len(), 0);
+        if verdict == crate::build::ship::ShipVerdict::Ship {
+            sealed.write_to_disk(&mp.hashes()).map_err(|e| e.to_string())?;
+        }
         let promotion = crate::build::ship::materialize_and_promote(
             &sealed,
             &mp,
@@ -5264,8 +5300,226 @@ fn build_test_promoted_or_withheld(
             None,
             verdict,
         )?;
-        Ok((promotion, keys, stale_sources))
+        let stale_sources = sealed.unresolved_inputs();
+        Ok((promotion, keys, stale_sources, sealed))
     })
+}
+
+#[derive(Default)]
+struct FocusGateReporter(std::sync::Mutex<Vec<String>>);
+
+impl crate::build::ports::reporter::BuildReporter for FocusGateReporter {
+    fn report(&self, _: &crate::build::progress::PipelineEvent) {}
+    fn cloud_sync(&self, status: &crate::build::ports::reporter::CloudSync<'_>) {
+        self.0.lock().unwrap().push(status.phase.to_string());
+    }
+    fn shell_listening(&self) -> bool { true }
+}
+
+fn focused_build_phase(
+    folder_path: &str,
+    url: &str,
+    source: crate::system::folder_session::PreviewSource,
+) -> Result<String, String> {
+    let ps = scan_folder(folder_path)?;
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()
+        .map_err(|e| e.to_string())?;
+    let root = crate::vault::paths::VaultRoot::resolve(folder_path);
+    let session = crate::system::folder_session::FolderSession::new(root.path().to_path_buf());
+    session.set_preview_requirement(url.to_string(), source)?;
+    let reporter = std::sync::Arc::new(FocusGateReporter::default());
+    let mut services = BuildServices::headless();
+    services.session = Some(session);
+    services.reporter = reporter.clone();
+    crate::build::cloud_readiness::mark_gated(folder_path);
+    rt.block_on(async {
+        let result = tokio::task::block_in_place(|| run(
+            &root, None, None, &crate::build::ports::port_of_this_build(None, None),
+            Some(&services), Some(Box::new(|_, _, _| Ok(ResolvedSlots::empty()))),
+            &ps, None, crate::build::render::IncrementalGates::default(),
+            crate::build::feeds::search_lane::Freshness::Now, &test_cache_keys(),
+        )).map_err(crate::build::outcome::BuildStopped::into_message)?;
+        if let Some(handle) = result.bg_handle { handle.await_completion().await.map_err(|e| e.to_string())?; }
+        reporter.0.lock().unwrap().last().cloned().ok_or_else(|| "no cloud gate reported".to_string())
+    })
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn focused_article_and_generated_home_ignore_unrelated_media() {
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("article.md"), "# Article\n").unwrap();
+    fs::write(dir.join(".unrelated.jpg.icloud"), "").unwrap();
+    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::File("article.md".into())).unwrap(), "home_ready");
+    assert_eq!(focused_build_phase(folder, "/", PreviewSource::Generated).unwrap(), "home_ready");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
+    use crate::system::folder_session::{FolderSession, PreviewSource};
+    let (dir, _cleanup) = create_test_dir();
+    // The production cache lease pins this record across render and promotion.
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&dir));
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\nchildren_style: grid\n---\n\n# Home\n\n![Hero](card.jpg)\n").unwrap();
+    let story = "---\ntitle: Original Card\ncover: card.jpg\n---\n\n# Story\n\nOriginal story.\n";
+    fs::write(dir.join("story.md"), story).unwrap();
+    let image = image::RgbImage::from_pixel(24, 24, image::Rgb([23, 45, 67]));
+    image.save(dir.join("card.jpg")).unwrap();
+    let theme = dir.join(".moss/theme");
+    fs::create_dir_all(&theme).unwrap();
+    fs::write(theme.join("style.css"), "body { color: #123456; }").unwrap();
+
+    let (first, _, _, first_seal) = build_test_promoted_or_withheld(folder).unwrap();
+    assert_eq!(first, crate::build::ship::Promotion::Promoted);
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+    let current = mp.current_ptr();
+    let original_home = fs::read(current.join("index.html")).unwrap();
+    assert!(String::from_utf8_lossy(&original_home).contains("Original Card"));
+    assert!(String::from_utf8_lossy(&original_home).contains("card.jpg"));
+    let original_image = fs::read(current.join("card.jpg")).unwrap();
+    let stylesheet = first_seal.files().keys().find(|key| key.starts_with("_moss/theme/style.") && key.ends_with(".css"))
+        .expect("complete generation includes the authored stylesheet");
+    let original_css = fs::read(current.join(stylesheet)).unwrap();
+    let original_hashes = fs::read(mp.hashes()).unwrap();
+    let original_generation = mp.current_generation_id().unwrap();
+
+    fs::remove_file(dir.join("story.md")).unwrap();
+    fs::write(dir.join(".story.md.icloud"), "").unwrap();
+    let state = SiteDirectoryState::new(mp.staging_dir());
+    let session = FolderSession::new(dir.clone());
+    session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
+    let (cold, _, unresolved, _) = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, Some(current.clone())).unwrap();
+    assert!(matches!(cold, crate::build::ship::Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)));
+    assert_eq!(unresolved, ["story.md"]);
+    assert_eq!(*state.current_dir.read().unwrap(), current);
+    assert_eq!(fs::read(current.join("index.html")).unwrap(), original_home);
+    assert_eq!(fs::read(current.join("card.jpg")).unwrap(), original_image);
+    assert_eq!(fs::read(current.join(stylesheet)).unwrap(), original_css);
+    assert_eq!(fs::read(mp.hashes()).unwrap(), original_hashes);
+    assert_eq!(mp.current_generation_id().unwrap(), original_generation);
+
+    fs::remove_file(dir.join(".story.md.icloud")).unwrap();
+    fs::write(dir.join("story.md"), story).unwrap();
+    let (recovered, _, unresolved, _) = build_test_promoted_or_withheld(folder).unwrap();
+    assert_eq!(recovered, crate::build::ship::Promotion::Promoted);
+    assert!(unresolved.is_empty());
+    assert_eq!(fs::read(mp.current_ptr().join("index.html")).unwrap(), original_home);
+}
+
+#[test]
+fn prior_route_requires_matching_source_and_current_bytes() {
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.html"), "old page").unwrap();
+    let mut previous = crate::types::content::SiteHashes::default();
+    previous.files.insert("index.html".into(), crate::types::content::file_entry(
+        &format!("{:016x}", xxhash_rust::xxh3::xxh3_64(b"old page")),
+    ));
+    previous.source_to_output.insert("index.md".into(), "index.html".into());
+    let requirement = |source| PreviewRequirement { url_path: "/".into(), source, revision: 1 };
+    assert!(previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir));
+    assert!(!previous_route_present(&requirement(PreviewSource::File("other.md".into())), &previous, &dir));
+    assert!(!previous_route_present(&requirement(PreviewSource::Generated), &previous, &dir));
+    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir));
+    previous.source_to_output.clear();
+    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir),
+        "a generated old home cannot prove the unresolved new source");
+    previous.source_to_output.insert("index.md".into(), "index.html".into());
+    fs::write(dir.join("index.html"), "newer generation").unwrap();
+    assert!(!previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn navigation_during_render_uses_latest_ready_source() {
+    use crate::system::folder_session::{FolderSession, PreviewSource};
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("article.md"), "# Ready article\n").unwrap();
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+    let state = SiteDirectoryState::new(mp.staging_dir());
+    let session = FolderSession::new(dir.clone());
+    session.set_preview_requirement("/article/".into(), PreviewSource::Unresolved).unwrap();
+    let (promotion, _, unresolved, _) = build_test_with_focus(
+        dir.to_str().unwrap(), scan_folder(dir.to_str().unwrap()).unwrap(), Some(&state), Some(session),
+        Some(("/article/".into(), PreviewSource::File("article.md".into()))), None,
+    ).unwrap();
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+    assert!(unresolved.is_empty());
+    assert_eq!(*state.current_dir.read().unwrap(), mp.staging_dir());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn pending_authored_folder_index_does_not_synthesize_a_finished_substitute() {
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::create_dir_all(dir.join("notes")).unwrap();
+    fs::write(dir.join("article.md"), "# Article\n").unwrap();
+    fs::write(dir.join("notes/child.md"), "# Child\n").unwrap();
+    fs::write(dir.join("notes/.index.md.icloud"), "").unwrap();
+    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::File("article.md".into())).unwrap(), "home_waiting");
+    let (_, keys, unresolved, sealed) = build_test_promoted_or_withheld(folder).unwrap();
+    assert!(keys.iter().any(|key| key == "article/index.html"));
+    assert!(!keys.iter().any(|key| key == "notes/index.html"));
+    assert_eq!(unresolved, ["notes/index.md"]);
+    assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_err());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn focused_unresolved_and_unemitted_routes_wait() {
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("article.md"), "# Article\n").unwrap();
+    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_waiting");
+    assert_eq!(focused_build_phase(folder, "/missing/", PreviewSource::Generated).unwrap(), "home_ready");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn unresolved_navigation_waits_even_when_an_old_route_exists() {
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("article.md"), "# Article\n").unwrap();
+    let (promotion, _, _, _) = build_test_promoted_or_withheld(folder).unwrap();
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_waiting");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn generated_old_home_does_not_hide_pending_authored_home() {
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("asset.txt"), "local asset").unwrap();
+    let (first, _, _, _) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    assert_eq!(first, crate::build::ship::Promotion::Promoted);
+    fs::write(dir.join(".index.md.icloud"), "").unwrap();
+    assert_eq!(focused_build_phase(dir.to_str().unwrap(), "/", PreviewSource::Generated).unwrap(), "home_waiting");
+}
+
+#[test]
+fn generated_places_requires_the_emitted_route_in_this_attempt() {
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempfile::tempdir().unwrap();
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+    let mut pending = crate::build::manifest::PendingManifest::for_build(Default::default(), evidence);
+    let requirement = PreviewRequirement { url_path: "/places/".into(), source: PreviewSource::Generated, revision: 1 };
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), crate::build::manifest::PreviewReadiness::Missing);
+    let path = crate::build::served_path::ServedPath::from_source("places/index.html").unwrap();
+    pending.register(&path, b"<h1>Places</h1>", crate::build::manifest::HashBucket::Files);
+    fs::create_dir_all(dir.path().join("places")).unwrap();
+    fs::write(dir.path().join("places/index.html"), b"<h1>Places</h1>").unwrap();
+    assert_eq!(pending.preview_readiness(&requirement, dir.path()), crate::build::manifest::PreviewReadiness::Usable);
+    let unresolved = PreviewRequirement { source: PreviewSource::Unresolved, ..requirement };
+    assert_eq!(pending.preview_readiness(&unresolved, dir.path()), crate::build::manifest::PreviewReadiness::Pending);
 }
 
 /// Every file under `dir`, as relative path → content hash. The instrument a
@@ -5692,184 +5946,11 @@ fn gate_raises_when_an_unmarked_home_loses_to_an_evicted_alphabetical_winner() {
     assert!(home_page_is_a_substitute(&ps, tmp.path().to_str().unwrap()));
 }
 
-// ----- the gate is monotonic, and sees post-scan evictions -----
-
-#[test]
-fn the_gate_holds_on_a_cold_open_with_files_still_in_the_cloud() {
-    assert!(
-        cloud_gate_should_hold(false, false, 553, false),
-        "no home page, nothing sealed, files outstanding — this is what the screen is for"
-    );
-}
-
-#[test]
-fn the_gate_never_holds_once_a_generation_is_sealed() {
-    // Monotonicity. This is what makes a screen with no dismissal control safe:
-    // `home_waiting` is re-emitted by every build and arrivals trigger builds,
-    // so a re-armable gate can slam a full-window screen over a site the user is
-    // already reading.
-    assert!(
-        !cloud_gate_should_hold(false, true, 553, false),
-        "a sealed generation is servable — blocking it is never right"
-    );
-}
-
-#[test]
-fn the_gate_does_not_hold_over_a_site_that_built() {
-    assert!(!cloud_gate_should_hold(true, false, 553, false));
-    assert!(!cloud_gate_should_hold(true, true, 553, false));
-}
-
-#[test]
-fn the_gate_is_silent_when_nothing_is_in_the_cloud() {
-    // A build that failed to produce a home page for a non-cloud reason must
-    // not get the cloud screen — it would be a lie, and no arrival can lower it.
-    assert!(!cloud_gate_should_hold(false, false, 0, false));
-}
-
-#[test]
-fn a_post_scan_eviction_still_raises_the_gate() {
-    // A known blindness: the scan count is taken before the build
-    // and prunes dot-directories, so it is 0 for anything evicted afterwards.
-    // The caller folds the ledger into `cloud_outstanding` precisely so this
-    // case reaches the gate at all; here that is the difference between the
-    // third argument being 0 and being non-zero.
-    assert!(!cloud_gate_should_hold(false, false, 0, false), "scan count alone");
-    assert!(
-        cloud_gate_should_hold(false, false, 1, false),
-        "one file the ledger recorded during the build is enough"
-    );
-}
-
-// ----- structural sources: a site rendered without them is not servable -----
-
-/// The reported symptom, pinned. `home_ready` alone said "servable" for a build
-/// whose stylesheet and page sources were still downloading, so the first
-/// preview of a Google Drive vault painted directory names, `Unknown` dates and
-/// no CSS, and called it ready.
-#[test]
-fn the_gate_holds_when_the_site_built_without_its_own_sources() {
-    assert!(
-        cloud_gate_should_hold(true, false, 553, true),
-        "an index.html rendered from files that were not there is not the author's site"
-    );
-}
-
-/// Monotonicity survives the structural input. It may not become a second way to
-/// slam a full-window screen over a site the user is already reading — "optimize
-/// storage" can evict a source at any time, and every build re-emits.
-#[test]
-fn a_structural_source_in_the_cloud_never_re_arms_the_gate_over_a_sealed_site() {
-    assert!(
-        !cloud_gate_should_hold(true, true, 553, true),
-        "a sealed generation is servable; the download belongs to the corner panel"
-    );
-    assert!(!cloud_gate_should_hold(false, true, 553, true));
-}
-
-/// A structural absence is a reason to hold, not a reason to invent a cloud
-/// episode. With nothing outstanding there is no arrival coming, so a gate
-/// raised here would never come down.
-#[test]
-fn a_structural_flag_alone_does_not_raise_the_gate() {
-    assert!(!cloud_gate_should_hold(true, false, 0, true));
-}
-
-/// The ordinary case must be untouched: a fully-local vault is servable the
-/// moment the home page exists.
-#[test]
-fn a_fully_local_build_leaves_the_gate_exactly_where_it_was() {
-    assert!(!cloud_gate_should_hold(true, false, 553, false));
-}
-
-// ----- the publish decision is not the screen decision -----
-//
-// `should_publish` — which used to withhold promotion whenever
-// `structural_incomplete` was true — was deleted in a 2026-09-17
-// revision (see `pipeline.rs`'s comment where it stood). The showing
-// question below is unchanged; the publish question now lives in full-build
-// tests instead of a pure function of `structural_incomplete` — see
-// `a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site`,
-// `an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site`,
-// `an_unreadable_config_toml_still_lets_the_build_publish`, and
-// `a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen` further
-// down this file.
-
-/// A sealed generation is what makes `cloud_gate_should_hold` return `false`
-/// — correctly, there is something to look at — even when this build's own
-/// read was incomplete. The screen decision does not need this build to be
-/// perfect; it needs there to be something worth showing.
-#[test]
-fn a_sealed_generation_keeps_the_screen_down_even_when_this_build_is_incomplete() {
-    assert!(
-        !cloud_gate_should_hold(true, true, 553, true),
-        "the screen stays down — the sealed generation is worth serving"
-    );
-}
-
-/// Withholding the SCREEN on a cold vault rolls nothing back — there is
-/// nothing sealed to roll back to. This is the same case at the
-/// `cloud_gate_should_hold` level; the full-pipeline version lives in
-/// `a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen`.
-#[test]
-fn a_cold_vault_shows_the_screen() {
-    assert!(cloud_gate_should_hold(false, false, 553, true));
-}
-
-/// `structural_missing_count` must stay clearable by construction, not by
-/// policy: vaults hold files moss never opens (`.zip`, `.psd`), the provider
-/// never downloads them, and their eviction is permanent — the positive
-/// extension list in `is_structural_source` is what keeps them from ever
-/// counting here at all.
-#[test]
-fn an_evicted_file_moss_never_reads_does_not_count_as_structural() {
-    let junk = vec![
-        std::path::PathBuf::from("/v/archive.zip"),
-        std::path::PathBuf::from("/v/art.psd"),
-    ];
-    assert_eq!(super::super::cloud_ledger::structural_missing_count(&junk, 0), 0);
-}
-
-/// The invariant `cloud_gate_should_hold` leans on: whenever
-/// `structural_missing_count` reports something missing, `cloud_outstanding`
-/// (the caller's `icloud_count.max(ledger)`) is also non-zero — so a
-/// structural absence never raises the screen without a cloud count to show
-/// alongside it. `structural_missing_count` only ever sees paths still in the
-/// cloud (the caller filters), and each of its two inputs is a subset of what
-/// `cloud_outstanding` counts.
-#[test]
-fn structural_absence_always_implies_a_nonzero_cloud_count() {
-    for (evicted, ledger) in [
-        (vec![std::path::PathBuf::from("/v/index.md")], 0usize),
-        (vec![], 1usize),
-    ] {
-        let missing = super::super::cloud_ledger::structural_missing_count(&evicted, ledger) > 0;
-        assert!(missing, "precondition of this case");
-        let cloud_outstanding = evicted.len().max(ledger);
-        assert!(cloud_outstanding > 0);
-        assert!(
-            cloud_gate_should_hold(false, false, cloud_outstanding, missing),
-            "nothing sealed and nothing servable — the screen must be available"
-        );
-    }
-}
-
-/// The publish half of a 2026-09-17 revision. Before it, a page still
-/// in the cloud made `structural_incomplete` true, and `should_publish` used
-/// that to withhold the WHOLE generation — so editing `index.md` while
-/// `keeper.md` sat offline meant neither page reached a reader. Ablate by
-/// changing `pipeline.rs`'s `let publishable = true;` back to
-/// `!structural_incomplete`: this goes red with `Promotion::Withheld`.
-///
-/// The second build's `stale_sources` assertion is the other half of that
-/// same revision — the staleness gate that replaced the withhold. It is the
-/// full-pipeline wiring `deploy/stale_sources_gate_tests.rs` points back to:
-/// this confirms `PipelineRunOutput::stale_sources` actually names the
-/// carried-forward page, and `stale_sources_gate_tests.rs` confirms
-/// `refuse_publish` acts on it once `BuildRecords` holds it.
+/// A pending page retains its HTML in staging, but the reduced attempt must
+/// not replace the complete durable generation or its `hashes.json` baseline.
 #[cfg(target_os = "macos")]
 #[test]
-fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
+fn a_page_that_could_not_be_read_withholds_the_complete_generation() {
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
     fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
@@ -5879,7 +5960,7 @@ fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
     )
     .unwrap();
 
-    let (promotion, _keys, _stale) = build_test_promoted_or_withheld(folder_path).expect("first build");
+    let (promotion, _keys, _stale, _) = build_test_promoted_or_withheld(folder_path).expect("first build");
     assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
     let keeper_html = test_dir.join(".moss/build.nosync/staging/keeper/index.html");
     assert!(keeper_html.is_file(), "first build must publish the page");
@@ -5893,13 +5974,9 @@ fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
     fs::write(test_dir.join(".keeper.md.icloud"), "").unwrap();
     fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
 
-    let (promotion, keys, stale_sources) =
+    let (promotion, keys, stale_sources, sealed) =
         build_test_promoted_or_withheld(folder_path).expect("second build, keeper evicted");
-    assert_eq!(
-        promotion,
-        crate::build::ship::Promotion::Promoted,
-        "an unreadable page must not withhold the rest of the site"
-    );
+    assert!(matches!(promotion, crate::build::ship::Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)));
     assert!(
         keys.iter().any(|k| k == "keeper/index.html"),
         "keeper must stay in the deploy manifest: {keys:?}"
@@ -5907,8 +5984,10 @@ fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
     assert_eq!(
         stale_sources,
         vec!["keeper.md".to_string()],
-        "the carried-forward page must be named in PipelineRunOutput::stale_sources"
+        "the carried-forward page must be named in sealed input evidence"
     );
+    assert_eq!(sealed.unresolved_inputs(), ["keeper.md"]);
+    assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_err());
     assert!(keeper_html.is_file(), "keeper's last-known HTML must still serve");
     assert_eq!(
         load_previous_hashes(folder_path).page_meta.get("keeper.md").map(|m| m.title.as_str()),
@@ -5920,22 +5999,86 @@ fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
     assert!(home_html.contains("Updated"), "the rest of the site must update normally");
 }
 
-/// The stylesheet is structural too (`cloud_ledger::is_structural_source`) and
-/// — unlike `config.toml` — its eviction IS tracked through the ledger, via
-/// `read_optional_build_input`'s call to `note_unavailable`. But that call
-/// only runs once `render::blocking` has already decided there is a user
-/// stylesheet to read at all (`theme_css.exists()`), and the only eviction a
-/// test can simulate — the pre-Sonoma `.icloud` sibling — works by making the
-/// real name disappear from the walk, which reads as "no stylesheet" at that
-/// gate rather than "an evicted one". So, like `config.toml`, this never
-/// reached `structural_incomplete` and `should_publish`'s deletion changes
-/// nothing for it (the ledger path exists for the `SF_DATALESS` form, which
-/// nothing but the real file-provider extension can set — see
-/// `deploy::history::record`'s note on the same limit). This pins the
-/// `.exists()` boundary rather than the deletion.
 #[cfg(target_os = "macos")]
 #[test]
-fn an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site() {
+fn a_present_read_error_retains_html_and_blocks_the_exact_seal() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Home\n").unwrap();
+    fs::write(test_dir.join("keeper.md"), "# Keeper\nOriginal wording.\n").unwrap();
+    let (_, first_keys, _, first) = build_test_promoted_or_withheld(folder_path).unwrap();
+    assert!(first_keys.iter().any(|key| key == "keeper/index.html"));
+    assert!(crate::deploy::refuse_unresolved_inputs(&first).is_ok());
+
+    fs::write(test_dir.join("keeper.md"), [0xff, 0xfe]).unwrap();
+    let (promotion, keys, stale, sealed) = build_test_promoted_or_withheld(folder_path).unwrap();
+    assert!(matches!(promotion, crate::build::ship::Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)));
+    assert!(keys.iter().any(|key| key == "keeper/index.html"));
+    assert_eq!(stale, ["keeper.md"]);
+    assert!(sealed.input_evidence().unwrap().get("keeper.md").is_some_and(|entry|
+        matches!(entry.state, crate::build::cloud_ledger::InputState::ReadError { retained: true, .. })));
+    assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_err());
+    assert!(fs::read_to_string(test_dir.join(".moss/build.nosync/staging/keeper/index.html"))
+        .unwrap().contains("Original wording."));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, _cleanup) = create_test_dir();
+    let page = dir.join("index.md");
+    fs::write(&page, "# Home\n").unwrap();
+    fs::set_permissions(&page, fs::Permissions::from_mode(0o444)).unwrap();
+    let result = build_test_promoted_or_withheld(dir.to_str().unwrap());
+    fs::set_permissions(&page, fs::Permissions::from_mode(0o644)).unwrap();
+    let (_, keys, unresolved, sealed) = result.unwrap();
+    assert!(keys.iter().any(|key| key == "index.html"));
+    assert!(unresolved.is_empty(), "a denied optional UID write did not change source bytes: {unresolved:?}");
+    assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_ok());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_arrival_after_scan_needs_a_new_render_before_it_clears_publish() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Home\n").unwrap();
+    fs::write(test_dir.join("keeper.md"), "# Keeper\nOriginal wording.\n").unwrap();
+    let (_, _, _, first) = build_test_promoted_or_withheld(folder_path).unwrap();
+    assert!(crate::deploy::refuse_unresolved_inputs(&first).is_ok());
+
+    fs::remove_file(test_dir.join("keeper.md")).unwrap();
+    fs::write(test_dir.join(".keeper.md.icloud"), "").unwrap();
+    let scanned_while_pending = scan_folder(folder_path).unwrap();
+    fs::remove_file(test_dir.join(".keeper.md.icloud")).unwrap();
+    fs::write(test_dir.join("keeper.md"), "# Keeper\nOriginal wording.\n").unwrap();
+    let (_, pending_keys, _, pending_seal) = build_test_with_structure(folder_path, scanned_while_pending).unwrap();
+    assert!(pending_keys.iter().any(|key| key == "keeper/index.html"));
+    assert_eq!(pending_seal.unresolved_inputs(), ["keeper.md"]);
+    assert!(crate::deploy::refuse_unresolved_inputs(&pending_seal).is_err());
+
+    let (_, fresh_keys, _, fresh_seal) = build_test_promoted_or_withheld(folder_path).unwrap();
+    assert!(fresh_keys.iter().any(|key| key == "keeper/index.html"));
+    assert_eq!(fresh_seal.files().get("keeper/index.html"), pending_seal.files().get("keeper/index.html"));
+    assert!(fresh_seal.unresolved_inputs().is_empty());
+    assert!(crate::deploy::refuse_unresolved_inputs(&fresh_seal).is_ok());
+
+    fs::remove_file(test_dir.join("keeper.md")).unwrap();
+    fs::write(test_dir.join(".keeper.md.icloud"), "").unwrap();
+    let scanned_again = scan_folder(folder_path).unwrap();
+    fs::remove_file(test_dir.join(".keeper.md.icloud")).unwrap();
+    fs::write(test_dir.join("keeper.md"), "# Keeper\nOriginal wording.\n").unwrap();
+    let (_, _, _, incomplete_again) = build_test_with_structure(folder_path, scanned_again).unwrap();
+    assert_eq!(incomplete_again.files().get("keeper/index.html"), fresh_seal.files().get("keeper/index.html"));
+    assert!(crate::deploy::refuse_unresolved_inputs(&incomplete_again).is_err());
+}
+
+/// A cloud-only stylesheet is a required input. Its absence must leave the
+/// last complete generation intact, even when a page changed in this attempt.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unreadable_stylesheet_withholds_the_complete_generation() {
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
     fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
@@ -5943,7 +6086,7 @@ fn an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site() {
     fs::create_dir_all(&theme_dir).unwrap();
     fs::write(theme_dir.join("style.css"), "body { color: red; }").unwrap();
 
-    let (promotion, _, _) = build_test_promoted_or_withheld(folder_path).expect("first build");
+    let (promotion, _, _, _) = build_test_promoted_or_withheld(folder_path).expect("first build");
     assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
 
     // Pre-Sonoma eviction of the stylesheet, plus an ordinary page edit.
@@ -5951,27 +6094,18 @@ fn an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site() {
     fs::write(theme_dir.join(".style.css.icloud"), "").unwrap();
     fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
 
-    let (promotion, _, _) =
+    let (promotion, _, _, _) =
         build_test_promoted_or_withheld(folder_path).expect("second build, stylesheet evicted");
-    assert_eq!(
-        promotion,
-        crate::build::ship::Promotion::Promoted,
-        "an unreadable stylesheet must not withhold the rest of the site"
-    );
+    assert!(matches!(promotion, crate::build::ship::Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)));
     let home_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(home_html.contains("Updated"), "the rest of the site must update normally");
 }
 
-/// `config.toml` is the odd one of the three: `.moss` sits outside the scan's
-/// walk, and `read_project_config`'s own read error is swallowed by
-/// `pipeline.rs`'s `.ok()` before `cloud_ledger::note_unavailable` ever runs.
-/// So an unreadable `config.toml` was never counted as `structural_incomplete`
-/// to begin with, and `should_publish`'s deletion changes nothing for it — this
-/// pins the boundary rather than the deletion. Ablate by changing that `.ok()`
-/// to `.expect(...)`: the build then errors before it ever seals.
+/// An unreadable shared config is recorded as unresolved even when the build
+/// can render with defaults. The reduced output must not replace `current`.
 #[cfg(unix)]
 #[test]
-fn an_unreadable_config_toml_still_lets_the_build_publish() {
+fn an_unreadable_config_toml_withholds_the_complete_generation() {
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
     fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nHello.\n").unwrap();
@@ -5993,31 +6127,16 @@ fn an_unreadable_config_toml_still_lets_the_build_publish() {
     // behind for `create_test_dir`'s cleanup.
     fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-    let (promotion, _, _) =
-        result.expect("a build with an unreadable config.toml must still complete and seal");
-    assert_eq!(
-        promotion,
-        crate::build::ship::Promotion::Promoted,
-        "an unreadable config.toml must not withhold the build"
-    );
+    let (promotion, _, _, _) = result.expect("a build with an unreadable config.toml still seals");
+    assert!(matches!(promotion, crate::build::ship::Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)));
 }
 
 /// `footer.md` is the fourth structural source, and the odd one of this
 /// group: it owns no page output of its own (`footer.rs`'s own
 /// last-known-good cache is what keeps the chrome from vanishing off every
 /// OTHER page while this is true — see `apply_last_known_good_fallback`), but
-/// it is still an `.md` file the scan walks, so `is_structural_source` counts
-/// it and the same pre-Sonoma eviction technique the page test above uses
-/// reaches it too. Ablate by removing the `is_structural_source` filter from
-/// either half of `cloud_ledger::structural_stale_paths` (or its
-/// `evicted_at_scan` term) and the `stale_sources` assertion below goes red.
-///
-/// `build_test_promoted_or_withheld` calls `pipeline::run` directly rather
-/// than `build.rs`'s seal tail, so unlike production this build's
-/// `stale_sources` never reaches `BuildRecords` on its own — this test wires
-/// it in the same way `build.rs` does before checking `deploy::refuse_publish`,
-/// which is the other half of the revision this pins: showing
-/// forgives a carried-forward footer, publish must not.
+/// it is still an `.md` file the scan walks. The exact sealed evidence must
+/// withhold publication while the preview keeps the prior footer.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_carried_forward_footer_reaches_the_staleness_gate() {
@@ -6026,7 +6145,7 @@ fn a_carried_forward_footer_reaches_the_staleness_gate() {
     fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
     fs::write(test_dir.join("footer.md"), "Original footer.\n").unwrap();
 
-    let (promotion, _keys, stale_sources) =
+    let (promotion, _keys, stale_sources, _sealed) =
         build_test_promoted_or_withheld(folder_path).expect("first build");
     assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
     assert!(
@@ -6039,25 +6158,19 @@ fn a_carried_forward_footer_reaches_the_staleness_gate() {
     fs::write(test_dir.join(".footer.md.icloud"), "").unwrap();
     fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
 
-    let (promotion, _keys, stale_sources) =
+    let (promotion, _keys, stale_sources, sealed) =
         build_test_promoted_or_withheld(folder_path).expect("second build, footer evicted");
-    assert_eq!(
-        promotion,
-        crate::build::ship::Promotion::Promoted,
-        "an unreadable footer must not withhold the rest of the site"
-    );
+    assert!(matches!(promotion, crate::build::ship::Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)));
     assert_eq!(
         stale_sources,
         vec!["footer.md".to_string()],
-        "the carried-forward footer must be named in PipelineRunOutput::stale_sources"
+        "the carried-forward footer must be named in sealed input evidence"
     );
     let home_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(home_html.contains("Updated"), "the rest of the site must update normally");
 
-    // What `build.rs`'s seal tail does with that value in production —
-    // exercised here because this harness bypasses `build.rs` entirely.
-    crate::system::build_records::records().record_stale_sources(folder_path, stale_sources);
-    let err = crate::deploy::refuse_publish(folder_path)
+    // The publish preflight reads the selected seal, not the current files.
+    let err = crate::deploy::refuse_unresolved_inputs(&sealed)
         .expect_err("publish must refuse a folder that carried footer.md forward");
     assert!(err.contains("footer.md"), "{err}");
 }
@@ -6794,4 +6907,21 @@ fn an_unchanged_warm_build_writes_no_page_to_the_stage() {
 
     let rewritten: Vec<&String> = cold.keys().filter(|page| cold.get(*page) != warm.get(*page)).collect();
     assert!(rewritten.is_empty(), "an unchanged warm build rewrote {rewritten:?}");
+}
+
+#[test]
+fn preview_inputs_request_selected_source_and_shared_essentials() {
+    let root = tempfile::tempdir().unwrap();
+    let names = ["selected.md", ".moss/config.toml", ".moss/places.toml", ".moss/theme/style.css", ".moss/theme/script.js"];
+    let paths: Vec<_> = names.iter().map(|name| root.path().join(name)).collect();
+    let _cloud: Vec<_> = paths.iter().map(|path| crate::build::icloud::pretend::evicted(path)).collect();
+    let requirement = crate::system::folder_session::PreviewRequirement {
+        url_path: "/selected.html".into(),
+        source: crate::system::folder_session::PreviewSource::File("selected.md".into()),
+        revision: 1,
+    };
+    request_preview_inputs(root.path(), Some(&requirement));
+    for path in &paths {
+        assert_eq!(crate::build::icloud::pretend::requests_for(path), 1, "{}", path.display());
+    }
 }

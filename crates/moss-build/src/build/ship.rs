@@ -463,12 +463,9 @@ pub enum Promotion {
     /// swap was refused. Not an error — the newer generation is
     /// the right one.
     Superseded,
-    /// Not frozen at all: either the folder closed before this build finished
-    /// (`PipelineRunOutput::publishable` was already `false` —
-    /// structural-source incompleteness stopped being a reason as of a
-    /// 2026-09-17 revision) or the presence pass could not stand
-    /// behind what it registered (`WithholdReason::Unverified` /
-    /// `ImplausibleLoss`).
+    /// Not frozen at all: the sealed attempt has unresolved required inputs,
+    /// or the presence pass could not stand behind what it registered
+    /// (`WithholdReason::Unverified` / `ImplausibleLoss`).
     ///
     /// Nothing is copied and `current` is untouched, which keeps `current` and
     /// `hashes.json` describing the same, last-complete build. Freezing the
@@ -491,12 +488,9 @@ pub enum ShipVerdict {
 /// Why a generation was not promoted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WithholdReason {
-    /// The folder closed before this build finished
-    /// (`PipelineRunOutput::publishable == false`). Named for its original
-    /// cause (a build whose structural sources were still
-    /// downloading) — structural incompleteness stopped constructing this
-    /// variant in a 2026-09-17 revision, and cancellation is now
-    /// the only path that does.
+    /// This sealed attempt did not read every required structural input.
+    /// The prior complete generation remains the durable baseline while the
+    /// focused preview can still show any usable route.
     SourcesDownloading,
     /// The presence pass or a producer met an I/O error that was not a positive
     /// `NotFound` on `entries` outputs. An unreadable output is not a missing
@@ -517,8 +511,8 @@ pub enum WithholdReason {
 pub const PRESENCE_LOSS_FLOOR: usize = 16;
 
 impl ShipVerdict {
-    /// The verdict a presence pass over a manifest of `entries` reaches, having
-    /// dropped `lost` of them and left `sealed.unverified()` behind.
+    /// The durable verdict after checking output presence and the sealed
+    /// attempt's required input evidence.
     pub fn after_presence_pass(
         sealed: &crate::build::manifest::SealedManifest,
         entries: usize,
@@ -537,6 +531,9 @@ impl ShipVerdict {
         }
         if lost > PRESENCE_LOSS_FLOOR.max(entries / 20) {
             return ShipVerdict::Withhold(WithholdReason::ImplausibleLoss { lost, of: entries });
+        }
+        if !sealed.unresolved_inputs().is_empty() {
+            return ShipVerdict::Withhold(WithholdReason::SourcesDownloading);
         }
         ShipVerdict::Ship
     }
@@ -591,8 +588,7 @@ pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
 /// swap goes through `lifecycle::promote`, which refuses it when a newer build
 /// has already promoted.
 ///
-/// `verdict` combines `PipelineRunOutput::publishable` (`false` only for a
-/// folder-closed cancellation) with the presence pass's own
+/// `verdict` covers the seal's required inputs and output presence pass
 /// ([`ShipVerdict::after_presence_pass`]). A `Withhold` returns
 /// [`Promotion::Withheld`] before anything is copied.
 pub fn materialize_and_promote(
@@ -606,8 +602,8 @@ pub fn materialize_and_promote(
     if let ShipVerdict::Withhold(reason) = verdict {
         match &reason {
             WithholdReason::SourcesDownloading => log::info!(
-                "[cloud] withholding generation {} — the build could not read every structural \
-                 source, so `current` stays on the last complete one",
+                "[cloud] withholding generation {} — required inputs remain unresolved, \
+                 so `current` stays on the last complete one",
                 sealed.generation_id()
             ),
             WithholdReason::Unverified { entries, sample } => log::warn!(
@@ -659,6 +655,8 @@ pub fn materialize_and_promote(
     } else {
         log::info!("generation {} is already on disk — promoting it without a copy", sealed.generation_id());
     }
+    sealed.write_preview_originals(&mp.generations_dir())
+        .map_err(|e| format!("Failed to write generation original identities: {e}"))?;
     let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     // A generation holding bytes its id does not describe keeps its lock file,

@@ -34,22 +34,26 @@ const bragaCathedral = work("braga-cathedral", "Braga Cathedral", ["places/braga
 const works: Work[] = [portoSteps, portoTram, coimbraLibrary, bragaCathedral];
 
 describe("deriveCrumbs", () => {
+  test("the root crumb of an article's scope switch names articles, not places", () => {
+    expect(deriveCrumbs({ kind: "all" }, places, null, strings, "en", true)[0].label).toBe("All articles");
+  });
+
   test("root: just the 'all' crumb, not itself a widen target", () => {
     expect(deriveCrumbs({ kind: "all" }, places, null, strings, "en")).toEqual([
-      { label: "All articles", target: null },
+      { label: "All places", target: null },
     ]);
   });
 
   test("a top-level place: 'all' widens, the place is terminal", () => {
     expect(deriveCrumbs({ kind: "place", id: "places/portugal" }, places, null, strings, "en")).toEqual([
-      { label: "All articles", target: { kind: "all" } },
+      { label: "All places", target: { kind: "all" } },
       { label: "Portugal", target: null },
     ]);
   });
 
   test("a nested place: 'all' and the parent both widen, the child is terminal", () => {
     expect(deriveCrumbs({ kind: "place", id: "places/porto" }, places, null, strings, "en")).toEqual([
-      { label: "All articles", target: { kind: "all" } },
+      { label: "All places", target: { kind: "all" } },
       { label: "Portugal", target: { kind: "place", id: "places/portugal" } },
       { label: "Porto", target: null },
     ]);
@@ -57,7 +61,7 @@ describe("deriveCrumbs", () => {
 
   test("an open ring appends one more non-widenable crumb; the crumb before it keeps its own widen target", () => {
     expect(deriveCrumbs({ kind: "place", id: "places/porto" }, places, 2, strings, "en")).toEqual([
-      { label: "All articles", target: { kind: "all" } },
+      { label: "All places", target: { kind: "all" } },
       { label: "Portugal", target: { kind: "place", id: "places/portugal" } },
       { label: "Porto", target: { kind: "place", id: "places/porto" } },
       { label: "2 works here", target: null },
@@ -119,7 +123,7 @@ describe("the mounted chip", () => {
 
   test("the root menu lists Portugal, and the dig-down menu sorts by count then name", () => {
     const figure = mount();
-    const root = crumbByText(figure, "All articles");
+    const root = crumbByText(figure, "All places");
     root.click();
     let items = Array.from(figure.querySelectorAll(".moss-places-chip-menu-item"));
     expect(items.map((item) => item.textContent)).toEqual(["Portugal(4)"]);
@@ -134,7 +138,7 @@ describe("the mounted chip", () => {
 
   test("narrowing from the menu updates the scope and the URL", () => {
     const figure = mount();
-    crumbByText(figure, "All articles").click();
+    crumbByText(figure, "All places").click();
     const item = figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!;
     expect(item.textContent).toBe("Portugal(4)");
     item.click();
@@ -145,18 +149,18 @@ describe("the mounted chip", () => {
 
   test("widening from an earlier crumb updates the scope and clears the URL's place param", () => {
     const figure = mount();
-    crumbByText(figure, "All articles").click();
+    crumbByText(figure, "All places").click();
     figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!.click();
     expect(readUrlState().scope).toEqual({ kind: "place", id: "places/portugal" });
 
-    crumbByText(figure, "All articles").click();
+    crumbByText(figure, "All places").click();
     expect(readUrlState().scope).toEqual({ kind: "all" });
     expect(location.search).not.toContain("place=");
   });
 
   test("ArrowDown moves focus, Escape closes the menu and refocuses the crumb", () => {
     const figure = mount();
-    crumbByText(figure, "All articles").click();
+    crumbByText(figure, "All places").click();
     figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!.click(); // narrow into Portugal
     const trigger = crumbByText(figure, "Portugal");
     trigger.click(); // open Portugal's own dig-down menu
@@ -173,7 +177,7 @@ describe("the mounted chip", () => {
 
   test("an unrelated camera settle (a window resize) leaves an open menu and its focus untouched", () => {
     const figure = mount();
-    crumbByText(figure, "All articles").click();
+    crumbByText(figure, "All places").click();
     const menuBefore = figure.querySelector(".moss-places-chip-menu");
     const focusedBefore = document.activeElement;
     expect(menuBefore).not.toBeNull();
@@ -189,7 +193,7 @@ describe("the mounted chip", () => {
 
   test("choosing a menu item moves focus to the new trail's terminal crumb, not <body>", () => {
     const figure = mount();
-    crumbByText(figure, "All articles").click();
+    crumbByText(figure, "All places").click();
     figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!.click(); // narrows into Portugal
     const terminal = figure.querySelector(".moss-places-chip-crumb[data-terminal]");
     expect(document.activeElement).toBe(terminal);
@@ -197,7 +201,7 @@ describe("the mounted chip", () => {
 
   test("choosing a menu item that narrows straight to a leaf place still moves focus onto it", () => {
     const figure = mount();
-    crumbByText(figure, "All articles").click();
+    crumbByText(figure, "All places").click();
     figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!.click(); // narrow into Portugal
     crumbByText(figure, "Portugal").click(); // open Portugal's own dig-down menu
     const items = Array.from(figure.querySelectorAll<HTMLButtonElement>(".moss-places-chip-menu-item"));
@@ -212,7 +216,7 @@ describe("the mounted chip", () => {
 
   test("the phone-width ellipsis is a real button that reveals the collapsed crumbs on activation", () => {
     const figure = mount();
-    crumbByText(figure, "All articles").click();
+    crumbByText(figure, "All places").click();
     figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!.click(); // narrow into Portugal
     crumbByText(figure, "Portugal").click();
     const items = Array.from(figure.querySelectorAll<HTMLButtonElement>(".moss-places-chip-menu-item"));
@@ -270,6 +274,13 @@ describe("the article scope switch", () => {
     expect(markerCount(figure)).toBe(2); // one per place of the article
   });
 
+  test("the switch's root segment says 'All articles' in both of its states, while the plain root crumb says 'All places'", () => {
+    const figure = mount(data, "two-places");
+    expect(option(figure, "all").textContent).toBe("All articles");
+    option(figure, "all").click();
+    expect(option(figure, "all").textContent).toBe("All articles");
+  });
+
   test("All articles shows every article with the place menu on its chevron; This article returns, and focus stays on the pressed segment", () => {
     const figure = mount(data, "two-places");
     option(figure, "all").click();
@@ -325,7 +336,7 @@ describe("the article scope switch", () => {
     const figure = mount(data);
     expect(figure.querySelector(".moss-places-chip-scope")).toBeNull();
     expect(figure.textContent).not.toContain("This article");
-    expect(figure.querySelector(".moss-places-chip")!.textContent).toContain("All articles");
+    expect(figure.querySelector(".moss-places-chip")!.textContent).toContain("All places");
   });
 
   test("a site with one article offers no switch", () => {

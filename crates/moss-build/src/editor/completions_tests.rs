@@ -282,10 +282,19 @@ fn a_symlink_escaping_the_vault_is_refused() {
 }
 
 #[test]
-fn a_folder_and_an_unclassifiable_extension_are_refused() {
+fn an_unclassifiable_extension_is_refused() {
     let tmp = repo_temp();
-    fs::create_dir_all(tmp.path().join("img")).unwrap();
     fs::write(tmp.path().join("notes.xyz"), b"x").unwrap();
-    assert!(picked(tmp.path(), "img", "index.md").is_err());
     assert!(picked(tmp.path(), "notes.xyz", "index.md").is_err());
+}
+
+#[test]
+fn a_picked_folder_is_its_page_relative_path_with_a_trailing_slash() {
+    let tmp = repo_temp();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("journal/2025")).unwrap();
+    fs::create_dir_all(root.join("notes")).unwrap();
+    let r = picked(root, "journal", "index.md").unwrap();
+    assert_eq!((r.insert.as_str(), r.label.as_str(), r.kind), ("journal/", "journal/", TargetKind::Folder));
+    assert_eq!(picked(root, "journal/2025", "notes/x.md").unwrap().insert, "../journal/2025/");
 }

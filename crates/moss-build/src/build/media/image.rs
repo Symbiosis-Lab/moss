@@ -71,7 +71,7 @@ use super::sniff::{is_animated_gif, is_animated_webp, is_cmyk_jpeg};
 /// Populated during scan, drained by the background image conversion task.
 #[derive(Debug, Clone)]
 pub struct ImageConversionItem {
-    /// Absolute path to the source image on disk.
+    /// Source path relative to the scanned vault root.
     pub source_path: PathBuf,
     /// Content-addressed OID of the source file (sha256 hex).
     pub source_oid: String,
@@ -113,6 +113,13 @@ pub struct ImageConversionItem {
 }
 
 impl ImageConversionItem {
+    /// An encoded WebP source writes its resized base at the source's own
+    /// output path. Other formats produce a separate variant; skipped items
+    /// never own the base. Decide from the collected plan, never fresh I/O.
+    pub(crate) fn owns_source_base(&self) -> bool {
+        moss_core::asset_paths::is_webp_source_ext(&self.ext) && self.skip.is_none()
+    }
+
     /// The worker is done with this image: its dispatch's marker ends and, when the
     /// worker `delivered`, the source it was queued for is recorded as delivered,
     /// alongside whatever `advisories` this delivery has to say about it.
@@ -664,32 +671,16 @@ fn probe_cmyk_magic_already_small(
     None
 }
 
-// `compute_webp_variant_for_scan` was deleted 2026-05-20. It computed a
-// snapshot of the transform cache during scan, which the synthesizer then
-// consulted to decide whether to emit `<picture><source srcset>`. That
-// snapshot mechanism was the parallel-oracle root cause of the broken-hero
-// bug verified at user log L2006/L2446/L2450 on 2026-05-19 — the snapshot
-// could disagree with the served-path reality (e.g., when fingerprint-skip
-// elided manifest registration, stale-cleanup deleted the file while the
-// snapshot still claimed it existed).
-//
-// The synthesizer now always emits `<picture>` for raster originals; the
-// preview server's AssetRegistry intercept handles the placeholder
-// lifecycle at request time; publish-mode synchronous encoding ensures
-// production parity.
-
-/// Collects images that need WebP conversion from the scanned project.
-///
-/// For each image in `image_files`, applies skip rules. Images that pass
-/// (i.e., should be encoded) are returned as `ImageConversionItem`s with
-/// content-addressed `source_oid` taken from the hash index (`HashIndex::lookup`).
-///
-/// On hash-resolution error, the item is logged and skipped.
+/// Collect encoding and promise-settlement decisions from scanned images.
+/// Encoding items carry a stat-resolved source OID when available; a cache
+/// miss defers hashing to the worker. Skipped items remain only when their
+/// promised URLs need settlement before first paint.
 pub(crate) fn collect_images_for_conversion(
     project_structure: &crate::types::content::ProjectStructure,
     transforms: &crate::build::cache::TransformCache,
     hash_index: &mut crate::build::cache::HashIndex,
     config: &ImageCompressionConfig,
+    evidence: Option<&crate::build::cloud_ledger::InputEvidence>,
 ) -> Vec<ImageConversionItem> {
     let mut items = Vec::new();
 
@@ -716,7 +707,7 @@ pub(crate) fn collect_images_for_conversion(
         // asking is cheap even for a vault that is entirely local.
         let source_in_the_cloud = crate::build::icloud::is_evicted(&file_path);
         if source_in_the_cloud {
-            crate::build::cloud_ledger::note_unavailable(&file_path);
+            if let Some(evidence) = evidence { evidence.pending(&file_path); }
         }
 
         let file_size = media_meta.size;

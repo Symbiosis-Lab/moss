@@ -38,7 +38,7 @@ The wikilink `![[demo.mov]]` does the same by name.
 
 moss transcodes `.mov` files to `.mp4` (H.264 + AAC) in the background. The preview opens immediately and video loads progressively as transcoding completes. Reference the original `.mov` filename; moss serves the converted `.mp4` automatically.
 
-The standard form also embeds audio (`![](track.mp3)`), PDF, HTML and 3D model files that are in your site, each giving the same player as its wikilink. A size in the alt text works as it does after the pipe (`![400](demo.mov)` matches `![[demo.mov|400]]`), and plain alt text becomes the player's accessible label, as the text after the pipe does for `![[demo.mov|a label]]`.
+The standard form also embeds audio (`![](track.mp3)`), PDF, HTML and 3D model files that are in your site, each giving the same player as its wikilink, and a YouTube, Vimeo or CodePen address (`![](https://www.youtube.com/watch?v=…)`) gives the same player as `![[https://www.youtube.com/watch?v=…]]`. A size in the alt text works as it does after the pipe (`![400](demo.mov)` matches `![[demo.mov|400]]`), and plain alt text becomes the player's accessible label, as the text after the pipe does for `![[demo.mov|a label]]`.
 
 ## Display control
 

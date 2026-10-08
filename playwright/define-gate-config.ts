@@ -16,11 +16,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { MOSS_BIN } from '../tests/e2e/helpers/scratch-site';
 
-type Engine = 'chromium' | 'webkit';
+type Engine = 'chromium' | 'webkit' | 'firefox';
 
 const ENGINE_PROJECT: Record<Engine, NonNullable<PlaywrightTestConfig['projects']>[number]> = {
   chromium: { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   webkit: { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+  firefox: { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
 };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');

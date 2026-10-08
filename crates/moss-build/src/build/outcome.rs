@@ -244,8 +244,8 @@ enum Disposition {
     /// **Anything under `build.nosync/staging/`, `build.nosync/cache/` or the
     /// store at `cache/`** — never a sealed generation, which the preview may
     /// be serving. A store
-    /// blob is waited for deliberately, once, by `ObjectStore::ready_blob`;
-    /// a read that still stops on it has already lost that wait, and a
+    /// blob is requested by `ObjectStore::ready_blob` and treated as a cache
+    /// miss; a read that still stops on it is an unavailable optional input, and a
     /// `Report` here would raise a waiting screen nothing lowers (the
     /// supervisor never sweeps the store). Delete it and
     /// fail; the caller re-runs the build once and it is written fresh. A

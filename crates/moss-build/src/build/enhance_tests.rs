@@ -639,7 +639,7 @@ fn a_cold_pass_caches_a_record_that_matches_the_receipt_it_returned() {
 /// the stage and a miss (re-injecting from the render) never would. The record
 /// itself stays the pass's own, unlike the sentinel tests.
 #[test]
-fn the_record_a_cold_pass_wrote_is_what_the_next_pass_ships() {
+fn a_corrupt_injected_blob_is_regenerated_from_the_render() {
     let dir = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
     let (objects, transforms) = slot_test_cache(cache_dir.path());
@@ -661,8 +661,8 @@ fn the_record_a_cold_pass_wrote_is_what_the_next_pass_ships() {
 
     assert_eq!(
         std::fs::read_to_string(&page).unwrap(),
-        "PLANTED IN THE BLOB",
-        "a hit links the cached blob into the stage; a miss would have injected the render again"
+        "<html><head><style>h1{}</style></head><body></body></html>",
+        "a corrupt cache hit must regenerate from the render"
     );
     assert_eq!(warm, cold, "and reports the receipt the cold pass returned");
 }

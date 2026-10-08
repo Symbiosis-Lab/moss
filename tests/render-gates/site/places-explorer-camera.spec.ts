@@ -467,7 +467,7 @@ async function loadAndFindAdjacentTilePairs(
     "ready",
     { timeout: 10000 },
   );
-  await page.waitForTimeout(500); // tile fetches + position settle
+  await expect(page.locator('.moss-places-tiles[data-moss-places-tiles-state="idle"]')).toHaveCount(1, { timeout: 15000 });
 
   const tileEls = page.locator(".moss-places-tiles > .moss-places-tile");
   const count = await tileEls.count();
@@ -750,11 +750,13 @@ test("past the world ceiling, an open-sea tile boundary is pixel-continuous in b
  * readily as with it present, so this was never two tiles disagreeing on
  * one feature's shape; it was the north tile's own south-bleeding slice
  * reading wrong regardless of what (if anything) sat under it.
- * That slice was the tile's blur and lighting filters misreading at the
- * canvas edge, which a flat tile no longer carries; a later attempt to hide
- * the slice with a `clip-path` inset made its own light line (the clip edge
- * antialiased at a fractional pixel), so tiles are not clipped at all and
- * the overlap simply draws the same terrain twice.
+ * That slice came from the tile's blur and lighting filters misreading at
+ * the canvas edge. The shadow filters now use each tile's own canvas bounds;
+ * all effects bake into its fixed-pixel surface. The clipped feature context and overlap
+ * preserve continuity. A later attempt to hide the slice with a `clip-path`
+ * inset made its own light line (the clip edge antialiased at a fractional
+ * pixel), so tiles are not clipped at all and the overlap draws the shared
+ * terrain.
  *
  * Checked as continuity within the south tile's own content, not as
  * agreement between the two tiles' own colours: a reader comparing this
@@ -920,19 +922,15 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
 });
 
 /**
- * Flat detail tiles at the close zoom, both engines. WebKit rasterised the
- * tiles' blur and lighting filters at low resolution, so a tile's flat land
- * came out a different tint from the world layer under it and a light line
- * showed where two tiles meet; tiles are now drawn with no filters. Two
- * claims, read off pixels (page.screenshot decoded in Node, as the seam tests
- * above do, because an in-page decode hangs in WebKit at this state):
- *
- * - where the world layer alone (tiles hidden) shows unlit flat ground, that
- *   is its `--moss-place-land` colour, the tile over it reads the same colour;
- * - the row boundary between two stacked land tiles carries no light line: a
- *   column of pixels across the edge reads like one mid-tile.
+ * At close zoom, the tile and world can shade land differently because the
+ * regional tile restores relief lighting. Keep the world-token sample as a
+ * land-classification check, then compare adjacent rows across the shared
+ * edge only where both sides are locally smooth away from it. This lets the
+ * relief shading vary on either side without hiding an edge step. Pixels are
+ * captured and decoded in Node because an in-page decode hangs in WebKit at
+ * this state.
  */
-test("at the close zoom, a tile's flat land matches the world's lowland and the tile edge shows no light line", async ({ page }) => {
+test("at the close zoom, a tile edge stays continuous across lit land", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("places/?p=patterson&z=18&x=399.6415&y=144.8651", { waitUntil: "domcontentloaded" });
   await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute(
@@ -976,57 +974,43 @@ test("at the close zoom, a tile's flat land matches the world's lowland and the 
   const near = (pixel: ArrayLike<number>, rgb: number[], tolerance: number) => rgb.every((value, channel) => Math.abs(pixel[channel] - value) <= tolerance);
   const worldAt = (x: number, y: number) => worldOnly.at(x - left, y - top);
   const tileAt = (x: number, y: number) => tiled.at(x - left, y - top);
-
-  // 1. Where the world layer shows unlit flat ground (its land colour, give
-  // or take the faint warm tint its own lighting leaves), the colour the tile
-  // paints there is the land colour itself. The tile also draws detail the
-  // world does not (built-up areas, thin relief bands), so this reads the
-  // median over those pixels, not every one.
-  const tileSamples: number[][] = [[], [], []];
-  const worldSamples: number[][] = [[], [], []];
+  // Confirm this camera still exposes enough world pixels classified as land
+  // for the edge scan below to distinguish relief from a tile boundary.
+  let worldLandPixels = 0;
   for (let y = top; y < bottom; y += 3) {
     for (let x = left; x < right; x += 3) {
       const world = worldAt(x, y);
-      if (!near(world, landRgb, 2)) continue;
-      const tile = tileAt(x, y);
-      for (let channel = 0; channel < 3; channel++) {
-        tileSamples[channel].push(tile[channel]);
-        worldSamples[channel].push(world[channel]);
-      }
+      if (near(world, landRgb, 2)) worldLandPixels++;
     }
   }
-  expect(tileSamples[0].length, "expected a real stretch of unlit flat land in the world layer at this camera").toBeGreaterThan(200);
-  const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
-  const tileMedian = tileSamples.map(median);
-  const worldMedian = worldSamples.map(median);
-  expect(near(tileMedian, landRgb, 2), `the tile's flat land reads ${tileMedian}, not the land colour ${landRgb}`).toBe(true);
-  expect(near(tileMedian, worldMedian, 6), `the tile's flat land reads ${tileMedian} over the world's ${worldMedian}`).toBe(true);
+  expect(worldLandPixels, "expected a real stretch of land-classified pixels in the world layer at this camera").toBeGreaterThan(200);
 
-  // 2. A column of pixels across the row edge reads like one mid-tile. Only
-  // columns plain on both sides of the edge are compared (the tile draws
-  // built-up areas, rivers and relief bands the world does not, which are
-  // real detail, not a seam); the rows at the edge itself never take part in
-  // that choice, so a light line there cannot exclude its own column.
-  const MID = 48; // px south of the edge, well inside the south tile
+  // Select columns by smoothness in each tile, away from the edge itself;
+  // then enforce the original 2-level adjacent-row bound through the join.
+  // The selection cannot exclude a seam based on its edge pixels.
   const atEdge = [edgeY - 1, edgeY, edgeY + 1];
-  const plain: number[] = [];
-  for (let y = edgeY - 8; y <= edgeY + 8; y++) if (!atEdge.includes(y)) plain.push(y);
-  plain.push(edgeY + MID);
   let columns = 0;
+  const smooth = (x: number, from: number, to: number): boolean => {
+    for (let y = from; y < to; y++) {
+      const a = tileAt(x, y);
+      const b = tileAt(x, y + 1);
+      for (let channel = 0; channel < 3; channel++) if (Math.abs(a[channel] - b[channel]) > 1) return false;
+    }
+    return true;
+  };
   for (let x = left; x < right; x++) {
-    if (![...atEdge, ...plain].every((y) => near(worldAt(x, y), landRgb, 6))) continue;
-    // The tile's own band edges (full-strength relief tints differ by a few levels) are real detail, so a column must read one flat colour on every row but the edge itself.
-    if (!plain.every((y) => near(tileAt(x, y), tileAt(x, edgeY + MID), 1))) continue;
+    if (!atEdge.every((y) => near(worldAt(x, y), landRgb, 6))) continue;
+    if (!smooth(x, edgeY - 8, edgeY - 3) || !smooth(x, edgeY + 3, edgeY + 8)) continue;
     columns++;
-    const mid = tileAt(x, edgeY + MID);
-    for (const y of atEdge) {
-      const pixel = tileAt(x, y);
+    for (let y = edgeY - 1; y < edgeY + 1; y++) {
+      const a = tileAt(x, y);
+      const b = tileAt(x, y + 1);
       for (let channel = 0; channel < 3; channel++) {
-        expect(Math.abs(pixel[channel] - mid[channel]), `x=${x} y=${y}: ${pixel} against mid-tile ${mid}`).toBeLessThanOrEqual(2);
+        expect(Math.abs(a[channel] - b[channel]), `x=${x} y=${y}: ${a} vs ${b}, channel ${channel}`).toBeLessThanOrEqual(2);
       }
     }
   }
-  expect(columns, "expected flat-land columns across the row edge").toBeGreaterThan(20);
+  expect(columns, "expected more than 20 locally smooth land columns across the shared tile edge").toBeGreaterThan(20);
 });
 
 /**

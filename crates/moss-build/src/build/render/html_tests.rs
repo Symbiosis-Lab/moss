@@ -1,5 +1,14 @@
 use super::tab_title;
 
+fn pending_for_render(
+    hashes: crate::types::content::SiteHashes,
+    output_dir: &std::path::Path,
+) -> crate::build::manifest::PendingManifest {
+    let root = output_dir.parent().unwrap().parent().unwrap().parent().unwrap();
+    let mut pending = crate::build::manifest::PendingManifest::for_build(hashes, crate::build::cloud_ledger::InputEvidence::new(root));
+    pending
+}
+
 /// Render `test_dir` through the build path's entry point and write its pages
 /// as rendered, since no slot pass follows here. Returns the output dir.
 fn render_for_build(
@@ -11,7 +20,7 @@ fn render_for_build(
     std::fs::create_dir_all(&output_dir).unwrap();
     let project_structure =
         crate::build::scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
-    let mut pending = crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
+    let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(test_dir));
     crate::build::render::generate_blocking_content_for_build(
         &crate::vault::paths::VaultRoot::resolve(test_dir),
         &project_structure,
@@ -358,7 +367,7 @@ mod stale_cleanup_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -612,7 +621,7 @@ mod non_blocking_video_tests {
             None, // no progress_sender in tests
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
 
         assert!(
@@ -684,7 +693,7 @@ mod non_blocking_video_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
         let elapsed = start.elapsed();
 
@@ -765,7 +774,7 @@ mod deferred_asset_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -831,7 +840,7 @@ mod deferred_asset_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(previous_hashes.clone()),
+            &mut crate::build::render::html::tests::pending_for_render(previous_hashes.clone(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -872,7 +881,7 @@ mod deferred_asset_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -950,7 +959,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -997,7 +1006,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1059,7 +1068,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1126,7 +1135,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1178,7 +1187,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1222,7 +1231,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1271,7 +1280,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1327,7 +1336,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1392,7 +1401,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1454,7 +1463,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1512,7 +1521,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1582,7 +1591,7 @@ mod auto_folder_index_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1772,7 +1781,7 @@ mod cover_wikilink_integration {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1852,7 +1861,7 @@ mod folder_cover_no_description {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -1954,7 +1963,7 @@ mod folder_cover_grid_escapes_narrow_column {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -2045,7 +2054,7 @@ mod folder_cover_grid_escapes_narrow_column {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -2120,7 +2129,7 @@ mod folder_cover_grid_escapes_narrow_column {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -2224,7 +2233,7 @@ mod folder_cover_lede_release {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 
@@ -2341,7 +2350,7 @@ mod children_listing_and_grid_independence {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
         output_dir
@@ -6342,7 +6351,7 @@ mod video_path_mapping_integration_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
         assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
@@ -6420,7 +6429,7 @@ mod video_path_mapping_integration_tests {
             lqip_data_uri: None,
         });
 
-        let mut pending = PendingManifest::new(SiteHashes::default());
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(&test_dir));
         let result = generate_blocking_content(
             &crate::vault::paths::VaultRoot::resolve(&test_dir),
             &project_structure,
@@ -8328,7 +8337,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
 
         assert!(
@@ -8396,7 +8405,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
 
         assert!(result.is_ok(), "generate_blocking_content should succeed");
@@ -8457,7 +8466,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
 
         assert!(result.is_ok(), "generate_blocking_content should succeed");
@@ -8519,7 +8528,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
         assert!(
             result.is_ok(),
@@ -8582,7 +8591,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
 
         assert!(result.is_ok(), "generate_blocking_content should succeed");
@@ -8648,7 +8657,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
         assert!(
             result.is_ok(),
@@ -8724,7 +8733,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
         assert!(result.is_ok(), "generate_blocking_content should succeed");
 
@@ -8778,7 +8787,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("multilingual site should build");
 
@@ -8831,7 +8840,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
         assert!(result.is_ok(), "generate_blocking_content should succeed");
 
@@ -8881,7 +8890,7 @@ mod homepage_translation_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         );
         assert!(result.is_ok(), "generate_blocking_content should succeed");
 
@@ -9225,7 +9234,7 @@ mod registry_clear_tests {
             None,
             true,
             SiteConfig::default(),
-            &mut PendingManifest::new(SiteHashes::default()),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
         )
         .expect("generate_blocking_content should succeed");
 

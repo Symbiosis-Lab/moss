@@ -58,6 +58,10 @@ pub struct PublishPreflightProjection {
     /// an older build that happens to complete after it.
     pub build_generation: u64,
     pub missing_references: Vec<MissingReferenceOccurrence>,
+    /// Required inputs this attempt could not read. A clean later attempt
+    /// replaces this list, even while an older complete seal remains selected.
+    #[serde(default)]
+    pub unresolved_inputs: Vec<String>,
 }
 
 /// The one owner of a fresh source's bytes between parsing and the cache
@@ -108,6 +112,12 @@ impl FinalSourceRecord {
         super::blocking::source_metadata(self.stat, self.final_source.as_bytes())
     }
 
+    /// A denied UID write can still leave a valid read of the original page.
+    /// A changed, absent, or unreadable source cannot make that claim.
+    pub(super) fn original_bytes_still_on_disk(&self) -> bool {
+        std::fs::read(&self.disk_path).is_ok_and(|bytes| bytes == self.original_source.as_bytes())
+    }
+
     pub(super) fn mint_missing_uid(&mut self, document: &mut ParsedDocument) {
         if document.uid.is_some() || document.slot_only {
             return;
@@ -136,6 +146,12 @@ impl FinalSourceRecord {
         // and nothing that lands on the path afterwards.
         let written = (|| {
             use std::io::Write;
+            // A source can change after the parse pass. Do not overwrite an
+            // author's newer bytes while adding a generated UID. This check
+            // narrows that race; it is not an atomic compare-and-swap.
+            if !self.original_bytes_still_on_disk() {
+                return Err(std::io::Error::other("source changed before UID normalization"));
+            }
             // allow:raw_write this writes authored markdown, not regenerable build output
             let mut file = std::fs::File::create(&self.disk_path)?;
             file.write_all(self.final_source.as_bytes())?;
@@ -354,6 +370,19 @@ mod tests {
             crate::build::watch::source_metadata_verdict(&record.source_metadata(), &now, &disk, None),
             crate::build::watch::SourceVerdict::Unchanged { refreshed: None },
         );
+    }
+
+    #[test]
+    fn uid_writeback_refuses_a_newer_author_edit() {
+        let source = "---\ntitle: Original\n---\nbody\n";
+        let temp = tempfile::tempdir().unwrap();
+        let disk = temp.path().join("note.md");
+        std::fs::write(&disk, source).unwrap();
+        let mut record = FinalSourceRecord::fresh(0, "note.md".into(), disk.clone(), source.into(), None, None);
+        record.mint_missing_uid(&mut ParsedDocument::default());
+        std::fs::write(&disk, "---\ntitle: Newer\n---\nbody\n").unwrap();
+        assert!(!record.write_final());
+        assert_eq!(std::fs::read_to_string(&disk).unwrap(), "---\ntitle: Newer\n---\nbody\n");
     }
 
     #[test]

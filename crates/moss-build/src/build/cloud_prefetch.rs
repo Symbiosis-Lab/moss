@@ -28,18 +28,15 @@
 //! range — a one-byte read cost the 河灣·週刊 vault days of a download that
 //! could not progress.
 //!
-//! **Everything about scheduling belongs to the provider.** What to fetch
-//! first, how many at once, when to retry, how to batch — the provider has a
-//! real scheduler with real knowledge (link speed, quota, what the user pinned)
-//! and moss has guesses. This module has no priority queue, no backoff and no
-//! retry policy, and adding one back is a regression, not a feature. It hands
-//! the provider a list and gets out of the way.
+//! The provider schedules transfer and retry. Moss orders only its own bounded
+//! read requests: inputs for the visible page move ahead of background files.
+//! Two reader slots stay available for those inputs when background reads
+//! wedge. There is no provider-specific policy or retry ladder here.
 //!
 //! # Retry: unbounded, uniform, and bounded by dedup
 //!
-//! Files *are* re-read — the supervisor re-hands its whole sweep result every
-//! 60 s, forever. That is deliberate, and it is not a scheduler: it is one
-//! cadence for every file, not a per-file curve. The evidence cuts both ways
+//! Files *are* re-read — the supervisor re-hands bounded batches of its sweep
+//! result every pass. The evidence cuts both ways
 //! and lands here:
 //!
 //! - **For retrying.** Obsidian's materialize-modal retries the same OS
@@ -56,7 +53,7 @@
 //!
 //! | Read | `pending` | Re-handed by the next sweep? |
 //! |---|---|---|
-//! | returns an error | entry removed | **yes**, every 60 s |
+//! | returns an error | entry removed | **yes**, on a later pass |
 //! | never returns (wedge) | entry stays forever | **no** — `read()` suppresses it |
 //!
 //! So the file that ate a thread is exactly the file moss will never ask for
@@ -128,6 +125,9 @@ use std::time::{Duration, Instant};
 /// seconds the pool is the limit and more readers would help; if it is aging in
 /// minutes those threads are wedged and more readers would only widen the loss.
 pub const READERS: usize = 8;
+
+/// Background admission is bounded here for every producer.
+pub const BACKGROUND_WAITING: usize = 12;
 
 /// How a file is made local. Injected so the queue and the accounting can be
 /// tested without a cloud provider — on Linux there are no dataless files at
@@ -292,9 +292,8 @@ pub struct Snapshot {
     /// This is the field that makes a stall diagnosable rather than merely
     /// reportable. `in_flight` alone cannot distinguish eight files downloading
     /// healthily (observed floor is 13–16 s each, even for a few hundred bytes)
-    /// from eight reads the provider abandoned and will never answer — and
-    /// those two want opposite responses from a support conversation. An age in
-    /// minutes means wedged; the path names the file, which in the vault this
+    /// from eight reads that have made no observable progress. Age is a
+    /// diagnostic, not proof of failure; the path names the file, which in the vault this
     /// design came from was the single `.moss/identity/secret-key` that took
     /// the whole app down.
     ///
@@ -307,10 +306,10 @@ pub struct Snapshot {
 }
 
 struct Queue {
-    /// Plain FIFO. Order is the order moss was told about the files, which for
-    /// the folder-open sweep is directory-walk order. Deliberately not sorted:
-    /// see the module docs — moss does not schedule.
+    /// Background FIFO; the sweep feeds it in bounded batches.
     fifo: VecDeque<PathBuf>,
+    /// Requested page inputs can overtake files already waiting in `fifo`.
+    foreground: VecDeque<PathBuf>,
     /// Paths queued or being read. Not a scheduling structure — it just stops
     /// moss reading the same file twice when the sweep and a failed build read
     /// name it in the same breath. A path leaves the set when its read returns,
@@ -320,6 +319,9 @@ struct Queue {
     /// counted so a stall can name the file and its age — see
     /// [`Snapshot::oldest_read`].
     in_flight: HashMap<PathBuf, Instant>,
+    background_in_flight: usize,
+    /// Active concrete read failures, pruned by the folder’s next sweep.
+    failures: HashSet<PathBuf>,
     shutdown: bool,
 }
 
@@ -329,6 +331,7 @@ struct Inner {
     work: Condvar,
     materialize: Materializer,
     done: AtomicU64,
+    background_limit: usize,
 }
 
 /// A fixed set of expendable threads that read files so the provider fetches
@@ -350,13 +353,17 @@ impl Prefetcher {
         let inner = Arc::new(Inner {
             queue: Mutex::new(Queue {
                 fifo: VecDeque::new(),
+                foreground: VecDeque::new(),
                 pending: HashSet::new(),
                 in_flight: HashMap::new(),
+                background_in_flight: 0,
+                failures: HashSet::new(),
                 shutdown: false,
             }),
             work: Condvar::new(),
             materialize,
             done: AtomicU64::new(0),
+            background_limit: readers.saturating_sub(2).max(1),
         });
         for i in 0..readers {
             let inner = Arc::clone(&inner);
@@ -380,6 +387,16 @@ impl Prefetcher {
     /// Hand a file over to be read. Non-blocking, idempotent, and cheap enough
     /// to call from anywhere — a path already queued or in flight is ignored.
     pub fn read(&self, path: &Path) {
+        self.enqueue(path, false);
+    }
+
+    /// Request a needed page input before queued background materialization.
+    /// A read already in flight cannot be interrupted.
+    pub fn read_foreground(&self, path: &Path) {
+        self.enqueue(path, true);
+    }
+
+    fn enqueue(&self, path: &Path, foreground: bool) {
         let mut q = match self.inner.queue.lock() {
             Ok(q) => q,
             // A poisoned queue means a reader panicked mid-file. Dropping this
@@ -387,10 +404,31 @@ impl Prefetcher {
             // supervisor's next sweep names the file again.
             Err(_) => return,
         };
-        if q.shutdown || !q.pending.insert(path.to_path_buf()) {
+        if q.shutdown {
             return;
         }
-        q.fifo.push_back(path.to_path_buf());
+        if q.pending.contains(path) {
+            if foreground {
+                if let Some(index) = q.fifo.iter().position(|p| p == path) {
+                    if let Some(queued) = q.fifo.remove(index) {
+                        q.foreground.push_back(queued);
+                        drop(q);
+                        self.inner.work.notify_one();
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+        if !foreground && q.fifo.len() >= BACKGROUND_WAITING {
+            return;
+        }
+        q.pending.insert(path.to_path_buf());
+        if foreground {
+            q.foreground.push_back(path.to_path_buf());
+        } else {
+            q.fifo.push_back(path.to_path_buf());
+        }
         drop(q);
         self.inner.work.notify_one();
     }
@@ -401,7 +439,7 @@ impl Prefetcher {
         let now = Instant::now();
         match self.inner.queue.lock() {
             Ok(q) => Snapshot {
-                waiting: q.fifo.len(),
+                waiting: q.fifo.len() + q.foreground.len(),
                 in_flight: q.in_flight.len(),
                 done,
                 oldest_read: q
@@ -414,12 +452,45 @@ impl Prefetcher {
         }
     }
 
+    /// Concrete errors among the sweep's current pending set. Names are a
+    /// short sample; the count always covers the whole intersection.
+    pub fn failures_for(&self, folder: &Path, pending: &HashSet<PathBuf>) -> (usize, Vec<String>) {
+        let paths = self.failure_paths_for(folder, pending);
+        let names = paths.iter().take(3).map(|p| {
+            p.file_name().unwrap_or(p.as_os_str()).to_string_lossy().into_owned()
+        }).collect();
+        (paths.len(), names)
+    }
+
+    /// Full paths for the sweep's current pending read failures. The pending
+    /// intersection is the authority: old queue failures cannot outlive the
+    /// sweep's current view of the folder.
+    pub fn failure_paths_for(&self, folder: &Path, pending: &HashSet<PathBuf>) -> Vec<PathBuf> {
+        let Ok(mut q) = self.inner.queue.lock() else { return Vec::new() };
+        q.failures.retain(|path| !path.starts_with(folder) || pending.contains(path));
+        let mut paths: Vec<_> = pending
+            .iter()
+            .filter(|path| path.starts_with(folder) && q.failures.contains(*path))
+            .cloned()
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_failure_for_test(&self, path: PathBuf) {
+        if let Ok(mut q) = self.inner.queue.lock() {
+            q.failures.insert(path);
+        }
+    }
+
     /// Stop accepting work and release every idle reader. Threads already
     /// blocked in a read stay blocked — see the note in `with_materializer`.
     pub fn shutdown(&self) {
         if let Ok(mut q) = self.inner.queue.lock() {
             q.shutdown = true;
             q.fifo.clear();
+            q.foreground.clear();
             q.pending.clear();
         }
         self.inner.work.notify_all();
@@ -449,9 +520,16 @@ fn reader_loop(inner: &Arc<Inner>) {
                 if q.shutdown {
                     return;
                 }
-                if let Some(path) = q.fifo.pop_front() {
+                if let Some(path) = q.foreground.pop_front() {
                     q.in_flight.insert(path.clone(), Instant::now());
-                    break path;
+                    break (path, false);
+                }
+                if q.background_in_flight < inner.background_limit {
+                    if let Some(path) = q.fifo.pop_front() {
+                        q.in_flight.insert(path.clone(), Instant::now());
+                        q.background_in_flight += 1;
+                        break (path, true);
+                    }
                 }
                 q = match inner.work.wait(q) {
                     Ok(q) => q,
@@ -464,21 +542,29 @@ fn reader_loop(inner: &Arc<Inner>) {
         // provider takes — or forever. Holding the queue here would put every
         // reader behind the slowest file and, worse, one wedged file would take
         // the whole pool down with it.
-        let result = (inner.materialize)(&path);
+        let result = (inner.materialize)(&path.0);
 
         // A failure is logged and dropped. There is no retry ledger on purpose:
         // the provider owns retry policy, and moss's own record of what still
         // needs fetching is the supervisor's sweep, which re-stats the vault
         // anyway. Anything more would be moss reimplementing a scheduler.
-        if let Err(e) = result {
-            log::debug!("cloud: reading {} did not materialize it: {e}", path.display());
+        if let Err(e) = &result {
+            log::debug!("cloud: reading {} did not materialize it: {e}", path.0.display());
         }
 
         inner.done.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut q) = inner.queue.lock() {
-            q.in_flight.remove(&path);
-            q.pending.remove(&path);
+            q.in_flight.remove(&path.0);
+            q.pending.remove(&path.0);
+            match result {
+                Ok(()) => { q.failures.remove(&path.0); }
+                Err(_) => { q.failures.insert(path.0.clone()); }
+            }
+            if path.1 {
+                q.background_in_flight -= 1;
+            }
         }
+        inner.work.notify_one();
     }
 }
 

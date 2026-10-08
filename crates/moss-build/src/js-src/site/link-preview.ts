@@ -183,15 +183,3 @@ import { clampLeft, maxSurfaceWidth, verticalSlot } from "./viewport";
 // preview.js only when `[site].link_preview` is true — so with hover previews
 // switched off, the shell's chrome tint had no reporter at all and wedged on
 // whatever backdrop it last measured. The bridge is injected unconditionally.
-
-// Auto-hide scrollbar: show on scroll, fade after 1.5s idle.
-(function () {
-  let scrollTimeout: ReturnType<typeof setTimeout>;
-  window.addEventListener("scroll", () => {
-    document.documentElement.classList.add("is-scrolling");
-    clearTimeout(scrollTimeout);
-    scrollTimeout = setTimeout(() => {
-      document.documentElement.classList.remove("is-scrolling");
-    }, 1500);
-  }, { passive: true });
-})();

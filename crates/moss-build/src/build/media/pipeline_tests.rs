@@ -1441,6 +1441,18 @@ fn run_converter_base(
     );
 }
 
+fn planned_images(source: &Path, moss_dir: &Path) -> Vec<crate::build::media::image::ImageConversionItem> {
+    let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
+    let structure = crate::build::scan::scan::scan_folder(&source.to_string_lossy()).unwrap();
+    let transforms = crate::build::cache::TransformCache::for_site(&paths);
+    let mut index = crate::build::cache::HashIndex::load(&paths.cache_hash_index());
+    let collected = crate::build::media::image::collect_images_for_conversion(
+        &structure, &transforms, &mut index,
+        &crate::build::media::image::ImageCompressionConfig::default(), None);
+    crate::build::media::promise::promise_image_variants(
+        None, &mut crate::build::manifest::PendingManifest::new(Default::default()), collected, &structure, &Default::default(), &Default::default(), &source.to_string_lossy())
+}
+
 /// Run `copy_deferred_assets` synchronously against a source/staging pair.
 async fn run_copy_deferred(
     source: &std::path::Path,
@@ -1448,7 +1460,9 @@ async fn run_copy_deferred(
     moss_dir: &std::path::Path,
 ) -> crate::build::manifest::SealedManifest {
     use crate::build::coordinator::test_utils;
+    let image_items = planned_images(source, moss_dir);
     let ctx = crate::types::services::BackgroundContext {
+        image_items,
         source_path: source.to_path_buf().to_string_lossy().to_string(),
         staging_dir: staging.to_path_buf(),
         moss_dir: moss_dir.to_path_buf(),
@@ -1627,55 +1641,38 @@ async fn animated_webp_source_lands_verbatim() {
     );
 }
 
-/// Design follow-up #6 (harden the `.unwrap_or(0)` TOCTOU). A webp source
-/// whose fresh metadata read FAILS mid-build (modeled as `size: None`) must
-/// fail SAFE — the converter owns the base, so `copy_deferred_assets` SKIPS
-/// the verbatim copy. The old `.unwrap_or(0)` instead fed size 0 (always
-/// `< min_size_kb`) → a small-DIMENSION webp re-derived `AlreadySmall` →
-/// verbatim copy racing the converter's resized base (the Task-12.6
-/// double-writer). A readable small webp (`Some(size)`) stays AlreadySmall
-/// and is still verbatim-copied — the single-writer invariant, both ways.
-#[test]
-fn webp_unreadable_source_fails_safe_to_converter_owned() {
-    use tempfile::TempDir;
-
-    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
-    std::fs::create_dir_all(&base).unwrap();
-    let tmp = TempDir::new_in(&base).unwrap();
+/// Ownership remains the planned encoder's when its source disappears after
+/// collection. A fresh stat must not transfer the base to the asset worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn planned_webp_base_survives_later_failed_stat() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
     let moss_dir = tmp.path().join(".moss");
-    let paths = MossPaths::from_moss_dir(moss_dir);
-    let transforms = crate::build::cache::TransformCache::new(
-        paths.cache_transforms(),
-        crate::build::cache::ObjectStore::new(paths.cache_objects()),
-    );
-    let cfg = crate::build::media::image::ImageCompressionConfig::default();
+    let staging = moss_dir.join("build/stage");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    let image = source.join("photo.webp");
+    write_gradient_webp(&image, 1500, 3000);
+    let items = planned_images(&source, &moss_dir);
+    assert_eq!(items.len(), 1);
+    fs::remove_file(&image).unwrap();
+    assert!(fs::metadata(&image).is_err());
+    assert!(items[0].owns_source_base(), "planned ownership survives unavailable metadata");
 
-    // A real, readable SMALL webp (600×400, empty ladder → AlreadySmall).
-    // The authority (`collect_images_for_conversion`) reads its real >0
-    // scan size and returns Some(AlreadySmall) → NOT converted → copy_deferred
-    // owns the verbatim copy.
-    let src_webp = tmp.path().join("small.webp");
-    write_gradient_webp(&src_webp, 600, 400);
-    assert!(
-        moss_core::asset_paths::ladder_rungs(600, 400, false).is_empty(),
-        "premise: 600×400 carries no rungs (AlreadySmall)"
-    );
-    let real_size = std::fs::metadata(&src_webp).unwrap().len();
-
-    // Readable → NOT converter-owned → copy_deferred verbatim-copies (unchanged).
-    assert!(
-        !webp_converter_owns_base(&src_webp, "webp", Some(real_size), &cfg, &transforms, ""),
-        "readable small webp stays AlreadySmall → copy_deferred owns the verbatim copy"
-    );
-
-    // Unreadable (metadata-read failure) → fail SAFE to converter-owned →
-    // SKIP the verbatim copy. The old `.unwrap_or(0)` would re-derive
-    // AlreadySmall from the small dims and fall through to a verbatim copy
-    // that races the converter's resized base.
-    assert!(
-        webp_converter_owns_base(&src_webp, "webp", None, &cfg, &transforms, ""),
-        "unreadable webp must fail safe to converter-owned — no verbatim copy, no double write"
-    );
+    // A replacement arriving after planning must not become a second writer,
+    // even when its bytes would now be classified as AlreadySmall.
+    write_gradient_webp(&image, 600, 400);
+    fs::write(staging.join("photo.webp"), b"already-planned-encoder-output").unwrap();
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(), staging_dir: staging.clone(), moss_dir,
+        image_items: items, ..crate::types::services::BackgroundContext::for_test()
+    };
+    let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || copy_deferred_assets(&ctx,
+        crate::build::ports::reporter::discarding(), tx, None)).await.unwrap();
+    let sealed = crate::build::coordinator::test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+    assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"already-planned-encoder-output");
+    assert!(!sealed.files().contains_key("photo.webp"), "only the encoder registers its base");
 }
 
 // -----------------------------------------------------------------------
@@ -2347,4 +2344,130 @@ fn copy_deferred_assets_skips_a_nested_site() {
     let names: Vec<&String> = sealed.files().keys().collect();
     assert!(names.iter().any(|k| k.ends_with("guide.pdf")), "{names:?}");
     assert!(!names.iter().any(|k| k.contains("price-list")), "{names:?}");
+}
+
+/// Theme discovery uses source keys for cache identity and served keys for
+/// manifests. It shares source storage, while its HTML and raster bytes stay
+/// verbatim and edits/deletions update the same cache slice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn theme_sources_reuse_cache_and_track_edits_and_deletes() {
+    use crate::build::coordinator::test_utils;
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = source.join(".moss");
+    let staging = moss_dir.join("build/stage");
+    let theme = moss_dir.join("theme");
+    fs::create_dir_all(&theme).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    let overlay = theme.join("grain.png");
+    let html = theme.join("nested/index.html");
+    fs::create_dir_all(html.parent().unwrap()).unwrap();
+    image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(3000, 128, |x, y| {
+        let mut noise = x.wrapping_add(y.wrapping_mul(3000)).wrapping_add(1);
+        noise ^= noise << 13;
+        noise ^= noise >> 17;
+        noise ^= noise << 5;
+        image::Rgba([noise as u8, (noise >> 8) as u8, (noise >> 16) as u8, 128])
+    })).save(&overlay).unwrap();
+    let original_overlay = fs::read(&overlay).unwrap();
+    assert!(original_overlay.len() as u64 > crate::build::media::image::ImageCompressionConfig::default().min_size_kb * 1024,
+        "fixture must exceed the ordinary image skip threshold");
+    fs::write(&html, b"<html><head></head><body>theme</body></html>").unwrap();
+    fs::write(theme.join("style.css"), b"blocking-owned").unwrap();
+    fs::write(theme.join("script.js"), b"blocking-owned").unwrap();
+    let old_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000);
+    for path in [&overlay, &html] {
+        fs::File::options().write(true).open(path).unwrap()
+            .set_times(fs::FileTimes::new().set_modified(old_time)).unwrap();
+    }
+    let mut previous = SiteHashes::default();
+    for pass in 0..5 {
+        if pass == 3 && !cfg!(target_os = "macos") { continue; }
+        if pass == 2 { fs::write(&overlay, b"edited-overlay").unwrap(); }
+        if pass == 3 {
+            fs::remove_file(&overlay).unwrap();
+            fs::write(theme.join(".grain.png.icloud"), b"").unwrap();
+        }
+        if pass == 4 {
+            fs::remove_file(if cfg!(target_os = "macos") {
+                theme.join(".grain.png.icloud")
+            } else { overlay.clone() }).unwrap();
+        }
+        let paths = MossPaths::from_moss_dir(moss_dir.clone());
+        fs::create_dir_all(paths.hashes().parent().unwrap()).unwrap();
+        fs::write(paths.hashes(), b"{}").unwrap();
+        let ctx = crate::types::services::BackgroundContext {
+            source_path: source.to_string_lossy().to_string(), staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(), previous_hashes: previous,
+            ..crate::types::services::BackgroundContext::for_test()
+        };
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let stats = tokio::task::spawn_blocking(move || copy_deferred_assets(&ctx,
+            crate::build::ports::reporter::discarding(), tx, None)).await.unwrap();
+        let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+        assert_eq!(fs::read(staging.join("_moss/theme/nested/index.html")).unwrap(),
+            b"<html><head></head><body>theme</body></html>");
+        assert!(!sealed.files().contains_key("_moss/theme/style.css"));
+        assert!(!sealed.files().contains_key("_moss/theme/script.js"));
+        if pass < 2 {
+            assert_eq!(fs::read(staging.join("_moss/theme/grain.png")).unwrap(), original_overlay,
+                "theme raster must remain verbatim even above the normal resize cap");
+        }
+        if pass == 1 {
+            assert_eq!(stats.cache_hits, 2, "unchanged theme sources reuse both blobs");
+            assert_eq!(stats.cache_misses, 0, "warm theme builds never store source bytes again");
+        }
+        if pass == 2 {
+            assert_eq!(fs::read(staging.join("_moss/theme/grain.png")).unwrap(), b"edited-overlay");
+            assert_eq!(stats.cache_misses, 1);
+        }
+        if pass == 3 {
+            assert_eq!(fs::read(staging.join("_moss/theme/grain.png")).unwrap(), b"edited-overlay");
+            assert!(!sealed.files().contains_key("_moss/theme/.grain.png.icloud"));
+            assert_eq!(stats.cache_misses, 0, "offline stub must never be stored as source bytes");
+        }
+        if pass == 4 {
+            assert!(!sealed.sources().contains_key(".moss/theme/grain.png"));
+            assert!(!sealed.files().contains_key("_moss/theme/grain.png"));
+        } else {
+            assert!(sealed.sources().contains_key(".moss/theme/grain.png"));
+            assert!(!sealed.sources().contains_key("_moss/theme/grain.png"));
+        }
+        previous = sealed.into_inner();
+    }
+}
+
+/// Both the cold encode and warm carry-forward must register the base in
+/// the image bucket while the asset worker leaves that path alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn planned_webp_base_registered_by_encoder_on_cold_and_warm_builds() {
+    use crate::build::coordinator::test_utils;
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = source.join(".moss");
+    let staging = moss_dir.join("build/stage");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    write_gradient_webp(&source.join("planned-owned-base.webp"), 1500, 3000);
+    let mut previous = SiteHashes::default();
+    for _ in 0..2 {
+        let ctx = crate::types::services::BackgroundContext {
+            image_items: planned_images(&source, &moss_dir),
+            source_path: source.to_string_lossy().to_string(), staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(), previous_hashes: previous,
+            ..crate::types::services::BackgroundContext::for_test()
+        };
+        let (tx, rx) = test_utils::build_test_coordinator();
+        tokio::task::spawn_blocking(move || {
+            let services = crate::types::services::BuildServices::headless();
+            crate::build::media::image::dispatch_image_conversions(Some(&services), &ctx, Some(tx.clone()));
+            copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+        }).await.unwrap();
+        let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+        assert!(sealed.site_hashes_view().image_outputs.contains("planned-owned-base.webp"));
+        assert!(sealed.staged_oid("planned-owned-base.webp").is_some(), "producer registers actual CAS bytes on both builds");
+        assert!(sealed.files().contains_key("planned-owned-base.webp"), "encoder receipt must supply the deploy entry");
+        assert_eq!(decoded_webp_dims(&staging.join("planned-owned-base.webp")), (1200, 2400));
+        previous = sealed.into_inner();
+    }
 }

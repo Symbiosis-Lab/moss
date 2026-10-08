@@ -229,17 +229,17 @@ pub struct ParsedDocument {
     /// The claiming page's listing, split by field: for each of the term
     /// kind's `fields` (in kind order), the member `url_path`s that field
     /// claims; plus a trailing `(None, urls)` group for members reachable
-    /// only through a hand-authored `also_in:` cross-list. `None` unless
-    /// this page hosts a term listing (`term_listing.is_some()`). Set by
-    /// `build::terms::derive_terms` in the same pass as `term_listing`, so
-    /// the render layer — which cannot see `TermIndex` — reads one resolved
-    /// field instead of re-deriving the split.
+    /// only through a hand-authored `also_in:` cross-list. Set on a claimed
+    /// page by `build::terms::derive_terms` alongside `term_listing`, and on
+    /// a generated term page by `render::blocking::synthetic_folder_doc`.
+    /// The renderer reads this resolved field instead of re-deriving the
+    /// split, and the facade includes it so generated pages track membership.
     #[serde(skip)]
     #[specta(skip)]
     pub term_sections: Option<Vec<(Option<String>, Vec<String>)>>,
-    /// This place term's direct children, `(display, url, count)` — set
-    /// alongside `term_sections`, same condition. `None` for a non-place
-    /// claiming page, and for a leaf place with no children.
+    /// This place term's direct children, `(display, url, count)`, set
+    /// alongside `term_sections` for claiming and generated term pages.
+    /// `None` for a non-place page and for a leaf place with no children.
     #[serde(skip)]
     #[specta(skip)]
     pub place_children: Option<Vec<(String, String, usize)>>,
@@ -274,6 +274,12 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]
     pub is_place_namespace_root: bool,
+    /// Hash of the shared places-data asset referenced by this explorer root's
+    /// map markup. Set before incremental verdicts so a changed member title
+    /// invalidates this root's own HTML without becoming a site-wide surface.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub explorer_places_hash: Option<String>,
     /// The one per-page switch for this page's own map. On a claimed term
     /// page or a place-namespace-root page it gates the term map spliced
     /// below the content (see `is_place_namespace_root`): `Some(false)`
