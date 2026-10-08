@@ -78,3 +78,15 @@ fn dir_has_markdown_index_nested_url_override_still_matches_by_url_path() {
     assert!(idx.dir_has_markdown_index("awards"));
     assert!(!idx.dir_has_markdown_index("評選"));
 }
+
+/// The folder URL is made by `slugify_path_segments` (`&` becomes `and`), so
+/// the lookup of the written folder name must use the same function.
+#[test]
+fn dir_has_markdown_index_finds_a_folder_whose_name_has_an_ampersand() {
+    let docs = vec![folder_doc(
+        "Film & Performance/Film & Performance.md",
+        "film-and-performance/index.html",
+    )];
+    let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
+    assert!(idx.dir_has_markdown_index("Film & Performance"));
+}

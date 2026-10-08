@@ -1173,14 +1173,16 @@ fn render_one(
     let folder_id = resolve_folder_id(parsed.path, from);
     // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
     // while `ParsedDocument.url_path` is slugified — lowercased and
-    // punctuation-stripped via `moss_core::content_graph::generate_slug`.
+    // punctuation-rewritten via `moss_core::slug::slugify_path_segments`
+    // (`&` becomes `and`, other punctuation becomes `-`; the folder's own
+    // URL is made by the same function, so the lookup must use it too).
     // Compute the slugified form for URL-space lookups (target_doc match,
     // folder_prefix filter, "more" href). Keep `folder_id` for source-side
     // lookups (e.g. `project.html_files` carries raw on-disk paths).
     let folder_id_slug = if folder_id.is_empty() {
         String::new()
     } else {
-        moss_core::content_graph::generate_slug(&folder_id)
+        moss_core::slug::slugify_path_segments(&folder_id)
     };
     // Route the three-branch decision through moss-core's `classify_reference`:
     // `dir_has_markdown_index` → FolderListing (Branch 1), else
@@ -1205,7 +1207,7 @@ fn render_one(
             // Branch 1: re-find the doc `dir_has_markdown_index` found, the
             // same way it found it (root by identity, else by `url_path` —
             // see that method's comment).
-            let target_slug = moss_core::content_graph::generate_slug(
+            let target_slug = moss_core::slug::slugify_path_segments(
                 classified.target_path.as_deref().unwrap_or(&folder_id_slug),
             );
             let found = if target_slug.is_empty() {
@@ -1543,7 +1545,9 @@ fn resolve_more_link_target<'a>(
     all_docs: &'a [ParsedDocument],
 ) -> Option<&'a ParsedDocument> {
     let stem = crate::build::markdown::frontmatter_ref_to_stem(more_ref);
-    let target_slug = moss_core::content_graph::generate_slug(&stem);
+    // Page URLs are built by `slug::generate_slug` (`&` becomes `and`, dots
+    // are kept), so the target is slugged by the same function.
+    let target_slug = moss_core::slug::generate_slug(&stem);
     all_docs.iter().find(|d| {
         let d_stem = d
             .url_path

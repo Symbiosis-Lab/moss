@@ -6,9 +6,9 @@
 //! method's comment for why the root case needs this and every other
 //! directory doesn't.
 
-use moss_core::content_graph::generate_slug;
 use moss_core::resolve::folder_class::FolderIndex;
 use moss_core::resolve::link_class::UrlIndex;
+use moss_core::slug::slugify_path_segments;
 use moss_core::PageKind;
 
 use crate::build::types::ParsedDocument;
@@ -28,7 +28,7 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
             return true;
         }
         let raw_prefix = format!("{}/", root_rel);
-        let slug_prefix = format!("{}/", generate_slug(root_rel));
+        let slug_prefix = format!("{}/", slugify_path_segments(root_rel));
         self.html_files
             .iter()
             .any(|f| f.path.starts_with(&raw_prefix))
@@ -54,7 +54,7 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
         // place that renaming is recorded — re-deriving identity from the
         // source path there would silently stop matching an overridden
         // folder (see `reference_parity.rs`'s `build_and_editor_folder_index_agree`).
-        let target_slug = generate_slug(root_rel);
+        let target_slug = slugify_path_segments(root_rel);
         if target_slug.is_empty() {
             return self.docs.iter().any(|d| d.kind == PageKind::Folder && is_root_source(d));
         }

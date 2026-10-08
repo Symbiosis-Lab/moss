@@ -2904,3 +2904,81 @@ fn children_upcoming_limit_counts_after_soonest_first_ordering() {
         assert!(!out.contains(other), "{} is not the next event: {}", other, out);
     }
 }
+
+#[test]
+fn folder_names_with_punctuation_find_their_slugified_listing() {
+    // A folder's URL is made by `slugify_path_segments` (`&` becomes `and`,
+    // other punctuation becomes `-`). The embed lookup once used a different
+    // slugger that dropped punctuation, so `Film & Performance/` looked for
+    // `film-performance` and rendered the missing-embed placeholder.
+    for (name, slug) in [
+        ("Film & Performance", "film-and-performance"),
+        ("It's", "it-s"),
+        ("Q\"x", "q-x"),
+        ("L<t", "l-t"),
+        ("Café", "café"),
+        ("A B", "a-b"),
+    ] {
+        let folder = make_folder_doc(&format!("{slug}/index.html"), "Idx");
+        let child = make_doc(&format!("{slug}/child/index.html"), "Child", Some("2025-01-01"));
+        let docs = vec![folder, child];
+        let project = test_project_with_html(&[]);
+        let dir_overrides = std::collections::HashMap::new();
+        let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+        let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+            &format!("{name}/"),
+            "index.md",
+            &params,
+        );
+        let out = resolve_markers(
+            &marker,
+            "index.md",
+            &docs,
+            &project,
+            &dir_overrides,
+            crate::i18n::Language::En,
+            None,
+            None,
+            true,
+        );
+        assert!(!out.contains("moss-embed-missing"), "{name}: {out}");
+        assert!(out.contains("Child"), "{name}: {out}");
+    }
+}
+
+/// A page's URL is built from its file stem by `compute_url_path`, which
+/// slugs `Q&A` to `qanda`, so a `children_more` target named `[[Q&A]]` must
+/// resolve to that page's URL.
+#[test]
+fn children_more_target_with_an_ampersand_resolves_to_its_page() {
+    let mut home = make_folder_doc("index.html", "Home");
+    home.children_limit = Some(2);
+    home.children_more = Some("[[Q&A]]".to_string());
+    let a = make_doc("a.html", "A", Some("2025-01-01"));
+    let b = make_doc("b.html", "B", Some("2025-03-01"));
+    let c = make_doc("c.html", "C", Some("2025-02-01"));
+    let qa_url = moss_core::frontmatter_typed::compute_url_path("Q&A.md", false, None, "Q&A");
+    assert_eq!(qa_url, "qanda/index.html");
+    let qa = make_doc(&qa_url, "Q&A", None);
+    let docs = vec![home.clone(), a, b, c, qa];
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+
+    let marker = synthesize_children_marker(&home, "", "index.md");
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &project,
+        &dir_overrides,
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(
+        out.contains(r#"href="/qanda/""#),
+        "children_more [[Q&A]] should link to /qanda/: {}",
+        out
+    );
+}
