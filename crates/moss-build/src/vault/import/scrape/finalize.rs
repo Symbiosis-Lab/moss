@@ -180,6 +180,9 @@ static ATX_HEADING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$").expect("atx heading regex")
 });
 static MD_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\([^)]*\)").expect("link regex"));
+static MD_IMAGE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^!(?:\[[^\]]*\]\([^)]*\)|\[\[[^\]]*\]\])$").expect("image regex")
+});
 
 /// The text a heading shows: links unwrapped, emphasis marks and backslash
 /// escapes gone.
@@ -246,8 +249,8 @@ fn looks_like_internal_name(title: &str) -> bool {
 /// name (`About | Studio` is `About`). Only the first heading of any level is
 /// considered: a different one, or any later one, stays.
 ///
-/// With `adopt`, a leading heading (only blank lines or a lone link line
-/// before it) also goes when the title shows nowhere in the page: that title
+/// With `adopt`, a leading heading (only blank lines, a lone link line or a
+/// lone image line before it) also goes when the title shows nowhere in the page: that title
 /// is a name the builder kept internally, and the heading is the real one, so
 /// it is returned as the new title. `None` when nothing changes.
 pub(super) fn without_title_heading(
@@ -281,7 +284,8 @@ pub(super) fn without_title_heading(
         let Some(caps) = ATX_HEADING.captures(text) else {
             let t = text.trim();
             let lone_link = MD_LINK.is_match(t) && MD_LINK.replace(t, "").is_empty();
-            leading &= t.is_empty() || lone_link;
+            let lone_image = MD_IMAGE.is_match(t);
+            leading &= t.is_empty() || lone_link || lone_image;
             continue;
         };
         let heading = heading_text(&caps[1]);
@@ -556,6 +560,22 @@ mod tests {
             adopted(body, "T_Winter_Tale_S"),
             Some(("The Winter's Tale".to_string(), "[OPERA](/work/opera)\n\nText.\n".to_string()))
         );
+    }
+
+    #[test]
+    fn a_lead_image_before_the_heading_does_not_stop_it_leading() {
+        let body = "![](./assets/imported/abc.jpg)\n\n## The Night Walk\n\nText.\n";
+        assert_eq!(
+            adopted(body, "P_Night_Walk"),
+            Some(("The Night Walk".to_string(), "![](./assets/imported/abc.jpg)\n\nText.\n".to_string()))
+        );
+        let wiki = "![[abc.jpg]]  \n\n## The Night Walk\n\nText.\n";
+        assert_eq!(adopted(wiki, "P_Night_Walk").map(|(t, _)| t).as_deref(), Some("The Night Walk"));
+    }
+
+    #[test]
+    fn a_text_paragraph_before_the_heading_still_stops_it_leading() {
+        assert_eq!(adopted("A paragraph of text.\n\n## The Night Walk\n\nText.\n", "P_Night_Walk"), None);
     }
 
     #[test]
