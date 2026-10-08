@@ -93,7 +93,7 @@ pub(crate) const GALLERY_CONTAINER_CLASSES: &[&str] = &[
     "gallery-masonry",
     "gallery-slideshow",
     "sqs-gallery-block-grid",
-    "sqs-gallery",
+    // Not `sqs-gallery`: a summary-block listing carries it too, and its cards are text.
 ];
 
 /// Host markers match by suffix (`player.vimeo.com` matches `vimeo.com`); the
@@ -350,14 +350,61 @@ fn iframe_outcome(el: &Element, base: &Url) -> Outcome {
 /// which [`html_to_markdown`] folds into a `:::gallery` fence.
 const GALLERY_TAG: &str = "moss-gallery";
 
+/// Longest run of text a caption or a stray text node may hold inside a
+/// gallery; anything longer is prose, so the container is not a gallery.
+const CAPTION_MAX: usize = 120;
+
+const PICTURE_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"];
+
+fn is_picture_href(href: &str) -> bool {
+    let path = href.split(|c| c == '?' || c == '#').next().unwrap_or("").to_ascii_lowercase();
+    PICTURE_EXTS.iter().any(|ext| path.ends_with(ext))
+}
+
+/// A link with no page behind it: its `href` is only a query (`?itemId=…`,
+/// a client-side view of the same page) or only a fragment. The extractor
+/// unwraps the same shape elsewhere, but it does not treat `#` as one.
+fn is_page_less_href(href: &str) -> bool {
+    let href = href.trim();
+    href.starts_with('?') || href.starts_with('#')
+}
+
+/// True when the container holds only pictures and their captions: no
+/// heading, no paragraph or text run longer than [`CAPTION_MAX`], and no link
+/// with text of its own unless it opens a picture file or has no page behind
+/// it (a lightbox link).
+fn holds_only_pictures(container: ElementRef) -> bool {
+    container.descendants().all(|node| {
+        if let Some(text) = node.value().as_text() {
+            return text.trim().chars().count() <= CAPTION_MAX;
+        }
+        let Some(el) = ElementRef::wrap(node) else { return true };
+        let len = el.text().collect::<String>().trim().chars().count();
+        match el.value().name() {
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => false,
+            "p" | "figcaption" => len <= CAPTION_MAX,
+            "a" => {
+                let href = attr(el.value(), "href");
+                len == 0 || is_picture_href(href) || is_page_less_href(href)
+            }
+            _ => true,
+        }
+    })
+}
+
 /// The gallery's pictures, each once, in source order. A gallery container
 /// holds only its own items (a link that opens a lightbox just wraps the
 /// image), so the picture is the `<img>`; a lazy-load attribute names the
-/// real file when `src` is absent or a placeholder.
+/// real file when `src` is absent or a placeholder. A container with prose
+/// or links of its own is a listing, and is left for the converter.
 fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
+    let container = ElementRef::wrap(node).expect("an element node");
+    if !holds_only_pictures(container) {
+        return Outcome::Leave;
+    }
     let mut seen = std::collections::HashSet::new();
     let mut items = String::new();
-    for img in ElementRef::wrap(node).expect("an element node").select(&Selector::parse("img").expect("static selector")) {
+    for img in container.select(&Selector::parse("img").expect("static selector")) {
         let el = img.value();
         let src = LAZY_SRC_ATTRS
             .iter()

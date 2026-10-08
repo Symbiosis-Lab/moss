@@ -36,6 +36,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A card listing in a source page is no longer imported as a gallery of bare images: its titles, dates and excerpts are kept.
 - An image can have a description that differs from its caption. Write the description in the brackets and the caption on an italic line directly under the image (`![A lake under a pink sky](hakone.jpg)` then `*Hiroshige, 1833–34. CC0.*`), the form the media docs already described; it now renders as a figure whose `<img>` keeps the description as its alt and whose `<figcaption>` is the italic line. With `implicit_figure = false` the italic line stays as text under the image. An italic span on the image's own line is unchanged. A caption-only image (`![Caption](hakone.jpg)`, `![[hakone.jpg|Caption]]`, or one in a `:::grid`) is announced once, through its caption, with `alt=""`; the docs now say so instead of claiming the alt matches the caption.
 - The build logs `Accessibility: image '…' on '…' has no alt text` for an image with neither alt text nor a caption. It is advisory and does not count toward `--strict`.
 - The places explorer opens fitted to the places it shows, and its Fit all places button returns to that view, instead of opening on the whole world. A site whose places sit in one region now opens on that region; a single place opens at a regional zoom, and places spread across the globe still open on the world view.

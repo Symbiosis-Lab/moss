@@ -209,3 +209,53 @@ fn a_gallery_container_is_one_gallery_block_with_each_image_once() {
     assert!(md.contains(block), "{md}");
     assert_eq!(md.matches("one.jpg").count(), 1, "{md}");
 }
+
+
+#[test]
+fn a_card_listing_under_a_gallery_class_keeps_each_cards_text() {
+    for class in ["sqs-gallery", "sqs-gallery-block-grid"] {
+        let html = page(
+            "",
+            &format!(
+                r#"<div class="summary-block {class}">
+<div class="summary-item"><img src="/img/concert-a.jpg" alt="Stage at the spring concert">
+<p>March 14, 2026</p><p>Harbour Hall</p>
+<a href="/events/a">Spring Concert</a>
+<p>A chamber ensemble opens the season with works by three local composers.</p>
+<a href="/events/a">Read more</a></div>
+<div class="summary-item"><img src="/img/concert-b.jpg" alt="Piano on a dark stage">
+<p>October 2, 2026</p><p>Quay Theatre</p>
+<a href="/events/b">Autumn Recital</a>
+<p>A pianist closes the year with a programme of Chopin nocturnes.</p>
+<a href="/events/b">Read more</a></div>
+</div>"#
+            ),
+        );
+        let md = run(&html).0;
+        assert!(!md.contains(":::gallery"), "{class}: {md}");
+        for kept in [
+            "Spring Concert",
+            "Autumn Recital",
+            "March 14, 2026",
+            "October 2, 2026",
+            "A chamber ensemble opens the season with works by three local composers.",
+            "A pianist closes the year with a programme of Chopin nocturnes.",
+        ] {
+            assert!(md.contains(kept), "{class}: missing {kept:?} in {md}");
+        }
+    }
+}
+
+#[test]
+fn a_gallery_whose_lightbox_links_name_only_a_query_is_one_gallery() {
+    let html = page(
+        "",
+        r#"<div class="gallery-strips">
+<figure><a href="?itemId=a1"><img src="/i/a.jpg"></a><a href="?itemId=a1">View fullsize</a></figure>
+<figure><a href="?itemId=a2"><img src="/i/b.jpg"></a><a href="?itemId=a2">View fullsize</a></figure>
+</div>"#,
+    );
+    let md = run(&html).0;
+    let block = ":::gallery\n![](https://site.example/i/a.jpg)\n![](https://site.example/i/b.jpg)\n:::";
+    assert!(md.contains(block), "{md}");
+}
