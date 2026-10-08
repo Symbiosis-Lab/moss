@@ -731,7 +731,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::Checkbox,
         // Frequency=1, Importance=2 → score = 100 - (1*6 + 2*4) = 100 - 14 = 86
         score: 86,
-        description: "Override site-wide breadcrumb setting for this page",
+        description: "Home page: true turns breadcrumbs on for the whole site, false turns them off for it. Other pages: false hides them on this page only; true does nothing.",
         label_key: "chip.breadcrumb.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -996,7 +996,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::CodeEditor,
         // Frequency=0, Importance=1 → score=96
         score: 96,
-        description: "Frontmatter values to push to all descendant pages",
+        description: "Frontmatter values to push to all descendant pages; the page that declares it is not included, so set the value on it directly too",
         label_key: "chip.cascade.label",
         group: "Child Styles",
         ..FIELD_DEFAULTS

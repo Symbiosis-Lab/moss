@@ -230,9 +230,7 @@ A `:::grid` cell holding nothing but a page reference becomes one of two differe
 
 ### Partials
 
-Extract repeated blocks to a partial file and transclude with
-`![[partial-name]]`. Partials are content reuse, not styling — they live outside
-the styling rungs.
+Extract repeated blocks to a partial file and transclude with `![[partial-name]]`. Partials are content reuse, not styling — they live outside the styling rungs. Two limits: a partial file is also a page, published at its own address like any other page, and `draft: true` or `listed: false` hides it from listings without removing that address; a dot-prefixed file name keeps it out of the build, but then the embed does not resolve either. An embed expands only when it is the only thing on its line, so `![[partial-name]]` written inside a sentence is left unexpanded and its text does not appear — put the embed on a line of its own.
 
 ### Term kinds
 
@@ -342,6 +340,8 @@ sort: [intro, setup, advanced]
 A page's own `weight:` is an integer that `sort: weight` orders by — lower first, and pages with no weight follow after the weighted ones, tied among themselves by stem.
 
 A section can show a shorter name in the nav bar than its title: `nav_label: Reading` on a page titled "Course of Reading". The nav bar and the footer links (`footer: true`) use it; the page's own heading, the browser tab title, listing cards, breadcrumbs and feeds keep the title. A blank `nav_label` is ignored.
+
+Breadcrumbs are switched on for the whole site by `breadcrumb: true` on the home page (left unset, they appear only when the site has no nav items), and on any other page `breadcrumb: false` hides them for that page while `true` does nothing.
 
 `series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next. Declaring `sort:` as an explicit list, or as `sort: weight`, turns `series` on by default.
 
