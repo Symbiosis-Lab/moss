@@ -22,6 +22,8 @@ pub struct EventFields {
     /// `start` normalized so that string order is chronological: the page's
     /// "when", which listings sort by in place of `date`.
     pub when: String,
+    /// The trimmed `timezone:` text, if set and non-empty.
+    pub timezone: Option<String>,
     pub status: Option<String>,
     pub tickets: Option<String>,
     pub online: Option<String>,

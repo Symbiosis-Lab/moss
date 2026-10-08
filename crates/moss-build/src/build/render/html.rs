@@ -1395,20 +1395,7 @@ pub(super) fn render_page<'d>(
         description: share_card_description.clone(),
         og_tags: if is_article_page && is_card_eligible {
             let d = doc.unwrap();
-            // Build a typed page path from the full url_path (e.g. "about/index.html"),
-            // then derive the pretty URL by stripping the trailing "index.html" from the
-            // relative form — preserving the trailing slash for directory pages.
-            let page_path = crate::build::served_path::ServedPath::from_source(&d.url_path)
-                .map_err(|e| format!("og:url path for {}: {}", d.url_path, e))?;
-            let page_relative = page_path.to_relative_url()
-                .trim_end_matches("index.html").to_string();
-            // og:url: only emit absolute URL when deployed; otherwise use the
-            // relative path so unconfigured builds don't emit http://localhost URLs.
-            let url = if site_url.is_deployed() {
-                site_url.to_absolute(&page_relative)
-            } else {
-                page_relative
-            };
+            let url = crate::build::page::meta::page_meta_url(d, site_url)?;
             // og:title is chrome; use the plain-text label.
             Some(crate::build::page::meta::build_og_tags(
                 &d.label,
@@ -1442,15 +1429,7 @@ pub(super) fn render_page<'d>(
             let (og_title, og_url): (&str, String) = if is_homepage && d.url_path == "index.html" {
                 (site_title.as_str(), homepage_meta_url.clone())
             } else {
-                let page_path = crate::build::served_path::ServedPath::from_source(&d.url_path)
-                    .map_err(|e| format!("og:url path for {}: {}", d.url_path, e))?;
-                let page_relative = page_path.to_relative_url()
-                    .trim_end_matches("index.html").to_string();
-                let url = if site_url.is_deployed() {
-                    site_url.to_absolute(&page_relative)
-                } else {
-                    page_relative
-                };
+                let url = crate::build::page::meta::page_meta_url(d, site_url)?;
                 let title = if is_homepage { site_title.as_str() } else { d.label.as_str() };
                 (title, url)
             };
@@ -1548,50 +1527,10 @@ pub(super) fn render_page<'d>(
         } else {
             None
         },
-        schema_json_ld: if is_article_page && is_card_eligible {
-            let d = doc.unwrap();
-            // Same pretty-URL derivation as og:url: build from full url_path,
-            // then strip "index.html" to preserve the trailing slash for directory pages.
-            let page_path = crate::build::served_path::ServedPath::from_source(&d.url_path)
-                .map_err(|e| format!("schema JSON-LD path for {}: {}", d.url_path, e))?;
-            let page_relative = page_path.to_relative_url()
-                .trim_end_matches("index.html").to_string();
-            let url = if site_url.is_deployed() {
-                site_url.to_absolute(&page_relative)
-            } else {
-                page_relative
-            };
-            // Schema.org headline is chrome; use the plain-text label.
-            // Reuse the same resolved_cover_for_og for the JSON-LD image field.
-            Some(crate::build::page::meta::build_schema_json_ld(
-                &d.label,
-                share_card_description_str,
-                &url,
-                &site_title,
-                d.date.as_deref(),
-                resolved_cover_for_og.as_ref(),
-                d.tags.as_deref().unwrap_or(&[]),
-                site_url,
-            ))
-        } else if is_homepage && is_card_eligible {
-            // Homepage: emit a WebSite JSON-LD node for entity identity.
-            // Reuses the same description + url already fed to the og:website
-            // tags, and the site language code. Gated on `is_card_eligible`
-            // (= `doc.is_public_page()`) so it stays symmetric with the og:website
-            // meta block, which carries the same gate — a `draft: true`
-            // homepage emits neither, never one without the other.
-            Some(crate::build::page::meta::build_schema_website(
-                &site_title,
-                share_card_description_str,
-                &homepage_meta_url,
-                // The PAGE's tag: this block is homepage-only, and a homepage
-                // declaring `lang: fr` on an `en` site would otherwise emit
-                // `<html lang="fr">` with `"inLanguage": "en"` one line apart.
-                &page_lang_tag,
-            ))
-        } else {
-            None
-        },
+        schema_json_ld: crate::build::page::meta::page_json_ld(
+            doc, is_article_page, is_homepage, share_card_description_str, &site_title,
+            resolved_cover_for_og.as_ref(), site_url, &homepage_meta_url, &page_lang_tag,
+        )?,
         embed_head_assets,
         post_article,
         robots_meta,

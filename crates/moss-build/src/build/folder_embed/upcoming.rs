@@ -85,6 +85,7 @@ mod tests {
                 start: day,
                 end: None,
                 when: day.sort_key(),
+                timezone: None,
                 status: None,
                 tickets: None,
                 online: None,

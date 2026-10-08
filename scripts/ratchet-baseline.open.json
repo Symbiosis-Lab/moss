@@ -19,7 +19,7 @@
         "crates/moss-build/src/build/page/meta.rs": 1700,
         "crates/moss-build/src/build/pipeline.rs": 2300,
         "crates/moss-build/src/build/render/blocking.rs": 3500,
-        "crates/moss-build/src/build/render/html.rs": 1600,
+        "crates/moss-build/src/build/render/html.rs": 1500,
         "crates/moss-build/src/build/scan/scan.rs": 1600,
         "crates/moss-build/src/build/ship.rs": 1000,
         "crates/moss-build/src/build/types.rs": 1000,

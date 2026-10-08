@@ -561,9 +561,8 @@ fn strip_preview_only_scripts(html: &str) -> String {
 /// (fragments). Mirrors `inject_shell_frame_class`'s string-rewrite approach.
 ///
 /// The scan is anchored past `</head>` when one exists: head content can
-/// legitimately contain a literal `<body` — `escape_json_string` does not
-/// escape angle brackets, so an article titled `Styling the <body> element`
-/// puts one into the JSON-LD block — and a first-substring-wins scan from
+/// legitimately contain a literal `<body` — an og:title or meta description
+/// for an article titled `Styling the <body> element` puts one there — and a first-substring-wins scan from
 /// offset 0 would inject into that string and leave the real tag ungated.
 /// Residual limitation (accepted): a head string containing `</head>` could
 /// still misanchor; no moss-emitted head content produces that.

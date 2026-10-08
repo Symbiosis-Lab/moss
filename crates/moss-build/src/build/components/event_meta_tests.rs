@@ -7,6 +7,7 @@ fn doc(start: &str, end: Option<&str>) -> ParsedDocument {
             start: EventTime::parse(start).unwrap(),
             when: EventTime::parse(start).unwrap().sort_key(),
             end: end.map(|e| EventTime::parse(e).unwrap()),
+            timezone: None,
             status: None,
             tickets: None,
             online: None,

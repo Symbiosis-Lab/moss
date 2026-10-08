@@ -336,6 +336,8 @@ Calendar files come with the page, with nothing to configure:
 - `status: cancelled` writes `STATUS:CANCELLED`; `status: postponed` writes `STATUS:TENTATIVE`, because iCalendar has no "postponed" value and `TENTATIVE` (date not settled) is the closest. `moved-online` and `rescheduled` write no `STATUS` (the page's own `start`/`end` are the new time). `online` is written as `CONFERENCE`. The event `UID` is the page's `uid` at the site's domain, so a rebuild updates the same calendar entry; `SEQUENCE` is a fingerprint of the event's fields, so an edited event differs from the one a client imported earlier. `online` is written only when it is an http(s) address.
 - Drafts get no file; a `listed: false` event keeps its own file but stays out of every folder calendar; an unparseable `start` means no file.
 
+Any page with a parseable `start:`, whatever its layout, gets schema.org `Event` JSON-LD in its `<head>` in place of the `Article` block, built from these fields plus the cover and `tags`; `location:` is emitted as a name-only `Place` (full addresses wait for place data), and timed values carry the zone's UTC offset when the page sets `timezone:`, and are written without an offset otherwise.
+
 ### Long archives
 
 moss has **no pagination**: no `paginate:`, no `offset`, no `/page/2/`. Do not
