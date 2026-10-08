@@ -606,11 +606,11 @@ describe("mountPlacesMap — the opening view of all places and the world layer'
     // A tile fetch that never settles keeps its cell in the manifest, as a slow network would; a rejected one marks it failed.
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     let call = 0;
-    vi.spyOn(TileLayer.prototype, "waitForVisibleTiles").mockImplementation(() => Promise.resolve(waits[Math.min(call++, waits.length - 1)]));
+    const waitForVisibleTiles = vi.spyOn(TileLayer.prototype, "waitForVisibleTiles").mockImplementation(() => Promise.resolve(waits[Math.min(call++, waits.length - 1)]));
     const figure = document.createElement("figure");
     document.body.append(figure);
     mountPlacesMap(figure, { worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [TILE_CELL], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, places: PLACES, lang: "en" });
-    return { figure, zoom: () => readUrlState().camera!.zoom };
+    return { figure, zoom: () => readUrlState().camera!.zoom, waitForVisibleTiles };
   }
   const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
 
@@ -633,7 +633,37 @@ describe("mountPlacesMap — the opening view of all places and the world layer'
     expect(zoom()).toBeGreaterThan(detailMaxZoom(WIDE) + 0.1);
   });
 
-  test("a reader who pans while the tiles load keeps their view, and Fit all places then goes deep", async () => {
+  test("a cleared opening wait is not retried after the reader changes camera", async () => {
+    let tilesDecoded!: (result: Wait) => void;
+    const { figure, zoom, waitForVisibleTiles } = open(new Promise<Wait>((resolve) => { tilesDecoded = resolve; }) as never, "ready");
+    const opening = zoom();
+    const zoomOut = figure.querySelector<HTMLElement>('[data-control="zoom-out"]')!;
+    for (let i = 0; i < 4; i++) zoomOut.click();
+    const panned = zoom();
+    expect(panned).toBeLessThan(detailMaxZoom(WIDE));
+    tilesDecoded("superseded");
+    await settle();
+    expect(zoom()).toBeCloseTo(panned, 2);
+    figure.querySelector<HTMLElement>('[data-control="reset"]')!.click();
+    expect(zoom()).toBeCloseTo(opening, 2);
+    expect(waitForVisibleTiles).toHaveBeenCalledTimes(1);
+  });
+
+  test("a ready wait for the old viewport does not unlock the deep reset fit after resize", async () => {
+    let tilesDecoded!: (result: Wait) => void;
+    const { figure, zoom } = open(new Promise<Wait>((resolve) => { tilesDecoded = resolve; }) as never);
+    const original = zoom();
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 800, height: 900, top: 0, left: 0, right: 800, bottom: 900, x: 0, y: 0, toJSON() {},
+    } as DOMRect);
+    tilesDecoded("ready");
+    await settle();
+    figure.querySelector<HTMLElement>('[data-control="reset"]')!.click();
+    expect(zoom()).toBeLessThanOrEqual(detailMaxZoom({ width: 800, height: 900 }) + 1e-2);
+    expect(zoom()).not.toBeCloseTo(original, 2);
+  });
+
+  test("a reader who pans while the original tiles load keeps their view, and Fit all places then goes deep", async () => {
     let tilesDecoded!: (result: Wait) => void;
     const { figure, zoom } = open(new Promise<Wait>((resolve) => { tilesDecoded = resolve; }) as never);
     figure.querySelector<HTMLElement>('[data-control="zoom-out"]')!.click();

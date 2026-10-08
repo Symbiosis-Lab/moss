@@ -779,16 +779,22 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const viewport = getViewport();
     camera = fitForScope(viewport, freeFrame(viewport));
     applyCamera(true);
-    // The deeper opening fit waits for the tiles under this first view. A wait is superseded when the layer clears (a resize, an early render outside the fade band), so ask again, as `waitForInitialPaint` does; a failure keeps the shallow view for good.
+    // The deeper opening fit waits for the tiles under this first view. If a clear supersedes that wait, retry only while the captured camera and viewport are still current; a failure keeps the shallow view.
     const opening = { ...camera };
+    const openingViewport = getViewport();
     void (async () => {
       let result = await tileLayer.waitForVisibleTiles();
-      while (result === "superseded") result = await tileLayer.waitForVisibleTiles();
+      while (result === "superseded") {
+        const viewport = getViewport();
+        if (camera.x !== opening.x || camera.y !== opening.y || camera.zoom !== opening.zoom || viewport.width !== openingViewport.width || viewport.height !== openingViewport.height) return;
+        result = await tileLayer.waitForVisibleTiles();
+      }
       if (result !== "ready") return;
-      openingTilesReady = true;
-      // A reader who has already moved the map keeps their view; Fit all places now goes deep.
-      if (camera.x !== opening.x || camera.y !== opening.y || camera.zoom !== opening.zoom) return;
       const latest = getViewport();
+      if (latest.width !== openingViewport.width || latest.height !== openingViewport.height) return;
+      openingTilesReady = true;
+      // Only this opening view's completed tile wait unlocks the deeper fit; any user move or resize leaves the current camera alone.
+      if (camera.x !== opening.x || camera.y !== opening.y || camera.zoom !== opening.zoom) return;
       camera = fitForScope(latest, freeFrame(latest));
       applyCamera(true);
     })();
