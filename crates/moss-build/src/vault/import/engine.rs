@@ -7,7 +7,8 @@
 //! readability-style extractor, which is itself the oldest convention on
 //! the internet.
 
-use super::dialects::{self, SelectorDialect};
+use super::dialects::{self, ChromeGate, SelectorDialect};
+use crate::vault::import::scrape::metadata::{same_name, EventMetadata};
 use crate::vault::import::scrape::converter::{AdapterBody, MetadataOverrides, SiteContent};
 
 /// The single entry the scrape pipeline calls
@@ -66,4 +67,77 @@ fn apply_selector_dialect(d: &SelectorDialect, html: &str, url: &str) -> Option<
         }
     }
     None
+}
+
+/// Remove the builder chrome the dialect rows name, before the generic
+/// extractor sees the page. A row whose gate does not hold (no event `start`
+/// or `location` in the frontmatter, a line that is not the venue name) leaves
+/// its markup, so a fact the frontmatter lacks stays in the page. A page no
+/// row matches comes back byte for byte.
+pub(crate) fn strip_dialect_chrome(html: &str, event: &EventMetadata) -> String {
+    if !carries_dialect_chrome(html) {
+        return html.to_string();
+    }
+    let mut doc = scraper::Html::parse_document(html);
+    let mut doomed = Vec::new();
+    for row in dialects::CHROME_DIALECTS.iter().flat_map(|d| d.rows) {
+        let Ok(selector) = scraper::Selector::parse(row.selector) else { continue };
+        doomed.extend(doc.select(&selector).filter(|el| gate_holds(row.gate, el, event)).map(|el| el.id()));
+    }
+    if doomed.is_empty() {
+        return html.to_string();
+    }
+    for id in doomed {
+        if let Some(mut node) = doc.tree.get_mut(id) {
+            node.detach();
+        }
+    }
+    doc.html()
+}
+
+/// Whether `html` mentions any class a chrome row selects, so a page with none
+/// of a dialect's chrome is never parsed or reserialised. The tokens are read
+/// from the rows' own selectors; a false positive only costs the parse.
+fn carries_dialect_chrome(html: &str) -> bool {
+    dialects::CHROME_DIALECTS.iter().flat_map(|d| d.rows).any(|row| {
+        row.selector.split('.').skip(1).any(|rest| {
+            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+            html.contains(&rest[..end.unwrap_or(rest.len())])
+        })
+    })
+}
+
+fn gate_holds(gate: ChromeGate, el: &scraper::ElementRef<'_>, event: &EventMetadata) -> bool {
+    match gate {
+        ChromeGate::CardHas(selector) => {
+            let card = el.ancestors().filter_map(scraper::ElementRef::wrap).find(|a| {
+                a.value().has_class("summary-item", scraper::CaseSensitivity::CaseSensitive)
+            });
+            scraper::Selector::parse(selector)
+                .ok()
+                .zip(card)
+                .is_some_and(|(sel, card)| card.select(&sel).next().is_some())
+        }
+        ChromeGate::EventStart => event.start.is_some(),
+        ChromeGate::EventLocation => event.location.is_some(),
+        ChromeGate::EventVenueLine => event
+            .location
+            .as_deref()
+            .is_some_and(|venue| same_name(&el.text().collect::<String>(), venue)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pre-check is the only thing standing between an unrelated page and
+    /// a parse plus reserialise. The output of an unmatched page is the same
+    /// string either way, so only the predicate can be pinned.
+    #[test]
+    fn only_a_page_naming_a_row_class_is_parsed() {
+        assert!(!carries_dialect_chrome("<article><p>Plain page, <b>unclosed</p>"));
+        assert!(carries_dialect_chrome(r#"<a class="x eventitem-backlink">Back</a>"#));
+        assert!(carries_dialect_chrome(r#"<div class="summary-thumbnail-event-date">"#));
+    }
 }

@@ -175,3 +175,73 @@ pub(crate) static DOUBAN: SelectorDialect = SelectorDialect {
     host_suffix: "douban.com",
     selectors: &[".review-content", "#link-report .note", ".note"],
 };
+
+/// What must hold before a chrome row may remove markup.
+#[derive(Clone, Copy)]
+pub(crate) enum ChromeGate {
+    /// The importer wrote `start:` from the page's Event data.
+    EventStart,
+    /// The importer wrote `location:` from the page's Event data.
+    EventLocation,
+    /// The element's text is the written `location:` (the venue name). The
+    /// street and city lines beside it are facts the frontmatter does not hold.
+    EventVenueLine,
+    /// The element's own card (`.summary-item`) holds a match for this
+    /// selector, so removing the element leaves that fact in the card.
+    CardHas(&'static str),
+}
+
+/// One piece of builder markup the DOM scorer cannot tell from content: a
+/// selector to remove, and the gate that keeps it when its facts would
+/// otherwise be lost.
+pub(crate) struct HtmlChromeRow {
+    pub selector: &'static str,
+    pub gate: ChromeGate,
+}
+
+/// One builder's HTML chrome, as rows. A new builder is a new entry in
+/// [`CHROME_DIALECTS`].
+pub(crate) struct ChromeDialect {
+    pub name: &'static str,
+    pub rows: &'static [HtmlChromeRow],
+}
+
+pub(crate) static CHROME_DIALECTS: &[ChromeDialect] =
+    &[ChromeDialect { name: "squarespace", rows: SQUARESPACE_CHROME }];
+
+/// Squarespace template chrome. An event page renders its back link, date and
+/// time, venue address, calendar export links (one a `?format=ical` endpoint a
+/// static site does not have) and categories inside the content. The address
+/// block also holds street and city, which `location:` does not, so only the
+/// map link and the line that is the venue name go. A summary block renders
+/// each card's date and venue above the title, below it, below the excerpt,
+/// and the date once more in the thumbnail's date box. The group below the
+/// title is kept, and the others go only when a card has it, so a block set up
+/// with a single group, or a card with no date elsewhere, loses nothing.
+static SQUARESPACE_CHROME: &[HtmlChromeRow] = &[
+    HtmlChromeRow { selector: ".eventitem-backlink", gate: ChromeGate::EventStart },
+    HtmlChromeRow {
+        selector: ".event-meta-date-time-container, .eventitem-meta-date, .eventitem-meta-time",
+        gate: ChromeGate::EventStart,
+    },
+    HtmlChromeRow { selector: ".eventitem-meta-address-maplink", gate: ChromeGate::EventLocation },
+    HtmlChromeRow { selector: ".eventitem-meta-address-line", gate: ChromeGate::EventVenueLine },
+    HtmlChromeRow {
+        selector: ".event-meta-addtocalendar-container, .eventitem-meta-export",
+        gate: ChromeGate::EventStart,
+    },
+    HtmlChromeRow {
+        selector: ".event-meta-cats-tags-container, .eventitem-meta-cats",
+        gate: ChromeGate::EventStart,
+    },
+    // The builder renders the same facts in every group, so these rows check only
+    // that the below-title group exists.
+    HtmlChromeRow {
+        selector: ".summary-metadata-container--above-title, .summary-metadata-container--below-content",
+        gate: ChromeGate::CardHas(".summary-metadata-container--below-title"),
+    },
+    HtmlChromeRow {
+        selector: ".summary-thumbnail-event-date",
+        gate: ChromeGate::CardHas(".summary-metadata-container--below-title .summary-metadata-item--date"),
+    },
+];

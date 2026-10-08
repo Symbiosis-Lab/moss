@@ -130,7 +130,8 @@ pub fn extract_article_with_snapshot(
             // Widgets are classified before the strip removes them.
             // A page with no URL (a local file) still resolves absolute links.
             let page_url = base.clone().unwrap_or_else(|| Url::parse("about:blank").expect("static url"));
-            let (carried, found) = carry_widgets(html, &page_url);
+            let html = crate::vault::import::engine::strip_dialect_chrome(html, &metadata.event);
+            let (carried, found) = carry_widgets(&html, &page_url);
             widgets = found;
             let h = extract_main_content(&carried);
             html_to_markdown(&h).unwrap_or_else(|_| h.clone())
@@ -467,6 +468,142 @@ mod tests {
             "both markdown references should point at the canonical URL: {}",
             art.markdown
         );
+    }
+
+    fn event_page(extra_ld: &str) -> String {
+        format!(r#"<html><head><title>Spring Recital</title>
+            <script type="application/ld+json">
+            {{"@type":"Event","name":"Spring Recital","startDate":"2026-11-01T14:00:00-05:00",
+              "endDate":"2026-11-01T16:00:00-05:00"{extra_ld}}}
+            </script></head><body><article>
+            <a href="/events" class="eventitem-backlink">Back to All Events</a>
+            <ul class="eventitem-meta event-meta event-meta-date-time-container">
+              <li class="eventitem-meta-item eventitem-meta-date"><time>Sunday, November 1, 2026</time></li>
+              <li class="eventitem-meta-item eventitem-meta-time"><time>2:00 PM</time> <time>4:00 PM</time></li>
+            </ul>
+            <ul class="eventitem-meta event-meta event-meta-address-container">
+              <li class="eventitem-meta-item eventitem-meta-address">
+                <span class="eventitem-meta-address-line eventitem-meta-address-line--title">Example Hall</span>
+                <span class="eventitem-meta-address-line">12 Sample Street</span>
+                <span class="eventitem-meta-address-line">Exampleton, EX 00000</span>
+                <a href="http://maps.example.test/?q=hall" class="eventitem-meta-address-maplink">(map)</a>
+              </li>
+            </ul>
+            <ul class="eventitem-meta event-meta event-meta-addtocalendar-container">
+              <li class="eventitem-meta-item eventitem-meta-export">
+                <a href="http://calendar.example.test/add?text=Spring">Google Calendar</a>
+                <a href="/events/2026/11/01?format=ical" class="eventitem-meta-export-ical">ICS</a>
+              </li>
+            </ul>
+            <div class="sqs-block-content"><p>An afternoon of piano pieces played by the studio's students.</p>
+            <p>Doors open at half past one and seating is general admission.</p></div>
+            <ul class="eventitem-meta event-meta event-meta-cats-tags-container">
+              <li class="eventitem-meta-item eventitem-meta-cats">Posted In: <a href="/events?category=recitals">Recitals</a></li>
+            </ul>
+            </article></body></html>"#)
+    }
+
+    /// An event page's template repeats the facts its frontmatter already
+    /// holds, and links dynamic endpoints a static site lacks. They are
+    /// builder markup, removed by dialect rows; the prose stays.
+    #[test]
+    fn an_event_pages_template_chrome_is_dropped_when_the_frontmatter_holds_the_facts() {
+        let ld = r#","location":{"@type":"Place","name":"Example Hall"}"#;
+        let art = extract_article(&event_page(ld), "https://example.test/events/2026/11/01");
+        assert_eq!(art.metadata.event.start.as_deref(), Some("2026-11-01 14:00"));
+        for gone in ["Back to All Events", "Sunday, November 1", "2:00 PM", "Example Hall", "(map)", "maps.example.test", "Google Calendar", "ICS", "format=ical", "Posted In", "Recitals"] {
+            assert!(!art.markdown.contains(gone), "{gone} should be dropped: {}", art.markdown);
+        }
+        assert!(art.markdown.contains("afternoon of piano pieces"), "{}", art.markdown);
+        // The frontmatter holds the venue name only; street and city are not repeated there.
+        assert!(art.markdown.contains("12 Sample Street"), "{}", art.markdown);
+        assert!(art.markdown.contains("Exampleton, EX 00000"), "{}", art.markdown);
+    }
+
+    /// The address is the only place the venue appears when no `location` was
+    /// written, so it stays; the date and time still go, `start` being written.
+    #[test]
+    fn the_address_stays_when_no_location_was_written() {
+        let art = extract_article(&event_page(""), "https://example.test/events/2026/11/01");
+        assert!(art.metadata.event.location.is_none());
+        assert!(art.markdown.contains("Example Hall"), "{}", art.markdown);
+        assert!(!art.markdown.contains("2:00 PM"), "{}", art.markdown);
+    }
+
+    /// Without event data nothing in the template is a repeat of the
+    /// frontmatter, so the same markup is left alone.
+    #[test]
+    fn a_page_without_event_data_keeps_its_event_markup() {
+        let html = event_page("").replace(r#""@type":"Event""#, r#""@type":"Thing""#);
+        let art = extract_article(&html, "https://example.test/events/2026/11/01");
+        assert!(art.metadata.event.start.is_none());
+        assert!(art.markdown.contains("2:00 PM"), "{}", art.markdown);
+        assert!(art.markdown.contains("Back to All Events"), "{}", art.markdown);
+    }
+
+    fn summary_card(title: &str, day: &str) -> String {
+        let meta = format!(
+            r#"<div class="summary-metadata summary-metadata--primary"><time class="summary-metadata-item summary-metadata-item--date">{day}</time></div>
+            <div class="summary-metadata summary-metadata--secondary"><span class="summary-metadata-item summary-metadata-item--location"><a href="http://maps.example.test/?q=hall">Example Hall</a></span></div>"#
+        );
+        format!(
+            r#"<div class="summary-item">
+            <div class="summary-thumbnail-outer-container"><a href="/events/{title}" class="summary-thumbnail-container">
+              <div class="summary-thumbnail img-wrapper"><img src="https://example.test/{title}.png" alt="{title}">
+              <div class="summary-thumbnail-event-date"><div class="summary-thumbnail-event-date-inner"><span>Nov</span><span>1</span></div></div></div></a></div>
+            <div class="summary-content">
+              <div class="summary-metadata-container summary-metadata-container--above-title">{meta}</div>
+              <div class="summary-title"><a href="/events/{title}" class="summary-title-link">{title}</a></div>
+              <div class="summary-metadata-container summary-metadata-container--below-title">{meta}</div>
+              <div class="summary-excerpt"><p>Excerpt for {title} with a few more words in it.</p></div>
+              <a href="/events/{title}" class="summary-read-more-link">Read more</a>
+              <div class="summary-metadata-container summary-metadata-container--below-content">{meta}</div>
+            </div></div>"#
+        )
+    }
+
+    /// A summary block prints each card's date and venue in three places. A
+    /// card keeps them once, between its title and its excerpt.
+    #[test]
+    fn a_summary_card_keeps_its_date_and_venue_once_in_reading_order() {
+        let html = format!(
+            r#"<article><p>Intro paragraph with enough words to anchor the page content here.</p>
+            <div class="summary-item-list">{}{}</div></article>"#,
+            summary_card("Alpha", "November 1, 2026"),
+            summary_card("Beta", "December 20, 2026"),
+        );
+        let md = extract_article(&html, "https://example.test/").markdown;
+        for fact in ["November 1, 2026", "December 20, 2026", "Example Hall"] {
+            let n = md.matches(fact).count();
+            assert_eq!(n, if fact == "Example Hall" { 2 } else { 1 }, "{fact} x{n}: {md}");
+        }
+        let at = |s: &str| md.find(s).unwrap_or_else(|| panic!("{s} missing: {md}"));
+        assert!(at("[Alpha](/events/Alpha)") < at("November 1, 2026"));
+        assert!(at("November 1, 2026") < at("Example Hall"));
+        assert!(at("Example Hall") < at("Excerpt for Alpha"));
+        assert!(at("Excerpt for Alpha") < at("[Read more](/events/Alpha)"));
+        assert!(!md.contains("Nov\n") && !md.contains("Nov 1"), "date box text is gone: {md}");
+    }
+
+    /// A block set up with fewer date and venue groups than three keeps what it
+    /// has: the thumbnail's date box is the only date of the first card, and
+    /// the second card's only group sits above its title.
+    #[test]
+    fn a_summary_card_never_loses_its_only_date_or_venue() {
+        let date_box_only = r#"<div class="summary-item"><a href="/events/a" class="summary-thumbnail-container">
+            <div class="summary-thumbnail-event-date"><span>Nov</span> <span>1</span></div></a>
+            <div class="summary-title"><a href="/events/a" class="summary-title-link">Alpha</a></div></div>"#;
+        let above_only = r#"<div class="summary-item"><div class="summary-content">
+            <div class="summary-metadata-container summary-metadata-container--above-title">
+              <time class="summary-metadata-item summary-metadata-item--date">December 20, 2026</time></div>
+            <div class="summary-title"><a href="/events/b" class="summary-title-link">Beta</a></div></div></div>"#;
+        let html = format!(
+            r#"<article><p>Intro paragraph with enough words to anchor the page content here.</p>
+            <div class="summary-item-list">{date_box_only}{above_only}</div></article>"#
+        );
+        let md = extract_article(&html, "https://example.test/").markdown;
+        assert!(md.contains("Nov") && md.contains('1'), "date box kept: {md}");
+        assert!(md.contains("December 20, 2026"), "lone above-title group kept: {md}");
     }
 
     #[test]
