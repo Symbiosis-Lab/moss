@@ -104,6 +104,9 @@ impl fmt::Display for StorageFailure {
             StorageOperation::CachePublish => "publishing verified cache candidate",
         };
         match &self.path {
+            Some(path) if self.operation == StorageOperation::ReadDirOpen
+                && self.io_error().is_some_and(|error| error.kind() == io::ErrorKind::NotADirectory) =>
+                write!(f, "'{}' is not a directory ({operation}: {})", path.display(), self.source),
             Some(path) => write!(f, "{operation} at '{}': {}", path.display(), self.source),
             None => write!(f, "{operation}: {}", self.source),
         }
