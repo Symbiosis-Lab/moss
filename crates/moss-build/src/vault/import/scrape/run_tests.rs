@@ -2127,3 +2127,18 @@ fn a_composed_note_drops_a_heading_that_repeats_the_title_without_its_site_name(
     assert_eq!(note.matches("Our Story").count(), 2, "title once, later heading once: {note}");
     assert!(!note.contains("## Our Story | Studio Name"), "{note}");
 }
+
+/// A page whose `<title>` is a name the builder keeps internally and never
+/// shows takes its visible leading heading as the title.
+#[test]
+fn a_composed_note_takes_the_heading_when_the_title_is_never_shown() {
+    let html = r#"<html><head><title>T_Winter_Tale_S</title></head><body><article>
+        <h2>The Winter's Tale</h2><p>First paragraph, long enough to be extracted as content.</p>
+        <p>Second paragraph of the same page.</p></article></body></html>"#;
+    let mut article = crate::vault::import::scrape::converter::extract_article(html, "https://example.test/work");
+    let note = compose_note(&mut article, &HashMap::new(), None, "https://example.test/work", None)
+        .expect("a note");
+    assert!(note.contains("title: \"The Winter's Tale\""), "{note}");
+    assert!(!note.contains("## The Winter's Tale"), "{note}");
+    assert!(!note.contains("T_Winter_Tale_S"), "{note}");
+}

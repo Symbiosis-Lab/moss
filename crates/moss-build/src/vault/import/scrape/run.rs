@@ -263,12 +263,15 @@ pub(crate) fn compose_note(
         return None;
     }
 
-    if let Some(title) = article.metadata.title.as_deref() {
+    if let Some(title) = article.metadata.title.clone() {
         let names: Vec<&str> = article.metadata.publisher.iter().map(String::as_str).collect();
-        if let Some(rest) = super::finalize::without_title_heading(&markdown, title, &names) {
+        if let Some(settled) = super::finalize::without_title_heading(&markdown, &title, &names, true) {
             // A page that is only its title keeps it: an empty note is a failure.
-            if !rest.trim().is_empty() {
-                markdown = rest;
+            if !settled.body.trim().is_empty() {
+                markdown = settled.body;
+                if settled.title.is_some() {
+                    article.metadata.title = settled.title;
+                }
             }
         }
     }
