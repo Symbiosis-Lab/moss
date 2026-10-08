@@ -263,6 +263,16 @@ pub(crate) fn compose_note(
         return None;
     }
 
+    if let Some(title) = article.metadata.title.as_deref() {
+        let names: Vec<&str> = article.metadata.publisher.iter().map(String::as_str).collect();
+        if let Some(rest) = super::finalize::without_title_heading(&markdown, title, &names) {
+            // A page that is only its title keeps it: an empty note is a failure.
+            if !rest.trim().is_empty() {
+                markdown = rest;
+            }
+        }
+    }
+
     // No "Originally published at …" attribution: the vault copy is
     // canonical, and the source is recorded as `origin` frontmatter
     // (provenance) rather than a linkblog banner implying the fetched page

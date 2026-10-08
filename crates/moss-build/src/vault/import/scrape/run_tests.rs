@@ -2083,3 +2083,47 @@ async fn a_title_segment_shared_by_every_crawled_page_is_stripped() {
         assert!(md.contains(&format!("title: \"{want}\"\n")), "{rel}:\n{md}");
     }
 }
+
+/// moss renders the page title itself, so an imported body that opens with the
+/// same heading prints it twice. The heading goes; a later heading stays.
+#[tokio::test]
+async fn a_body_heading_repeating_the_title_is_not_imported() {
+    let mut server = mockito::Server::new_async().await;
+    let page = server
+        .mock("GET", "/about")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><head><title>Our Story</title></head><body><article>\
+             <h1>Our Story</h1><p>First paragraph, long enough to be extracted as content.</p>\
+             <h2>Later</h2><p>Second paragraph under a later heading.</p></article></body></html>",
+        )
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let config = ScrapeConfig::new(format!("{}/about", server.url()), tmp.path());
+    scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    page.assert_async().await;
+
+    let note = std::fs::read_to_string(tmp.path().join("about.md")).unwrap();
+    assert!(note.contains("title: \"Our Story\""), "{note}");
+    assert!(!note.contains("# Our Story"), "the title is not repeated in the body: {note}");
+    assert!(note.contains("## Later"), "a later heading stays: {note}");
+}
+
+/// The single-file arm never runs the crawl's finishing pass, so the note
+/// composer drops the repeated heading itself, site name included.
+#[test]
+fn a_composed_note_drops_a_heading_that_repeats_the_title_without_its_site_name() {
+    let html = r#"<html><head><title>Our Story | Studio Name</title>
+        <meta property="og:site_name" content="Studio Name"></head><body><article>
+        <h2>Our Story | Studio Name</h2><p>First paragraph, long enough to be extracted as content.</p>
+        <h2>Our Story</h2><p>Second paragraph under a later heading.</p></article></body></html>"#;
+    let mut article = crate::vault::import::scrape::converter::extract_article(html, "https://example.test/about");
+    let note = compose_note(&mut article, &HashMap::new(), None, "https://example.test/about", None)
+        .expect("a note");
+    assert!(note.contains("title: \"Our Story\""), "{note}");
+    assert_eq!(note.matches("Our Story").count(), 2, "title once, later heading once: {note}");
+    assert!(!note.contains("## Our Story | Studio Name"), "{note}");
+}
