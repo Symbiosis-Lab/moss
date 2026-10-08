@@ -156,6 +156,7 @@ All notable changes to moss will be documented here.
 - Edits made in another app to a page — or to `.moss/config.toml`, `.moss/places.toml`, or the site's theme `style.css`/`script.js` — that is open in moss's editor now appear in the editor, instead of the editor keeping the old text and writing it back over them on the next autosave.
 - A video shorter than about a second now gets a real poster image instead of a broken, empty one. The poster is captured from the middle of the clip rather than a fixed one-second mark, so the capture point always falls inside the video; if a capture still comes out empty, moss leaves out the broken poster instead of publishing it.
 - A build phase that runs well past its internal timing budget — not unusual on a large site's `build` phase — now logs a WARN performance note instead of an `[ERROR]` line. Before, a successful build of a large site could print an `[ERROR]` line purely for taking a while, reading as a failed build to anyone scanning the log even though the site was generated fine and the build's own problem count never counted it.
+- A very wide image inside a grid card no longer gets the article margin that pushed it below its neighbours.
 - A page placed at the root of a place term (for example `places/index.md`) now keeps the map that root would otherwise show, with the page's own title and content leading it — before, writing that page silently replaced the map with no warning that it was gone. Set `map: false` on that page to turn the map off instead.
 
 ### Changed

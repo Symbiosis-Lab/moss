@@ -1529,6 +1529,19 @@ fn test_css_grid_card_link_no_underline() {
     );
 }
 
+#[test]
+fn test_css_grid_card_scroll_picture_has_no_article_margin() {
+    // A wide (`data-aspect="scroll"`) picture inside a grid card must drop the
+    // article-body block margin, or it sits lower than its neighbours' images.
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-grid-card picture[data-aspect=\"scroll\"]")
+        .expect(".moss-grid-card picture[data-aspect=\"scroll\"] CSS rule should exist");
+    assert!(
+        rule.contains("margin-block: 0"),
+        "card scroll picture must zero the article margin, got: {}",
+        rule
+    );
+}
+
 // =========================================================================
 // Template: has-sidebar-layout class on <html>
 // =========================================================================

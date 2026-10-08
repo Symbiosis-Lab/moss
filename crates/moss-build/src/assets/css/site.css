@@ -7934,6 +7934,13 @@ article picture[data-aspect="scroll"] {
   margin-block: calc(var(--moss-read-line) * 1.25);
 }
 
+/* The article-body margin above would push a wide image down inside a grid
+   card, out of line with its neighbours' images (`.moss-grid-card img` is
+   flush at the top of the cell). */
+.moss-grid-card picture[data-aspect="scroll"] {
+  margin-block: 0;
+}
+
 /* No upscale past natural size (`inline-size: auto`, the same never-
    upscale pattern the hero-plate rules below use): a source shorter than
    60vh already just shows at its own height. `max-block-size` is the
