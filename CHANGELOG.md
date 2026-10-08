@@ -161,6 +161,8 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- A folder shown as a card in a grid now shows its folder note's `description:` under its title, beside its page count.
+
 - **BREAKING:** A site theme can now override `--moss-cover-color` and `--moss-hero-panel-bg`. moss used to write both as inline `style` custom properties, which no stylesheet rule can outrank. It now publishes the per-item values as `--item-cover-color` and `--item-hero-panel-bg` and paints with `var(--moss-cover-color, var(--item-cover-color))` (and the same shape for the panel), so a theme-set token wins and, with none set, each card and hero keeps its own colour. **A theme that read the inline `--moss-cover-color` or `--moss-hero-panel-bg` of a card, grid cell or hero must read `--item-cover-color` / `--item-hero-panel-bg` instead.**
 
 - Each `:::gallery` image is now wrapped in `<a class="moss-gallery-link" href="<full image>" data-title="<alt>">`, inside the `.moss-gallery-item`. With `fullscreen.js` (shipped site-wide when any page has a gallery) the link opens the image in the full-screen viewer and the arrow keys step through that gallery; without it the link opens the image. **BREAKING:** A theme that styled `.moss-gallery-item > img` by child combinator needs to target `img` as a descendant.

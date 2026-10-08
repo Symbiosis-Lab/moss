@@ -434,7 +434,7 @@ fn file_card_renders_description_under_title() {
 }
 
 #[test]
-fn folder_card_does_not_render_description() {
+fn folder_card_renders_description_under_title_beside_its_count() {
     let props = ChildItemProps {
         title: "Travel".to_string(),
         url: "travel/".to_string(),
@@ -444,8 +444,8 @@ fn folder_card_does_not_render_description() {
     };
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
     assert!(
-        !html.contains("moss-card-description"),
-        "folder card must NOT render a description. Got: {}",
+        html.contains(r#"<p class="moss-card-description">A collection of travel stories.</p>"#),
+        "folder card must render its folder note's description. Got: {}",
         html
     );
     assert!(

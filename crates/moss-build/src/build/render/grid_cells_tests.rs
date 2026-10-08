@@ -284,6 +284,20 @@ fn folder_links_in_a_grid_become_collection_cards() {
 }
 
 #[test]
+fn a_folder_card_in_a_grid_shows_the_folder_notes_description() {
+    let mut folder = make_folder("Theater", "theater/index.html", None);
+    folder.description = Some("Pick a room".to_string());
+    let docs = vec![folder, make_doc("Hamlet", "theater/hamlet/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[Theater](theater/)\n:::\n");
+    assert!(
+        html.contains(r#"<p class="moss-card-description">Pick a room</p>"#),
+        "folder card must carry its folder note's description. got: {html}"
+    );
+    assert!(html.contains("1 article"), "folder card keeps its count. got: {html}");
+}
+
+#[test]
 fn a_bare_wikilink_cell_shows_the_linked_pages_title() {
     // `[[work-b]]` has no `|alias`, so pulldown-cmark synthesizes the raw
     // target ("work-b") as the link's text. That synthesized text is never
