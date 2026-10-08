@@ -18,7 +18,9 @@ use moss_core::event::EventTime;
 const STATUSES: [&str; 4] = ["cancelled", "postponed", "moved-online", "rescheduled"];
 
 /// The event's meta span, or `None` when the page is not an event.
-pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool) -> Option<String> {
+/// `calendar_href` is the event file's address, from the calendar plan; the
+/// "Add to calendar" link goes after the tickets and online links.
+pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, calendar_href: Option<&str>) -> Option<String> {
     let ev = doc.event.as_ref()?;
     let (start, end) = (ev.start, ev.end);
     let status = ev.status.as_deref().map(str::trim).filter(|s| STATUSES.contains(s));
@@ -54,6 +56,13 @@ pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool) -> 
                 t(lang, key),
             ));
         }
+    }
+    if let Some(href) = calendar_href {
+        html.push_str(&format!(
+            r#"<a class="moss-event-link moss-event-calendar" href="{}">{}</a>"#,
+            html_escape(href),
+            t(lang, "add_to_calendar"),
+        ));
     }
     html.push_str("</span>");
     Some(html)

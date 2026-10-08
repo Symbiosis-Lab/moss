@@ -2428,6 +2428,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "A `tickets` (label Tickets) or `online` (label Online) link; only http and https addresses are linked.",
     },
     ComponentEntry {
+        class: "moss-event-calendar",
+        kind: "instance",
+        parent: "moss-event-meta",
+        data_attrs: &[],
+        example_html: r#"<a class="moss-event-link moss-event-calendar" href="/events/talk/event.ics">Add to calendar</a>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0.16",
+        description: "The \"Add to calendar\" link to the event's `.ics` file, after the tickets and online links. Carries `.moss-event-link` too.",
+    },
+    ComponentEntry {
         class: "moss-when",
         kind: "container",
         parent: "",

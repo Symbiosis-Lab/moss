@@ -7052,7 +7052,23 @@ fn a_folder_of_events_publishes_a_subscribable_calendar_and_links_it() {
     assert!(folder.contains(r#"href="webcal://example.test/events/calendar.ics""#), "{folder}");
     let page = staged(&dir, "events/a/index.html");
     assert!(page.contains(r#"href="/events/a/event.ics""#), "{page}");
+    assert!(page.contains(r#"<a class="moss-event-link moss-event-calendar" href="/events/a/event.ics">Add to calendar</a></span>"#), "the event's calendar link closes its meta line: {page}");
+    assert!(!page.contains("moss-calendar-links"), "an event page has no calendar paragraph at the end of its body: {page}");
     assert!(!staged(&dir, "events/notes/index.html").contains("event.ics"));
+    let folder = staged(&dir, "events/index.html");
+    assert!(folder.contains("Download calendar") && folder.contains("Subscribe"), "a folder page keeps its download and subscribe links: {folder}");
+}
+
+#[test]
+fn an_event_on_a_page_shell_keeps_its_calendar_link_once_at_the_end_of_the_body() {
+    // `nav: true` pins a page to the Page shell, which renders no meta line.
+    let (dir, _c) = event_site(&[("Pinned.md", "title: Pinned\nuid: pppp0001\nstart: 2026-11-01 19:00\ntimezone: Europe/London\nnav: true\n")]);
+    let page = staged(&dir, "events/pinned/index.html");
+    assert!(!page.contains("moss-event-meta"), "a Page-shell event renders no meta line: {page}");
+    assert_eq!(page.matches(">Add to calendar</a>").count(), 1, "{page}");
+    let link = page.find(r#"<a class="moss-calendar-link" href="/events/pinned/event.ics" type="text/calendar">Add to calendar</a>"#);
+    assert!(link.is_some(), "{page}");
+    assert!(page.find("Body.").unwrap() < link.unwrap(), "the link closes the body, after the prose: {page}");
 }
 
 fn staged_exists(test_dir: &std::path::Path, rel: &str) -> bool {

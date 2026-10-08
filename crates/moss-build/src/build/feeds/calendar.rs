@@ -352,13 +352,14 @@ impl CalendarPlan {
         out
     }
 
-    /// The visible calendar links for a page: "Add to calendar" on an event, and
-    /// the folder's calendar file with its `webcal://` subscribe link on a folder
-    /// whose listing shows events. Empty when the page has neither.
-    pub fn links_html(&self, doc: &ParsedDocument, site_url: &SiteUrl, lang: crate::i18n::Language) -> String {
+    /// The calendar links that close a page's body: `event_href` (the caller
+    /// passes it only when the meta line did not carry the event's link), then
+    /// a folder's calendar file and, when the site is deployed, its `webcal://`
+    /// subscribe link. Empty when there is nothing to link.
+    pub fn links_html(&self, doc: &ParsedDocument, site_url: &SiteUrl, lang: crate::i18n::Language, event_href: Option<&str>) -> String {
         let t = |key| crate::i18n::t(lang, key);
         let mut links = Vec::new();
-        if let Some(href) = self.event_href(doc) {
+        if let Some(href) = event_href {
             links.push(format!(r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#, t("add_to_calendar")));
         }
         if let Some(href) = self.folder_href(doc) {

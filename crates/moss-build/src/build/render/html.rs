@@ -1208,9 +1208,14 @@ pub(super) fn render_page<'d>(
     // body. The {date_line} template token is left empty so the template's
     // legacy "above the body" position is no longer used.
     // An event page shows its event facts here instead of the posted date.
+    // Its "Add to calendar" link goes in this meta line when the page has one,
+    // and closes the body otherwise (a Page-shell event has no meta line). This
+    // is the one place that decides which spot gets the link.
+    let event_calendar_href = doc.and_then(|d| context.shared.calendar.event_href(d));
     let event_meta_html = doc
         .filter(|_| is_article_page)
-        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines));
+        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref()));
+    let calendar_at_body_end = if event_meta_html.is_some() { None } else { event_calendar_href };
     let article_date_line_html: Option<String> = if is_article_page
         && doc.is_some()
         && (doc.unwrap().date.is_some() || event_meta_html.is_some())
@@ -1278,11 +1283,10 @@ pub(super) fn render_page<'d>(
             credits::push_colophon(&mut homepage_content, &d.colophon, emit_source_lines);
         }
     }
-    // Calendar links close the page body: an event's "Add to calendar", and a
-    // folder of events' calendar file with its subscribe link. Apart from the
-    // meta line under the title, so each can change without the other.
+    // Calendar links that close the body: a folder's download and subscribe
+    // links, and an event's "Add to calendar" when no meta line carries it.
     if let Some(d) = doc {
-        homepage_content.push_str(&context.shared.calendar.links_html(d, site_url, d.lang));
+        homepage_content.push_str(&context.shared.calendar.links_html(d, site_url, d.lang, calendar_at_body_end.as_deref()));
     }
 
     // Resolve the share-card description once for the page, using the
