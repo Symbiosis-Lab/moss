@@ -2140,9 +2140,10 @@ fn test_extract_color_and_lqip_returns_none_lqip_for_svg() {
 }
 
 /// A logo with a transparent half: the blur-up is an opaque JPEG and would
-/// show through the clear pixels after the real image loads.
+/// show through the clear pixels after the real image loads. The empty LQIP
+/// is the marker that keeps the renderer from painting the colour instead.
 #[test]
-fn test_extract_color_and_lqip_has_no_lqip_for_png_with_transparent_pixels() {
+fn test_extract_color_and_lqip_marks_png_with_transparent_pixels_as_no_placeholder() {
     let temp_dir =
         std::env::temp_dir().join(format!("moss_test_lqip_alpha_{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
@@ -2156,7 +2157,11 @@ fn test_extract_color_and_lqip_has_no_lqip_for_png_with_transparent_pixels() {
     let (color, lqip) = extract_color_and_lqip(&logo_path);
 
     assert!(color.is_some(), "a transparent image still has a dominant color");
-    assert!(lqip.is_none(), "a PNG with transparent pixels must get no LQIP");
+    assert_eq!(
+        lqip.as_deref(),
+        Some(""),
+        "a PNG with transparent pixels must carry the empty no-placeholder marker"
+    );
 
     fs::remove_dir_all(&temp_dir).ok();
 }

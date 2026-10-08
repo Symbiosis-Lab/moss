@@ -219,12 +219,14 @@ pub(crate) fn compute_color_and_lqip_from_image(
 
     // --- LQIP from ~20px thumbnail → JPEG → base64 data URI ---
     // A JPEG has no alpha, so the blur-up would show through a transparent
-    // logo after the real image loads. Such an image gets no LQIP at all.
+    // logo after the real image loads. Such an image gets an empty LQIP: that
+    // is the "transparent, no placeholder" marker. `None` would mean "no LQIP
+    // computed", and the renderer then falls back to the dominant colour.
     let lqip_thumb = img.thumbnail(20, 20);
     let lqip_rgb = lqip_thumb.to_rgb8();
     let mut jpeg_buf = std::io::Cursor::new(Vec::new());
     let lqip_data_uri = if has_transparent_pixel(img) {
-        None
+        Some(String::new())
     } else if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, 20)
         .encode(
             lqip_rgb.as_raw(),
@@ -357,7 +359,13 @@ const MEDIA_META_TRANSFORM: &str = "media/meta";
 /// **2 → 3**: an image with transparent pixels cached an opaque JPEG LQIP,
 /// which showed as a grey box behind the logo after it loaded. Those entries
 /// are recomputed with no LQIP.
-const MEDIA_META_VERSION: u32 = 3;
+///
+/// **3 → 4**: that no-LQIP entry was indistinguishable from "no LQIP
+/// computed", so the renderer painted the dominant colour behind the logo
+/// anyway. A transparent image now stores an empty LQIP, which is the marker
+/// the renderer reads as "no placeholder at all". Version-3 entries are
+/// recomputed to pick it up.
+const MEDIA_META_VERSION: u32 = 4;
 
 /// Stat-based cache key for an image's placeholder metadata (dimensions +
 /// dominant color + LQIP), shared by the blocking scan and the background media

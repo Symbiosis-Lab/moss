@@ -40,8 +40,11 @@ pub struct AssetSnapshot {
     /// Original-image dimensions. Path is the source path as it appears in markdown.
     pub dimensions: HashMap<PathBuf, (u32, u32)>,
 
-    /// Base64-encoded LQIP data URI. Empty string if no LQIP computed (e.g.
-    /// SVG, decorative images that don't participate in placeholder rendering).
+    /// Base64-encoded LQIP data URI. Empty string marks a transparent image:
+    /// it gets no placeholder at all, not even the dominant colour (which
+    /// would show through its clear pixels). Absent when no LQIP was computed
+    /// (e.g. SVG, decorative images that don't participate in placeholder
+    /// rendering).
     pub lqip: HashMap<PathBuf, String>,
 
     /// Registered variant URLs per source-stem. A variant is "registered" if

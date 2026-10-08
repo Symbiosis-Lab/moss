@@ -131,6 +131,21 @@ fn picture_wrap_for_raster_original_with_lqip() {
 }
 
 #[test]
+fn transparent_image_with_empty_lqip_gets_no_placeholder_style() {
+    // An empty LQIP is the scan's "transparent" marker. The dominant colour is
+    // present too, and must not be painted behind the clear pixels.
+    let s = snapshot_with("logo.png", Some((800, 600)), Some("#c81e1e"), Some(""), false);
+    let html = synthesize_image_html(
+        "logo.png",
+        "Logo",
+        &s,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions::default(),
+    );
+    assert!(!html.contains("style="), "Got: {html}");
+}
+
+#[test]
 fn bare_img_with_dominant_color_no_lqip() {
     let s = snapshot_with("photo.jpg", Some((800, 600)), Some("#aabbcc"), None, false);
     let html = synthesize_image_html(
