@@ -41,6 +41,7 @@ import {
   clampCamera,
   coverCamera,
   detailMaxZoom,
+  openingMaxZoom,
   fitPoints,
   fitWork,
   MIN_ZOOM,
@@ -438,12 +439,12 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   function fitForScope(viewport: Viewport, frame?: Rect): Camera {
     if (scope.kind === "article" || scope.kind !== "place") {
       const points = workPoints(scope.kind === "article" ? scope.id : selectedId);
-      return points.length ? fitWorkCamera(points, viewport, frame && workFrame(viewport)) : coverCamera(allPoints(), viewport, frame);
+      return points.length ? fitWorkCamera(points, viewport, frame && workFrame(viewport)) : fitAllCamera(viewport, frame);
     }
     const points = pointsForWorks(options.places.works, options.places.places, scope);
     return points.length
       ? fitPoints(points, viewport, detailMaxZoom(viewport), frame)
-      : coverCamera(allPoints(), viewport, frame);
+      : fitAllCamera(viewport, frame);
   }
 
   /** The collapsed embed is too small to give up any of itself to overlays, so a work's fit uses the whole frame there. */
@@ -455,6 +456,23 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   function fitWorkCamera(points: Point[], viewport: Viewport, frame: Rect | undefined): Camera {
     const deep = fitWork(points, viewport, frame, tileDetailMaxZoom(viewport));
     return tileLayer.hasVisibleTiles(deep, viewport) ? deep : fitWork(points, viewport, frame, detailMaxZoom(viewport));
+  }
+
+  /** Set once the tiles under the opening view have decoded (or never, if they fail): until then the opening view stays within the world layer's own resolution, since past it the world image is a stretched, low-poly picture. */
+  let openingTilesReady = false;
+
+  /** The opening and reset view of every place: fitted to their bounds, so places in one region open on that region. Places spread wider than the viewport fall back to the cover view panned to their densest window. */
+  function fitAllCamera(viewport: Viewport, frame?: Rect): Camera {
+    const points = allPoints();
+    // One frame for both cameras, so comparing their zooms compares like with like (the collapsed embed gives up no part of itself to overlays).
+    const fitFrame = frame && workFrame(viewport);
+    const cover = coverCamera(points, viewport, fitFrame);
+    if (!points.length) return cover;
+    // Past the world layer's ceiling only once tiles can draw it, and never past the depth where the bundled data still looks clean.
+    const world = fitWork(points, viewport, fitFrame, detailMaxZoom(viewport));
+    const deep = openingTilesReady ? fitWork(points, viewport, fitFrame, openingMaxZoom(viewport)) : world;
+    const fitted = tileLayer.hasVisibleTiles(deep, viewport) ? deep : world;
+    return fitted.zoom > cover.zoom ? fitted : cover;
   }
 
   function selectWork(id: string | null): void {
@@ -710,7 +728,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     markerLayer.closeRing();
     scopedIds = null;
     const viewport = getViewport();
-    camera = coverCamera(allPoints(), viewport, freeFrame(viewport));
+    camera = fitAllCamera(viewport, freeFrame(viewport));
     applyCamera(true);
   });
 
@@ -761,6 +779,19 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const viewport = getViewport();
     camera = fitForScope(viewport, freeFrame(viewport));
     applyCamera(true);
+    // The deeper opening fit waits for the tiles under this first view. A wait is superseded when the layer clears (a resize, an early render outside the fade band), so ask again, as `waitForInitialPaint` does; a failure keeps the shallow view for good.
+    const opening = { ...camera };
+    void (async () => {
+      let result = await tileLayer.waitForVisibleTiles();
+      while (result === "superseded") result = await tileLayer.waitForVisibleTiles();
+      if (result !== "ready") return;
+      openingTilesReady = true;
+      // A reader who has already moved the map keeps their view; Fit all places now goes deep.
+      if (camera.x !== opening.x || camera.y !== opening.y || camera.zoom !== opening.zoom) return;
+      const latest = getViewport();
+      camera = fitForScope(latest, freeFrame(latest));
+      applyCamera(true);
+    })();
   }
   return {
     setScope,

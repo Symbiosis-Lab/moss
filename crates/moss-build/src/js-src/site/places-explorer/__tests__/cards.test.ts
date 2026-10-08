@@ -4,7 +4,7 @@
  * by the render gates.
  */
 import { describe, test, expect } from "vitest";
-import { byDateDescThenTitle, CardRow, worksForRow } from "../cards";
+import { byWeightThenDateThenTitle, CardRow, worksForRow } from "../cards";
 import { copyFor, type PlacesStrings } from "../strings";
 import type { Work } from "../types";
 
@@ -12,20 +12,27 @@ function work(id: string, title: string, date?: string): Work {
   return { id, title, url: `/${id}/`, date, byline: [], authors: [], places: [], companions: [] };
 }
 
-describe("byDateDescThenTitle", () => {
+describe("byWeightThenDateThenTitle", () => {
   test("sorts by date descending", () => {
     const works = [work("old", "Old", "2020-01-01"), work("new", "New", "2024-06-01")];
-    expect([...works].sort(byDateDescThenTitle).map((w) => w.id)).toEqual(["new", "old"]);
+    expect([...works].sort(byWeightThenDateThenTitle).map((w) => w.id)).toEqual(["new", "old"]);
   });
 
   test("breaks a date tie by title", () => {
     const works = [work("b", "Beta", "2024-01-01"), work("a", "Alpha", "2024-01-01")];
-    expect([...works].sort(byDateDescThenTitle).map((w) => w.id)).toEqual(["a", "b"]);
+    expect([...works].sort(byWeightThenDateThenTitle).map((w) => w.id)).toEqual(["a", "b"]);
   });
 
   test("an undated work always sorts after every dated one, not as the oldest", () => {
     const works = [work("undated", "Undated"), work("ancient", "Ancient", "1900-01-01")];
-    expect([...works].sort(byDateDescThenTitle).map((w) => w.id)).toEqual(["ancient", "undated"]);
+    expect([...works].sort(byWeightThenDateThenTitle).map((w) => w.id)).toEqual(["ancient", "undated"]);
+  });
+});
+
+describe("byWeightThenDateThenTitle with weights", () => {
+  test("weight ascending beats title, and weighted works come before unweighted ones", () => {
+    const works = [{ ...work("zeta", "Zeta"), weight: 1 }, work("alpha", "Alpha"), { ...work("mid", "Mid"), weight: 2 }];
+    expect([...works].sort(byWeightThenDateThenTitle).map((w) => w.id)).toEqual(["zeta", "mid", "alpha"]);
   });
 });
 

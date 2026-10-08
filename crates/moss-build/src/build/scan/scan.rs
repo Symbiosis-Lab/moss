@@ -903,9 +903,6 @@ pub fn scan_folder(folder_path: &str) -> Result<ProjectStructure, String> {
     scan_folder_with_dedup(folder_path, None)
 }
 
-/// Build/deploy default: extract image placeholders synchronously (no deferral).
-/// Preview callers use `scan_folder_with_dedup_emit(.., defer_placeholders=true)`.
-
 /// Scan a folder with optional singleflight dedup for metadata extraction.
 ///
 /// When `metadata_dedup` is `Some`, concurrent calls that hit a TransformCache
@@ -1438,7 +1435,7 @@ pub fn scan_folder_with_dedup_emit(
     let attachment_folder = crate::build::site_config::load_attachment_folder(folder_path);
     dirs.retain(|d| crate::build::scan::classify::gets_index_page(d, &passthrough_roots, &attachment_folder));
 
-    Ok(ProjectStructure {
+    let structure = ProjectStructure {
         root_path: folder_path.to_string(),
         markdown_files,
         html_files,
@@ -1455,7 +1452,9 @@ pub fn scan_folder_with_dedup_emit(
         has_language_trees,
         passthrough_roots,
         dirs,
-    })
+    };
+    crate::build::scan::case_collision::warn_case_colliding_files(&structure);
+    Ok(structure)
 }
 
 // =========================================================================
