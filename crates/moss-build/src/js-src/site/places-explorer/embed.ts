@@ -295,6 +295,15 @@ function readEmbedParams(): { embed: boolean; place: string | null; article: str
   return { embed: params.get("embed") === "1", place: params.get("place"), article: params.get("article") };
 }
 
+/** Apply embed geometry before mounting: the camera immediately allocates
+ * its first raster from the viewport. Applying these styles afterward queues
+ * an oversized SVG raster that WebKit must finish even after the resize. */
+export function prepareEmbedLayoutIfRequested(figure: HTMLElement): void {
+  if (!readEmbedParams().embed) return;
+  document.documentElement.setAttribute("data-moss-embed", "");
+  figure.setAttribute("data-moss-places-embed-mode", "collapsed");
+}
+
 /**
  * Switches a freshly-mounted explorer into the small embed's own
  * presentation when (and only when) its own URL carries `embed=1` — a
@@ -306,14 +315,6 @@ export async function attachEmbedModeIfRequested(controller: PlacesMapController
   const { embed, place, article } = readEmbedParams();
   if (!embed) return;
 
-  // This is still the full places-root page — header, nav, footer, the
-  // moss colophon — just loaded into a small hydrated iframe (an `embed.ts`
-  // host page keeps the iframe hidden until this very module posts ready,
-  // so there is no flash: a reader never sees this page with
-  // its own chrome, on or off). places-explorer.css's own rule, scoped to
-  // this same attribute, is what actually hides it.
-  document.documentElement.setAttribute("data-moss-embed", "");
-  figure.setAttribute("data-moss-places-embed-mode", "collapsed");
   controller.setCooperativeGestures(true);
 
   // Fix scope from the URL through the existing scope state. `place=`
