@@ -10,7 +10,8 @@ use super::{TransformCache, TransformRecord};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Compatibility policy for cache calls. Cache reads and writes now request
 /// cloud-only entries and return promptly in both modes.
@@ -46,6 +47,8 @@ impl RecordRead {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Merged {
     Written,
+    /// The owned optional write is still pending; the caller may use its local outputs.
+    PendingOptionalCache,
     /// The existing record was left as it is: unreadable, or already what the
     /// edit would write.
     Kept,
@@ -71,6 +74,89 @@ fn report_once(path: &Path, what: &str) -> bool {
         log::warn!("[cache] record {} {}", path.display(), what);
     }
     first
+}
+
+// Only admitted jobs keep these owners alive. Weak keys are pruned on every
+// insertion, and each owner bounds retained edits independently of native slots.
+static OWNED: LazyLock<Mutex<HashMap<PathBuf, Weak<RecordOwner>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+const MAX_RECORD_EDITS: usize = 128;
+const MAX_RECORD_BYTES: usize = 256 * 1024;
+struct RecordOwner {
+    revision: Arc<AtomicU64>,
+    intent: Mutex<Option<RecordEdit>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+enum RecordEdit {
+    Patch { source_size: u64, entries: HashMap<String, Option<super::TransformEntry>> },
+    Replace(TransformRecord),
+    Delete,
+}
+
+impl RecordEdit {
+    fn append(&self, next: Self, source_oid: &str) -> Self {
+        let Self::Patch { source_size, entries } = next else { return next };
+        match self {
+            Self::Patch { entries: old, .. } => {
+                let mut combined = old.clone();
+                combined.extend(entries);
+                Self::Patch { source_size, entries: combined }
+            }
+            Self::Replace(record) => {
+                let mut record = record.clone();
+                record.source_size = source_size;
+                apply_changes(&mut record, &entries);
+                Self::Replace(record)
+            }
+            Self::Delete => {
+                let mut record = TransformRecord { source_oid: source_oid.into(), source_size, transforms: HashMap::new() };
+                apply_changes(&mut record, &entries);
+                Self::Replace(record)
+            }
+        }
+    }
+
+    fn apply(&self, record: &mut TransformRecord) {
+        match self {
+            Self::Patch { source_size, entries } => { record.source_size = *source_size; apply_changes(record, entries); }
+            Self::Replace(replacement) => { *record = replacement.clone(); }
+            Self::Delete => { record.transforms.clear(); }
+        }
+    }
+
+    fn entries(&self) -> usize {
+        match self { Self::Patch { entries, .. } => entries.len(), Self::Replace(record) => record.transforms.len(), Self::Delete => 0 }
+    }
+}
+
+fn record_owner(path: &Path) -> Arc<RecordOwner> {
+    let mut owners = OWNED.lock().unwrap_or_else(|e| e.into_inner());
+    owners.retain(|_, owner| owner.strong_count() > 0);
+    if let Some(owner) = owners.get(path).and_then(Weak::upgrade) { return owner; }
+    let owner = Arc::new(RecordOwner { revision: Arc::new(AtomicU64::new(0)), intent: Mutex::new(None) });
+    owners.insert(path.to_path_buf(), Arc::downgrade(&owner));
+    owner
+}
+
+fn apply_changes(record: &mut TransformRecord, changes: &HashMap<String, Option<super::TransformEntry>>) {
+    for (name, value) in changes {
+        match value { Some(entry) => { record.transforms.insert(name.clone(), entry.clone()); }, None => { record.transforms.remove(name); } }
+    }
+}
+
+/// Complete atomic record publication. Every retry rereads the shared record;
+/// pending changes contain intent, never a replacement snapshot of that file.
+fn write_record(path: &Path, record: &TransformRecord) -> Result<(), crate::build::cloud_readiness::StorageFailure> {
+    use crate::build::cloud_readiness::{StorageFailure, StorageOperation};
+    use super::publication::attempt;
+    let parent = path.parent().expect("record has a shard");
+    attempt(path, StorageOperation::CacheMkdir, || std::fs::create_dir_all(parent))?; // allow:raw_write shared transform record shard, never staging
+    let json = serde_json::to_vec_pretty(record).map_err(|error| StorageFailure::new(Some(path.into()), StorageOperation::CacheWrite, io::Error::other(error)))?;
+    let tmp = path.with_extension(format!("json.pending.{}", uuid::Uuid::new_v4()));
+    let result = attempt(path, StorageOperation::CacheWrite, || std::fs::write(&tmp, &json)) // allow:raw_write this transaction's sibling candidate
+        .and_then(|()| attempt(path, StorageOperation::CachePublish, || std::fs::rename(&tmp, path))); // allow:unlink atomic publication of the owned candidate
+    if result.is_err() { let _ = std::fs::remove_file(&tmp); } // allow:unlink only this transaction's pending candidate
+    result
 }
 
 impl TransformCache {
@@ -150,21 +236,120 @@ impl TransformCache {
         load: &dyn Fn(&Path, RecordMode) -> io::Result<String>,
         edit: impl FnOnce(&mut TransformRecord),
     ) -> Result<Merged, String> {
+        let owner = self.owned_record_owner(source_oid);
+        let pending = owner.as_ref().and_then(|owner| owner.intent.lock().unwrap_or_else(|e| e.into_inner()).clone());
         let (mut record, read) = match self.read_via(source_oid, mode, load) {
             RecordRead::Present(record) => (record.clone(), Some(record)),
             RecordRead::Absent => {
                 (TransformRecord { source_oid: source_oid.to_string(), source_size, transforms: HashMap::new() }, None)
             }
-            RecordRead::Unreadable => return Ok(Merged::Kept),
+            RecordRead::Unreadable => match &pending {
+                Some(RecordEdit::Replace(record)) => (record.clone(), None),
+                Some(RecordEdit::Delete) => (TransformRecord { source_oid: source_oid.into(), source_size, transforms: HashMap::new() }, None),
+                _ => return Ok(Merged::Kept),
+            },
         };
+        if let Some(intent) = pending { intent.apply(&mut record); }
+        let baseline = record.clone();
         edit(&mut record);
         // Rewriting an identical record would make a file the sync provider
         // uploads again, on every machine sharing the folder.
-        if read.as_ref() == Some(&record) {
+        if baseline == record && (read.is_some() || record.transforms.is_empty()) {
             return Ok(Merged::Kept);
+        }
+        if let Some(owner) = owner {
+            let mut changes = HashMap::new();
+            for (name, entry) in &record.transforms {
+                if baseline.transforms.get(name) != Some(entry) { changes.insert(name.clone(), Some(entry.clone())); }
+            }
+            for name in baseline.transforms.keys() {
+                if !record.transforms.contains_key(name) { changes.insert(name.clone(), None); }
+            }
+            return self.publish_edit(&record.source_oid, owner, RecordEdit::Patch { source_size: record.source_size, entries: changes });
         }
         self.put(&record, mode).map(|()| Merged::Written)
     }
+
+    fn owned_record_owner(&self, source_oid: &str) -> Option<Arc<RecordOwner>> {
+        (self.objects.site.is_some() && crate::build::cloud_readiness::storage::managed_context(&self.base))
+            .then(|| record_owner(&self.record_path(source_oid)))
+    }
+
+    pub(super) fn put_owned(&self, record: &TransformRecord) -> Option<Result<Merged, String>> {
+        let owner = self.owned_record_owner(&record.source_oid)?;
+        Some(self.publish_edit(&record.source_oid, owner, RecordEdit::Replace(record.clone())))
+    }
+
+    pub(super) fn remove_owned(&self, source_oid: &str) -> Option<Result<Merged, String>> {
+        let owner = self.owned_record_owner(source_oid)?;
+        Some(self.publish_edit(source_oid, owner, RecordEdit::Delete))
+    }
+
+    fn publish_edit(&self, source_oid: &str, owner: Arc<RecordOwner>, edit: RecordEdit) -> Result<Merged, String> {
+        use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, PublicationOutcome, StorageValue};
+        use crate::build::cloud_readiness::{StorageFailure, StorageOperation};
+        let expected = {
+            let mut pending = owner.intent.lock().unwrap_or_else(|e| e.into_inner());
+            let combined = pending.as_ref().map_or_else(|| edit.clone(), |previous| previous.append(edit.clone(), source_oid));
+            if combined.entries() > MAX_RECORD_EDITS || serde_json::to_vec(&combined).map_err(|e| e.to_string())?.len() > MAX_RECORD_BYTES {
+                return Err("optional record publication exceeds retained edit capacity".into());
+            }
+            *pending = Some(combined);
+            owner.revision.fetch_add(1, Ordering::AcqRel) + 1
+        };
+        let path = self.record_path(source_oid);
+        let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: self.base.clone() } };
+        let cache = self.clone();
+        let source_oid = source_oid.to_string();
+        let lease = crate::build::lifecycle::detached_cache_lease(self.objects.site.as_ref().expect("owned record has a site"));
+        let latest = owner.revision.clone();
+        let attempt: Operation = Arc::new(move || {
+            let _lease = &lease;
+            let (intent, revision) = {
+                let intent = owner.intent.lock().unwrap_or_else(|e| e.into_inner());
+                (intent.as_ref().expect("admitted record has an edit").clone(), owner.revision.load(Ordering::Acquire))
+            };
+            if matches!(intent, RecordEdit::Delete) {
+                super::publication::attempt(&path, StorageOperation::CacheRemove, || {
+                    match std::fs::remove_file(&path) { // allow:unlink explicit invalid-record eviction under cache/transforms
+                        Ok(()) => Ok(()),
+                        Err(error) if crate::build::icloud::is_definitely_absent(&path, &error) => Ok(()),
+                        Err(error) => Err(error),
+                    }
+                })?;
+                return Ok(StorageValue::Published(revision));
+            }
+            let read_failure = Mutex::new(None);
+            let read = cache.read_via(&source_oid, RecordMode::Request, &|path, _| {
+                match super::publication::attempt(path, StorageOperation::CacheRead, || std::fs::read_to_string(path)) {
+                    Ok(data) => Ok(data),
+                    Err(failure) => {
+                        let error = failure.raw_os_error().map(io::Error::from_raw_os_error).unwrap_or_else(|| io::Error::other(failure.to_string()));
+                        *read_failure.lock().unwrap() = Some(failure);
+                        Err(error)
+                    }
+                }
+            });
+            let mut record = match read {
+                RecordRead::Present(record) => record,
+                RecordRead::Absent => TransformRecord { source_oid: source_oid.clone(), source_size: 0, transforms: HashMap::new() },
+                RecordRead::Unreadable => return Err(read_failure.into_inner().unwrap().unwrap_or_else(|| StorageFailure::new(Some(path.clone()), StorageOperation::CacheRead, io::Error::other("existing record is unreadable; it is preserved")))),
+            };
+            intent.apply(&mut record);
+            write_record(&path, &record)?;
+            Ok(StorageValue::Published(revision))
+        });
+        match crate::build::cloud_readiness::storage::await_publication_revision(key, attempt, Some(latest), expected) {
+            PublicationOutcome::Completed => Ok(Merged::Written),
+            PublicationOutcome::PendingOptionalCache => Ok(Merged::PendingOptionalCache),
+            PublicationOutcome::Fatal(failure) => Err(failure.to_string()),
+        }
+    }
+
+    pub(super) fn put_sync(&self, record: &TransformRecord) -> Result<(), String> {
+        write_record(&self.record_path(&record.source_oid), record).map_err(|e| e.to_string())
+    }
+
 }
 
 #[cfg(test)]

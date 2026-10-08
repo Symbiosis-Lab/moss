@@ -21,6 +21,7 @@ const IOPOL_MATERIALIZE_DATALESS_FILES_ON: c_int = 2;
 
 unsafe extern "C" {
     fn setiopolicy_np(iotype: c_int, scope: c_int, policy: c_int) -> c_int;
+    fn getiopolicy_np(iotype: c_int, scope: c_int) -> c_int;
 }
 
 /// Opt this process out of implicit dataless-file materialization, process-wide.
@@ -120,6 +121,17 @@ pub fn materialize_on_this_thread() -> bool {
 /// or the dedicated materialization threads. This policy stays on the worker.
 pub fn fail_fast_on_this_thread() -> bool {
     set_policy(IOPOL_SCOPE_THREAD, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+}
+
+/// Whether a dataless read on this thread is guaranteed to fail fast.
+/// A default thread policy inherits the process policy; an unknown response
+/// must be treated as potentially blocking.
+pub fn reads_fail_fast() -> bool {
+    // SAFETY: these scopes and policy constants are defined by the OS API.
+    let thread = unsafe { getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD) };
+    thread == IOPOL_MATERIALIZE_DATALESS_FILES_OFF || (thread == 0 && unsafe {
+        getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS)
+    } == IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
 }
 
 fn set_policy(scope: c_int, policy: c_int) -> bool {

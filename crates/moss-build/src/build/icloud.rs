@@ -284,16 +284,28 @@ pub fn is_definitely_absent(path: &Path, err: &std::io::Error) -> bool {
     if err.kind() != std::io::ErrorKind::NotFound {
         return false;
     }
-    !has_icloud_stub_sibling(path)
+    if path.file_name().and_then(|name| name.to_str()).is_none() || path.parent().is_none() { return false; }
+    #[cfg(target_os = "macos")]
+    { stub_sibling_stat(path).is_some_and(|stat| stat.is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)) }
+    #[cfg(not(target_os = "macos"))]
+    { true }
+}
+
+#[cfg(target_os = "macos")]
+fn stub_sibling_stat(path: &Path) -> Option<std::io::Result<std::fs::Metadata>> {
+    let name = path.file_name()?.to_str()?;
+    let parent = path.parent()?;
+    let sibling = parent.join(format!(".{name}.icloud"));
+    #[cfg(test)]
+    if let Err(failure) = crate::build::cloud_readiness::storage::test_probe(&sibling, crate::build::cloud_readiness::StorageOperation::EntryMetadata) {
+        return Some(Err(failure.raw_os_error().map(std::io::Error::from_raw_os_error).unwrap_or_else(|| std::io::Error::other(failure.to_string()))));
+    }
+    Some(sibling.symlink_metadata())
 }
 
 #[cfg(target_os = "macos")]
 fn has_icloud_stub_sibling(path: &Path) -> bool {
-    let (Some(name), Some(parent)) = (path.file_name().and_then(|n| n.to_str()), path.parent())
-    else {
-        return false;
-    };
-    parent.join(format!(".{name}.icloud")).symlink_metadata().is_ok()
+    stub_sibling_stat(path).is_some_and(|stat| stat.is_ok())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -416,6 +428,16 @@ mod tests {
         let missing = dir.path().join("gone.txt");
         let err = std::io::Error::from(std::io::ErrorKind::NotFound);
         assert!(is_definitely_absent(&missing, &err));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn absence_unknown_stub_metadata_does_not_prove_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("missing.txt");
+        let sibling = dir.path().join(".missing.txt.icloud");
+        let _fault = crate::build::cloud_readiness::storage::TestFault::install(dir.path(), &sibling, crate::build::cloud_readiness::StorageOperation::EntryMetadata, 1, std::time::Duration::from_millis(20));
+        assert!(!is_definitely_absent(&path, &std::io::Error::from(std::io::ErrorKind::NotFound)), "unknown legacy-placeholder metadata cannot certify deletion");
     }
 
     #[test]

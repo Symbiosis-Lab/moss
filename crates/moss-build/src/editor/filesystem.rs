@@ -5,6 +5,11 @@
 //! `create_folder`, `copy_files_to_project`, `get_file_info`,
 //! and `resolve_url_for_file` Tauri commands in `commands.rs`.
 
+
+mod directory;
+pub use directory::list_directory_inner;
+use directory::list_directory_counted;
+
 // ── Public types ──────────────────────────────────────────────────────────
 
 /// Metadata about a file for the editor's file viewer.
@@ -196,68 +201,6 @@ pub fn walk_source_files(dir: &str, project_path: &str, visit: &mut dyn FnMut(&D
     }
 }
 
-/// Inner implementation of `list_directory` for testability (no Tauri State dependency).
-pub fn list_directory_inner(
-    path: &str,
-    project_path: &str,
-    show_internal: bool,
-) -> Result<Vec<DirEntry>, String> {
-    Ok(list_directory_counted(path, project_path, show_internal)?.0)
-}
-
-fn list_directory_counted(path: &str, project_path: &str, show_internal: bool) -> Result<(Vec<DirEntry>, u32), String> {
-    let dir = std::path::Path::new(path);
-    if !dir.is_dir() { return Err(format!("'{}' is not a directory", path)); }
-
-    // Compute this directory's path relative to the project root ("" for root,
-    // ".moss" when listing .moss/ itself, ".moss/theme" when listing
-    // .moss/theme/, etc.).
-    let parent_relative = std::path::Path::new(path)
-        .strip_prefix(project_path)
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_default();
-
-    let read_dir = std::fs::read_dir(dir)
-        .map_err(|e| format!("Failed to read directory '{}': {}", path, e))?;
-
-    let mut entries: Vec<DirEntry> = Vec::new();
-    let mut hidden: u32 = 0;
-
-    for entry in read_dir {
-        let entry = entry.map_err(|e| format!("Error reading entry: {}", e))?;
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        if let Some(reason) = crate::build::scan::classify::is_hidden_reason(&name, &parent_relative, show_internal) {
-            hidden += reason.is_curated() as u32;
-            continue;
-        }
-
-        let metadata = entry
-            .metadata()
-            .map_err(|e| format!("Failed to read metadata for '{}': {}", name, e))?;
-
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs_f64());
-
-        let file_id = extract_file_id(&metadata);
-
-        entries.push(DirEntry {
-            name,
-            path: entry.path().to_string_lossy().to_string(),
-            is_dir: metadata.is_dir(),
-            modified,
-            file_id,
-        });
-    }
-
-    entries.sort_by(cmp_dir_entry);
-
-    Ok((entries, hidden))
-}
-
 /// Per-project publish-date cache passed to `list_tree_inner_cached`.
 ///
 /// Keyed by `(file_path, mtime_secs)` so a stale entry never gets served.
@@ -303,6 +246,16 @@ pub fn list_tree_inner_cached(
     show_internal: bool,
     cache: &PublishDateCacheView<'_>,
 ) -> Result<TreeNode, String> {
+    list_tree_inner_cached_with_error(path, project_path, show_internal, cache)
+        .map_err(|failure| failure.to_string())
+}
+
+pub fn list_tree_inner_cached_with_error(
+    path: &str,
+    project_path: &str,
+    show_internal: bool,
+    cache: &PublishDateCacheView<'_>,
+) -> Result<TreeNode, crate::build::cloud_readiness::storage::Unavailable> {
     let (entries, hidden) = list_directory_counted(path, project_path, show_internal)?;
 
     // Basenames of md children whose frontmatter carries the `home: true`
@@ -314,7 +267,7 @@ pub fn list_tree_inner_cached(
         .into_iter()
         .map(|entry| {
             if entry.is_dir {
-                list_tree_inner_cached(&entry.path, project_path, show_internal, cache)
+                list_tree_inner_cached_with_error(&entry.path, project_path, show_internal, cache)
             } else {
                 let (publish_date, date_source) = if entry.name.to_ascii_lowercase().ends_with(".md") {
                     let (date, source, home_marker) = resolve_md_date(&entry, cache);
@@ -799,6 +752,35 @@ pub fn read_frontmatter_only(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_open_failure_keeps_path_and_operation_at_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not-a-directory");
+        std::fs::write(&file, "file").unwrap();
+
+        let error = list_directory_inner(
+            file.to_str().unwrap(),
+            dir.path().to_str().unwrap(),
+            false,
+        )
+        .unwrap_err();
+
+        assert!(error.contains(file.to_str().unwrap()), "{error}");
+        assert!(error.contains("opening directory listing"), "{error}");
+    }
+
+    #[test]
+    fn availability_editor_tree_recovers_child_metadata_after_parent_eof() {
+        use crate::build::cloud_readiness::storage::TestFault;
+        use crate::build::cloud_readiness::StorageOperation;
+        let dir = tempfile::tempdir().unwrap();
+        let child = dir.path().join("child.md");
+        std::fs::write(&child, "# child").unwrap();
+        let _fault = TestFault::install(dir.path(), &child, StorageOperation::EntryMetadata, 1, std::time::Duration::from_secs(3));
+        let tree = list_tree_inner(dir.path().to_str().unwrap(), dir.path().to_str().unwrap(), false).unwrap();
+        assert_eq!(tree.children.unwrap().len(), 1);
+    }
 
     // --- read_frontmatter_only ---
 

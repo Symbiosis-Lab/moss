@@ -11,10 +11,11 @@
 //! instead of the misleading "Downloading from iCloud" label we used to
 //! always emit.
 //!
-//! Detection is path-based, not authoritative: we don't query File Provider
-//! APIs. That keeps this module pure Rust with no entitlement requirements,
-//! and the cost of a wrong guess is a slightly less accurate label, not a
-//! broken build.
+//! Detection is lexical, not authoritative: we do not query File Provider
+//! APIs. `detect_from_path` labels progress. `recovery_context` narrows recovery
+//! to the current home directory's modern provider containers; the availability
+//! owner also requires macOS and the actual provider-refusal errno. A legacy
+//! Dropbox folder alone is not evidence of a File Provider operation.
 //!
 //! ## Scope and limitations
 //!
@@ -132,6 +133,16 @@ pub fn detect_from_path(path: &Path) -> Option<CloudProvider> {
     }
 
     None
+}
+
+/// Positive lexical context for retrying a macOS provider refusal. This does
+/// no filesystem I/O: resolving a symlink could itself block on the provider.
+pub(crate) fn recovery_context(path: &Path) -> bool {
+    dirs::home_dir().is_some_and(|home| {
+        (path.starts_with(home.join("Library/CloudStorage"))
+            || path.starts_with(home.join("Library/Mobile Documents")))
+            && detect_from_path(path).is_some()
+    })
 }
 
 /// Classify a directory name that appears directly under `~/Library/CloudStorage/`.

@@ -7273,3 +7273,65 @@ fn an_author_supplied_calendar_file_wins_over_the_generated_one() {
     build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("rebuild");
     assert_eq!(staged(&dir, "events/calendar.ics"), "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n");
 }
+
+#[test]
+fn availability_pending_source_walk_preserves_current_generation_and_baseline() {
+    crate::infra::home::with_moss_home(|_| {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap().block_on(async {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    use crate::build::cloud_readiness::{storage::TestFault, StorageOperation};
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "# complete").unwrap();
+    let config = || PipelineConfig {
+        root: crate::vault_root::VaultRoot::resolve(&dir),
+        progress: crate::build::null_sink(), plugins: PluginMode::Skip,
+        watch: false, start_server: false,
+        host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
+        exits_after_build: true, site_url_override: None, server_port: None,
+        admission_epoch: None, live_port: None,
+    };
+    run_pipeline(config()).await.unwrap();
+    let paths = crate::moss_paths::MossPaths::new(&dir);
+    let current = fs::read_link(paths.current_ptr()).unwrap();
+    let generation = fs::read(paths.current_ptr().join("index.html")).unwrap();
+    let preflight = crate::system::build_records::records().publish_preflight(dir.to_str().unwrap()).unwrap();
+    fs::write(dir.join("index.md"), "# newer").unwrap();
+    let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
+    assert!(run_pipeline(config()).await.is_err());
+    assert_eq!(fs::read_link(paths.current_ptr()).unwrap(), current);
+    assert_eq!(fs::read(paths.current_ptr().join("index.html")).unwrap(), generation);
+    let pending = crate::system::build_records::records().publish_preflight(dir.to_str().unwrap()).unwrap();
+    assert!(pending.build_generation > preflight.build_generation);
+    assert_eq!(pending.unresolved_inputs, ["."]);
+    assert!(crate::deploy::refuse_publish(dir.to_str().unwrap()).is_err(), "the latest unavailable structural attempt must block publication");
+    drop(fault);
+    run_pipeline(config()).await.unwrap();
+    assert_ne!(fs::read(paths.current_ptr().join("index.html")).unwrap(), generation);
+        });
+    });
+}
+
+#[test]
+fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
+    crate::infra::home::with_moss_home(|_| {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap().block_on(async {
+            use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+            use crate::build::cloud_readiness::{storage::TestFault, StorageOperation};
+            let (dir, _cleanup) = create_test_dir();
+            let config = || PipelineConfig {
+                root: crate::vault_root::VaultRoot::resolve(&dir), progress: crate::build::null_sink(), plugins: PluginMode::Skip,
+                watch: false, start_server: false, host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
+                exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None,
+            };
+            let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
+            assert!(run_pipeline(config()).await.is_err());
+            assert!(crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()));
+            crate::build::cloud_readiness::mark_gated(dir.to_str().unwrap());
+            drop(fault);
+            let _fatal = TestFault::install_errno(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_secs(2), libc::EACCES);
+            let failure = run_pipeline(config()).await.unwrap_err();
+            assert!(failure.contains("Permission denied"), "the resumed owner must report the actual hard error: {failure}");
+            assert!(!crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()), "fatal scan must settle the old cloud waiting latch");
+        });
+    });
+}

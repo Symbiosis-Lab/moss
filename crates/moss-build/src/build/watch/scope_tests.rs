@@ -42,7 +42,7 @@ fn fixture() -> TempDir {
 }
 
 fn targets_of(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    watch_targets(root).into_iter().map(|(p, _)| p).collect()
+    watch_targets_with_error(root).unwrap().into_iter().map(|(p, _)| p).collect()
 }
 
 /// The invariant, stated over the registration set instead of the event
@@ -103,7 +103,7 @@ fn watch_targets_exclude_build_output_dotdirs_and_node_modules() {
 fn root_level_files_are_covered_on_every_platform() {
     let dir = fixture();
     let root = dir.path();
-    let targets = watch_targets(root);
+    let targets = watch_targets_with_error(root).unwrap();
 
     if cfg!(target_os = "macos") {
         assert!(
@@ -148,7 +148,38 @@ fn root_level_files_moss_writes_are_never_targets() {
 #[test]
 fn watch_targets_are_stable_across_calls() {
     let dir = fixture();
-    assert_eq!(watch_targets(dir.path()), watch_targets(dir.path()));
+    assert_eq!(watch_targets_with_error(dir.path()).unwrap(), watch_targets_with_error(dir.path()).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_top_level_symlink_to_a_directory_keeps_nonrecursive_file_type_semantics() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("index.md"), "# Outside").unwrap();
+    let link = root.path().join("linked-posts");
+    std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+
+    let targets = watch_targets_with_error(root.path()).unwrap();
+
+    assert!(
+        !targets.iter().any(|(path, mode)| path == &link && *mode == RecursiveMode::Recursive),
+        "watch-target classification must not follow a top-level directory symlink"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_icloud_stub_keeps_the_moss_allowlist_candidate_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let moss = dir.path().join(".moss");
+    fs::create_dir_all(&moss).unwrap();
+    fs::write(moss.join(".config.toml.icloud"), b"").unwrap();
+
+    assert!(
+        watch_targets_with_error(dir.path()).is_err(),
+        "a pre-Sonoma placeholder cannot be mistaken for a missing watched config"
+    );
 }
 
 #[test]
@@ -161,6 +192,22 @@ fn watch_targets_pick_up_a_new_top_level_folder() {
         targets_of(root).contains(&root.join("essays")),
         "a folder dropped into the project must become a target on the next reconcile"
     );
+}
+
+#[test]
+fn a_target_metadata_refusal_discards_the_watch_set_candidate() {
+    use crate::build::cloud_readiness::storage::{StorageOperation, TestFault};
+
+    let dir = fixture();
+    let entry = dir.path().join("posts");
+    let _fault = TestFault::install(
+        dir.path(), &entry, StorageOperation::EntryMetadata, 1,
+        std::time::Duration::from_millis(50),
+    );
+
+    let result = watch_targets_with_error(dir.path());
+
+    assert!(result.is_err(), "unknown entry type cannot produce a complete target set");
 }
 
 /// Another instance of the same class, now caught at the event filter rather than

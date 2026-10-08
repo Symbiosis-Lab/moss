@@ -94,6 +94,101 @@ fn arrival_accounting_does_not_call_a_deleted_file_downloaded() {
     assert!(pending.is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn metadata_refusal_does_not_confirm_a_pending_file_deleted() {
+    use crate::build::cloud_readiness::storage::{StorageOperation, TestFault};
+
+    let dir = tempfile::tempdir().unwrap();
+    let present = dir.path().join("still-here.md");
+    std::fs::write(&present, "# Here").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(&present).unwrap().permissions();
+    permissions.set_mode(0);
+    std::fs::set_permissions(&present, permissions).unwrap();
+    let _fault = TestFault::install(
+        dir.path(),
+        &present,
+        StorageOperation::EntryMetadata,
+        1,
+        Duration::from_millis(50),
+    );
+    let mut pending = HashSet::from([present.clone()]);
+
+    let counts = observe_pending(&mut pending);
+
+    assert_eq!(counts, (0, 0), "an EDEADLK stat is unknown, not deletion");
+    assert!(pending.contains(&present));
+}
+
+#[tokio::test]
+async fn an_entry_refusal_makes_the_walk_non_authoritative() {
+    use crate::build::cloud_readiness::storage::{StorageOperation, TestFault};
+
+    let dir = tempfile::tempdir().unwrap();
+    let present = dir.path().join("posts/still-here.md");
+    std::fs::create_dir_all(present.parent().unwrap()).unwrap();
+    std::fs::write(&present, "# Here").unwrap();
+    let _fault = TestFault::install(
+        dir.path(),
+        &present,
+        StorageOperation::WalkEntry,
+        1,
+        Duration::from_millis(50),
+    );
+
+    let mut prior = crate::types::content::SiteHashes::default();
+    prior.files.insert("published/index.html".into(), "100644:known".into());
+    let pass = walk::run_pass(dir.path(), None, Some(prior.clone()), Some("posts/before.md".into()), false).await;
+
+    assert!(!pass.complete, "a skipped failed entry cannot authorize pending replacement");
+    assert_eq!(pass.baseline.unwrap().files, prior.files, "failed candidate cannot replace prior baseline");
+    assert_eq!(pass.resume.as_deref(), Some("posts/before.md"), "failed candidate retains its cursor");
+}
+
+#[tokio::test]
+async fn a_required_entry_stat_refusal_discards_the_walk_candidate() {
+    use crate::build::cloud_readiness::storage::{StorageOperation, TestFault};
+
+    let dir = tempfile::tempdir().unwrap();
+    let present = dir.path().join("posts/still-here.md");
+    std::fs::create_dir_all(present.parent().unwrap()).unwrap();
+    std::fs::write(&present, "# Here").unwrap();
+    let _fault = TestFault::install(
+        dir.path(), &present, StorageOperation::EntryMetadata, 1,
+        Duration::from_millis(50),
+    );
+
+    let pass = walk::run_pass(
+        dir.path(), None, Some(crate::types::content::SiteHashes::default()), None, false,
+    ).await;
+
+    assert!(!pass.complete, "a required stat failure invalidates whole-tree authority");
+    assert!(pass.walk.files.is_empty(), "no partial walk candidate escapes the failure");
+    assert!(pass.baseline.is_some(), "the previous baseline remains available");
+}
+
+#[tokio::test]
+async fn a_directory_entry_refusal_does_not_certify_an_offline_subtree() {
+    use crate::build::cloud_readiness::storage::{StorageOperation, TestFault};
+
+    let dir = tempfile::tempdir().unwrap();
+    let posts = dir.path().join("posts");
+    std::fs::create_dir_all(&posts).unwrap();
+    std::fs::write(posts.join("still-here.md"), "# Here").unwrap();
+    let _fault = TestFault::install(
+        dir.path(), &posts, StorageOperation::WalkEntry, 1,
+        Duration::from_millis(50),
+    );
+
+    let pass = walk::run_pass(
+        dir.path(), None, Some(crate::types::content::SiteHashes::default()), None, false,
+    ).await;
+
+    assert!(!pass.complete, "an unenumerated subtree cannot certify readiness or absence");
+    assert!(pass.walk.files.is_empty(), "partial subtree results are discarded");
+}
+
 #[test]
 fn navigation_promotes_only_the_resolved_requested_source() {
     let dir = tempfile::tempdir().unwrap();
@@ -1179,4 +1274,70 @@ fn the_walk_does_not_enter_a_nested_site() {
     std::fs::write(root.join("inner/x.md"), b"# x").unwrap();
     std::fs::write(root.join("posts/a.md"), b"# a").unwrap();
     assert_eq!(walk(root, None, None).files_seen, 1);
+}
+
+#[tokio::test]
+async fn availability_sweep_recovers_the_actual_walk_before_accepting_authority() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("index.md");
+    std::fs::write(&file, "# Full").unwrap();
+    let _fault = TestFault::install(dir.path(), &file, StorageOperation::WalkEntry, 1, Duration::from_secs(2));
+    let outcome = run_pass(dir.path(), None, None, None, false).await;
+    assert!(outcome.complete, "a returned provider refusal must retry the same complete walk");
+    assert_eq!(outcome.walk.files_seen, 1);
+}
+
+#[test]
+fn availability_sweep_retry_has_a_fresh_bounded_budget() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.md"), "# Full").unwrap();
+    let _fault = TestFault::install(dir.path(), dir.path(), StorageOperation::ReadDirOpen, 1, Duration::from_secs(2));
+    let snapshot = owned_walk(dir.path(), Some(Duration::from_millis(40)), None).unwrap();
+    assert!(!snapshot.deadline_blown, "the delayed attempt must not inherit an already expired deadline");
+    assert_eq!(snapshot.files_seen, 1);
+}
+
+#[test]
+fn availability_resumed_suffix_eof_is_not_complete_structure() {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.md"), "# Already visited").unwrap();
+    std::fs::write(dir.path().join("b.md"), "# Suffix").unwrap();
+    let session = FolderSession::new(dir.path().into());
+    let folder = dir.path().to_string_lossy().into_owned();
+    crate::system::folder_session::registry().insert(folder.clone(), session.clone());
+    let pool = crate::build::cloud_prefetch::Prefetcher::with_materializer(3, std::sync::Arc::new(|_| Ok(())), false);
+    let (send, receive) = std::sync::mpsc::channel();
+    pool.set_settlement_emitter(std::sync::Arc::new(move |event| { let _ = send.send(event); }));
+    let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let native_gate = gate.clone();
+    let root = dir.path().to_path_buf();
+    let op: Operation = std::sync::Arc::new(move || {
+        let mut released = native_gate.0.lock().unwrap();
+        while !*released { released = native_gate.1.wait(released).unwrap(); }
+        walk_with_error(&root, Some(Instant::now() + Duration::from_secs(1)), Some("a.md")).map(StorageValue::Sweep)
+    });
+    let task = pool.structural_operation(OperationKey { path: dir.path().into(), policy: OperationPolicy::SweepWalk { budget: Some(Duration::from_secs(1)), resume: Some("a.md".into()) } }, op).unwrap();
+    { let mut state = task.state.lock().unwrap(); state.waiters = 0; state.deferred = true; }
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    let started = Instant::now();
+    while task.state.lock().unwrap().result.is_none() {
+        assert!(started.elapsed() < Duration::from_secs(2));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    {
+        let state = task.state.lock().unwrap();
+        let StorageValue::Sweep(snapshot) = state.result.as_ref().unwrap().as_ref().unwrap().as_ref() else { panic!("expected sweep snapshot") };
+        assert_eq!(snapshot.files_seen, 1, "the actual collector covered only the suffix");
+        assert!(!snapshot.deadline_blown, "suffix reached EOF inside its budget");
+    }
+    let event = receive.recv_timeout(Duration::from_millis(30));
+    let wakes = pool.take_structural_arrivals(dir.path()).wake_count();
+    session.cancel.cancel();
+    crate::system::folder_session::registry().remove(&folder);
+    assert!(event.is_err(), "suffix EOF must not emit Ready for the whole source tree");
+    assert_eq!(wakes, 0, "suffix completion cannot certify a rebuild arrival");
 }

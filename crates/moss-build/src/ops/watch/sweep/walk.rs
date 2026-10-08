@@ -13,6 +13,7 @@ use crate::build::scan::classify;
 use crate::build::watch::drift;
 use crate::build::watch::path_to_relative_key;
 use crate::build::watch::scope;
+use crate::build::cloud_readiness::{StorageFailure, StorageOperation};
 
 use super::WALK_DEADLINE;
 
@@ -20,39 +21,7 @@ use super::WALK_DEADLINE;
 // The walk: one stat pass, three verdicts' raw material
 // ---------------------------------------------------------------------------
 
-/// What one stat walk of the source tree found. One pass feeds all three
-/// verdicts: `dataless` → the cloud readers, `files`/`offline_prefixes` →
-/// the drift compare, `root_unreadable`/`deadline_blown` → the unavailable
-/// counter.
-#[derive(Debug, Default)]
-pub(crate) struct WalkOutcome {
-    /// Source files still in the cloud — the download-request set
-    /// ([`should_request`]'s materialization filter, NOT the drift filter).
-    pub dataless: Vec<PathBuf>,
-    /// Drift-eligible files on disk, keyed the manifest's way.
-    pub files: Vec<drift::WalkedFile>,
-    /// Folder-relative keys of directories the walk could not enumerate for
-    /// cloud reasons — offline subtrees, exempt from the deletion check.
-    pub offline_prefixes: Vec<String>,
-    /// The vault root itself would not enumerate.
-    pub root_unreadable: bool,
-    /// The pass ran out of deadline mid-walk. Partial results are still
-    /// usable: `dataless` feeds downloads and `files` feeds a
-    /// modification-only compare; what a partial pass must NOT do is claim
-    /// full-tree authority (deletions, pending-set replacement).
-    pub deadline_blown: bool,
-    /// Files the pass looked at, and how many the watcher may watch at all
-    /// (both excluding `.moss/`). Seen-but-none-watchable is a folder moss is
-    /// blind to; `supervision::note_blind_folder` is what says so.
-    pub files_seen: usize,
-    pub files_watchable: usize,
-    /// Where to pick up next pass: the last file processed before the blow.
-    /// `None` when the walk reached the end. Without this, a filesystem
-    /// where every pass blows at the same budget point never checks the deep
-    /// half of the tree for the life of the session (the incident's file was
-    /// 8 directories deep).
-    pub resume: Option<String>,
-}
+use crate::build::cloud_readiness::storage::SweepSnapshot as WalkOutcome;
 
 /// Whether the sweep should descend into a directory named `name` at
 /// vault-relative path `rel`.
@@ -190,17 +159,42 @@ pub(crate) fn should_log_no_baseline_transition(passes_without_baseline: u64) ->
 /// across passes, and resuming only means anything in a stable order. While
 /// fast-forwarding to the cursor the per-file work (eviction probe, stat,
 /// filters) is skipped — the point of resuming is not to re-spend the
-/// budget on the half already covered. Panic-proof by construction: no
-/// unwraps in the loop body; enumeration errors are classified, never
-/// propagated.
+/// budget on the half already covered. Non-offline enumeration and required
+/// stat failures propagate so the caller can discard the incomplete candidate.
+#[cfg(test)]
 pub(crate) fn walk(folder: &Path, deadline: Option<Instant>, resume_after: Option<&str>) -> WalkOutcome {
+    walk_with_error(folder, deadline, resume_after).unwrap_or_else(|error| WalkOutcome {
+        root_unreadable: error.path().is_some_and(|path| path == folder),
+        ..WalkOutcome::default()
+    })
+}
+
+/// Collect one candidate walk. Any failed enumeration or required stat
+/// failure discards the candidate so callers cannot infer absences from it.
+/// Each queued attempt gets its own bounded pass budget. A returned partial
+/// measurement can resume a pass, but cannot certify complete structure.
+pub(super) fn owned_walk(folder: &Path, budget: Option<std::time::Duration>, cursor: Option<String>) -> Result<WalkOutcome, crate::build::cloud_readiness::storage::Unavailable> {
+    use crate::build::cloud_readiness::storage::{await_operation, OperationPolicy, StorageValue};
+    let root = folder.to_path_buf();
+    let resume = cursor.clone();
+    let owner = crate::build::cloud_readiness::storage::OperationOwner::for_folder(folder);
+    let value = await_operation(folder, OperationPolicy::SweepWalk { budget, resume: cursor }, budget.unwrap_or(WALK_DEADLINE) + std::time::Duration::from_secs(2),
+        &|| !owner.active(), &|| {}, std::sync::Arc::new(move || {
+            walk_with_error(&root, budget.map(|d| Instant::now() + d), resume.as_deref()).map(StorageValue::Sweep)
+        }))?;
+    let StorageValue::Sweep(snapshot) = value.as_ref() else { unreachable!("sweep operation returns its measurement") };
+    Ok(snapshot.clone())
+}
+
+pub(crate) fn walk_with_error(
+    folder: &Path,
+    deadline: Option<Instant>,
+    resume_after: Option<&str>,
+) -> Result<WalkOutcome, StorageFailure> {
     let mut out = WalkOutcome::default();
 
-    if std::fs::read_dir(folder).is_err() {
-        out.root_unreadable = true;
-        return out;
-    }
-
+    #[cfg(test)]
+    crate::build::cloud_readiness::storage::test_probe(folder, StorageOperation::ReadDirOpen)?;
     // `None` once the cursor has been passed (or was never set).
     let mut skipping_until = resume_after;
     let mut last_processed: Option<String> = None;
@@ -229,27 +223,26 @@ pub(crate) fn walk(folder: &Path, deadline: Option<Instant>, resume_after: Optio
         let entry = match entry {
             Ok(e) => e,
             Err(err) => {
-                // An unenumerable directory. Offline (dataless subtree) must
-                // read as "offline", never as "everything under it was
-                // deleted"; anything else is logged and skipped — the sweep
-                // re-runs, and a rebuild would not fix an unreadable dir.
-                if let (Some(path), Some(io)) = (err.path(), err.io_error()) {
-                    if crate::build::icloud::is_offline_not_absent(path, io) {
-                        if let Some(rel) = path_to_relative_key(folder, path) {
-                            out.offline_prefixes.push(rel);
-                            continue;
-                        }
-                    }
+                // Even a dataless directory is an incomplete candidate. The
+                // next whole pass retries it; treating the subtree as an
+                // offline prefix could otherwise certify readiness or absence
+                // from a walk that never enumerated it.
+                if let Some(path) = err.path() {
                     log::debug!(
                         target: "moss::build::watch",
                         "sweep: cannot enumerate {}: {}",
                         path.display(),
-                        io
+                        err
                     );
                 }
-                continue;
+                return Err(StorageFailure::from_walkdir(err));
             }
         };
+        #[cfg(test)]
+        crate::build::cloud_readiness::storage::test_probe(
+            entry.path(),
+            crate::build::cloud_readiness::StorageOperation::WalkEntry,
+        )?;
         if !entry.file_type().is_file() {
             continue;
         }
@@ -295,7 +288,15 @@ pub(crate) fn walk(folder: &Path, deadline: Option<Instant>, resume_after: Optio
                 // Carry the stat: the drift compare's fast tiers and the
                 // sticky fingerprint reuse it instead of re-stat'ing every
                 // file up to twice more per pass.
-                let meta = if offline { None } else { entry.metadata().ok() };
+                let meta = if offline {
+                    None
+                } else {
+                    #[cfg(test)]
+                    crate::build::cloud_readiness::storage::test_probe(path, StorageOperation::EntryMetadata)?;
+                    Some(entry.metadata().map_err(|error| StorageFailure::new(
+                        Some(path.to_path_buf()), StorageOperation::EntryMetadata, error.into(),
+                    ))?)
+                };
                 out.files.push(drift::WalkedFile {
                     rel,
                     abs: effective.to_path_buf(),
@@ -306,7 +307,7 @@ pub(crate) fn walk(folder: &Path, deadline: Option<Instant>, resume_after: Optio
         }
     }
 
-    out
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -412,12 +413,21 @@ pub(crate) async fn run_pass(
 ) -> PassOutcome {
     let f = folder.to_path_buf();
     let task = tokio::task::spawn_blocking(move || {
-        let walk_deadline = Instant::now() + WALK_DEADLINE;
         let started_at_top = cursor.is_none();
-        let walk_out = walk(&f, Some(walk_deadline), cursor.as_deref());
-        if walk_out.root_unreadable {
-            return PassOutcome { walk: walk_out, baseline: cache, ..PassOutcome::default() };
-        }
+        let walk_out = match owned_walk(&f, Some(WALK_DEADLINE), cursor.clone()) {
+            Ok(walk) => walk,
+            Err(error) => {
+                let root_unreadable = error.failure.path().is_some_and(|path| path == f);
+                log::debug!(target: "moss::build::watch", "sweep: discarding incomplete walk for {}: {}", f.display(), error);
+                return PassOutcome {
+                    walk: WalkOutcome { root_unreadable, ..WalkOutcome::default() },
+                    baseline: cache,
+                    resume: cursor,
+                    complete: false,
+                    ..PassOutcome::default()
+                };
+            }
+        };
 
         let mut baseline = if drift_allowed {
             drift::select_baseline(stash.as_ref(), cache, || read_baseline_from_disk(&f))

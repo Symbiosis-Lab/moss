@@ -31,10 +31,11 @@ fn test_ffmpeg_config_shape() {
 
 #[test]
 fn test_moss_bin_dir() {
-    let dir = get_moss_bin_dir();
-    assert!(dir.is_ok());
-    let path = dir.unwrap();
-    assert!(path.to_string_lossy().contains(".moss"));
+    crate::infra::home::with_moss_home(|home| {
+        let path = get_moss_bin_dir().unwrap();
+        assert_eq!(path, home.join("bin"));
+        assert!(path.is_dir());
+    });
 }
 
 #[test]

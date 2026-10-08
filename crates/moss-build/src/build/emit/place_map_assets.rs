@@ -590,6 +590,12 @@ mod tests {
             let (_dir, paths) = scratch_paths("cloud-map-cache");
             let objects = ObjectStore::for_site(&paths);
             let transforms = TransformCache::for_site(&paths);
+            // The scratch root represents a managed provider, including a
+            // refusal below its object shard rather than at the store root.
+            let _provider_context = crate::build::cloud_readiness::storage::TestFault::install(
+                objects.root(), objects.root(), crate::build::cloud_readiness::StorageOperation::CacheMkdir,
+                0, std::time::Duration::from_millis(20),
+            );
             let folder = if object_folder {
                 objects.blob_path(&oid).parent().unwrap().to_path_buf()
             } else {
@@ -611,12 +617,23 @@ mod tests {
                 assert!(map_dir.join(format!("tile-{x}-{y}.svg")).is_file());
             }
             assert_eq!(manifest.site_hashes_view().files.len(), cells.len() + 2, "both outputs registered");
-            assert_eq!(pretend::requests_for(&folder), 1);
+            assert_eq!(pretend::requests_for(&folder), 0, "directory writes never request a file-byte download");
             assert_eq!(std::fs::read(&sibling).unwrap(), b"preserve shared data");
+            if object_folder {
+                assert_eq!(std::fs::read(ObjectStore::new(paths.cache_local_objects()).blob_path(&oid)).unwrap(), tile.as_bytes(), "the complete local CAS supplies the emitted map while the shared publication waits");
+            }
+            assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_err(), "the admitted owned publication retains its local source through completion");
             drop(cloud);
-            // A later build saves the cache, and its successor consumes it.
-            let later_renders = if object_folder { [0, 0] } else { [1, 0] };
-            for expected in later_renders {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                if let Ok(token) = crate::build::lifecycle::try_begin_cache_gc(&paths) { drop(token); break; }
+                assert!(std::time::Instant::now() < deadline, "owned map cache publication did not settle after the actual write became available");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(std::fs::read(objects.blob_path(&oid)).unwrap(), tile.as_bytes(), "the shared object is available only after verified owned publication");
+            let record = transforms.get_with(&Asset::Tile(x, y).cache_key(&context), crate::build::cache::RecordMode::Request).expect("owned record publication settles without another build");
+            assert_eq!(record.transforms[&Asset::Tile(x, y).name()].oid, oid);
+            for expected in [0, 0] {
                 let next = tempfile::tempdir().unwrap();
                 let mut pending = PendingManifest::new(SiteHashes::default());
                 assert_eq!(emit(&context, &gaz, &paths, next.path(), &mut pending).unwrap(), expected);

@@ -18,6 +18,7 @@ use std::path::Path;
 
 use notify::Watcher;
 
+use crate::build::cloud_readiness::storage::Unavailable;
 use crate::build::watch::scope;
 
 // How often the watcher re-derives its subscription set is `Cadence::interval()`
@@ -34,8 +35,18 @@ type Debouncer = notify_debouncer_full::Debouncer<
 /// unwatch what vanished. Whether either amounts to a content change worth a
 /// rebuild is the sweep's call ([`scope::watch_set_content_change`]), made
 /// against its own snapshot on its own tick.
-pub(crate) fn targets(debouncer: &mut Debouncer, root: &Path, watched: &mut Vec<scope::WatchTarget>) {
-    let desired = scope::watch_targets(root);
+pub(crate) fn targets(
+    debouncer: &mut Debouncer,
+    root: &Path,
+    watched: &mut Vec<scope::WatchTarget>,
+) -> Result<(), Unavailable> {
+    let desired = match scope::watch_targets_with_error(root) {
+        Ok(desired) => desired,
+        Err(error) => {
+            log::debug!(target: "moss::build::watch", "Cannot reconcile watches for {}: {}", root.display(), error);
+            return Err(error);
+        }
+    };
 
     for (path, _) in watched.iter() {
         if !desired.iter().any(|(p, _)| p == path) {
@@ -88,4 +99,9 @@ pub(crate) fn targets(debouncer: &mut Debouncer, root: &Path, watched: &mut Vec<
     if newly_watched > 0 {
         log::info!(target: "moss::build::watch", "Now watching {} more path(s)", newly_watched);
     }
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "reconcile_tests.rs"]
+mod tests;
