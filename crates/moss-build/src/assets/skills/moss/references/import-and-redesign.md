@@ -32,7 +32,7 @@ Keep three places apart:
 
 ## 1. Import
 
-`moss import <url> "<Site>" --recursive`, as `moss guide importing` describes. Read the summary: pages written, duplicates skipped, failed pages, widgets carried as links or with no static form, and the site chrome written. Build it once with `moss build "<Site>" --strict` and take `moss list --json` as the page inventory. Then put the folder under version control (`git init`, commit) with nothing else changed: the import is the content baseline, and every later change becomes a reviewable diff against it. Build before the first commit, not after: the first build writes `.moss/.gitignore`, which keeps build output, caches and the site's identity out of the baseline.
+`moss import <url> "<Site>" --recursive`, as `moss guide importing` describes. Read the summary: pages written, duplicates skipped, failed pages, widgets carried as links or with no static form, and the site chrome written. Build it once with `moss build "<Site>" --strict` and take `moss list --json` as the page inventory. An imported site often fails that first strict build on dead links to addresses the old platform served as aliases (`/home`, a renamed page); repoint each link, or redirect the old address, before building further, and record which you did. Then put the folder under version control (`git init`, commit) with nothing else changed: the import is the content baseline, and every later change becomes a reviewable diff against it. Build before the first commit, not after: the first build writes `.moss/.gitignore`, which keeps build output, caches and the site's identity out of the baseline.
 
 Write what the import lost into `<Site> design/import.md`: failed pages, widgets with no static form, anything that came across wrong. Each is a decision for the vision, never something to patch silently. Prefer a re-import over hand edits to fix what came across wrong, because a re-import discards hand edits. An import defect moss should fix is worth reporting to moss with the URL and the page.
 
@@ -82,6 +82,7 @@ What keeps the surface friendly:
 
 - A page's source reads like the page: no raw HTML where markdown or a moss block does the job, no inline styles, no class on every paragraph.
 - A fact lives in one place. A value several pages share is frontmatter or a partial, never pasted.
+- The owner's own sentences stay as written, even when one repeats a fact moss now shows from frontmatter ("Join us Sunday at 2:00 PM"). Remove builder leftovers that repeat facts (date lines, venue blocks, ticket buttons), never the owner's prose.
 - Every theme rule carries a short comment with its design reason, or it goes.
 - A source-owned HTML homepage (`moss guide authoring`) gives up the surface for that page. Use one only when the owner accepts that, and record why.
 
