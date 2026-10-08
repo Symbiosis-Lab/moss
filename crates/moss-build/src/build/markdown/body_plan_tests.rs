@@ -299,6 +299,7 @@ fn lede_ends_at_a_widened_figure_but_not_a_body_width_one() {
             align: None,
             class_names: vec![],
             img_style: None,
+            italic_caption: false,
         },
     ];
     assert_eq!(lede_end(&blocks), blocks.len(), "body width is the default measure");

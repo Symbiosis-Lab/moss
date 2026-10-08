@@ -315,6 +315,7 @@ impl Restore<'_> {
                 align: _,
                 class_names: _,
                 img_style: _,
+                italic_caption: _,
             } => {
                 self.in_inline(image);
                 if let Some(caption) = caption {

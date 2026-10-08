@@ -1298,7 +1298,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "![alt](image.jpg)",
         status: Status::Confirmed,
         since: "0",
-        description: "Wrapper around an inline `<img>` for sizing and figure semantics. `data-width` carries a named width token (body|wide|page|screen); a content-relative width is instead emitted as inline `style=\"width:NN%\"` (set by the editor drag-resize), which also forces the inner image to fill that percent box. Images narrower than the content column center horizontally.",
+        description: "Wrapper around an inline `<img>` for sizing and figure semantics. `data-width` carries a named width token (body|wide|page|screen); a content-relative width is instead emitted as inline `style=\"width:NN%\"` (set by the editor drag-resize), which also forces the inner image to fill that percent box. Images narrower than the content column center horizontally. A captioned image is announced once, through its `<figcaption>`: when the alt is empty or only repeats the caption the inner `<img>` has `alt=\"\"`. An alt that differs from the caption comes from an italic line under the image: `![description](x.jpg)` then `*caption*` on the next line.",
     },
     ComponentEntry {
         class: "moss-align-left",

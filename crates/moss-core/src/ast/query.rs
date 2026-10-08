@@ -16,6 +16,58 @@ use super::node::{Block, Inline};
 use super::shortcode::Shortcode;
 use std::collections::HashMap;
 
+/// Hrefs of the images in the document that a screen reader gets no text for:
+/// an empty alt and, for a figure, no caption to stand in for it. Only image
+/// files count; a video, audio or PDF written in the image form takes its
+/// label from elsewhere. Descends into grid cells, callouts, lists and table
+/// cells.
+pub fn images_without_text(doc: &Document) -> Vec<String> {
+    fn is_image_file(href: &str) -> bool {
+        crate::resolve::ext_kind::reference_kind_for_ext(&crate::path_ext::path_extension_lower(href))
+            == crate::resolve::ext_kind::ExtKind::Image
+    }
+    fn bare(image: &Inline, out: &mut Vec<String>) {
+        if let Inline::Image { src, alt, .. } = image {
+            let href = match src {
+                super::url::Url::Resolved(r) => r.href.as_str(),
+                super::url::Url::Unresolved(s) => s.as_str(),
+            };
+            if alt.trim().is_empty() && is_image_file(href) {
+                out.push(href.to_string());
+            }
+        }
+    }
+    fn walk(inlines: &[Inline], out: &mut Vec<String>) {
+        for i in inlines {
+            match i {
+                Inline::Image { .. } => bare(i, out),
+                Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) => walk(c, out),
+                Inline::Link { children, .. } => walk(children, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    super::visit::visit_blocks(doc, |block| {
+        match block {
+            Block::Paragraph(inlines) | Block::Heading { children: inlines, .. } => {
+                walk(inlines, &mut out)
+            }
+            Block::Table { header, rows, .. } => {
+                for cell in header.iter().chain(rows.iter().flatten()) {
+                    walk(cell, &mut out);
+                }
+            }
+            Block::Figure { image, caption, .. } if caption.as_ref().is_none_or(|c| c.is_empty()) => {
+                bare(image, &mut out)
+            }
+            _ => {}
+        }
+        true
+    });
+    out
+}
+
 /// Find the first `Inline::Image` reachable from the document's top-level
 /// block sequence.
 ///
@@ -271,6 +323,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: None,
+            italic_caption: false,
         }
     }
 

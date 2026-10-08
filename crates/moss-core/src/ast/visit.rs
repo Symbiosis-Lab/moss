@@ -881,6 +881,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: None,
+            italic_caption: false,
         }]);
         let mut seen: Vec<String> = Vec::new();
         visit_urls_mut(&mut doc, |u| match u {
@@ -908,6 +909,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: None,
+            italic_caption: false,
         }]);
         visit_urls_mut(&mut doc, |u| {
             *u = Url::resolved("p.jpg", UrlKind::Asset);
@@ -945,6 +947,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: None,
+            italic_caption: false,
         }]);
         let mut seen: Vec<String> = Vec::new();
         visit_urls_mut(&mut doc, |u| match u {

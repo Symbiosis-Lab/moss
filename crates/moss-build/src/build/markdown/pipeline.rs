@@ -1049,6 +1049,14 @@ pub fn process_markdown_file(
     //    every URL be `Url::Resolved` at emission time.
     moss_core::ast::classify_remaining_urls(&mut doc);
 
+    // An image with no alt and no caption is invisible to a screen reader. It
+    // is a prompt to describe the image, not a defect in the build, so it goes
+    // to the log only: `log_warn_problem!` would make `--strict` fail every
+    // existing site that has a decorative or not-yet-described image.
+    for href in moss_core::ast::images_without_text(&doc) {
+        log::warn!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
+    }
+
     // 6. Render the typed AST to HTML through `PipelineHooks`. This is THE
     //    production HTML emission — `transform_events` no longer runs for
     //    `process_markdown_file`.

@@ -88,7 +88,7 @@ An image in its own paragraph — an empty line above it, nothing else on the li
 
 ```html
 <figure>
-  &lt;img src="…/light.jpg" alt="Morning light, Yangshuo">
+  &lt;img src="…/light.jpg" alt="">
   <figcaption>Morning light, Yangshuo</figcaption>
 </figure>
 ```
@@ -99,11 +99,13 @@ This is Pandoc's implicit-figure convention, on by default; the default theme se
 
 | Syntax | Caption | Alt text |
 |--------|---------|----------|
-| `![Caption](photo.jpg)` | the alt text | same as the caption |
-| `![[photo.jpg\|Caption]]` | the alias | same as the caption |
-| `![Alt description](photo.jpg)` then `*Caption*` on the next line | the italic line | a separate description |
+| `![Caption](photo.jpg)` | the alt text | none: the caption names the image |
+| `![[photo.jpg\|Caption]]` | the alias | none: the caption names the image |
+| `![Alt description](photo.jpg)` then `*Caption*` on the next line | the italic line | the bracket text, a separate description |
 
-The third form is best for accessibility: the alt describes the image for screen readers while the italic line is the visible caption. In the first two, the alt does double duty as caption and description.
+In the first two, the image is announced once, through its caption, so the `<img>` carries `alt=""`: a screen reader would otherwise read the same words twice. The third form is for when the caption is a credit line or a title and the image needs a real description. Write the description in the brackets and put the caption on an italic line of its own directly under the image; the line must start on a new line, so `![logo](x.png) *beta*` on one line stays a paragraph with an image in it.
+
+An image with no text at all (`![](photo.jpg)` or `![[photo.jpg]]`) gets `alt=""`, which marks it decorative, and the build logs `Accessibility: image '…' on '…' has no alt text`. That line is advice: it does not count as a problem for `--strict`. There is no separate marker for a deliberately decorative image yet, so the line is the cost of leaving one bare.
 
 For the wikilink form, the alias becomes a caption only when it isn't a [size or fit/position keyword](#display-control) — those are read first.
 

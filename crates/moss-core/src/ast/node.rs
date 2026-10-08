@@ -333,6 +333,11 @@ pub enum Block {
         /// embed). `None` omits it. Distinct from any figure-level attribute:
         /// fit/position style belongs on the image element, not the figure.
         img_style: Option<String>,
+        /// The caption is the author's italic line under the image
+        /// (`![description](x)` then `*caption*`), not the image's own alt
+        /// text. The opt-out from implicit figures puts the line back.
+        #[serde(default)]
+        italic_caption: bool,
     },
     /// Compound-link grid cell: the entire cell is a single markdown
     /// link `[inner](url)` whose `inner` is parsed as block-level content
@@ -617,6 +622,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: None,
+            italic_caption: false,
         };
         match b {
             Block::Figure {
@@ -648,6 +654,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: None,
+            italic_caption: false,
         };
         let s = serde_json::to_string(&b).expect("serialize");
         let back: Block = serde_json::from_str(&s).expect("deserialize");

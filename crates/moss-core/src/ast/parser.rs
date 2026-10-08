@@ -399,12 +399,21 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
 pub(crate) fn unwrap_implicit_figure(block: &mut Block) {
     // Replace this block if it's an undecorated Figure.
     if is_implicit_figure(block) {
-        if let Block::Figure { image, .. } = block {
+        if let Block::Figure { image, caption, italic_caption, .. } = block {
+            let italic_line = if *italic_caption { caption.take() } else { None };
             let img = std::mem::replace(
                 image,
                 Inline::Text(String::new()), // placeholder, overwritten below
             );
-            *block = Block::Paragraph(vec![img]);
+            // The author's italic line under the image is their text, not an
+            // inference: the opt-out undoes the figure, so the line goes back
+            // as the line it was.
+            let mut inlines = vec![img];
+            if let Some(c) = italic_line {
+                inlines.push(Inline::LineBreak);
+                inlines.push(Inline::Emphasis(c));
+            }
+            *block = Block::Paragraph(inlines);
         }
         return;
     }
@@ -955,8 +964,40 @@ fn try_promote_to_figure(
     events: &[Event<'_>],
     para_start: usize,
 ) -> Result<Block, Vec<Inline>> {
+    // `![Description](x.jpg)` followed on the next line by one italic line is
+    // a figure whose caption is the italic line and whose alt stays the
+    // bracket text, so the two can differ. A refusal hands the paragraph back
+    // untouched.
+    let italic_at = italic_caption_index(&inlines);
+    try_promote_image_only(inlines, events, para_start, italic_at)
+}
+
+/// Index of the italic line when the paragraph is exactly `image`, a line
+/// break (hard, or the soft `\n` text), `*italic*`. An italic span on the
+/// image's own line (`![logo](x.png) *beta*`) is prose, not a caption.
+fn italic_caption_index(inlines: &[Inline]) -> Option<usize> {
+    let blank = |i: &Inline| matches!(i, Inline::Text(s) if s.trim().is_empty()) || matches!(i, Inline::LineBreak);
+    let breaks = |i: &Inline| matches!(i, Inline::LineBreak) || matches!(i, Inline::Text(s) if s.contains('\n'));
+    let img = inlines.iter().position(|i| matches!(i, Inline::Image { .. }))?;
+    let em = inlines.iter().position(|i| matches!(i, Inline::Emphasis(c) if !c.is_empty()))?;
+    (em > img
+        && inlines[..img].iter().all(blank)
+        && inlines[img + 1..em].iter().all(blank)
+        && inlines[img + 1..em].iter().any(breaks)
+        && inlines[em + 1..].iter().all(blank))
+    .then_some(em)
+}
+
+/// `italic_at` is the index of an italic caption line that follows the image;
+/// everything from it on is dropped from the paragraph once it promotes.
+fn try_promote_image_only(
+    mut inlines: Vec<Inline>,
+    events: &[Event<'_>],
+    para_start: usize,
+    italic_at: Option<usize>,
+) -> Result<Block, Vec<Inline>> {
     let mut image_count = 0;
-    for inline in &inlines {
+    for inline in &inlines[..italic_at.unwrap_or(inlines.len())] {
         match inline {
             Inline::Image { .. } => image_count += 1,
             Inline::Text(s) if s.trim().is_empty() => {} // whitespace OK
@@ -1071,7 +1112,7 @@ fn try_promote_to_figure(
     // original `<p><img></p>` shape with its whitespace siblings) — UNLESS it
     // carries a width, which needs a figure to hold the inline
     // `style="width:NN%"` / `data-width=`.
-    if alt_text.is_empty() && placement.is_empty() {
+    if alt_text.is_empty() && placement.is_empty() && italic_at.is_none() {
         return Err(inlines);
     }
 
@@ -1083,6 +1124,15 @@ fn try_promote_to_figure(
         // failure than a panic if that invariant ever stops holding.
         return Err(inlines);
     };
+    // From here the paragraph is promoting: lift the italic line out of it.
+    let italic_caption = italic_at.map(|at| {
+        let line = match &mut inlines[at] {
+            Inline::Emphasis(c) => std::mem::take(c),
+            _ => Vec::new(),
+        };
+        inlines.truncate(at);
+        line
+    });
     let mut image = inlines.swap_remove(image_pos);
     if let (Some(new_alt), Inline::Image { alt, .. }) = (rewritten_alt, &mut image) {
         *alt = new_alt;
@@ -1095,7 +1145,10 @@ fn try_promote_to_figure(
     // flat pothole-derived caption (its alias is a literal string, not
     // markdown), and a plain-text alt keeps the flat single-Text caption so
     // the byte shape is unchanged for the common case.
-    let caption = if alt_text.is_empty() {
+    let has_italic_caption = italic_caption.is_some();
+    let caption = if has_italic_caption {
+        italic_caption
+    } else if alt_text.is_empty() {
         None
     } else {
         Some(build_caption_inlines(
@@ -1114,6 +1167,7 @@ fn try_promote_to_figure(
         align: placement.align.map(|side| side.css_class().to_string()),
         class_names: Vec::new(),
         img_style: None,
+        italic_caption: has_italic_caption,
     })
 }
 

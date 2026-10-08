@@ -1854,6 +1854,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: Some("object-fit:cover;object-position:left".into()),
+            italic_caption: false,
         }];
         let sc = Shortcode::Hero(HeroShortcode {
             overlay: overlay_blocks,
@@ -2038,6 +2039,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: None,
+            italic_caption: false,
         }
     }
 

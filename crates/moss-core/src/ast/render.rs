@@ -508,6 +508,7 @@ fn render_block<H: RenderHooks + ?Sized>(
             align,
             class_names,
             img_style,
+            italic_caption: _,
         } => {
             // Image-only paragraphs promoted at parse time become
             // Block::Figure: a `<figure class="moss-image">` wrap around the
@@ -563,26 +564,11 @@ fn render_block<H: RenderHooks + ?Sized>(
             }
             push_source_line_attr(out, meta.source_line);
             out.push('>');
-            // A caption that is about to be shown OWNS the description, so
-            // the image inside it is decorative *relative to that caption*
-            // and takes `alt=""`.
-            //
-            // Every figure moss builds derives its caption from the same
-            // authored string as the alt — the implicit-figure promotion
-            // uses the markdown alt (`try_promote_to_figure`), and a
-            // wikilink embed uses the pothole alias for both
-            // (`resolve::wikilink_dispatch`). Emitting the sentence twice
-            // makes a screen reader announce it twice: once as the image's
-            // accessible name, once as the caption. Per W3C/WAI guidance on
-            // captioned images, `alt` and the caption must not duplicate
-            // each other; when only one text exists, the visible caption is
-            // the one to keep.
-            //
-            // Keyed off the caption that is ACTUALLY emitted below (same
-            // `Some(non-empty)` test), so an uncaptioned figure — and every
-            // non-figure image, which never reaches this arm — keeps its
-            // alt as its only accessible name.
-            let caption_owns_text = caption.as_ref().is_some_and(|c| !c.is_empty());
+            // A shown caption already names the image for a screen reader, so
+            // an alt that is empty or only repeats it would be announced
+            // twice; it goes out as `alt=""`. An alt that differs from the
+            // caption (the description written in the brackets, the caption
+            // on an italic line below) is the author's and is kept.
             // Render the inner image. Pattern-match the constrained shape;
             // any other inline falls back to the standard inline path so
             // the renderer never panics on a malformed Figure.
@@ -591,7 +577,13 @@ fn render_block<H: RenderHooks + ?Sized>(
                     src, alt, title, ..
                 } => match src {
                     Url::Resolved(r) => {
-                        let alt = if caption_owns_text { "" } else { alt.as_str() };
+                        let repeats_caption = caption.as_ref().is_some_and(|c| {
+                            !c.is_empty()
+                                && (alt.trim().is_empty()
+                                    || super::plain_text::inlines_to_plain_text(c).trim()
+                                        == alt.trim())
+                        });
+                        let alt = if repeats_caption { "" } else { alt.as_str() };
                         hooks.render_image(
                             out,
                             r,

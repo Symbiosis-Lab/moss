@@ -720,6 +720,7 @@ mod tests {
                 align: None,
                 class_names: Vec::new(),
                 img_style: Some("object-fit:cover;object-position:left".into()),
+                italic_caption: false,
             }],
             image: Some(Url::Resolved(ResolvedUrl::new("header.png", UrlKind::Asset))),
             ..Default::default()
