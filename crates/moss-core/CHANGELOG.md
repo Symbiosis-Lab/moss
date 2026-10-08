@@ -5,6 +5,17 @@ All notable changes to this crate are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-10-08
+
+### Added
+
+- Exposed `link_completions::relative_destination` and the transclusion-site and remote-media classification helpers for downstream consumers.
+
+### Fixed
+
+- Standard Markdown images and wiki references now share the written-path resolver across page rendering and shortcode parsing. Escaped image syntax stays literal, and destinations with balanced parentheses or angle brackets are parsed consistently.
+- Reference edits now preserve and resolve standard Markdown destinations with query strings, reference definitions, and encoded spaces, keeping rename and delete behavior aligned with rendered links.
+
 ## [Unreleased]
 
 ### Added
