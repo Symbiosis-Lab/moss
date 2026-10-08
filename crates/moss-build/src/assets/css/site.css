@@ -2935,6 +2935,22 @@ article .moss-place-map-frame:is(.moss-align-left, .moss-align-right):not([data-
   border-bottom-color: currentColor;
 }
 
+.moss-calendar-links {
+  margin-block-start: var(--moss-space-lg);
+  font-size: 0.82em;
+  line-height: 1.8;
+  color: var(--moss-color-muted);
+}
+
+.moss-calendar-links a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-calendar-links a:hover {
+  border-bottom-color: currentColor;
+}
+
 .font-anchor {
   position: relative;
   margin-inline-start: 0.75em;

@@ -1759,6 +1759,28 @@ pub const COMPONENTS: &[ComponentEntry] = &[
     // Series navigation (prev/next + collection links).
     // -------------------------------------------------------------------
     ComponentEntry {
+        class: "moss-calendar-links",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-calendar-links"><a class="moss-calendar-link" href="/events/calendar.ics">Download calendar</a> · <a class="moss-calendar-link" href="webcal://example.test/events/calendar.ics">Subscribe to calendar</a></p>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "Closing line of an event page (\"Add to calendar\") or of a folder that holds events (its calendar file and a webcal subscribe link).",
+    },
+    ComponentEntry {
+        class: "moss-calendar-link",
+        kind: "instance",
+        parent: "moss-calendar-links",
+        data_attrs: &[],
+        example_html: r#"<a class="moss-calendar-link" href="/events/talk/event.ics">Add to calendar</a>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "One calendar link: the .ics file, or the webcal:// subscription.",
+    },
+    ComponentEntry {
         class: "moss-series-nav",
         kind: "standalone",
         parent: "",

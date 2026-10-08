@@ -6925,3 +6925,335 @@ fn preview_inputs_request_selected_source_and_shared_essentials() {
         assert_eq!(crate::build::icloud::pretend::requests_for(path), 1, "{}", path.display());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Calendar files for events
+// ---------------------------------------------------------------------------
+
+/// The properties and line rules RFC 5545 requires of what we write: CRLF on
+/// every line, no physical line over 75 octets, balanced components, and the
+/// properties a calendar app refuses to import without. Returns the unfolded
+/// content lines.
+fn assert_valid_ics(text: &str) -> Vec<String> {
+    assert!(text.ends_with("\r\n"), "ends with CRLF");
+    assert!(!text.replace("\r\n", "").contains(['\r', '\n']), "every line break is CRLF");
+    for physical in text.split("\r\n").filter(|l| !l.is_empty()) {
+        assert!(physical.len() <= 75, "{} octets over the 75 limit: {physical}", physical.len());
+    }
+    let lines: Vec<String> = text.replace("\r\n ", "").split("\r\n").filter(|l| !l.is_empty()).map(str::to_string).collect();
+    assert_eq!(lines.first().map(String::as_str), Some("BEGIN:VCALENDAR"));
+    assert_eq!(lines.last().map(String::as_str), Some("END:VCALENDAR"));
+    assert!(lines.contains(&"VERSION:2.0".to_string()));
+    assert!(lines.iter().any(|l| l.starts_with("PRODID:")));
+    let mut open: Vec<&str> = Vec::new();
+    for l in &lines {
+        if let Some(c) = l.strip_prefix("BEGIN:") {
+            open.push(c);
+        } else if let Some(c) = l.strip_prefix("END:") {
+            assert_eq!(open.pop(), Some(c), "END:{c} closes the component last opened");
+        }
+    }
+    assert!(open.is_empty(), "unclosed: {open:?}");
+    let mut in_event = Vec::new();
+    for l in &lines {
+        match l.as_str() {
+            "BEGIN:VEVENT" => in_event.clear(),
+            "END:VEVENT" => {
+                for need in ["UID:", "DTSTAMP:", "DTSTART", "SUMMARY:"] {
+                    assert!(in_event.iter().any(|p: &String| p.starts_with(need)), "VEVENT lacks {need}: {in_event:?}");
+                }
+            }
+            _ => in_event.push(l.clone()),
+        }
+    }
+    lines
+}
+
+fn staged(test_dir: &std::path::Path, rel: &str) -> String {
+    let p = test_dir.join(".moss/build.nosync/staging").join(rel);
+    fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+}
+
+fn event_site(pages: &[(&str, &str)]) -> (std::path::PathBuf, impl Drop) {
+    event_site_at(pages, Some("https://example.test"))
+}
+
+fn event_site_at(pages: &[(&str, &str)], site_url: Option<&str>) -> (std::path::PathBuf, impl Drop) {
+    let (test_dir, cleanup) = create_test_dir();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(test_dir.join("Events")).unwrap();
+    fs::write(test_dir.join("Events/index.md"), "---\ntitle: Events\n---\n\nWhat is on.\n").unwrap();
+    for (name, fm) in pages {
+        fs::write(test_dir.join("Events").join(name), format!("---\n{fm}---\n\nBody.\n")).unwrap();
+    }
+    build_test_sealed_at(test_dir.to_str().unwrap(), site_url).expect("build");
+    (test_dir, cleanup)
+}
+
+#[test]
+fn a_timed_event_with_a_zone_writes_tzid_and_a_vtimezone() {
+    let (dir, _c) = event_site(&[(
+        "Spring Concert.md",
+        "title: \"Spring Concert, with Interval; Strings and Winds for an Evening of Music at the Hall\"\nuid: abcd1234\nstart: 2026-11-01 14:00\nend: 2026-11-01 16:30\ntimezone: America/New_York\nlocation: Example Hall\nonline: https://stream.example.test/live\n",
+    )]);
+    let text = staged(&dir, "events/spring-concert/event.ics");
+    let lines = assert_valid_ics(&text);
+    assert!(lines.contains(&"UID:abcd1234@example.test".to_string()), "{lines:?}");
+    assert!(lines.contains(&"DTSTART;TZID=America/New_York:20261101T140000".to_string()), "{lines:?}");
+    assert!(lines.contains(&"DTEND;TZID=America/New_York:20261101T163000".to_string()), "{lines:?}");
+    assert!(lines.contains(&"TZID:America/New_York".to_string()));
+    // 2026-11-01 is the day New York leaves daylight time.
+    assert!(lines.contains(&"TZOFFSETFROM:-0400".to_string()) && lines.contains(&"TZOFFSETTO:-0500".to_string()), "{lines:?}");
+    assert!(lines.iter().any(|l| l.starts_with("SUMMARY:Spring Concert\\, with Interval\\; Strings")), "{lines:?}");
+    assert!(lines.contains(&"LOCATION:Example Hall".to_string()));
+    assert!(lines.contains(&"CONFERENCE;VALUE=URI:https://stream.example.test/live".to_string()));
+    assert!(lines.contains(&"URL:https://example.test/events/spring-concert/".to_string()), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.starts_with("STATUS:")), "scheduled events write no STATUS");
+    assert!(text.lines().any(|l| l.starts_with(' ')), "the long title was folded");
+}
+
+#[test]
+fn an_all_day_multi_day_event_ends_the_day_after_its_inclusive_end() {
+    let (dir, _c) = event_site(&[("Festival.md", "title: Festival\nuid: fest0001\nstart: 2026-11-01\nend: 2026-11-03\n")]);
+    let lines = assert_valid_ics(&staged(&dir, "events/festival/event.ics"));
+    assert!(lines.contains(&"DTSTART;VALUE=DATE:20261101".to_string()), "{lines:?}");
+    assert!(lines.contains(&"DTEND;VALUE=DATE:20261104".to_string()), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("TZID")), "an all-day event needs no zone");
+}
+
+#[test]
+fn cancelled_and_postponed_events_carry_the_matching_status() {
+    let (dir, _c) = event_site(&[
+        ("Gala.md", "title: Gala\nuid: gala0001\nstart: 2026-12-05\nstatus: cancelled\n"),
+        ("Recital.md", "title: Recital\nuid: reci0001\nstart: 2026-12-06\nstatus: postponed\n"),
+    ]);
+    assert!(assert_valid_ics(&staged(&dir, "events/gala/event.ics")).contains(&"STATUS:CANCELLED".to_string()));
+    assert!(assert_valid_ics(&staged(&dir, "events/recital/event.ics")).contains(&"STATUS:TENTATIVE".to_string()));
+}
+
+#[test]
+fn a_folder_of_events_publishes_a_subscribable_calendar_and_links_it() {
+    let (dir, _c) = event_site(&[
+        ("B.md", "title: Second\nuid: bbbb0002\nstart: 2026-11-08 19:00\ntimezone: Europe/London\n"),
+        ("A.md", "title: First\nuid: aaaa0001\nstart: 2026-11-01 19:00\ntimezone: Europe/London\n"),
+        ("C.md", "title: Third\nuid: cccc0003\nstart: 2026-11-15\n"),
+        ("Notes.md", "title: Not an event\nuid: nnnn0004\n"),
+    ]);
+    let text = staged(&dir, "events/calendar.ics");
+    let lines = assert_valid_ics(&text);
+    let uids: Vec<&str> = lines.iter().filter_map(|l| l.strip_prefix("UID:")).collect();
+    assert_eq!(uids, ["aaaa0001@example.test", "bbbb0002@example.test", "cccc0003@example.test"], "start order, events only");
+    assert_eq!(lines.iter().filter(|l| l.as_str() == "BEGIN:VTIMEZONE").count(), 1, "one VTIMEZONE per zone");
+    assert!(lines.contains(&"X-WR-CALNAME:Events".to_string()));
+    assert!(staged_exists(&dir, "calendar.ics"), "the root home lists the whole tree, so its calendar holds the events too");
+
+    let folder = staged(&dir, "events/index.html");
+    assert!(folder.contains(r#"href="/events/calendar.ics""#), "{folder}");
+    assert!(folder.contains(r#"href="webcal://example.test/events/calendar.ics""#), "{folder}");
+    let page = staged(&dir, "events/a/index.html");
+    assert!(page.contains(r#"href="/events/a/event.ics""#), "{page}");
+    assert!(!staged(&dir, "events/notes/index.html").contains("event.ics"));
+}
+
+fn staged_exists(test_dir: &std::path::Path, rel: &str) -> bool {
+    test_dir.join(".moss/build.nosync/staging").join(rel).exists()
+}
+
+#[test]
+fn a_timed_event_without_a_zone_is_floating() {
+    let (dir, _c) = event_site(&[("Open Mic.md", "title: Open Mic\nuid: mic00001\nstart: 2026-11-01 19:30\n")]);
+    let lines = assert_valid_ics(&staged(&dir, "events/open-mic/event.ics"));
+    assert!(lines.contains(&"DTSTART:20261101T193000".to_string()), "floating: no TZID, no Z: {lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("TZID") || l == "BEGIN:VTIMEZONE"), "{lines:?}");
+}
+
+/// A site from `(path, frontmatter)` pairs, each page's body being "Body.".
+fn site_of(files: &[(&str, &str)]) -> (std::path::PathBuf, impl Drop) {
+    let (dir, cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    for (path, fm) in files {
+        fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        fs::write(dir.join(path), format!("---\n{fm}---\n\nBody.\n")).unwrap();
+    }
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    (dir, cleanup)
+}
+
+fn staged_calendars(dir: &std::path::Path) -> Vec<String> {
+    fn walk(d: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
+        for e in fs::read_dir(d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, root, out);
+            } else if p.file_name().is_some_and(|n| n == "calendar.ics") {
+                out.push(p.strip_prefix(root).unwrap().to_string_lossy().into_owned());
+            }
+        }
+    }
+    let root = dir.join(".moss/build.nosync/staging");
+    let mut out = Vec::new();
+    walk(&root, &root, &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn a_folder_calendar_holds_what_the_folders_listing_shows() {
+    let (dir, _c) = site_of(&[
+        ("Season/index.md", "title: Season\nchildren_depth: all\n"),
+        ("Season/Week1/Opening.md", "title: Opening\nuid: open0001\nstart: 2026-11-01\n"),
+        ("Plain/index.md", "title: Plain\n"),
+        ("Plain/Sub/Talk.md", "title: Talk\nuid: talk0001\nstart: 2026-11-02\n"),
+    ]);
+    let season = staged(&dir, "season/calendar.ics");
+    assert!(season.contains("UID:open0001@example.test"), "a nested event the listing shows is in the calendar: {season}");
+    assert_eq!(staged_calendars(&dir), ["calendar.ics", "season/calendar.ics"], "the root home lists the whole tree; Plain lists direct children only, and Talk is nested");
+}
+
+#[test]
+fn a_folder_without_a_home_page_gets_no_calendar() {
+    let (dir, _c) = site_of(&[("Dates/2026/11/01/Show.md", "title: Show\nuid: show0001\nstart: 2026-11-01 19:00\n")]);
+    assert!(staged_exists(&dir, "dates/2026/11/01/show/event.ics"), "the event keeps its own file");
+    assert_eq!(staged_calendars(&dir), ["calendar.ics"], "only the root has a home page; the date folders have none to carry a subscribe link");
+}
+
+#[test]
+fn a_folder_home_with_no_event_under_it_gets_no_calendar() {
+    let (dir, _c) = site_of(&[
+        ("Events/index.md", "title: Events\n"),
+        ("Events/A.md", "title: A\nuid: aaaa0001\nstart: 2026-11-01\n"),
+        ("Quiet/index.md", "title: Quiet\n"),
+        ("Quiet/Notes.md", "title: Notes\n"),
+    ]);
+    assert_eq!(staged_calendars(&dir), ["calendar.ics", "events/calendar.ics"], "Quiet has a home page but no event under it, so it gets no calendar");
+}
+
+#[test]
+fn an_end_past_the_last_representable_day_is_reported_not_dropped() {
+    crate::build::cache::tests::logged_count(log::Level::Warn, "");
+    let (_dir, _c) = event_site(&[("Forever.md", "title: Forever\nuid: fvr00001\nstart: 9999-12-30\nend: 9999-12-31\n")]);
+    assert!(crate::build::cache::tests::logged_count(log::Level::Warn, "`Forever` has no DTEND") >= 1, "the dropped DTEND is named in a warning");
+}
+
+#[test]
+fn a_folder_whose_listing_names_no_folder_is_reported() {
+    crate::build::cache::tests::logged_count(log::Level::Warn, "");
+    let (dir, _c) = site_of(&[
+        ("Events/index.md", "title: Events\nchildren_in: sidebar\nchildren_source: \"[[Nowhere]]\"\n"),
+        ("Events/A.md", "title: A\nuid: aaaa0001\nstart: 2026-11-01\n"),
+    ]);
+    assert!(crate::build::cache::tests::logged_count(log::Level::Warn, "`events/index.html` lists a folder that does not exist") >= 1);
+    assert!(!staged_calendars(&dir).contains(&"events/calendar.ics".to_string()));
+}
+
+#[test]
+fn a_listed_false_event_keeps_its_file_but_leaves_the_folder_calendar() {
+    let (dir, _c) = event_site(&[
+        ("Shown.md", "title: Shown\nuid: shwn0001\nstart: 2026-11-01\n"),
+        ("Hidden.md", "title: Hidden\nuid: hdn00001\nstart: 2026-11-02\nlisted: false\n"),
+    ]);
+    assert!(staged_exists(&dir, "events/hidden/event.ics"));
+    let cal = staged(&dir, "events/calendar.ics");
+    assert!(cal.contains("shwn0001") && !cal.contains("hdn00001"), "{cal}");
+}
+
+#[test]
+fn an_unknown_zone_falls_back_to_floating_time() {
+    let (dir, _c) = event_site(&[("Odd.md", "title: Odd\nuid: odd00001\nstart: 2026-11-01 19:30\ntimezone: Mars/Olympus_Mons\n")]);
+    let lines = assert_valid_ics(&staged(&dir, "events/odd/event.ics"));
+    assert!(lines.contains(&"DTSTART:20261101T193000".to_string()), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("TZID")));
+}
+
+#[test]
+fn an_undeployed_site_links_the_calendar_file_but_offers_no_webcal_subscription() {
+    let (dir, _c) = event_site_at(&[("A.md", "title: A\nuid: aaaa0001\nstart: 2026-11-01\n")], None);
+    let folder = staged(&dir, "events/index.html");
+    assert!(folder.contains(r#"href="/events/calendar.ics""#), "{folder}");
+    assert!(!folder.contains("webcal://"), "{folder}");
+}
+
+#[test]
+fn floating_times_warn_once_per_site() {
+    crate::build::cache::tests::logged_count(log::Level::Warn, "");
+    // Seven floating events: the count in the message is unique to this site.
+    let pages: Vec<(String, String)> = (1..=7)
+        .map(|i| (format!("E{i}.md"), format!("title: E{i}\nuid: flt0000{i}\nstart: 2026-11-0{i} 19:00\n")))
+        .collect();
+    let refs: Vec<(&str, &str)> = pages.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let (_dir, _c) = event_site(&refs);
+    assert_eq!(crate::build::cache::tests::logged_count(log::Level::Warn, "7 timed event(s) have no `timezone:`"), 1);
+}
+
+#[test]
+fn a_multi_line_online_value_cannot_inject_calendar_properties() {
+    let (dir, _c) = event_site(&[(
+        "Evil.md",
+        "title: Evil\nuid: \"ev il\\r\\nATTENDEE:mailto:x@example.test\"\nstart: 2026-11-01\nonline: \"https://ok.example.test/x\\r\\nATTENDEE:mailto:y@example.test\"\n",
+    )]);
+    let text = staged(&dir, "events/evil/event.ics");
+    let lines = assert_valid_ics(&text);
+    assert!(!lines.iter().any(|l| l.starts_with("ATTENDEE") || l.starts_with("CONFERENCE")), "{lines:?}");
+    let uid = lines.iter().find_map(|l| l.strip_prefix("UID:")).unwrap();
+    assert!(uid.ends_with("@example.test") && uid.chars().all(|c| c.is_ascii_alphanumeric() || "@._-".contains(c)), "{uid}");
+}
+
+#[test]
+fn a_path_with_spaces_and_unicode_still_gets_a_safe_uid() {
+    let (dir, _c) = event_site(&[("春 Concert.md", "title: Concert\nstart: 2026-11-01\n")]);
+    let ics = fs::read_dir(dir.join(".moss/build.nosync/staging/events")).unwrap().flatten()
+        .map(|e| e.path().join("event.ics")).find(|p| p.exists()).expect("an event file");
+    let lines = assert_valid_ics(&fs::read_to_string(ics).unwrap());
+    let uid = lines.iter().find_map(|l| l.strip_prefix("UID:")).unwrap();
+    assert!(uid.chars().all(|c| c.is_ascii_alphanumeric() || "@._-".contains(c)), "{uid}");
+}
+
+#[test]
+fn unusable_event_fields_are_reported_not_dropped_silently() {
+    crate::build::cache::tests::logged_count(log::Level::Warn, "");
+    let _ = event_site(&[
+        ("BadStart.md", "title: Bad\nstart: next friday\n"),
+        ("BadEnd.md", "title: Backwards\nstart: 2026-11-05\nend: 2026-11-01\n"),
+        ("BadZone.md", "title: Zoned\nstart: 2026-11-05 10:00\ntimezone: Atlantis/Nowhere\n"),
+        ("BadOnline.md", "title: Online\nstart: 2026-11-05\nonline: not a url\n"),
+    ]);
+    for what in ["is not a date or date and time", "unreadable or before `start:`", "Atlantis/Nowhere", "`online:` is not an http(s) address"] {
+        assert!(crate::build::cache::tests::logged_count(log::Level::Warn, what) >= 1, "no warning mentions {what}");
+    }
+}
+
+#[test]
+fn event_pages_and_calendar_folders_declare_a_calendar_alternate_in_the_head() {
+    let (dir, _c) = event_site(&[("A.md", "title: A\nuid: aaaa0001\nstart: 2026-11-01\n")]);
+    let head = |html: &str| html.split("</head>").next().unwrap().to_string();
+    assert!(head(&staged(&dir, "events/a/index.html")).contains(r#"type="text/calendar" title="Add to calendar" href="/events/a/event.ics""#));
+    assert!(head(&staged(&dir, "events/index.html")).contains(r#"type="text/calendar" title="Download calendar" href="/events/calendar.ics""#));
+    assert!(head(&staged(&dir, "events/a/index.html")).contains(r#"type="application/rss+xml" title="RSS""#), "the feed link stays beside the calendar link");
+}
+
+#[test]
+fn an_edited_event_gets_a_different_sequence() {
+    let seq = |title: &str| {
+        let (dir, _c) = event_site(&[("A.md", &format!("title: {title}\nuid: aaaa0001\nstart: 2026-11-01\n"))]);
+        assert_valid_ics(&staged(&dir, "events/a/event.ics")).into_iter().find(|l| l.starts_with("SEQUENCE:")).unwrap()
+    };
+    assert_eq!(seq("Same"), seq("Same"));
+    assert_ne!(seq("Same"), seq("Renamed"));
+}
+
+/// A file the author keeps in the site folder at a generated calendar address is
+/// copied over the generated one, as a hand-made `feed.xml` is. The build still
+/// succeeds.
+#[test]
+fn an_author_supplied_calendar_file_wins_over_the_generated_one() {
+    let (dir, _c) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(dir.join("Events")).unwrap();
+    fs::write(dir.join("Events/index.md"), "---\ntitle: Events\n---\n\nx\n").unwrap();
+    fs::write(dir.join("Events/A.md"), "---\ntitle: A\nuid: aaaa0001\nstart: 2026-11-01\n---\n\nx\n").unwrap();
+    fs::write(dir.join("Events/calendar.ics"), "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    assert_eq!(staged(&dir, "events/calendar.ics"), "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n");
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("rebuild");
+    assert_eq!(staged(&dir, "events/calendar.ics"), "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n");
+}

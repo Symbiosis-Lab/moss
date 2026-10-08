@@ -153,8 +153,8 @@ pub struct ShellVars {
     pub latest_list: Option<String>,
     pub latest_sidebar: Option<String>,
     pub favicon: Option<String>,
-    /// RSS feed link for head section
-    pub rss_link: Option<String>,
+    /// `<link rel="alternate">` tags for the head: the RSS feed, then calendar files.
+    pub head_alternates: Option<String>,
     /// Analytics script tag for head section
     pub analytics: Option<String>,
     pub footer: Option<String>,
@@ -380,7 +380,7 @@ impl ShellProcessor {
             ("latest_sidebar", latest_sidebar),
             ("favicon", vars.favicon.unwrap_or_default()),
             ("robots_meta", vars.robots_meta.unwrap_or_default()),
-            ("rss_link", vars.rss_link.unwrap_or_default()),
+            ("head_alternates", vars.head_alternates.unwrap_or_default()),
             ("analytics", vars.analytics.unwrap_or_default()),
             ("footer", vars.footer.unwrap_or_default()),
             // Article-specific variables

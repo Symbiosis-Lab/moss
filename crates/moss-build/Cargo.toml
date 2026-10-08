@@ -56,6 +56,10 @@ serde_json = "1"
 base64 = "0.21"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
+# IANA zones and their transitions, for the VTIMEZONE blocks in calendar (.ics)
+# files. The bundled tz data, not the system's, so output is identical on every
+# machine. Lives here, not in moss-core, which carries no time-zone dependency.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 # Already in the tree transitively via scraper, whose `Html.tree` field is
 # this crate's public `Tree<Node>` — the extractor mutates anchors directly
 # on it, so it needs the type name. Version must keep matching what

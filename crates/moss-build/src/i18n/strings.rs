@@ -320,6 +320,22 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "订阅",
             Language::ZhHant => "訂閱",
         },
+        // Calendar files for events
+        "add_to_calendar" => match lang {
+            Language::En => "Add to calendar",
+            Language::ZhHans => "添加到日历",
+            Language::ZhHant => "加入行事曆",
+        },
+        "download_calendar" => match lang {
+            Language::En => "Download calendar",
+            Language::ZhHans => "下载日历",
+            Language::ZhHant => "下載行事曆",
+        },
+        "subscribe_to_calendar" => match lang {
+            Language::En => "Subscribe to calendar",
+            Language::ZhHans => "订阅日历",
+            Language::ZhHant => "訂閱行事曆",
+        },
         "rss" => "RSS",
         "subscribe_via_rss" => match lang {
             Language::En => "Subscribe via RSS",

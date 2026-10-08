@@ -1546,7 +1546,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         latest_list: None,
         latest_sidebar: None,
         favicon: None,
-        rss_link: None,
+        head_alternates: None,
         analytics: None,
         footer: None,
         body_attrs: String::new(),

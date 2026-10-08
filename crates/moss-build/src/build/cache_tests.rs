@@ -2728,12 +2728,18 @@ impl log::Log for Capture {
 }
 
 fn logged_at(level: log::Level, about: &str) -> bool {
+    logged_count(level, about) > 0
+}
+
+/// How many lines of `level` mention `about`. The first call installs the
+/// capturing logger, so a test that wants lines from a build calls this first.
+pub(crate) fn logged_count(level: log::Level, about: &str) -> usize {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let _ = log::set_logger(&Capture);
         log::set_max_level(log::LevelFilter::Debug);
     });
-    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(l, m)| *l == level && m.contains(about))
+    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(l, m)| *l == level && m.contains(about)).count()
 }
 
 /// A store holding one blob of `source`'s bytes, with the blob's file replaced

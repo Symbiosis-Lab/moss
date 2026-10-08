@@ -1350,7 +1350,7 @@ pub fn generate_blocking_content_for_build(
         // toggle, but never shown when `has_rss` is false — `has_rss` is the
         // one place "does this build actually have a feed" is decided, and
         // the footer link must not disagree with the `<head>` link (gated on
-        // the same value via `homepage_rss`/`rss_link` below) about it. The
+        // the same value via `homepage_rss`/`head_alternates` below) about it. The
         // toggle alone used to be enough to print the footer link even on a
         // localhost/no-site-url build that writes no `rss.xml`, so every page
         // carried a link to a file that was never generated.
@@ -1680,7 +1680,8 @@ pub fn generate_blocking_content_for_build(
     log::debug!(target: "timing", "[render] verdict computed: {:?}", total_start.elapsed());
 
     // Built once here rather than once per page. See `BuildShared`.
-    let shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
+    let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
+    shared.calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
 
     let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
     let page_rss_link = has_rss.then(|| format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#));
@@ -1696,7 +1697,7 @@ pub fn generate_blocking_content_for_build(
             documents: &documents, project: project_structure, layout: &layout_config, site_lang,
             assets: ChromeAssets {
                 paths: page_paths, scripts: &shared.scripts, has_user_css, has_user_js,
-                rss_link: page_rss_link.as_deref(),
+                head_alternates: page_rss_link.as_deref(),
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
         },
@@ -2421,6 +2422,11 @@ pub fn generate_blocking_content_for_build(
         // cards missing their QR corner.
         qr::emit_share_qrs(&documents, &site_url, output_dir, pending)?;
     }
+
+    // Calendar files for event pages and for folders of them. Written whether or
+    // not the site has a deployed address, so a preview serves the links the
+    // pages carry.
+    shared.calendar.emit(output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: rss+sitemap+robots+qr: {:?}", total_start.elapsed());
 
     // Search indexing (Pagefind) does NOT run here. Pagefind walks rendered

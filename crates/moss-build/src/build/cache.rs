@@ -1725,4 +1725,4 @@ fn read_dir_entries(dir: &Path) -> Vec<String> {
 
 #[cfg(test)]
 #[path = "cache_tests.rs"]
-mod tests;
+pub(crate) mod tests;

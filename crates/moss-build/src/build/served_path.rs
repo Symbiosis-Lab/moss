@@ -95,6 +95,11 @@ pub const PLACE_MAP_ASSET_PREFIX: &str = "_moss/map.";
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ServedPath(String);
 
+/// File name of an event page's calendar file (see [`ServedPath::for_event_ics`]).
+pub const EVENT_ICS: &str = "event.ics";
+/// File name of a folder's calendar file (see [`ServedPath::for_calendar`]).
+pub const CALENDAR_ICS: &str = "calendar.ics";
+
 /// Failure modes for ServedPath construction. Each variant corresponds to
 /// one invariant the type enforces at parse time.
 #[derive(Debug)]
@@ -327,6 +332,26 @@ impl ServedPath {
             format!("{}/rss.xml", slug)
         };
         Ok(ServedPath(inner))
+    }
+
+    /// A folder's subscribable calendar. `dir` is a served directory, `""` for
+    /// the site root. Published: people subscribe to this address.
+    pub fn for_calendar(dir: &str) -> Self {
+        ServedPath(if dir.is_empty() { CALENDAR_ICS.to_string() } else { format!("{dir}/{CALENDAR_ICS}") })
+    }
+
+    /// An event page's own calendar file, beside the page's output: `a/b/index.html`
+    /// gives `a/b/event.ics`, `a/b.html` gives `a/b.ics`. `None` for a path that
+    /// is not an HTML document.
+    pub fn for_event_ics(page: &ServedPath) -> Option<Self> {
+        let out = page.as_str();
+        if out == "index.html" {
+            return Some(ServedPath(EVENT_ICS.to_string()));
+        }
+        if let Some(dir) = out.strip_suffix("/index.html") {
+            return Some(ServedPath(format!("{dir}/{EVENT_ICS}")));
+        }
+        out.strip_suffix(".html").map(|stem| ServedPath(format!("{stem}.ics")))
     }
 
     /// The redirect table a host that can answer a real 301 reads.
@@ -641,6 +666,17 @@ mod tests {
         assert_eq!(transform_for("rss.xml"), ShipTransform::CopyAsIs);
         assert_eq!(transform_for("data.json"), ShipTransform::CopyAsIs);
         assert_eq!(transform_for("video.mp4"), ShipTransform::CopyAsIs);
+    }
+
+    #[test]
+    fn calendar_paths_sit_beside_the_page_output() {
+        let page = |p: &str| ServedPath::from_source(p).unwrap();
+        assert_eq!(ServedPath::for_event_ics(&page("events/talk/index.html")).unwrap().as_str(), "events/talk/event.ics");
+        assert_eq!(ServedPath::for_event_ics(&page("index.html")).unwrap().as_str(), "event.ics");
+        assert_eq!(ServedPath::for_event_ics(&page("events/talk.html")).unwrap().as_str(), "events/talk.ics");
+        assert!(ServedPath::for_event_ics(&page("events/talk.pdf")).is_none());
+        assert_eq!(ServedPath::for_calendar("events").as_str(), "events/calendar.ics");
+        assert_eq!(ServedPath::for_calendar("").as_str(), "calendar.ics");
     }
 
     #[test]

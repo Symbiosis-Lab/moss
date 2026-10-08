@@ -411,6 +411,37 @@ fn a_generated_file_no_longer_produced_is_unexplained() {
     assert_eq!(removed_of(&prev, &cur), [("feed.xml".to_string(), RemovalReason::Unexplained)]);
 }
 
+/// A calendar file has no source of its own, and the page behind it is still on
+/// disk when the author only removed `start:`. Losing it is the author's edit,
+/// not a vanished generated file.
+#[test]
+fn a_calendar_file_that_stops_being_produced_is_author_removed() {
+    let prev = snapshot(&sealed(
+        &[("a.md", "a/index.html", "h", b"A")],
+        &[("a/event.ics", &b"E"[..]), ("calendar.ics", &b"C"[..]), ("feed.xml", &b"F"[..])],
+    ));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    assert_eq!(
+        removed_of(&prev, &cur),
+        [
+            ("a/event.ics".to_string(), RemovalReason::AuthorRemoved),
+            ("calendar.ics".to_string(), RemovalReason::AuthorRemoved),
+            ("feed.xml".to_string(), RemovalReason::Unexplained),
+        ]
+    );
+}
+
+/// Only the names the calendar feature writes count. An `.ics` the author put in
+/// the folder is an ordinary file, so its removal is not the author editing `start:`.
+#[test]
+fn a_vanished_ics_file_the_calendar_feature_does_not_write_is_unexplained() {
+    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[("notes.ics", &b"N"[..])]));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("notes.ics".to_string(), RemovalReason::Unexplained)]);
+}
+
 #[test]
 fn a_page_whose_source_was_deleted_is_author_removed() {
     let prev = snapshot(&sealed(

@@ -102,7 +102,7 @@ pub fn generate_html(
     project: &ProjectStructure,
     layout_config: &LayoutConfig,
     is_homepage: bool,
-    rss_link: Option<&str>,
+    head_alternates: Option<&str>,
     analytics_script: Option<&str>,
     site_lang: crate::i18n::Language,
     css_version: Option<&str>,
@@ -125,7 +125,7 @@ pub fn generate_html(
     // Without this, an auto-card would be written to disk and immediately
     // orphaned because there is no way to register it for stale-cleanup.
     generate_html_inner(
-        doc, all_docs, project, layout_config, is_homepage, rss_link,
+        doc, all_docs, project, layout_config, is_homepage, head_alternates,
         analytics_script, site_lang, css_version, has_user_css,
         has_sidebar_layout, user_css_version, has_user_js, user_js_version,
         content_graph, dir_overrides, site_url, show_rss_in_footer,
@@ -147,7 +147,7 @@ pub fn generate_html_collect_og<'d>(
     project: &ProjectStructure,
     layout_config: &LayoutConfig,
     is_homepage: bool,
-    rss_link: Option<&str>,
+    head_alternates: Option<&str>,
     analytics_script: Option<&str>,
     site_lang: crate::i18n::Language,
     css_version: Option<&str>,
@@ -173,7 +173,7 @@ pub fn generate_html_collect_og<'d>(
     shared: &BuildShared<'d>,
 ) -> Result<String, String> {
     generate_html_inner(
-        doc, all_docs, project, layout_config, is_homepage, rss_link,
+        doc, all_docs, project, layout_config, is_homepage, head_alternates,
         analytics_script, site_lang, css_version, has_user_css,
         has_sidebar_layout, user_css_version, has_user_js, user_js_version,
         content_graph, dir_overrides, site_url, show_rss_in_footer,
@@ -320,7 +320,7 @@ fn generate_html_inner<'d>(
     project: &ProjectStructure,
     layout_config: &LayoutConfig,
     is_homepage: bool,
-    rss_link: Option<&str>,
+    head_alternates: Option<&str>,
     _analytics_script: Option<&str>,
     site_lang: crate::i18n::Language,
     css_version: Option<&str>,
@@ -363,7 +363,7 @@ fn generate_html_inner<'d>(
     let context = RenderCtx {
         chrome: PageChromeContext {
             documents: all_docs, project, layout: layout_config, site_lang,
-            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, rss_link },
+            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, head_alternates },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
         },
         content_graph, dir_overrides, site_url, output_dir, source_root, shared,
@@ -407,7 +407,14 @@ pub(super) fn render_page<'d>(
         doc.and_then(|d| d.typesetting.as_deref()), layout_config.typesetting.as_deref(),
     );
     let vertical_typesetting = resolved_typesetting == Some("vertical");
-    let chrome = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root_doc(doc, layout_config));
+    let mut chrome = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root_doc(doc, layout_config));
+    // The calendar alternates sit in the head beside the feed's.
+    if let Some(d) = doc {
+        let head = context.shared.calendar.head_link(d, d.lang);
+        if !head.is_empty() {
+            chrome.head_alternates.get_or_insert_with(String::new).push_str(&head);
+        }
+    }
     let processor = ShellProcessor::new();
 
     // Determine template type based on layout and content folders
@@ -1270,6 +1277,12 @@ pub(super) fn render_page<'d>(
         if let Some(d) = doc {
             credits::push_colophon(&mut homepage_content, &d.colophon, emit_source_lines);
         }
+    }
+    // Calendar links close the page body: an event's "Add to calendar", and a
+    // folder of events' calendar file with its subscribe link. Apart from the
+    // meta line under the title, so each can change without the other.
+    if let Some(d) = doc {
+        homepage_content.push_str(&context.shared.calendar.links_html(d, site_url, d.lang));
     }
 
     // Resolve the share-card description once for the page, using the
