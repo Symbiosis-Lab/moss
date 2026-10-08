@@ -149,6 +149,9 @@ interface MediaItem {
 
   document.addEventListener("keydown", (e: KeyboardEvent) => {
     if (lightbox.hidden) return;
+    // The viewer owns these keys while open; other page handlers (series
+    // navigation) check defaultPrevented and must not also act on them.
+    if (e.key === "Escape" || e.key === "ArrowRight" || e.key === "ArrowLeft") e.preventDefault();
     switch (e.key) {
       case "Escape":
         close();
