@@ -23,6 +23,9 @@ use std::time::{Duration, Instant};
 
 use crate::build::icloud;
 
+pub mod storage;
+pub use storage::{StorageFailure, StorageOperation, recoverable_storage_failure, collect_directory_entries};
+
 /// Whether a source file is ready to be read/probed/converted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Readiness {
@@ -733,6 +736,80 @@ pub fn read_to_string_with_materialize_wait(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+
+    #[test]
+    fn contextual_storage_failure_keeps_path_and_operation() {
+        let path = Path::new("/vault/posts/story.md");
+        let failure = StorageFailure::new(
+            Some(path.to_path_buf()),
+            StorageOperation::ReadDirNext,
+            std::io::Error::from_raw_os_error(libc::EDEADLK),
+        );
+
+        assert_eq!(failure.path(), Some(path));
+        assert_eq!(failure.operation(), StorageOperation::ReadDirNext);
+        assert_eq!(failure.raw_os_error(), Some(libc::EDEADLK));
+    }
+
+    #[test]
+    fn injected_open_failure_keeps_directory_operation_and_errno() {
+        let path = Path::new("/vault/posts");
+        let result: Result<Vec<String>, _> = collect_directory_entries(path, |_| {
+            Err::<std::vec::IntoIter<io::Result<String>>, _>(
+                io::Error::from_raw_os_error(libc::EDEADLK),
+            )
+        });
+
+        let failure = result.unwrap_err();
+        assert_eq!(failure.path(), Some(path));
+        assert_eq!(failure.operation(), StorageOperation::ReadDirOpen);
+        assert_eq!(failure.raw_os_error(), Some(libc::EDEADLK));
+    }
+
+    #[test]
+    fn iterator_failure_after_partial_entries_never_returns_a_prefix() {
+        let path = Path::new("/vault/posts");
+        let result = collect_directory_entries(path, |_| {
+            Ok(vec![
+                Ok("first.md".to_string()),
+                Err(io::Error::from_raw_os_error(libc::EDEADLK)),
+            ].into_iter())
+        });
+
+        let failure = result.unwrap_err();
+        assert_eq!(failure.path(), Some(path));
+        assert_eq!(failure.operation(), StorageOperation::ReadDirNext);
+        assert_eq!(failure.raw_os_error(), Some(libc::EDEADLK));
+    }
+
+    #[test]
+    fn complete_directory_listing_consumes_iterator_through_eof() {
+        let path = Path::new("/vault/posts");
+        let visited = std::cell::Cell::new(0);
+        let entries = collect_directory_entries(path, |_| {
+            Ok((0..3).map(|index| {
+                visited.set(visited.get() + 1);
+                Ok(index)
+            }))
+        }).unwrap();
+
+        assert_eq!(entries, vec![0, 1, 2]);
+        assert_eq!(visited.get(), 3, "Ready requires consuming through EOF");
+    }
+
+    #[test]
+    fn only_managed_macos_deadlock_failures_are_recoverable() {
+        for (errno, managed, macos, expected) in [
+            (libc::EDEADLK, true, true, true),
+            (libc::EDEADLK, false, true, false),
+            (libc::EDEADLK, true, false, false),
+            (libc::EACCES, true, true, false),
+        ] {
+            let failure = StorageFailure::new(Some(PathBuf::from("/site/posts")), StorageOperation::ReadDirNext, io::Error::from_raw_os_error(errno));
+            assert_eq!(recoverable_storage_failure(&failure, managed, macos), expected);
+        }
+    }
 
     fn s(dataless: bool, size: u64, mtime: i64) -> StatSample {
         StatSample { dataless, size, mtime }

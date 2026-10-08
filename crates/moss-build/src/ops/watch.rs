@@ -314,7 +314,7 @@ pub async fn start(config: WatchConfig) {
             // output. A build writes ~5700 files, which overflows the FSEvents
             // buffer, and the overflow arrives as a PATHLESS rescan event that no
             // per-event filter can attribute — so it forced a full rebuild, which
-            // wrote the output again, forever. `scope::watch_targets` returns the
+            // wrote the output again, forever. `scope::watch_targets_with_error` returns the
             // content-only set; see that module for why this cannot be a
             // `RecursiveMode` change on macOS.
             //
@@ -324,7 +324,14 @@ pub async fn start(config: WatchConfig) {
             // content it must never see.
             let root = Path::new(&folder_path);
             let mut watched: Vec<scope::WatchTarget> = Vec::new();
-            for (path, mode) in scope::watch_targets(root) {
+            let initial_targets = match scope::watch_targets_with_error(root) {
+                Ok(targets) => targets,
+                Err(error) => {
+                    log::warn!("⚠️ Cannot enumerate watcher targets in '{}': {} — retrying", root.display(), error);
+                    Vec::new()
+                }
+            };
+            for (path, mode) in initial_targets {
                 if let Err(e) = debouncer.watcher().watch(&path, mode) {
                     // One unreadable subdirectory must not cost the whole watcher.
                     log::warn!("⚠️ Not watching '{}': {}", path.display(), e);
@@ -362,7 +369,7 @@ pub async fn start(config: WatchConfig) {
             // rather than waiting out a 30s Background interval before it ever
             // sees content that appeared after the watcher's initial scan.
             let mut ticker = cadence::CadenceTicker::new(cadence.clone());
-            reconcile::targets(&mut debouncer, root, &mut watched);
+            let _ = reconcile::targets(&mut debouncer, root, &mut watched);
 
             // Process debounced batches until shutdown, recreate, or channel death
             let end = loop {
@@ -384,7 +391,7 @@ pub async fn start(config: WatchConfig) {
                         match tick {
                             cadence::Tick::Elapsed
                             | cadence::Tick::CadenceChanged(cadence::Cadence::Live) => {
-                                reconcile::targets(&mut debouncer, root, &mut watched);
+                                let _ = reconcile::targets(&mut debouncer, root, &mut watched);
                             }
                             cadence::Tick::CadenceChanged(cadence::Cadence::Background) => {
                                 // Just entered Background — let the freshly

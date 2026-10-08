@@ -1,5 +1,5 @@
-//! Reading files so the cloud provider downloads them — on threads moss can
-//! afford to lose.
+//! Cloud byte reads and owned atomic cache publications — on threads moss can
+//! afford to lose. Structural reads have reserved capacity in this same owner.
 //!
 //! # The mechanism is the OS's, not moss's
 //!
@@ -90,7 +90,7 @@
 //!
 //! Those threads are this module. They call
 //! `platform::materialize_on_this_thread()` once and then do nothing else for
-//! their whole lives but read. A provider that stops answering costs moss one
+//! their whole lives but execute owned file operations. A provider that stops answering costs moss one
 //! thread per wedged file and nothing else — and when they are all gone, no
 //! progress is possible by any means, which the supervisor reports as a stall.
 //!
@@ -106,6 +106,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
+use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationTask, OperationOwner, OperationPolicy};
+
+mod operations;
+use operations::{structural_reader_loop, finish_operation};
 
 /// How many reads moss will have outstanding at once.
 ///
@@ -125,6 +129,10 @@ use std::time::{Duration, Instant};
 /// seconds the pool is the limit and more readers would help; if it is aging in
 /// minutes those threads are wedged and more readers would only widen the loss.
 pub const READERS: usize = 8;
+
+/// Structural reads cannot be starved by wedged byte downloads. Native calls
+/// remain bounded to eight byte readers plus these two reserved workers.
+const STRUCTURAL_READERS: usize = 2;
 
 /// Background admission is bounded here for every producer.
 pub const BACKGROUND_WAITING: usize = 12;
@@ -305,9 +313,31 @@ pub struct Snapshot {
     pub oldest_read: Option<(PathBuf, Duration)>,
 }
 
+#[derive(Default)]
+pub(crate) struct StructuralArrivals {
+    pub retry_admission: bool,
+    pub completed: usize,
+}
+
+impl StructuralArrivals {
+    pub fn wake_count(&self) -> usize { self.completed + usize::from(self.retry_admission) }
+}
+
+enum BackgroundWork {
+    Bytes(PathBuf),
+    Publication(OperationKey, Arc<OperationTask>, Instant),
+}
+
 struct Queue {
+    structural: VecDeque<(OperationKey, Arc<OperationTask>, Instant)>,
+    operation_pending: HashMap<OperationKey, Arc<OperationTask>>,
+    structural_in_flight: HashMap<OperationKey, Instant>,
+    cache_in_flight: HashMap<OperationKey, Instant>,
+    structural_arrivals: HashMap<OperationKey, OperationOwner>,
+    capacity_waiters: HashMap<PathBuf, OperationOwner>,
+    editor_intents: VecDeque<(OperationKey, OperationOwner)>,
     /// Background FIFO; the sweep feeds it in bounded batches.
-    fifo: VecDeque<PathBuf>,
+    fifo: VecDeque<BackgroundWork>,
     /// Requested page inputs can overtake files already waiting in `fifo`.
     foreground: VecDeque<PathBuf>,
     /// Paths queued or being read. Not a scheduling structure — it just stops
@@ -325,17 +355,25 @@ struct Queue {
     shutdown: bool,
 }
 
+impl Queue {
+    fn structural_count(&self) -> usize {
+        self.operation_pending.keys().filter(|key| !matches!(key.policy, OperationPolicy::CachePublication { .. })).count()
+    }
+}
+
 struct Inner {
     queue: Mutex<Queue>,
     /// Signals a reader that a file is available, or that it should exit.
     work: Condvar,
+    structural_work: Condvar,
     materialize: Materializer,
     done: AtomicU64,
+    settlement_emitter: Mutex<Option<crate::ops::watch::EventRelay>>,
     background_limit: usize,
 }
 
-/// A fixed set of expendable threads that read files so the provider fetches
-/// them.
+/// A fixed set of expendable workers for byte reads and owned native file
+/// operations. Required structural reads retain their reserved capacity.
 pub struct Prefetcher {
     inner: Arc<Inner>,
 }
@@ -352,6 +390,13 @@ impl Prefetcher {
     pub fn with_materializer(readers: usize, materialize: Materializer, opt_in: bool) -> Self {
         let inner = Arc::new(Inner {
             queue: Mutex::new(Queue {
+                structural: VecDeque::new(),
+                operation_pending: HashMap::new(),
+                structural_in_flight: HashMap::new(),
+                cache_in_flight: HashMap::new(),
+                structural_arrivals: HashMap::new(),
+                capacity_waiters: HashMap::new(),
+                editor_intents: VecDeque::new(),
                 fifo: VecDeque::new(),
                 foreground: VecDeque::new(),
                 pending: HashSet::new(),
@@ -361,8 +406,10 @@ impl Prefetcher {
                 shutdown: false,
             }),
             work: Condvar::new(),
+            structural_work: Condvar::new(),
             materialize,
             done: AtomicU64::new(0),
+            settlement_emitter: Mutex::new(None),
             background_limit: readers.saturating_sub(2).max(1),
         });
         for i in 0..readers {
@@ -381,7 +428,20 @@ impl Prefetcher {
                     reader_loop(&inner);
                 });
         }
+        for i in 0..STRUCTURAL_READERS {
+            let inner = Arc::clone(&inner);
+            let _ = std::thread::Builder::new()
+                .name(format!("moss-cloud-structure-{i}"))
+                .spawn(move || {
+                    if opt_in { crate::platform::materialize_on_this_thread(); }
+                    structural_reader_loop(&inner);
+                });
+        }
         Self { inner }
+    }
+
+    pub(crate) fn set_settlement_emitter(&self, emit: crate::ops::watch::EventRelay) {
+        *self.inner.settlement_emitter.lock().unwrap_or_else(|e| e.into_inner()) = Some(emit);
     }
 
     /// Hand a file over to be read. Non-blocking, idempotent, and cheap enough
@@ -409,8 +469,9 @@ impl Prefetcher {
         }
         if q.pending.contains(path) {
             if foreground {
-                if let Some(index) = q.fifo.iter().position(|p| p == path) {
+                if let Some(index) = q.fifo.iter().position(|job| matches!(job, BackgroundWork::Bytes(p) if p == path)) {
                     if let Some(queued) = q.fifo.remove(index) {
+                        let BackgroundWork::Bytes(queued) = queued else { unreachable!("foreground promotion selects bytes") };
                         q.foreground.push_back(queued);
                         drop(q);
                         self.inner.work.notify_one();
@@ -427,10 +488,100 @@ impl Prefetcher {
         if foreground {
             q.foreground.push_back(path.to_path_buf());
         } else {
-            q.fifo.push_back(path.to_path_buf());
+            q.fifo.push_back(BackgroundWork::Bytes(path.to_path_buf()));
         }
         drop(q);
         self.inner.work.notify_one();
+    }
+
+    pub(crate) fn structural_operation(&self, key: OperationKey, attempt: Operation) -> Option<Arc<OperationTask>> {
+        let mut q = self.inner.queue.lock().ok()?;
+        if q.shutdown { return None; }
+        if let Some(task) = q.operation_pending.get(&key) {
+            let task = task.clone();
+            let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
+            if !task.owner_active() {
+                let owner = OperationOwner::for_folder(key.folder());
+                if owner.active() {
+                    // One fresh request waits behind the old native call. It
+                    // replaces only a previous intent, never a native worker.
+                    state.superseding = Some(crate::build::cloud_readiness::storage::OperationRequest { owner, attempt });
+                }
+            }
+            state.waiters += 1;
+            drop(state);
+            return Some(task);
+        }
+        q.capacity_waiters.retain(|_, owner| owner.active());
+        q.structural_arrivals.retain(|_, owner| owner.active());
+        q.editor_intents.retain(|(_, owner)| owner.active());
+        if q.structural_count() >= BACKGROUND_WAITING + STRUCTURAL_READERS {
+            let owner = OperationOwner::for_folder(key.folder());
+            if owner.active() {
+                if matches!(key.policy, OperationPolicy::EditorDirectory { .. }) {
+                    if !q.editor_intents.iter().any(|(waiting, _)| waiting == &key) && q.editor_intents.len() < BACKGROUND_WAITING {
+                        q.editor_intents.push_back((key, owner));
+                    }
+                } else if matches!(owner, OperationOwner::Folder(_)) && q.capacity_waiters.len() < BACKGROUND_WAITING {
+                    q.capacity_waiters.insert(key.folder().to_path_buf(), owner);
+                }
+            }
+            return None;
+        }
+        q.editor_intents.retain(|(waiting, _)| waiting != &key);
+        let task = Arc::new(OperationTask::new(&key, attempt));
+        q.operation_pending.insert(key.clone(), task.clone());
+        q.structural.push_back((key, task.clone(), Instant::now()));
+        drop(q);
+        self.inner.structural_work.notify_one();
+        Some(task)
+    }
+
+    /// Optional atomic publications share background byte capacity. They can
+    /// never occupy the reserved source/tree workers or foreground byte slots.
+    #[cfg(test)]
+    pub(crate) fn cache_publication(&self, key: OperationKey, attempt: Operation) -> Option<Arc<OperationTask>> {
+        self.cache_publication_revision(key, attempt, None)
+    }
+
+    pub(crate) fn cache_publication_revision(&self, key: OperationKey, attempt: Operation, revision: Option<Arc<AtomicU64>>) -> Option<Arc<OperationTask>> {
+        let mut q = self.inner.queue.lock().ok()?;
+        if q.shutdown { return None; }
+        if let Some(task) = q.operation_pending.get(&key) { return Some(task.clone()); }
+        if q.fifo.len() >= BACKGROUND_WAITING { return None; }
+        let mut task = OperationTask::new(&key, attempt);
+        task.request.owner = OperationOwner::Host;
+        task.revision = revision;
+        task.state.lock().unwrap().waiters = 0;
+        let task = Arc::new(task);
+        q.operation_pending.insert(key.clone(), task.clone());
+        q.fifo.push_back(BackgroundWork::Publication(key, task.clone(), Instant::now()));
+        drop(q);
+        self.inner.work.notify_all();
+        Some(task)
+    }
+
+    pub(crate) fn structural_recovery_retained(&self, key: &OperationKey) -> bool {
+        self.inner.queue.lock().is_ok_and(|q| q.operation_pending.contains_key(key)
+            || q.editor_intents.iter().any(|(waiting, owner)| waiting == key && owner.active())
+            || q.capacity_waiters.get(key.folder()).is_some_and(OperationOwner::active))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn structural_receipts_for_test(&self) -> usize {
+        self.inner.queue.lock().unwrap().structural_arrivals.len()
+    }
+
+    pub(crate) fn take_structural_arrivals(&self, folder: &Path) -> StructuralArrivals {
+        let Ok(mut q) = self.inner.queue.lock() else { return StructuralArrivals::default() };
+        q.capacity_waiters.retain(|_, owner| owner.active());
+        q.structural_arrivals.retain(|_, owner| owner.active());
+        let capacity_available = q.structural_count() < BACKGROUND_WAITING + STRUCTURAL_READERS && !q.shutdown;
+        let retry_admission = capacity_available && q.capacity_waiters.remove(folder).is_some();
+        let keys: Vec<_> = q.structural_arrivals.keys().filter(|key| key.folder() == folder).cloned().collect();
+        let completed = keys.len();
+        for key in keys { q.structural_arrivals.remove(&key); }
+        StructuralArrivals { retry_admission, completed }
     }
 
     /// Queue depth and in-flight count, for the stall diagnosis.
@@ -439,12 +590,14 @@ impl Prefetcher {
         let now = Instant::now();
         match self.inner.queue.lock() {
             Ok(q) => Snapshot {
-                waiting: q.fifo.len() + q.foreground.len(),
-                in_flight: q.in_flight.len(),
+                waiting: q.fifo.len() + q.foreground.len() + q.structural.len(),
+                in_flight: q.in_flight.len() + q.structural_in_flight.len() + q.cache_in_flight.len(),
                 done,
                 oldest_read: q
                     .in_flight
                     .iter()
+                    .chain(q.structural_in_flight.iter().map(|(key, started)| (&key.path, started)))
+                    .chain(q.cache_in_flight.iter().map(|(key, started)| (&key.path, started)))
                     .min_by_key(|(_, started)| **started)
                     .map(|(path, started)| (path.clone(), now.saturating_duration_since(*started))),
             },
@@ -492,8 +645,13 @@ impl Prefetcher {
             q.fifo.clear();
             q.foreground.clear();
             q.pending.clear();
+            q.structural.clear();
+            q.operation_pending.clear();
+            q.capacity_waiters.clear();
+            q.editor_intents.clear();
         }
         self.inner.work.notify_all();
+        self.inner.structural_work.notify_all();
     }
 }
 
@@ -511,60 +669,61 @@ impl Drop for Prefetcher {
 
 fn reader_loop(inner: &Arc<Inner>) {
     loop {
-        let path = {
-            let mut q = match inner.queue.lock() {
-                Ok(q) => q,
-                Err(_) => return,
-            };
+        let (work, background) = {
+            let mut q = match inner.queue.lock() { Ok(q) => q, Err(_) => return };
             loop {
-                if q.shutdown {
-                    return;
-                }
+                if q.shutdown { return; }
                 if let Some(path) = q.foreground.pop_front() {
                     q.in_flight.insert(path.clone(), Instant::now());
-                    break (path, false);
+                    break (BackgroundWork::Bytes(path), false);
                 }
-                if q.background_in_flight < inner.background_limit {
-                    if let Some(path) = q.fifo.pop_front() {
-                        q.in_flight.insert(path.clone(), Instant::now());
+                let available = q.background_in_flight < inner.background_limit;
+                let now = Instant::now();
+                if available {
+                    if let Some(index) = q.fifo.iter().position(|job| match job {
+                        BackgroundWork::Bytes(_) => true,
+                        BackgroundWork::Publication(_, _, ready_at) => *ready_at <= now,
+                    }) {
+                        let job = q.fifo.remove(index).unwrap();
+                        match &job {
+                            BackgroundWork::Bytes(path) => { q.in_flight.insert(path.clone(), now); }
+                            BackgroundWork::Publication(key, _, _) => { q.cache_in_flight.insert(key.clone(), now); }
+                        }
                         q.background_in_flight += 1;
-                        break (path, true);
+                        break (job, true);
                     }
                 }
-                q = match inner.work.wait(q) {
-                    Ok(q) => q,
-                    Err(_) => return,
+                let delay = available.then(|| q.fifo.iter().filter_map(|job| match job {
+                    BackgroundWork::Publication(_, _, at) => Some(at.saturating_duration_since(now)),
+                    _ => None,
+                }).min()).flatten();
+                q = match delay {
+                    Some(delay) => match inner.work.wait_timeout(q, delay) { Ok((q, _)) => q, Err(_) => return },
+                    None => match inner.work.wait(q) { Ok(q) => q, Err(_) => return },
                 };
             }
         };
-
-        // Outside the lock: this is the part that blocks, for as long as the
-        // provider takes — or forever. Holding the queue here would put every
-        // reader behind the slowest file and, worse, one wedged file would take
-        // the whole pool down with it.
-        let result = (inner.materialize)(&path.0);
-
-        // A failure is logged and dropped. There is no retry ledger on purpose:
-        // the provider owns retry policy, and moss's own record of what still
-        // needs fetching is the supervisor's sweep, which re-stats the vault
-        // anyway. Anything more would be moss reimplementing a scheduler.
-        if let Err(e) = &result {
-            log::debug!("cloud: reading {} did not materialize it: {e}", path.0.display());
-        }
-
-        inner.done.fetch_add(1, Ordering::Relaxed);
-        if let Ok(mut q) = inner.queue.lock() {
-            q.in_flight.remove(&path.0);
-            q.pending.remove(&path.0);
-            match result {
-                Ok(()) => { q.failures.remove(&path.0); }
-                Err(_) => { q.failures.insert(path.0.clone()); }
+        match work {
+            BackgroundWork::Publication(key, task, _) => {
+                let result = task.run();
+                finish_operation(inner, key, task, result);
             }
-            if path.1 {
-                q.background_in_flight -= 1;
+            BackgroundWork::Bytes(path) => {
+                let result = (inner.materialize)(&path);
+                if let Err(error) = &result { log::debug!("cloud: reading {} did not materialize it: {error}", path.display()); }
+                inner.done.fetch_add(1, Ordering::Relaxed);
+                if let Ok(mut q) = inner.queue.lock() {
+                    q.in_flight.remove(&path);
+                    q.pending.remove(&path);
+                    match result {
+                        Ok(()) => { q.failures.remove(&path); }
+                        Err(_) => { q.failures.insert(path); }
+                    }
+                    if background { q.background_in_flight -= 1; }
+                }
+                inner.work.notify_all();
             }
         }
-        inner.work.notify_one();
     }
 }
 

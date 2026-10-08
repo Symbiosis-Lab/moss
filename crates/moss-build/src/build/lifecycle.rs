@@ -47,8 +47,8 @@ struct FolderLifecycle {
     /// Open [`CacheWriteLease`]s: builds between `run_pipeline` entry and the
     /// end of the seal tail's `materialize_and_promote`.
     build_writers: usize,
-    /// Open [`EncodeLease`]s: detached encodes, which outlive their build.
-    encode_writers: usize,
+    /// Open [`DetachedCacheLease`]s: cache publishers and encodes that outlive their build.
+    detached_writers: usize,
     /// A [`CacheGcToken`] is out.
     gc_running: bool,
     /// This build's handle on `.moss/build.nosync`, opened by
@@ -509,26 +509,25 @@ impl Drop for CacheWriteLease {
     }
 }
 
-/// A detached encode that may still store to the object store after its build's
-/// lease is gone. Taken at dispatch, while that lease is open, so it never
-/// waits; kept apart from build leases so a long encode refuses cache GC
-/// without also refusing every staging sweep.
-pub(crate) struct EncodeLease {
+/// Detached work retains cache objects without owning staging. It prevents
+/// cache GC until the native operation completes, while independent builds
+/// may still park and clean staging.
+pub(crate) struct DetachedCacheLease {
     record: Arc<LifecycleCell>,
 }
 
-pub(crate) fn encode_lease(mp: &MossPaths) -> EncodeLease {
-    EncodeLease { record: enter_writer(mp, |st| &mut st.encode_writers) }
+pub(crate) fn detached_cache_lease(mp: &MossPaths) -> DetachedCacheLease {
+    DetachedCacheLease { record: enter_writer(mp, |st| &mut st.detached_writers) }
 }
 
-impl Drop for EncodeLease {
+impl Drop for DetachedCacheLease {
     fn drop(&mut self) {
         let mut st = self.record.state();
-        st.encode_writers = st.encode_writers.saturating_sub(1);
+        st.detached_writers = st.detached_writers.saturating_sub(1);
     }
 }
 
-/// Licence to collect this folder's object store: no build or encode holds a
+/// Licence to collect this folder's object store: no build or detached cache job holds a
 /// lease, and none can take one until the token drops. `cache::gc` requires
 /// one, so "never during a build" is a type rather than a comment.
 pub(crate) struct CacheGcToken {
@@ -536,12 +535,12 @@ pub(crate) struct CacheGcToken {
 }
 
 /// A GC token when nothing is writing the store, else the open lease counts
-/// (build, encode). Never waits.
+/// (build, detached). Never waits.
 pub(crate) fn try_begin_cache_gc(mp: &MossPaths) -> Result<CacheGcToken, (usize, usize)> {
     let record = lock_for(mp);
     let mut st = record.state();
-    if st.build_writers > 0 || st.encode_writers > 0 || st.gc_running {
-        return Err((st.build_writers, st.encode_writers));
+    if st.build_writers > 0 || st.detached_writers > 0 || st.gc_running {
+        return Err((st.build_writers, st.detached_writers));
     }
     st.gc_running = true;
     drop(st);

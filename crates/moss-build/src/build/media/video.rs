@@ -2191,7 +2191,7 @@ pub(crate) fn dispatch_video_conversions(
                 // The encode outlives this build's cache lease; its own keeps
                 // a cache GC off the blobs and records it stores before the
                 // run's hash index, which marks them live, is saved.
-                let encode_lease = crate::build::lifecycle::encode_lease(&MossPaths::from_moss_dir(
+                let encode_lease = crate::build::lifecycle::detached_cache_lease(&MossPaths::from_moss_dir(
                     background_ctx.moss_dir.clone(),
                 ));
                 spawner.spawn_blocking(Box::new(move || {

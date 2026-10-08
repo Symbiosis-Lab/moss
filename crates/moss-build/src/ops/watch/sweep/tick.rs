@@ -173,7 +173,8 @@ pub(crate) async fn run(
         let mut top_level_dirty = false;
 
         // ── (1) Root health + top-level target reconcile (cheap read_dir) ──
-        let root_readable = std::fs::read_dir(&folder).is_ok();
+        let target_snapshot = scope::watch_targets_with_error(&folder);
+        let root_readable = target_snapshot.is_ok();
         if root_readable {
             unreadable_streak = 0;
             // A readable root clears the verdict only when the PASSES are
@@ -187,27 +188,34 @@ pub(crate) async fn run(
                     folder_str
                 );
             }
-            let desired: Vec<PathBuf> =
-                scope::watch_targets(&folder).into_iter().map(|(p, _)| p).collect();
-            if let Some(prev) = &prev_targets {
-                if scope::watch_set_content_change(prev, &desired, root_readable, &social) {
-                    log::info!(
-                        target: "moss::build::watch",
-                        "Sweep: top-level entry set changed — rebuilding"
-                    );
-                    // The entry set moved with no per-path evidence to pass,
-                    // so this source is honestly `Full`.
-                    dirty = Some(crate::build::BuildTrigger::Full);
-                    top_level_dirty = true;
+            match target_snapshot {
+                Ok(targets) => {
+                    let desired: Vec<PathBuf> = targets.into_iter().map(|(p, _)| p).collect();
+                    if let Some(prev) = &prev_targets {
+                        if scope::watch_set_content_change(prev, &desired, root_readable, &social) {
+                            log::info!(
+                                target: "moss::build::watch",
+                                "Sweep: top-level entry set changed — rebuilding"
+                            );
+                            // The entry set moved with no per-path evidence to pass,
+                            // so this source is honestly `Full`.
+                            dirty = Some(crate::build::BuildTrigger::Full);
+                            top_level_dirty = true;
+                        }
+                    }
+                    prev_targets = Some(desired);
                 }
+                Err(error) => log::debug!(
+                    target: "moss::build::watch",
+                    "Sweep: retaining prior watcher-target snapshot for {} after incomplete listing: {}",
+                    folder.display(), error
+                ),
             }
-            prev_targets = Some(desired);
         } else {
             note_failed_pass(&session, &folder_str, &mut unreadable_streak, "root unreadable");
-            // An unreadable root also invalidates the snapshot: when it
-            // comes back, the first diff must be seeded fresh, not read as
-            // "everything disappeared then reappeared".
-            prev_targets = None;
+            // Keep the last complete target snapshot. The next successful
+            // enumeration can compare against it; this failed read cannot
+            // establish that anything disappeared.
         }
 
         // ── (2) Evicted-set arrival scan (every tick — the old fast path) ──
@@ -222,11 +230,13 @@ pub(crate) async fn run(
         // only a build can lower the gate. Left uncounted, deleting the
         // awaited file from another device wedges the waiting screen at
         // "0 remaining" forever.
-        if arrived + deleted > 0 {
+        let structural_arrivals = crate::build::cloud_readiness::storage::take_arrivals(&folder);
+        let structural_wakes = structural_arrivals.wake_count();
+        if arrived + deleted + structural_wakes > 0 {
             if deleted > 0 {
                 log::info!("cloud-sync: {} awaited file(s) were deleted upstream", deleted);
             }
-            arrivals_since_rebuild += arrived + deleted;
+            arrivals_since_rebuild += arrived + deleted + structural_wakes;
             last_arrival = now;
             first_arrival_at.get_or_insert(now);
             stall_reported = false;
@@ -323,10 +333,10 @@ pub(crate) async fn run(
                     // here (covers the upstream-delete case too — still a
                     // structural change).
                     let mut next: HashSet<PathBuf> = outcome.walk.dataless.iter().cloned().collect();
-                    next.extend(pending.iter().filter(|p| p.exists() && !readable_arrival(p)).cloned());
+                    next.extend(pending.iter().filter(|p| pending_still_present(p) && !readable_arrival(p)).cloned());
                     let swallowed = pending.iter().filter(|p| !next.contains(*p)).count();
                     let arrived_unseen = pending.iter().filter(|p| !next.contains(*p) && readable_arrival(p)).count();
-                    let deleted_unseen = pending.iter().filter(|p| !next.contains(*p) && !p.exists()).count();
+                    let deleted_unseen = pending.iter().filter(|p| !next.contains(*p) && pending_confirmed_absent(p)).count();
                     pending = next;
                     if swallowed > 0 {
                         log::debug!(
@@ -652,6 +662,9 @@ pub(super) fn answer_unavailable_query(
 
 /// A pending path leaves the unresolved set only after it can be opened.
 /// Disappearance and an unreadable present file are different outcomes.
+/// These probes only stat and open read-only; they never read bytes, truncate
+/// or coordinate materialization. Provider refusals keep the path pending;
+/// actual materialization belongs to the byte pool.
 fn readable_arrival(path: &std::path::Path) -> bool {
     !crate::build::icloud::is_still_in_the_cloud(path) && std::fs::File::open(path).is_ok()
 }
@@ -681,13 +694,33 @@ pub(super) fn observe_pending(pending: &mut HashSet<PathBuf>) -> (usize, usize) 
             arrived += 1;
             return false;
         }
-        if !crate::build::icloud::is_still_in_the_cloud(path) && !path.exists() {
+        if pending_confirmed_absent(path) {
             deleted += 1;
             return false;
         }
         true
     });
     (arrived, deleted)
+}
+
+/// Metadata uncertainty keeps the path pending. The cloud helper also checks
+/// the pre-Sonoma `.name.icloud` representation before confirming absence.
+fn pending_confirmed_absent(path: &std::path::Path) -> bool {
+    #[cfg(test)]
+    if crate::build::cloud_readiness::storage::test_probe(
+        path,
+        crate::build::cloud_readiness::StorageOperation::EntryMetadata,
+    ).is_err() {
+        return false;
+    }
+    match std::fs::metadata(path) {
+        Ok(_) => false,
+        Err(error) => crate::build::icloud::is_definitely_absent(path, &error),
+    }
+}
+
+fn pending_still_present(path: &std::path::Path) -> bool {
+    !pending_confirmed_absent(path)
 }
 
 /// Which drifted paths are worth dispatching: those whose stamp has MOVED

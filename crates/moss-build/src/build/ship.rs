@@ -649,7 +649,7 @@ pub fn materialize_and_promote(
         // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
         // the entry's CAS blob surviving a concurrent build's GC across this
         // whole call — see `CacheWriteLease` at this function's own call sites.
-        let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
+        let object_store = crate::build::cache::ObjectStore::for_site(mp);
         drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref())
             .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
     } else {

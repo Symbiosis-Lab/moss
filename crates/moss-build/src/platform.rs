@@ -63,3 +63,9 @@ pub fn materialize_whole_file(path: &std::path::Path) -> Result<(), String> {
 pub fn materialize_whole_file(_path: &std::path::Path) -> Result<(), String> {
     Err("file coordination is macOS-only".to_string())
 }
+
+#[cfg(target_os = "macos")]
+pub(crate) fn dataless_reads_fail_fast() -> bool { iopolicy::reads_fail_fast() }
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn dataless_reads_fail_fast() -> bool { false }

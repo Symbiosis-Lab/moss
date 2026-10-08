@@ -2,7 +2,7 @@
 //!
 //! Two halves of one question:
 //!
-//! - **Registration** ([`watch_targets`]) — the set of paths handed to
+//! - **Registration** ([`watch_targets_with_error`]) — the set of paths handed to
 //!   `notify::Watcher::watch`. This is the load-bearing half.
 //! - **Filtering** ([`path_is_watchable`], [`path_passes_filter`]) — the
 //!   per-event predicates applied to whatever still arrives.
@@ -41,6 +41,7 @@
 use notify::RecursiveMode;
 use std::path::{Path, PathBuf};
 
+use crate::build::cloud_readiness::{StorageFailure, StorageOperation};
 use crate::infra::moss_paths;
 
 /// A path to hand to `notify::Watcher::watch`, with the mode to use.
@@ -64,14 +65,20 @@ const RECURSIVE_MODE_NARROWS: bool = !cfg!(target_os = "macos");
 /// needs no healing.
 pub const REWATCH_IS_CHEAP: bool = RECURSIVE_MODE_NARROWS;
 
-/// The exact set of paths the watcher should subscribe to for `root`.
-///
-/// Recomputed periodically by the watcher's reconciler, so it must stay a
-/// cheap, pure function of one `read_dir` plus a handful of `exists` checks.
-///
-/// Returns targets in a stable order (directory entries sorted) so a caller
-/// diffing two calls sees only real changes.
-pub fn watch_targets(root: &Path) -> Vec<WatchTarget> {
+/// Build a complete target candidate. Returning an error means the caller
+/// must retain its previous subscriptions; a partial directory listing is not
+/// a valid replacement watch set.
+pub fn watch_targets_with_error(root: &Path) -> Result<Vec<WatchTarget>, crate::build::cloud_readiness::storage::Unavailable> {
+    use crate::build::cloud_readiness::storage::{await_operation, OperationPolicy, StorageValue, OperationOwner};
+    let path = root.to_path_buf();
+    let owner = OperationOwner::for_folder(root);
+    let result = await_operation(root, OperationPolicy::WatchTargets, std::time::Duration::from_millis(250), &|| !owner.active(), &|| {},
+        std::sync::Arc::new(move || collect_watch_targets(&path).map(StorageValue::WatchTargets)))?;
+    let StorageValue::WatchTargets(targets) = result.as_ref() else { unreachable!("watch operation returns its complete target set") };
+    Ok(targets.clone())
+}
+
+fn collect_watch_targets(root: &Path) -> Result<Vec<WatchTarget>, StorageFailure> {
     let mut targets: Vec<WatchTarget> = Vec::new();
 
     // The root itself, only where NonRecursive genuinely narrows. This is what
@@ -82,22 +89,22 @@ pub fn watch_targets(root: &Path) -> Vec<WatchTarget> {
         targets.push((root.to_path_buf(), RecursiveMode::NonRecursive));
     }
 
-    let mut entries: Vec<PathBuf> = match std::fs::read_dir(root) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
-        // An unreadable root is the caller's problem (it will fail to watch
-        // anything and log); returning what we have keeps this total.
-        Err(_) => Vec::new(),
-    };
-    entries.sort();
+    let mut entries = crate::build::cloud_readiness::collect_directory_entries(root, |path| std::fs::read_dir(path))?;
+    entries.sort_by_key(std::fs::DirEntry::path);
 
     for entry in entries {
-        let Some(name) = entry.file_name().and_then(|n| n.to_str()) else { continue };
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
         // What the scan leaves out at the root: hidden folders (`.moss/` is
         // handled below by the registry allowlist), `node_modules`, nested
         // sites and agent instruction files. A root file is filtered by type
         // further down, where it becomes a target at all.
-        let is_dir = entry.is_dir();
-        if crate::build::scan::classify::left_out(&entry, is_dir, 1).is_some() {
+        #[cfg(test)]
+        crate::build::cloud_readiness::storage::test_probe(&path, StorageOperation::EntryMetadata)?;
+        let is_dir = entry.file_type().map_err(|error| {
+            StorageFailure::new(Some(path.clone()), StorageOperation::EntryMetadata, error)
+        })?.is_dir();
+        if crate::build::scan::classify::left_out(&path, is_dir, 1).is_some() {
             continue;
         }
         // Root-level files moss writes itself (`AGENTS.md` and friends).
@@ -107,7 +114,7 @@ pub fn watch_targets(root: &Path) -> Vec<WatchTarget> {
         if is_dir {
             // A nested site deeper down lives inside this recursive target;
             // `path_is_watchable` drops its events.
-            targets.push((entry, RecursiveMode::Recursive));
+            targets.push((path, RecursiveMode::Recursive));
         } else if !RECURSIVE_MODE_NARROWS {
             // macOS only: no root watch, so each root-level file is its own
             // target. Elsewhere the root's non-recursive watch already covers
@@ -122,10 +129,10 @@ pub fn watch_targets(root: &Path) -> Vec<WatchTarget> {
             // publish — would become a target and buy a full rebuild of the
             // site moss just published. That is instance 6 of the very class
             // this module exists to close.
-            if !path_passes_filter(root, &entry) {
+            if !path_passes_filter(root, &path) {
                 continue;
             }
-            targets.push((entry, RecursiveMode::NonRecursive));
+            targets.push((path, RecursiveMode::NonRecursive));
         }
     }
 
@@ -133,8 +140,14 @@ pub fn watch_targets(root: &Path) -> Vec<WatchTarget> {
     // `.moss` directory as a whole is never watched.
     for rule in moss_paths::MOSS_PATH_RULES.iter().filter(|r| r.watched) {
         let path = root.join(rule.rel.trim_end_matches('/'));
-        if !path.exists() {
-            continue;
+        #[cfg(test)]
+        crate::build::cloud_readiness::storage::test_probe(&path, StorageOperation::EntryMetadata)?;
+        match std::fs::metadata(&path) {
+            Ok(_) => {}
+            Err(error) if crate::build::icloud::is_definitely_absent(&path, &error) => continue,
+            Err(error) => return Err(StorageFailure::new(
+                Some(path), StorageOperation::EntryMetadata, error,
+            )),
         }
         let mode = if rule.rel.ends_with('/') {
             RecursiveMode::Recursive
@@ -144,12 +157,12 @@ pub fn watch_targets(root: &Path) -> Vec<WatchTarget> {
         targets.push((path, mode));
     }
 
-    targets
+    Ok(targets)
 }
 
 /// Did the top-level target set change in a way that is a CONTENT change?
 ///
-/// The sweep's every-tick verdict over two [`watch_targets`] snapshots
+/// The sweep's every-tick verdict over two [`watch_targets_with_error`] snapshots
 /// (paths only — the mode is registration detail). An entry that appeared
 /// was populated *before* any watch could land on it, so its files' events
 /// are gone and the set diff is the only signal; an entry that disappeared
@@ -230,7 +243,7 @@ pub fn path_in_nested_vault(root: &Path, path: &Path) -> bool {
 /// here regardless of who wrote it, and which is ordinary content one
 /// directory down (`editor::filesystem` pins that distinction).
 ///
-/// It matters on Linux and Windows, where [`watch_targets`] registers the
+/// It matters on Linux and Windows, where [`watch_targets_with_error`] registers the
 /// project root non-recursively and therefore hears about every root-level
 /// file whether it is a target or not. On macOS nothing subscribes to those
 /// paths in the first place; this keeps the platforms honest.
@@ -382,7 +395,7 @@ pub fn mount_join(mount: &str, rel: &str) -> PathBuf {
 
 /// Returns `true` if `path` survives the gitignore-style watcher prefilter.
 ///
-/// Second line of defence now that [`watch_targets`] keeps moss's output
+/// Second line of defence now that [`watch_targets_with_error`] keeps moss's output
 /// unsubscribed: a target registered before a build created a moss-owned path
 /// beneath it can still deliver one. Inside the vault's own `.moss/` it asks
 /// the allowlist; elsewhere it rejects whatever the scan leaves out of the site
@@ -474,7 +487,7 @@ pub fn should_watch_moss_file(after_moss: &str) -> bool {
 /// Check if a file or directory should trigger recompilation
 ///
 /// Note: Directory-level filtering (.moss/, node_modules/, .git/) is handled by
-/// [`path_is_watchable`] and by which paths [`watch_targets`] subscribes to at
+/// [`path_is_watchable`] and by which paths [`watch_targets_with_error`] subscribes to at
 /// all. This function only filters by file type/extension.
 pub fn should_watch_file(path: &str) -> bool {
     // Asset files that should trigger rebuilds. Images come from the same
@@ -541,3 +554,16 @@ pub fn should_watch_file(path: &str) -> bool {
 #[cfg(test)]
 #[path = "scope_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn availability_watch_targets_recover_the_complete_required_listing() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    for operation in [StorageOperation::ReadDirOpen, StorageOperation::ReadDirNext] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("posts")).unwrap();
+        let _fault = TestFault::install(dir.path(), dir.path(), operation, 1, std::time::Duration::from_secs(2));
+        let targets = watch_targets_with_error(dir.path()).expect("the canonical owner retries the complete target operation");
+        assert!(targets.iter().any(|(p, _)| p == &dir.path().join("posts")));
+    }
+}
