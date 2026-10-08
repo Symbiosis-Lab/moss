@@ -2214,13 +2214,8 @@ fn footer_link_no_active_when_current_url_none() {
 fn is_nav_bar_item_explicit_true() {
     // nav: true wins for any file, any depth.
     assert!(super::is_nav_bar_item(
-        Some(true),
-        false,
-        false,
-        false,
-        false,
-        "post",
-        false
+        super::NavFacts { nav: Some(true), draft: false, slot_only: false, unlisted: false },
+        false, false, "post", false
     ));
 }
 
@@ -2228,13 +2223,8 @@ fn is_nav_bar_item_explicit_true() {
 fn is_nav_bar_item_explicit_false() {
     // nav: false opts out even a root keyword file in organized mode.
     assert!(!super::is_nav_bar_item(
-        Some(false),
-        false,
-        false,
-        true,
-        false,
-        "about",
-        true
+        super::NavFacts { nav: Some(false), draft: false, slot_only: false, unlisted: false },
+        true, false, "about", true
     ));
 }
 
@@ -2242,13 +2232,8 @@ fn is_nav_bar_item_explicit_false() {
 fn is_nav_bar_item_slot_only_never_nav() {
     // Slot files (footer.md) are chrome, never nav items — even nav: true.
     assert!(!super::is_nav_bar_item(
-        Some(true),
-        false,
-        true,
-        true,
-        false,
-        "footer",
-        true
+        super::NavFacts { nav: Some(true), draft: false, slot_only: true, unlisted: false },
+        true, false, "footer", true
     ));
 }
 
@@ -2256,7 +2241,8 @@ fn is_nav_bar_item_slot_only_never_nav() {
 fn is_nav_bar_item_organized_root_nonindex() {
     // Organized mode: a root-level non-index file auto-appears.
     assert!(super::is_nav_bar_item(
-        None, false, false, true, false, "about", true
+        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+        true, false, "about", true
     ));
 }
 
@@ -2264,7 +2250,8 @@ fn is_nav_bar_item_organized_root_nonindex() {
 fn is_nav_bar_item_organized_nested_excluded() {
     // Nested file never auto-appears.
     assert!(!super::is_nav_bar_item(
-        None, false, false, false, false, "post", true
+        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+        false, false, "post", true
     ));
 }
 
@@ -2272,7 +2259,8 @@ fn is_nav_bar_item_organized_nested_excluded() {
 fn is_nav_bar_item_organized_root_index_excluded() {
     // The root index is the home page, not a nav item.
     assert!(!super::is_nav_bar_item(
-        None, false, false, true, true, "index", true
+        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+        true, true, "index", true
     ));
 }
 
@@ -2280,14 +2268,16 @@ fn is_nav_bar_item_organized_root_index_excluded() {
 fn is_nav_bar_item_flat_keyword() {
     // Flat mode: only keyword filenames auto-appear.
     assert!(super::is_nav_bar_item(
-        None, false, false, true, false, "about", false
+        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+        true, false, "about", false
     ));
 }
 
 #[test]
 fn is_nav_bar_item_flat_nonkeyword_excluded() {
     assert!(!super::is_nav_bar_item(
-        None, false, false, true, false, "contact", false
+        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+        true, false, "contact", false
     ));
 }
 
@@ -2295,16 +2285,12 @@ fn is_nav_bar_item_flat_nonkeyword_excluded() {
 fn is_nav_bar_item_draft_never_nav() {
     // draft wins over explicit nav: true and over auto-navigational status
     assert!(!super::is_nav_bar_item(
-        Some(true),
-        true,
-        false,
-        true,
-        false,
-        "about",
-        true
+        super::NavFacts { nav: Some(true), draft: true, slot_only: false, unlisted: false },
+        true, false, "about", true
     ));
     assert!(!super::is_nav_bar_item(
-        None, true, false, true, false, "about", true
+        super::NavFacts { nav: None, draft: true, slot_only: false, unlisted: false },
+        true, false, "about", true
     ));
 }
 
@@ -3007,4 +2993,18 @@ fn brand_mode_never_marks_a_containing_section_current() {
         .generate_navigation();
     assert!(!exact_page.contains("aria-current"), "brand mode's exact-match styling is plain class=\"active\" only: {exact_page}");
     assert!(exact_page.contains(r#"<a href="/essays/" class="active">Essays</a>"#), "got: {exact_page}");
+}
+
+// --- `listed: false` and automatic nav membership ---
+
+#[test]
+fn unlisted_root_page_is_not_auto_promoted_into_nav() {
+    // An unlisted root page would otherwise qualify (organized mode, root level).
+    let mut doc = make_doc_with_root_level("stub/index.html", "Stub", None, None, true);
+    doc.clean_stem = "stub".to_string();
+    assert!(is_nav_bar_item_doc(&doc, true), "listed root page auto-joins nav");
+    doc.listed = Some(false);
+    assert!(!is_nav_bar_item_doc(&doc, true), "listed: false stays out of nav");
+    doc.nav = Some(true);
+    assert!(is_nav_bar_item_doc(&doc, true), "explicit nav: true still wins");
 }

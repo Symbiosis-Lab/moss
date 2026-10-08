@@ -1022,7 +1022,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::Checkbox,
         // Frequency=2, Importance=3 → score=76
         score: 76,
-        description: "Whether to show in site navigation",
+        description: "Whether to show in site navigation. When unset, a page at the site root that would otherwise be navigational still stays out if it has `listed: false`",
         label_key: "chip.nav.label",
         group: "Whole Site",
         ..FIELD_DEFAULTS

@@ -289,6 +289,31 @@ fn split_ref_suffix(text: &str) -> (&str, &str) {
     }
 }
 
+/// A root-relative link that names a page by the address the site serves it at.
+struct ServedPage {
+    page: String,
+    /// The address, slash-terminated (`/docs/`) whichever way it was written.
+    address: String,
+}
+
+/// The build keeps a link starting with `/` verbatim, so one written as a
+/// published address names whichever page the site serves there, however that
+/// address is spelled: a slugged name, a frontmatter `url:`, a numbered or
+/// language-prefixed address. The trailing `/` is optional (`/docs` and
+/// `/docs/` are one address). `None` for anything else, including a path to a
+/// file such as `/files/a.pdf`, which stays on the path route.
+fn served_page_of(base_text: &str, addresses: &Addresses) -> Option<ServedPage> {
+    if !base_text.starts_with('/') {
+        return None;
+    }
+    let slashed = |s: &str| if s.ends_with('/') { s.to_string() } else { format!("{s}/") };
+    [Some(base_text.to_string()), percent_decoded_fallback(base_text)]
+        .into_iter()
+        .flatten()
+        .map(|a| slashed(&a))
+        .find_map(|address| addresses.page_at(&address).map(|p| ServedPage { page: p.to_string(), address }))
+}
+
 // ── The per-reference resolve → verify → escalate decision ─────────────────
 
 /// Resolve `raw_text` (a `RawRef.text`, or a structural `AssetPathSpan.path`)
@@ -325,15 +350,8 @@ fn plan_one_ref(
     if base_text == "/" && route == RefRoute::PageGraph && !wiki {
         return Ok(None);
     }
-    // The build keeps a link starting with `/` verbatim, so one written as a
-    // published address names whichever page the site serves there, however
-    // that address is spelled: a slugged name, a frontmatter `url:`, a
-    // numbered or language-prefixed address.
-    let served_page = (route == RefRoute::PageGraph && !wiki && base_text.starts_with('/') && base_text.ends_with('/'))
-        .then(|| {
-            let decoded = percent_decoded_fallback(base_text);
-            addresses.page_at(base_text).or_else(|| addresses.page_at(decoded.as_deref()?)).map(str::to_string)
-        })
+    let served = (route == RefRoute::PageGraph && !wiki)
+        .then(|| served_page_of(base_text, addresses))
         .flatten();
 
     // target_is_dir only has meaning on the AssetOrEmbed route: a folder
@@ -343,7 +361,7 @@ fn plan_one_ref(
     // through to a FILE (the folder's home page) — so a PageGraph reference
     // is never itself "a directory" to retarget.
     let (t, target_is_dir) = match route {
-        _ if served_page.is_some() => (served_page.clone(), false),
+        _ if served.is_some() => (served.as_ref().map(|s| s.page.clone()), false),
         RefRoute::AssetOrEmbed => {
             let resolved = classify_reference(raw_text, from_source_pre, true, ctx_pre);
             let is_dir =
@@ -363,6 +381,13 @@ fn plan_one_ref(
     let map_t = map_path(&t, expanded_moves);
     let from_dir_post = dirname(from_source_post);
 
+    // A published address is compared as an address: the page keeps the URL
+    // the build serves it at (a root page becoming its own folder's home does)
+    // or it does not, whatever happened to its file name.
+    if served.as_ref().is_some_and(|s| addresses.after_moves(&map_t).ok() == Some(s.address.as_str())) {
+        return Ok(None);
+    }
+
     // A PageGraph target with no REGISTERED file behind it is the synthetic
     // `<dir>/index.md` the folder-note fallback manufactures for an
     // auto-index dir (content_graph.rs ~512-523); no authored text ever
@@ -375,15 +400,16 @@ fn plan_one_ref(
     // in the same style: the resolver's name search would still find a moved
     // file through a path that is now dead for every other tool.
     let exact_of = |from_dir: &str, target: &str| exact_style_of_text(base_text, from_dir, target, target_is_dir, wiki);
-    let exact = match served_page {
-        Some(_) => Some(ExactStyle::root_address()),
+    let exact = match served {
+        Some(_) => Some(ExactStyle::root_address(base_text.ends_with('/'))),
         None if synthetic_auto_index => None,
         None => exact_of(dirname(from_source_pre), &t),
     };
     let resolves_post = resolve_by_route(route, raw_text, from_source_post, ctx_post, graph_post).as_deref()
         == Some(map_t.as_str());
     let unchanged = match &exact {
-        Some(style) => resolves_post && exact_of(from_dir_post, &map_t).is_some_and(|post| post.same_kind(style)),
+        // The address differs (the check above): never "still resolves".
+                Some(style) => resolves_post && exact_of(from_dir_post, &map_t).is_some_and(|post| post.same_kind(style)),
         None => resolves_post,
     };
     if unchanged {

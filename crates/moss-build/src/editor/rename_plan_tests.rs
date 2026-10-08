@@ -1642,3 +1642,119 @@ fn moving_a_nested_site_or_hidden_folder_rewrites_its_own_pages_but_not_what_it_
     assert_eq!(r(&root, "deep/.drafts/x.md"), "![](../../img/a.png)\n");
     assert_eq!(r(&root, "deep/.drafts/node_modules/y.md"), "![](../../img/a.png)\n");
 }
+
+// Moving a root page into its own folder as that folder's home keeps its
+// address (`/events/`), so root-relative links to it, with or without the
+// trailing slash, are already right and stay byte-identical.
+#[test]
+fn a_page_becoming_its_folders_home_leaves_root_relative_links_to_its_address_alone() {
+    let (_t, root) = site(&[
+        ("events.md", "# Events\n"),
+        ("events/past.md", "x"),
+        ("index.md", "[a](/events) [b](/events/) [c](/events#top) [d](/events/past/)\n"),
+    ]);
+    do_move(&root, "events.md", "events/events.md");
+    assert_eq!(r(&root, "index.md"), "[a](/events) [b](/events/) [c](/events#top) [d](/events/past/)\n");
+}
+
+// A page moved to another folder is served at a new address, so a
+// root-relative link to its old address follows it, keeping its slash habit.
+#[test]
+fn moving_a_page_to_another_folder_rewrites_root_relative_links_to_its_address() {
+    let (_t, root) = site(&[
+        ("events.md", "# Events\n"),
+        ("archive/old.md", "x"),
+        ("index.md", "[a](/events) [b](/events/) [c](/events/#top)\n"),
+    ]);
+    do_move(&root, "events.md", "archive/events.md");
+    assert_eq!(r(&root, "index.md"), "[a](/archive/events/) [b](/archive/events/) [c](/archive/events/#top)\n");
+}
+
+// The reverse of the folder-home case: the folder home becomes an ordinary
+// page next to its folder, still served at the old folder address.
+#[test]
+fn a_folder_home_leaving_its_folder_keeps_root_relative_links_when_the_address_is_unchanged() {
+    let (_t, root) = site(&[
+        ("events/events.md", "# Events\n"),
+        ("events/past.md", "x"),
+        ("index.md", "[a](/events) [b](/events/)\n[rel](./events/events.md)\n"),
+    ]);
+    do_move(&root, "events/events.md", "events.md");
+    assert_eq!(r(&root, "index.md").lines().next().unwrap(), "[a](/events) [b](/events/)");
+}
+
+// Page-relative links name the file, not its address, so they follow the file
+// into the folder even though the address did not change.
+#[test]
+fn a_page_becoming_its_folders_home_still_rewrites_page_relative_links() {
+    let (_t, root) = site(&[
+        ("events.md", "# Events\n"),
+        ("events/past.md", "x"),
+        ("index.md", "[a](./events.md) [b](events.md) [c](/events)\n"),
+    ]);
+    do_move(&root, "events.md", "events/events.md");
+    assert_eq!(r(&root, "index.md"), "[a](./events/events.md) [b](events/events.md) [c](/events)\n");
+}
+
+// A query string rides along on a rewritten address and is ignored when the
+// address is unchanged.
+#[test]
+fn a_query_string_on_a_root_relative_address_is_kept() {
+    let (_t, root) = site(&[
+        ("events.md", "# Events\n"),
+        ("archive/old.md", "x"),
+        ("index.md", "[a](/events?page=2) [b](/events/?page=2#top)\n"),
+    ]);
+    do_move(&root, "events.md", "archive/events.md");
+    assert_eq!(r(&root, "index.md"), "[a](/archive/events/?page=2) [b](/archive/events/?page=2#top)\n");
+
+    let (_t, root) = site(&[
+        ("events.md", "# Events\n"),
+        ("events/past.md", "x"),
+        ("index.md", "[a](/events?page=2) [b](/events/?page=2#top)\n"),
+    ]);
+    do_move(&root, "events.md", "events/events.md");
+    assert_eq!(r(&root, "index.md"), "[a](/events?page=2) [b](/events/?page=2#top)\n");
+}
+
+// A root-relative link to a file (not a page address) stays on the path
+// route: it follows the file, and the address lookup never claims it.
+#[test]
+fn a_root_relative_file_link_stays_on_the_path_route() {
+    let (_t, root) = site(&[
+        ("files/a.pdf", "x"),
+        ("docs/b.pdf", "x"),
+        ("index.md", "[a](/files/a.pdf)\n"),
+    ]);
+    do_move(&root, "files/a.pdf", "docs/a.pdf");
+    assert_eq!(r(&root, "index.md"), "[a](/docs/a.pdf)\n");
+}
+
+// A `url:` override is relative to the page's folder, so moving the file
+// changes the address it is served at (`/calendar/` becomes
+// `/archive/calendar/`); the link follows the address the build computes, not
+// the file name.
+#[test]
+fn a_url_override_moves_with_the_folder_and_the_link_follows_it() {
+    let (_t, root) = site(&[
+        ("events.md", "---\nurl: /calendar/\n---\n# Events\n"),
+        ("archive/old.md", "x"),
+        ("index.md", "[a](/calendar/) [b](/calendar)\n"),
+    ]);
+    do_move(&root, "events.md", "archive/events.md");
+    assert_eq!(r(&root, "index.md"), "[a](/archive/calendar/) [b](/archive/calendar/)\n");
+}
+
+// An address served only by a `[redirects]` entry is not a page: the redirect
+// serves it whatever happens to the page it points at, so rename leaves it.
+#[test]
+fn a_link_to_a_redirect_source_is_left_alone() {
+    let (_t, root) = site(&[
+        (".moss/config.toml", "schema_version = 6\n[redirects]\n\"/old-events/\" = \"/events/\"\n"),
+        ("events.md", "# Events\n"),
+        ("archive/old.md", "x"),
+        ("index.md", "[a](/old-events/) [b](/old-events)\n"),
+    ]);
+    do_move(&root, "events.md", "archive/events.md");
+    assert_eq!(r(&root, "index.md"), "[a](/old-events/) [b](/old-events)\n");
+}

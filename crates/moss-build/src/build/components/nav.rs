@@ -446,6 +446,18 @@ pub fn is_navigational_page(
     is_root_level && !is_root_index && (has_content_folders || is_nav_keyword(clean_stem))
 }
 
+/// The frontmatter and slot facts that decide nav membership before position
+/// does, named so a new one is a new field rather than another positional bool.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NavFacts {
+    /// Explicit `nav:` opt-in / opt-out.
+    pub nav: Option<bool>,
+    pub draft: bool,
+    pub slot_only: bool,
+    /// `listed: false`.
+    pub unlisted: bool,
+}
+
 /// Does this document render as an item in the top navigation bar?
 ///
 /// Single source of truth for "is a top-nav item": `generate_navigation`,
@@ -457,20 +469,21 @@ pub fn is_navigational_page(
 /// are structural chrome and are excluded unconditionally.
 /// `draft` also wins over an explicit `nav: true` — draft pages are hidden from
 /// all listings, including the top nav bar.
-/// The `None` (no explicit frontmatter) case delegates to `is_navigational_page`.
+/// The `None` (no explicit frontmatter) case delegates to `is_navigational_page`,
+/// except that an `unlisted` (`listed: false`) page is never auto-promoted; an
+/// explicit `nav: true` still puts it in the bar.
 ///
 /// `is_root_index` is the top-level site index (`url_path == "index.html"`),
 /// never a nav item. A subfolder `index.html` is excluded by the
 /// `!is_root_level` arm instead, not this flag.
 pub fn is_nav_bar_item(
-    nav: Option<bool>,
-    draft: bool,
-    slot_only: bool,
+    facts: NavFacts,
     is_root_level: bool,
     is_root_index: bool,
     clean_stem: &str,
     has_content_folders: bool,
 ) -> bool {
+    let NavFacts { nav, draft, slot_only, unlisted } = facts;
     // Slot files (footer.md) are chrome; drafts are hidden. Neither is a nav item,
     // and draft wins even over an explicit `nav: true`.
     if slot_only || draft {
@@ -478,7 +491,11 @@ pub fn is_nav_bar_item(
     }
     match nav {
         Some(v) => v, // explicit opt-in / opt-out
-        None => is_navigational_page(is_root_level, is_root_index, clean_stem, has_content_folders),
+        // `listed: false` hides a page from listings; promoting it into the
+        // most visible listing of all by position alone would contradict that.
+        None => {
+            !unlisted && is_navigational_page(is_root_level, is_root_index, clean_stem, has_content_folders)
+        }
     }
 }
 
@@ -492,9 +509,12 @@ pub fn is_nav_bar_item_doc(
     has_content_folders: bool,
 ) -> bool {
     is_nav_bar_item(
-        doc.nav,
-        doc.draft == Some(true),
-        doc.slot_only,
+        NavFacts {
+            nav: doc.nav,
+            draft: doc.draft == Some(true),
+            slot_only: doc.slot_only,
+            unlisted: doc.listed == Some(false),
+        },
         doc.is_root_level,
         doc.url_path == "index.html",
         &doc.clean_stem,

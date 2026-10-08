@@ -1181,9 +1181,8 @@ pub fn process_markdown_file(
     // which this gate never injects for. Keeping the proxy avoids depending on
     // `url_path`, computed a few lines below.
     let is_nav_page = crate::build::components::nav::is_nav_bar_item(
-        frontmatter.nav,
-        frontmatter.draft == Some(true),
-        is_slot_only,
+        crate::build::components::nav::NavFacts { nav: frontmatter.nav, draft: frontmatter.draft == Some(true),
+            slot_only: is_slot_only, unlisted: frontmatter.listed == Some(false) },
         is_root_level,
         is_index_file && is_root_level,
         &clean_stem,
