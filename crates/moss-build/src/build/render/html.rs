@@ -558,6 +558,10 @@ pub(super) fn render_page<'d>(
                 media_lookup,
                 resolved_typesetting,
             );
+            // Only the parent segment is read, so the site name passed is unused.
+            if let Some(parent) = crate::build::components::nav::parent_label_segment(doc, all_docs, "") {
+                crate::build::markdown::html_post::prepend_parent_label(&mut body, &parent);
+            }
             // Done before any cover-wrap below reads `body`, so a claimed
             // leaf's `split_at_lede` sees the locator as part of the body
             // it is splitting, same as any other segment, rather than

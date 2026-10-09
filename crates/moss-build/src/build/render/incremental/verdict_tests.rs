@@ -762,7 +762,7 @@ fn a_homepage_title_edit_widens_to_its_language_not_the_site() {
 fn a_folder_indexs_label_edit_widens_to_its_breadcrumb_descendants_only() {
     let h = Harness::new();
     let mut docs = vault();
-    docs[0].breadcrumb = Some(true);
+    docs[0].breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
     docs.push(doc("other/index.html", PageKind::Folder, "other body", Some("Other")));
     docs.push(doc("other/leaf/index.html", PageKind::Article, "leaf body", Some("Leaf")));
     h.run(&docs);
@@ -790,7 +790,7 @@ fn a_homepage_breadcrumb_toggle_widens_the_whole_site() {
     h.run(&docs);
 
     let mut flipped = docs.clone();
-    flipped[0].breadcrumb = Some(true);
+    flipped[0].breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
     let verdict = h.run(&flipped);
     assert_incremental(&verdict);
     for src in ["index.md", "writings/index.md", "writings/alpha/index.md", "writings/beta/index.md"] {

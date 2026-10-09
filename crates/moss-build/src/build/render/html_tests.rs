@@ -3506,6 +3506,28 @@ mod children_field_tests {
         }
     }
 
+    #[test]
+    fn breadcrumb_label_sits_above_the_title_of_a_page_in_a_folder() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::Label);
+        let folder = make_doc("Opera", "opera/index.html");
+        let mut page = make_doc("Botez", "opera/botez.html");
+        page.html_content = "<h1 class=\"moss-article-title\">Botez</h1>\n<p>Body</p>".to_string();
+
+        let all_docs = vec![homepage, folder, page.clone()];
+        let html = render_page(Some(&page), &all_docs, false);
+
+        let label = html
+            .find(r#"<a class="moss-parent-label" href="/opera/">Opera</a>"#)
+            .expect("the parent label is rendered");
+        let title = html
+            .find(r#"<h1 class="moss-article-title">Botez</h1>"#)
+            .expect("the title is rendered");
+        assert!(label < title, "the label sits above the title");
+        assert!(!html.contains("breadcrumb-separator"), "label mode draws no header trail");
+    }
+
     /// The published site carries none of it. The annotations exist for the
     /// editor preview only; `emit_source_lines: false` is the shipped shape.
     #[test]
@@ -3515,7 +3537,7 @@ mod children_field_tests {
         // Turn on everything that WOULD be annotated in the editor preview —
         // breadcrumb trail, folder cover, children listing — so this negative
         // covers every fm emitter, not just byline/colophon/title.
-        homepage.breadcrumb = Some(true);
+        homepage.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
 
         let mut folder_index = make_doc("發佈會", "events/index.html");
         folder_index.kind = PageKind::Folder;
@@ -3543,7 +3565,7 @@ mod children_field_tests {
     fn cover_children_breadcrumb_and_logo_name_their_fields() {
         let mut homepage = make_doc("Test Site", "index.html");
         homepage.is_root_level = true;
-        homepage.breadcrumb = Some(true); // site-wide breadcrumb enable
+        homepage.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On); // site-wide breadcrumb enable
         homepage.logo = Some("assets/logo.svg".to_string());
 
         let mut folder_index = make_doc("Events", "events/index.html");

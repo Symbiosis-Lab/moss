@@ -2,6 +2,7 @@
 //!
 //! Handles the creation of the main site navigation.
 
+use moss_core::frontmatter_typed::BreadcrumbSetting;
 use crate::build::types::ParsedDocument;
 
 use crate::i18n::Language;
@@ -626,6 +627,66 @@ pub fn compute_breadcrumb_segments(
     has_content_folders: bool,
     force: bool,
 ) -> Option<Vec<BreadcrumbSegment>> {
+    // Rule 1: the home page's setting decides the header trail. `label` moves
+    // the parent link above the title instead (`parent_label_segment`), so the
+    // trail stays off there.
+    let has_nav = has_nav_items(all_docs, has_content_folders);
+    let breadcrumb_enabled = match home_breadcrumb_setting(all_docs) {
+        Some(BreadcrumbSetting::On) => true,
+        Some(BreadcrumbSetting::Off | BreadcrumbSetting::Label) => force && !has_nav,
+        None => !has_nav,
+    };
+    if !breadcrumb_enabled {
+        return None;
+    }
+
+    // Rule 2: per-page override — breadcrumb: false disables
+    if doc.breadcrumb == Some(BreadcrumbSetting::Off) {
+        return None;
+    }
+
+    trail_segments(doc, all_docs, site_title)
+}
+
+/// The parent-section link shown above `doc`'s title when the home page says
+/// `breadcrumb: label`: the trail's segment just above the current page, which
+/// is the folder that holds it. `None` on the home page, on a top-level page
+/// (the trail has no folder above the current page), and where the page says
+/// `breadcrumb: false`.
+pub fn parent_label_segment(
+    doc: &ParsedDocument,
+    all_docs: &[ParsedDocument],
+    site_title: &str,
+) -> Option<BreadcrumbSegment> {
+    if home_breadcrumb_setting(all_docs) != Some(BreadcrumbSetting::Label) {
+        return None;
+    }
+    if doc.breadcrumb == Some(BreadcrumbSetting::Off) {
+        return None;
+    }
+    let mut segments = trail_segments(doc, all_docs, site_title)?;
+    // [site name, parent folder, ..., current page]: a parent exists from three on.
+    if segments.len() < 3 {
+        return None;
+    }
+    let parent = segments.len() - 2;
+    segments.into_iter().nth(parent)
+}
+
+fn home_breadcrumb_setting(all_docs: &[ParsedDocument]) -> Option<BreadcrumbSetting> {
+    all_docs
+        .iter()
+        .find(|d| d.url_path == "index.html")
+        .and_then(|d| d.breadcrumb)
+}
+
+/// The trail for `doc` before any enable rule: the site name, each folder above
+/// the page, and the page. Callers decide whether it is shown.
+fn trail_segments(
+    doc: &ParsedDocument,
+    all_docs: &[ParsedDocument],
+    site_title: &str,
+) -> Option<Vec<BreadcrumbSegment>> {
     // Parse URL path into folder parts
     let parts: Vec<&str> = doc.url_path.split('/').collect();
     let folder_parts = &parts[..parts.len() - 1];
@@ -655,30 +716,6 @@ pub fn compute_breadcrumb_segments(
         return None;
     }
     if effective_parts.is_empty() {
-        return None;
-    }
-
-    // Rule 1: breadcrumb enable logic.
-    // Explicit homepage setting wins. Otherwise auto-enable when no nav items exist
-    // (the nav bar only has site name + theme toggle, so breadcrumbs provide orientation).
-    let homepage_breadcrumb = all_docs
-        .iter()
-        .find(|d| d.url_path == "index.html")
-        .and_then(|d| d.breadcrumb);
-
-    let has_nav = has_nav_items(all_docs, has_content_folders);
-    let breadcrumb_enabled = match homepage_breadcrumb {
-        Some(true) => true,
-        Some(false) => force && !has_nav,
-        None => !has_nav,
-    };
-
-    if !breadcrumb_enabled {
-        return None;
-    }
-
-    // Rule 2: per-page override — breadcrumb: false disables
-    if doc.breadcrumb == Some(false) {
         return None;
     }
 

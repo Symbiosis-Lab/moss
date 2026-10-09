@@ -391,7 +391,7 @@ pub struct ParsedDocument {
     /// Series declaration: bool for weight-based, Vec<String> for explicit wikilink order
     pub series: Option<SeriesField>,
     /// Override site-wide breadcrumb setting
-    pub breadcrumb: Option<bool>,
+    pub breadcrumb: Option<moss_core::frontmatter_typed::BreadcrumbSetting>,
     /// Override site-wide footer setting
     pub footer: Option<bool>,
     /// Frontmatter values to cascade to all descendants

@@ -154,6 +154,22 @@ const FIELD_DEFAULTS: BuiltinField = BuiltinField {
 /// Union members for `children`: a boolean toggle OR a single wikilink/path
 /// pointing at the folder whose articles to render. Materialized into
 /// `FieldDefinition::one_of` by `builtin_schema()`.
+const BREADCRUMB_MEMBERS: &[BuiltinField] = &[
+    BuiltinField {
+        name: "",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["label"]),
+        ..FIELD_DEFAULTS
+    },
+];
+
 const CHILDREN_MEMBERS: &[BuiltinField] = &[
     BuiltinField {
         name: "",
@@ -727,11 +743,13 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
     },
     BuiltinField {
         name: "breadcrumb",
-        field_type: FieldType::Boolean,
-        widget: Widget::Checkbox,
+        field_type: FieldType::OneOf,
+        widget: Widget::Union,
+        one_of_members: Some(BREADCRUMB_MEMBERS),
         // Frequency=1, Importance=2 → score = 100 - (1*6 + 2*4) = 100 - 14 = 86
         score: 86,
-        description: "Home page: true turns breadcrumbs on for the whole site, false turns them off for it. Other pages: false hides them on this page only; true does nothing.",
+        description: "Breadcrumb style. Home page: true shows the trail in the header on every page, false hides it, and label hides the trail and shows each page's parent section as a small link above its title instead. Other pages: false hides the breadcrumb on this page only; true and label do nothing.",
+
         label_key: "chip.breadcrumb.label",
         group: "This Page",
         ..FIELD_DEFAULTS

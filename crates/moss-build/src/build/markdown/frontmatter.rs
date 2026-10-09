@@ -104,7 +104,7 @@ Some content.
         assert_eq!(frontmatter.sidebar, Some("[[News]]".to_string()));
         assert_eq!(frontmatter.children_style, Some("card".to_string()));
         assert_eq!(frontmatter.children_depth, Some("all".to_string()));
-        assert_eq!(frontmatter.breadcrumb, Some(true));
+        assert_eq!(frontmatter.breadcrumb, Some(moss_core::frontmatter_typed::BreadcrumbSetting::On));
         assert_eq!(frontmatter.description, Some("A test page".to_string()));
         assert_eq!(frontmatter.tags, Some(vec!["rust".to_string(), "moss".to_string()]));
         assert_eq!(
@@ -149,7 +149,7 @@ breadcrumb: "true"
         let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
 
         assert_eq!(frontmatter.title, Some("山居".to_string()));
-        assert_eq!(frontmatter.breadcrumb, Some(true));
+        assert_eq!(frontmatter.breadcrumb, Some(moss_core::frontmatter_typed::BreadcrumbSetting::On));
     }
 
     #[test]
@@ -157,7 +157,7 @@ breadcrumb: "true"
         let markdown = "---\nbreadcrumb: \"false\"\n---\n";
         let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
 
-        assert_eq!(frontmatter.breadcrumb, Some(false));
+        assert_eq!(frontmatter.breadcrumb, Some(moss_core::frontmatter_typed::BreadcrumbSetting::Off));
     }
 
     #[test]

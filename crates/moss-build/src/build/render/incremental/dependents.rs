@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::build::components::nav::{compute_breadcrumb_segments, is_nav_bar_item_doc};
+use crate::build::components::nav::{compute_breadcrumb_segments, is_nav_bar_item_doc, parent_label_segment};
 use crate::build::facade::debug_hash;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
@@ -170,7 +170,10 @@ pub fn breadcrumb_ancestor_descendants(
         // nav.rs`'s own doc), so a descendant that happens to be one must be
         // treated as showing a trail today even when the site-wide answer
         // alone would have said no.
-        .filter(|d| compute_breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some())
+        .filter(|d| {
+            compute_breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some()
+                || parent_label_segment(d, documents, "").is_some()
+        })
         .map(|d| crate::build::facade::PageKey::for_document(d).cache_key().into_owned())
         .collect()
 }

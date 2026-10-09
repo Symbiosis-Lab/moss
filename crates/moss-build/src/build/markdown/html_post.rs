@@ -414,6 +414,29 @@ pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_
     }
 }
 
+/// Put the parent-section link (`breadcrumb: label`) above the title that
+/// `inject_article_title_h1` placed at the head of `plan`. A plan that does not
+/// open with that heading (its layout hides the title, or it has none) gets no
+/// link: the link is there to name the title it sits above.
+pub(crate) fn prepend_parent_label(
+    plan: &mut crate::build::markdown::body_plan::BodyPlan,
+    parent: &crate::build::components::nav::BreadcrumbSegment,
+) {
+    use crate::build::markdown::body_plan::BodySegment;
+    let opens_title = matches!(
+        plan.segments.first(),
+        Some(BodySegment::Html(html)) if html.starts_with("<h1 class=\"moss-article-title\"")
+    );
+    if opens_title {
+        let link = format!(
+            "<a class=\"moss-parent-label\" href=\"{}\">{}</a>\n",
+            html_escape(&parent.url),
+            html_escape(&parent.title),
+        );
+        plan.prepend_html(link);
+    }
+}
+
 /// Splice an HTML fragment (e.g. the date-line + reading-prefs control)
 /// into `html_body` at the position immediately after the article's title
 /// block. The title block is the first top-level `<h1>...</h1>` plus an
@@ -1782,6 +1805,35 @@ mod tests {
     }
 
     // --- splice_after_title_block ---
+
+    #[test]
+    fn prepend_parent_label_sits_before_the_injected_title() {
+        let parent = crate::build::components::nav::BreadcrumbSegment {
+            title: "Opera & Co".to_string(),
+            url: "/opera/".to_string(),
+            is_current: false,
+        };
+        let mut plan = crate::build::markdown::body_plan::BodyPlan::opaque(
+            inject_article_title_h1("", "Botez", false, false),
+        );
+        prepend_parent_label(&mut plan, &parent);
+        assert_eq!(
+            plan.to_html(),
+            "<a class=\"moss-parent-label\" href=\"/opera/\">Opera &amp; Co</a>\n<h1 class=\"moss-article-title\">Botez</h1>\n"
+        );
+    }
+
+    #[test]
+    fn prepend_parent_label_skips_a_body_with_no_injected_title() {
+        let parent = crate::build::components::nav::BreadcrumbSegment {
+            title: "Opera".to_string(),
+            url: "/opera/".to_string(),
+            is_current: false,
+        };
+        let mut plan = crate::build::markdown::body_plan::BodyPlan::opaque("<p>Body</p>".to_string());
+        prepend_parent_label(&mut plan, &parent);
+        assert_eq!(plan.to_html(), "<p>Body</p>");
+    }
 
     #[test]
     fn splice_after_title_block_inserts_after_lone_h1() {

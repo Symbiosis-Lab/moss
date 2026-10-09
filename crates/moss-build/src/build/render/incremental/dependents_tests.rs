@@ -112,7 +112,7 @@ fn home_title_globals_changes_only_the_edited_languages_key() {
 #[test]
 fn home_breadcrumb_globals_is_one_global_key_not_per_language() {
     let mut root = doc("index.html", PageKind::Folder);
-    root.breadcrumb = Some(true);
+    root.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
     let globals = home_breadcrumb_globals(&[root]);
     assert_eq!(globals.keys().collect::<Vec<_>>(), vec!["site"]);
 }
@@ -123,12 +123,12 @@ fn home_breadcrumb_globals_ignores_a_non_root_homes_own_field() {
     // never consults a per-language home's own `breadcrumb:` field (see the
     // function's doc comment), so this must not move the digest.
     let mut root = doc("index.html", PageKind::Folder);
-    root.breadcrumb = Some(false);
+    root.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::Off);
     let mut zh_home = doc("zh-hans/index.html", PageKind::Folder);
     zh_home.lang = Language::ZhHans;
-    zh_home.breadcrumb = Some(true);
+    zh_home.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
     let before = home_breadcrumb_globals(&[root.clone(), zh_home.clone()]);
-    zh_home.breadcrumb = Some(false);
+    zh_home.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::Off);
     let after = home_breadcrumb_globals(&[root, zh_home]);
     assert_eq!(before, after);
 }
@@ -136,7 +136,7 @@ fn home_breadcrumb_globals_ignores_a_non_root_homes_own_field() {
 #[test]
 fn breadcrumb_ancestor_descendants_is_scoped_to_the_folders_own_prefix() {
     let mut root = doc("index.html", PageKind::Folder);
-    root.breadcrumb = Some(true);
+    root.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
     let folder = doc("writings/index.html", PageKind::Folder);
     let child = doc("writings/alpha/index.html", PageKind::Article);
     let other_folder = doc("other/index.html", PageKind::Folder);

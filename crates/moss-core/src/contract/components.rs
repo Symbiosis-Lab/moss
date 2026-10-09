@@ -1228,6 +1228,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Text content slot inside `.moss-hero` — text laid ON the image. For text ABOUT the image, see `.moss-hero-caption`.",
     },
     ComponentEntry {
+        class: "moss-parent-label",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<a class="moss-parent-label" href="/opera/">Opera</a>"#,
+        example_markdown: "---\nbreadcrumb: label\n---\n",
+        status: Status::Confirmed,
+        since: "0",
+        description: "The parent section's name, as a small link above the page title, in place of the header trail. Turned on by `breadcrumb: label` in the home page's frontmatter.",
+    },
+    ComponentEntry {
         class: "moss-hero-caption",
         kind: "standalone",
         parent: "",

@@ -410,9 +410,10 @@ pub struct FrontMatter {
     /// (SeriesField::Ordered) preserved for back-compat but normalized away
     /// at deserialize time — see FrontMatter::normalize (Task 5).
     pub series: Option<SeriesField>,
-    /// Override site-wide breadcrumb setting
-    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
-    pub breadcrumb: Option<bool>,
+    /// Override site-wide breadcrumb setting: `true`/`false`, or `label` for
+    /// the parent-section link above the title (see [`BreadcrumbSetting`]).
+    #[serde(default, deserialize_with = "deserialize_breadcrumb_setting")]
+    pub breadcrumb: Option<BreadcrumbSetting>,
     /// Override site-wide footer setting
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub footer: Option<bool>,
@@ -613,6 +614,78 @@ where
         Some([one]) => one.serialize(serializer),
         other => other.serialize(serializer),
     }
+}
+
+/// A page's `breadcrumb:` value. `On` and `Off` are the old bool; `Label`
+/// (home page only) replaces the header trail with a parent-section link above
+/// each page's title, and on any other page it means `On`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub enum BreadcrumbSetting {
+    On,
+    Off,
+    Label,
+}
+
+impl<'de> Deserialize<'de> for BreadcrumbSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        deserialize_breadcrumb_setting(deserializer)?
+            .ok_or_else(|| D::Error::custom("expected true, false or label"))
+    }
+}
+
+impl Serialize for BreadcrumbSetting {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            BreadcrumbSetting::On => serializer.serialize_bool(true),
+            BreadcrumbSetting::Off => serializer.serialize_bool(false),
+            BreadcrumbSetting::Label => serializer.serialize_str("label"),
+        }
+    }
+}
+
+/// Deserialize `breadcrumb:` from a bool, the string "true"/"false", or "label".
+/// Any other string is a per-field error, which `project_typed` reports as a
+/// build warning naming the file and the allowed values.
+pub fn deserialize_breadcrumb_setting<'de, D>(deserializer: D) -> Result<Option<BreadcrumbSetting>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct BreadcrumbVisitor;
+
+    impl<'de> de::Visitor<'de> for BreadcrumbVisitor {
+        type Value = Option<BreadcrumbSetting>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("true, false or label")
+        }
+
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
+            Ok(Some(if v { BreadcrumbSetting::On } else { BreadcrumbSetting::Off }))
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            match v {
+                "true" => Ok(Some(BreadcrumbSetting::On)),
+                "false" => Ok(Some(BreadcrumbSetting::Off)),
+                "label" => Ok(Some(BreadcrumbSetting::Label)),
+                _ => Err(E::custom(format!("\"{v}\" is not valid; use true, false or label"))),
+            }
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(BreadcrumbVisitor)
 }
 
 /// Deserialize a bool that may be a YAML string ("true"/"false") or a native bool.
@@ -1049,7 +1122,22 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 // copying YAML habits into simplified frontmatter (`nav: 'true'`)
                 // would otherwise compare "'true'" != "true" and silently land on
                 // `false` — a worse variant of that failure mode (miscoercion, not just drop).
-                "nav" | "home" | "draft" | "listed" | "breadcrumb" | "footer" | "comments" => {
+                "breadcrumb" => {
+                    let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
+                    frontmatter.breadcrumb = match unquoted {
+                        "true" | "" => Some(BreadcrumbSetting::On),
+                        "false" => Some(BreadcrumbSetting::Off),
+                        "label" => Some(BreadcrumbSetting::Label),
+                        _ => {
+                            eprintln!(
+                                "Warning: {}: \"{}\" is not valid. Use true, false or label.",
+                                key, value
+                            );
+                            None
+                        }
+                    };
+                }
+                "nav" | "home" | "draft" | "listed" | "footer" | "comments" => {
                     let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
                     // Anything other than "true"/"false" is a likely typo (e.g.
                     // "yes", "Ture"); warn rather than silently defaulting to
@@ -1071,7 +1159,6 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         "home" => frontmatter.home = flag,
                         "draft" => frontmatter.draft = flag,
                         "listed" => frontmatter.listed = flag,
-                        "breadcrumb" => frontmatter.breadcrumb = flag,
                         "footer" => frontmatter.footer = flag,
                         "comments" => frontmatter.comments = flag,
                         _ => unreachable!(),
@@ -1100,7 +1187,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 "home" => frontmatter.home = Some(true),
                 "draft" => frontmatter.draft = Some(true),
                 "listed" => frontmatter.listed = Some(true),
-                "breadcrumb" => frontmatter.breadcrumb = Some(true),
+                "breadcrumb" => frontmatter.breadcrumb = Some(BreadcrumbSetting::On),
                 "footer" => frontmatter.footer = Some(true),
                 "comments" => frontmatter.comments = Some(true),
                 "children" => frontmatter.children = Some(true),
@@ -1880,8 +1967,9 @@ mod url_path_tests {
                 "`{flag}` is listed as a bare flag but is not detected"
             );
             let (fm, _) = parse_simplified_frontmatter(&content);
+            let set = format!("{fm:?}");
             assert!(
-                format!("{fm:?}").contains("Some(true)"),
+                set.contains("Some(true)") || set.contains("Some(On)"),
                 "`{flag}` is detected but the parser sets no field from it"
             );
         }
@@ -1972,5 +2060,20 @@ mod url_path_tests {
         assert_eq!(fm.online.as_deref(), Some("https://live.example/x"));
         let (day, _) = parse_simplified_frontmatter("start: 2026-11-01\n---\nbody\n");
         assert_eq!(day.start.as_deref(), Some("2026-11-01"));
+    }
+
+    #[test]
+    fn breadcrumb_accepts_label_and_warns_on_an_unknown_value() {
+        let ok: serde_yaml::Mapping = serde_yaml::from_str("breadcrumb: label\n").unwrap();
+        let (fm, warnings) = project_typed(&ok);
+        assert_eq!(fm.breadcrumb, Some(BreadcrumbSetting::Label));
+        assert!(warnings.is_empty());
+
+        let bad: serde_yaml::Mapping = serde_yaml::from_str("breadcrumb: sideways\n").unwrap();
+        let (fm, warnings) = project_typed(&bad);
+        assert_eq!(fm.breadcrumb, None);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].key, "breadcrumb");
+        assert!(warnings[0].message.contains("true, false or label"), "{}", warnings[0].message);
     }
 }

@@ -563,7 +563,7 @@ fn is_navigational_page_nested_keyword_excluded() {
 fn make_doc_with_breadcrumb(
     url_path: &str,
     title: &str,
-    breadcrumb: Option<bool>,
+    breadcrumb: Option<BreadcrumbSetting>,
 ) -> ParsedDocument {
     let mut doc = make_doc(url_path, title, None, None);
     doc.breadcrumb = breadcrumb;
@@ -574,7 +574,7 @@ fn make_doc_with_breadcrumb(
 fn test_breadcrumb_renders_when_enabled_on_homepage() {
     // Homepage has breadcrumb: true, nested page should get breadcrumbs
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", "Posts", None),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
@@ -645,7 +645,7 @@ fn editor_preview_breadcrumb_and_logo_name_their_fields() {
     // latter only when the flag says this page owns the field. Default
     // builders (publish, synthetic pages) emit neither.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", "Posts", None),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
@@ -692,7 +692,7 @@ fn editor_preview_breadcrumb_and_logo_name_their_fields() {
 fn test_breadcrumb_not_rendered_on_root_page() {
     // Root pages (depth 0) should not get breadcrumbs even with breadcrumb: true on homepage
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("about.html", "About", None),
     ];
 
@@ -717,9 +717,9 @@ fn test_breadcrumb_not_rendered_on_root_page() {
 fn test_breadcrumb_per_page_override_false() {
     // Homepage has breadcrumb: true, but specific page has breadcrumb: false
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", "Posts", None),
-        make_doc_with_breadcrumb("posts/secret/index.html", "Secret Post", Some(false)),
+        make_doc_with_breadcrumb("posts/secret/index.html", "Secret Post", Some(BreadcrumbSetting::Off)),
     ];
 
     let doc = &documents[2]; // posts/secret/index.html
@@ -735,7 +735,7 @@ fn test_breadcrumb_per_page_override_false() {
 fn test_breadcrumb_not_rendered_when_explicitly_disabled() {
     // Homepage has breadcrumb: false — no breadcrumbs even without nav items
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(false)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::Off)),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
 
@@ -755,7 +755,7 @@ fn test_breadcrumb_force_names_an_explorer_root_even_when_the_site_disables_brea
     // `<h1>` is `.visually-hidden` though, so with the site's breadcrumbs
     // off it would otherwise name the section nowhere in the page at all.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(false)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::Off)),
         make_doc_with_breadcrumb("places/index.html", "Places", None),
     ];
     let doc = &documents[1];
@@ -775,7 +775,7 @@ fn test_breadcrumb_force_names_an_explorer_root_even_when_the_site_disables_brea
     // A page-level `breadcrumb: false` still opts out even under force — the
     // one override an author has, left intact.
     let mut opted_out = documents[1].clone();
-    opted_out.breadcrumb = Some(false);
+    opted_out.breadcrumb = Some(BreadcrumbSetting::Off);
     assert!(
         compute_breadcrumb_segments(&opted_out, &documents, "My Site", true, true).is_none(),
         "an explicit per-page opt-out still wins over force"
@@ -801,7 +801,7 @@ fn test_breadcrumb_force_yields_to_the_nav_bar_when_the_site_has_nav_items() {
     );
 
     let mut trail_home = documents.clone();
-    trail_home[0].breadcrumb = Some(true);
+    trail_home[0].breadcrumb = Some(BreadcrumbSetting::On);
     assert!(
         compute_breadcrumb_segments(&trail_home[2], &trail_home, "My Site", true, true).is_some(),
         "a homepage that sets breadcrumb: true still draws the trail"
@@ -813,9 +813,9 @@ fn test_breadcrumb_page_opt_out_still_wins_for_an_explorer_root_with_nav_items()
     // The homepage turns trails on, so only the page's own `breadcrumb: false`
     // stands between the explorer root and a trail.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc("about.html", "About", None, Some(true)),
-        make_doc_with_breadcrumb("places/index.html", "Places", Some(false)),
+        make_doc_with_breadcrumb("places/index.html", "Places", Some(BreadcrumbSetting::Off)),
     ];
     let doc = &documents[2];
 
@@ -868,7 +868,7 @@ fn test_breadcrumb_segment_titles_from_label_vs_titlecase_fallback() {
     // When a folder's index page exists, use its label
     // When it doesn't, fall back to titlecased path segment
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("blog-posts/index.html", "My Blog Posts", None),
         // "blog-posts/tech-tips" has no index.html — should titlecase to "Tech Tips"
         make_doc_with_breadcrumb(
@@ -903,7 +903,7 @@ fn test_breadcrumb_segment_titles_from_label_vs_titlecase_fallback() {
 fn test_breadcrumb_current_page_is_absent() {
     // Current page should be completely absent from breadcrumb (page identity comes from h1)
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
 
@@ -948,7 +948,7 @@ fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
     // make. With fewer, the controls could never unhide, so they are not
     // emitted at all.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", "Posts", None),
         make_doc_with_breadcrumb("posts/2024/index.html", "2024", None),
         make_doc_with_breadcrumb("posts/2024/hello/index.html", "Hello World", None),
@@ -1014,7 +1014,7 @@ fn test_breadcrumb_segment_carries_hint_label_and_label_span() {
     // The home segment is `flex-shrink: 0` and never truncates, so it gets
     // neither — a hint there would just repeat what is already on screen.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", "A Very Long Section Name", None),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
@@ -1058,7 +1058,7 @@ fn test_breadcrumb_hint_escapes_quotes_in_title() {
     // The hint lands in an HTML attribute, so a title containing a quote must
     // not be able to close it and inject markup.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", r#"He said "hi" & left"#, None),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
@@ -1093,7 +1093,7 @@ fn test_breadcrumb_single_depth_page() {
     // A page at depth 1 (e.g. "about/index.html") — after filtering out is_current,
     // only site-name remains. Result: just the site name link, no separator.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("about/index.html", "About Us", None),
     ];
 
@@ -1175,7 +1175,7 @@ fn test_breadcrumb_empty_segments_fallback() {
 fn make_doc_with_translations(
     url_path: &str,
     title: &str,
-    breadcrumb: Option<bool>,
+    breadcrumb: Option<BreadcrumbSetting>,
     translations: Vec<TranslationLink>,
 ) -> ParsedDocument {
     let mut doc = make_doc_with_breadcrumb(url_path, title, breadcrumb);
@@ -1191,7 +1191,7 @@ fn test_breadcrumb_translation_root_transparent() {
         make_doc_with_translations(
             "index.html",
             "moss",
-            Some(true),
+            Some(BreadcrumbSetting::On),
             vec![TranslationLink {
                 lang_tag: Language::ZhHans.as_bcp47_attr().to_string(),
                 url_path: "zh-hans/index.html".to_string(),
@@ -1253,7 +1253,7 @@ fn test_breadcrumb_translation_root_homepage_no_breadcrumbs() {
         make_doc_with_translations(
             "index.html",
             "moss",
-            Some(true),
+            Some(BreadcrumbSetting::On),
             vec![TranslationLink {
                 lang_tag: Language::ZhHans.as_bcp47_attr().to_string(),
                 url_path: "zh-hans/index.html".to_string(),
@@ -1288,7 +1288,7 @@ fn test_breadcrumb_translation_root_deep_nesting() {
         make_doc_with_translations(
             "index.html",
             "moss",
-            Some(true),
+            Some(BreadcrumbSetting::On),
             vec![TranslationLink {
                 lang_tag: Language::ZhHans.as_bcp47_attr().to_string(),
                 url_path: "zh-hans/index.html".to_string(),
@@ -1339,7 +1339,7 @@ fn test_breadcrumb_translation_root_non_index_file() {
         make_doc_with_translations(
             "index.html",
             "moss",
-            Some(true),
+            Some(BreadcrumbSetting::On),
             vec![TranslationLink {
                 lang_tag: Language::ZhHans.as_bcp47_attr().to_string(),
                 url_path: "zh-hans/index.html".to_string(),
@@ -1381,7 +1381,7 @@ fn test_breadcrumb_translation_root_partial_translation() {
         make_doc_with_translations(
             "index.html",
             "moss",
-            Some(true),
+            Some(BreadcrumbSetting::On),
             vec![TranslationLink {
                 lang_tag: Language::ZhHans.as_bcp47_attr().to_string(),
                 url_path: "zh-hans/index.html".to_string(),
@@ -1423,7 +1423,7 @@ fn test_breadcrumb_arbitrary_folder_name_as_translation_root() {
         make_doc_with_translations(
             "index.html",
             "moss",
-            Some(true),
+            Some(BreadcrumbSetting::On),
             vec![TranslationLink {
                 lang_tag: Language::ZhHans.as_bcp47_attr().to_string(),
                 url_path: "chinese/index.html".to_string(),
@@ -1462,7 +1462,7 @@ fn test_breadcrumb_translation_root_direct_child_no_breadcrumbs() {
         make_doc_with_translations(
             "index.html",
             "moss",
-            Some(true),
+            Some(BreadcrumbSetting::On),
             vec![TranslationLink {
                 lang_tag: Language::ZhHans.as_bcp47_attr().to_string(),
                 url_path: "zh-hans/index.html".to_string(),
@@ -1493,7 +1493,7 @@ fn test_breadcrumb_translation_root_direct_child_no_breadcrumbs() {
 fn test_breadcrumb_non_translation_folder_unchanged() {
     // docs/ is NOT a translation root — should behave normally
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("docs/index.html", "Docs", None),
         make_doc_with_breadcrumb("docs/getting-started/index.html", "Getting Started", None),
     ];
@@ -1515,7 +1515,7 @@ fn test_breadcrumb_non_translation_folder_unchanged() {
 fn test_breadcrumb_folder_with_no_index_not_transparent() {
     // foo/ has no index.html — can't be a translation root
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("foo/page/index.html", "Some Page", None),
     ];
 
@@ -2567,7 +2567,7 @@ fn test_search_button_label_is_localized() {
 /// Build the island for a page at `posts/hello/index.html` on a 3-level site.
 fn island_for_deep_page() -> String {
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", "Posts", None),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
@@ -2623,7 +2623,7 @@ fn island_appends_the_current_page_the_masthead_skips() {
 fn the_masthead_still_stops_before_the_current_page() {
     // The island's extra crumb must not leak back into the nav bar.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", "Posts", None),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
@@ -2658,7 +2658,7 @@ fn island_folds_only_when_there_is_a_middle_to_sacrifice() {
     // cannot otherwise take, and an affordance that vanishes at depth 1 reads
     // as a bug.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("about/index.html", "About Us", None),
     ];
     let doc = &documents[1];
@@ -2687,7 +2687,7 @@ fn island_folds_only_when_there_is_a_middle_to_sacrifice() {
 fn no_island_without_a_breadcrumb_trail() {
     // The homepage, and any site that has turned breadcrumbs off. Nowhere to go
     // "up" to, so no island — and no empty bar hanging over the page.
-    let documents = vec![make_doc_with_breadcrumb("index.html", "Home", Some(true))];
+    let documents = vec![make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On))];
     let island = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -2768,7 +2768,7 @@ fn island_current_crumb_can_say_what_it_truncated() {
 #[test]
 fn island_labels_are_localized_and_attribute_safe() {
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", r#"He said "hi""#, None),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello", None),
     ];
@@ -2903,7 +2903,7 @@ fn nav_mode_suppresses_the_floating_island() {
     // the site name — exactly the brand text nav mode drops from the
     // masthead. See `HeaderMode::Nav`'s doc.
     let documents = vec![
-        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
         make_doc_with_breadcrumb("posts/index.html", "Posts", None),
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
@@ -3050,4 +3050,60 @@ fn unlisted_root_page_is_not_auto_promoted_into_nav() {
     assert!(!is_nav_bar_item_doc(&doc, true), "listed: false stays out of nav");
     doc.nav = Some(true);
     assert!(is_nav_bar_item_doc(&doc, true), "explicit nav: true still wins");
+}
+
+#[test]
+fn test_breadcrumb_label_on_home_gives_a_folder_page_its_parent_and_no_header_trail() {
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::Label)),
+        make_doc_with_breadcrumb("opera/index.html", "Opera", None),
+        make_doc_with_breadcrumb("opera/botez.html", "Botez", None),
+    ];
+    let doc = &documents[2];
+
+    assert!(
+        compute_breadcrumb_segments(doc, &documents, "My Site", true, false).is_none(),
+        "label on the home page takes the trail out of the header"
+    );
+    let parent = parent_label_segment(doc, &documents, "My Site")
+        .expect("a page inside a folder gets the parent label");
+    assert_eq!(parent.title, "Opera");
+    assert_eq!(parent.url, "/opera/");
+}
+
+#[test]
+fn test_breadcrumb_label_gives_no_parent_to_home_folder_note_or_top_level_page() {
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::Label)),
+        make_doc_with_breadcrumb("opera/index.html", "Opera", None),
+        make_doc_with_breadcrumb("about.html", "About", None),
+    ];
+
+    assert!(parent_label_segment(&documents[0], &documents, "My Site").is_none());
+    assert!(parent_label_segment(&documents[1], &documents, "My Site").is_none());
+    assert!(parent_label_segment(&documents[2], &documents, "My Site").is_none());
+}
+
+#[test]
+fn test_breadcrumb_page_false_hides_the_parent_label_under_home_label() {
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::Label)),
+        make_doc_with_breadcrumb("opera/index.html", "Opera", None),
+        make_doc_with_breadcrumb("opera/botez.html", "Botez", Some(BreadcrumbSetting::Off)),
+    ];
+
+    assert!(parent_label_segment(&documents[2], &documents, "My Site").is_none());
+}
+
+#[test]
+fn test_breadcrumb_true_on_home_keeps_the_header_trail_and_adds_no_parent_label() {
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
+        make_doc_with_breadcrumb("opera/index.html", "Opera", None),
+        make_doc_with_breadcrumb("opera/botez.html", "Botez", None),
+    ];
+    let doc = &documents[2];
+
+    assert!(compute_breadcrumb_segments(doc, &documents, "My Site", true, false).is_some());
+    assert!(parent_label_segment(doc, &documents, "My Site").is_none());
 }

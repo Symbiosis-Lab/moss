@@ -458,12 +458,15 @@ mod tests {
     #[test]
     fn test_builtin_schema_boolean_fields() {
         let schema = builtin_schema();
-        for name in &["draft", "breadcrumb", "listed"] {
+        for name in &["draft", "listed"] {
             let field = schema.frontmatter.fields.get(*name)
                 .unwrap_or_else(|| panic!("{} field missing", name));
             assert_eq!(field.field_type, FieldType::Boolean, "{} should be boolean", name);
             assert_eq!(field.widget, Some(Widget::Checkbox), "{} should be checkbox", name);
         }
+        // `label` is a third value, so breadcrumb is a union of bool and string.
+        let breadcrumb = schema.frontmatter.fields.get("breadcrumb").expect("breadcrumb field missing");
+        assert_eq!(breadcrumb.field_type, FieldType::OneOf);
     }
 
     #[test]

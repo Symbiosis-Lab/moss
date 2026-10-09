@@ -102,7 +102,7 @@ fn apply_cascade_values(
             }
             "breadcrumb" => {
                 if doc.breadcrumb.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<bool>(value.clone()) {
+                    if let Ok(v) = serde_yaml::from_value::<moss_core::frontmatter_typed::BreadcrumbSetting>(value.clone()) {
                         doc.breadcrumb = Some(v);
                     }
                 }
@@ -382,7 +382,7 @@ mod tests {
         // Guide should inherit breadcrumb from root and children_style from docs/
         assert_eq!(
             docs[2].breadcrumb,
-            Some(true),
+            Some(moss_core::frontmatter_typed::BreadcrumbSetting::On),
             "Guide should inherit breadcrumb: true from root cascade"
         );
         assert_eq!(
@@ -412,7 +412,7 @@ mod tests {
         apply_cascade(&mut docs);
 
         assert_eq!(docs[1].nav, Some(true));
-        assert_eq!(docs[1].breadcrumb, Some(false));
+        assert_eq!(docs[1].breadcrumb, Some(moss_core::frontmatter_typed::BreadcrumbSetting::Off));
         assert_eq!(docs[1].children, Some(true));
         assert_eq!(docs[1].children_style, Some(moss_core::Resolved::cascade("summary".to_string())));
         assert_eq!(docs[1].children_depth, Some("all".to_string()));
@@ -459,12 +459,12 @@ mod tests {
 
         assert_eq!(
             docs[1].breadcrumb,
-            Some(true),
+            Some(moss_core::frontmatter_typed::BreadcrumbSetting::On),
             "About should inherit breadcrumb from root cascade"
         );
         assert_eq!(
             docs[2].breadcrumb,
-            Some(true),
+            Some(moss_core::frontmatter_typed::BreadcrumbSetting::On),
             "Docs/guide should inherit breadcrumb from root cascade"
         );
         // Root itself should NOT be modified

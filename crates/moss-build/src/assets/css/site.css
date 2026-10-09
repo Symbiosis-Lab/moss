@@ -5085,6 +5085,33 @@ hr::before {
    per page (e.g. `display: none` on a hero-led landing) or globally.
    .article-title is retained for any pre-existing themes that target the
    un-prefixed class. */
+/* The parent-section link above a page's title (`breadcrumb: label`). Small
+   spaced capitals in the muted colour keep it a label rather than a second
+   heading. It underlines only on hover or focus, and its focus ring is drawn
+   explicitly because it is the one link on the page back up the section. */
+.moss-parent-label {
+  display: block;
+  width: fit-content;
+  margin-block: 0 var(--moss-space-sm);
+  font-size: 0.8125rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--moss-color-muted);
+  text-decoration: none;
+}
+
+.moss-parent-label:hover,
+.moss-parent-label:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.moss-parent-label:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .moss-article-title,
 .article-title {
   font-family: var(--moss-font-heading);
