@@ -3451,6 +3451,27 @@ fn wikilink_image_sizing_survives_hero_overlay_end_to_end() {
     );
 }
 
+/// The first embed on a hero fence's first line is the primary slide, so the
+/// alt text the author wrote on it is the picture's alt. Without alt text the
+/// picture stays decorative (`alt=""`).
+#[test]
+fn hero_first_embed_alt_text_becomes_the_picture_alt() {
+    let hero = render_hero_with_graph(
+        ":::hero\n![A concert hall with its stage lit](hall.jpg)\n# Title\n:::\n",
+        &["hall.jpg"],
+    );
+    assert!(
+        hero.contains(r#"alt="A concert hall with its stage lit""#),
+        "hero picture lost the author's alt text: {hero}"
+    );
+
+    let decorative = render_hero_with_graph(":::hero\n![](hall.jpg)\n# Title\n:::\n", &["hall.jpg"]);
+    assert!(
+        decorative.contains(r#"alt="""#) && !decorative.contains("concert"),
+        "an embed without alt text must keep alt=\"\": {decorative}"
+    );
+}
+
 // ---- per-page language tests ----
 
 /// A `:::apply` shortcode on a `zh-hans/` page in an English-default site

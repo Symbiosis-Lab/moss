@@ -284,7 +284,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
             let assets = media_assets.expect("media_lookup is Some so assets is Some");
             moss_core::render::image::synthesize_image_html(
                 href,
-                "",
+                &args.image_alt,
                 &assets,
                 moss_core::render::image::ImageContext::Hero { plate: is_plate },
                 &opts,
@@ -321,7 +321,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
             let empty_snapshot = moss_core::asset_snapshot::AssetSnapshot::new();
             moss_core::render::image::synthesize_image_html(
                 href,
-                "",
+                &args.image_alt,
                 &empty_snapshot,
                 moss_core::render::image::ImageContext::HeroBare,
                 &opts,
