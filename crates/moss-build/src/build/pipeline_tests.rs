@@ -6841,6 +6841,47 @@ fn the_sitemap_lists_static_pages_and_notebooks_but_never_stubs() {
     }
 }
 
+/// A raw `.html` file is copied through unparsed, so the sitemap has to read
+/// its own robots meta: a page that tells crawlers `noindex` is not listed,
+/// whichever way its meta tag is written. Markdown `listed: false` stays out.
+#[test]
+fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("hidden.md"), "---\ntitle: Hidden\nlisted: false\n---\n\nHidden.\n").unwrap();
+    let pages = [
+        ("music.html", "<!doctype html><html><head><title>Music</title></head><body>m</body></html>"),
+        ("about.html", "<html><head><meta name=\"description\" content=\"about robots and noindex\"></head></html>"),
+        ("commented.html", "<html><head><!-- <meta name=\"robots\" content=\"noindex\"> --></head></html>"),
+        ("scales.html", "<!DOCTYPE html>\n<html><head>\n<META NAME=\"Robots\" CONTENT=\"NoIndex, nofollow\">\n</head></html>"),
+        ("closed.html", "<html><head><meta name=\"robots\" content=\"none\"></head></html>"),
+    ];
+    for (name, html) in pages {
+        fs::write(test_dir.join(name), html).unwrap();
+    }
+    // Only the first 8 KiB is read: a meta past it is not seen, one inside it is.
+    let noindex = "<meta name=\"robots\" content=\"noindex\">";
+    let padded = |pad: usize| format!("<html><head>{}{noindex}</head></html>", " ".repeat(pad));
+    fs::write(test_dir.join("too-late.html"), padded(9000)).unwrap();
+    fs::write(test_dir.join("just-inside.html"), padded(8000)).unwrap();
+    fs::create_dir_all(test_dir.join("share/abc123")).unwrap();
+    fs::write(
+        test_dir.join("share/abc123/index.html"),
+        "<html><head><meta content='noindex' name='robots'></head><body>x</body></html>",
+    )
+    .unwrap();
+
+    build_test_at_site_url(folder_path).expect("build");
+    let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
+    for kept in ["music", "about", "commented", "too-late"] {
+        assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
+    }
+    for out in ["scales", "closed", "just-inside", "share/abc123/", "hidden/"] {
+        assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
+    }
+}
+
 /// A warm build of an unchanged site writes no page to the stage: the render
 /// leaves its pages in memory, the slot pass is their one writer, and it skips
 /// a stage file its staged-link record vouches already holds the page's final

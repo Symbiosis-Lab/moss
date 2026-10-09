@@ -104,7 +104,7 @@ fn metadata_refusal_does_not_confirm_a_pending_file_deleted() {
     std::fs::write(&present, "# Here").unwrap();
     use std::os::unix::fs::PermissionsExt;
     let mut permissions = std::fs::metadata(&present).unwrap().permissions();
-    permissions.set_mode(0);
+    permissions.set_mode(0o0);
     std::fs::set_permissions(&present, permissions).unwrap();
     let _fault = TestFault::install(
         dir.path(),
