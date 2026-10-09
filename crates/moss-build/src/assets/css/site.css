@@ -2336,38 +2336,23 @@ header:has(+ .moss-hero) .main-nav {
   margin-inline-start: auto;
 }
 
-/* Two-line split (`data-nav-split`, set by nav-split.ts) — a plain-site-name
-   masthead that has to wrap keeps its toggles in the top corner: row 1 is the
-   site name at the start edge and the toggle cluster at the end edge, row 2 is
-   the link set alone, spread across the full measure. The one-row order
-   (name | links | toggles) and this two-row order disagree about sequence, so
-   no flex wrap can produce both — wrapping never floats a later sibling back
-   up a line — and CSS cannot ask whether a row wrapped. nav-split.ts measures
-   instead, and only on mastheads with no breadcrumb: a trail owns row 1 by
-   design (it folds to fill it), so breadcrumb pages keep the wrap above,
-   which anchors row 2's links at the start edge and toggles at the end edge.
-   Both layouts land the same invariant: every masthead row is anchored at
-   both container edges. With JS off the attribute never appears and the wrap
-   above is the fallback.
-
-   `display: contents` lifts .nav-links and .nav-icons to direct flex items of
-   .nav-content; .nav-icons's existing `margin-inline-start: auto` plus
-   .nav-left's flex-grow pin it to row 1's end edge, and the 100% basis forces
-   the links onto their own row. `space-between` is what "aligned on both
-   ends" means for a row that holds only links; a wrapped further row spreads
-   the same way, and a lone last item sits at the start edge. */
+/* Two-line split (`data-nav-split`, set by nav-split.ts): row 1 is the site name alone and row 2 holds the links, then the toggles at its end edge. */
 .nav-content[data-nav-split] .nav-right {
   display: contents;
 }
 
-.nav-content[data-nav-split] .nav-links {
-  order: 2;
+.nav-content[data-nav-split] .nav-left {
   flex: 1 1 100%;
+}
+
+.nav-content[data-nav-split] .nav-links {
+  order: 1;
+  flex: 1 1 0;
   justify-content: space-between;
 }
 
 .nav-content[data-nav-split] .nav-icons {
-  order: 1;
+  order: 2;
 }
 
 /* Same box as .nav-search-btn (search.css): a 2.25rem pill, transparent at

@@ -103,6 +103,7 @@ const GATE_PORT_KEYS = [
   'hero-pause',
   'bridge-capture',
   'contents-ruler',
+  'nav-split-order',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

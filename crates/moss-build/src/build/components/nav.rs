@@ -598,7 +598,7 @@ pub fn titlecase_segment(segment: &str) -> String {
 /// Returns `Some(segments)` when breadcrumbs should be shown, `None` otherwise.
 ///
 /// Breadcrumbs are shown when:
-/// 1. The homepage has `breadcrumb: true` (site-wide enable), OR `force` is set
+/// 1. The homepage has `breadcrumb: true` (site-wide enable), OR `force` is set and the site has no nav items
 /// 2. The current page has NOT set `breadcrumb: false` (per-page override)
 /// 3. The page's effective depth > 0 (homepages don't get breadcrumbs)
 ///
@@ -610,8 +610,10 @@ pub fn titlecase_segment(segment: &str) -> String {
 /// its own `<h1>` `.visually-hidden` — with no other visible title anywhere
 /// in the page, a site that otherwise keeps breadcrumbs off (nav items cover
 /// orientation everywhere else) would name the section nowhere at all. `true`
-/// only for that one page shape; every other rule above still applies on top
-/// of it (a page-level `breadcrumb: false` still opts out).
+/// only for that one page shape. Where the site has nav items, that trail is
+/// not drawn: the nav bar orients the reader on every page, the explorer root
+/// included, so the root gets the same header as the rest. Every other rule
+/// above still applies on top (a page-level `breadcrumb: false` still opts out).
 ///
 /// **Translation roots**: A folder whose index page is a translation of the site
 /// homepage (linked via `translationKey` or stem convention) is transparent in
@@ -664,16 +666,12 @@ pub fn compute_breadcrumb_segments(
         .find(|d| d.url_path == "index.html")
         .and_then(|d| d.breadcrumb);
 
-    let breadcrumb_enabled = force
-        || match homepage_breadcrumb {
-            Some(true) => true,
-            Some(false) => false,
-            None => {
-                // Auto-enable when no nav items exist
-                let has_nav_items = has_nav_items(all_docs, has_content_folders);
-                !has_nav_items
-            }
-        };
+    let has_nav = has_nav_items(all_docs, has_content_folders);
+    let breadcrumb_enabled = match homepage_breadcrumb {
+        Some(true) => true,
+        Some(false) => force && !has_nav,
+        None => !has_nav,
+    };
 
     if !breadcrumb_enabled {
         return None;

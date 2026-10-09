@@ -783,6 +783,49 @@ fn test_breadcrumb_force_names_an_explorer_root_even_when_the_site_disables_brea
 }
 
 #[test]
+fn test_breadcrumb_force_yields_to_the_nav_bar_when_the_site_has_nav_items() {
+    // An explorer root on a site with nav items gets the same header as every
+    // other page: the nav bar already orients the reader, so no trail. A
+    // homepage that sets `breadcrumb: true` still gets one.
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", None),
+        make_doc("about.html", "About", None, Some(true)),
+        make_doc_with_breadcrumb("places/index.html", "Places", None),
+    ];
+    assert!(has_nav_items(&documents, true), "fixture must carry a nav item");
+    let doc = &documents[2];
+
+    assert!(
+        compute_breadcrumb_segments(doc, &documents, "My Site", true, true).is_none(),
+        "an explorer root on a site with nav items renders the nav, not a trail"
+    );
+
+    let mut trail_home = documents.clone();
+    trail_home[0].breadcrumb = Some(true);
+    assert!(
+        compute_breadcrumb_segments(&trail_home[2], &trail_home, "My Site", true, true).is_some(),
+        "a homepage that sets breadcrumb: true still draws the trail"
+    );
+}
+
+#[test]
+fn test_breadcrumb_page_opt_out_still_wins_for_an_explorer_root_with_nav_items() {
+    // The homepage turns trails on, so only the page's own `breadcrumb: false`
+    // stands between the explorer root and a trail.
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc("about.html", "About", None, Some(true)),
+        make_doc_with_breadcrumb("places/index.html", "Places", Some(false)),
+    ];
+    let doc = &documents[2];
+
+    assert!(
+        compute_breadcrumb_segments(doc, &documents, "My Site", true, true).is_none(),
+        "breadcrumb: false on the root wins over force with nav items"
+    );
+}
+
+#[test]
 fn test_breadcrumb_auto_enable_flat_mode_with_keyword() {
     // Flat mode with "about" keyword file: nav items exist → no auto-breadcrumbs
     let mut about = make_doc_with_breadcrumb("about/index.html", "About", None);

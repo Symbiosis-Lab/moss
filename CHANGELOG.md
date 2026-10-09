@@ -37,6 +37,9 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- When a plain site-name masthead wraps to two rows, row 1 now holds the site name alone and row 2 holds the links with the search, language and theme toggles at its right end. The toggles used to sit on row 1 beside the name.
+- The places explorer root on a site with nav items now shows the same nav header as every other page. It used to draw a breadcrumb trail there even though the nav bar was present. A site without nav items keeps the trail, and a homepage with `breadcrumb: true` still shows one.
+- A Markdown table whose header row is blank (`| | |` over `|---|---|`) no longer draws its empty header as a second border under the table's top border. The body rows render as before, and a header with any text is unchanged.
 - A card listing in a source page is no longer imported as a gallery of bare images: its titles, dates and excerpts are kept.
 - An image can have a description that differs from its caption. Write the description in the brackets and the caption on an italic line directly under the image (`![A lake under a pink sky](hakone.jpg)` then `*Hiroshige, 1833–34. CC0.*`), the form the media docs already described; it now renders as a figure whose `<img>` keeps the description as its alt and whose `<figcaption>` is the italic line. With `implicit_figure = false` the italic line stays as text under the image. An italic span on the image's own line is unchanged. A caption-only image (`![Caption](hakone.jpg)`, `![[hakone.jpg|Caption]]`, or one in a `:::grid`) is announced once, through its caption, with `alt=""`; the docs now say so instead of claiming the alt matches the caption.
 - The build logs `Accessibility: image '…' on '…' has no alt text` for an image with neither alt text nor a caption. It is advisory and does not count toward `--strict`.

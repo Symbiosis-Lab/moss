@@ -650,14 +650,17 @@ fn test_css_nav_right_edge_aligns_toggles_when_it_wraps() {
 }
 
 #[test]
-fn test_css_nav_split_keeps_toggles_on_row_one() {
+fn test_css_nav_split_name_alone_on_row_one_then_links_and_toggles() {
     // `data-nav-split` (set by nav-split.ts on a plain-site-name masthead that
-    // has to wrap) re-stacks the nav: toggles on row 1 beside the name, links
-    // alone on row 2 spread edge to edge. `display: contents` is what lifts
-    // the two groups out of .nav-right so they can land on different rows —
-    // flex wrapping alone can never float the later sibling back up.
+    // has to wrap) re-stacks the nav: the site name takes row 1 by itself, and
+    // row 2 holds the links followed by the toggles at the end edge.
+    // `display: contents` is what lifts the two groups out of .nav-right so
+    // they can be ordered independently — flex wrapping alone can never float
+    // the later sibling back up.
     let right = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-right")
         .expect("split .nav-right rule should exist");
+    let left = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-left")
+        .expect("split .nav-left rule should exist");
     let links = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-links")
         .expect("split .nav-links rule should exist");
     let icons = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-icons")
@@ -669,15 +672,21 @@ fn test_css_nav_split_keeps_toggles_on_row_one() {
         right
     );
     assert!(
-        links.contains("flex: 1 1 100%") && links.contains("justify-content: space-between"),
-        "split links take their own full row, spread across both edges, got: {}",
+        left.contains("flex: 1 1 100%"),
+        "split .nav-left takes all of row 1 so the site name sits alone there, got: {}",
+        left
+    );
+    assert!(
+        links.contains("order: 1")
+            && links.contains("flex: 1 1 0")
+            && links.contains("justify-content: space-between"),
+        "split links open row 2 and spread across it, got: {}",
         links
     );
     assert!(
-        icons.contains("order: 1") && links.contains("order: 2"),
-        "icons must precede links in wrap order so they stay on row 1, got icons: {} links: {}",
-        icons,
-        links
+        icons.contains("order: 2"),
+        "icons must follow links so they land at row 2's end edge, got: {}",
+        icons
     );
 }
 

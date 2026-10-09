@@ -1195,6 +1195,60 @@ fn table_omits_tr_data_source_line_when_parser_did_not_track() {
 }
 
 #[test]
+fn table_with_a_blank_header_row_omits_the_thead() {
+    // A GFM table with an empty header row (`| | |`) would otherwise draw its
+    // header border under the table's own top border, a double line.
+    let blank_header = Block::Table {
+        header: vec![vec![], vec![Inline::Text("  ".into())]],
+        rows: vec![vec![vec![Inline::Text("1".into())], vec![Inline::Text("2".into())]]],
+        alignments: Vec::new(),
+        header_source_line: None,
+        row_source_lines: vec![],
+    };
+    let html = render_with_meta(vec![blank_header], vec![BlockMeta::default()]);
+    assert!(!html.contains("<thead>"), "blank header must not render a thead: {html}");
+    assert!(html.contains("<tbody>"), "body rows must still render: {html}");
+
+    let labelled_header = Block::Table {
+        header: vec![vec![Inline::Text("A".into())], vec![]],
+        rows: vec![vec![vec![Inline::Text("1".into())], vec![Inline::Text("2".into())]]],
+        alignments: Vec::new(),
+        header_source_line: None,
+        row_source_lines: vec![],
+    };
+    let html = render_with_meta(vec![labelled_header], vec![BlockMeta::default()]);
+    assert!(html.contains("<thead>"), "a header with any text keeps its thead: {html}");
+
+    // A cell that is only a code span or a link has no text node to trim, but
+    // it is still a visible heading, so its thead must survive.
+    let code_header = Block::Table {
+        header: vec![vec![Inline::Code("x".into())]],
+        rows: vec![vec![vec![Inline::Text("1".into())]]],
+        alignments: Vec::new(),
+        header_source_line: None,
+        row_source_lines: vec![],
+    };
+    let html = render_with_meta(vec![code_header], vec![BlockMeta::default()]);
+    assert!(html.contains("<thead>"), "a code-only header keeps its thead: {html}");
+
+    let link_header = Block::Table {
+        header: vec![vec![Inline::Link {
+            url: Url::resolved("docs/", UrlKind::Internal),
+            title: None,
+            children: vec![Inline::Text("Docs".into())],
+            is_wikilink: false,
+            has_pothole: false,
+        }]],
+        rows: vec![vec![vec![Inline::Text("1".into())]]],
+        alignments: Vec::new(),
+        header_source_line: None,
+        row_source_lines: vec![],
+    };
+    let html = render_with_meta(vec![link_header], vec![BlockMeta::default()]);
+    assert!(html.contains("<thead>"), "a link-only header keeps its thead: {html}");
+}
+
+#[test]
 fn figure_emits_data_source_line_on_outer_tag() {
     let blocks = vec![Block::Figure {
         image: Inline::Image {

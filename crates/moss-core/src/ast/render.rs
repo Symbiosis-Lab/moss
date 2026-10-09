@@ -448,19 +448,29 @@ fn render_block<H: RenderHooks + ?Sized>(
             out.push_str("<div class=\"moss-table-scroll\" tabindex=\"0\">\n");
             out.push_str("<table");
             push_source_line_attr(out, meta.source_line);
-            out.push_str(">\n<thead>\n<tr");
-            // Header `<tr>` source line. Same f91aca8fa shape — annotated
-            // when the parser tracked lines, omitted otherwise.
-            push_source_line_attr(out, *header_source_line);
-            out.push('>');
-            for (col, cell) in header.iter().enumerate() {
-                out.push_str("<th");
-                out.push_str(cell_class(col));
+            out.push_str(">\n");
+            // A header whose cells are all blank (`| | |` over `|---|---|`) is
+            // a rule, not a heading: its `<thead>` border doubles the table's
+            // top border, so the row is left out and the body stands alone.
+            let blank_header = header.iter().all(|cell| {
+                cell.iter()
+                    .all(|inline| matches!(inline, Inline::Text(t) if t.trim().is_empty()))
+            });
+            if !blank_header {
+                out.push_str("<thead>\n<tr");
+                // Header `<tr>` source line. Same f91aca8fa shape — annotated
+                // when the parser tracked lines, omitted otherwise.
+                push_source_line_attr(out, *header_source_line);
                 out.push('>');
-                render_inlines(hooks, out, cell, fnotes);
-                out.push_str("</th>");
+                for (col, cell) in header.iter().enumerate() {
+                    out.push_str("<th");
+                    out.push_str(cell_class(col));
+                    out.push('>');
+                    render_inlines(hooks, out, cell, fnotes);
+                    out.push_str("</th>");
+                }
+                out.push_str("</tr>\n</thead>\n");
             }
-            out.push_str("</tr>\n</thead>\n");
             if !rows.is_empty() {
                 out.push_str("<tbody>\n");
                 for (idx, row) in rows.iter().enumerate() {
