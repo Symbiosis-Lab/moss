@@ -90,6 +90,8 @@ fn late_ready_render_is_revealed_once_and_stale_tails_cannot_switch_stage() {
 fn late_ready_tail_cannot_repoint_shared_cell_after_another_folder_adopts_it() {
     let (_tmp_a, mp_a) = vault(&[]);
     let (_tmp_b, mp_b) = vault(&[]);
+    let _record_a = lock_for(&mp_a);
+    let _record_b = lock_for(&mp_b);
     let cell = empty_cell();
 
     adopt_server(&mp_a, &cell);
