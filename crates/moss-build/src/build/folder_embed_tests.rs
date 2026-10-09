@@ -3064,6 +3064,97 @@ fn folder_note_can_embed_its_own_folder_by_name() {
 }
 
 #[test]
+fn folder_note_self_embed_by_name_truncated_has_no_more_link() {
+    // `Opera/` falls back to the note's own folder; a truncated listing of
+    // that folder must not link to the page the reader is already on.
+    let folder = ParsedDocument {
+        url_path: "work/opera/index.html".to_string(),
+        source_path: Some("work/Opera/Opera.md".to_string()),
+        label: "Opera".to_string(),
+        title: "Opera".to_string(),
+        clean_stem: "opera".to_string(),
+        kind: PageKind::Folder,
+        ..Default::default()
+    };
+    let docs = vec![
+        folder,
+        make_doc("work/opera/a.html", "A", Some("2026-01-03")),
+        make_doc("work/opera/b.html", "B", Some("2026-01-02")),
+        make_doc("work/opera/c.html", "C", Some("2026-01-01")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        limit: Some(2),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Opera/",
+        "work/Opera/Opera.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "work/Opera/Opera.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("A") && out.contains("B"), "got: {}", out);
+    assert!(!out.contains("moss-embed-more"), "got: {}", out);
+}
+
+#[test]
+fn truncated_embed_of_a_sibling_folder_from_a_folder_note_keeps_more_link() {
+    // Guard for the self-listing fix: a different folder reached with `../`
+    // from the same folder note still links to its own page.
+    let folder = ParsedDocument {
+        url_path: "work/opera/index.html".to_string(),
+        source_path: Some("work/Opera/Opera.md".to_string()),
+        label: "Opera".to_string(),
+        title: "Opera".to_string(),
+        clean_stem: "opera".to_string(),
+        kind: PageKind::Folder,
+        ..Default::default()
+    };
+    let other = make_folder_doc("work/other/index.html", "Other");
+    let docs = vec![
+        folder,
+        other,
+        make_doc("work/other/a.html", "A", Some("2026-01-03")),
+        make_doc("work/other/b.html", "B", Some("2026-01-02")),
+        make_doc("work/other/c.html", "C", Some("2026-01-01")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        limit: Some(2),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "../Other/",
+        "work/Opera/Opera.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "work/Opera/Opera.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(
+        out.contains(r#"<p class="moss-embed-more"><a href="/work/other/">More →</a></p>"#),
+        "got: {}",
+        out
+    );
+}
+
+#[test]
 fn folder_note_self_name_prefers_a_real_subfolder_of_that_name() {
     // A real `notes/Trips/Trips/` folder keeps the folder-relative meaning.
     let docs = vec![

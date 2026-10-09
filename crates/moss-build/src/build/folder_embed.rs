@@ -1220,6 +1220,9 @@ fn render_one(
         folders: &folder_idx,
         urls: &no_urls,
     };
+    // The note being rendered, before the own-name fallback below may repoint
+    // `from` at the parent folder's `_.md`.
+    let note_from = from;
     let parent_from = folder_note_parent_from(parsed.path, from, &ctx);
     let from = parent_from.as_deref().unwrap_or(from);
     let folder_id = resolve_folder_id(parsed.path, from);
@@ -1490,14 +1493,18 @@ fn render_one(
 
     // Suppress the More link when the embed is on the folder's own index page
     // (self-referential listing). A "More →" link pointing to the page the
-    // user is already reading is meaningless. Uses `from` (the resolved path
-    // with fallback) and `is_index_source` so README.md and self-named home
-    // files are handled correctly alongside index.md.
-    let from_parent = std::path::Path::new(from)
+    // user is already reading is meaningless. Compares the note being rendered
+    // (`note_from`, not the own-name fallback's parent `_.md`) against the
+    // resolved folder, so a self-named embed like `![[Opera/]]` from
+    // `Opera/Opera.md` counts too. `is_index_source` keeps README.md and
+    // self-named home files handled alongside index.md. The directory is
+    // slugified because `folder_id_slug` is lowercased.
+    let note_dir = std::path::Path::new(note_from)
         .parent()
         .and_then(|p| p.to_str())
         .unwrap_or("");
-    let is_self_listing = is_index_source(from, all_docs) && from_parent == folder_id_slug;
+    let is_self_listing = is_index_source(note_from, all_docs)
+        && moss_core::slug::slugify_path_segments(note_dir) == folder_id_slug;
 
     // An explicit target — `children_more:` frontmatter or the embed's own
     // `more:<target>` param, unified into `parsed.more` — always wins, and

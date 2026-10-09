@@ -46,6 +46,7 @@ All notable changes to moss will be documented here.
 - A page with `breadcrumb: label` and a `date:` or `byline:` keeps its date row and byline under the title. The parent-section link above the title used to push them above it.
 - A year-grouped list, such as a `style:list` folder embed sorted by date, puts undated pages after every dated page, newest first or oldest first. Before, they led the list, which contradicted the summary style and the series order.
 - The guide's folder-embed options were written as `sort:date|date-asc|weight|title` and similar, which read as separators between options. They are now listed one by one, with a complete example.
+- A folder note that embeds its own folder by name (`![[Opera/|limit:2]]` in `Opera/Opera.md`) no longer shows a "More →" link back to the page it is on.
 - The home page's `##` and `###` sections get the same `#` permalink anchors as every other page, so a section of the home page can be linked to. The page's level-1 title and the `:::hero` title stay unanchored, and `[site] heading_anchors = false` still turns the anchors off everywhere.
 - A `:::grid` card's link is now named by its title alone. Its cover image repeated the title as alt text, so a screen reader read the title twice.
 - A `:::grid` with five or six columns lays out that many columns. Before, any count above four silently fell to one column; a count above six now builds at six with a build warning.
