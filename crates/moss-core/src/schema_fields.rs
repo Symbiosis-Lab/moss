@@ -117,7 +117,8 @@ pub struct BuiltinField {
     /// entry can name. `false` for every other field. Schema-derived rather
     /// than inferred from `one_of_members` identity — `tags` has no
     /// `one_of_members` at all, so a predicate keyed on that would silently
-    /// exclude it. Read by `name_list_fields()`.
+    /// exclude it. A site's name-list set adds its declared fields on top
+    /// (`build::terms::declared_name_list_fields`).
     pub name_list: bool,
     /// Whether this field is a term-page claim (`author_page`, `tag_page`,
     /// `editor_page`, `jury_page`, `place_page`): a page claiming the term
@@ -1088,14 +1089,6 @@ pub fn asset_field_names() -> impl Iterator<Item = &'static str> {
         .iter()
         .filter(|f| matches!(f.widget, Widget::FilePicker))
         .map(|f| f.name)
-}
-
-/// Frontmatter fields that feed a term kind's derivation loop: `author`,
-/// `tags`, `editor`, `jury`. The SSOT `build::terms::term_kinds` filters a
-/// declared `[terms.<key>] fields = [...]` list through this, so an
-/// unrecognized name is a diagnostic rather than a silent no-op.
-pub fn name_list_fields() -> impl Iterator<Item = &'static str> {
-    BUILTIN_FIELDS.iter().filter(|f| f.name_list).map(|f| f.name)
 }
 
 /// Frontmatter fields that are a term-page claim: `author_page`, `tag_page`,

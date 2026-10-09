@@ -44,10 +44,20 @@ impl From<moss_core::validation::Diagnostic> for EditorDiagnostic {
 /// - First-plugin wins: if two plugins define the same field, the first
 ///   (alphabetical) wins
 /// - Every conflict produces a log warning — no silent overwrites
+///
+/// `declared_name_lists` are the site's own name-list fields
+/// ([`crate::build::terms::declared_name_list_fields`]); each takes the
+/// `author` definition, so a declared field is validated as a list of names.
 pub fn compose_schema(
     plugins: &[crate::plugins::types::Plugin],
+    declared_name_lists: &[String],
 ) -> moss_core::schema::ContentSchema {
     let mut schema = moss_core::schema::builtin_schema();
+    if let Some(author) = schema.frontmatter.fields.get("author").cloned() {
+        for name in declared_name_lists {
+            schema.frontmatter.fields.entry(name.clone()).or_insert_with(|| author.clone());
+        }
+    }
     for plugin in plugins {
         if let Some(ref contributes) = plugin.manifest.contributes {
             if let Some(ref fm) = contributes.frontmatter {
@@ -203,5 +213,26 @@ mod url_collision_tests {
         let dir = vault_with_collision();
         let outside = std::path::Path::new("/somewhere/else/散文組.md");
         assert!(super::url_collision_diagnostic(dir.path(), outside).is_empty());
+    }
+
+    #[test]
+    fn a_site_declared_name_list_field_is_not_an_unknown_field() {
+        let frontmatter: std::collections::HashMap<String, serde_yaml::Value> = serde_yaml::from_str(
+            "conductor: Ada Example\nsoloist:\n  - Ben Sample\n",
+        )
+        .unwrap();
+        let undeclared = super::compose_schema(&[], &[]);
+        let cfg = crate::config::ConfigFile::parse("[terms.performers]\nfields = [\"conductor\", \"soloist\"]\n")
+            .unwrap();
+        let names = crate::build::terms::declared_name_list_fields(&cfg);
+        let declared = super::compose_schema(&[], &names);
+        let unknown = |schema| {
+            moss_core::validation::validate_frontmatter(&frontmatter, &schema)
+                .into_iter()
+                .filter(|d| d.path.as_deref().is_some_and(|p| p == "conductor" || p == "soloist"))
+                .count()
+        };
+        assert_eq!(unknown(undeclared), 2, "undeclared, both are unknown-field hints");
+        assert_eq!(unknown(declared), 0, "declared, neither is reported");
     }
 }
