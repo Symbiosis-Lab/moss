@@ -1050,7 +1050,7 @@ fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>)
     for line in body.lines() {
         if let Some(it) = gallery_item_span(line) {
             let (alt, alt_only) = match super::parser::alt_only_text(&it.alt) {
-                Some(head) => (head.to_string(), true),
+                Some(head) => (crate::media::extract_placement_from_alias(head).1, true),
                 None => (it.alt, false),
             };
             items.push(GalleryItem {

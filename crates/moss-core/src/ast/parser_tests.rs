@@ -2392,3 +2392,15 @@ fn escaped_pipe_before_the_bracket_end_is_caption_text() {
         other => panic!("expected Figure, got {other:?}"),
     }
 }
+
+#[test]
+fn alt_only_with_a_placement_is_a_figure_with_no_caption() {
+    match first_block("![A lake|page|](p.jpg)\n") {
+        Block::Figure { image, caption, width, .. } => {
+            assert!(caption.is_none(), "{caption:?}");
+            assert_eq!(width.as_deref(), Some("page"));
+            assert!(matches!(&image, Inline::Image { alt, .. } if alt == "A lake"), "{image:?}");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
