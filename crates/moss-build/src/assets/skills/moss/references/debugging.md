@@ -94,3 +94,5 @@ So check the build log for `frontmatter:` lines first. The usual cause is a
 field given the wrong type (`weight: high` — `weight` is an integer). Scalars
 are coerced wherever it is unambiguous, so a numeric `uid:` or `title:` (e.g.
 `uid: 12345`) works unquoted and needs no fix.
+
+A different failure drops every field on the page, not one: an unquoted value containing a colon followed by a space makes the frontmatter invalid YAML. The build prints `frontmatter: invalid YAML` and ignores the whole block, so quote such values (`title: "Notes: spring"`) and build with `--strict` so the warning fails the build.

@@ -168,7 +168,9 @@ All media via embeds — never raw `<img>`, `<video>`, or `<audio>`. The standar
 ![](track.mp3)          → audio player
 ```
 
-`![[photo.jpg]]`, `![[clip.mp4]]` and `![[track.mp3]]` are the wiki spelling of the same three embeds. Write the path relative to the page; if the file is not there moss tries the site root, then the nearest file with that name, and `%20` stands for a space. A wikilink needs only the file name. Text in the brackets plays the role the text after the pipe plays in a wikilink: `![640x360 loop](clip.mp4)` equals `![[clip.mp4|640x360 loop]]`, and on an image it is the caption. A page, table, notebook or folder embeds the same way in either spelling: `![](notes/essay.md)` equals `![[essay]]`, and `![limit:2](journal/)` equals `![[journal/|limit:2]]`. On a page, table or notebook the bracket text is ignored. One word is not interchangeable: `cover` (and the other display keywords) crops an image after the pipe but captions it in the standard brackets.
+`![[photo.jpg]]`, `![[clip.mp4]]` and `![[track.mp3]]` are the wiki spelling of the same three embeds. Write the path relative to the page; if the file is not there moss tries the site root, then the nearest file with that name, and `%20` stands for a space. A wikilink needs only the file name. Text in the brackets plays the role the text after the pipe plays in a wikilink: `![640x360 loop](clip.mp4)` equals `![[clip.mp4|640x360 loop]]`, and on an image it is the caption unless an italic line follows the image (below). A page, table, notebook or folder embeds the same way in either spelling: `![](notes/essay.md)` equals `![[essay]]`, and `![limit:2](journal/)` equals `![[journal/|limit:2]]`. On a page, table or notebook the bracket text is ignored. One word is not interchangeable: `cover` (and the other display keywords) crops an image after the pipe but captions it in the standard brackets.
+
+An image followed on the next line by one italic line becomes a figure: the bracket text is its alt text and the italic line is the visible caption, as in `![Harbour from the east pier](harbour.jpg)` then `*Dusk, 14 May*`. A caption-only image, `![Dusk, 14 May](harbour.jpg)`, keeps `alt=""` so the text is read once.
 
 A folder embed takes comma-separated options after the pipe: `limit:N`, `sort:date|date-asc|weight|title`, `style:list|summary|grid`, `group:year|none`, `depth:all` (every descendant, not just the direct children), `covers:only` (only pages that have a cover) and `more:<folder>` (where the "More" link points). `style:list` is the compact dated index; `style:summary` is rows with covers and descriptions.
 
@@ -210,6 +212,12 @@ The wiki spelling is `![[https://www.youtube.com/watch?v=dQw4w9WgXcQ|640x360]]`.
 ## Content structure
 
 The home page's title is the site's name; moss adds it as a hidden heading for screen readers unless the page opens with its own `# ` heading or a hero.
+
+A page's title is its visible heading unless the page is a nav item, since the nav bar already shows that title. A nav-item page still gets its title as a visually hidden `<h1>`, so screen readers have a heading, unless its body already supplies one. To show a visible title on any page, write a `# Heading` in the body: moss keeps it as written and it is then the page's heading.
+
+A home page or folder page lists its child pages by default. `children: false` in its frontmatter turns that listing off, and on a place page it also drops the place's term listing, while links to the place still resolve.
+
+Quote a frontmatter value that contains a colon followed by a space, such as `title: "Notes: spring"`. Unquoted, it is invalid YAML, and the whole frontmatter block is ignored rather than the one field, so every field on the page falls back to its default. The build prints `frontmatter: invalid YAML`; `moss build --strict` turns that warning into a failure.
 
 ### Shortcodes
 
@@ -389,6 +397,15 @@ A page you removed, or merged into a section of another, leaves nothing for moss
 For an address that is not a page moss tracks — a hand-made `.html` file you moved, or a link out to another site — declare it in `.moss/config.toml` instead: `[redirects]` maps the old address to the new one, both site-absolute (`"/scale-compare.html" = "/assets/scale-compare.html"`, `"/old-post/" = "/writings/new-post/"`, `"/shop/" = "https://example.com/shop"`). The new address is one the site serves or an `https://` URL. A page address or a `.html` file gets a forwarding page; any other file gets a byte copy of its target, so its target must be a file on the site (an external or page target for a non-HTML file has no static form and is reported, working only on a host that reads `_moss/redirects.json`, which lists every redirect). An old address with capitals or spaces in a folder name cannot be a file path, so it gets no forwarding page and works only on a host that reads the table. An old address the site really serves is left alone and reported. The table is optional and needs no `schema_version` change.
 
 A site kept in git must un-ignore this one file. moss's own `.moss/.gitignore` excludes `.moss/data/` as `data/*`, deliberately the one line in that file spelled so a single file underneath can still be re-included — but nothing adds that exception for you, so add `!data/redirects.json` on its own line beneath `data/*`, or `git add -f` the file once. Left ignored, an ordinary `git add .` silently drops it: a fresh clone then has no redirect history at all, so every earlier hand-declared forward for a removed or merged page is gone — there is no `uid:` for moss to reconstruct it from — while a rename since the last deploy still gets caught fresh, since the deploy record itself is tracked in git.
+
+## Search
+
+Turn on the site search with `search = true` under `[site]` in `.moss/config.toml`. The build then writes a client-side Pagefind index and shows the search button; it is off when the key is unset.
+
+```toml
+[site]
+search = true
+```
 
 ## Multilingual sites
 
