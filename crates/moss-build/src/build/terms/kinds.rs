@@ -81,48 +81,13 @@ impl TermKind {
     }
 }
 
-/// Why a name in a `[terms.<key>] fields` list cannot be a name-list field, or
-/// `None` when it can. A built-in field that is not a name list is refused,
-/// since reading its value as a list of names would break it. So is a name
-/// whose claim key (`<name>_page`) is a built-in's claim key: `tag` would claim
-/// `tag_page:`, which `tags` already owns.
-pub fn name_list_refusal(field: &str) -> Option<String> {
-    match moss_core::schema_fields::BUILTIN_FIELDS.iter().find(|b| b.name == field) {
-        Some(b) if !b.name_list => Some("a built-in field that is not a name list".to_string()),
-        Some(_) => None,
-        None => {
-            let claim = super::claim_field_key(field);
-            moss_core::schema_fields::term_claim_fields()
-                .any(|c| c == claim)
-                .then(|| format!("its claim key {claim} belongs to a built-in field"))
-        }
-    }
-}
-
-/// The name-list fields a config declares beyond the built-in five, in
-/// declaration order, deduplicated. The editor's schema adds them.
-pub fn declared_name_list_fields(cfg: &crate::config::ConfigFile) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for kind in cfg.terms_kinds() {
-        for f in kind.fields {
-            if name_list_refusal(&f).is_none() && !out.contains(&f) {
-                out.push(f);
-            }
-        }
-    }
-    out
-}
-
 /// Turn config into the kinds table [`super::derive_terms`] derives from —
 /// the one unified read of `.moss/config.toml`'s `[terms]` section
 /// ([`crate::config::ConfigFile::terms_kinds`]).
 ///
-/// The name-list set for this build is the built-in five (the `name_list`
-/// flag in [`moss_core::schema_fields::BUILTIN_FIELDS`]) plus every name a declared
-/// `fields` list names: a declared field is a name-list field for this site.
-/// A name refused by [`name_list_refusal`] (a built-in non-list field such as
-/// `title`, or a name claiming a built-in's term page) is a diagnostic, not a
-/// silent drop. A field a
+/// Every declared `fields` list is filtered through
+/// [`moss_core::schema_fields::name_list_fields`], dropping an unrecognized
+/// name with a diagnostic rather than silently ignoring it. A field a
 /// DECLARED (non-built-in) kind claims is removed from any built-in kind
 /// that would otherwise list it by default, so a field belongs to at most
 /// one kind — naming `author` in `[terms.people]` takes it out of
@@ -138,6 +103,9 @@ pub fn declared_name_list_fields(cfg: &crate::config::ConfigFile) -> Vec<String>
 /// declared `[terms.tags]` with no explicit `title` still falls back to the
 /// i18n default correctly.
 pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) -> Vec<TermKind> {
+    let recognized: std::collections::HashSet<&str> =
+        moss_core::schema_fields::name_list_fields().collect();
+
     let filtered: Vec<(crate::config::RawKind, Vec<String>)> = cfg
         .terms_kinds()
         .into_iter()
@@ -146,18 +114,15 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) 
                 .fields
                 .iter()
                 .filter(|f| {
-                    match name_list_refusal(f) {
-                        None => true,
-                        Some(reason) => {
-                            crate::build::cli_output::log_warn_problem!(
-                                "[terms.{}] names field \"{}\", which cannot be a name-list field ({}); ignoring",
-                                kind.key,
-                                f,
-                                reason
-                            );
-                            false
-                        }
+                    let ok = recognized.contains(f.as_str());
+                    if !ok {
+                        crate::build::cli_output::log_warn_problem!(
+                            "[terms.{}] names field \"{}\", which is not a name-list field; ignoring",
+                            kind.key,
+                            f
+                        );
                     }
+                    ok
                 })
                 .cloned()
                 .collect();
@@ -237,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_field_is_a_name_list_field_for_the_site() {
+    fn unknown_declared_field_is_a_diagnostic_not_a_crash() {
         let cfg =
             crate::config::ConfigFile::parse("[terms.people]\nfields = [\"editor\", \"ghost\"]\n")
                 .unwrap();
@@ -245,29 +210,9 @@ mod tests {
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert_eq!(
             people.fields,
-            vec!["editor".to_string(), "ghost".to_string()],
-            "a name no built-in knows is still a name-list field once declared"
+            vec!["editor".to_string()],
+            "an unrecognized field name is dropped with a diagnostic, not a panic"
         );
-    }
-
-    #[test]
-    fn a_built_in_field_that_is_not_a_name_list_is_refused() {
-        let cfg =
-            crate::config::ConfigFile::parse("[terms.people]\nfields = [\"editor\", \"title\"]\n")
-                .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
-        let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
-        assert_eq!(people.fields, vec!["editor".to_string()], "title is not a name list");
-    }
-
-    #[test]
-    fn a_declared_name_whose_claim_key_is_a_built_ins_is_refused() {
-        // `tag` would claim `tag_page:`, the key `tags` already owns.
-        let cfg = crate::config::ConfigFile::parse("[terms.people]\nfields = [\"tag\", \"place\"]\n")
-            .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
-        let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
-        assert!(people.fields.is_empty(), "tag and place collide with tags and location: {:?}", people.fields);
     }
 
     #[test]

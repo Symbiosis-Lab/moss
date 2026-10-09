@@ -178,3 +178,23 @@ fn extract_hero_with_no_top_level_hero_in_nested_block() {
     assert!(extraction.is_none(), "nested hero NOT extracted");
     assert_eq!(doc.blocks.len(), 1);
 }
+
+/// The `alt` key is the way to describe an `image=` or directive-form hero
+/// picture, and it overrides the alt text of a body embed. Without it the
+/// image stays decorative.
+#[test]
+fn alt_key_sets_the_hero_image_alt() {
+    let cfg = ParseConfig::default();
+
+    let (with_alt, _, _) = parse_hero("{image=cover.jpg alt=\"Harbour at dawn\"}", "", &cfg);
+    assert_eq!(with_alt.image_alt, "Harbour at dawn");
+
+    let (directive_form, _, _) = parse_hero("./cover.jpg {alt=\"Harbour at dawn\"}", "", &cfg);
+    assert_eq!(directive_form.image_alt, "Harbour at dawn");
+
+    let (embed, _, _) = parse_hero("{alt=\"Harbour at dawn\"}", "![old](cover.jpg)\n# T", &cfg);
+    assert_eq!(embed.image_alt, "Harbour at dawn");
+
+    let (without_alt, _, _) = parse_hero("{image=cover.jpg}", "", &cfg);
+    assert_eq!(without_alt.image_alt, "");
+}

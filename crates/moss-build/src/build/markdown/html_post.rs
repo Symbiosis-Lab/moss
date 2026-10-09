@@ -403,13 +403,14 @@ pub fn strip_html_tags(html: &str) -> String {
 ///
 /// Injection is article-only, and the `moss-article-title` class is a stable
 /// contract.
-pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool) -> String {
+pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool, visually_hidden: bool) -> String {
     let escaped = html_escape(title);
     let fm_attr = if emit_source_lines { r#" data-source-fm="title""# } else { "" };
+    let class = if visually_hidden { "moss-article-title visually-hidden" } else { "moss-article-title" };
     if html_body.is_empty() {
-        format!("<h1 class=\"moss-article-title\"{fm_attr}>{escaped}</h1>\n")
+        format!("<h1 class=\"{class}\"{fm_attr}>{escaped}</h1>\n")
     } else {
-        format!("<h1 class=\"moss-article-title\"{fm_attr}>{escaped}</h1>\n{html_body}")
+        format!("<h1 class=\"{class}\"{fm_attr}>{escaped}</h1>\n{html_body}")
     }
 }
 
@@ -1728,7 +1729,7 @@ mod tests {
     #[test]
     fn inject_article_title_h1_prepends_heading_with_class() {
         let body = "<p>Hello world.</p>";
-        let result = inject_article_title_h1(body, "AI 带来写作的黄金时代", false);
+        let result = inject_article_title_h1(body, "AI 带来写作的黄金时代", false, false);
         assert_eq!(
             result,
             "<h1 class=\"moss-article-title\">AI 带来写作的黄金时代</h1>\n<p>Hello world.</p>"
@@ -1736,9 +1737,18 @@ mod tests {
     }
 
     #[test]
+    fn inject_article_title_h1_visually_hidden_adds_the_utility_class() {
+        let result = inject_article_title_h1("<p>x</p>", "Stub", false, true);
+        assert_eq!(
+            result,
+            "<h1 class=\"moss-article-title visually-hidden\">Stub</h1>\n<p>x</p>"
+        );
+    }
+
+    #[test]
     fn inject_article_title_h1_html_escapes_title() {
         let body = "<p>x</p>";
-        let result = inject_article_title_h1(body, "A & B <script>alert(1)</script>", false);
+        let result = inject_article_title_h1(body, "A & B <script>alert(1)</script>", false, false);
         assert!(
             result.starts_with("<h1 class=\"moss-article-title\">A &amp; B &lt;script&gt;alert(1)&lt;/script&gt;</h1>"),
             "title not properly HTML-escaped: {}",
@@ -1749,13 +1759,13 @@ mod tests {
     #[test]
     fn inject_article_title_h1_handles_empty_body() {
         // No body content (rare but possible for stub pages).
-        let result = inject_article_title_h1("", "Stub", false);
+        let result = inject_article_title_h1("", "Stub", false, false);
         assert_eq!(result, "<h1 class=\"moss-article-title\">Stub</h1>\n");
     }
 
     #[test]
     fn inject_article_title_h1_emits_source_fm_when_flag_on() {
-        let result = inject_article_title_h1("", "My Title", true);
+        let result = inject_article_title_h1("", "My Title", true, false);
         assert!(
             result.contains(r#"data-source-fm="title""#),
             "emit_source_lines=true should add data-source-fm=\"title\", got: {result}"
@@ -1764,7 +1774,7 @@ mod tests {
 
     #[test]
     fn inject_article_title_h1_omits_source_fm_when_flag_off() {
-        let result = inject_article_title_h1("", "My Title", false);
+        let result = inject_article_title_h1("", "My Title", false, false);
         assert!(
             !result.contains("data-source-fm"),
             "emit_source_lines=false must not emit data-source-fm, got: {result}"

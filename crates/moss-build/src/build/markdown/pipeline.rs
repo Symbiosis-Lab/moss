@@ -917,6 +917,11 @@ pub fn process_markdown_file(
     for w in &doc.warnings {
         crate::build::cli_output::cli_warn!("[{}] {}", file_path, w);
     }
+    // Advisories are plain log lines, not problems: the page builds the same
+    // either way, so `--strict` does not count them.
+    for a in &doc.advisories {
+        log::warn!("[{}] {}", file_path, a);
+    }
 
     // Inline #tags are read from the author's OWN parsed
     // body — before dispatch_wikilink_embeds splices in blocks from other
@@ -1199,12 +1204,18 @@ pub fn process_markdown_file(
     // and the body H1, exactly like Obsidian with inline-title on.
     // Index/folder pages inject `<h1 class="moss-folder-title">` downstream
     // (render/html.rs, render/blocking.rs) from `doc.title`; the body is
-    // passed through untouched here. Nav pages suppress the injected title
-    // because the nav bar already surfaces it.
-    if heading.visible && !is_nav_page {
+    // passed through untouched here. A nav page's visible title is dropped
+    // because the nav bar already shows it, but the heading stays as a
+    // visually hidden `<h1>` for screen readers, unless the body supplies its
+    // own title (the same predicate the folder path uses).
+    if heading.visible {
         // A pure prepend, so it becomes a leading segment — no flat copy to
         // drift from the pieces it was built from.
-        body_plan.prepend_html(inject_article_title_h1("", &heading.text, emit_source_lines));
+        if !is_nav_page {
+            body_plan.prepend_html(inject_article_title_h1("", &heading.text, emit_source_lines, false));
+        } else if !moss_core::heading::body_supplies_title(&markdown_content) {
+            body_plan.prepend_html(inject_article_title_h1("", &heading.text, emit_source_lines, true));
+        }
     }
 
     // Look up pre-computed url_path from PageMap, falling back to inline computation

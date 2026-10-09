@@ -34,6 +34,7 @@ use super::node::Block;
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use crate::resolve::md_extract::{AssetPathSpan, MediaLineSpan, PathContainer};
 use super::shortcode::{HeroShortcode, Shortcode};
+use super::shortcode_extract::{fragment_parts, Diagnostics};
 use super::url::Url;
 
 /// Captured Hero data after extraction.
@@ -248,7 +249,7 @@ pub(crate) fn hero_body_has_overlay_content(args: &str, body: &str) -> bool {
 /// collected while re-parsing the overlay body as a fragment (e.g. a
 /// misspelled `:::name` shortcode nested inside the overlay) — see
 /// [`parse_overlay_to_blocks`].
-pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroShortcode, bool, Vec<String>) {
+pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroShortcode, bool, Diagnostics) {
     let (positional, parsed) = split_hero_directive_args(args);
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
@@ -257,6 +258,9 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     // Read once, for all three image-source branches below — a caption belongs
     // to the hero, not to whichever syntax named its image.
     let caption = parsed.get("caption").unwrap_or_default().trim().to_string();
+    // The `alt` key is the only way to describe an `image=` or directive-form
+    // hero picture; on a body embed it overrides the embed's own `![alt]`.
+    let alt_attr = parsed.get("alt").unwrap_or_default().to_string();
 
     // Priority 1: `image=` attribute.
     if let Some(image_value) = parsed.get("image") {
@@ -270,7 +274,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 } else {
                     Some(Url::unresolved(path.trim().to_string()))
                 },
-                image_alt: String::new(),
+                image_alt: alt_attr.clone(),
                 extra_images: Vec::new(),
                 attrs: attrs_str.to_string(),
                 classes,
@@ -300,7 +304,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 } else {
                     Some(Url::unresolved(path.trim().to_string()))
                 },
-                image_alt: String::new(),
+                image_alt: alt_attr.clone(),
                 extra_images: Vec::new(),
                 attrs: attrs_str.to_string(),
                 classes,
@@ -358,7 +362,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     (
         HeroShortcode {
             image: image_path.map(Url::unresolved),
-            image_alt,
+            image_alt: if alt_attr.is_empty() { image_alt } else { alt_attr },
             extra_images,
             attrs: image_attrs,
             classes,
@@ -385,12 +389,11 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
 /// overlay body) are carried out here rather than dropped, so they reach
 /// [`parse_hero`] → [`super::shortcode_extract::parse_shortcode_block`],
 /// which already merges its `Vec<String>` into `doc.warnings`.
-fn parse_overlay_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<String>) {
+fn parse_overlay_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Diagnostics) {
     if raw.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Diagnostics::default());
     }
-    let doc = parse_fragment_with_config(raw, config);
-    (doc.blocks, doc.warnings)
+    fragment_parts(parse_fragment_with_config(raw, config))
 }
 
 /// File extensions recognized as media for hero body-image fallback.

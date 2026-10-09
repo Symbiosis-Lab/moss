@@ -22,6 +22,7 @@
 
 use super::attrs::gather_multi_line_attrs;
 use super::cells::split_cells;
+use super::document::Document;
 use super::node::Block;
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use super::shortcode::{
@@ -62,6 +63,25 @@ pub struct ExtractionResult {
     /// names). Each entry is a one-line human-readable string. Caller
     /// surfaces these in the build log; presence does not abort the build.
     pub warnings: Vec<String>,
+    /// Advisories that are not build problems: the author wrote something
+    /// that parses but has no effect on the output. They are logged at the
+    /// plain warning level, outside the problem count `--strict` reads.
+    pub advisories: Vec<String>,
+}
+
+/// What a shortcode's parse reports back to the extractor. `warnings` are
+/// build problems and are counted by `--strict`; `advisories` are notes that
+/// change nothing in the output and are logged without being counted.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Diagnostics {
+    pub(crate) warnings: Vec<String>,
+    pub(crate) advisories: Vec<String>,
+}
+
+/// Split a fragment `Document` into its blocks and the diagnostics its own
+/// parse raised, so nothing a nested body reports is dropped on the way out.
+pub(crate) fn fragment_parts(doc: Document) -> (Vec<Block>, Diagnostics) {
+    (doc.blocks, Diagnostics { warnings: doc.warnings, advisories: doc.advisories })
 }
 
 /// Names recognized by the typed AST. Other names fall through to the
@@ -79,20 +99,20 @@ fn is_typed_known(name: &str) -> bool {
 /// (e.g. for `:::buttons {.primary}`, args is `{.primary}`).
 ///
 /// Returns `(Some(Shortcode), Vec<String>)` where the second element is
-/// parse-time deprecation warnings. An empty warning vec means the block
+/// parse-time deprecation warnings. An empty `warnings` means the block
 /// used only current-grammar syntax.
 fn parse_shortcode_block(
     name: &str,
     args: &str,
     body: &str,
     config: &ParseConfig,
-) -> (Option<Shortcode>, Vec<String>) {
+) -> (Option<Shortcode>, Diagnostics) {
     match name {
-        "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), vec![]),
-        "buttons" => (Some(Shortcode::Buttons(parse_buttons_body(args, body))), vec![]),
+        "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), Diagnostics::default()),
+        "buttons" => (Some(Shortcode::Buttons(parse_buttons_body(args, body))), Diagnostics::default()),
         "gallery" => {
             let (sc, warns) = parse_gallery_body(args, body);
-            (Some(Shortcode::Gallery(sc)), warns)
+            (Some(Shortcode::Gallery(sc)), Diagnostics { warnings: warns, ..Default::default() })
         }
         "hero" => {
             // Body media lines are the CANONICAL multi-slide grammar (the
@@ -103,7 +123,7 @@ fn parse_shortcode_block(
             let mut warns = fragment_warnings;
             if let Some(ref v) = sc.mobile {
                 if v != "overlay" {
-                    warns.push(format!(
+                    warns.warnings.push(format!(
                         "shortcode `:::hero` has unrecognized `mobile={v}`. \
                          Only `mobile=overlay` is recognized. The attribute is ignored."
                     ));
@@ -111,7 +131,7 @@ fn parse_shortcode_block(
             }
             if let Some(ref v) = sc.align {
                 if v != "end" {
-                    warns.push(format!(
+                    warns.warnings.push(format!(
                         "shortcode `:::hero` has unrecognized `align={v}`. \
                          Only `align=end` is recognized. The attribute is ignored."
                     ));
@@ -123,7 +143,7 @@ fn parse_shortcode_block(
             let (sc, legacy, fragment_warnings) = parse_grid(args, body, config);
             let mut warns = fragment_warnings;
             if legacy {
-                warns.push(
+                warns.warnings.push(
                     "shortcode `:::grid` uses `---` cell dividers (deprecated). Migrate to `+++`.\n\
                      `---` support will be removed in a future release."
                         .to_string(),
@@ -131,9 +151,9 @@ fn parse_shortcode_block(
             }
             (Some(Shortcode::Grid(sc)), warns)
         }
-        "recent" => (Some(Shortcode::Recent(parse_recent_args(args, body))), vec![]),
-        "apply" => (Some(Shortcode::Apply(parse_apply_args(args))), vec![]),
-        _ => (None, vec![]),
+        "recent" => (Some(Shortcode::Recent(parse_recent_args(args, body))), Diagnostics::default()),
+        "apply" => (Some(Shortcode::Apply(parse_apply_args(args))), Diagnostics::default()),
+        _ => (None, Diagnostics::default()),
     }
 }
 
@@ -205,7 +225,7 @@ fn cols_alias_warning(shortcode_name: &str) -> String {
 /// re-parsing cell bodies as fragments (e.g. a misspelled shortcode nested
 /// inside a cell) — see [`parse_cell_to_blocks`] — plus the `cols=`
 /// deprecation warning when that alias was written.
-fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, bool, Vec<String>) {
+fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, bool, Diagnostics) {
     let trimmed = args.trim();
     let (positional, attr_block): (&str, &str) = if let Some(pos) = trimmed.find('{') {
         // char-aligned: pos points to ASCII '{' from str::find — safe to slice.
@@ -270,17 +290,18 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
     // - A plain markdown cell. Parse via [`super::parser::parse`] (which
     //   re-runs extract_shortcodes so any nested `::::buttons` etc. get
     //   substituted) and drop the wrapping `Document`.
-    let mut fragment_warnings: Vec<String> = Vec::new();
+    let mut fragment = Diagnostics::default();
     let cells: Vec<Vec<Block>> = raw_cells
         .iter()
         .map(|raw| {
-            let (blocks, warns) = parse_cell_to_blocks(raw, config);
-            fragment_warnings.extend(warns);
+            let (blocks, diag) = parse_cell_to_blocks(raw, config);
+            fragment.warnings.extend(diag.warnings);
+            fragment.advisories.extend(diag.advisories);
             blocks
         })
         .collect();
     if used_cols_alias {
-        fragment_warnings.push(cols_alias_warning("grid"));
+        fragment.warnings.push(cols_alias_warning("grid"));
     }
 
     (
@@ -294,7 +315,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
             label,
         },
         found_legacy_dash,
-        fragment_warnings,
+        fragment,
     )
 }
 
@@ -308,14 +329,14 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
 /// content is appended as sibling blocks after the card. On no match,
 /// parses the cell directly via [`super::parser::parse`].
 ///
-/// Returns `(Vec<Block>, Vec<String>)`: the parsed blocks, plus any
-/// warnings collected by the fragment parse(s) underneath (e.g. a
+/// Returns `(Vec<Block>, Diagnostics)`: the parsed blocks, plus any
+/// warnings and advisories collected by the fragment parse(s) underneath (e.g. a
 /// misspelled `:::name` shortcode nested inside this cell). Each internal
 /// [`parse_fragment_with_config`] call produces its own independent
 /// `Document`, whose `warnings` would otherwise be dropped on the floor —
 /// this is the plumbing that carries them out to [`parse_shortcode_block`],
 /// which already merges its `Vec<String>` into `doc.warnings`.
-fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<String>) {
+fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Diagnostics) {
     if let Some((url, inner, trailing)) = detect_compound_link(raw) {
         let inner_trimmed = inner.trim();
         let trailing_trimmed = trailing.trim();
@@ -341,11 +362,10 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Str
             // Re-emit as standard markdown link inside a paragraph so the
             // host's link-preview pass owns the rendering.
             let linkified = format!("[{}]({})", inner_trimmed, url);
-            let doc = parse_fragment_with_config(&linkified, config);
-            return (doc.blocks, doc.warnings);
+            return fragment_parts(parse_fragment_with_config(&linkified, config));
         }
         let inner_doc = parse_fragment_with_config(inner_trimmed, config);
-        let mut warnings = inner_doc.warnings;
+        let mut diag = Diagnostics { warnings: inner_doc.warnings, advisories: inner_doc.advisories };
         let mut blocks = vec![Block::LinkCard {
             url: Url::unresolved(url),
             children: inner_doc.blocks,
@@ -353,9 +373,10 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Str
         if !trailing_trimmed.is_empty() {
             let trailing_doc = parse_fragment_with_config(trailing_trimmed, config);
             blocks.extend(trailing_doc.blocks);
-            warnings.extend(trailing_doc.warnings);
+            diag.warnings.extend(trailing_doc.warnings);
+            diag.advisories.extend(trailing_doc.advisories);
         }
-        return (blocks, warnings);
+        return (blocks, diag);
     }
     // Phase 4 PR4.5 (2026-05-28): bare-URL cell auto-promotion. When the
     // entire cell content is a single bare URL on its own line (no
@@ -372,11 +393,9 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Str
     // parse time so the bytes flow through the typed AST.
     if let Some(url) = detect_bare_url_cell(raw) {
         let linkified = format!("[]({})", url);
-        let doc = parse_fragment_with_config(&linkified, config);
-        return (doc.blocks, doc.warnings);
+        return fragment_parts(parse_fragment_with_config(&linkified, config));
     }
-    let doc = parse_fragment_with_config(raw, config);
-    (doc.blocks, doc.warnings)
+    fragment_parts(parse_fragment_with_config(raw, config))
 }
 
 /// Detect a "bare URL cell": the entire cell content (after trim) is a
@@ -1319,12 +1338,14 @@ pub fn extract_shortcodes_with_config(
     let nonce = compute_nonce(markdown);
     let mut extracted: Vec<ExtractedShortcode> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-    let output = extract_with_state(markdown, &nonce, &mut extracted, &mut warnings, config);
+    let mut advisories: Vec<String> = Vec::new();
+    let output = extract_with_state(markdown, &nonce, &mut extracted, &mut warnings, &mut advisories, config);
     ExtractionResult {
         markdown_with_placeholders: output,
         extracted,
         nonce,
         warnings,
+        advisories,
     }
 }
 
@@ -1339,6 +1360,7 @@ fn extract_with_state(
     nonce: &str,
     extracted: &mut Vec<ExtractedShortcode>,
     warnings: &mut Vec<String>,
+    advisories: &mut Vec<String>,
     config: &ParseConfig,
 ) -> String {
     let mut output = String::with_capacity(markdown.len());
@@ -1454,7 +1476,16 @@ fn extract_with_state(
                 // closer-search only matches the outer's exact arity;
                 // the recursive call then handles the inner.
                 let parsed = super::attrs::parse_attrs(args).unwrap_or_default();
-                let body_processed = extract_with_state(&body, nonce, extracted, warnings, config);
+                // A plain div renders only classes and an id, so any other
+                // key on the fence is read and then thrown away.
+                if !parsed.kvs.is_empty() {
+                    let keys: Vec<&str> = parsed.kvs.iter().map(|(k, _)| k.as_str()).collect();
+                    advisories.push(format!(
+                        "fenced div `:::{{...}}` does not render attribute(s) {}; only classes and an id reach the output",
+                        keys.join(", ")
+                    ));
+                }
+                let body_processed = extract_with_state(&body, nonce, extracted, warnings, advisories, config);
                 output.push_str(&render_div_open(&parsed.classes, parsed.id.as_deref(), None));
                 output.push_str("\n\n");
                 output.push_str(&body_processed);
@@ -1467,8 +1498,9 @@ fn extract_with_state(
             }
 
             if is_typed_known(name) {
-                if let (Some(sc), parse_warnings) = parse_shortcode_block(name, args, &body, config) {
-                    warnings.extend(parse_warnings);
+                if let (Some(sc), diag) = parse_shortcode_block(name, args, &body, config) {
+                    warnings.extend(diag.warnings);
+                    advisories.extend(diag.advisories);
                     let index = extracted.len();
                     output.push_str(&placeholder_for(&nonce, index));
                     output.push('\n');
@@ -1510,7 +1542,7 @@ fn extract_with_state(
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
             let extra_attrs = format!(r#" data-name="{}""#, html_escape_attr(name));
-            let body_processed = extract_with_state(&body, nonce, extracted, warnings, config);
+            let body_processed = extract_with_state(&body, nonce, extracted, warnings, advisories, config);
             output.push_str(&render_div_open(&classes, parsed.id.as_deref(), Some(&extra_attrs)));
             output.push_str("\n\n");
             output.push_str(&body_processed);

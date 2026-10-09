@@ -400,9 +400,10 @@ fn article_with_frontmatter_title_injects_title() {
 }
 
 /// A root-level non-index file in organized mode is a nav page; the nav bar
-/// shows its title, so the auto-injected article title is suppressed.
+/// shows its title, so the visible article title is dropped. The heading stays
+/// as a visually hidden `<h1>` so the page still has one for screen readers.
 #[test]
-fn nav_page_suppresses_injected_article_title() {
+fn nav_page_hides_injected_article_title_from_view() {
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "about.md",
@@ -420,8 +421,13 @@ fn nav_page_suppresses_injected_article_title() {
     )
     .expect("should parse");
     assert!(
-        !doc.html_content.contains("moss-article-title"),
-        "nav page must not inject an article title, got: {}",
+        !doc.html_content.contains(r#"class="moss-article-title""#),
+        "nav page must not show an article title, got: {}",
+        doc.html_content
+    );
+    assert!(
+        doc.html_content.contains(r#"<h1 class="moss-article-title visually-hidden">about</h1>"#),
+        "nav page without a body H1 needs a hidden heading, got: {}",
         doc.html_content
     );
 }
@@ -481,6 +487,34 @@ fn nav_false_restores_article_title() {
     );
 }
 
+/// A body that opens with an image and then `# Title` already supplies the
+/// page's heading, so a nav page must not add a second, hidden one.
+#[test]
+fn nav_page_with_leading_image_then_h1_has_one_h1() {
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "about.md",
+        "![cover](cover.jpg)\n\n# Harbour Notes\n\nBody.\n",
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+    )
+    .expect("should parse");
+    assert_eq!(
+        doc.html_content.matches("<h1").count(),
+        1,
+        "the authored H1 is the page's only heading, got: {}",
+        doc.html_content
+    );
+}
+
 /// Suppression drops only the AUTO-injected title; an authored body H1 stays.
 #[test]
 fn nav_page_keeps_authored_body_h1() {
@@ -507,6 +541,12 @@ fn nav_page_keeps_authored_body_h1() {
     assert!(
         doc.html_content.contains("My Heading"),
         "authored body H1 must survive, got: {}",
+        doc.html_content
+    );
+    assert_eq!(
+        doc.html_content.matches("<h1").count(),
+        1,
+        "a body H1 is the only heading, got: {}",
         doc.html_content
     );
 }

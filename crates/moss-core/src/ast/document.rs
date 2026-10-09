@@ -81,6 +81,12 @@ pub struct Document {
     /// and `unknown_shortcode_inside_a_hero_overlay_warns`.
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Non-blocking notes about author input that parses but changes nothing
+    /// in the output (e.g. a fence attribute a plain div cannot render). Kept
+    /// apart from `warnings` so the caller can log them without counting them
+    /// as build problems.
+    #[serde(default)]
+    pub advisories: Vec<String>,
 }
 
 impl Document {
@@ -99,6 +105,7 @@ impl Document {
             block_meta,
             slot_only: false,
             warnings: Vec::new(),
+            advisories: Vec::new(),
         }
     }
 
@@ -115,6 +122,7 @@ impl Document {
             block_meta,
             slot_only: false,
             warnings: Vec::new(),
+            advisories: Vec::new(),
         }
     }
 

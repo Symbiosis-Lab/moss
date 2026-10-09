@@ -369,6 +369,23 @@ fn test_css_nav_content_has_border() {
     );
 }
 
+/// A linked image that is a figure's or a card's whole content is a tile, so
+/// the prose image margin must not apply to it.
+#[test]
+fn test_css_linked_image_tile_has_no_prose_margin() {
+    let rule = get_css_rule(
+        DEFAULT_CSS,
+        "article :is(figure, .moss-card) > a > img:only-child, \
+         article :is(figure, .moss-card) > a > picture:only-child > img",
+    )
+    .expect("the linked-image tile rule should exist");
+    assert!(
+        rule.contains("margin-block: 0"),
+        "a linked image tile should drop the prose margin, got: {}",
+        rule
+    );
+}
+
 #[test]
 fn test_css_main_nav_has_bottom_margin() {
     // Main nav has bottom margin for spacing from content
@@ -1849,6 +1866,18 @@ fn template_marks_main_nav_and_nav_island_as_source_none_in_preview_mode() {
     );
 }
 
+/// Pagefind indexes the page body, so the skip link's "Skip to content" text
+/// would otherwise lead every search excerpt. The rendered shell must mark it.
+#[test]
+fn rendered_shell_keeps_skip_link_out_of_the_search_index() {
+    let processor = ShellProcessor::new();
+    let result = processor.process(ShellType::Article, make_test_vars(false));
+    assert!(
+        result.contains(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">"##),
+        "the skip link must carry data-pagefind-ignore"
+    );
+}
+
 #[test]
 fn template_marks_colophon_and_skip_link_as_source_none_in_preview_mode() {
     let processor = ShellProcessor::new();
@@ -2922,7 +2951,7 @@ fn test_template_skip_link_is_first_in_body_and_localized() {
         .expect("<body ...> tag must close");
     let after_body = &SHELL_TEMPLATE[body_tag_end..];
     assert!(
-        after_body.starts_with(r##"<a class="moss-skip-link" href="#main-content">{skip_link_label}</a>"##),
+        after_body.starts_with(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">{skip_link_label}</a>"##),
         "Skip link must be the first element after <body ...>, got: {:?}",
         &after_body[..after_body.len().min(120)]
     );
@@ -2938,7 +2967,7 @@ fn test_template_skip_link_is_first_in_body_and_localized() {
     };
     let result = processor.process(ShellType::Page, vars);
     assert!(
-        result.contains(r##"<a class="moss-skip-link" href="#main-content">跳到内容</a>"##),
+        result.contains(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">跳到内容</a>"##),
         "Skip link should render with the localized label"
     );
 }

@@ -7685,7 +7685,7 @@ mod place_locator_position_tests {
             }
         });
         let mut plan = render_segmented(&doc, &DefaultHooks::new());
-        plan.prepend_html(inject_article_title_h1("", "Research", false));
+        plan.prepend_html(inject_article_title_h1("", "Research", false, false));
         plan
     }
 

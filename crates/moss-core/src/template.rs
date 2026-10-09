@@ -50,17 +50,12 @@ pub enum TemplateKind {
 /// dateless page is how moss renders an undated section or note; inventing
 /// the field would put a date line on every page made from that template.
 ///
-/// `declared_claim_keys` are the site's own `<field>_page:` keys, one per
-/// declared name-list field (`claim_field_key` over `declared_name_list_fields`).
-/// Callers must pass them; the built-in claims are always dropped.
-///
 /// `now` is a caller-supplied `YYYY-MM-DD` string (moss-core has no `chrono`
 /// dependency by convention — see `date.rs`) so this stays pure and
 /// deterministic; the Tauri I/O boundary reads the clock, not this function.
 pub fn instantiate_template_frontmatter(
     mut frontmatter: HashMap<String, Value>,
     now: &str,
-    declared_claim_keys: &[String],
 ) -> HashMap<String, Value> {
     frontmatter.remove("title");
     frontmatter.remove("uid");
@@ -70,9 +65,6 @@ pub fn instantiate_template_frontmatter(
     // the 2026-09-05 log: `測試獎.md` sent to /awards/writing-2/).
     frontmatter.remove("url");
     for claim in schema_fields::term_claim_fields().chain(["translationKey", "syndicated", "origin"]) {
-        frontmatter.remove(claim);
-    }
-    for claim in declared_claim_keys {
         frontmatter.remove(claim);
     }
     if frontmatter.contains_key("date") {
@@ -105,7 +97,7 @@ mod tests {
         }
         fm.insert("syndicated".to_string(), Value::Sequence(vec![Value::String("https://m/x".to_string())]));
 
-        let out = instantiate_template_frontmatter(fm, "2026-09-03", &[]);
+        let out = instantiate_template_frontmatter(fm, "2026-09-03");
 
         for identity in ["title", "uid", "url", "author_page", "tag_page", "editor_page", "jury_page", "place_page", "translationKey", "syndicated", "origin"] {
             assert_eq!(out.get(identity), None, "`{identity}` names the captured page, not the instance");
@@ -122,7 +114,7 @@ mod tests {
         cascade.insert(Value::String("nav".to_string()), Value::Bool(true));
         fm.insert("cascade".to_string(), Value::Mapping(cascade.clone()));
 
-        let out = instantiate_template_frontmatter(fm, "2026-09-03", &[]);
+        let out = instantiate_template_frontmatter(fm, "2026-09-03");
 
         assert_eq!(out.get("layout"), Some(&Value::String("article".to_string())));
         assert_eq!(
@@ -133,22 +125,10 @@ mod tests {
     }
 
     #[test]
-    fn instantiate_drops_a_site_declared_claim_too() {
-        let mut fm = HashMap::new();
-        fm.insert("conductor_page".to_string(), Value::String("Ada Example".to_string()));
-        fm.insert("layout".to_string(), Value::String("article".to_string()));
-
-        let out = instantiate_template_frontmatter(fm, "2026-09-03", &["conductor_page".to_string()]);
-
-        assert_eq!(out.get("conductor_page"), None, "a copy would otherwise claim the captured page's person");
-        assert_eq!(out.get("layout"), Some(&Value::String("article".to_string())));
-    }
-
-    #[test]
     fn instantiate_adds_no_date_when_the_template_has_none() {
         let mut fm = HashMap::new();
         fm.insert("layout".to_string(), Value::String("page".to_string()));
-        let out = instantiate_template_frontmatter(fm, "2026-09-03", &[]);
+        let out = instantiate_template_frontmatter(fm, "2026-09-03");
         assert_eq!(out.get("date"), None);
     }
 }

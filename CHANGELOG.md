@@ -38,7 +38,11 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - Empty-folder and text-page previews no longer wait for title-only social sharing images to render. Their images finish in the background before publishing; composed image covers retain their existing render and fallback behavior.
-
+- A hero image can carry alt text from an `alt` key: `:::hero {image=cover.jpg alt="…"}` sets the picture's `alt`, including for the `image=` form that had no way to describe it. A hero without `alt` keeps the text written on its embed, or `alt=""` when there is none, which is correct for a decorative hero.
+- A page listed in the nav bar keeps a level-1 heading for screen readers. Its visible title stays in the nav bar, and the heading is visually hidden, the way folder pages already do it. A body that opens with its own `# H1` is unchanged.
+- An image that is the whole content of a link inside a figure or card no longer gets the prose image margin, which opened a gap around card thumbnails. The feed description of a nav-bar page now begins with its title heading, as articles outside the nav already do.
+- A plain fenced div (`:::{...}`) that carries `lang=` or `data-*` keys now logs an advisory naming the keys. Those keys are not rendered, and the advisory does not count toward `--strict`.
+- The skip link is marked `data-pagefind-ignore`, so "Skip to content" no longer opens search excerpts.
 - On a wrapped site-name masthead, the nav links on row 2 now pack at the left edge with normal spacing between them instead of spreading across the row; the search, language and theme toggles stay at the right edge. A long site name on a wrapped masthead now wraps onto a second line in row one instead of being cut off at the edge.
 - When a plain site-name masthead wraps to two rows, row 1 now holds the site name alone and row 2 holds the links with the search, language and theme toggles at its right end. The toggles used to sit on row 1 beside the name.
 - The places explorer root on a site with nav items now shows the same nav header as every other page. It used to draw a breadcrumb trail there even though the nav bar was present. A site without nav items keeps the trail, and a homepage with `breadcrumb: true` still shows one.

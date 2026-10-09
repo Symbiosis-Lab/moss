@@ -4350,6 +4350,14 @@ article img {
   margin-block: calc(var(--moss-read-line) * 1.25);
 }
 
+/* An image that is the whole content of a link inside a figure or card is a
+   tile: the figure or card already spaces it, so the prose margin above would
+   open a gap around the tile. */
+article :is(figure, .moss-card) > a > img:only-child,
+article :is(figure, .moss-card) > a > picture:only-child > img {
+  margin-block: 0;
+}
+
 /* Standalone images — Step 8 of the structural-html-emission migration.
    Markdown `![]()` paragraphs are emitted in one of two shapes depending
    on whether a caption-pattern detector fires:

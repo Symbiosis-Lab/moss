@@ -2189,7 +2189,7 @@ fn parses_recent_with_since_and_count() {
         "",
         &ParseConfig::default(),
     );
-    assert!(warns.is_empty());
+    assert!(warns.warnings.is_empty());
     match sc.expect("expected Some(Shortcode)") {
         Shortcode::Recent(args) => {
             assert_eq!(args.since.as_deref(), Some("2026-04-01"));
@@ -2229,7 +2229,7 @@ fn captures_recent_body_as_fallback_markdown() {
 #[test]
 fn recent_with_no_args_yields_all_none() {
     let (sc, warns) = parse_shortcode_block("recent", "", "", &ParseConfig::default());
-    assert!(warns.is_empty());
+    assert!(warns.warnings.is_empty());
     match sc.expect("expected Some(Shortcode)") {
         Shortcode::Recent(args) => {
             assert!(args.since.is_none());
@@ -2249,7 +2249,7 @@ fn parses_recent_with_all_three_attrs() {
         "",
         &ParseConfig::default(),
     );
-    assert!(warns.is_empty());
+    assert!(warns.warnings.is_empty());
     match sc.expect("expected Some(Shortcode)") {
         Shortcode::Recent(args) => {
             assert_eq!(args.since.as_deref(), Some("2026-01-01"));
@@ -2304,7 +2304,7 @@ fn parses_apply_directive() {
 #[test]
 fn apply_parse_bare_has_none_overrides() {
     let (sc, warns) = parse_shortcode_block("apply", "", "", &ParseConfig::default());
-    assert!(warns.is_empty());
+    assert!(warns.warnings.is_empty());
     match sc.expect("expected Some(Shortcode)") {
         Shortcode::Apply(args) => {
             assert!(args.placeholder.is_none());
