@@ -6941,7 +6941,9 @@ article a:where(:not(.moss-btn)):focus {
   font: inherit;
   cursor: pointer;
 }
-.moss-hero[data-align="end"] .moss-hero-pause {
+/* Content at the end puts the control at the start, unless captions live
+   there: then it stays at the end corner. */
+.moss-hero[data-align="end"]:not(:has(.moss-hero-captions)) .moss-hero-pause {
   inset-inline: 0.5rem auto;
 }
 @media (width < 48rem) { /* the panel spans the block end (stacked or overlaid): keep the control on the picture */
@@ -7054,6 +7056,22 @@ article a:where(:not(.moss-btn)):focus {
     z-index: 2; /* not auto: else this flex item paints below the scrim */
     flex: none; /* hugs its own content; never stretch to the hero's height */
   }
+
+  /* Captions join the same bottom stack, directly above the content, so the
+     two can never overlap. Only `align=end` keeps them apart sideways (caption
+     bottom-start, content bottom-end), which is why that case stays absolute. */
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]):not([data-align="end"]) > .moss-hero-captions {
+    position: static;
+    flex: none;
+    align-self: flex-start;
+    inline-size: min(36rem, 100%);
+  }
+
+  /* With captions the pause control stays at the bottom end: leave it room
+     beside end-aligned content. */
+  .moss-hero[data-align="end"]:has(.moss-hero-captions):has(.moss-hero-pause) .moss-hero-content {
+    margin-inline-end: 3.75rem;
+  }
 }
 
 /* Responsive — tablet */
@@ -7165,6 +7183,22 @@ article a:where(:not(.moss-btn)):focus {
     font-size: var(--moss-size-sm);
   }
 
+  /* Stacked: the slide captions are a credit line between the picture and the
+     text block, in flow, page colours, no scrim. The overlay block below puts
+     them back over the picture (same specificity, later). */
+  .moss-hero:has(.moss-hero-content) .moss-hero-captions {
+    position: static;
+    flex: none;
+    max-inline-size: none;
+    padding: var(--moss-space-sm) var(--moss-container-padding) 0;
+    background: none;
+  }
+  .moss-hero:has(.moss-hero-content) .moss-hero-captions > .moss-hero-caption {
+    color: var(--moss-color-muted);
+    font-size: var(--moss-size-sm);
+    text-shadow: none;
+  }
+
   /* Stacked layout: reduce the section's bottom margin — the text block
      itself provides visual separation from the content below. */
   .moss-hero:has(.moss-hero-content) {
@@ -7185,7 +7219,7 @@ article a:where(:not(.moss-btn)):focus {
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
-    min-block-size: min(60vb, 480px);
+    min-block-size: var(--moss-hero-max-height, min(60vb, 480px));
     max-block-size: none;
     padding-block-start: var(--moss-hero-mobile-band, min(45vb, 320px));
   }
@@ -7202,6 +7236,17 @@ article a:where(:not(.moss-btn)):focus {
 
   .moss-hero[data-mobile="overlay"]::before {
     content: '';
+  }
+
+  /* Captions sit in the bottom stack, directly above the content, over the
+     picture with the scrim: in flow, so they cannot meet the content. */
+  .moss-hero[data-mobile="overlay"] .moss-hero-captions {
+    padding: 2.5rem 5% 1rem;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
+  }
+  .moss-hero[data-mobile="overlay"] .moss-hero-captions > .moss-hero-caption {
+    color: #ffffff;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content {

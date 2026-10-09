@@ -101,6 +101,7 @@ const GATE_PORT_KEYS = [
   'places-explorer-vertical',
   'places-explorer-single',
   'hero-pause',
+  'hero-caption-stack',
   'bridge-capture',
   'contents-ruler',
   'nav-split-order',

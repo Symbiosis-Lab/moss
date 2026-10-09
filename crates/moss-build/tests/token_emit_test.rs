@@ -116,3 +116,25 @@ fn heading_rules_consume_font_heading_weight_token() {
         count
     );
 }
+
+/// The phone overlay floor reads the same token as the desktop one, so a site's
+/// `--moss-hero-max-height: 100svh` can fill the first screen; and slide
+/// captions are in-flow items of the hero's column rather than absolute boxes
+/// that land on the hero's words. The painted result is pinned by the
+/// `hero-caption-stack` render gate; this keeps the declarations from drifting.
+#[test]
+fn hero_phone_overlay_floor_and_caption_stack_declarations() {
+    let css = fs::read_to_string(site_css_path()).expect("site.css must exist");
+    assert!(
+        css.contains("min-block-size: var(--moss-hero-max-height, min(60vb, 480px));"),
+        "mobile overlay floor must honour --moss-hero-max-height"
+    );
+    assert!(
+        css.contains(r#".moss-hero:has(.moss-hero-content):not([data-fit="plate"]):not([data-align="end"]) > .moss-hero-captions {"#),
+        "wide captions must join the flex stack unless align=end"
+    );
+    assert!(
+        css.contains(r#".moss-hero[data-align="end"]:not(:has(.moss-hero-captions)) .moss-hero-pause"#),
+        "the pause moves to the start only when no captions live there"
+    );
+}

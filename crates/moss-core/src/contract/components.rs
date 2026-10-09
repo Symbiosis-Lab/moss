@@ -1242,7 +1242,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Shared wrapper for the per-slide captions of a multi-slide hero, after the slides and outside the `<section>`. Each slide's caption is a `.moss-hero-caption` carrying `data-slide`; the container is `aria-live=\"polite\"` so a slide change is announced.",
+        description: "Shared wrapper for the per-slide captions of a multi-slide hero, after the slides and outside the `<section>`. Each slide's caption is a `.moss-hero-caption` carrying `data-slide`; the container is `aria-live=\"polite\"` so a slide change is announced. Placement: with hero content, in the hero's bottom stack directly above it (over the picture with a scrim; a quiet credit under the picture in a stacked phone hero), except `align=end` on a wide screen, where it sits at the bottom start beside the end-aligned content.",
     },
     ComponentEntry {
         class: "moss-parent-label",

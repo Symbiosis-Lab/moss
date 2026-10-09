@@ -3223,3 +3223,39 @@ precision = "city"
 `,
   },
 };
+
+// ── Hero captions stack with the hero content ────────────────────────────────
+// A multi-slide hero's captions and its overlay content (a link) used to be
+// two absolutely-placed boxes at the same bottom corner, drawn on top of each
+// other unless `align=end` pushed the content aside. Whether they overlap is a
+// painted-layout question. A function for the same reason as videoEmbedShapeGate:
+// ffmpeg is only needed by the config that builds this site.
+// Served by playwright/hero-caption-stack.config.ts.
+export function heroCaptionStackGate(): ScratchSiteSpec {
+  const hero = (opts: string) => `---
+title: Stack
+uid: "hcs00001"
+---
+
+:::hero {${opts}}
+![[a.mp4|*Title one* · Venue · 2018]]
+![[b.mp4|*Title two* · Venue · 2025]]
+[See the work →](/work/)
+:::
+
+Body text.
+`;
+  return {
+    name: "hero-caption-stack-gate",
+    files: {
+      "a.mp4": syntheticTestClip(640, 360),
+      "b.mp4": syntheticTestClip(640, 360),
+      "end.md": hero("header=over align=end mobile=overlay"),
+      "start.md": hero("header=over mobile=overlay"),
+      "stacked.md": hero("header=over"),
+      "work.md": `---\ntitle: Work\nuid: "hcs00002"\n---\n\nWork.\n`,
+      ".moss/config.toml": CONFIG_TOML,
+      ".moss/theme/style.css": null,
+    },
+  };
+}
