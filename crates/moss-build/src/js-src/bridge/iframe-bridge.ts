@@ -1092,6 +1092,7 @@ import { installCaptureResponder } from "./capture/responder";
           window.parent.postMessage(
             {
               type: "moss-morph-failed",
+              gen,
               url,
               error: "script-changed",
               changedScripts,
@@ -1272,6 +1273,7 @@ import { installCaptureResponder } from "./capture/responder";
         window.parent.postMessage(
           {
             type: "moss-morph-failed",
+            gen,
             url,
             error: detail,
             initCount: (window as unknown as { __bridgeInitCount?: number })
