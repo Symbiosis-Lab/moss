@@ -37,6 +37,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Media with `screen` width stays inside the text column in vertical layouts instead of extending into its padding.
 - When a plain site-name masthead wraps to two rows, row 1 now holds the site name alone and row 2 holds the links with the search, language and theme toggles at its right end. The toggles used to sit on row 1 beside the name.
 - The places explorer root on a site with nav items now shows the same nav header as every other page. It used to draw a breadcrumb trail there even though the nav bar was present. A site without nav items keeps the trail, and a homepage with `breadcrumb: true` still shows one.
 - A Markdown table whose header row is blank (`| | |` over `|---|---|`) no longer draws its empty header as a second border under the table's top border. The body rows render as before, and a header with any text is unchanged.

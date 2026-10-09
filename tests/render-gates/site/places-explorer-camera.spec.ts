@@ -399,9 +399,7 @@ test("regional tiles are absent at the world's own cover zoom and present past i
     "ready",
     { timeout: 10000 },
   );
-  await page.waitForTimeout(500); // tile fetch + position settle
-  const count = await page.locator(".moss-places-tiles > .moss-places-tile").count();
-  expect(count, "expected a regional tile past the world's own detail ceiling").toBeGreaterThan(0);
+  await expect(page.locator(".moss-places-tiles > .moss-places-tile").first()).toBeVisible();
 });
 
 /** `camera.ts`'s own `detailMaxZoom`, reimplemented from its published formula rather than imported — the same cross-check `pattersonProject` above already applies to the projection itself. `WORLD_WIDTH` comes straight from `pattersonProject` rather than a second hardcoded constant: at longitude 180 its own `x` is exactly the full canvas width (`width/2 + scale*PI`, and `scale*PI === width/2` by `projection.ts`'s own derivation). */
@@ -422,7 +420,8 @@ test("the tile fade follows camera zoom without a CSS transition", async ({ page
   // Inside the last 20% of the world's own zoom range — `tileFadeOpacity`'s
   // own fade band (`tiles.ts`) — so the transition is actually doing
   // something at this camera, not merely declared and unused.
-  const fadeBandZoom = detailMaxZoomFor(viewport) * 0.9;
+  // Regional detail also takes over at the world bitmap's 1.6× zoom cap.
+  const fadeBandZoom = Math.min(detailMaxZoomFor(viewport), 1.6) * 0.9;
   const center = pattersonProject(0, 0);
   const gotoFadeBand = () => page.goto(`places/?p=patterson&z=${fadeBandZoom}&x=${center.x}&y=${center.y}`, { waitUntil: "domcontentloaded" });
   const waitReady = () =>

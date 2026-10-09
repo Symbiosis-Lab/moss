@@ -207,54 +207,58 @@ test("the terrain lighting takes each theme's own highlight and shadow strength"
 // The approved dot is 8 px across (a 4 px radius) on a map shown 720 px
 // wide. Sized in viewBox units it shrank with the floated locator, to
 // about 4 px on a desktop and on a phone alike.
-for (const [device, viewport] of [
-  ["desktop", { width: 1440, height: 900 }],
-  ["phone", { width: 390, height: 844 }],
-] as const) {
-  test(`the locator's place dot stays 8 px across on a ${device}`, async ({ page }) => {
-    await page.setViewportSize(viewport);
-    await page.goto("./", { waitUntil: "domcontentloaded" });
-    await page.locator(".moss-place-locator svg").scrollIntoViewIfNeeded();
-    const dot = page.locator(".moss-place-locator [data-map-marker]:not([data-map-globe-marker])").first();
-    const { x, y, color, mapWidth } = await dot.evaluate((element) => {
-      const marker = element as SVGGraphicsElement;
-      const svg = marker.ownerSVGElement!;
-      const box = marker.getBBox();
-      const point = svg.createSVGPoint();
-      point.x = box.x + box.width / 2;
-      point.y = box.y + box.height / 2;
-      const screen = point.matrixTransform(svg.getScreenCTM()!);
-      const style = getComputedStyle(marker);
-      const color = style.stroke && style.stroke !== "none" ? style.stroke : style.fill;
-      return { x: screen.x, y: screen.y, color, mapWidth: svg.getBoundingClientRect().width };
+test.describe("static locator without JavaScript", () => {
+  test.use({ javaScriptEnabled: false });
+  for (const [device, viewport] of [
+    ["desktop", { width: 1440, height: 900 }],
+    ["phone", { width: 390, height: 844 }],
+  ] as const) {
+    test(`the locator's place dot stays 8 px across on a ${device}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("./", { waitUntil: "domcontentloaded" });
+      await page.locator(".moss-place-locator .moss-place-map > svg").scrollIntoViewIfNeeded();
+      const dot = page.locator(".moss-place-locator [data-map-marker]:not([data-map-globe-marker])").first();
+      const { x, y, color, mapWidth } = await dot.evaluate((element) => {
+        const marker = element as SVGGraphicsElement;
+        const svg = marker.ownerSVGElement!;
+        const box = marker.getBBox();
+        const point = svg.createSVGPoint();
+        point.x = box.x + box.width / 2;
+        point.y = box.y + box.height / 2;
+        const screen = point.matrixTransform(svg.getScreenCTM()!);
+        const style = getComputedStyle(marker);
+        const color = style.stroke && style.stroke !== "none" ? style.stroke : style.fill;
+        return { x: screen.x, y: screen.y, color, mapWidth: svg.getBoundingClientRect().width };
+      });
+      expect(mapWidth, "the locator is shown well under the 720 px it is drawn for").toBeLessThan(400);
+      const shot = await page.screenshot({ clip: { x: x - 12, y: y - 12, width: 24, height: 24 } });
+      const matching = await page.evaluate(
+        async ([png, target]) => {
+          const image = new Image();
+          image.src = `data:image/png;base64,${png}`;
+          await image.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = image.width;
+          canvas.height = image.height;
+          const context = canvas.getContext("2d")!;
+          context.drawImage(image, 0, 0);
+          const [r, g, b] = target.match(/\d+/g)!.map(Number);
+          const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          let count = 0;
+          for (let index = 0; index < data.length; index += 4) {
+            if (Math.abs(data[index] - r) + Math.abs(data[index + 1] - g) + Math.abs(data[index + 2] - b) < 48) count += 1;
+          }
+          return count / (image.width / 24) ** 2;
+        },
+        [shot.toString("base64"), color] as const,
+      );
+      const diameter = 2 * Math.sqrt(matching / Math.PI);
+      expect(diameter, `the dot is ${diameter.toFixed(1)} px across`).toBeGreaterThan(7);
+      expect(diameter, `the dot is ${diameter.toFixed(1)} px across`).toBeLessThan(11);
     });
-    expect(mapWidth, "the locator is shown well under the 720 px it is drawn for").toBeLessThan(400);
-    const shot = await page.screenshot({ clip: { x: x - 12, y: y - 12, width: 24, height: 24 } });
-    const matching = await page.evaluate(
-      async ([png, target]) => {
-        const image = new Image();
-        image.src = `data:image/png;base64,${png}`;
-        await image.decode();
-        const canvas = document.createElement("canvas");
-        canvas.width = image.width;
-        canvas.height = image.height;
-        const context = canvas.getContext("2d")!;
-        context.drawImage(image, 0, 0);
-        const [r, g, b] = target.match(/\d+/g)!.map(Number);
-        const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
-        let count = 0;
-        for (let index = 0; index < data.length; index += 4) {
-          if (Math.abs(data[index] - r) + Math.abs(data[index + 1] - g) + Math.abs(data[index + 2] - b) < 48) count += 1;
-        }
-        return count / (image.width / 24) ** 2;
-      },
-      [shot.toString("base64"), color] as const,
-    );
-    const diameter = 2 * Math.sqrt(matching / Math.PI);
-    expect(diameter, `the dot is ${diameter.toFixed(1)} px across`).toBeGreaterThan(7);
-    expect(diameter, `the dot is ${diameter.toFixed(1)} px across`).toBeLessThan(11);
-  });
-}
+  }
+
+});
 
 // Below the 48rem mobile breakpoint the locator un-floats and is documented
 // to run the column's own full width (authoring.md), the same rule every

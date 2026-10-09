@@ -4656,7 +4656,7 @@ article.container > [data-width] {
  * physical padding-right: an over-constrained box drops its end-side margin,
  * so left-to-right pages position from the left and right-to-left pages from
  * the right, and the extra width reaches the window's right edge in both. */
-article.container > [data-width="screen"] {
+:where(body:not([data-typesetting="vertical"])) article.container > [data-width="screen"] {
   inline-size: calc(100cqi + var(--moss-sidenote-inset, 0px));
   margin-left: calc((100% - 100cqi) / 2);
   margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));

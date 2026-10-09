@@ -112,8 +112,11 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
-test("the visible label count respects the area budget and its minimum", async ({ page }) => {
-  await gotoReady(page);
+test("the world view fills the minimum label budget without exceeding the area budget", async ({ page }) => {
+  // Opening now fits the site's two nearby places; this budget fixture needs
+  // the world view, with enough collision-free candidates to fill it.
+  const center = pattersonProject(0, 0);
+  await gotoReady(page, `?p=patterson&z=1&x=${center.x}&y=${center.y}`);
   const viewportBox = (await page.locator(".moss-places-viewport").boundingBox())!;
   const AREA_BUDGET_PX2 = 45000;
   const MIN_COUNT = 5;
