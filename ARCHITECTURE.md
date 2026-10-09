@@ -79,7 +79,7 @@ Every file over 1000 production lines (tests excluded, counted the same way `scr
 <!-- ratchet:known-debt:start -->
 | File | Prod lines | Disposition |
 |---|---:|---|
-| `crates/moss-core/src/contract/components.rs` | 4664 | One ComponentEntry per emitted moss-* class in a single const table, the federated contract's Source 2; splitting it by category would need the components_sync_test scanner taught to scan multiple files, which nothing currently proposes. |
+| `crates/moss-core/src/contract/components.rs` | 4735 | One ComponentEntry per emitted moss-* class in a single const table, the federated contract's Source 2; splitting it by category would need the components_sync_test scanner taught to scan multiple files, which nothing currently proposes. |
 | `crates/moss-build/src/build/render/blocking.rs` | 3466 | The blocking build coordinates source readiness, parsing, typed document preparation, and distinct authored, term, and place bodies. Folder planning and common page chrome now have single owners; further reduction should give document preparation an explicit result consumed by those body renderers. |
 | `crates/moss-build/src/build/media/image.rs` | 3089 | Mirrors video.rs's cache-then-convert-then-CAS shape for the image side (WebP encode, EXIF, resize, CAS store); retires the same way video.rs does, by factoring the shared cache/CAS/dispatch skeleton the module doc says the two files mirror by hand today. |
 | `crates/moss-build/src/build/markdown/pipeline.rs` | 2257 | Already shed its ~860-line legacy event-pipeline in PR7a-fragment per its own module doc; what remains is the sole markdown-to-HTML entry point plus URL classification/prettification, so the next cut is splitting URL handling out rather than deleting more dead code. |

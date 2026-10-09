@@ -70,6 +70,7 @@ GATES_BUILD=(
   share-card
   notebook-loads
   nav-island
+  contents-ruler
   edge-clamp
   vertical-nav-chrome
   video-embed-shape
