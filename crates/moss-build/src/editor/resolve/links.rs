@@ -110,16 +110,8 @@ pub fn resolve_url_for_file_inner(
     // Load article map
     let map = ArticleMap::load(&moss_dir)?;
 
-    // Generate candidate URL paths and look up each in the article map
-    let candidates = source_to_url_candidates(rel_path);
-    for candidate in &candidates {
-        if map.articles.contains_key(candidate) {
-            return Ok(Some(format!("/{}", candidate)));
-        }
-    }
-
-    // Look up by source_path field. Handles slugified URLs where the source
-    // filename differs from the URL key (e.g., Chinese filenames → English slugs).
+    // Resolve by source ownership, not a URL guessed from its filename: that
+    // URL may belong to another article while this file is a folder home.
     for article in map.articles.values() {
         if article.source_path == rel_path {
             return Ok(Some(format!("/{}", article.url_path)));
@@ -316,7 +308,12 @@ pub fn resolve_expected_url_for_file(
     // A home file (index stem, lang-suffixed index, or self-named folder note)
     // is served AT its containing folder's URL — collapse it to the parent dir
     // so it doesn't gain a spurious nested `<folder>/<stem>/` path.
-    let parent_name = parent_dir.rsplit('/').next().unwrap_or("");
+    let root = crate::vault_root::VaultRoot::resolve(folder_path);
+    let parent_name = if parent_dir.is_empty() {
+        root.name()
+    } else {
+        parent_dir.rsplit('/').next().unwrap_or("")
+    };
     let dir_like: &str = if moss_core::home::is_home_file(file_stem, parent_name) {
         parent_dir
     } else {
@@ -345,48 +342,6 @@ pub fn resolve_expected_url_for_file(
     );
     let pretty = to_pretty_url(&mapped);
     Some(format!("/{}", pretty))
-}
-
-/// Generate candidate URL paths from a source file path.
-///
-/// Given a relative source file path (e.g., `"articles/post.md"`), returns
-/// candidate URL paths that might exist as keys in the article map.
-///
-/// # Examples
-/// - `"articles/post.md"` -> `["articles/post/", "articles/post"]`
-/// - `"articles/post/index.md"` -> `["articles/post/"]`
-/// - `"index.md"` -> `[""]`
-pub fn source_to_url_candidates(source_path: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
-
-    // Handle index.md files (directory-style)
-    if source_path == "index.md" || source_path == "index.markdown" {
-        // Root index -> root URL
-        candidates.push(String::new());
-        return candidates;
-    }
-
-    if let Some(dir) = source_path
-        .strip_suffix("/index.md")
-        .or_else(|| source_path.strip_suffix("/index.markdown"))
-    {
-        // "articles/post/index.md" -> "articles/post/"
-        candidates.push(format!("{}/", dir));
-        return candidates;
-    }
-
-    // Handle regular .md files
-    if let Some(stem) = source_path
-        .strip_suffix(".md")
-        .or_else(|| source_path.strip_suffix(".markdown"))
-    {
-        // "articles/post.md" -> ["articles/post/", "articles/post"]
-        // (directory-style pretty URL is more common, try first)
-        candidates.push(format!("{}/", stem));
-        candidates.push(stem.to_string());
-    }
-
-    candidates
 }
 
 /// Generate candidate source file paths from a URL path.
@@ -576,6 +531,54 @@ mod tests {
              resolve to a URL after a build completes — got None, meaning it \
              was excluded from the article/page map entirely"
         );
+    }
+
+    #[test]
+    fn built_root_home_resolves_by_source_before_other_articles_url() {
+        crate::infra::home::with_moss_home(|_| {
+            let project = repo_temp();
+            let folder_path = project.path().join("garden");
+            fs::create_dir_all(&folder_path).unwrap();
+            fs::write(folder_path.join("garden.md"), "").unwrap();
+            fs::write(
+                folder_path.join("Other.md"),
+                "---\ndate: 2026-01-01\nurl: garden\n---\n# Other\n",
+            ).unwrap();
+
+            assert_eq!(
+                super::resolve_expected_url_for_file("garden.md", &folder_path),
+                Some("/".to_string()),
+            );
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(crate::build::run_pipeline(crate::build::PipelineConfig {
+                root: crate::vault_root::VaultRoot::resolve(&folder_path),
+                progress: crate::build::stdout_sink(),
+                plugins: crate::build::PluginMode::Skip,
+                watch: false,
+                start_server: false,
+                host: crate::build::ports::host::test_host_ports(),
+                trigger: crate::build::BuildTrigger::Full,
+                exits_after_build: true,
+                site_url_override: None,
+                server_port: None,
+                admission_epoch: None,
+                live_port: None,
+            })).unwrap();
+
+            let map = ArticleMap::load(&folder_path.join(".moss")).unwrap();
+            assert_eq!(map.pages.get(""), Some(&"garden.md".to_string()));
+            assert_eq!(map.articles.get("garden/").unwrap().source_path, "Other.md");
+            assert_eq!(super::source_path_for_url(&map, "/"), Some("garden.md".to_string()));
+            assert_eq!(
+                resolve_url_for_file_inner("garden.md", &folder_path, &served(&folder_path)).unwrap(),
+                Some("/".to_string()),
+            );
+            assert_eq!(
+                resolve_url_for_file_inner("Other.md", &folder_path, &served(&folder_path)).unwrap(),
+                Some("/garden/".to_string()),
+            );
+        });
     }
 
     /// A self-named folder note (`Research/Research.md`, the index page for
@@ -913,6 +916,27 @@ mod tests {
             super::resolve_expected_url_for_file("Research/Research.md", folder_path),
             Some("/research/".to_string()),
         );
+    }
+
+    #[test]
+    fn expected_url_for_root_home_uses_vault_identity() {
+        let project = repo_temp();
+        for name in ["Garden Path", "山居"] {
+            let root = project.path().join(name);
+            fs::create_dir_all(&root).unwrap();
+            let file = format!("{name}.md");
+            for path in [root.clone(), root.join("."), root.join("child/..")] {
+                assert_eq!(
+                    super::resolve_expected_url_for_file(&file, &path),
+                    Some("/".to_string()),
+                    "root home in {}", path.display(),
+                );
+                assert_eq!(
+                    super::resolve_expected_url_for_file("Other.md", &path),
+                    Some("/other/".to_string()),
+                );
+            }
+        }
     }
 
     /// CJK folder renames recorded in the last build's `dir_overrides` are
