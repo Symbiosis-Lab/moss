@@ -124,6 +124,7 @@ impl FootnoteIndex {
                 Block::List { items, .. } => items
                     .iter()
                     .find_map(|item| Self::definition(item, label)),
+                Block::DefinitionList(children) | Block::DefinitionDefinition(children) => Self::definition(children, label),
                 _ => None,
             };
             if found.is_some() {
@@ -148,6 +149,7 @@ fn collect_definitions(blocks: &[Block], out: &mut Vec<String>, seen: &mut HashS
             Block::BlockQuote(children)
             | Block::Callout { children, .. }
             | Block::LinkCard { children, .. } => collect_definitions(children, out, seen),
+            Block::DefinitionList(children) | Block::DefinitionDefinition(children) => collect_definitions(children, out, seen),
             Block::List { items, .. } => {
                 for item in items {
                     collect_definitions(item, out, seen);
@@ -208,6 +210,8 @@ fn collect_refs(
                     collect_refs(children, out, seen, hoisted);
                 }
             }
+            Block::DefinitionTitle(children) => collect_refs_in_inlines(children, out, seen),
+            Block::DefinitionList(children) | Block::DefinitionDefinition(children) => collect_refs(children, out, seen, hoisted),
             Block::List { items, .. } => {
                 for item in items {
                     collect_refs(item, out, seen, hoisted);

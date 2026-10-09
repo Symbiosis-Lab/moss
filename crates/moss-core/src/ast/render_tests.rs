@@ -1435,3 +1435,45 @@ fn grid_scroll_with_more_cells_than_columns_still_scrolls() {
     let html = render(vec![grid_with_cells(true, None, 4)]);
     assert!(html.contains("data-scroll"), "4 cells over 3 columns should scroll: {html}");
 }
+
+fn render_markdown(md: &str) -> String {
+    let doc = super::super::parser::parse(md);
+    render_document(&doc, &DefaultHooks::new())
+}
+
+#[test]
+fn renders_definition_list_as_one_dl_with_dt_dd_pairs() {
+    let html = render_markdown("Set Design\n: Ines Varga\n\nLighting\n: Ada Ng\n");
+    assert_eq!(html.matches("<dl").count(), 1, "{html}");
+    assert_eq!(html.matches("<dt>").count(), 2, "{html}");
+    assert_eq!(html.matches("<dd>").count(), 2, "{html}");
+    assert!(
+        html.contains("<dt>Set Design</dt>\n<dd>Ines Varga</dd>"),
+        "{html}"
+    );
+}
+
+#[test]
+fn definition_list_keeps_inline_emphasis_in_term_and_definition() {
+    let html = render_markdown("*Set* Design\n: **Caleb** Wertenbaker\n");
+    assert!(html.contains("<dt><em>Set</em> Design</dt>"), "{html}");
+    assert!(html.contains("<dd><strong>Caleb</strong> Wertenbaker</dd>"), "{html}");
+}
+
+
+#[test]
+fn footnote_marker_inside_definition_is_numbered_in_document_order() {
+    let html = render_markdown(
+        "Term\n: text[^1]\n\nBody[^2]\n\n[^1]: note one\n\n[^2]: note two\n",
+    );
+    let dd = html
+        .split("<dd>")
+        .nth(1)
+        .and_then(|s| s.split("</dd>").next())
+        .unwrap_or("");
+    assert!(dd.starts_with("text") && dd.len() > "text".len(), "{html}");
+    let endnotes = html.split("</dl>").nth(1).unwrap_or("");
+    let one = endnotes.find("note one");
+    let two = endnotes.find("note two");
+    assert!(one.is_some() && two.is_some() && one < two, "{html}");
+}

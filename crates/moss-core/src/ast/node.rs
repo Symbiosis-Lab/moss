@@ -288,6 +288,14 @@ pub enum Block {
     },
     /// `> blockquote`
     BlockQuote(Vec<Block>),
+    /// A definition list: a run of [`Block::DefinitionTitle`] and
+    /// [`Block::DefinitionDefinition`] children in source order.
+    DefinitionList(Vec<Block>),
+    /// The term of a definition list entry.
+    DefinitionTitle(Vec<Inline>),
+    /// One definition of the preceding term. A tight definition holds a
+    /// single `Paragraph`; the renderer emits its inlines without a `<p>`.
+    DefinitionDefinition(Vec<Block>),
     /// A typed shortcode block (`:::name ...args\n body :::`).
     Shortcode(Shortcode),
     /// `<hr>` thematic break.

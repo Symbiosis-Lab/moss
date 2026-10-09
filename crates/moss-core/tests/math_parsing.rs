@@ -201,6 +201,15 @@ fn math_survives_inside_a_table_cell() {
     );
 }
 
+#[test]
+fn math_survives_inside_a_definition() {
+    let html = render("Term\n: $x^2$\n", true);
+    assert!(
+        html.contains("<dd") && html.contains("moss-math"),
+        "math dropped inside a definition: {html}"
+    );
+}
+
 /// The shortcode sub-parse used to call the default-config `parse()`, so a
 /// math-on site rendered `$E=mc^2$` as an equation in prose and as literal
 /// text one line later inside a `:::hero` or `:::grid` — the same page in

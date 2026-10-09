@@ -43,7 +43,7 @@ where
                 visit_urls_in_inline(inline, callback);
             }
         }
-        Block::Paragraph(children) => {
+        Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
                 visit_urls_in_inline(inline, callback);
             }
@@ -74,7 +74,9 @@ where
                 }
             }
         }
-        Block::BlockQuote(children) => {
+        Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children) => {
             for nested in children {
                 visit_urls_in_block(nested, callback);
             }

@@ -719,6 +719,26 @@ ol { list-style-type: decimal; }
 ol ol { list-style-type: lower-latin; }
 ol ol ol { list-style-type: lower-roman; }
 
+/* Definition lists. Browsers default `dd` to a 40px start indent, which pushes
+   a definition off the term's edge and reads as a second column in a narrow
+   reading measure. The explicit rules keep each term and its definition on
+   the text edge in the body face, and space consecutive pairs like list items. */
+dl {
+  margin: var(--moss-space-md) 0;
+}
+
+dt {
+  margin-block: var(--moss-space-xs) 0;
+  font-weight: 400;
+  color: var(--moss-color-text);
+}
+
+dd {
+  margin: 0 0 var(--moss-space-xs);
+  padding: 0;
+  color: var(--moss-color-text);
+}
+
 /* Task lists. The renderer emits a bare disabled
    `<input type="checkbox">` as the item's first inline — no class, because the
    checkbox itself is the selector. Dropping the marker keeps the box from

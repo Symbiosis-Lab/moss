@@ -162,6 +162,10 @@ pub fn parser_options(math: bool) -> Options {
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
     options.insert(Options::ENABLE_TASKLISTS);
+    // `Term` line then `: definition` lines. Without the flag the `: ` line
+    // is an ordinary paragraph, so the arms in `parse_block_with_tag` never see
+    // the events.
+    options.insert(Options::ENABLE_DEFINITION_LIST);
     // Phase 3 PR2: pulldown-cmark emits `LinkType::WikiLink` events for
     // `[[…]]` / `![[…]]` natively. The typed-AST parser preserves them as
     // `Inline::Link`/`Inline::Image` with `Url::Unresolved`; resolution
@@ -930,6 +934,39 @@ fn parse_block_with_tag(
                 end - start + 1,
             )
         }
+        // `Term` / `: definition` pairs. Pulldown emits the term and each
+        // definition as flat siblings inside the list, so the arms walk them in
+        // order. A definition goes through the item collector, which handles
+        // both the tight (inline) and loose (paragraph) shapes.
+        Tag::DefinitionList => {
+            let mut children = Vec::new();
+            let mut i = start + 1;
+            while i < events.len() {
+                match &events[i] {
+                    // allow:math-events-ignored — structural walk over term and
+                    // definition boundaries; their content is collected by the
+                    // math-aware collect_inlines_until and collect_flow_until.
+                    // Pinned by `math_survives_inside_a_definition`.
+                    Event::End(TagEnd::DefinitionList) => break,
+                    Event::Start(Tag::DefinitionListTitle) => {
+                        let (inlines, end) = collect_inlines_until(events, i + 1, |e| {
+                            matches!(e, Event::End(TagEnd::DefinitionListTitle))
+                        });
+                        children.push(Block::DefinitionTitle(inlines));
+                        i = end + 1;
+                    }
+                    Event::Start(Tag::DefinitionListDefinition) => {
+                        let (blocks, end) = collect_flow_until(events, i + 1, line_ctx, |e| {
+                            matches!(e, Event::End(TagEnd::DefinitionListDefinition))
+                        });
+                        children.push(Block::DefinitionDefinition(blocks));
+                        i = end + 1;
+                    }
+                    _ => i += 1,
+                }
+            }
+            (Some(Block::DefinitionList(children)), i - start + 1)
+        }
         // Unmodeled containers: skip to End and emit nothing. The events
         // inside are dropped — anything moss cares about should be modeled
         // explicitly.
@@ -1614,11 +1651,28 @@ fn collect_item_blocks(
     start: usize,
     line_ctx: Option<&LineCtx<'_>>,
 ) -> (Vec<Block>, usize) {
+    collect_flow_until(events, start, line_ctx, |e| {
+        matches!(e, Event::End(TagEnd::Item))
+    })
+}
+
+/// [`collect_item_blocks`] for any container whose content is flow content
+/// (a list item, a definition): the same inline-vs-block handling, stopping
+/// at the event that `is_end` accepts. Returns that event's index.
+fn collect_flow_until<F>(
+    events: &[Event<'_>],
+    start: usize,
+    line_ctx: Option<&LineCtx<'_>>,
+    is_end: F,
+) -> (Vec<Block>, usize)
+where
+    F: Fn(&Event<'_>) -> bool,
+{
     let mut out: Vec<Block> = Vec::new();
     let mut pending_inlines: Vec<Inline> = Vec::new();
     let mut i = start;
     while i < events.len() {
-        if matches!(&events[i], Event::End(TagEnd::Item)) {
+        if is_end(&events[i]) {
             flush_pending_paragraph(&mut out, &mut pending_inlines);
             return (out, i);
         }
@@ -2074,6 +2128,8 @@ fn collect_heading_id_slots<'a>(
             // LinkCard counts: it is the compound-link grid cell, and its
             // children include headings.
             Block::BlockQuote(children)
+            | Block::DefinitionList(children)
+            | Block::DefinitionDefinition(children)
             | Block::Callout { children, .. }
             | Block::LinkCard { children, .. } => {
                 collect_heading_id_slots(children, sink, hoisted, notes, scope);
@@ -2114,7 +2170,7 @@ fn collect_heading_id_slots<'a>(
             // children, and the next `Block` variant that gains a
             // `Vec<Block>` must fail to compile HERE rather than silently
             // leak duplicate ids onto the page.
-            Block::Paragraph(_)
+            Block::Paragraph(_) | Block::DefinitionTitle(_)
             | Block::CodeBlock { .. }
             | Block::Table { .. }
             | Block::ThematicBreak

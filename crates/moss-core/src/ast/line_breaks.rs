@@ -38,7 +38,9 @@ pub fn apply(doc: &mut Document) {
 
 fn in_block(block: &mut Block) {
     match block {
-        Block::Heading { children, .. } | Block::Paragraph(children) => in_inlines(children),
+        Block::Heading { children, .. }
+        | Block::Paragraph(children)
+        | Block::DefinitionTitle(children) => in_inlines(children),
         Block::Figure { caption, .. } => {
             if let Some(caption) = caption {
                 in_inlines(caption);
@@ -46,6 +48,8 @@ fn in_block(block: &mut Block) {
         }
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
         | Block::LinkCard { children, .. }
         | Block::FootnoteDefinition { children, .. } => {
             for nested in children {

@@ -229,6 +229,15 @@ pub(super) fn render_blocks_with<H: RenderHooks + ?Sized>(
     }
 }
 
+/// The inlines of a block list that is one bare paragraph: a tight list item or
+/// definition, which renders without a `<p>`.
+fn tight_inlines(blocks: &[Block]) -> Option<&[Inline]> {
+    match blocks {
+        [Block::Paragraph(inlines)] => Some(inlines),
+        _ => None,
+    }
+}
+
 fn render_block<H: RenderHooks + ?Sized>(
     hooks: &H,
     out: &mut String,
@@ -343,8 +352,9 @@ fn render_block<H: RenderHooks + ?Sized>(
                 let mut item = String::new();
                 // Single-paragraph items render their inline content inline
                 // (no extra <p>). Mirrors pulldown-cmark's "tight list" output.
-                let tight = matches!(item_blocks.as_slice(), [Block::Paragraph(_)]);
-                if let [Block::Paragraph(inlines)] = item_blocks.as_slice() {
+                let inline_body = tight_inlines(item_blocks);
+                let tight = inline_body.is_some();
+                if let Some(inlines) = inline_body {
                     render_inlines(hooks, &mut item, inlines, fnotes);
                 } else {
                     render_blocks_with(hooks, &mut item, item_blocks, fnotes);
@@ -501,6 +511,28 @@ fn render_block<H: RenderHooks + ?Sized>(
                 out.push_str(&body);
                 out.push_str("</blockquote>\n");
             }
+        }
+        Block::DefinitionList(children) => {
+            out.push_str("<dl");
+            push_source_line_attr(out, meta.source_line);
+            out.push_str(">\n");
+            render_blocks_with(hooks, out, children, fnotes);
+            out.push_str("</dl>\n");
+        }
+        Block::DefinitionTitle(children) => {
+            out.push_str("<dt>");
+            render_inlines(hooks, out, children, fnotes);
+            out.push_str("</dt>\n");
+        }
+        Block::DefinitionDefinition(children) => {
+            out.push_str("<dd>");
+            if let Some(inlines) = tight_inlines(children) {
+                render_inlines(hooks, out, inlines, fnotes);
+            } else {
+                out.push('\n');
+                render_blocks_with(hooks, out, children, fnotes);
+            }
+            out.push_str("</dd>\n");
         }
         Block::Shortcode(sc) => {
             hooks.render_shortcode(out, sc, meta.source_line);

@@ -178,6 +178,10 @@ fn find_first_image_in_block<'a>(
             None
         }
         Block::BlockQuote(children) => find_first_image_in_blocks(children, notes, hoisted),
+        Block::DefinitionList(children) | Block::DefinitionDefinition(children) => {
+            find_first_image_in_blocks(children, notes, hoisted)
+        }
+        Block::DefinitionTitle(inlines) => find_first_image_in_inlines(inlines),
         Block::Callout { children, .. } => find_first_image_in_blocks(children, notes, hoisted),
         Block::Table { header, rows, .. } => {
             // Headers walked first (document order), then rows.

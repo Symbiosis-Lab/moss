@@ -312,6 +312,8 @@ fn resolve_shortcode_image_urls(
         // Callout, Grid inside a list, etc.) are reached.
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
         | Block::FootnoteDefinition { children, .. } => {
             for nested in children {
                 resolve_shortcode_image_urls(nested, graph, source_path, found);
@@ -332,6 +334,7 @@ fn resolve_shortcode_image_urls(
         // Leaf / inline-only blocks: nothing structural to resolve here.
         Block::Heading { .. }
         | Block::Paragraph(_)
+        | Block::DefinitionTitle(_)
         | Block::Table { .. }
         | Block::Figure { .. }
         | Block::CodeBlock { .. }
@@ -631,13 +634,15 @@ where
     F: FnMut(&mut Inline),
 {
     match block {
-        Block::Heading { children, .. } | Block::Paragraph(children) => {
+        Block::Heading { children, .. } | Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
                 walk_images_in_inline(inline, f);
             }
         }
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
         | Block::FootnoteDefinition { children, .. } => {
             for nested in children {
                 walk_images_in_block(nested, f);
@@ -763,13 +768,15 @@ where
     F: FnMut(&mut Url, &str, bool),
 {
     match block {
-        Block::Heading { children, .. } | Block::Paragraph(children) => {
+        Block::Heading { children, .. } | Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
                 walk_links_in_inline(inline, f);
             }
         }
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
         | Block::FootnoteDefinition { children, .. } => {
             for nested in children {
                 walk_links_in_block(nested, f);
@@ -942,7 +949,7 @@ fn gather_text_blocks(blocks: &[Block]) -> String {
 
 fn gather_text_block(block: &Block, out: &mut String) {
     match block {
-        Block::Heading { children, .. } | Block::Paragraph(children) => {
+        Block::Heading { children, .. } | Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
                 gather_text_inline(inline, out);
             }

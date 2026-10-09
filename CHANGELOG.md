@@ -34,6 +34,7 @@ All notable changes to moss will be documented here.
 - `sort: date-asc` orders a folder's children oldest-first — the reverse of `sort: date`'s newest-first default — for a chronology meant to be read in the order it happened, like a sequence of lectures. Year-grouped listings lead with the oldest year under it, same as the rows within each year; `sort: date` and every other axis are unchanged, and `date-asc` works the same way in a `![[folder|sort:date-asc]]` embed.
 - An import writes a source page's gallery as one `:::gallery` block with each image once, in source order, instead of a column of separate images.
 - An image whose alt text is only a file name is imported with an empty alt, so the file name does not show as a caption under the photo.
+- Markdown definition lists render: a term line followed by a `: ` line becomes a `<dl>` with `<dt>` and `<dd>`, so a credit like `Set Design` then `: Ines Varga` is marked up as a term and its definition. A paragraph followed directly by a line starting with `: ` now renders the same way, so a site that used that pattern as prose should check those pages.
 
 ### Fixed
 

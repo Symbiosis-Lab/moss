@@ -305,7 +305,7 @@ impl Restore<'_> {
                     *id = Some(crate::heading::anchor::obsidian_heading_anchor(&text));
                 }
             }
-            Block::Paragraph(children) => {
+            Block::Paragraph(children) | Block::DefinitionTitle(children) => {
                 self.in_inlines(children);
             }
             Block::Figure {
@@ -342,7 +342,9 @@ impl Restore<'_> {
                     self.in_block(nested);
                 }
             }
-            Block::BlockQuote(children) => {
+            Block::BlockQuote(children)
+            | Block::DefinitionList(children)
+            | Block::DefinitionDefinition(children) => {
                 for nested in children {
                     self.in_block(nested);
                 }

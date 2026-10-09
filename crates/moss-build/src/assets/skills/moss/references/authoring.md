@@ -219,6 +219,8 @@ A home page or folder page lists its child pages by default. `children: false` i
 
 Quote a frontmatter value that contains a colon followed by a space, such as `title: "Notes: spring"`. Unquoted, it is invalid YAML, and the whole frontmatter block is ignored rather than the one field, so every field on the page falls back to its default. The build prints `frontmatter: invalid YAML`; `moss build --strict` turns that warning into a failure.
 
+A term line followed by a line starting with `: ` is a definition list, which renders as `<dl>` with the term as `<dt>` and the definition as `<dd>`, as in a credit written `Set Design` then `: Ines Varga`.
+
 ### Shortcodes
 
 Shortcodes are fenced blocks (`:::hero`, `:::grid`, …); callouts use

@@ -2309,3 +2309,23 @@ fn valid_shortcodes_produce_no_warnings() {
         doc.warnings
     );
 }
+
+#[test]
+fn parses_definition_list_into_title_and_tight_definition() {
+    match first_block("Set Design\n: Ines Varga\n") {
+        Block::DefinitionList(children) => {
+            assert_eq!(children.len(), 2, "{children:?}");
+            assert_eq!(
+                children[0],
+                Block::DefinitionTitle(vec![Inline::Text("Set Design".into())])
+            );
+            assert_eq!(
+                children[1],
+                Block::DefinitionDefinition(vec![Block::Paragraph(vec![Inline::Text(
+                    "Ines Varga".into()
+                )])])
+            );
+        }
+        other => panic!("expected DefinitionList, got {other:?}"),
+    }
+}
