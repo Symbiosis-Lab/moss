@@ -1002,12 +1002,61 @@ fn try_promote_to_figure(
     events: &[Event<'_>],
     para_start: usize,
 ) -> Result<Block, Vec<Inline>> {
+    // `![Description|](x.jpg)` is alt only. With no italic line under it there
+    // is no caption to promote, so the paragraph stays a plain image.
+    let alt_only = !trailing_pipe_is_escaped(events, para_start) && strip_alt_only_pipe(&mut inlines);
     // `![Description](x.jpg)` followed on the next line by one italic line is
     // a figure whose caption is the italic line and whose alt stays the
     // bracket text, so the two can differ. A refusal hands the paragraph back
     // untouched.
     let italic_at = italic_caption_index(&inlines);
+    if alt_only && italic_at.is_none() {
+        return Err(inlines);
+    }
     try_promote_image_only(inlines, events, para_start, italic_at)
+}
+
+/// Trim a bare trailing `|` from the bracket text of a lone standard image:
+/// `![A lake|](p.jpg)` has alt text `A lake` and no caption. Returns whether
+/// the pipe was there. Wikilink embeds keep their own pipe grammar, and a
+/// pipe whose left side is a placement (`![55%|](p.jpg)`) is left to the
+/// placement parser.
+fn strip_alt_only_pipe(inlines: &mut [Inline]) -> bool {
+    let mut images = inlines.iter_mut().filter_map(|i| match i {
+        Inline::Image { alt, is_wikilink, .. } => Some((alt, *is_wikilink)),
+        _ => None,
+    });
+    let (Some((alt, false)), None) = (images.next(), images.next()) else {
+        return false;
+    };
+    let Some(head) = alt.trim_end().strip_suffix('|') else {
+        return false;
+    };
+    let head = head.trim().to_string();
+    if !crate::media::extract_placement_from_alias(&head).0.is_empty() {
+        return false;
+    }
+    *alt = head;
+    true
+}
+
+/// Whether the image's trailing pipe was written `\|`. pulldown-cmark hands an
+/// escaped character over as its own text event, so an escaped pipe follows
+/// the text before it, while an unescaped one stays in that text. A lone `|`
+/// cannot be told apart from `\|` here, and is read as unescaped.
+fn trailing_pipe_is_escaped(events: &[Event<'_>], para_start: usize) -> bool {
+    let Some(start) = (para_start + 1..events.len())
+        .find(|&i| matches!(events[i], Event::Start(Tag::Image { .. })))
+    else {
+        return false;
+    };
+    let Some(end) = (start..events.len()).find(|&i| matches!(events[i], Event::End(TagEnd::Image)))
+    else {
+        return false;
+    };
+    end >= start + 3
+        && matches!(&events[end - 1], Event::Text(t) if &**t == "|")
+        && matches!(&events[end - 2], Event::Text(_))
 }
 
 /// Index of the italic line when the paragraph is exactly `image`, a line

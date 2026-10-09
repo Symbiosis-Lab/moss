@@ -2329,3 +2329,66 @@ fn parses_definition_list_into_title_and_tight_definition() {
         other => panic!("expected DefinitionList, got {other:?}"),
     }
 }
+
+#[test]
+fn bare_trailing_pipe_makes_the_bracket_text_alt_only() {
+    // A `|` ending the brackets means alt only: the image stays a plain
+    // image, with no figure and so no caption.
+    match first_block("![A lake|](p.jpg)\n") {
+        Block::Paragraph(children) => {
+            assert!(
+                children.iter().any(|i| matches!(i, Inline::Image { alt, .. } if alt == "A lake")),
+                "{children:?}"
+            );
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn bare_trailing_pipe_trims_the_spaces_around_it() {
+    match first_block("![A lake | ](p.jpg)\n") {
+        Block::Paragraph(children) => {
+            assert!(
+                children.iter().any(|i| matches!(i, Inline::Image { alt, .. } if alt == "A lake")),
+                "{children:?}"
+            );
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn bracket_text_without_a_pipe_is_still_the_caption() {
+    match first_block("![A lake](p.jpg)\n") {
+        Block::Figure { caption, .. } => {
+            let cap = caption.expect("caption from alt text");
+            assert!(matches!(&cap[0], Inline::Text(t) if t == "A lake"), "{cap:?}");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+#[test]
+fn alt_only_image_followed_by_an_italic_line_keeps_the_line_as_caption() {
+    match first_block("![A lake|](p.jpg)\n*Credit. CC0.*\n") {
+        Block::Figure { image, caption, .. } => {
+            assert!(matches!(&image, Inline::Image { alt, .. } if alt == "A lake"), "{image:?}");
+            let cap = caption.expect("italic line becomes the caption");
+            assert_eq!(crate::ast::inlines_to_plain_text(&cap), "Credit. CC0.");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+#[test]
+fn escaped_pipe_before_the_bracket_end_is_caption_text() {
+    // `\|` is a literal pipe in the bracket text, not the alt-only marker.
+    match first_block("![Cats \\|](x.jpg)\n") {
+        Block::Figure { caption, .. } => {
+            let cap = caption.expect("caption from alt text");
+            assert_eq!(crate::ast::inlines_to_plain_text(&cap), "Cats |");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}

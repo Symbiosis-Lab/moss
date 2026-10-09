@@ -3904,3 +3904,10 @@ fn italic_line_under_an_image_in_a_grid_cell_is_a_caption() {
     assert!(html.contains("Credit. CC0."), "got: {html}");
     assert!(html.contains("<figcaption>"), "got: {html}");
 }
+
+#[test]
+fn bare_trailing_pipe_renders_alt_without_a_figcaption() {
+    let html = render_markdown_to_html("![Two dancers face each other on a pink stage|](x.jpg)\n");
+    assert!(html.contains(r#"alt="Two dancers face each other on a pink stage""#), "got: {html}");
+    assert!(!html.contains("figcaption"), "got: {html}");
+}
