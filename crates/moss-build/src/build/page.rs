@@ -2,6 +2,7 @@
 
 pub mod canonical;
 pub mod cover;
+pub(crate) mod event_json_ld;
 pub(crate) mod layout;
 pub mod link_meta;
 pub mod meta;

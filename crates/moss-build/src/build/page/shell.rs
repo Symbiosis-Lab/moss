@@ -153,8 +153,8 @@ pub struct ShellVars {
     pub latest_list: Option<String>,
     pub latest_sidebar: Option<String>,
     pub favicon: Option<String>,
-    /// RSS feed link for head section
-    pub rss_link: Option<String>,
+    /// `<link rel="alternate">` tags for the head: the RSS feed, then calendar files.
+    pub head_alternates: Option<String>,
     /// Analytics script tag for head section
     pub analytics: Option<String>,
     pub footer: Option<String>,
@@ -281,6 +281,10 @@ pub struct ShellVars {
     /// than one var per script because every gate is SITE-level: the set is
     /// identical on every page of a build.
     pub runtime_js_tags: String,
+    /// The full-screen viewer's markup (`media_collection::lightbox_html`),
+    /// set only on a page that has a `:::gallery`; empty elsewhere. Dropped in
+    /// just before the runtime scripts, which `fullscreen.js` finds it through.
+    pub lightbox: String,
     /// Robots meta tag (e.g. noindex for drafts). Empty when omitted.
     pub robots_meta: Option<String>,
 }
@@ -380,7 +384,7 @@ impl ShellProcessor {
             ("latest_sidebar", latest_sidebar),
             ("favicon", vars.favicon.unwrap_or_default()),
             ("robots_meta", vars.robots_meta.unwrap_or_default()),
-            ("rss_link", vars.rss_link.unwrap_or_default()),
+            ("head_alternates", vars.head_alternates.unwrap_or_default()),
             ("analytics", vars.analytics.unwrap_or_default()),
             ("footer", vars.footer.unwrap_or_default()),
             // Article-specific variables
@@ -406,6 +410,7 @@ impl ShellProcessor {
             ("post_article", vars.post_article),
             // Every gated runtime script tag, in SITE_SCRIPTS order
             ("runtime_js_tags", vars.runtime_js_tags),
+            ("lightbox", vars.lightbox),
             // User JS tag (placed after theme.js, before body-end slot)
             ("user_js_tag", vars.user_js_tag.unwrap_or_default()),
         ]);

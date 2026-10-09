@@ -87,11 +87,12 @@ jobs:
       # assertions depend on CJK glyph advance); the ubuntu-latest image
       # ships no CJK-capable font, so without this package a CJK heading
       # falls back to a font with different metrics and the width-band
-      # assertions land on the wrong side of a wrap.
+      # assertions land on the wrong side of a wrap. Gate fixture imports
+      # also synthesize a small busy image with ffmpeg.
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y fonts-noto-cjk
+          sudo apt-get install -y ffmpeg fonts-noto-cjk
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -150,6 +151,11 @@ jobs:
         with:
           workspaces: '. -> target'
           shared-key: render-gates-webkit
+
+      # macOS runners do not guarantee ffmpeg; gate-site imports use it to
+      # synthesize a small busy-image fixture.
+      - name: Install ffmpeg
+        run: command -v ffmpeg >/dev/null 2>&1 || brew install ffmpeg
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

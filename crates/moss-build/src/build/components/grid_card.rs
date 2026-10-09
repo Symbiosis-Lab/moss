@@ -95,6 +95,7 @@ fn render_item(
         .map(|count| i18n::article_count_label(lang, count, typesetting));
     let count_text = super::child_list::meta_text(
         props.date_display.as_deref(),
+        props.when_html.as_deref(),
         props.place.as_deref(),
         count_label.as_deref(),
     );
@@ -131,7 +132,7 @@ fn render_item(
         root,
         media_lookup,
     )
-        .map(|c| format!(r#" data-cover-color style="--moss-cover-color: {}""#, html_escape(&c)))
+        .map(|c| format!(r#" data-cover-color style="--item-cover-color: {}""#, html_escape(&c)))
         .unwrap_or_default();
 
     let kicker_html = props.kicker.as_deref()
@@ -151,13 +152,13 @@ fn render_item(
     // Pre-fix this emitted `{kicker}{title}{meta}` — placing the meta
     // BELOW the title (where it visually read as a subtitle, not a kicker).
     //
-    // Description slot — a paragraph BELOW the title, file/article cards
-    // only (`child_count.is_none()`). Folder cards keep their "N articles"
-    // meta and render no description. The text is frontmatter-only (the
-    // callers leave `props_for_document`'s reading alone, never the
-    // auto-extracted excerpt), so the slot stays author-intentional. Mirrors
-    // child_summary's below-title `.moss-card-description` so grid and
-    // summary cards agree:
+    // Description slot — a paragraph BELOW the title, for file/article and
+    // folder cards alike. A folder card keeps its "N articles" meta and adds
+    // its folder note's `description:` here, the same as a page card. The
+    // text is frontmatter-only (the callers leave `props_for_document`'s
+    // reading alone, never the auto-extracted excerpt), so the slot stays
+    // author-intentional. Mirrors child_summary's below-title
+    // `.moss-card-description` so grid and summary cards agree:
     // meta = date overline ABOVE, description = paragraph BELOW the title.
     // Suppressed when the quote slot above already carries this same text
     // (coverless card, covered list) — otherwise it would print twice.
@@ -165,7 +166,6 @@ fn render_item(
     let description_html = props.description.as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .filter(|_| props.child_count.is_none())
         .filter(|_| !used_in_quote_slot)
         .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
         .unwrap_or_default();

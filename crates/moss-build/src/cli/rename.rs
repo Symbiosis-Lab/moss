@@ -13,16 +13,13 @@ use std::path::Path;
 
 /// Entry point for `moss rename`. Returns an exit code (0 = success).
 pub fn run(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{}", usage());
+        return 0;
+    }
     let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
     if positional.len() < 2 {
-        eprintln!("Usage: moss rename <old_path> <new_path>");
-        eprintln!();
-        eprintln!("Renames a file or folder and rewrites every [[wikilink]] and");
-        eprintln!("[text](link) reference to it across the project. Paths may be");
-        eprintln!("relative to the current directory.");
-        eprintln!();
-        eprintln!("Tip: pair with a `url:` frontmatter pin to keep the published");
-        eprintln!("URL stable when the filename changes language.");
+        eprintln!("{}", usage());
         return 1;
     }
 
@@ -38,6 +35,15 @@ pub fn run(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+fn usage() -> &'static str {
+    "Usage: moss rename <old_path> <new_path>\n\n\
+     Renames a file or folder and rewrites every [[wikilink]] and\n\
+     [text](link) reference to it across the project. Paths may be\n\
+     relative to the current directory.\n\n\
+     Tip: pair with a `url:` frontmatter pin to keep the published\n\
+     URL stable when the filename changes language."
 }
 
 /// Testable core of [`run`]: `args` are the two positional paths, `cwd` is

@@ -24,14 +24,14 @@
 {
   "@context": "https://schema.org",
   "@type": "Article",
-  "headline": "Shortcode Examples",
-  "url": "/shortcodes/",
   "description": "This page demonstrates shortcodes.",
+  "headline": "Shortcode Examples",
   "image": "/_moss/og/[OG_HASH].png",
   "publisher": {
     "@type": "Organization",
     "name": "Learn Rust"
-  }
+  },
+  "url": "/shortcodes/"
 }
 </script>
     <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
@@ -40,7 +40,7 @@
     
     
     <script>var t=null;try{t=localStorage.getItem("moss-theme")}catch(e){}document.documentElement.setAttribute("data-theme",t||((window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light"));</script>
-    <link rel="stylesheet" href="/_moss/style.15b4f9877105d786.css">
+    <link rel="stylesheet" href="/_moss/style.da17ac4c76131b57.css">
     
 </head>
 <body><a class="moss-skip-link" href="#main-content">Skip to content</a>
@@ -61,7 +61,7 @@
 <div class="moss-unknown-shortcode" data-name="toc">
 </div>
 <h2 id="image-gallery">Image Gallery<a class="moss-heading-anchor" href="#image-gallery" aria-label="Permalink to this section"></a></h2>
-<div class="moss-gallery" data-columns="2" style="--moss-gallery-columns: 2"><div class="moss-gallery-item"><picture><source srcset="https://example.com/photo1.webp" type="image/webp"><img src="https://example.com/photo1.jpg" width="800" height="600" loading="lazy" alt="" /></picture></div><div class="moss-gallery-item"><picture><source srcset="https://example.com/photo2.webp" type="image/webp"><img src="https://example.com/photo2.jpg" width="800" height="600" loading="lazy" alt="" /></picture></div><div class="moss-gallery-item"><picture><source srcset="https://example.com/photo3.webp" type="image/webp"><img src="https://example.com/photo3.jpg" width="800" height="600" loading="lazy" alt="" /></picture></div></div>
+<div class="moss-gallery" data-columns="2" style="--moss-gallery-columns: 2"><div class="moss-gallery-item"><a class="moss-gallery-link" href="https://example.com/photo1.jpg" data-title="" aria-label="Open image 1 of 3"><picture><source srcset="https://example.com/photo1.webp" type="image/webp"><img src="https://example.com/photo1.jpg" width="800" height="600" loading="lazy" alt="" /></picture></a></div><div class="moss-gallery-item"><a class="moss-gallery-link" href="https://example.com/photo2.jpg" data-title="" aria-label="Open image 2 of 3"><picture><source srcset="https://example.com/photo2.webp" type="image/webp"><img src="https://example.com/photo2.jpg" width="800" height="600" loading="lazy" alt="" /></picture></a></div><div class="moss-gallery-item"><a class="moss-gallery-link" href="https://example.com/photo3.jpg" data-title="" aria-label="Open image 3 of 3"><picture><source srcset="https://example.com/photo3.webp" type="image/webp"><img src="https://example.com/photo3.jpg" width="800" height="600" loading="lazy" alt="" /></picture></a></div></div>
 <h2 id="important-notes">Important Notes<a class="moss-heading-anchor" href="#important-notes" aria-label="Permalink to this section"></a></h2>
 <div class="moss-unknown-shortcode" data-name="callout">
 <p>This is a warning callout block.</p>
@@ -87,10 +87,26 @@
         </a>
     </div>
 
-    <script src="/_moss/js/theme.607b3ce14cce79b4.js" data-share-card="/_moss/js/share-card.f7eb5dfe01ffd623.js"></script>
+    <!-- Lightbox -->
+  <div id="lightbox" class="lightbox" hidden tabindex="-1">
+    <button class="lightbox-close" aria-label="Close">&times;</button>
+    <div class="lightbox-content">
+      <img class="lightbox-image" src="" alt="" hidden />
+      <video class="lightbox-video" controls playsinline hidden></video>
+      <iframe class="lightbox-iframe" hidden></iframe>
+    </div>
+    <div class="lightbox-caption">
+      <p class="lightbox-title"></p>
+      <a class="lightbox-article-link" href="">View in article &rarr;</a>
+    </div>
+    <button class="lightbox-nav lightbox-prev" aria-label="Previous">&lsaquo;</button>
+    <button class="lightbox-nav lightbox-next" aria-label="Next">&rsaquo;</button>
+  </div>
+    <script src="/_moss/js/theme.8c52f04e8251a7ff.js" data-share-card="/_moss/js/share-card.f7eb5dfe01ffd623.js"></script>
     <script src="/_moss/js/preview.78d7d648255fdf2d.js"></script>
     <script src="/_moss/js/heading-anchor.12724b8107ea6263.js"></script>
     <script src="/_moss/js/math-copy.8c1e446c594b2033.js"></script>
+    <script src="/_moss/js/fullscreen.1173055ef9dc1d4b.js"></script>
     
 </body>
 </html>

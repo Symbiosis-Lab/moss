@@ -8,6 +8,7 @@ fn all_on() -> SiteAssets {
         heading_anchors: true,
         math: true,
         media_pages: true,
+        galleries: true,
         search: true,
         vertical: true,
         has_footnotes: true,
@@ -118,6 +119,7 @@ fn each_gate_reads_a_distinct_fact() {
         ("math-copy", |a| a.math = true),
         ("search", |a| a.search = true),
         ("fullscreen", |a| a.media_pages = true),
+        ("fullscreen", |a| a.galleries = true),
     ];
     for (name, set) in fields {
         let mut assets = SiteAssets::default();
@@ -267,9 +269,9 @@ fn shell_tags_follow_the_table_in_order() {
         .map(|s| s.name)
         .collect();
     assert_eq!(names, expected, "the shell block must be SITE_SCRIPTS order");
-    // `theme` and `fullscreen` are eager but placed by their own templates,
-    // and the lazy chunk has no tag at all — none of the three may leak here.
-    for placed in ["theme", "fullscreen", "share-card"] {
+    // `theme` is eager but placed by its own template, and the lazy chunk has
+    // no tag at all — neither may leak here.
+    for placed in ["theme", "share-card"] {
         assert!(!names.contains(&placed), "'{placed}' is not placed by the shell block");
     }
     assert!(

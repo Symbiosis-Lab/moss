@@ -73,25 +73,27 @@ fn trim_one_trailing_slash(path: &str) -> &str {
     }
 }
 
+/// Whether a URL is on the same scheme, host and port as the scope's start
+/// URL, ignoring the path prefix. A file linked from an imported page belongs
+/// to the site wherever it lives on that host (`/s/…`, `/wp-content/uploads/…`),
+/// not only under the start URL's folder.
+pub fn is_same_origin(scope: &UrlScope, url_str: &str) -> bool {
+    let Ok(url) = Url::parse(url_str) else {
+        return false;
+    };
+    url.scheme() == scope.base_url.scheme()
+        && url.host() == scope.base_url.host()
+        && url.port() == scope.base_url.port()
+}
+
 /// Check if a URL is within the given scope
 pub fn is_within_scope(scope: &UrlScope, url_str: &str) -> bool {
-    let url = match Url::parse(url_str) {
-        Ok(u) => u,
-        Err(_) => return false,
+    if !is_same_origin(scope, url_str) {
+        return false;
+    }
+    let Ok(url) = Url::parse(url_str) else {
+        return false;
     };
-
-    // Check host matches (including scheme)
-    if url.scheme() != scope.base_url.scheme() {
-        return false;
-    }
-
-    if url.host() != scope.base_url.host() {
-        return false;
-    }
-
-    if url.port() != scope.base_url.port() {
-        return false;
-    }
 
     // Check path starts with the scope's path prefix
     let path = url.path();

@@ -438,6 +438,11 @@ if (document.body.dataset.typesetting === "vertical") {
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
         (e.target as HTMLElement)?.isContentEditable) return;
+    // A key an earlier handler claimed, or one an open viewer (the gallery
+    // lightbox, or a modal dialog) uses to step through its own items, must
+    // not also leave the page.
+    if (e.defaultPrevented) return;
+    if (document.querySelector("#lightbox:not([hidden]), dialog[open]")) return;
 
     if (e.key === "ArrowLeft") {
       const prev = nav.querySelector<HTMLAnchorElement>(".moss-series-nav-prev");

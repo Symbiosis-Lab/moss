@@ -706,3 +706,25 @@ test.describe('hover hints stay on screen', () => {
     });
   }
 });
+
+test.describe('a phone does not widen its layout viewport', () => {
+  // A mobile engine widens the layout viewport to fit whatever overflows it,
+  // and the fixed island is sized against that widened viewport. The fold then
+  // measures a bar wider than the screen, finds room, and folds nothing. The
+  // fixture's last endnote is a long URL; an unbreakable run in an endnote
+  // must wrap rather than set the page's width. Needs a mobile context, which
+  // a resized desktop viewport does not give (it never widens).
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test('a long URL in an endnote leaves the viewport at device width', async ({ page }) => {
+    await reveal(page);
+    const m = await page.evaluate(() => ({
+      innerWidth: window.innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      barRight: document.querySelector('.moss-nav-island-bar')!.getBoundingClientRect().right,
+    }));
+    expect(m.innerWidth, 'layout viewport stays at the device width').toBe(390);
+    expect(m.scrollWidth, 'nothing scrolls the page sideways').toBeLessThanOrEqual(390);
+    expect(m.barRight, 'the island bar ends inside the screen').toBeLessThanOrEqual(390);
+  });
+});

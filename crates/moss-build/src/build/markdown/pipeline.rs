@@ -528,6 +528,7 @@ pub fn process_markdown_file(
     // Normalize legacy `series: [list]` form into `sort: List + series: Flag(true)`.
     // Task 5: defensive conversion for future authors who might write the old form.
     frontmatter.normalize();
+    let event = crate::build::types::EventFields::from_frontmatter(&frontmatter);
 
     // Translate the deprecated `sidebar:` field for both simplified and YAML
     // paths. Runs after frontmatter is fully parsed so it sees the final state
@@ -1049,6 +1050,14 @@ pub fn process_markdown_file(
     //    every URL be `Url::Resolved` at emission time.
     moss_core::ast::classify_remaining_urls(&mut doc);
 
+    // An image with no alt and no caption is invisible to a screen reader. It
+    // is a prompt to describe the image, not a defect in the build, so it goes
+    // to the log only: `log_warn_problem!` would make `--strict` fail every
+    // existing site that has a decorative or not-yet-described image.
+    for href in moss_core::ast::images_without_text(&doc) {
+        log::warn!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
+    }
+
     // 6. Render the typed AST to HTML through `PipelineHooks`. This is THE
     //    production HTML emission — `transform_events` no longer runs for
     //    `process_markdown_file`.
@@ -1079,6 +1088,8 @@ pub fn process_markdown_file(
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
+    let has_gallery =
+        moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Gallery);
 
     // Defensive sweep: `Block::Other` raw HTML (e.g. `<div class="callout">`
     // from upstream Stage 1) may still contain `href="moss-resolved:..."` /
@@ -1173,9 +1184,8 @@ pub fn process_markdown_file(
     // which this gate never injects for. Keeping the proxy avoids depending on
     // `url_path`, computed a few lines below.
     let is_nav_page = crate::build::components::nav::is_nav_bar_item(
-        frontmatter.nav,
-        frontmatter.draft == Some(true),
-        is_slot_only,
+        crate::build::components::nav::NavFacts { nav: frontmatter.nav, draft: frontmatter.draft == Some(true),
+            slot_only: is_slot_only, unlisted: frontmatter.listed == Some(false) },
         is_root_level,
         is_index_file && is_root_level,
         &clean_stem,
@@ -1407,6 +1417,7 @@ pub fn process_markdown_file(
         editor: frontmatter.editor.unwrap_or_default(),
         jury: frontmatter.jury.unwrap_or_default(),
         location: frontmatter.location.unwrap_or_default(),
+        event,
         author_page: frontmatter.author_page,
         tag_page: frontmatter.tag_page,
         editor_page: frontmatter.editor_page,
@@ -1456,6 +1467,7 @@ pub fn process_markdown_file(
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
+            galleries: has_gallery,
         },
         slot: frontmatter.slot.clone(),
         // Reserved-name convention: `footer.md` at the project root parses
@@ -1958,12 +1970,17 @@ impl<'a> PipelineHooks<'a> {
             None => moss_core::ast::DefaultHooks::new(),
         }
         .vertical(self.vertical)
+        .with_gallery_link_template(crate::i18n::t(self.lang, "gallery_open_image"))
     }
 }
 
 impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     fn permalink_section_label(&self) -> &str {
         self.permalink_section_label
+    }
+
+    fn gallery_link_template(&self) -> &str {
+        crate::i18n::t(self.lang, "gallery_open_image")
     }
 
     fn emit_heading_anchors(&self, level: u8) -> bool {

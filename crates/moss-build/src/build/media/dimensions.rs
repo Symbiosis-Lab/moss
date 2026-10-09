@@ -357,7 +357,7 @@ fn unique_suffix_match<'a, V>(
 /// that returns an arbitrary OTHER article's value — and reshuffles it every
 /// build, because `HashMap` iteration order is not stable across processes.
 /// Measured on the riverbend vault (2026-08-19): 46 built pages differed
-/// between two consecutive generations in `--moss-cover-color` and nothing
+/// between two consecutive generations in `--item-cover-color` and nothing
 /// else, with two unrelated articles landing on the identical wrong colour.
 /// Every one of those covers is also re-uploaded on every publish.
 ///
@@ -515,7 +515,7 @@ mod tests {
     /// the whole map for ANY entry sharing a stem and returned the first the
     /// `HashMap` yielded, so covers borrowed each other's colours and the
     /// borrowing reshuffled every build: 46 pages differed between two
-    /// consecutive generations in `--moss-cover-color` and nothing else.
+    /// consecutive generations in `--item-cover-color` and nothing else.
     #[test]
     fn covers_sharing_a_stem_never_borrow_each_others_color() {
         let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);
@@ -628,6 +628,67 @@ mod tests {
         assert!(
             !without.asset_snapshot().has_hls_for_source(&Path::new("/clip.mp4").to_path_buf()),
             "no registry, no variants — the absence must be honest, not a stale carry-over"
+        );
+    }
+
+    /// A transparent PNG and an opaque JPEG, from scan to rendered `<img>`. The
+    /// PNG keeps its colour for cards but gets no placeholder style at all; the
+    /// JPEG keeps its blur-up.
+    #[test]
+    fn transparent_png_renders_no_placeholder_and_keeps_its_colour() {
+        let dir = std::env::temp_dir()
+            .join(format!("moss_test_transparent_placeholder_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let logo = dir.join("logo.png");
+        image::RgbaImage::from_fn(64, 64, |x, _| {
+            image::Rgba([200, 30, 30, if x < 32 { 0 } else { 255 }])
+        })
+        .save(&logo)
+        .unwrap();
+        let photo = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(64, 64, image::Rgb([10, 200, 10]))
+            .save(&photo)
+            .unwrap();
+
+        let meta = |path: &str, file: &Path| {
+            let (dominant_color, lqip_data_uri) =
+                crate::build::scan::scan::extract_color_and_lqip(file);
+            MediaMetadata {
+                path: path.to_string(),
+                dimensions: Some((64, 64)),
+                dominant_color,
+                lqip_data_uri,
+                ..Default::default()
+            }
+        };
+        let logo_color = crate::build::scan::scan::extract_color_and_lqip(&logo).0;
+        let images = [meta("logo.png", &logo), meta("photo.jpg", &photo)];
+        let lookup = MediaDimensionLookup::new(&images, &[], &HashMap::new(), None);
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(logo_color.is_some(), "the scan still computes a colour for a transparent image");
+        assert_eq!(
+            lookup.get_dominant_color("logo.png"),
+            logo_color,
+            "cards still read the transparent image's colour through the lookup"
+        );
+        assert!(lookup.get_cover_color("logo.png").is_some());
+
+        let render = |src: &str| {
+            moss_core::render::image::synthesize_image_html(
+                src,
+                "alt",
+                lookup.asset_snapshot(),
+                moss_core::render::image::ImageContext::MarkdownInline,
+                &moss_core::render::image::ImageRenderOptions::default(),
+            )
+        };
+        let logo_html = render("logo.png");
+        assert!(!logo_html.contains("style="), "Got: {logo_html}");
+        let photo_html = render("photo.jpg");
+        assert!(
+            photo_html.contains("background-image:url(data:image/jpeg;base64,"),
+            "an opaque JPEG keeps its LQIP. Got: {photo_html}"
         );
     }
 }

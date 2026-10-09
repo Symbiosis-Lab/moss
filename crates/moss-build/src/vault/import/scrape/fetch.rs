@@ -473,11 +473,75 @@ pub(crate) fn hash_url(url: &str) -> String {
     format!("{:016x}", xxhash_rust::xxh3::xxh3_64(url.as_bytes()))
 }
 
+/// Largest single file a page's link may pull into the site.
+pub(crate) const LINKED_FILE_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// What a download did: wrote the file, or refused it for its size.
+pub(crate) enum Downloaded {
+    Saved(String),
+    TooLarge,
+}
+
 pub(crate) async fn download_asset(
     url: &str,
     assets_dir: &Path,
     user_agent: &str,
 ) -> Result<String, FetchError> {
+    match download_to(url, assets_dir, user_agent, hashed_filename, u64::MAX).await? {
+        Downloaded::Saved(filename) => Ok(filename),
+        Downloaded::TooLarge => Err(FetchError::message(format!("{url} is too large to download"))),
+    }
+}
+
+fn hashed_filename(url: &str, _assets_dir: &Path, content_type: &str) -> String {
+    format!("{}.{}", hash_url(url), content_type_to_extension(content_type))
+}
+
+/// [`download_asset`] for a file a page links to (a PDF, a score, a
+/// document): same request, same folder, but the file is saved under
+/// `filename` (see [`linked_filename`]) rather than a hash. A file over
+/// `max_bytes` is not written.
+pub(crate) async fn download_linked_file(
+    url: &str,
+    assets_dir: &Path,
+    user_agent: &str,
+    max_bytes: u64,
+    filename: String,
+) -> Result<Downloaded, FetchError> {
+    download_to(url, assets_dir, user_agent, move |_, _, _| filename, max_bytes).await
+}
+
+/// The name a linked file keeps: the last path segment of its URL,
+/// decoded and passed through the importer's filename policy, so
+/// `/s/Violin%20Part.PDF` is `Violin Part.pdf`. A URL with no usable name
+/// falls back to its hash.
+pub(crate) fn linked_filename(url: &str) -> String {
+    let last_segment = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.path_segments().and_then(|s| s.last().map(str::to_string)))
+        .unwrap_or_default();
+    let decoded = urlencoding::decode(&last_segment)
+        .map(|d| d.into_owned())
+        .unwrap_or(last_segment);
+    let (stem, ext) = match decoded.rsplit_once('.') {
+        Some((s, e)) if !e.is_empty() => (s.to_string(), e.to_ascii_lowercase()),
+        _ => (decoded, "bin".to_string()),
+    };
+    let stem = super::writer::sanitize_filename(&stem);
+    if stem.is_empty() {
+        format!("{}.{}", hash_url(url), ext)
+    } else {
+        format!("{stem}.{ext}")
+    }
+}
+
+async fn download_to(
+    url: &str,
+    assets_dir: &Path,
+    user_agent: &str,
+    name: impl FnOnce(&str, &Path, &str) -> String + Send + 'static,
+    max_bytes: u64,
+) -> Result<Downloaded, FetchError> {
     let url_clone = url.to_string();
     let assets_dir = assets_dir.to_path_buf();
     let user_agent = user_agent.to_string();
@@ -493,23 +557,32 @@ pub(crate) async fn download_asset(
             Some(crate::vault::import::media::MEDIA_ACCEPT),
         )?;
 
-        let hash = hash_url(&url_clone);
-        let content_type = response.content_type();
-        let extension = content_type_to_extension(content_type);
-        let filename = format!("{}.{}", hash, extension);
+        if response
+            .header("content-length")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .is_some_and(|len| len > max_bytes)
+        {
+            return Ok(Downloaded::TooLarge);
+        }
+        let filename = name(&url_clone, &assets_dir, response.content_type());
 
+        // A response without a content-length is buffered up to the cap.
         let mut bytes = Vec::new();
         response
             .into_reader()
+            .take(max_bytes.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|e| FetchError::message(format!("Failed to read asset: {}", e)))?;
+        if bytes.len() as u64 > max_bytes {
+            return Ok(Downloaded::TooLarge);
+        }
 
         let file_path = assets_dir.join(&filename);
         // allow:raw_write the author's own source content, not `.moss/build.nosync/` output — a downloaded media file
         fs::write(&file_path, &bytes)
             .map_err(|e| FetchError::message(format!("Failed to write asset: {}", e)))?;
 
-        Ok(filename)
+        Ok(Downloaded::Saved(filename))
     })
     .await
     .map_err(|e| FetchError::message(format!("Task error: {}", e)))?

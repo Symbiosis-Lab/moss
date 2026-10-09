@@ -356,9 +356,10 @@ impl ExactStyle {
             && (self.form == other.form || (is_address(self.form) && is_address(other.form)))
     }
 
-    /// A root-anchored published address written with its trailing `/`.
-    pub(crate) fn root_address() -> ExactStyle {
-        ExactStyle { anchor: Anchor::Root, form: PathForm::AddrPage, slash: true, dot: false }
+    /// A root-anchored published address, written with or without its
+    /// trailing `/`.
+    pub(crate) fn root_address(slash: bool) -> ExactStyle {
+        ExactStyle { anchor: Anchor::Root, form: PathForm::AddrPage, slash, dot: false }
     }
 
     /// A root-anchored published address (`/notes/beta/`), which the build

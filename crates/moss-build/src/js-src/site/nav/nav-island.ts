@@ -27,7 +27,11 @@
  * asserted in tests/render-gates/site/nav-island.spec.ts.
  */
 
-import { applyFold, inlineAvailableExtent, placePanel } from "./breadcrumb-fold";
+import { applyFold, inlineAvailableExtent, placePanel, trailOverflows } from "./breadcrumb-fold";
+import { mountContentsRuler } from "./contents-ruler";
+import { canvasMeasure, truncateMiddle } from "./middle-truncate";
+import { markRows, SECTION_SYNC_EVENT } from "./section-event";
+import { mountSectionName } from "./section-name";
 
 /**
  * Fallback clearance below the island's own bottom edge before a heading
@@ -45,7 +49,7 @@ const JITTER = 2;
 
 /**
  * How far below the scrollspy line a heading may sit and still count as having
- * reached it. Sub-pixel: see `markCurrentSection`.
+ * reached it. Sub-pixel: see `currentSection`.
  */
 const LANDING_TOLERANCE = 1;
 
@@ -186,14 +190,33 @@ export function initNavIsland(): void {
     return;
   }
 
+  const titles = headings.map(headingText);
+
   if (sectionsMenu) {
-    headings.forEach((heading) => {
+    headings.forEach((heading, i) => {
       const row = document.createElement("a");
       row.href = `#${heading.id}`;
-      row.textContent = headingText(heading);
+      row.textContent = titles[i];
       row.addEventListener("click", () => closeMenus());
       sectionsMenu.appendChild(row);
     });
+  }
+
+  // The wide-screen contents ruler and the section name on the button both
+  // follow `currentSection` through `SECTION_SYNC_EVENT`; neither keeps a
+  // scrollspy of its own. They must exist before the first `pass()` at the
+  // bottom, whose notification they would otherwise miss.
+  if (sectionsBtn) {
+    teardown.push(
+      mountContentsRuler({
+        headings,
+        titles,
+        label: sectionsBtn.getAttribute("aria-label") ?? "",
+        island,
+        clearance: scrollspyLine,
+      }),
+      mountSectionName({ button: sectionsBtn, island, titles }),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -232,9 +255,29 @@ export function initNavIsland(): void {
     if (!next) closeMenus();
   }
 
-  function onScroll(): void {
+  /**
+   * One frame's work for everything that follows the scroll position.
+   *
+   * Scroll and resize only schedule it. Reads (scroll offset, the masthead's
+   * edge, every heading's top) come first, then the ruler's own reads run off
+   * the event below, then the writes — so a scroll costs one layout however
+   * many surfaces follow it, where it used to cost one per write-then-read.
+   */
+  function pass(): void {
+    frame = 0;
+    if (relayout) {
+      relayout = false;
+      layoutTrail();
+    }
     const y = window.scrollY;
     const past = y > mastheadBottom();
+    const doc = document.documentElement;
+    const scrollable = doc.scrollHeight - doc.clientHeight;
+    const index = currentSection();
+
+    // Listeners (the ruler's fade, the button's name) read next, still before
+    // anything below has written.
+    island.dispatchEvent(new CustomEvent(SECTION_SYNC_EVENT, { detail: { index } }));
 
     if (!past) {
       setShown(false);
@@ -246,16 +289,21 @@ export function initNavIsland(): void {
     lastY = y;
 
     if (progress) {
-      const doc = document.documentElement;
-      const scrollable = doc.scrollHeight - doc.clientHeight;
       const pct = scrollable > 0 ? (y / scrollable) * 100 : 0;
       progress.style.width = `${Math.max(0, Math.min(100, pct))}%`;
     }
-
-    if (sectionsMenu && !sectionsMenu.hidden) markCurrentSection();
+    // A closed panel is marked when it opens, not on every frame.
+    if (sectionsMenu && !sectionsMenu.hidden) markRows(sectionsMenu.children, index);
   }
 
-  on(window, "scroll", onScroll, { passive: true });
+  let frame = 0;
+  let relayout = false;
+  const schedule = (): void => {
+    if (!frame) frame = requestAnimationFrame(pass);
+  };
+  teardown.push(() => cancelAnimationFrame(frame));
+
+  on(window, "scroll", schedule, { passive: true });
 
   // Tabbing past the last row of an open panel used to leave it open behind the
   // page, its button still saying `aria-expanded="true"`, with focus landed on
@@ -274,7 +322,7 @@ export function initNavIsland(): void {
   /** The folded level names, kept so the tooltip can be restored after a close. */
   let levelNames = "";
 
-  function layoutTrail(): void {
+  function foldTrail(): void {
     if (!moreBtn || !moreSep || !levelsMenu) return;
     // The algorithm and its measurement rules live in breadcrumb-fold.ts —
     // shared with the masthead, which folds the same way.
@@ -288,15 +336,42 @@ export function initNavIsland(): void {
     });
   }
 
+  /**
+   * Fold the trail around a sections button that carries the section's name.
+   *
+   * The name's box is a fixed width (see section-name.ts), so the fold has a
+   * neighbour that stays put while the reader scrolls. On a window too narrow
+   * for it the trail cannot fit even fully folded, and the name is what gives:
+   * the button goes back to its glyph alone. Decided here, on layout, by trying
+   * the name first — never on scroll, and never from the current width of the
+   * trail, which would flip the name off and on as the trail grew and shrank.
+   */
+  function layoutTrail(): void {
+    island.removeAttribute("data-nameless");
+    foldTrail();
+    if (trailOverflows(trail)) {
+      island.setAttribute("data-nameless", "");
+      foldTrail();
+    }
+  }
+
   // The trail is a flex item that resizes with the window, with the font, and
   // with a sibling appearing after a morph. Observing the bar catches all three
   // — `resize` alone catches only the first.
+  //
+  // The trail is observed as well as the bar: the bar keeps its width when the
+  // sections button hides (the ruler is up) or changes its name, but the trail
+  // beside it gains or loses exactly that room.
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => layoutTrail());
     ro.observe(bar);
+    ro.observe(trail);
     teardown.push(() => ro.disconnect());
   }
-  on(window, "resize", () => layoutTrail(), { passive: true });
+  on(window, "resize", () => {
+    relayout = true;
+    schedule();
+  }, { passive: true });
 
   // -------------------------------------------------------------------------
   // Sections
@@ -321,7 +396,8 @@ export function initNavIsland(): void {
   }
 
   /**
-   * Mark the row for the last heading whose top has passed the island.
+   * The one scrollspy: the position of the last heading whose top has passed
+   * the island (`-1` before the first). Reading only; `pass` publishes it.
    *
    * The comparison carries a one-pixel tolerance because "has passed" is a
    * knife edge: a fragment jump parks the heading AT the line, and a page
@@ -332,17 +408,13 @@ export function initNavIsland(): void {
    * multiplier) and every page at a reader font-scale step other than the
    * default. It only became visible when the Latin default joined them.
    */
-  function markCurrentSection(): void {
-    if (!sectionsMenu) return;
+  function currentSection(): number {
     const line = scrollspyLine() + LANDING_TOLERANCE;
     let current = -1;
     headings.forEach((heading, i) => {
       if (heading.getBoundingClientRect().top <= line) current = i;
     });
-    [...sectionsMenu.children].forEach((row, i) => {
-      if (i === current) row.setAttribute("aria-current", "true");
-      else row.removeAttribute("aria-current");
-    });
+    return current;
   }
 
   // -------------------------------------------------------------------------
@@ -364,6 +436,24 @@ export function initNavIsland(): void {
     if (moreBtn && levelsMenu?.hidden && levelNames) {
       moreBtn.setAttribute("data-tooltip", levelNames);
     }
+  }
+
+  /** Cut each section row's title in the middle to the row's own width, and
+   *  keep the whole title as the link's name when it was cut. */
+  function fitSectionRows(): void {
+    const rows = [...(sectionsMenu?.children ?? [])] as HTMLElement[];
+    rows.forEach((row, i) => (row.textContent = titles[i]));
+    const measure = rows[0] && canvasMeasure(rows[0]);
+    if (!measure) return;
+    const style = getComputedStyle(rows[0]);
+    const room =
+      rows[0].clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+    if (room <= 0) return;
+    rows.forEach((row, i) => {
+      row.textContent = truncateMiddle(titles[i], room, measure);
+      if (row.textContent === titles[i]) row.removeAttribute("aria-label");
+      else row.setAttribute("aria-label", titles[i]);
+    });
   }
 
   /** `moveFocus` puts the caret on the first row. Keyboard opens want that —
@@ -390,6 +480,13 @@ export function initNavIsland(): void {
     }
     if (!opening) return;
 
+    // Long titles are cut in the middle here as on the ruler and the button,
+    // measured now because a closed panel has no width.
+    if (menu === sectionsMenu) {
+      markRows(menu.children, currentSection());
+      fitSectionRows();
+    }
+
     // The panels are siblings of the bar (it clips its overflow), so their
     // containing block is `.moss-nav-island` — the full-width fixed wrapper.
     placePanel(menu, button, island, bar);
@@ -410,7 +507,7 @@ export function initNavIsland(): void {
   }
   if (sectionsBtn && sectionsMenu) {
     on(sectionsBtn, "click", (event) => {
-      markCurrentSection();
+      pass();
       togglePanel(sectionsMenu, sectionsBtn, openedByKeyboard(event));
     });
   }
@@ -432,7 +529,7 @@ export function initNavIsland(): void {
   });
 
   layoutTrail();
-  onScroll();
+  pass();
 }
 
 if (document.readyState === "loading") {

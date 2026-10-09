@@ -610,6 +610,7 @@ fn dispatch_embed_form(
                         align,
                         class_names: media.class_names,
                         img_style,
+                        italic_caption: false,
                     }
                 };
                 return WikilinkEmit {

@@ -201,12 +201,12 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         .and_then(|raw| {
             crate::build::components::color_extract::panel_background(raw, !is_light_tone)
         })
-        .map(|c| format!(r#" style="--moss-hero-panel-bg: {}""#, html_escape(&c)))
+        .map(|c| format!(r#" style="--item-hero-panel-bg: {}""#, html_escape(&c)))
         .unwrap_or_default();
     let mobile_style_attr = if args.mobile.as_deref() != Some("overlay") {
         dominant_color
             .map(|c| format!(
-                r#" data-cover-color style="--moss-cover-color: {}""#,
+                r#" data-cover-color style="--item-cover-color: {}""#,
                 html_escape(c)
             ))
             .unwrap_or_default()
@@ -720,6 +720,7 @@ mod tests {
                 align: None,
                 class_names: Vec::new(),
                 img_style: Some("object-fit:cover;object-position:left".into()),
+                italic_caption: false,
             }],
             image: Some(Url::Resolved(ResolvedUrl::new("header.png", UrlKind::Asset))),
             ..Default::default()
@@ -804,8 +805,8 @@ mod tests {
         let html = render_hero_html_typed(&args, &resolver, None, None, Some("hsla(212, 14%, 29%, 1)"), crate::i18n::Language::En);
         assert!(html.contains("data-cover-color"), "section must carry data-cover-color, got: {html}");
         assert!(
-            html.contains("--moss-cover-color: hsla(212, 14%, 29%, 1)"),
-            "section must carry --moss-cover-color with the dominant color, got: {html}"
+            html.contains("--item-cover-color: hsla(212, 14%, 29%, 1)"),
+            "section must carry --item-cover-color with the dominant color, got: {html}"
         );
         assert!(!html.contains("--moss-hero-mobile-bg"), "must not emit old var, got: {html}");
         assert!(!html.contains("--moss-hero-mobile-color"), "must not emit old companion var, got: {html}");
@@ -816,7 +817,7 @@ mod tests {
         let args = moss_core::ast::HeroShortcode::default();
         let resolver = |s: &str| s.to_string();
         let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
-        assert!(!html.contains("--moss-cover-color"), "got: {html}");
+        assert!(!html.contains("--item-cover-color"), "got: {html}");
         assert!(!html.contains("data-cover-color"), "got: {html}");
     }
 
@@ -912,7 +913,7 @@ mod tests {
         };
         let resolver = |s: &str| s.to_string();
         let html = render_hero_html_typed(&args, &resolver, None, None, Some("hsla(0, 50%, 20%, 1)"), crate::i18n::Language::En);
-        assert!(!html.contains("--moss-cover-color"), "overlay must suppress cover color var, got: {html}");
+        assert!(!html.contains("--item-cover-color"), "overlay must suppress cover color var, got: {html}");
         assert!(!html.contains("data-cover-color"), "overlay must suppress data attr, got: {html}");
     }
 

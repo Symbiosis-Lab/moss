@@ -822,6 +822,11 @@ main > article.container {
   max-inline-size: var(--moss-content-width);
   line-break: strict;
   word-break: normal;
+  /* Overflow here is not cosmetic: a phone widens its layout viewport to fit
+     an unbreakable run (a URL in an endnote), and the fixed nav island is then
+     sized and folded against a screen wider than the device. `break-word`, not
+     `anywhere`, so tables and grids keep their min-content columns. */
+  overflow-wrap: break-word;
   text-autospace: normal;
 }
 
@@ -2331,38 +2336,23 @@ header:has(+ .moss-hero) .main-nav {
   margin-inline-start: auto;
 }
 
-/* Two-line split (`data-nav-split`, set by nav-split.ts) — a plain-site-name
-   masthead that has to wrap keeps its toggles in the top corner: row 1 is the
-   site name at the start edge and the toggle cluster at the end edge, row 2 is
-   the link set alone, spread across the full measure. The one-row order
-   (name | links | toggles) and this two-row order disagree about sequence, so
-   no flex wrap can produce both — wrapping never floats a later sibling back
-   up a line — and CSS cannot ask whether a row wrapped. nav-split.ts measures
-   instead, and only on mastheads with no breadcrumb: a trail owns row 1 by
-   design (it folds to fill it), so breadcrumb pages keep the wrap above,
-   which anchors row 2's links at the start edge and toggles at the end edge.
-   Both layouts land the same invariant: every masthead row is anchored at
-   both container edges. With JS off the attribute never appears and the wrap
-   above is the fallback.
-
-   `display: contents` lifts .nav-links and .nav-icons to direct flex items of
-   .nav-content; .nav-icons's existing `margin-inline-start: auto` plus
-   .nav-left's flex-grow pin it to row 1's end edge, and the 100% basis forces
-   the links onto their own row. `space-between` is what "aligned on both
-   ends" means for a row that holds only links; a wrapped further row spreads
-   the same way, and a lone last item sits at the start edge. */
+/* Two-line split (`data-nav-split`, set by nav-split.ts): row 1 is the site name alone and row 2 holds the links, then the toggles at its end edge. */
 .nav-content[data-nav-split] .nav-right {
   display: contents;
 }
 
-.nav-content[data-nav-split] .nav-links {
-  order: 2;
+.nav-content[data-nav-split] .nav-left {
   flex: 1 1 100%;
+}
+
+.nav-content[data-nav-split] .nav-links {
+  order: 1;
+  flex: 1 1 0;
   justify-content: space-between;
 }
 
 .nav-content[data-nav-split] .nav-icons {
-  order: 1;
+  order: 2;
 }
 
 /* Same box as .nav-search-btn (search.css): a 2.25rem pill, transparent at
@@ -2647,6 +2637,35 @@ header:has(+ .moss-hero) .main-nav {
   margin-block: 0 var(--moss-space-md);
 }
 
+/*
+ * Event facts in the meta line (a page with `start`): time, status label,
+ * place and links share the row's muted colour and wrap on a narrow screen.
+ * A cancelled event keeps its time legible but struck through; the status
+ * label beside it carries the meaning in text.
+ */
+.moss-event-meta {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--moss-space-sm);
+}
+.moss-event-meta[data-status="cancelled"] .moss-event-time {
+  text-decoration: line-through;
+}
+.moss-event-status {
+  font-weight: 600;
+}
+.moss-event-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-event-link:hover {
+  border-bottom-color: currentColor;
+}
+
 /* Date and byline are one masthead unit: when both are present the date row
    stops holding the body's worth of space between them. */
 .date-line:has(+ .moss-byline) {
@@ -2903,6 +2922,22 @@ article .moss-place-map-frame:is(.moss-align-left, .moss-align-right):not([data-
   border-bottom: 1px solid var(--moss-border-light);
 }
 .moss-article-colophon a:hover {
+  border-bottom-color: currentColor;
+}
+
+.moss-calendar-links {
+  margin-block-start: var(--moss-space-lg);
+  font-size: 0.82em;
+  line-height: 1.8;
+  color: var(--moss-color-muted);
+}
+
+.moss-calendar-links a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-calendar-links a:hover {
   border-bottom-color: currentColor;
 }
 
@@ -3381,9 +3416,37 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   cursor: pointer;
   border-radius: 6px;
   color: var(--moss-color-text-secondary);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   font-size: var(--moss-size-lg);
+}
+
+/* The current section's name, before the glyph, in a box of FIXED width so the
+   breadcrumb fold never measures a moving neighbour (section-name.ts reads the
+   width back from here). Empty before the first section, same width. */
+.moss-nav-island-section-name {
+  box-sizing: border-box;
+  inline-size: 6em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: end;
+  font-family: var(--moss-font-body);
+  font-size: var(--moss-size-2xs);
+  line-height: 1; /* keeps the bar the height scroll-padding-top was sized for */
+}
+
+/* On a window too narrow to give the name its box and still show a trail
+   (nav-island.ts `layoutTrail` decides), the button is the glyph alone. */
+.moss-nav-island[data-nameless] .moss-nav-island-section-name {
+  display: none;
+}
+
+/* While the contents ruler is on screen it is the page's one contents menu. */
+.moss-nav-island[data-ruler="on"] .moss-nav-island-sections,
+.moss-nav-island[data-ruler="on"] [data-island-menu="sections"] {
+  display: none;
 }
 
 /* Invisible 44px hit area over the 32px icon. .moss-nav-island-actions holds
@@ -3463,29 +3526,30 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   outline-offset: -2px;
 }
 
-/* The section you are reading: a rule in the gutter, not a character in the
-   line. An in-flow marker (`content: "●"`) occupies real space, so it shifts
-   its own label sideways and the current row stops lining up with the rest —
-   the one thing a position indicator must never do. Absolute positioning takes
-   it out of the flow entirely. This is Wikipedia's sidebar TOC and Stripe's /
-   Tailwind's docs rails.
+/* The sections panel marks its rows the way the contents ruler marks its
+   dashes — the dash itself is styled once, under "The contents ruler" below;
+   this only places it. No bold and no side rule on the current row: weight
+   changes a label's width, so it would stop lining up with the rest.
 
-   Not an underline: every row here is already a link, so underlining the
-   current one says "link", not "you are here" — and it sits badly under CJK. */
-.moss-nav-island-menu a[aria-current="true"] {
-  color: var(--moss-color-text);
-  font-weight: 600;
+   Scoped to the sections panel: the levels menu and the masthead's folded
+   levels share the row rules above and have no current row. */
+[data-island-menu="sections"] a {
+  padding-inline-start: 40px; /* clears the longest dash (14px in, 18px long) */
 }
 
-.moss-nav-island-menu a[aria-current="true"]::before {
+[data-island-menu="sections"] a::before {
   content: "";
   position: absolute;
-  left: 6px;
-  top: 7px;
-  bottom: 7px;
-  width: 2px;
-  border-radius: 1px;
-  background: var(--moss-color-ui-accent);
+  inset-inline-start: 14px;
+  top: 50%;
+}
+
+[data-island-menu="sections"] a[aria-current="true"] {
+  color: var(--moss-color-text);
+}
+
+[data-island-menu="sections"] a[aria-current="true"]::before {
+  margin-block-start: -0.5px; /* the 2px dash stays centred on the row */
 }
 
 /* Reading progress rides the island's own bottom edge rather than being a
@@ -3516,6 +3580,155 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 
 @media (prefers-reduced-motion: reduce) {
   .moss-nav-island {
+    transition: none;
+  }
+}
+
+/* The contents ruler: one dash per section, in the left margin, pinned to the
+   window and centred on its height, with no background of its own at rest or
+   open. nav-island.ts mounts it only where the margin is wide enough to name a
+   section (contents-ruler.ts: `hidden` otherwise), so the plain `hidden`
+   rule below is the whole "not here" story. Below the island (z-index 100) and
+   far below the lightbox and the search overlay.
+
+   Every row is 20px tall, at rest and open. Rows that re-spaced on hover would
+   move the one under the pointer and the click would land on a neighbour. */
+.moss-contents-ruler {
+  position: fixed;
+  left: 32px; /* plus the list's 8px padding: the dashes start 40px in */
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  font-family: var(--moss-font-body);
+  font-weight: var(--moss-font-weight-body);
+  transition: opacity 200ms ease;
+}
+
+.moss-contents-ruler[hidden] {
+  display: none;
+}
+
+/* Faded while the article's body is not what is on screen (over a cover above
+   it, over the comments below it). Opacity, not `visibility`: the links stay
+   in the tab order, and focusing one lifts the fade. */
+.moss-contents-ruler[data-away] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.moss-contents-ruler ol {
+  list-style: none;
+  margin: 0;
+  padding: 10px 8px; /* a little room around the dashes, still part of the hover target */
+}
+
+.moss-contents-ruler li {
+  margin: 0;
+}
+
+.moss-contents-ruler a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  inline-size: 20px; /* every row is 20px tall; see above */
+  block-size: 20px;
+  text-decoration: none;
+  color: var(--moss-color-muted);
+}
+
+.moss-contents-ruler a:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* The dash, for both the ruler and the sections panel's rows: short and faint
+   at rest, darker once read, long and in the accent colour for the current
+   section. */
+.moss-contents-ruler-dash,
+[data-island-menu="sections"] a::before {
+  inline-size: 10px;
+  block-size: 1px;
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.moss-contents-ruler a[data-read] .moss-contents-ruler-dash,
+[data-island-menu="sections"] a[data-read]::before {
+  opacity: 0.9;
+}
+
+.moss-contents-ruler a[aria-current="true"] .moss-contents-ruler-dash,
+[data-island-menu="sections"] a[aria-current="true"]::before {
+  inline-size: 18px;
+  block-size: 2px;
+  opacity: 1;
+  background: var(--moss-color-ui-accent);
+}
+
+.moss-contents-ruler-dash {
+  transition: opacity 150ms ease;
+}
+
+/* The title, to the right of its dash. Hidden at rest with `visibility` as well
+   as opacity so that only the dash column is hit-tested; its box overlaps the
+   list padding so there is no dead strip between dash and label. nav-island.ts
+   sets its `max-width` (the room left before the text) and cuts the title in
+   the middle to fit. */
+.moss-contents-ruler-label {
+  position: absolute;
+  inset-inline-start: 24px; /* 4px past the row: inside the list padding, so no dead strip */
+  top: 0;
+  box-sizing: border-box;
+  padding-inline-start: 8px;
+  font-size: 0.8125rem; /* a step under body text; nothing in the type scale sits there */
+  line-height: 20px; /* the row height */
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--moss-color-text-secondary);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 150ms ease, visibility 0s 150ms;
+}
+
+.moss-contents-ruler a[aria-current="true"] .moss-contents-ruler-label {
+  color: var(--moss-color-text);
+}
+
+/* Open: under a pointer where hover exists, on keyboard focus, or after the
+   first tap where it does not (the second tap follows the link). */
+@media (hover: hover) {
+  .moss-contents-ruler:hover .moss-contents-ruler-label {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 150ms ease;
+  }
+
+  .moss-contents-ruler a:hover .moss-contents-ruler-label {
+    color: var(--moss-color-text);
+  }
+
+  .moss-contents-ruler a:hover .moss-contents-ruler-dash {
+    opacity: 1;
+  }
+}
+
+.moss-contents-ruler:is(:focus-within, [data-open]) .moss-contents-ruler-label {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 150ms ease;
+}
+
+@media print {
+  .moss-contents-ruler {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moss-contents-ruler,
+  .moss-contents-ruler-dash,
+  .moss-contents-ruler-label {
     transition: none;
   }
 }
@@ -4444,7 +4657,7 @@ article.container > [data-width] {
  * so left-to-right pages position from the left and right-to-left pages from
  * the right, and the extra width reaches the window's right edge in both. */
 article.container > [data-width="screen"] {
-  inline-size: calc(100cqi + var(--moss-sidenote-inset, 0px));
+  inline-size: calc(var(--moss-escape) + var(--moss-sidenote-inset, 0px));
   margin-left: calc((100% - 100cqi) / 2);
   margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));
 }
@@ -5862,12 +6075,14 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* Cover color background: applied when parent card carries a dominant color
-   extracted from its cover image. --moss-cover-color is set on the outer
-   <a class="moss-card"> by the Rust emitter.
-   allow:runtime-token --moss-cover-color set inline beside data-cover-color by
+   extracted from its cover image. The Rust emitter sets --item-cover-color on
+   the outer <a class="moss-card"> and reads it only as the fallback: the
+   public --moss-cover-color wins whenever a theme sets it, which an inline
+   --moss-cover-color could never allow (inline beats every stylesheet rule).
+   allow:runtime-token --item-cover-color set inline beside data-cover-color by
    build/render/grid_cells.rs — the selector is gated on the same attribute. */
 [data-cover-color] .moss-card-content {
-    background: var(--moss-cover-color);
+    background: var(--moss-cover-color, var(--item-cover-color));
     color: #fff;
 }
 
@@ -6411,7 +6626,7 @@ article a:where(:not(.moss-btn)):focus {
      the photo. */
   color: #ffffff;
   text-shadow: 0 1px 3px rgba(0,0,0,0.35);
-  background: var(--moss-hero-panel-bg, rgba(20, 16, 12, 0.82)); /* tinted panel; see color_extract::panel_background */
+  background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82))); /* tinted panel; see color_extract::panel_background */
 }
 
 /* Elements that carry their OWN colour from the base stylesheet have to hand
@@ -6724,7 +6939,7 @@ article a:where(:not(.moss-btn)):focus {
     padding-block: var(--moss-space-md);
     padding-inline: var(--moss-container-padding);
     max-inline-size: none;
-    background: var(--moss-cover-color, var(--moss-bg, var(--moss-color-bg, #fff)));
+    background: var(--moss-cover-color, var(--item-cover-color, var(--moss-bg, var(--moss-color-bg, #fff))));
     /* Stacked below the image on the page background, so the container's
        white (set for the overlay case) has to be handed back to body text.
        [data-cover-color] below re-asserts white when a cover tint is set. */
@@ -6800,7 +7015,7 @@ article a:where(:not(.moss-btn)):focus {
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content {
     position: static;
-    background: var(--moss-hero-panel-bg, rgba(20, 16, 12, 0.82)); /* see "Backing panel" above */
+    background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82))); /* see "Backing panel" above */
     /* Back over the image, so back to white — and the children inherit it
        via the `:is(h1…blockquote)` rule in the base block. */
     color: #fff;
@@ -6851,7 +7066,7 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero[data-hero-tone="light"] .moss-hero-content {
     color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
-    background: var(--moss-hero-panel-bg, rgba(250, 248, 244, 0.82)); /* pale panel for dark text */
+    background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(250, 248, 244, 0.82))); /* pale panel for dark text */
   }
 
   .moss-hero[data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
@@ -6863,7 +7078,7 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content {
     color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
-    background: var(--moss-hero-panel-bg, rgba(250, 248, 244, 0.82));
+    background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(250, 248, 244, 0.82)));
   }
 
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
@@ -7347,6 +7562,14 @@ a.moss-grid-card:hover {
   }
 }
 
+/* The image's link: opens the full-screen viewer (fullscreen.js), or the
+   full-size image where the script has not run. Block so the link is exactly
+   as tall as the picture it wraps. */
+.moss-gallery-link {
+  display: block;
+  cursor: zoom-in;
+}
+
 .moss-gallery-item img {
   width: 100%;
   height: auto;
@@ -7455,6 +7678,18 @@ main.has-sidebar > .moss-series-nav {
 /* Title can wrap to multiple lines */
 .moss-series-nav-title {
   /* inherits line-height from parent */
+}
+
+/* Direction label stacked above the title, since the arrow alone does not say which way a link goes. */
+.moss-series-nav-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.moss-series-nav-label {
+  font-size: var(--moss-size-xs);
+  line-height: 1.2;
+  color: var(--moss-color-muted);
 }
 
 /* Hover: only underline the title, not the arrow */
@@ -7877,6 +8112,13 @@ article picture[data-aspect="scroll"] {
   display: block;
   max-inline-size: 100%;
   margin-block: calc(var(--moss-read-line) * 1.25);
+}
+
+/* The article-body margin above would push a wide image down inside a grid
+   card, out of line with its neighbours' images (`.moss-grid-card img` is
+   flush at the top of the cell). */
+.moss-grid-card picture[data-aspect="scroll"] {
+  margin-block: 0;
 }
 
 /* No upscale past natural size (`inline-size: auto`, the same never-

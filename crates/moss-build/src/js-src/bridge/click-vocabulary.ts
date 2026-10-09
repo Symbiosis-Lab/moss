@@ -28,3 +28,10 @@ export function classifyClickGesture(
   if (eventType === 'dblclick') return 'dblclick';
   return detail > 1 ? null : 'click';
 }
+
+// A click on a gallery image's link belongs to the full-screen viewer, which
+// fullscreen.js opens from the same click; the bridge must not navigate to the
+// image file first.
+export function shouldLeaveClickToPage(target: Element): boolean {
+  return target.closest(".moss-gallery-link") !== null;
+}

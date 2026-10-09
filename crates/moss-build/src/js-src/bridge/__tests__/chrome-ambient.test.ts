@@ -26,7 +26,7 @@ import {
 } from "../chrome-ambient";
 
 describe("parseRgb", () => {
-  it("parses hsl() and hsla() — the ONLY form moss emits --moss-cover-color in", () => {
+  it("parses hsl() and hsla() — the ONLY form moss emits --item-cover-color in", () => {
     // color_extract.rs::darkened_hsla formats `hsla({h}, {s}%, {l}%, 1)`, and
     // IFRAME_COVER_FALLBACK is "hsla(0, 0%, 18%, 1)". A parser without this
     // branch drops the cover colour on every page that has one.
@@ -192,7 +192,7 @@ describe("resolveElementColor", () => {
     // Already normalised for contrast by prepare_cover_color_muted; re-deriving
     // it from pixels would discard that and cost a decode.
     const section = document.createElement("section");
-    section.style.setProperty("--moss-cover-color", "hsla(212, 14%, 29%, 1)");
+    section.style.setProperty("--item-cover-color", "hsla(212, 14%, 29%, 1)");
     expect(
       resolveElementColor(section, win(new Map()), new Map(), fakeCanvas([1, 1, 1, 255])),
     ).toBe("rgb(64, 73, 84)");
@@ -205,7 +205,7 @@ describe("resolveElementColor", () => {
     const body = document.createElement("div");
     const section = document.createElement("section");
     body.appendChild(section);
-    section.style.setProperty("--moss-cover-color", "color(display-p3 1 0 0)");
+    section.style.setProperty("--item-cover-color", "color(display-p3 1 0 0)");
     const styles = new Map<Element, string>([[body, "rgb(250, 248, 245)"]]);
     expect(resolveElementColor(section, win(styles), new Map(), fakeCanvas([1, 1, 1, 255])))
       .toBe("rgb(250, 248, 245)");
@@ -300,7 +300,7 @@ describe("sampleTopBand", () => {
     // null and sampleTopBand returned [] — on exactly the cover pages the
     // feature exists for. Assert through the caller, not the unit.
     const cover = document.createElement("div");
-    cover.style.setProperty("--moss-cover-color", "hsla(212, 14%, 29%, 1)");
+    cover.style.setProperty("--item-cover-color", "hsla(212, 14%, 29%, 1)");
     const win = {
       innerWidth: 700,
       getComputedStyle: () => ({ backgroundColor: "rgba(0, 0, 0, 0)" }),

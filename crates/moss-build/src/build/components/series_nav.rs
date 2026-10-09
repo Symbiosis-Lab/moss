@@ -40,10 +40,10 @@ use crate::i18n::numerals::to_chinese_numeral;
 /// <nav class="moss-series-nav">
 ///   <div class="moss-series-nav-links">
 ///     <a href="prev.html" class="moss-series-nav-link moss-series-nav-prev">
-///       <span class="moss-series-nav-arrow">&lt;</span> <span class="moss-series-nav-title">Previous</span>
+///       <span class="moss-series-nav-arrow">&lt;</span> <span class="moss-series-nav-text"><span class="moss-series-nav-label">Previous</span><span class="moss-series-nav-title">Title</span></span>
 ///     </a>
 ///     <a href="next.html" class="moss-series-nav-link moss-series-nav-next">
-///       <span class="moss-series-nav-title">Next</span> <span class="moss-series-nav-arrow">&gt;</span>
+///       <span class="moss-series-nav-text"><span class="moss-series-nav-label">Next</span><span class="moss-series-nav-title">Title</span></span> <span class="moss-series-nav-arrow">&gt;</span>
 ///     </a>
 ///   </div>
 ///   <div class="moss-series-nav-collection-row">
@@ -72,12 +72,17 @@ pub fn render(
 
     // Row 1: Navigation links
     // Arrow and title are separate spans so arrow doesn't wrap with multi-line titles
+    // The label says which way the link goes; the arrow alone does not, and a
+    // screen reader reads the title with no direction.
+    let prev_label = html_escape(crate::i18n::t(lang, "previous"));
+    let next_label = html_escape(crate::i18n::t(lang, "next"));
     let prev_link = prev
         .map(|(title, url)| {
             // Prev: arrow before title (← Title)
             format!(
-                r#"<a href="{}" class="moss-series-nav-link moss-series-nav-prev"><span class="moss-series-nav-arrow">&lt;</span> <span class="moss-series-nav-title">{}</span></a>"#,
+                r#"<a href="{}" class="moss-series-nav-link moss-series-nav-prev"><span class="moss-series-nav-arrow">&lt;</span> <span class="moss-series-nav-text"><span class="moss-series-nav-label">{}</span><span class="moss-series-nav-title">{}</span></span></a>"#,
                 html_escape(url),
+                prev_label,
                 html_escape(title)
             )
         })
@@ -87,8 +92,9 @@ pub fn render(
         .map(|(title, url)| {
             // Next: title before arrow (Title →)
             format!(
-                r#"<a href="{}" class="moss-series-nav-link moss-series-nav-next"><span class="moss-series-nav-title">{}</span> <span class="moss-series-nav-arrow">&gt;</span></a>"#,
+                r#"<a href="{}" class="moss-series-nav-link moss-series-nav-next"><span class="moss-series-nav-text"><span class="moss-series-nav-label">{}</span><span class="moss-series-nav-title">{}</span></span> <span class="moss-series-nav-arrow">&gt;</span></a>"#,
                 html_escape(url),
+                next_label,
                 html_escape(title)
             )
         })

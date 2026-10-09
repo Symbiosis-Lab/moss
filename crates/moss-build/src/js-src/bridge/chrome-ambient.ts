@@ -21,7 +21,7 @@
  * Why not `getComputedStyle` alone: it reports an `<img>`'s CSS background,
  * never its content, so a page whose top is a photo would sample as
  * transparent. Images are resolved by a build-time dominant colour when moss
- * computed one (`--moss-cover-color`, see build/components/color_extract.rs),
+ * computed one (`--item-cover-color`, see build/components/color_extract.rs),
  * and by a 1×1 canvas downscale otherwise. Text is deliberately not sampled:
  * WebKit's own `predominantColor()` excludes it, and a strip of body copy
  * averages to a muddy grey that tracks nothing.
@@ -100,7 +100,7 @@ export function parseRgb(css: string | null | undefined): [number, number, numbe
     return [r, g, b];
   }
 
-  // hsl()/hsla() is not optional: moss emits --moss-cover-color ONLY in this
+  // hsl()/hsla() is not optional: moss emits --item-cover-color ONLY in this
   // form (color_extract.rs::darkened_hsla), so a parser without this branch
   // drops the build-time cover colour on every page that has one.
   const hsl = s.match(/^hsla?\(([^)]+)\)$/);
@@ -248,7 +248,7 @@ export function resolveElementColor(
     // module's own parser cannot read makes the caller drop the column AND
     // skips the ancestor walk below, so one unreadable value blanks the band
     // instead of degrading to the background behind it.
-    const cover = (node as HTMLElement).style?.getPropertyValue?.("--moss-cover-color");
+    const cover = (node as HTMLElement).style?.getPropertyValue?.("--item-cover-color");
     const coverRgb = parseRgb(cover);
     if (coverRgb) return toRgbString(coverRgb);
 

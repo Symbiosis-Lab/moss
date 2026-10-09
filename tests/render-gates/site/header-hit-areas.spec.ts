@@ -266,42 +266,57 @@ test("dark theme does not move either toggle's hit area", async ({
   expect(await hitAt(page, ".nav-search-btn", 19, 0)).toBe("nav-search-btn");
 });
 
-test(".moss-nav-island-sections reaches a 44px hit area on all four sides without moving the 32px icon", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/field-reports/long-form-dispatch/", { waitUntil: "load" });
-  // nav-island.ts reveals the island only on an UPWARD scroll past the
-  // masthead (see the comment on .moss-heading-anchor's scroll-padding in
-  // site.css for the same scroll-direction rule) — scroll down, then up.
-  await scrollAndSettle(page, 400);
-  await scrollAndSettle(page, 200);
-  await expect(page.locator(".moss-nav-island")).toHaveAttribute(
-    "data-shown",
-    "true",
-  );
+// The island's sections button, with and without the contents ruler. At 900px
+// the ruler has no room; at 1440px a site has switched it off with CSS (it
+// would otherwise be on screen and the island would hide this button on
+// purpose — contents-ruler.spec.ts). Either way the button must be there, and
+// reachable 20px from its icon's centre on every side.
+for (const [width, rulerOff] of [
+  [900, false],
+  [1440, true],
+] as const) {
+  test(`.moss-nav-island-sections reaches a 44px hit area on all four sides without moving the 32px icon, at ${width}px${rulerOff ? " with the ruler switched off" : ""}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/field-reports/long-form-dispatch/", { waitUntil: "load" });
+    if (rulerOff) await page.addStyleTag({ content: ".moss-contents-ruler { display: none; }" });
+    // nav-island.ts reveals the island only on an UPWARD scroll past the
+    // masthead (see the comment on .moss-heading-anchor's scroll-padding in
+    // site.css for the same scroll-direction rule) — scroll down, then up.
+    await scrollAndSettle(page, 400);
+    await scrollAndSettle(page, 200);
+    await expect(page.locator(".moss-nav-island")).toHaveAttribute(
+      "data-shown",
+      "true",
+    );
+    await expect(page.locator(".moss-nav-island-sections")).toBeVisible();
 
-  const box = await visibleBox(page, ".moss-nav-island-sections");
-  expect(box!.w, "visible width").toBeCloseTo(32, 0);
-  expect(box!.h, "visible height").toBeCloseTo(32, 0);
+    // The button may carry the current section's name before its icon, so the
+    // icon is measured through its svg: 20px plus 6px of padding each side.
+    const icon = await visibleBox(page, ".moss-nav-island-sections svg");
+    expect(icon!.w, "icon width").toBeCloseTo(20, 0);
+    expect((await visibleBox(page, ".moss-nav-island-sections"))!.h, "button height").toBeCloseTo(32, 0);
 
-  // .moss-nav-island-actions holds this button alone (no neighbour to
-  // split with — see its contract entry), and .moss-nav-island-bar's own
-  // min-height/padding leave exactly 6px of slack on every side, so all
-  // four directions reach the full 20px.
-  for (const [name, dx, dy] of [
-    ["right", 20, 0],
-    ["left", -20, 0],
-    ["up", 0, -20],
-    ["down", 0, 20],
-  ] as const) {
-    expect(
-      await hitAt(page, ".moss-nav-island-sections", dx, dy),
-      `${name}: 20px from .moss-nav-island-sections' centre must still hit it, ` +
-        "not the decorative .moss-nav-island-progress rule riding its bottom edge",
-    ).toBe("moss-nav-island-sections");
-  }
-});
+    // .moss-nav-island-actions holds this button alone (no neighbour to
+    // split with — see its contract entry), and .moss-nav-island-bar's own
+    // min-height/padding leave exactly 6px of slack on every side, so all
+    // four directions reach the full 20px. Left of the icon is the name's box,
+    // which is part of the button.
+    for (const [name, dx, dy] of [
+      ["right", 20, 0],
+      ["left", -20, 0],
+      ["up", 0, -20],
+      ["down", 0, 20],
+    ] as const) {
+      expect(
+        await hitAt(page, ".moss-nav-island-sections svg", dx, dy),
+        `${name}: 20px from the icon's centre must still hit .moss-nav-island-sections, ` +
+          "not the decorative .moss-nav-island-progress rule riding its bottom edge",
+      ).toMatch(/^moss-nav-island-section(s|-name)$/);
+    }
+  });
+}
 
 test(".font-trigger reaches a 44px hit area without moving the pill or overlapping the heading above it", async ({
   page,

@@ -53,6 +53,7 @@ GATES_BUILD=(
   pre-paint-dark
   ui-accent-seam
   nav-toggle-cluster
+  nav-split-order
   header-hit-areas
   lightbox-github-shapes
   grid-card-no-cover
@@ -70,6 +71,7 @@ GATES_BUILD=(
   share-card
   notebook-loads
   nav-island
+  contents-ruler
   edge-clamp
   vertical-nav-chrome
   video-embed-shape
@@ -277,17 +279,24 @@ for gate in "${GATES[@]}"; do
   echo "── $gate ────────────────────────────────────────────"
   cfg="playwright/${gate}.config.ts"
   if [ -n "$PROJECT" ]; then
-    # A config's project set decides how --project applies to it, and the
-    # only reliable way to read that set is to ask Playwright, not to grep
-    # the config: `--list --project=<name>` exits 0 when the config defines
-    # that project and non-zero otherwise. Every gate here declares named
-    # projects, one per engine it runs (see define-gate-config.ts) — there is
-    # no gate left with an empty project set to run unfiltered, so a miss
-    # always means "this gate has nothing to say about this engine — skip it".
-    if npx playwright test -c "$cfg" --list --project="$PROJECT" >/dev/null 2>&1; then
+    # Ask Playwright for the configured project set rather than grepping the
+    # config. Only its explicit missing-project diagnostic means this gate has
+    # nothing to say about the selected engine; config-load and scratch-build
+    # errors must remain failures instead of becoming false skips.
+    list_output=""
+    if list_output="$(npx playwright test -c "$cfg" --list --project="$PROJECT" 2>&1)"; then
       npx playwright test -c "$cfg" --project="$PROJECT" --reporter=line || status=1
     else
-      echo "SKIP $gate: no $PROJECT project"
+      case "$list_output" in
+        *"Error: Project(s) \"$PROJECT\" not found. Available projects:"*)
+          echo "SKIP $gate: no $PROJECT project"
+          ;;
+        *)
+          printf '%s\n' "$list_output" >&2
+          echo "ERROR $gate: Playwright project listing failed" >&2
+          status=1
+          ;;
+      esac
     fi
   else
     npx playwright test -c "$cfg" --reporter=line || status=1

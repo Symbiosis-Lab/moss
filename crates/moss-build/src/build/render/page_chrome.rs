@@ -22,7 +22,7 @@ pub(super) struct ChromeAssets<'a> {
     pub scripts: &'a ScriptAssets,
     pub has_user_css: bool,
     pub has_user_js: bool,
-    pub rss_link: Option<&'a str>,
+    pub head_alternates: Option<&'a str>,
 }
 
 pub(super) struct PageChromeContext<'a, 'd> {
@@ -126,7 +126,7 @@ impl PageChromeContext<'_, '_> {
             footer: Some(nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),
-            rss_link: self.assets.rss_link.map(str::to_string),
+            head_alternates: self.assets.head_alternates.map(str::to_string),
             analytics: analytics_home.and_then(|d| d.analytics.as_ref()).map(|a| a.to_script_tag()),
             body_attrs,
             lang: page_lang_tag, ui_lang,
@@ -146,7 +146,7 @@ impl PageChromeContext<'_, '_> {
             date: None, formatted_date: None, date_line: None, short_date: None, content: None,
             description: None, og_tags: None, twitter_tags: None, canonical_link: None,
             hreflang_links: None, schema_json_ld: None, embed_head_assets: String::new(),
-            post_article: String::new(), robots_meta: None,
+            post_article: String::new(), lightbox: String::new(), robots_meta: None,
         }
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::event::{check_end_after_start, when};
+use crate::event::check_end_after_start;
 
 #[test]
 fn bare_date_is_all_day() {
@@ -50,12 +50,4 @@ fn inclusive_and_equal_ends_are_accepted() {
     assert!(check_end_after_start("2026-11-01 14:00", "2026-11-01 14:00").is_ok());
     // An all-day end covers the whole day, so it is not before a timed start on that day.
     assert!(check_end_after_start("2026-11-03 19:30", "2026-11-03").is_ok());
-}
-
-#[test]
-fn when_prefers_start_and_falls_back_to_date() {
-    assert_eq!(when(Some("2026-11-01 14:00"), Some("2026-09-01")).as_deref(), Some("2026-11-01T14:00"));
-    assert_eq!(when(None, Some("2026-09-01")).as_deref(), Some("2026-09-01"));
-    assert_eq!(when(Some("garbage"), Some("2026-09")).as_deref(), Some("2026-09"));
-    assert_eq!(when(None, None), None);
 }

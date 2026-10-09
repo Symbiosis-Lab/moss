@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { initPlacesExplorer } from "../index";
+import * as raster from "../raster";
 
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const PLACES_JSON = { works: [], places: [] };
@@ -43,6 +44,7 @@ function stubSuccessfulFetch(placesJson: unknown = PLACES_JSON, labelsOutcome: "
 }
 
 beforeEach(() => {
+  history.replaceState(null, "", "/places/");
   // A real, non-zero layout so mountPlacesMap's render pipeline actually
   // runs its full body instead of early-returning on a 0x0 viewport.
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
@@ -52,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.innerHTML = "";
+  document.documentElement.removeAttribute("data-moss-embed");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -77,6 +80,28 @@ describe("initPlacesExplorer", () => {
     expect(figure.getAttribute("data-moss-places-explorer-ready")).toBe("ready");
     expect(figure.querySelector("[data-static-floor]")).toBeNull();
     expect(figure.querySelector(".moss-places-viewport")).not.toBeNull();
+  });
+
+  test("sizes the first raster from the collapsed embed, before mounting the camera", async () => {
+    history.replaceState(null, "", "/places/?embed=1");
+    document.body.innerHTML = handshakeFigure();
+    stubSuccessfulFetch();
+    const rasterize = vi.spyOn(raster, "rasterizeOrFallback").mockImplementation(async () => ({
+      el: document.createElement("canvas"), release() {},
+    }));
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function () {
+      const embedded = document.documentElement.hasAttribute("data-moss-embed")
+        && document.querySelector("[data-moss-places-explorer]")?.getAttribute("data-moss-places-embed-mode") === "collapsed";
+      const height = embedded ? 240 : 480;
+      return { width: 360, height, top: 0, left: 0, right: 360, bottom: height, x: 0, y: 0, toJSON() {} } as DOMRect;
+    });
+
+    await initPlacesExplorer();
+
+    expect(rasterize).toHaveBeenCalled();
+    // The raster may bake up to 1.6x the viewport's cover scale. A full-page
+    // 480px bake cannot be undone after its expensive draw has been queued.
+    expect(rasterize.mock.calls[0][3]).toBeLessThanOrEqual(240 * 1.6 * devicePixelRatio);
   });
 
   test("a failed fetch leaves the static figure untouched and never throws", async () => {

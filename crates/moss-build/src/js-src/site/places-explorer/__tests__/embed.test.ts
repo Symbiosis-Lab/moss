@@ -8,7 +8,7 @@
  * after, which would re-navigate an already-loaded iframe a second time.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { attachEmbedModeIfRequested, initPlaceEmbeds } from "../embed";
+import { attachEmbedModeIfRequested, initPlaceEmbeds, prepareEmbedLayoutIfRequested } from "../embed";
 import type { PlacesMapController } from "../map";
 
 class FakeIntersectionObserver {
@@ -328,6 +328,7 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     history.replaceState(null, "", "/places/?place=lisbon");
     const controller = fakeController();
     const figure = document.createElement("figure");
+    prepareEmbedLayoutIfRequested(figure);
     attachEmbedModeIfRequested(controller, figure);
     expect(controller.setCooperativeGestures).not.toHaveBeenCalled();
     expect(figure.hasAttribute("data-moss-places-embed-mode")).toBe(false);
@@ -340,15 +341,16 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     const figure = document.createElement("figure");
     attachEmbedModeIfRequested(controller, figure);
     expect(controller.setCooperativeGestures).toHaveBeenCalledWith(true);
-    expect(figure.getAttribute("data-moss-places-embed-mode")).toBe("collapsed");
     expect(controller.setScope).not.toHaveBeenCalled();
     expect(controller.setCurrentArticle).not.toHaveBeenCalled();
   });
 
   test("marks the document so this page's own chrome (header/nav/footer) hides itself — the embed is never meant to show it", () => {
     history.replaceState(null, "", "/places/?place=lisbon&embed=1");
-    attachEmbedModeIfRequested(fakeController(), document.createElement("figure"));
+    const figure = document.createElement("figure");
+    prepareEmbedLayoutIfRequested(figure);
     expect(document.documentElement.hasAttribute("data-moss-embed")).toBe(true);
+    expect(figure.getAttribute("data-moss-places-embed-mode")).toBe("collapsed");
   });
 
   test("an article-scoped embed (the locator) scopes to that work and names it the current article", () => {
@@ -433,6 +435,7 @@ describe("attachEmbedModeIfRequested — iframe content side", () => {
     history.replaceState(null, "", "/places/?place=lisbon&embed=1");
     const controller = fakeController();
     const figure = document.createElement("figure");
+    prepareEmbedLayoutIfRequested(figure);
     attachEmbedModeIfRequested(controller, figure);
     (controller.setCooperativeGestures as any).mockClear();
 

@@ -227,10 +227,31 @@ pub fn emit_redirect_table(
     // so the site loses nothing it has already earned; what it cannot do is
     // notice a move made since the last publish, and the advisory says so
     // instead of telling the user their site is complete.
-    let new_renames = match &baseline {
+    let mut new_renames = match &baseline {
         Baseline::Present(projection) => detect_renames(projection, current_article_map),
         Baseline::Absent | Baseline::Unreadable(_) => HashMap::new(),
     };
+    // Folder homes have no article UID entry. Their unchanged source path
+    // still identifies an output moved by slug rules or a `url:` edit.
+    // The same published mapping preserves QR files for all unchanged page
+    // sources. Copies go through the table's normal output/collision checks.
+    use crate::build::manifest::{backfill, published_record};
+    use crate::build::media::qr::qr_key_for_url_path;
+    use crate::build::scan::article_map::to_pretty_url;
+    if let Some(previous) = published_record::load_address_baseline(paths, backfill::publish_target(paths).as_deref()) {
+        let folder_sources: HashSet<&str> = current_article_map.pages.values().map(String::as_str).collect();
+        for (source, old) in &previous.source_to_output {
+            let Some(new) = pending.source_to_output().get(source) else { continue };
+            if old == new { continue; }
+            if folder_sources.contains(source.as_str()) {
+                new_renames.insert(to_pretty_url(old), to_pretty_url(new));
+            }
+            let (old_qr, new_qr) = (qr_key_for_url_path(old), qr_key_for_url_path(new));
+            if previous.files.contains_key(&old_qr) && pending.is_registered(&new_qr) {
+                new_renames.insert(old_qr, new_qr);
+            }
+        }
+    }
     let current_urls = current_build_urls(current_article_map);
     let merged = merge_redirects(existing.as_ref().unwrap_or(&BTreeMap::new()), &new_renames, &current_urls);
 
@@ -484,6 +505,68 @@ mod tests {
     // ---------------------------------------------------------------
     // detect_renames
     // ---------------------------------------------------------------
+
+    #[test]
+    fn published_folder_paths_and_qr_files_survive_slug_changes() {
+        use crate::build::context::BuildContext;
+        use crate::build::manifest::{change_set::PublishedSnapshot, published_record, HashBucket, PendingManifest};
+        use crate::build::media::qr::qr_key_for_url_path;
+        use crate::build::scan::article_map::to_pretty_url;
+        use crate::build::served_path::ServedPath;
+        use crate::moss_paths::MossPaths;
+        use crate::types::content::SiteHashes;
+
+        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
+            .parent().unwrap().join("target/test-tmp");
+        std::fs::create_dir_all(&test_tmp).unwrap();
+        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
+        let paths = MossPaths::new(tmp.path());
+        let output = tmp.path().join("output");
+        let cases = [
+            ("cafe\u{301}/index.md", "cafe/index.html", "café/index.html", None),
+            ("folder/index.md", "share-id/index.html", "share/id/index.html", None),
+            ("ordinary.md", "path-item/index.html", "path/item/index.html", Some("arti0001")),
+            ("note-e\u{301}.md", "note-e/index.html", "note-é/index.html", Some("arti0002")),
+        ];
+        let mut previous_map = ArticleMap::new();
+        let mut current_map = ArticleMap::new();
+        let mut record = PublishedSnapshot { target: "moss:fixture".into(), ..Default::default() };
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for (source, old, new, uid) in cases {
+            record.source_to_output.insert(source.into(), old.into());
+            record.files.insert(old.into(), "old-page".into());
+            record.files.insert(qr_key_for_url_path(old), "old-qr".into());
+            if let Some(uid) = uid {
+                let mut info = article_info_with_uid(Some(uid));
+                info.source_path = source.into();
+                previous_map.articles.insert(to_pretty_url(old), info.clone());
+                current_map.articles.insert(to_pretty_url(new), info);
+            } else {
+                current_map.pages.insert(to_pretty_url(new), source.into());
+            }
+            let page = ServedPath::from_source(new).unwrap();
+            pending.register_source_mapping(source.into(), &page);
+            for (key, bytes) in [(new.to_string(), b"<html>current page</html>".as_slice()), (qr_key_for_url_path(new), b"<svg>current QR</svg>".as_slice())] {
+                BuildContext::for_render(&output, &mut pending)
+                    .emit(&ServedPath::from_source(&key).unwrap(), bytes, HashBucket::Files).unwrap();
+            }
+        }
+        record.triples = Some(projection_of(&previous_map).entries);
+        published_record::save(&paths, &record).unwrap();
+        emit_redirect_table(&paths, &current_map, &TableInputs { has_deployed_url: true, ..Default::default() }, &output, &mut pending).unwrap();
+        let sealed = pending.seal();
+        let table: serde_json::Value = serde_json::from_slice(&std::fs::read(output.join("_moss/redirects.json")).unwrap()).unwrap();
+        for (_, old, new, _) in cases {
+            assert!(sealed.files().contains_key(old), "old page missing from seal: {old}");
+            assert!(std::fs::read_to_string(output.join(old)).unwrap().contains(&format!("url=/{}", to_pretty_url(new))));
+            let old_qr = qr_key_for_url_path(old);
+            assert!(sealed.files().contains_key(&old_qr), "old QR missing from seal: {old_qr}");
+            assert_eq!(std::fs::read(output.join(&old_qr)).unwrap(), std::fs::read(output.join(qr_key_for_url_path(new))).unwrap());
+            for from in [format!("/{}", to_pretty_url(old)), format!("/{old_qr}")] {
+                assert!(table["redirects"].as_array().unwrap().iter().any(|r| r["from"] == from), "missing redirect: {from}");
+            }
+        }
+    }
 
     #[test]
     fn detect_renames_same_uid_different_url() {

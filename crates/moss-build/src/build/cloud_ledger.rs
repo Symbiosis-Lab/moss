@@ -19,6 +19,7 @@ pub enum InputState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputRole {
+    DirectoryStructure,
     PageMetadata,
     PageContent,
     SharedConfig,
@@ -53,7 +54,7 @@ impl InputEvidence {
 
     fn key(&self, path: &Path) -> Option<String> {
         path.strip_prefix(&self.root).ok()
-            .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+            .map(|rel| if rel.as_os_str().is_empty() { ".".into() } else { moss_core::slug::normalize_separators(&rel.to_string_lossy()) })
     }
 
     fn record(&self, path: &Path, state: InputState) {
@@ -196,7 +197,7 @@ pub fn unresolved_preview_entries(
         entries.iter()
             .filter(|(path, entry)| {
                 let needed = match entry.role {
-                    InputRole::SharedConfig | InputRole::Theme | InputRole::Layout => true,
+                    InputRole::DirectoryStructure | InputRole::SharedConfig | InputRole::Theme | InputRole::Layout => true,
                     InputRole::GeneratedData => include_places,
                     InputRole::PageMetadata | InputRole::PageContent =>
                         include_listing_metadata || needed_pages.contains(*path),

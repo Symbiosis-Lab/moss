@@ -151,6 +151,8 @@ impl<'a> NavigationBuilder<'a> {
         let trail_label =
             crate::build::page::meta::escape_html_attr(crate::i18n::t(lang, "nav_breadcrumb"));
 
+        // The glyph is a ruler: dashes of one length with one longer, the mark
+        // the contents ruler and the panel's rows use for the current section.
         // The sections glyph and the progress rule are inert markup until
         // `nav-island.ts` fills them in; both are `hidden` / zero-width so a
         // script-less page shows neither. `aria-label` only, no `data-tooltip`
@@ -159,7 +161,7 @@ impl<'a> NavigationBuilder<'a> {
         // button's, which names levels the bar has hidden and is set by
         // nav-island.ts while folded.
         let sections_button = format!(
-            r#"<button type="button" class="moss-nav-island-sections" aria-expanded="false" aria-label="{sections_label}"><svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M4 12h16M4 18h12"/></svg></button>"#
+            r#"<button type="button" class="moss-nav-island-sections" aria-expanded="false" aria-label="{sections_label}"><svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 6h6M5 10h6M5 14h13M5 18h6"/></svg></button>"#
         );
 
         [

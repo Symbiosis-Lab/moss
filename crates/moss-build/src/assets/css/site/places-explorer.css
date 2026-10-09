@@ -228,20 +228,9 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
    World + tiles: the layer the camera's CSS transform actually moves.
    --------------------------------------------------------------------------- */
 
-/* Sized and transformed from JS (map.ts's applyCamera): width/height are the
-   cover-scale box in CSS px, transform is translate+scale from the live
-   camera. will-change is permanent now, not scoped to an active gesture
-   (data-gesture, still set/cleared for the label-hiding rule further down):
-   the world layer's own content is a decoded raster plus a thin, unfiltered
-   rivers overlay (map.ts's module doc), neither of which has a live filter
-   left for a permanent compositor layer to force a soft re-rasterisation
-   of — the old comment's own concern (a zoomed-out-then-back-in map reading
-   blurry) applied to a live, filtered `<svg>` promoted only for a gesture's
-   span, not to a raster map.ts itself re-decodes at a sharper size on
-   settle. A measured win for Chromium specifically (see that file's doc):
-   without it, a filtered live SVG's own paint invalidation on every
-   transform change cost whole frames even before WebKit's own, larger cost
-   entered the picture. */
+/* Sized and transformed by map.ts's applyCamera. Do not promote this whole
+   subtree with will-change: WebKit can magnify a coarse composited layer
+   even while its regional canvases retain sharp pixels. */
 .moss-places-world,
 .moss-places-labels {
   user-select: none;
@@ -253,7 +242,6 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   top: 50%;
   left: 50%;
   transform-origin: center;
-  will-change: transform;
 }
 
 /* Camera zoom already drives the continuous detail fade. Do not animate it

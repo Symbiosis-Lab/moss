@@ -301,22 +301,59 @@ pub fn build_twitter_tags(
     tags_html.join("\n    ")
 }
 
+/// Wrap a JSON-LD value in its `<script>` tag. The one place JSON-LD text
+/// reaches HTML: `<` is written as `\u003c` so page text such as `</script>`
+/// or `<!--` cannot close the block or open a comment.
+pub(crate) fn ld_script(value: &serde_json::Value) -> String {
+    let body = serde_json::to_string_pretty(value).unwrap_or_default().replace('<', "\\u003c");
+    format!("<script type=\"application/ld+json\">\n{body}\n</script>")
+}
+
+/// The page's own URL as meta tags and JSON-LD state it: absolute when the
+/// site is deployed, else the relative served path, with `index.html` cut
+/// so directory pages keep their trailing slash.
+pub(crate) fn page_meta_url(
+    doc: &crate::build::types::ParsedDocument,
+    site_url: &SiteUrl,
+) -> Result<String, String> {
+    let page_path = crate::build::served_path::ServedPath::from_source(&doc.url_path)
+        .map_err(|e| format!("meta URL path for {}: {}", doc.url_path, e))?;
+    let relative = page_path.to_relative_url().trim_end_matches("index.html").to_string();
+    Ok(if site_url.is_deployed() { site_url.to_absolute(&relative) } else { relative })
+}
+
+/// The JSON-LD block for a page: `Event` for an event page of any layout,
+/// else `Article` for an article page, else `WebSite` for the homepage, else
+/// none. Only public pages get one, like the og/twitter tags.
+pub(crate) fn page_json_ld(
+    doc: Option<&crate::build::types::ParsedDocument>,
+    is_article_page: bool,
+    is_homepage: bool,
+    description: &str,
+    site_name: &str,
+    cover: Option<&CoverRef>,
+    site_url: &SiteUrl,
+    homepage_url: &str,
+    lang_tag: &str,
+) -> Result<Option<String>, String> {
+    let Some(d) = doc.filter(|d| d.is_public_page()) else { return Ok(None) };
+    if let Some(event) = super::event_json_ld::for_page(d, description, site_name, cover, site_url)? {
+        return Ok(Some(event));
+    }
+    if is_article_page {
+        // Schema.org headline is chrome; use the plain-text label.
+        return Ok(Some(build_schema_json_ld(
+            &d.label, description, &page_meta_url(d, site_url)?, site_name,
+            d.date.as_deref(), cover, d.tags.as_deref().unwrap_or(&[]), site_url,
+        )));
+    }
+    Ok(is_homepage.then(|| build_schema_website(site_name, description, homepage_url, lang_tag)))
+}
+
 /// Generate Schema.org JSON-LD for an article.
 ///
-/// # Arguments
-/// * `title` - Article title (headline)
-/// * `description` - Article description
-/// * `url` - Full canonical URL
-/// * `site_name` - Publisher name
-/// * `date` - Publication date in ISO 8601 format
-/// * `cover` - Optional typed CoverRef (Local served path or External URL)
-/// * `tags` - Article keywords
-/// * `site_url` - Base URL used to resolve cover paths via
-///   [`CoverRef::to_meta_url`]: absolute on deployed sites, relative on
-///   preview / unconfigured builds (same deploy-gated policy as `og:image`)
-///
-/// # Returns
-/// HTML script tag containing JSON-LD structured data
+/// `site_url` resolves the cover through [`CoverRef::to_meta_url`]: absolute
+/// on deployed sites, relative on preview builds (same policy as `og:image`).
 pub fn build_schema_json_ld(
     title: &str,
     description: &str,
@@ -327,108 +364,49 @@ pub fn build_schema_json_ld(
     tags: &[String],
     site_url: &SiteUrl,
 ) -> String {
-    let mut json_parts = vec![
-        r#"  "@context": "https://schema.org""#.to_string(),
-        r#"  "@type": "Article""#.to_string(),
-        format!(r#"  "headline": "{}""#, escape_json_string(title)),
-        format!(r#"  "url": "{}""#, escape_json_string(url)),
-        format!(r#"  "description": "{}""#, escape_json_string(description)),
-    ];
-
+    let mut o = serde_json::json!({
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": title,
+        "url": url,
+        "description": description,
+        // Publisher is required by Google.
+        "publisher": {"@type": "Organization", "name": site_name},
+    });
     if let Some(date) = date {
-        json_parts.push(format!(r#"  "datePublished": "{}""#, escape_json_string(date)));
+        o["datePublished"] = date.into();
     }
-
-    if let Some(cover_ref) = cover {
-        // Use the deploy-gated form: JSON-LD image is meta data crawlers
-        // ingest, same constraints as og:image (see CoverRef::to_meta_url).
-        let image = cover_ref.to_meta_url(site_url);
-        json_parts.push(format!(r#"  "image": "{}""#, escape_json_string(&image)));
+    if let Some(cover) = cover {
+        o["image"] = cover.to_meta_url(site_url).into();
     }
-
     if !tags.is_empty() {
-        let keywords: Vec<String> = tags.iter()
-            .map(|t| format!(r#""{}""#, escape_json_string(t)))
-            .collect();
-        json_parts.push(format!(r#"  "keywords": [{}]"#, keywords.join(", ")));
+        o["keywords"] = tags.into();
     }
-
-    // Publisher (always included, required by Google)
-    json_parts.push(format!(
-        r#"  "publisher": {{
-    "@type": "Organization",
-    "name": "{}"
-  }}"#,
-        escape_json_string(site_name)
-    ));
-
-    format!(
-        r#"<script type="application/ld+json">
-{{
-{}
-}}
-</script>"#,
-        json_parts.join(",\n")
-    )
+    ld_script(&o)
 }
 
-/// Generate Schema.org `WebSite` JSON-LD for the homepage.
-///
-/// Establishes the site's entity identity for crawlers — the homepage is the
-/// one page that represents the site as a whole (the article builder above
-/// represents individual posts). Mirrors [`build_schema_json_ld`]'s style: a
-/// `Vec<String>` of JSON lines joined with `escape_json_string`, wrapped in the
-/// same `<script type="application/ld+json">` tag.
-///
-/// # Arguments
-/// * `site_name` - Site name (also the Organization publisher name)
-/// * `description` - Site description; the line is omitted when empty
-///   (same empty-field-skip policy as the og builders)
-/// * `url` - Homepage URL (absolute when deployed, "/" otherwise — same value
-///   passed to [`build_og_tags_website`])
-/// * `lang_code` - Site language code (e.g. "en"); the `inLanguage` line is
-///   omitted when empty
-///
-/// # Returns
-/// HTML script tag containing JSON-LD structured data
+/// Generate Schema.org `WebSite` JSON-LD for the homepage: the site's entity
+/// identity for crawlers. `description` and `lang_code` are omitted when empty.
 pub fn build_schema_website(
     site_name: &str,
     description: &str,
     url: &str,
     lang_code: &str,
 ) -> String {
-    let mut json_parts = vec![
-        r#"  "@context": "https://schema.org""#.to_string(),
-        r#"  "@type": "WebSite""#.to_string(),
-        format!(r#"  "name": "{}""#, escape_json_string(site_name)),
-        format!(r#"  "url": "{}""#, escape_json_string(url)),
-    ];
-
+    let mut o = serde_json::json!({
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": site_name,
+        "url": url,
+        "publisher": {"@type": "Organization", "name": site_name},
+    });
     if !description.is_empty() {
-        json_parts.push(format!(r#"  "description": "{}""#, escape_json_string(description)));
+        o["description"] = description.into();
     }
-
     if !lang_code.is_empty() {
-        json_parts.push(format!(r#"  "inLanguage": "{}""#, escape_json_string(lang_code)));
+        o["inLanguage"] = lang_code.into();
     }
-
-    // Publisher (always included — mirrors build_schema_json_ld)
-    json_parts.push(format!(
-        r#"  "publisher": {{
-    "@type": "Organization",
-    "name": "{}"
-  }}"#,
-        escape_json_string(site_name)
-    ));
-
-    format!(
-        r#"<script type="application/ld+json">
-{{
-{}
-}}
-</script>"#,
-        json_parts.join(",\n")
-    )
+    ld_script(&o)
 }
 
 /// Extract description from article content.
@@ -1681,15 +1659,6 @@ pub fn build_hreflang_link_tags(
     }
 
     Some(links.join("\n    "))
-}
-
-/// Escape JSON string value
-fn escape_json_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
 }
 
 #[cfg(test)]

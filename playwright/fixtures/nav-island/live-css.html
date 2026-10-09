@@ -22,6 +22,10 @@
     body { margin: 0; }
     /* Enough page to scroll through, with the masthead's own height above it. */
     main { padding-block: var(--moss-space-xl) 40vh; }
+    /* This harness drives the island's own sections panel. Where the contents
+       ruler is on screen the island hides that button on purpose, so the ruler
+       is switched off here; contents-ruler.spec.ts covers both on a built site. */
+    .moss-contents-ruler { display: none; }
   </style>
 </head>
 <body>
@@ -34,7 +38,7 @@
      the same segments and asserts the result appears in this file verbatim.
      Change the emitter and that test tells you to change this line.
      ========================================================================== -->
-<div class="moss-nav-island"><div class="moss-nav-island-bar"><nav class="moss-nav-island-trail" aria-label="Breadcrumb"><a href="/" class="site-name" data-island-crumb>示例 · 報導站</a><span class="breadcrumb-separator">/</span><button type="button" class="moss-nav-island-more" hidden aria-expanded="false" aria-label="Show hidden levels">…</button><span class="breadcrumb-separator" data-trail-more-separator hidden>/</span><a href="/awards/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">子分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/s1/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">示例組</span></a><span class="breadcrumb-separator">/</span><span class="breadcrumb-segment moss-nav-island-current" aria-current="page" data-island-crumb data-hint-label="地方誌調查報導範例標題"><span class="breadcrumb-label">地方誌調查報導範例標題</span></span></nav><span class="moss-nav-island-actions"><button type="button" class="moss-nav-island-sections" aria-expanded="false" aria-label="Sections on this page"><svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M4 12h16M4 18h12"/></svg></button></span><span class="moss-nav-island-progress"><span class="moss-nav-island-progress-fill"></span></span></div><div class="moss-nav-island-menu" data-island-menu="levels" hidden></div><div class="moss-nav-island-menu" data-island-menu="sections" hidden></div></div>
+<div class="moss-nav-island"><div class="moss-nav-island-bar"><nav class="moss-nav-island-trail" aria-label="Breadcrumb"><a href="/" class="site-name" data-island-crumb>示例 · 報導站</a><span class="breadcrumb-separator">/</span><button type="button" class="moss-nav-island-more" hidden aria-expanded="false" aria-label="Show hidden levels">…</button><span class="breadcrumb-separator" data-trail-more-separator hidden>/</span><a href="/awards/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">子分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/s1/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">示例組</span></a><span class="breadcrumb-separator">/</span><span class="breadcrumb-segment moss-nav-island-current" aria-current="page" data-island-crumb data-hint-label="地方誌調查報導範例標題"><span class="breadcrumb-label">地方誌調查報導範例標題</span></span></nav><span class="moss-nav-island-actions"><button type="button" class="moss-nav-island-sections" aria-expanded="false" aria-label="Sections on this page"><svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 6h6M5 10h6M5 14h13M5 18h6"/></svg></button></span><span class="moss-nav-island-progress"><span class="moss-nav-island-progress-fill"></span></span></div><div class="moss-nav-island-menu" data-island-menu="levels" hidden></div><div class="moss-nav-island-menu" data-island-menu="sections" hidden></div></div>
 
 <!-- The masthead, as shell.html + generate_navigation emit it. Present for two
      reasons: the island's reveal threshold is the masthead's own bottom edge,
@@ -82,6 +86,11 @@
     <p>再補充一段描述性文字，確保這個小節與其他小節的長度大致相當。</p>
     <p>倒數第二段用來延長本節內容，純屬排版測試所需，不具備任何敘事意義。</p>
     <p>最後一段作為整篇範例文章的結尾，用來確認頁面捲動到底部時的版面表現是否正常。</p>
+    <section class="moss-footnotes" role="doc-endnotes">
+      <ol>
+        <li id="fn-1"><p>虛構來源：https://archive.example.org/collections/regional-surveys/volume-12/item-0042/scan/page-0007/transcript.html <a class="moss-footnote-backref" href="#fnref-1" role="doc-backlink" aria-label="Back to reference 1">↩</a></p></li>
+      </ol>
+    </section>
   </article>
 </main>
 

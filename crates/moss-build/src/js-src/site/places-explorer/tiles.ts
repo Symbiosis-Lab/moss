@@ -6,10 +6,8 @@
  * failed; where each loaded element sits; whether the layer should exist at
  * all yet — see `tileFadeOpacity`) and nothing else, constructed once by
  * `map.ts`'s `mountPlacesMap` and driven by its own `render` call on every
- * `applyCamera`. `render` is a no-op below the fade band short of the
- * world's own detail ceiling: the world layer alone carries every zoom up
- * to that ceiling, so a tile exists only to supply detail past it, never as
- * a second copy of what the world is already drawing. The pure geometry
+ * `applyCamera`. Regional detail takes over before the world bitmap must
+ * be enlarged beyond its raster budget. The pure geometry
  * (`tileCellBounds`, `tileOverlayTransform`, `tilesForView`,
  * `tileFadeOpacity`) stays exported as plain functions, the same split
  * `markers.ts` draws between `MarkerLayer` (DOM) and
@@ -23,7 +21,7 @@
  */
 import { detailMaxZoom, screenScale } from "./camera";
 import { project } from "./projection";
-import { rasterizeOrFallback, splitMapSvg, type MapSvgSplit } from "./raster";
+import { rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP, type MapSvgSplit } from "./raster";
 import type { Camera, Viewport } from "./types";
 
 /** Tile rasters are capped at this device pixel ratio — a tile's own build-time resolution already carries the real detail ceiling, so a 3x phone gains nothing from tripling it further. */
@@ -35,23 +33,13 @@ const TILE_REBAKE_RATIO = 1.3;
 /** How many regional tiles may be mid-fetch/decode at once — see `TileLayer.drainQueue`'s own doc for the stall letting every visible cell start at once was measured causing. */
 const MAX_CONCURRENT_TILE_LOADS = 6;
 
-/** The last fraction of the world layer's own zoom range (`0`..`detailMaxZoom`, NOT the raised ceiling `hasVisibleTiles` unlocks) where the tile layer fades in. */
+/** The final fraction of the world raster budget where regional detail fades in. */
 const TILE_FADE_BAND = 0.2;
 const WORLD_TILE_CELLS: Array<[number, number]> = Array.from({ length: 36 * 18 }, (_, index) => [index % 36, Math.floor(index / 36)]);
 
-/**
- * How visible the regional-tile layer should be at `camera`, 0..1 — the
- * cross-fade `TileLayer.render` drives (its own `--moss-place-tile-opacity`)
- * so the handover past the world layer's own detail ceiling is a fade, not
- * tiles popping onto the world view at rest. 0 at and below 80% of
- * `detailMaxZoom`, ramping linearly to 1 exactly at it — past that, the
- * camera is already into the zoom range only a raised, tile-covered ceiling
- * (`hasVisibleTiles`) permits. Pure and independent of whether any cell
- * actually has a tile to show: a camera over open ocean reaches full
- * opacity on the same schedule, it just has nothing to apply it to.
- */
+/** Regional detail takes over at the smaller of the bitmap and geometry budgets, independently of whether the manifest covers this camera. */
 export function tileFadeOpacity(camera: Camera, viewport: Viewport): number {
-  const ceiling = detailMaxZoom(viewport);
+  const ceiling = Math.min(detailMaxZoom(viewport), WORLD_RASTER_ZOOM_CAP);
   const fadeStart = ceiling * (1 - TILE_FADE_BAND);
   if (ceiling <= fadeStart) return camera.zoom >= ceiling ? 1 : 0;
   return Math.max(0, Math.min(1, (camera.zoom - fadeStart) / (ceiling - fadeStart)));
@@ -304,7 +292,7 @@ export class TileLayer {
   /**
    * Fetch and position every tile visible at `camera`/`viewport` — but only
    * once the camera's own screen scale has entered the fade band short of
-   * the world layer's detail ceiling (`tileFadeOpacity`); below it, this
+   * the world raster budget (`tileFadeOpacity`); below it, this
    * clears the layer instead (no fetch, no DOM), which is what keeps the
    * world view at rest from ever showing a tile rectangle sitting on top of
    * it. `unitScale` is world units to CSS px (constant across pan/zoom —

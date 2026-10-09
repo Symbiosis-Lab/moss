@@ -674,6 +674,11 @@ pub fn removed_addresses(
             let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
             let reason = match recorded {
                 Some(srcs) if !srcs.iter().any(exists) => RemovalReason::AuthorRemoved,
+                // A calendar file has no source of its own: it exists while a page
+                // says `start:` (or a listing shows one). Losing it means the author
+                // edited that, and the page file is still on disk, so the deleted-
+                // source test above cannot see it.
+                None if crate::build::feeds::calendar::is_calendar_file(out) => RemovalReason::AuthorRemoved,
                 _ => RemovalReason::Unexplained,
             };
             let moved_to = recorded.and_then(|srcs| {

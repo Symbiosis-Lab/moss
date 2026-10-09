@@ -1094,24 +1094,63 @@ fn image_with_caption_text_does_not_promote() {
 }
 
 #[test]
-fn image_with_emphasis_sibling_does_not_promote() {
-    // Pandoc-style "image + emphasis caption" is recognized in the
-    // legacy transform_events as a captioned figure, but PR3's
-    // simplified detection (one Image, no other content modulo
-    // whitespace) leaves these as Paragraph. PR0's parity probe
-    // already classifies these under image_emission / image_figures
-    // depending on production behavior; PR3 owns ONLY the simple
-    // image-only case. The downstream image+emphasis case is closed
-    // out at PR7a when production flips.
-    match first_block("![alt](a.jpg) *caption*\n") {
-        Block::Paragraph(children) => {
-            assert!(children.iter().any(|i| matches!(i, Inline::Image { .. })));
-            assert!(
-                children.iter().any(|i| matches!(i, Inline::Emphasis(_))),
-                "expected Emphasis to remain, got {children:?}"
-            );
+fn image_with_trailing_italic_line_promotes_with_alt_apart_from_caption() {
+    match first_block("![A lake at dusk](a.jpg)\n*Credit line. CC0.*\n") {
+        Block::Figure { image, caption, .. } => {
+            assert!(matches!(&image, Inline::Image { alt, .. } if alt == "A lake at dusk"));
+            let cap = caption.expect("italic line becomes the caption");
+            assert_eq!(crate::ast::inlines_to_plain_text(&cap), "Credit line. CC0.");
         }
-        other => panic!("expected Paragraph, got {other:?}"),
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+/// Assert the first block is a plain paragraph that still holds the image
+/// and the emphasis (no figure was made).
+fn assert_stays_paragraph(md: &str) {
+    match first_block(md) {
+        Block::Paragraph(children) => {
+            assert!(children.iter().any(|i| matches!(i, Inline::Image { .. })), "{md:?}");
+            assert!(children.iter().any(|i| matches!(i, Inline::Emphasis(_))), "{md:?}");
+        }
+        other => panic!("{md:?}: expected Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn image_with_emphasis_on_the_same_line_does_not_promote() {
+    // `![logo](x.png) *beta*` is prose with an image in it; only an italic
+    // line of its own under the image is a caption.
+    assert_stays_paragraph("![alt](a.jpg) *caption*\n");
+}
+
+#[test]
+fn image_with_italic_text_before_it_does_not_promote() {
+    assert_stays_paragraph("*caption* ![alt](a.jpg)\n");
+}
+
+#[test]
+fn two_italic_spans_do_not_make_a_caption() {
+    assert_stays_paragraph("![alt](a.jpg)\n*one* *two*\n");
+}
+
+#[test]
+fn text_after_the_italic_line_does_not_make_a_caption() {
+    assert_stays_paragraph("![alt](a.jpg)\n*caption* and more\n");
+}
+
+#[test]
+fn italic_line_under_an_image_in_a_list_item_stays_a_paragraph() {
+    // A tight list item's image never becomes a figure (with or without an
+    // italic line), so the italic line stays prose there too.
+    match first_block("- ![alt](a.jpg)\n  *caption*\n") {
+        Block::List { items, .. } => {
+            let kept = items[0].iter().any(|b| matches!(b, Block::Paragraph(c)
+                if c.iter().any(|i| matches!(i, Inline::Image { .. }))
+                && c.iter().any(|i| matches!(i, Inline::Emphasis(_)))));
+            assert!(kept, "expected the paragraph to be kept, got {items:?}");
+        }
+        other => panic!("expected List, got {other:?}"),
     }
 }
 

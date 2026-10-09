@@ -52,10 +52,10 @@ function rectsOverlap(a: Box, b: Box): boolean {
 test.describe("desktop, light", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test("the root chip shows 'All articles' with a chevron, and opening it lists every top-level place by count then name", async ({ page }) => {
+  test("the root chip shows 'All places' with a chevron, and opening it lists every top-level place by count then name", async ({ page }) => {
     await gotoReady(page);
     const root = trigger(page);
-    await expect(root).toContainText("All articles");
+    await expect(root).toContainText("All places");
     await expect(root).toHaveAttribute("aria-haspopup", "menu");
     await expect(root.locator(".moss-places-chip-chevron svg")).toHaveCount(1);
     await expect(page.locator(".moss-places-chip-menu")).toHaveCount(0);
@@ -72,6 +72,7 @@ test.describe("desktop, light", () => {
       "Arequipa(1)",
       "Bergen(1)",
       "Cusco(1)",
+      "East Reach(1)",
       "Faro(1)",
       "Iquitos(1)",
       "Kyoto(1)",
@@ -82,15 +83,16 @@ test.describe("desktop, light", () => {
       "Os(1)",
       "Osaka(1)",
       "Tokyo(1)",
+      "West Reach(1)",
     ]);
   });
 
-  test("a selected card is a selection, not a scope: the chip keeps 'All articles' and gains no 'This article' crumb or switch", async ({ page }) => {
+  test("a selected card is a selection, not a scope: the chip keeps 'All places' and gains no 'This article' crumb or switch", async ({ page }) => {
     await gotoReady(page, "?article=%2Fporto-steps%2F");
     await expect(page.locator('.moss-places-marker[data-selected="true"]')).toHaveCount(1);
     await expect(page.locator(".moss-places-chip-scope")).toHaveCount(0);
     await expect(page.locator(".moss-places-chip")).not.toContainText("This article");
-    await expect(trigger(page)).toContainText("All articles");
+    await expect(trigger(page)).toContainText("All places");
   });
 
   test("ArrowDown moves focus; Escape closes the menu and refocuses the crumb", async ({ page }) => {
@@ -137,7 +139,7 @@ test.describe("desktop, light", () => {
 
     await expect(page).toHaveURL(/place=places%2Fportugal/);
     const trail = page.locator(".moss-places-chip-trail");
-    await expect(trail).toContainText("All articles");
+    await expect(trail).toContainText("All places");
     await expect(trail).toContainText("Portugal");
 
     // `history.replaceState`, never a real navigation — the sentinel a fresh
@@ -148,7 +150,7 @@ test.describe("desktop, light", () => {
   test("the nested place's own crumb trail is three deep, and the terminal crumb's own menu lists its children", async ({ page }) => {
     await gotoReady(page, "?place=places/porto");
     const trail = page.locator(".moss-places-chip-trail");
-    await expect(trail).toContainText("All articles");
+    await expect(trail).toContainText("All places");
     await expect(trail).toContainText("Portugal");
     await expect(trail).toContainText("Porto");
     // Porto is a leaf — no children, no chevron: its terminal crumb is a
@@ -248,7 +250,7 @@ test.describe("phone, 390px", () => {
   test("the middle crumb collapses to '…', and the chip still clears the zoom controls", async ({ page }) => {
     await gotoReady(page, "?place=places/porto");
     const trail = page.locator(".moss-places-chip-trail");
-    await expect(trail).toContainText("All articles");
+    await expect(trail).toContainText("All places");
     await expect(trail).toContainText("Porto");
 
     await expect(page.locator(".moss-places-chip-collapsible")).not.toBeVisible();
@@ -285,6 +287,6 @@ test.describe("dark theme", () => {
     await expect(page.locator(".moss-places-chip")).toBeVisible();
     await trigger(page).click();
     await expect(page.locator('.moss-places-chip-menu[role="menu"]')).toBeVisible();
-    await expect(menuItems(page)).toHaveCount(14);
+    await expect(menuItems(page)).toHaveCount(16);
   });
 });

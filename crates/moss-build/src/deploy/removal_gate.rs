@@ -18,6 +18,9 @@ pub(crate) const LIST_CAP: usize = 20;
 pub(crate) fn cause_line(r: &RemovedAddress) -> String {
     let at = served_address(&r.path);
     if r.reason == RemovalReason::AuthorRemoved {
+        if r.source.is_none() && crate::build::feeds::calendar::is_calendar_file(&r.path) {
+            return format!("{at} is gone because no event page says `start:` there any more.");
+        }
         return match &r.source {
             Some(src) => format!("{at} is gone because you deleted its source ({src})."),
             None => format!("{at} is gone because you deleted its file."),
@@ -82,4 +85,20 @@ pub(crate) fn refusal_text(pending: &[PendingRemoval]) -> String {
 pub(crate) fn refusal_for(folder_path: &str) -> Option<String> {
     let pending = crate::system::build_records::records().pending_removals(folder_path);
     (!pending.is_empty()).then(|| refusal_text(&pending))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_vanished_calendar_file_is_worded_as_the_authors_edit() {
+        let r = RemovedAddress {
+            path: "events/talk/event.ics".into(),
+            reason: crate::build::manifest::change_set::RemovalReason::AuthorRemoved,
+            moved_to: None,
+            source: None,
+        };
+        assert_eq!(cause_line(&r), "/events/talk/event.ics is gone because no event page says `start:` there any more.");
+    }
 }

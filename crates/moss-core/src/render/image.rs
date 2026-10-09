@@ -964,10 +964,17 @@ pub(crate) fn render_img_tag(
     let style_attr = if extra_has_style {
         String::new()
     } else if let Some(lqip) = lookup_lqip(assets, src) {
-        format!(
-            r#" style="background-image:url({});background-size:cover""#,
-            lqip
-        )
+        // An empty LQIP is the scan's "transparent" marker: no placeholder at
+        // all, not even the colour below, which would show through the clear
+        // pixels as a box.
+        if lqip.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#" style="background-image:url({});background-size:cover""#,
+                lqip
+            )
+        }
     } else if let Some(color) = lookup_color(assets, src) {
         format!(r#" style="background-color:{}""#, color)
     } else {

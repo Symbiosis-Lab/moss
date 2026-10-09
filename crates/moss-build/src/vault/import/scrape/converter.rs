@@ -17,7 +17,9 @@ use std::sync::LazyLock;
 use url::Url;
 
 use super::extractor::extract_main_content;
+use crate::vault::import::media::{is_image_url, is_linked_content_file_url};
 use super::metadata::{derive, ArticleMetadata};
+use super::scope::{is_same_origin, UrlScope};
 use crate::vault::import::widgets::{carry_widgets, html_to_markdown, WidgetCount};
 
 /// Output of the extraction pipeline.
@@ -122,13 +124,14 @@ pub fn extract_article_with_snapshot(
             overrides,
         }) => {
             apply_overrides(&mut metadata, overrides);
-            htmd::convert(&h).unwrap_or(h)
+            html_to_markdown(&h).unwrap_or(h)
         }
         None => {
             // Widgets are classified before the strip removes them.
             // A page with no URL (a local file) still resolves absolute links.
             let page_url = base.clone().unwrap_or_else(|| Url::parse("about:blank").expect("static url"));
-            let (carried, found) = carry_widgets(html, &page_url);
+            let html = crate::vault::import::engine::strip_dialect_chrome(html, &metadata.event);
+            let (carried, found) = carry_widgets(&html, &page_url);
             widgets = found;
             let h = extract_main_content(&carried);
             html_to_markdown(&h).unwrap_or_else(|_| h.clone())
@@ -250,6 +253,74 @@ pub fn rewrite_image_links(
         .to_string()
 }
 
+fn link_dest<'a>(caps: &regex::Captures<'a>) -> &'a str {
+    caps.get(1).or_else(|| caps.get(2)).map_or("", |m| m.as_str())
+}
+
+/// A markdown link destination that names a content file on the page's own
+/// site: its absolute URL without the fragment (the download and dedupe key)
+/// and the fragment to put back (`#page=2`). `None` for anything else — a
+/// page, another host, a stylesheet.
+fn linked_file_target(dest: &str, base: &Option<Url>, scope: &UrlScope) -> Option<(String, String)> {
+    let mut url = Url::parse(&resolve_url(dest, base)?).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !is_same_origin(scope, url.as_str())
+        || !is_linked_content_file_url(url.as_str())
+    {
+        return None;
+    }
+    let fragment = url.fragment().map(|f| format!("#{f}")).unwrap_or_default();
+    url.set_fragment(None);
+    // `/x.pdf` and `/x.pdf?dl=1` are one file. An image keeps its query: a
+    // CDN reads it as a rendition, and the media pass keys the same image
+    // by the same URL.
+    if !is_image_url(url.as_str()) {
+        url.set_query(None);
+    }
+    Some((url.to_string(), fragment))
+}
+
+/// Absolute URLs of the files a page's links point at that the import should
+/// carry into the site, in document order, each once. Written absolute
+/// (`https://host/s/x.pdf`) or root-relative (`/s/x.pdf`) in the source, they
+/// resolve to the same URL.
+pub(crate) fn linked_file_urls(markdown: &str, page_url: &str, scope: &UrlScope) -> Vec<String> {
+    let base = Url::parse(page_url).ok();
+    let mut seen = HashSet::new();
+    LINK_DEST_PATTERN
+        .captures_iter(markdown)
+        .filter_map(|c| linked_file_target(link_dest(&c), &base, scope))
+        .filter(|(url, _)| seen.insert(url.clone()))
+        .map(|(url, _)| url)
+        .collect()
+}
+
+/// Point every link to a downloaded file (`remote_to_local`, values already
+/// relative to the page that holds the link) at the local copy. Links to
+/// files that did not download are left as written.
+pub(crate) fn rewrite_file_links(
+    markdown: &str,
+    page_url: &str,
+    scope: &UrlScope,
+    remote_to_local: &std::collections::HashMap<String, String>,
+) -> String {
+    let base = Url::parse(page_url).ok();
+    LINK_DEST_PATTERN
+        .replace_all(markdown, |caps: &regex::Captures| {
+            let local = linked_file_target(link_dest(caps), &base, scope)
+                .and_then(|(url, fragment)| Some((remote_to_local.get(&url)?, fragment)));
+            match local {
+                Some((path, fragment)) => format!(
+                    "]({}{fragment}{})",
+                    moss_core::resolve::fuzzy_path::escape_md_destination(path, false),
+                    &caps[3]
+                ),
+                None => caps[0].to_string(),
+            }
+        })
+        .to_string()
+}
+
 fn extract_image_urls_in_markdown(md: &str) -> Vec<String> {
     IMG_PATTERN
         .captures_iter(md)
@@ -274,8 +345,21 @@ pub(crate) fn resolve_url(href: &str, base: &Option<Url>) -> Option<String> {
 // non-paren, non-whitespace character OR a single balanced `(…)` group, which
 // covers the full CommonMark spec allowance for one level of nested parens in
 // link destinations (CommonMark spec §6.6, link destination grammar).
+const MD_DESTINATION: &str = r#"(?:[^()\s"'<>]|\([^()]*\))+"#;
+
 pub(crate) static IMG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"!\[([^\]]*)\]\(((?:[^()\s"'<>]|\([^()]*\))+)\)"#).expect("img regex")
+    Regex::new(&format!(r#"!\[([^\]]*)\]\(({MD_DESTINATION})\)"#)).expect("img regex")
+});
+
+// The `](destination "title")` tail of any markdown link or image. The
+// destination is either `<…>` (spaces allowed) or the same plain form images
+// use; the label is not needed, which also covers an image wrapped in a link.
+// Captures: 1 angle destination, 2 plain destination, 3 title.
+static LINK_DEST_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r#"\]\((?:<([^>\n]*)>|({MD_DESTINATION}))((?:\s+"[^"]*")?)\)"#
+    ))
+    .expect("link dest regex")
 });
 
 // Matches `![[https://…]]` wikilink embeds with an absolute URL target (no
@@ -323,6 +407,27 @@ mod tests {
     }
 
     #[test]
+    fn linked_files_with_parentheses_or_angle_destinations_are_found_and_rewritten() {
+        let scope = UrlScope::new("https://example.test/").unwrap();
+        let md = "[a](/f/Score%20(final).pdf) [b](</f/My Score.pdf> \"t\")";
+        let urls = linked_file_urls(md, "https://example.test/p", &scope);
+        assert_eq!(
+            urls,
+            vec![
+                "https://example.test/f/Score%20(final).pdf".to_string(),
+                "https://example.test/f/My%20Score.pdf".to_string()
+            ]
+        );
+        let map: HashMap<String, String> = urls
+            .iter()
+            .zip(["./assets/imported/a.pdf", "./assets/imported/b.pdf"])
+            .map(|(u, l)| (u.clone(), l.to_string()))
+            .collect();
+        let out = rewrite_file_links(md, "https://example.test/p", &scope, &map);
+        assert_eq!(out, "[a](./assets/imported/a.pdf) [b](./assets/imported/b.pdf \"t\")");
+    }
+
+    #[test]
     fn extract_image_urls_finds_absolute_and_relative() {
         let md = "![A](https://cdn.example.com/a.png)\n\nBody\n\n![B](/img/b.jpg)";
         let base = Some(Url::parse("https://example.com/post/").unwrap());
@@ -363,6 +468,142 @@ mod tests {
             "both markdown references should point at the canonical URL: {}",
             art.markdown
         );
+    }
+
+    fn event_page(extra_ld: &str) -> String {
+        format!(r#"<html><head><title>Spring Recital</title>
+            <script type="application/ld+json">
+            {{"@type":"Event","name":"Spring Recital","startDate":"2026-11-01T14:00:00-05:00",
+              "endDate":"2026-11-01T16:00:00-05:00"{extra_ld}}}
+            </script></head><body><article>
+            <a href="/events" class="eventitem-backlink">Back to All Events</a>
+            <ul class="eventitem-meta event-meta event-meta-date-time-container">
+              <li class="eventitem-meta-item eventitem-meta-date"><time>Sunday, November 1, 2026</time></li>
+              <li class="eventitem-meta-item eventitem-meta-time"><time>2:00 PM</time> <time>4:00 PM</time></li>
+            </ul>
+            <ul class="eventitem-meta event-meta event-meta-address-container">
+              <li class="eventitem-meta-item eventitem-meta-address">
+                <span class="eventitem-meta-address-line eventitem-meta-address-line--title">Example Hall</span>
+                <span class="eventitem-meta-address-line">12 Sample Street</span>
+                <span class="eventitem-meta-address-line">Exampleton, EX 00000</span>
+                <a href="http://maps.example.test/?q=hall" class="eventitem-meta-address-maplink">(map)</a>
+              </li>
+            </ul>
+            <ul class="eventitem-meta event-meta event-meta-addtocalendar-container">
+              <li class="eventitem-meta-item eventitem-meta-export">
+                <a href="http://calendar.example.test/add?text=Spring">Google Calendar</a>
+                <a href="/events/2026/11/01?format=ical" class="eventitem-meta-export-ical">ICS</a>
+              </li>
+            </ul>
+            <div class="sqs-block-content"><p>An afternoon of piano pieces played by the studio's students.</p>
+            <p>Doors open at half past one and seating is general admission.</p></div>
+            <ul class="eventitem-meta event-meta event-meta-cats-tags-container">
+              <li class="eventitem-meta-item eventitem-meta-cats">Posted In: <a href="/events?category=recitals">Recitals</a></li>
+            </ul>
+            </article></body></html>"#)
+    }
+
+    /// An event page's template repeats the facts its frontmatter already
+    /// holds, and links dynamic endpoints a static site lacks. They are
+    /// builder markup, removed by dialect rows; the prose stays.
+    #[test]
+    fn an_event_pages_template_chrome_is_dropped_when_the_frontmatter_holds_the_facts() {
+        let ld = r#","location":{"@type":"Place","name":"Example Hall"}"#;
+        let art = extract_article(&event_page(ld), "https://example.test/events/2026/11/01");
+        assert_eq!(art.metadata.event.start.as_deref(), Some("2026-11-01 14:00"));
+        for gone in ["Back to All Events", "Sunday, November 1", "2:00 PM", "Example Hall", "(map)", "maps.example.test", "Google Calendar", "ICS", "format=ical", "Posted In", "Recitals"] {
+            assert!(!art.markdown.contains(gone), "{gone} should be dropped: {}", art.markdown);
+        }
+        assert!(art.markdown.contains("afternoon of piano pieces"), "{}", art.markdown);
+        // The frontmatter holds the venue name only; street and city are not repeated there.
+        assert!(art.markdown.contains("12 Sample Street"), "{}", art.markdown);
+        assert!(art.markdown.contains("Exampleton, EX 00000"), "{}", art.markdown);
+    }
+
+    /// The address is the only place the venue appears when no `location` was
+    /// written, so it stays; the date and time still go, `start` being written.
+    #[test]
+    fn the_address_stays_when_no_location_was_written() {
+        let art = extract_article(&event_page(""), "https://example.test/events/2026/11/01");
+        assert!(art.metadata.event.location.is_none());
+        assert!(art.markdown.contains("Example Hall"), "{}", art.markdown);
+        assert!(!art.markdown.contains("2:00 PM"), "{}", art.markdown);
+    }
+
+    /// Without event data nothing in the template is a repeat of the
+    /// frontmatter, so the same markup is left alone.
+    #[test]
+    fn a_page_without_event_data_keeps_its_event_markup() {
+        let html = event_page("").replace(r#""@type":"Event""#, r#""@type":"Thing""#);
+        let art = extract_article(&html, "https://example.test/events/2026/11/01");
+        assert!(art.metadata.event.start.is_none());
+        assert!(art.markdown.contains("2:00 PM"), "{}", art.markdown);
+        assert!(art.markdown.contains("Back to All Events"), "{}", art.markdown);
+    }
+
+    fn summary_card(title: &str, day: &str) -> String {
+        let meta = format!(
+            r#"<div class="summary-metadata summary-metadata--primary"><time class="summary-metadata-item summary-metadata-item--date">{day}</time></div>
+            <div class="summary-metadata summary-metadata--secondary"><span class="summary-metadata-item summary-metadata-item--location"><a href="http://maps.example.test/?q=hall">Example Hall</a></span></div>"#
+        );
+        format!(
+            r#"<div class="summary-item">
+            <div class="summary-thumbnail-outer-container"><a href="/events/{title}" class="summary-thumbnail-container">
+              <div class="summary-thumbnail img-wrapper"><img src="https://example.test/{title}.png" alt="{title}">
+              <div class="summary-thumbnail-event-date"><div class="summary-thumbnail-event-date-inner"><span>Nov</span><span>1</span></div></div></div></a></div>
+            <div class="summary-content">
+              <div class="summary-metadata-container summary-metadata-container--above-title">{meta}</div>
+              <div class="summary-title"><a href="/events/{title}" class="summary-title-link">{title}</a></div>
+              <div class="summary-metadata-container summary-metadata-container--below-title">{meta}</div>
+              <div class="summary-excerpt"><p>Excerpt for {title} with a few more words in it.</p></div>
+              <a href="/events/{title}" class="summary-read-more-link">Read more</a>
+              <div class="summary-metadata-container summary-metadata-container--below-content">{meta}</div>
+            </div></div>"#
+        )
+    }
+
+    /// A summary block prints each card's date and venue in three places. A
+    /// card keeps them once, between its title and its excerpt.
+    #[test]
+    fn a_summary_card_keeps_its_date_and_venue_once_in_reading_order() {
+        let html = format!(
+            r#"<article><p>Intro paragraph with enough words to anchor the page content here.</p>
+            <div class="summary-item-list">{}{}</div></article>"#,
+            summary_card("Alpha", "November 1, 2026"),
+            summary_card("Beta", "December 20, 2026"),
+        );
+        let md = extract_article(&html, "https://example.test/").markdown;
+        for fact in ["November 1, 2026", "December 20, 2026", "Example Hall"] {
+            let n = md.matches(fact).count();
+            assert_eq!(n, if fact == "Example Hall" { 2 } else { 1 }, "{fact} x{n}: {md}");
+        }
+        let at = |s: &str| md.find(s).unwrap_or_else(|| panic!("{s} missing: {md}"));
+        assert!(at("[Alpha](/events/Alpha)") < at("November 1, 2026"));
+        assert!(at("November 1, 2026") < at("Example Hall"));
+        assert!(at("Example Hall") < at("Excerpt for Alpha"));
+        assert!(at("Excerpt for Alpha") < at("[Read more](/events/Alpha)"));
+        assert!(!md.contains("Nov\n") && !md.contains("Nov 1"), "date box text is gone: {md}");
+    }
+
+    /// A block set up with fewer date and venue groups than three keeps what it
+    /// has: the thumbnail's date box is the only date of the first card, and
+    /// the second card's only group sits above its title.
+    #[test]
+    fn a_summary_card_never_loses_its_only_date_or_venue() {
+        let date_box_only = r#"<div class="summary-item"><a href="/events/a" class="summary-thumbnail-container">
+            <div class="summary-thumbnail-event-date"><span>Nov</span> <span>1</span></div></a>
+            <div class="summary-title"><a href="/events/a" class="summary-title-link">Alpha</a></div></div>"#;
+        let above_only = r#"<div class="summary-item"><div class="summary-content">
+            <div class="summary-metadata-container summary-metadata-container--above-title">
+              <time class="summary-metadata-item summary-metadata-item--date">December 20, 2026</time></div>
+            <div class="summary-title"><a href="/events/b" class="summary-title-link">Beta</a></div></div></div>"#;
+        let html = format!(
+            r#"<article><p>Intro paragraph with enough words to anchor the page content here.</p>
+            <div class="summary-item-list">{date_box_only}{above_only}</div></article>"#
+        );
+        let md = extract_article(&html, "https://example.test/").markdown;
+        assert!(md.contains("Nov") && md.contains('1'), "date box kept: {md}");
+        assert!(md.contains("December 20, 2026"), "lone above-title group kept: {md}");
     }
 
     #[test]

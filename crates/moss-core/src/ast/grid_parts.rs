@@ -44,7 +44,7 @@ pub struct GridCellParts {
     /// already carries its own chrome.
     pub carded: bool,
     /// The dominant colour of the image in the cell's cover position, as a CSS
-    /// colour. Published as `--moss-cover-color` on the wrapper so a theme can
+    /// colour. Published as `--item-cover-color` on the wrapper (the private half of `var(--moss-cover-color, var(--item-cover-color))`, so a theme-set `--moss-cover-color` still wins) so a theme can
     /// paint a band behind the cell's text — the same variable, on the same
     /// class, that a collection card already carries.
     ///
@@ -63,7 +63,7 @@ impl GridCellParts {
                 .as_deref()
                 .map(|c| {
                     format!(
-                        r#" data-cover-color style="--moss-cover-color: {}""#,
+                        r#" data-cover-color style="--item-cover-color: {}""#,
                         escape_attr(c)
                     )
                 })

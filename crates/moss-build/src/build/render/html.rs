@@ -102,7 +102,7 @@ pub fn generate_html(
     project: &ProjectStructure,
     layout_config: &LayoutConfig,
     is_homepage: bool,
-    rss_link: Option<&str>,
+    head_alternates: Option<&str>,
     analytics_script: Option<&str>,
     site_lang: crate::i18n::Language,
     css_version: Option<&str>,
@@ -125,7 +125,7 @@ pub fn generate_html(
     // Without this, an auto-card would be written to disk and immediately
     // orphaned because there is no way to register it for stale-cleanup.
     generate_html_inner(
-        doc, all_docs, project, layout_config, is_homepage, rss_link,
+        doc, all_docs, project, layout_config, is_homepage, head_alternates,
         analytics_script, site_lang, css_version, has_user_css,
         has_sidebar_layout, user_css_version, has_user_js, user_js_version,
         content_graph, dir_overrides, site_url, show_rss_in_footer,
@@ -147,7 +147,7 @@ pub fn generate_html_collect_og<'d>(
     project: &ProjectStructure,
     layout_config: &LayoutConfig,
     is_homepage: bool,
-    rss_link: Option<&str>,
+    head_alternates: Option<&str>,
     analytics_script: Option<&str>,
     site_lang: crate::i18n::Language,
     css_version: Option<&str>,
@@ -173,7 +173,7 @@ pub fn generate_html_collect_og<'d>(
     shared: &BuildShared<'d>,
 ) -> Result<String, String> {
     generate_html_inner(
-        doc, all_docs, project, layout_config, is_homepage, rss_link,
+        doc, all_docs, project, layout_config, is_homepage, head_alternates,
         analytics_script, site_lang, css_version, has_user_css,
         has_sidebar_layout, user_css_version, has_user_js, user_js_version,
         content_graph, dir_overrides, site_url, show_rss_in_footer,
@@ -187,9 +187,9 @@ pub fn generate_html_collect_og<'d>(
 /// `<h1 class="moss-folder-title">`, unless something else on the page is
 /// already showing the title. Three things can be —
 ///
-/// - the body opens with its own `# Title`, which is then both the visible
-///   title and the heading landmark: nothing is emitted, for nav and non-nav
-///   folders alike,
+/// - the body has its own `# Title` (anywhere outside a code fence), which is
+///   then both the visible title and the heading landmark: nothing is
+///   emitted, for nav and non-nav folders alike,
 /// - the body opens with a `:::hero` that carries its own heading: nothing is
 ///   emitted, since the hero already supplies the `<h1>`, or
 /// - the folder renders as a nav item, so the nav bar shows its title: the
@@ -206,22 +206,10 @@ fn no_cover_folder_heading(
     has_content_folders: bool,
     emit_source_fm: bool,
 ) -> String {
-    if moss_core::heading::body_opens_with_h1(&doc.content) {
+    if moss_core::heading::body_supplies_title(&doc.content) {
         String::new()
     } else if crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders) {
         crate::build::components::folder_title::render(h1_text, emit_source_fm, true)
-    } else if moss_core::heading::hero_at_top_owns_title(&doc.content) {
-        // The same rule the article path applies, which this site never asked.
-        // A folder note that opens with a hero carrying its own heading got
-        // BOTH that heading and an injected `moss-folder-title` — two titles,
-        // one above the other, on every season index of the site that adopted
-        // full-bleed covers.
-        //
-        // `heading::compute`'s `visible` cannot be reused here: it is false for
-        // every folder note regardless (`!is_index_file`), so it answers a
-        // different question. The hero predicate is the shared part, and it is
-        // the part that was missing.
-        String::new()
     } else {
         crate::build::components::folder_title::render(h1_text, emit_source_fm, false)
     }
@@ -332,7 +320,7 @@ fn generate_html_inner<'d>(
     project: &ProjectStructure,
     layout_config: &LayoutConfig,
     is_homepage: bool,
-    rss_link: Option<&str>,
+    head_alternates: Option<&str>,
     _analytics_script: Option<&str>,
     site_lang: crate::i18n::Language,
     css_version: Option<&str>,
@@ -375,7 +363,7 @@ fn generate_html_inner<'d>(
     let context = RenderCtx {
         chrome: PageChromeContext {
             documents: all_docs, project, layout: layout_config, site_lang,
-            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, rss_link },
+            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, head_alternates },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
         },
         content_graph, dir_overrides, site_url, output_dir, source_root, shared,
@@ -419,7 +407,14 @@ pub(super) fn render_page<'d>(
         doc.and_then(|d| d.typesetting.as_deref()), layout_config.typesetting.as_deref(),
     );
     let vertical_typesetting = resolved_typesetting == Some("vertical");
-    let chrome = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root_doc(doc, layout_config));
+    let mut chrome = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root_doc(doc, layout_config));
+    // The calendar alternates sit in the head beside the feed's.
+    if let Some(d) = doc {
+        let head = context.shared.calendar.head_link(d, d.lang);
+        if !head.is_empty() {
+            chrome.head_alternates.get_or_insert_with(String::new).push_str(&head);
+        }
+    }
     let processor = ShellProcessor::new();
 
     // Determine template type based on layout and content folders
@@ -485,6 +480,14 @@ pub(super) fn render_page<'d>(
             // `layout: article` homepage is the article path's page, not this one.
             if !is_article_page {
                 content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement);
+
+                // The home injects no visible title of its own, but a page
+                // needs one top-level heading: when the body supplies none,
+                // add the folder-index heading, visually hidden.
+                if !moss_core::heading::body_supplies_title(&doc.content) {
+                    let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, true);
+                    content = format!("{h1}\n{content}");
+                }
             }
 
             // Folder card <img> tags inherit width/height/loading/LQIP/color
@@ -1082,7 +1085,7 @@ pub(super) fn render_page<'d>(
                     d.url_path.starts_with(&target_prefix)
                         && d.url_path != target_doc.url_path
                         && d.is_listable()
-                        && d.date.is_some()
+                        && (d.date.is_some() || d.event.is_some())
                 })
                 // Sidebar always shows direct children only, regardless of children_depth.
                 // Nested subfolder articles are excluded from sidebar listings.
@@ -1097,6 +1100,7 @@ pub(super) fn render_page<'d>(
                         title: d.label.clone(),
                         url_path: d.url_path.clone(),
                         place: d.place_names.clone(),
+                        when_html: None,
                     }
                 })
                 .collect();
@@ -1203,18 +1207,29 @@ pub(super) fn render_page<'d>(
     // reader sees: H1 → optional blockquote-deck → date row + reading prefs →
     // body. The {date_line} template token is left empty so the template's
     // legacy "above the body" position is no longer used.
+    // An event page shows its event facts here instead of the posted date.
+    // Its "Add to calendar" link goes in this meta line when the page has one,
+    // and closes the body otherwise (a Page-shell event has no meta line). This
+    // is the one place that decides which spot gets the link.
+    let event_calendar_href = doc.and_then(|d| context.shared.calendar.event_href(d));
+    let event_meta_html = doc
+        .filter(|_| is_article_page)
+        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref()));
+    let calendar_at_body_end = if event_meta_html.is_some() { None } else { event_calendar_href };
     let article_date_line_html: Option<String> = if is_article_page
         && doc.is_some()
-        && doc.unwrap().date.is_some()
+        && (doc.unwrap().date.is_some() || event_meta_html.is_some())
     {
         let d = doc.unwrap();
-        let date_str = d.date.as_ref().unwrap();
         let doc_lang = d.lang;
-        let formatted = components::format_display_date(date_str, doc_lang, resolved_typesetting);
-        let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
+        let when_html = event_meta_html.unwrap_or_else(|| {
+            let formatted = components::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
+            let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
+            format!(r#"<span class="date"{}>{}</span>"#, date_fm_attr, formatted)
+        });
         Some(format!(
-            r#"<div class="date-line"><span class="date"{}>{}</span><div class="font-anchor"><button class="font-trigger size-std" aria-label="{}" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="{}"></button><button data-scale="" class="active" aria-label="{}"></button><button data-scale="large" aria-label="{}"></button><button data-scale="xlarge" aria-label="{}"></button></div></div></div>"#,
-            date_fm_attr, formatted,
+            r#"<div class="date-line">{}<div class="font-anchor"><button class="font-trigger size-std" aria-label="{}" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="{}"></button><button data-scale="" class="active" aria-label="{}"></button><button data-scale="large" aria-label="{}"></button><button data-scale="xlarge" aria-label="{}"></button></div></div></div>"#,
+            when_html,
             crate::i18n::t(doc_lang, "reading_preferences"),
             crate::i18n::t(doc_lang, "text_small"),
             crate::i18n::t(doc_lang, "text_standard"),
@@ -1267,6 +1282,11 @@ pub(super) fn render_page<'d>(
         if let Some(d) = doc {
             credits::push_colophon(&mut homepage_content, &d.colophon, emit_source_lines);
         }
+    }
+    // Calendar links that close the body: a folder's download and subscribe
+    // links, and an event's "Add to calendar" when no meta line carries it.
+    if let Some(d) = doc {
+        homepage_content.push_str(&context.shared.calendar.links_html(d, site_url, d.lang, calendar_at_body_end.as_deref()));
     }
 
     // Resolve the share-card description once for the page, using the
@@ -1379,20 +1399,7 @@ pub(super) fn render_page<'d>(
         description: share_card_description.clone(),
         og_tags: if is_article_page && is_card_eligible {
             let d = doc.unwrap();
-            // Build a typed page path from the full url_path (e.g. "about/index.html"),
-            // then derive the pretty URL by stripping the trailing "index.html" from the
-            // relative form — preserving the trailing slash for directory pages.
-            let page_path = crate::build::served_path::ServedPath::from_source(&d.url_path)
-                .map_err(|e| format!("og:url path for {}: {}", d.url_path, e))?;
-            let page_relative = page_path.to_relative_url()
-                .trim_end_matches("index.html").to_string();
-            // og:url: only emit absolute URL when deployed; otherwise use the
-            // relative path so unconfigured builds don't emit http://localhost URLs.
-            let url = if site_url.is_deployed() {
-                site_url.to_absolute(&page_relative)
-            } else {
-                page_relative
-            };
+            let url = crate::build::page::meta::page_meta_url(d, site_url)?;
             // og:title is chrome; use the plain-text label.
             Some(crate::build::page::meta::build_og_tags(
                 &d.label,
@@ -1426,15 +1433,7 @@ pub(super) fn render_page<'d>(
             let (og_title, og_url): (&str, String) = if is_homepage && d.url_path == "index.html" {
                 (site_title.as_str(), homepage_meta_url.clone())
             } else {
-                let page_path = crate::build::served_path::ServedPath::from_source(&d.url_path)
-                    .map_err(|e| format!("og:url path for {}: {}", d.url_path, e))?;
-                let page_relative = page_path.to_relative_url()
-                    .trim_end_matches("index.html").to_string();
-                let url = if site_url.is_deployed() {
-                    site_url.to_absolute(&page_relative)
-                } else {
-                    page_relative
-                };
+                let url = crate::build::page::meta::page_meta_url(d, site_url)?;
                 let title = if is_homepage { site_title.as_str() } else { d.label.as_str() };
                 (title, url)
             };
@@ -1532,51 +1531,16 @@ pub(super) fn render_page<'d>(
         } else {
             None
         },
-        schema_json_ld: if is_article_page && is_card_eligible {
-            let d = doc.unwrap();
-            // Same pretty-URL derivation as og:url: build from full url_path,
-            // then strip "index.html" to preserve the trailing slash for directory pages.
-            let page_path = crate::build::served_path::ServedPath::from_source(&d.url_path)
-                .map_err(|e| format!("schema JSON-LD path for {}: {}", d.url_path, e))?;
-            let page_relative = page_path.to_relative_url()
-                .trim_end_matches("index.html").to_string();
-            let url = if site_url.is_deployed() {
-                site_url.to_absolute(&page_relative)
-            } else {
-                page_relative
-            };
-            // Schema.org headline is chrome; use the plain-text label.
-            // Reuse the same resolved_cover_for_og for the JSON-LD image field.
-            Some(crate::build::page::meta::build_schema_json_ld(
-                &d.label,
-                share_card_description_str,
-                &url,
-                &site_title,
-                d.date.as_deref(),
-                resolved_cover_for_og.as_ref(),
-                d.tags.as_deref().unwrap_or(&[]),
-                site_url,
-            ))
-        } else if is_homepage && is_card_eligible {
-            // Homepage: emit a WebSite JSON-LD node for entity identity.
-            // Reuses the same description + url already fed to the og:website
-            // tags, and the site language code. Gated on `is_card_eligible`
-            // (= `doc.is_public_page()`) so it stays symmetric with the og:website
-            // meta block, which carries the same gate — a `draft: true`
-            // homepage emits neither, never one without the other.
-            Some(crate::build::page::meta::build_schema_website(
-                &site_title,
-                share_card_description_str,
-                &homepage_meta_url,
-                // The PAGE's tag: this block is homepage-only, and a homepage
-                // declaring `lang: fr` on an `en` site would otherwise emit
-                // `<html lang="fr">` with `"inLanguage": "en"` one line apart.
-                &page_lang_tag,
-            ))
-        } else {
-            None
-        },
+        schema_json_ld: crate::build::page::meta::page_json_ld(
+            doc, is_article_page, is_homepage, share_card_description_str, &site_title,
+            resolved_cover_for_og.as_ref(), site_url, &homepage_meta_url, &page_lang_tag,
+        )?,
         embed_head_assets,
+        lightbox: if doc.is_some_and(|d| d.features.galleries) {
+            format!("{}\n    ", crate::build::media_collection::lightbox_html(chrome.ui_lang))
+        } else {
+            String::new()
+        },
         post_article,
         robots_meta,
         ..chrome

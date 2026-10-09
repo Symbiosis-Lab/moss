@@ -23,7 +23,7 @@ import { installSwipeNavigation } from "./swipe-gesture";
 import { startChromeAmbient } from "./chrome-ambient";
 import { startSiteAccent } from "./site-accent";
 import type { ThemeSettled } from "./theme-settled";
-import { classifyClickGesture } from "./click-vocabulary";
+import { classifyClickGesture, shouldLeaveClickToPage } from "./click-vocabulary";
 import { installContextMenu } from "./context-menu";
 import { installCaptureResponder } from "./capture/responder";
 
@@ -530,6 +530,10 @@ import { installCaptureResponder } from "./capture/responder";
 
       const href = anchor.getAttribute("href");
       if (!href) return;
+
+      // A gallery image's link is the full-screen viewer's trigger; the site
+      // script opens the viewer, so navigating to the image file would pre-empt it.
+      if (shouldLeaveClickToPage(anchor)) return;
 
       // Skip special links (including potentially dangerous URL schemes)
       if (

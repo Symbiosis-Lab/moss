@@ -1151,7 +1151,7 @@ Scratch site; the assertions run against the probe page.
   <!-- Pale cover, stacked on mobile with a cover tint: text is BELOW the image
        on the darkened band, so it must stay white. -->
   <section class="moss-hero" data-hero-tone="light" data-cover-color
-           style="--moss-cover-color: hsla(203, 73%, 14%, 1)" id="light-stacked-hero">
+           style="--item-cover-color: hsla(203, 73%, 14%, 1)" id="light-stacked-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
       <h2 id="light-stacked-heading">Stacked heading</h2>
@@ -3040,5 +3040,115 @@ lng = -9.139
 precision = "exact"
 `,
     ".moss/theme/style.css": null,
+  },
+};
+
+/**
+ * Site for the split-masthead row gate. Seven nav items make the link set
+ * wider than a phone row, so at narrow widths the split's second row must
+ * hold the links and the toggles together. The long site name forces the
+ * split at the middle widths. `places/index.md` with a located place gives the
+ * explorer root, whose header must match the other pages.
+ */
+export const NAV_SPLIT_ORDER_GATE: ScratchSiteSpec = {
+  name: "nav-split-order-gate",
+  files: {
+    "index.md": `---
+title: Nav Split Order Gate Site With A Long Name
+uid: "nso00101"
+---
+
+# Nav Split Order Gate Site
+
+Scratch site for the split-masthead row render gate.
+`,
+    "Essays.md": `---
+title: Essays
+uid: "nso00102"
+nav: true
+---
+
+# Essays
+`,
+    "FieldNotes.md": `---
+title: Field Notes
+uid: "nso00103"
+nav: true
+---
+
+# Field Notes
+`,
+    "Photographs.md": `---
+title: Photographs
+uid: "nso00104"
+nav: true
+---
+
+# Photographs
+`,
+    "ReadingList.md": `---
+title: Reading List
+uid: "nso00105"
+nav: true
+---
+
+# Reading List
+`,
+    "Archive.md": `---
+title: Archive
+uid: "nso00106"
+nav: true
+---
+
+# Archive
+`,
+    "Contact.md": `---
+title: Contact
+uid: "nso00107"
+nav: true
+---
+
+# Contact
+`,
+    "Colophon.md": `---
+title: Colophon
+uid: "nso00108"
+nav: true
+---
+
+# Colophon
+`,
+    "places/index.md": `---
+title: Places
+uid: "nso00201"
+---
+
+Every place this site names.
+`,
+    "kyoto.md": `---
+title: Kyoto
+uid: "nso00202"
+location: Kyoto
+---
+
+# Kyoto
+
+A located page, so the places root has a place to list.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+title = "Places"
+`,
+    ".moss/places.toml": `["Kyoto"]
+lat = 35.0116
+lng = 135.7681
+precision = "city"
+`,
   },
 };

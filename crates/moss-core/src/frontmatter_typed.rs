@@ -1131,7 +1131,7 @@ pub fn compute_url_path(
     clean_stem: &str,
 ) -> String {
     use std::path::Path;
-    use crate::slug::{generate_slug, slugify_path_segments};
+    use crate::slug::{generate_slug, slugify_path_segments, slugify_url_override};
 
     if is_index_file {
         let parent_path = Path::new(file_path)
@@ -1146,7 +1146,7 @@ pub fn compute_url_path(
                 .parent()
                 .and_then(|p| p.to_str())
                 .unwrap_or("");
-            let slug = generate_slug(custom_url);
+            let slug = slugify_url_override(custom_url);
             if grandparent.is_empty() {
                 format!("{}/index.html", slug)
             } else {
@@ -1158,7 +1158,7 @@ pub fn compute_url_path(
     } else {
         // Check for frontmatter url override first
         let slug = if let Some(custom_url) = frontmatter_url {
-            generate_slug(custom_url)
+            slugify_url_override(custom_url)
         } else {
             // Use clean stem (language suffix stripped)
             generate_slug(clean_stem)
@@ -1768,6 +1768,38 @@ mod url_path_tests {
                 "page"
             ),
             "news/custom-slug/index.html"
+        );
+    }
+
+    #[test]
+    fn test_compute_url_path_url_override_keeps_slashes() {
+        assert_eq!(
+            compute_url_path("share.md", false, Some("share/ID"), "share"),
+            "share/id/index.html"
+        );
+        assert_eq!(
+            compute_url_path("News/page.md", false, Some("a b/c d"), "page"),
+            "news/a-b/c-d/index.html"
+        );
+        assert_eq!(
+            compute_url_path("Sec/Old/index.md", true, Some("share/ID"), "index"),
+            "sec/share/id/index.html"
+        );
+    }
+
+    #[test]
+    fn test_compute_url_path_url_override_cannot_escape() {
+        assert_eq!(
+            compute_url_path("posts/p.md", false, Some("../../etc"), "p"),
+            "posts/etc/index.html"
+        );
+        assert_eq!(
+            compute_url_path("posts/p.md", false, Some("/abs/./x"), "p"),
+            "posts/abs/x/index.html"
+        );
+        assert_eq!(
+            compute_url_path("posts/p.md", false, Some(".."), "p"),
+            "posts/untitled/index.html"
         );
     }
 

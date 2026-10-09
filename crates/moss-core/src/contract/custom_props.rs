@@ -86,7 +86,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-panel-bg",
         owner: "moss-hero-content",
         default: "rgba(20, 16, 12, 0.82)",
-        description: "Backing panel behind overlay text in both overlaid hero layouts (desktop, and mobile under `mobile=overlay`), so the text stays legible wherever a drawn line, lettering or a face in the photo falls under it. moss sets this inline per-render, tinted from the image's own scan-cached dominant colour (`color_extract::panel_background`) and engineered so the panel's WCAG contrast against the overlay text holds even in the worst case of its own translucency — composited over pure black or pure white, which bounds every actual pixel underneath. The flat default here only applies when that can't be computed (no media manifest). A pale ('light'-toned) hero reads this against a different literal fallback, `rgba(250, 248, 244, 0.82)` — same property, the other side of the dark/light text split `--moss-hero-tone-color` makes.",
+        description: "Backing panel behind overlay text in both overlaid hero layouts (desktop, and mobile under `mobile=overlay`), so the text stays legible wherever a drawn line, lettering or a face in the photo falls under it. moss does not set this itself: it publishes a per-render panel colour as `--item-hero-panel-bg`, tinted from the image's own scan-cached dominant colour (`color_extract::panel_background`) and engineered so the panel's WCAG contrast against the overlay text holds even in the worst case of its own translucency — composited over pure black or pure white, which bounds every actual pixel underneath. This token, when a theme sets it (on `:root` or `.moss-hero`), takes precedence over that computed colour. The flat default here only applies when neither exists (no media manifest). A pale ('light'-toned) hero reads this against a different literal fallback, `rgba(250, 248, 244, 0.82)` — same property, the other side of the dark/light text split `--moss-hero-tone-color` makes.",
     },
     CustomProp {
         name: "--moss-hero-mobile-band",
@@ -176,7 +176,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-cover-color",
         owner: "moss-card",
         default: "var(--moss-bg, var(--moss-color-bg, #fff))",
-        description: "Background behind card content when the card carries `data-cover-color`. moss sets this per-card from the cover image's dominant colour; a theme can override it to opt out of the extracted tint. Also set on a `.moss-grid-card` whose cell opens with an image — there moss only publishes the colour and paints nothing, so a hand-built cell can wear the same band as a card.",
+        description: "Background behind card content when the card carries `data-cover-color`. moss does not set this itself: it publishes each card's colour from the cover image's dominant colour as `--item-cover-color` and paints with `var(--moss-cover-color, var(--item-cover-color))`, so a theme that sets `--moss-cover-color` (on `:root`, or on `.moss-card`) wins over the extracted tint — set it to `transparent` to opt out of the tint entirely. The same `--item-cover-color` is published on a `.moss-grid-card` whose cell opens with an image, where moss paints nothing, so a hand-built cell can wear the same band with `background: var(--moss-cover-color, var(--item-cover-color))`.",
     },
     CustomProp {
         name: "--moss-bg",

@@ -284,6 +284,20 @@ fn folder_links_in_a_grid_become_collection_cards() {
 }
 
 #[test]
+fn a_folder_card_in_a_grid_shows_the_folder_notes_description() {
+    let mut folder = make_folder("Theater", "theater/index.html", None);
+    folder.description = Some("Pick a room".to_string());
+    let docs = vec![folder, make_doc("Hamlet", "theater/hamlet/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[Theater](theater/)\n:::\n");
+    assert!(
+        html.contains(r#"<p class="moss-card-description">Pick a room</p>"#),
+        "folder card must carry its folder note's description. got: {html}"
+    );
+    assert!(html.contains("1 article"), "folder card keeps its count. got: {html}");
+}
+
+#[test]
 fn a_bare_wikilink_cell_shows_the_linked_pages_title() {
     // `[[work-b]]` has no `|alias`, so pulldown-cmark synthesizes the raw
     // target ("work-b") as the link's text. That synthesized text is never
@@ -1078,7 +1092,7 @@ fn a_hand_built_cell_publishes_its_cover_images_color() {
     let html = page.cover_colors(md);
     assert!(html.contains("data-cover-color"), "got: {html}");
     assert!(
-        html.contains(r#"<div class="moss-grid-card" data-cover-color style="--moss-cover-color: hsla(214, 54%, 41%, 1)">"#),
+        html.contains(r#"<div class="moss-grid-card" data-cover-color style="--item-cover-color: hsla(214, 54%, 41%, 1)">"#),
         "got: {html}"
     );
 }
@@ -1106,7 +1120,7 @@ fn a_cell_that_became_a_card_keeps_the_cards_own_color() {
     let page = Page::new("index.html", &docs).with_root(tmp.path());
     let html = page.cover_colors(":::grid 1\n[Harbour](works/harbour/)\n:::\n");
     assert_eq!(html.matches("data-cover-color").count(), 1, "got: {html}");
-    assert!(html.contains("--moss-cover-color: hsla(203, 73%, 14%, 1)"), "got: {html}");
+    assert!(html.contains("--item-cover-color: hsla(203, 73%, 14%, 1)"), "got: {html}");
 }
 
 /// A `:::grid` folder card counts in Chinese numerals on a vertical CJK page.

@@ -1,7 +1,7 @@
 /**
- * Tests for nav-split.ts — a plain-site-name masthead that wraps keeps its
- * toggles on row 1 (`data-nav-split`); breadcrumb pages and the hamburger
- * range are left to the shipped CSS.
+ * Tests for nav-split.ts — a plain-site-name masthead that wraps puts the name
+ * alone on row 1 (`data-nav-split`); breadcrumb pages and the hamburger range
+ * are left to the shipped CSS.
  *
  * jsdom does no layout, so the width arithmetic is pinned through the pure
  * `oneRowFits` decision, and the DOM tests pin the *scoping*: which mastheads

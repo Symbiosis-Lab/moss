@@ -126,6 +126,28 @@ impl Walker<'_> {
                     self.walk_collection(obj.get(*field));
                 }
             }
+            NodeRule::Gallery(fields) => {
+                let start = self.blocks.len();
+                for field in *fields {
+                    self.walk_collection(obj.get(*field));
+                }
+                let (images, rest): (Vec<_>, Vec<_>) = self
+                    .blocks
+                    .split_off(start)
+                    .into_iter()
+                    .partition(|b| matches!(b, Block::Image { .. }));
+                if !images.is_empty() {
+                    let images = images
+                        .into_iter()
+                        .filter_map(|b| match b {
+                            Block::Image { src, alt } => Some((src, alt)),
+                            _ => None,
+                        })
+                        .collect();
+                    self.blocks.push(Block::Gallery { images });
+                }
+                self.blocks.extend(rest);
+            }
             NodeRule::ActiveChild {
                 field,
                 slots,

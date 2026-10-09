@@ -313,7 +313,12 @@ fn test_build_schema_json_ld_with_keywords() {
         &site_url,
     );
 
-    assert!(result.contains(r#""keywords": ["rust", "wasm"]"#));
+    let inner = result
+        .strip_prefix(r#"<script type="application/ld+json">"#)
+        .and_then(|b| b.strip_suffix("</script>"))
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(inner).unwrap();
+    assert_eq!(v["keywords"], serde_json::json!(["rust", "wasm"]));
 }
 
 #[test]
@@ -711,12 +716,6 @@ fn test_escape_html_attr() {
         escape_html_attr(r#"a "b" <c>"#),
         r#"a &quot;b&quot; &lt;c&gt;"#
     );
-}
-
-#[test]
-fn test_escape_json_string() {
-    assert_eq!(escape_json_string("line1\nline2"), r#"line1\nline2"#);
-    assert_eq!(escape_json_string(r#"say "hello""#), r#"say \"hello\""#);
 }
 
 #[test]
@@ -2455,5 +2454,27 @@ fn og_image_keeps_the_raster_extension_and_never_becomes_webp() {
             url.ends_with(&source[source.rfind('.').unwrap()..]),
             "og:image for {source} resolved to {url}; extension must survive"
         );
+    }
+}
+
+/// Author text reaches a `<script>` block verbatim, so `</script>` or `<!--`
+/// in a title or description must not be able to end or open anything.
+#[test]
+fn json_ld_blocks_cannot_be_broken_out_of_by_page_text() {
+    let hostile = "</script><img src=x onerror=alert(1)><!-- x";
+    let article = build_schema_json_ld(
+        hostile, hostile, "https://example.com/", hostile, None, None,
+        &[hostile.to_string()], &test_site_url(),
+    );
+    let website = build_schema_website(hostile, hostile, "https://example.com/", "en");
+    for block in [article, website] {
+        let inner = block
+            .strip_prefix(r#"<script type="application/ld+json">"#)
+            .and_then(|b| b.strip_suffix("</script>"))
+            .expect("one script wrapper");
+        assert!(!inner.contains("</script"), "closes the block early: {inner}");
+        assert!(!inner.contains("<!--"), "opens an HTML comment: {inner}");
+        let v: serde_json::Value = serde_json::from_str(inner).expect("valid JSON");
+        assert!(v.to_string().contains(hostile), "the text survives the escaping");
     }
 }

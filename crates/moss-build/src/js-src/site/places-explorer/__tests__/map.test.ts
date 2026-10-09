@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { coverCamera, detailMaxZoom, openingMaxZoom, resizeCamera, screenScale, tileDetailMaxZoom, worldToScreen } from "../camera";
-import { TileLayer } from "../tiles";
+import { TileLayer, tileCellBounds, tilesForView } from "../tiles";
 import { mountPlacesMap } from "../map";
 import { project, WORLD_WIDTH } from "../projection";
 import { readUrlState } from "../state";
@@ -117,6 +117,89 @@ describe("mountPlacesMap — embed seams", () => {
     const { controller } = mount();
     await expect(controller.waitForInitialPaint()).resolves.toBe(true);
     expect(raster.rasterizeOrFallback).toHaveBeenCalled();
+  });
+
+  test.each([1.29, 1.44, 1.6])("world-resolution frame at zoom %s does not wait for regional detail", async (zoom) => {
+    const center = project(15, 25);
+    history.replaceState(null, "", `/places/?p=patterson&z=${zoom}&x=${center.x}&y=${center.y}`);
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    raster.rasterizeOrFallback.mockImplementation(async () => ({ el: document.createElement("canvas"), release: () => {} }));
+    const figure = document.createElement("figure");
+    document.body.append(figure);
+    const controller = mountPlacesMap(figure, {
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [TILE_CELL],
+      tileK: 4, tileOrigins: { "20,10": [0, 0] }, tileColumns: 36, tileRows: 18,
+      places: PLACES, lang: "en",
+    })!;
+    let ready = false;
+    void controller.waitForInitialPaint().then((result) => { ready = result; });
+    await vi.waitFor(() => expect(ready).toBe(true));
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  test.each([
+    { width: 360, height: 240, zoom: 12 },
+    { width: 800, height: 500, zoom: 4 },
+  ])("ready frame retains regional resolution at $width×$height and zoom $zoom", async ({ width, height, zoom }) => {
+    const viewport = { width, height };
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(rect(0, 0, width, height));
+    vi.stubGlobal("devicePixelRatio", 2);
+    raster.rasterizeOrFallback.mockImplementation(async (_markup, _fallback, pixelWidth, pixelHeight) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(pixelWidth);
+      canvas.height = Math.ceil(pixelHeight);
+      return { el: canvas, release: () => {} };
+    });
+    const center = project(15, 25);
+    history.replaceState(null, "", `/places/?p=patterson&z=${zoom}&x=${center.x}&y=${center.y}`);
+    const cells: Array<[number, number]> = [];
+    const origins: Record<string, [number, number]> = {};
+    const assets = new Map<string, string>();
+    for (let y = 7; y <= 13; y++) {
+      for (let x = 17; x <= 23; x++) {
+        const bounds = tileCellBounds(x, y);
+        const origin: [number, number] = [Math.floor(bounds.minX * 4) - 8, Math.floor(bounds.minY * 4) - 8];
+        const w = Math.ceil(bounds.maxX * 4) - origin[0] + 8;
+        const h = Math.ceil(bounds.maxY * 4) - origin[1] + 8;
+        cells.push([x, y]);
+        origins[`${x},${y}`] = origin;
+        assets.set(`/_moss/map.abc/tile-${x}-${y}.svg`, `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="M0 0h${w}v${h}H0Z"/></svg>`);
+      }
+    }
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: assets.has(url), text: async () => assets.get(url) ?? "" })));
+    const figure = document.createElement("figure");
+    document.body.append(figure);
+    const controller = mountPlacesMap(figure, {
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: cells,
+      tileK: 4, tileOrigins: origins, tileColumns: 36, tileRows: 18,
+      places: PLACES, lang: "en",
+    })!;
+
+    async function expectSharpReadyFrame() {
+      await expect(controller.waitForInitialPaint()).resolves.toBe(true);
+      const camera = readUrlState().camera!;
+      const world = figure.querySelector<HTMLElement>(".moss-places-world")!;
+      const backing = world.querySelector<HTMLCanvasElement>(".moss-places-world-surface")!;
+      const requiredWorldPixels = parseFloat(world.style.width) * camera.zoom * 2;
+      // The capped world cannot supply this frame's density by itself.
+      expect(requiredWorldPixels / backing.width).toBeGreaterThan(1.3);
+      const tiles = figure.querySelector<HTMLElement>(".moss-places-tiles")!;
+      expect(Number(tiles.style.getPropertyValue("--moss-place-tile-opacity"))).toBe(1);
+      const visible = tilesForView(cells, camera, viewport, 0);
+      expect(visible.length).toBeGreaterThan(0);
+      for (const [x, y] of visible) {
+        const tile = tiles.querySelector<HTMLElement>(`[data-moss-places-tile="${x},${y}"]`);
+        expect(tile, `visible cell ${x},${y}`).not.toBeNull();
+        const canvas = tile!.firstElementChild as HTMLCanvasElement;
+        expect(canvas.tagName).toBe("CANVAS");
+        const requiredPixels = parseFloat(tile!.style.width) * screenScale(camera, viewport) / 4 * 2;
+        expect(requiredPixels / canvas.width).toBeLessThanOrEqual(1.3);
+      }
+    }
+    expect(readUrlState().camera!.zoom).toBe(zoom);
+    await expectSharpReadyFrame();
+    figure.querySelector<HTMLElement>('[data-control="zoom-in"]')!.click();
+    await expectSharpReadyFrame();
   });
 
   test("places within one region open fitted to them, and Fit all places returns to that view", () => {

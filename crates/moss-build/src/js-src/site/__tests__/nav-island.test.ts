@@ -13,7 +13,7 @@
  * nearest the reader locates them better than the one nearest the site root.
  */
 
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach, vi } from "vitest";
 
 import { foldPlan, outerWidth } from "../nav/breadcrumb-fold";
 import { initNavIsland } from "../nav/nav-island";
@@ -170,6 +170,8 @@ describe("initNavIsland — the contents gate and the sections panel", () => {
 
   beforeEach(() => {
     document.body.innerHTML = `${ISLAND}<main></main>`;
+    // The section name measures with a canvas, which jsdom does not have.
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   });
 
   const island = () => document.querySelector<HTMLElement>(".moss-nav-island")!;

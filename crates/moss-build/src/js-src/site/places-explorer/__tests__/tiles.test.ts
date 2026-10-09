@@ -12,6 +12,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import { detailMaxZoom, MIN_ZOOM, screenScale } from "../camera";
+import { WORLD_RASTER_ZOOM_CAP } from "../raster";
 import { WORLD_WIDTH, WORLD_HEIGHT } from "../projection";
 import { TileLayer, tileCellBounds, tileEdgeMask, tileFadeOpacity, tileOverlayTransform, tilesForView } from "../tiles";
 
@@ -109,14 +110,14 @@ describe("tileFadeOpacity", () => {
     expect(tileFadeOpacity(camera, viewport)).toBe(0);
   });
 
-  test("reaches full opacity exactly at the world's own detail ceiling — tiles are present past it", () => {
-    const ceiling = detailMaxZoom(viewport);
+  test("reaches full opacity at the world raster budget", () => {
+    const ceiling = Math.min(detailMaxZoom(viewport), WORLD_RASTER_ZOOM_CAP);
     const camera = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, zoom: ceiling };
     expect(tileFadeOpacity(camera, viewport)).toBe(1);
   });
 
   test("ramps linearly across the fade band and stays zero short of it", () => {
-    const ceiling = detailMaxZoom(viewport);
+    const ceiling = Math.min(detailMaxZoom(viewport), WORLD_RASTER_ZOOM_CAP);
     const fadeStart = ceiling * 0.8; // the last 20% of the zoom range
     const justShort = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, zoom: fadeStart - 0.01 };
     const midBand = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, zoom: (fadeStart + ceiling) / 2 };
@@ -890,7 +891,7 @@ describe("TileLayer — complete first-frame coverage", () => {
     layer.render(wideCamera, wideViewport, screenScale({ ...wideCamera, zoom: 1 }, wideViewport), true);
     expect(layer.hasOpaqueViewportCoverage(wideCamera, wideViewport)).toBe(false);
 
-    const fadingCamera = { ...camera, zoom: camera.zoom * 0.95 };
+    const fadingCamera = { ...camera, zoom: WORLD_RASTER_ZOOM_CAP * 0.95 };
     layer.render(fadingCamera, viewport, unitScale, true);
     expect(layer.hasOpaqueViewportCoverage(fadingCamera, viewport)).toBe(false);
   });

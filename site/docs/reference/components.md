@@ -19,7 +19,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-card` | instance | v1 collapsed shape — single canonical instance class inside `.moss-cards`. Layout-specific styling targets `.moss-cards[data-layout=X] .moss-card`. Tag is `<a>` for ordinary cards and `<div>` for linkblog cards (`[data-linkblog]`). |
 | `.moss-card-cover` | instance | Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present, or `data-cover="quote"` when a sibling card in the same listing has a cover and this one doesn't. |
 | `.moss-card-no-cover` | instance | Modifier applied to `.moss-card-cover` when no cover media is available. |
-| `.moss-card-content` | instance | Text content slot inside a grid-layout `.moss-card` (kicker + title + meta). |
+| `.moss-card-content` | instance | Text content slot inside a grid-layout `.moss-card` (kicker + title + meta). A card with a cover has a tinted content band (`--moss-cover-color`) with white title, meta and description. A theme that clears that band's background must also set the card's text colours, or the text is white on the page. |
 | `.moss-card-row` | instance | Row wrapper inside a list-layout `.moss-card` holding body + cover side-by-side. |
 | `.moss-card-body` | instance | Text body slot of a list-layout `.moss-card`. |
 | `.moss-card-title` | instance | Title inside `.moss-card`. |
@@ -57,8 +57,9 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-hero-content` | instance | Text content slot inside `.moss-hero` — text laid ON the image. For text ABOUT the image, see `.moss-hero-caption`. |
 | `.moss-hero-caption` | standalone | Caption or credit for a hero image, from `:::hero {caption="…"}`. A SIBLING of `.moss-hero`, immediately after it — not a child: the section is a fixed-height cropping frame, and a photographer's credit has to survive as text below the picture rather than be printed across it. Rendered as inline markdown, so a credit can be a link, exactly like a `byline:` / `colophon:` row. |
 | `.moss-hero-slides` | instance | Wrapper holding the `.moss-hero-slide` images of a multi-image hero; the CSS ambient crossfade cycles one slide visible at a time. |
+| `.moss-hero-pause` | instance | Pause toggle of a multi-image hero: a checkbox (no script) that stops the crossfade while checked. Emitted only with `data-slides`; the accessible name is localized. Sits at the block-end inline-end corner (inline-start with `align=end`), 44px hit area, hidden under reduced motion. The rotation also pauses while the hero is hovered or holds keyboard focus. It pauses the crossfade only; a video slide keeps playing. |
 | `.moss-hero-slide` | instance | One background slide of a multi-image hero. Emitted only when the hero has 2+ images; slides crossfade ambiently via site.css keyed on the section's data-slides. First slide is the reduced-motion static fallback. |
-| `.moss-image` | standalone | Wrapper around an inline `<img>` for sizing and figure semantics. `data-width` carries a named width token (body\|wide\|page\|screen); a content-relative width is instead emitted as inline `style="width:NN%"` (set by the editor drag-resize), which also forces the inner image to fill that percent box. Images narrower than the content column center horizontally. |
+| `.moss-image` | standalone | Wrapper around an inline `<img>` for sizing and figure semantics. `data-width` carries a named width token (body\|wide\|page\|screen); a content-relative width is instead emitted as inline `style="width:NN%"` (set by the editor drag-resize), which also forces the inner image to fill that percent box. Images narrower than the content column center horizontally. A captioned image is announced once, through its `<figcaption>`: when the alt is empty or only repeats the caption the inner `<img>` has `alt=""`. An alt that differs from the caption comes from an italic line under the image: `![description](x.jpg)` then `*caption*` on the next line. |
 | `.moss-align-left` | standalone | Floats an embed element to the left of body text (editorial runaround) — an image, a captioned figure (`.moss-image`, `.moss-embed-figure`), a bare `.moss-embed`, or a `.moss-cards-container` listing. Defaults max-width to 50% on desktop unless the element carries its own `data-width` or content-relative size, and collapses to a full-width, unfloated block below 48rem regardless. CSS `:has()` escalates an image's float to its wrapping `<figure class="moss-image">` when present; every other kind carries the class on its own outermost element already. Mirrors WordPress's `alignleft` convention. |
 | `.moss-align-right` | standalone | Floats an embed element to the right of body text (editorial runaround) — an image, a captioned figure (`.moss-image`, `.moss-embed-figure`), a bare `.moss-embed`, or a `.moss-cards-container` listing. Symmetric counterpart to `.moss-align-left`. Mirrors WordPress's `alignright` convention. |
 | `.moss-article-title` | instance | Article-page H1 title emitted from frontmatter. |
@@ -67,6 +68,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-grid-card` | instance | Card instance inside `.moss-grid`. Today emits sibling classes `link-card` / `friend-card` / `no-cards`; v1 collapses to `data-kind`. |
 | `.moss-gallery` | container | Image gallery container. v1 adds `data-width` (P9). |
 | `.moss-gallery-item` | instance | Single image entry inside `.moss-gallery`. |
+| `.moss-gallery-link` | instance | The link around a gallery image. With scripting it opens the image in the full-screen viewer (the same one as the media collection pages), stepping through that gallery's images with the arrow keys; without scripting it opens the full-size image. `href` is the full image and `data-title` is its caption. |
 | `.moss-buttons` | container | Container for a row of `.moss-btn` buttons. v1: the inverted variant is on `data-style="inverted"`. |
 | `.moss-btn` | standalone | Generic button primitive. Role on `data-role` (v1). |
 | `.moss-btn__label` | instance | Label span inside `.moss-btn`. |
@@ -79,12 +81,16 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-subscribe-status` | instance | Status message shown after submit (success/error). |
 | `.moss-subscribe-status__icon` | instance | Icon slot inside `.moss-subscribe-status`. |
 | `.moss-subscribe-landing` | standalone | Standalone subscribe landing page surface (larger variant). |
+| `.moss-calendar-links` | standalone | Closing line of an event page ("Add to calendar") or of a folder that holds events (its calendar file and a webcal subscribe link). |
+| `.moss-calendar-link` | instance | One calendar link: the .ics file, or the webcal:// subscription. |
 | `.moss-series-nav` | standalone | Series navigation bar (prev/next/collection) on series pages. |
 | `.moss-series-nav-links` | instance | Row holding prev/next links in series nav. |
 | `.moss-series-nav-link` | instance | Individual link inside series nav. Modifiers: `moss-series-nav-prev`, `moss-series-nav-next`, `empty` (placeholder). |
 | `.empty` | instance | Co-class on a series-nav link with nowhere to go — the previous link on the first entry, the next link on the last. The element is still emitted so the pair keeps its layout. |
 | `.moss-series-nav-prev` | instance | Previous-page modifier on a series nav link. |
 | `.moss-series-nav-next` | instance | Next-page modifier on a series nav link. |
+| `.moss-series-nav-text` | instance | Wrapper stacking a series nav link's label above its title. |
+| `.moss-series-nav-label` | instance | Visible direction label ("Previous" / "Next", localized) above a series nav link's title. |
 | `.moss-series-nav-arrow` | instance | Arrow glyph inside a series-nav link. |
 | `.moss-series-nav-title` | instance | Title text of the destination page in a series-nav link. |
 | `.moss-series-nav-collection` | instance | Collection-listing slot in series nav (sibling pages). |
@@ -92,7 +98,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-series-nav-position` | instance | Where this page sits in its series — "2 of 3" / 「第 2 篇，共 3 篇」. Counts only the pages still in the reading order, so a page that stepped out with `series: false` is not in the total. Omitted when the folder holds a single page. |
 | `.moss-collection-cover` | standalone | Header surface on a collection landing page. |
 | `.moss-collection-cover-row` | instance | Row inside `.moss-collection-cover`. |
-| `.moss-collection-cover-body` | instance | Body content slot inside `.moss-collection-cover`. |
+| `.moss-collection-cover-body` | instance | Body content slot inside `.moss-collection-cover`. On a folder home with a cover this slot holds the whole body, embedded listings included; to style only the prose, target its paragraphs. |
 | `.moss-input` | standalone | Generic form input primitive. |
 | `.moss-field` | container | Form field group (label + input). Modifier `--inline` for horizontal layout. |
 | `.moss-label` | instance | Label primitive for `.moss-field`. Modifier `--small` for compact form. |
@@ -128,6 +134,22 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.main-nav` | chrome | Top site navigation bar. Legacy non-`moss-` prefix kept for theme parity. |
 | `.date-line` | chrome | Byline row under an article title: the publication date on the left, the reading-size control on the right. Emitted only when the page has a `date`. |
 | `.date` | instance | The formatted publication date inside `.date-line`. Text is localized to the page's language. |
+| `.moss-event-meta` | container | The event facts of a page with `start`, in place of the posted date inside `.date-line`: the time, the `status` label, the place, and the `tickets` / `online` links. Also carries `.date`. Absent on a page without `start`. |
+| `.moss-event-time` | instance | A `<time>` element holding the event's human-readable time (localized to the page language, with the end when `end` is set). `datetime` is the start as written, venue-local, with no zone offset. Struck through when the event is cancelled. |
+| `.moss-event-status` | instance | Text label for `status` (Cancelled, Postponed, Moved online, Rescheduled), beside the time. Absent for a scheduled event. |
+| `.moss-event-place` | instance | The event's `location` as plain text, in the page's meta line and after the time in a listing row or card (preceded there by `.moss-event-sep`). On the page it is emitted only when the place did not resolve to a place page; a resolved place shows in the linked place line under the meta line instead. |
+| `.moss-event-link` | instance | A `tickets` (label Tickets) or `online` (label Online) link; only http and https addresses are linked. |
+| `.moss-event-calendar` | instance | The "Add to calendar" link to the event's `.ics` file, after the tickets and online links. Carries `.moss-event-link` too. |
+| `.moss-event-tickets` | instance | The `tickets` link, which also carries `.moss-event-link`. |
+| `.moss-event-online` | instance | The `online` link, which also carries `.moss-event-link`. |
+| `.moss-event-sep` | instance | The separator between an event's time and its place in a listing row or card. |
+| `.moss-when` | container | An event's time in a listing item (list row, card, grid card), in place of the compact date: a `<time>` whose `datetime` is the start as written, venue-local. The visible text is the same words the event page shows (localized to the page language). Each piece sits in its own span so a theme can lay the date out as it likes, for instance a large day numeral. |
+| `.moss-when-weekday` | instance | The weekday name. |
+| `.moss-when-month` | instance | The month name (`11月` in Chinese). |
+| `.moss-when-day` | instance | The day of the month (`1日` in Chinese). |
+| `.moss-when-year` | instance | The year (`2026年` in Chinese). |
+| `.moss-when-time` | instance | The time of day, with the end when `end` is later the same day. Absent for an all-day event. |
+| `.moss-cards-group` | container | A run of listing items under `children_group: upcoming` (or `group:upcoming` on an embed). An empty run is not emitted. Computed when the site is built. |
 | `.moss-byline` | container | Credit block under the page title, below `.date-line` when there is one. Emitted from the `byline` frontmatter field on every page kind — articles, folder indexes, the homepage and plain pages alike — one `.moss-byline-row` per authored line. On a page moss gives no title of its own (the homepage, a `home: true` folder page, a plain page) it sits under the author's own opening `<h1>`, or at the top of the page content when the body has none. Absent when the field is. |
 | `.moss-byline-row` | instance | One credit line. Its content is the author's text rendered as inline markdown, so a row may contain links or emphasis. moss does not know which part is a role and which is a name — style the whole row. |
 | `.moss-article-colophon` | container | Credit block at the FOOT of the page, emitted from the `colophon` frontmatter field — where the piece first ran, contributor biographies, production credits. Same rows as `.moss-byline`, different end of the page. Emitted on every page kind: inside `<article>` on an article page, and last in the page content everywhere else — after the children listing on a folder index or the homepage — where the enclosing element is not an `<article>` despite the class name. Unrelated to `.review-colophon`, which is the review feature's book card. |
@@ -155,12 +177,16 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-nav-island-current` | instance | The page you are on, as the trail's last crumb. The only crumb permitted to truncate — an ancestor either fits whole or folds away. |
 | `.moss-nav-island-more` | instance | Stands in for the ancestor levels the trail had to drop. Opens the levels menu on click; names them on hover via `data-tooltip`. Never opens on hover — a touch device has none, and that is the width where folding happens. |
 | `.moss-nav-island-actions` | instance | Button cluster at the island's end edge. Holds the sections button only — theme, language and search stay in the masthead. |
-| `.moss-nav-island-sections` | instance | Opens this page's section list. Always present in an emitted island, because an island only ever shows on a page with two or more sections — so the button always has something to open. |
-| `.moss-nav-island-menu` | instance | Popover opened by `.moss-nav-island-more` or `.moss-nav-island-sections`. Every row reserves a leading gutter for the current-row rule, so the labels line up in one column whether or not a row is marked. |
+| `.moss-nav-island-sections` | instance | Opens this page's section list. Always present in an emitted island, because an island only ever shows on a page with two or more sections — so the button always has something to open. The glyph is a small ruler. The site runtime adds the current section's name before it, in a box of fixed width, and hides the button while the contents ruler is on screen. |
+| `.moss-nav-island-section-name` | instance | The current section's title on the sections button, cut in the middle to a fixed 6em box and empty before the first section. Written by the site runtime; absent from emitted HTML. |
+| `.moss-nav-island-menu` | instance | Popover opened by `.moss-nav-island-more` or `.moss-nav-island-sections`. In the sections menu every row leads with a short dash (darker once read, a long accent dash for the current section) in a gutter all rows reserve, so the labels line up in one column whether or not a row is current. |
 | `.moss-breadcrumb-more` | instance | The masthead trail's counterpart to `.moss-nav-island-more`: stands in for the ancestor levels the trail folded, opens the levels menu on click, names them on hover via `data-tooltip`. Emitted (hidden) only when the trail has a middle to fold — three or more crumbs. |
 | `.moss-breadcrumb-menu` | instance | Popover listing the masthead trail's folded ancestor levels, opened by `.moss-breadcrumb-more`. A sibling of `.nav-left` (which clips its own overflow), positioned against `.nav-content`. Same shape as `.moss-nav-island-menu`. |
 | `.moss-nav-island-progress` | instance | Reading-progress track along the island's own bottom edge — not a separate bar across the window. Currently measures document scroll. |
 | `.moss-nav-island-progress-fill` | instance | The filled portion of the progress track. Its `width` is written inline by the site runtime; with JavaScript off it stays at 0 and the track reads as empty. |
+| `.moss-contents-ruler` | chrome | Contents ruler: one short dash per section in the left margin, pinned to the window and vertically centred, with the section titles opening to its right on hover or focus. Added by the site runtime (never in emitted HTML) beside `<main>` on a page where the nav island is live, and only where the margin leaves a title at least 96px; hidden under vertical typesetting, in print, when the dashes do not fit the window's height, and while the article's body is off screen. |
+| `.moss-contents-ruler-dash` | instance | One section's mark: 10px by 1px at rest, darker once read, 18px by 2px in the accent colour for the current section. |
+| `.moss-contents-ruler-label` | instance | A section's title, to the right of its dash and hidden until the ruler is hovered or focused. Cut in the middle to the room left before the text column; the link carries the full title as its accessible name. |
 | `.footer-default` | chrome | The generated footer link row, emitted only when the site has no authored `footer.md`. Authoring a footer replaces it, so a rule targeting this stops applying the moment the site gains one. |
 | `.footer-link` | instance | One link in the generated footer row (RSS and similar). Off-site ones also carry `data-external`. |
 | `.moss-child-section-divider` | instance | Divider rule between auto-generated child sections. |
@@ -253,7 +279,6 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.has-sidebar-layout` | instance | Marks a page laid out with a sidebar, so the main column can reserve room for it without the sidebar having rendered yet. |
 | `.wikilink` | instance | Marks a link that came from `[[wikilink]]` syntax rather than a markdown link, so a theme can distinguish internal cross-references from ordinary links. |
 | `.moss-term-role` | instance | Section heading on a term page (e.g. /people/<name>/) for one name-list field's group of works, when the kind names more than one field. |
-| `.moss-place-breadcrumb` | instance | Ancestor trail on a place page (e.g. /places/<name>/), oldest ancestor first, reusing the masthead's own `.breadcrumb-segment`/`.breadcrumb-separator` classes. Absent for a root place with no gazetteer parent, and for every non-place term. |
 | `.moss-place-children` | instance | Direct child places on a place page, each with its roll-up-inclusive member count. Absent for a leaf place with no children, and for every non-place term. |
 | `.moss-place-line` | instance | The automatic place line under a page's byline, generated from `location:` — every declared place, linked to its term page. Absent when `location:` is unset, or the site declares no place-typed kind. No opt-out: this is generated chrome with no authored equivalent. |
 | `.moss-place-map` | instance | Offline SVG map on a place term page or explicit `style:map` embed. Geography and privacy precision come from `.moss/places.toml`; no browser network request is made. |

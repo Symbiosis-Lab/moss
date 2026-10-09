@@ -287,6 +287,20 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "评审",
             Language::ZhHant => "評審",
         },
+        // Event meta line: weekday names (Monday first), link labels, status labels.
+        "weekday_0" => match lang { Language::En => "Monday", Language::ZhHans => "星期一", Language::ZhHant => "星期一" },
+        "weekday_1" => match lang { Language::En => "Tuesday", Language::ZhHans => "星期二", Language::ZhHant => "星期二" },
+        "weekday_2" => match lang { Language::En => "Wednesday", Language::ZhHans => "星期三", Language::ZhHant => "星期三" },
+        "weekday_3" => match lang { Language::En => "Thursday", Language::ZhHans => "星期四", Language::ZhHant => "星期四" },
+        "weekday_4" => match lang { Language::En => "Friday", Language::ZhHans => "星期五", Language::ZhHant => "星期五" },
+        "weekday_5" => match lang { Language::En => "Saturday", Language::ZhHans => "星期六", Language::ZhHant => "星期六" },
+        "weekday_6" => match lang { Language::En => "Sunday", Language::ZhHans => "星期日", Language::ZhHant => "星期日" },
+        "event_tickets" => match lang { Language::En => "Tickets", Language::ZhHans => "购票", Language::ZhHant => "購票" },
+        "event_online" => match lang { Language::En => "Online", Language::ZhHans => "线上参加", Language::ZhHant => "線上參加" },
+        "event_status_cancelled" => match lang { Language::En => "Cancelled", Language::ZhHans => "已取消", Language::ZhHant => "已取消" },
+        "event_status_postponed" => match lang { Language::En => "Postponed", Language::ZhHans => "已延期", Language::ZhHant => "已延期" },
+        "event_status_moved-online" => match lang { Language::En => "Moved online", Language::ZhHans => "改为线上", Language::ZhHant => "改為線上" },
+        "event_status_rescheduled" => match lang { Language::En => "Rescheduled", Language::ZhHans => "已改期", Language::ZhHant => "已改期" },
         "term_role_location" => match lang {
             Language::En => "Location",
             Language::ZhHans => "地点",
@@ -305,6 +319,22 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::En => "Subscribe",
             Language::ZhHans => "订阅",
             Language::ZhHant => "訂閱",
+        },
+        // Calendar files for events
+        "add_to_calendar" => match lang {
+            Language::En => "Add to calendar",
+            Language::ZhHans => "添加到日历",
+            Language::ZhHant => "加入行事曆",
+        },
+        "download_calendar" => match lang {
+            Language::En => "Download calendar",
+            Language::ZhHans => "下载日历",
+            Language::ZhHant => "下載行事曆",
+        },
+        "subscribe_to_calendar" => match lang {
+            Language::En => "Subscribe to calendar",
+            Language::ZhHans => "订阅日历",
+            Language::ZhHant => "訂閱行事曆",
         },
         "rss" => "RSS",
         "subscribe_via_rss" => match lang {
@@ -360,6 +390,12 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::En => "Next",
             Language::ZhHans => "下一个",
             Language::ZhHant => "下一個",
+        },
+        // Gallery image link name; {n} is the 1-based position, {m} the total.
+        "gallery_open_image" => match lang {
+            Language::En => "Open image {n} of {m}",
+            Language::ZhHans => "打开第 {n} 张图片，共 {m} 张",
+            Language::ZhHant => "開啟第 {n} 張圖片，共 {m} 張",
         },
         "view_in_article" => match lang {
             Language::En => "View in article",

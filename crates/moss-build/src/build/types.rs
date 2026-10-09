@@ -13,6 +13,42 @@ use specta::Type;
 pub use moss_core::frontmatter_typed::SeriesField;
 pub use crate::build::render::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
+/// Validated event facts shared by page metadata, listings and calendar files.
+/// Present when `start` parses; `end` must also parse and not precede it.
+#[derive(Debug, Clone)]
+pub struct EventFields {
+    pub start: moss_core::event::EventTime,
+    pub end: Option<moss_core::event::EventTime>,
+    /// `start` normalized so that string order is chronological: the page's
+    /// "when", which listings sort by in place of `date`.
+    pub when: String,
+    /// The trimmed `timezone:` text, if set and non-empty.
+    pub timezone: Option<String>,
+    pub status: Option<String>,
+    pub tickets: Option<String>,
+    pub online: Option<String>,
+}
+
+impl EventFields {
+    pub fn from_frontmatter(fm: &moss_core::frontmatter_typed::FrontMatter) -> Option<Self> {
+        use moss_core::event::{check_end_after_start, EventTime};
+        let start_raw = fm.start.as_deref()?;
+        let start = EventTime::parse(start_raw).ok()?;
+        let end = fm.end.as_deref()
+            .filter(|end| check_end_after_start(start_raw, end).is_ok())
+            .and_then(|end| EventTime::parse(end).ok());
+        Some(Self {
+            when: start.sort_key(),
+            start,
+            end,
+            timezone: fm.timezone.as_deref().map(str::trim).filter(|z| !z.is_empty()).map(str::to_string),
+            status: fm.status.clone(),
+            tickets: fm.tickets.clone(),
+            online: fm.online.clone(),
+        })
+    }
+}
+
 /// Parsed markdown document with frontmatter and content.
 ///
 /// Represents a processed markdown file ready for HTML generation.
@@ -191,6 +227,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub location: Vec<String>,
+    /// The event fields (`start`, `end`, `status`, `tickets`, `online`), present
+    /// exactly when the page has a valid `start`. Read by the article meta line.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub event: Option<EventFields>,
     /// Term-page claim from `author_page:` — this page is the author page
     /// for the claimed name (see `moss_core::terms::TermClaim`). Resolved by
     /// `build::terms::derive_terms` into [`Self::term_listing`] on the
@@ -706,6 +747,11 @@ pub struct PageFeatures {
     /// runtime script via [`SiteAssets`]. Read from the typed AST
     /// (`moss_core::ast::has_scroll_row_recursive`).
     pub scroll_rows: bool,
+    /// True if the page has a `:::gallery`. Gates the full-screen viewer
+    /// (`fullscreen.js`) via [`SiteAssets`] and puts the viewer's markup on
+    /// this page. Read from the typed AST
+    /// (`moss_core::ast::has_shortcode_recursive`).
+    pub galleries: bool,
 }
 
 impl PageFeatures {
@@ -718,6 +764,7 @@ impl PageFeatures {
             callouts: self.callouts || other.callouts,
             footnotes: self.footnotes || other.footnotes,
             scroll_rows: self.scroll_rows || other.scroll_rows,
+            galleries: self.galleries || other.galleries,
         }
     }
 }
@@ -769,6 +816,9 @@ pub struct SiteAssets {
     /// (`/photography`, `/videos`, `/experiments`), which is what
     /// `fullscreen.js` attaches to.
     pub media_pages: bool,
+    /// Some page has a `:::gallery`, whose images open in the same
+    /// full-screen viewer (`fullscreen.js`) as the media collection pages.
+    pub galleries: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
     /// the nav button, the search-index emitter and `search.js`'s tag alike.
@@ -823,6 +873,7 @@ impl SiteAssets {
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
+            galleries: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
@@ -834,6 +885,7 @@ impl SiteAssets {
             ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
+            out.galleries |= page.features.galleries;
         }
         out
     }
@@ -897,7 +949,8 @@ impl SourceMetadata {
 
 impl moss_core::sort::SortableDoc for ParsedDocument {
     fn url_path(&self) -> &str { &self.url_path }
-    fn date(&self) -> Option<&str> { self.date.as_deref() }
+    /// The page's one "when": its event `start` if it has one, else its `date`.
+    fn date(&self) -> Option<&str> { self.event.as_ref().map(|e| e.when.as_str()).or(self.date.as_deref()) }
     fn weight(&self) -> Option<i32> { self.weight }
     fn declared_sort(&self) -> Option<&moss_core::sort::SortField> { self.sort.as_ref() }
     fn clean_stem(&self) -> &str { &self.clean_stem }

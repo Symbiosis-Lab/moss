@@ -539,7 +539,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=5, Importance=4 → score=54 (same tier as cover)
         score: 55,
-        description: "Custom URL slug (e.g. `links` → /links/). Pin a stable ASCII slug when the filename isn't one — moss's convention is to name files after the page title in their own language, then pin `url:` here (`隐私.md` + `url: privacy` → /privacy). Keeps `[[wikilinks]]` working across a rename.",
+        description: "Custom URL slug (e.g. `links` → /links/). Pin a stable ASCII slug when the filename isn't one — moss's convention is to name files after the page title in their own language, then pin `url:` here (`隐私.md` + `url: privacy` → /privacy). Keeps `[[wikilinks]]` working across a rename. It is one path segment that renames the page inside its folder (a `/` becomes `-`); to change the folder, move the file and keep the old address with a `[redirects]` entry.",
         label_key: "chip.url.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -731,7 +731,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::Checkbox,
         // Frequency=1, Importance=2 → score = 100 - (1*6 + 2*4) = 100 - 14 = 86
         score: 86,
-        description: "Override site-wide breadcrumb setting for this page",
+        description: "Home page: true turns breadcrumbs on for the whole site, false turns them off for it. Other pages: false hides them on this page only; true does nothing.",
         label_key: "chip.breadcrumb.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -996,7 +996,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::CodeEditor,
         // Frequency=0, Importance=1 → score=96
         score: 96,
-        description: "Frontmatter values to push to all descendant pages",
+        description: "Frontmatter values to push to all descendant pages; the page that declares it is not included, so set the value on it directly too",
         label_key: "chip.cascade.label",
         group: "Child Styles",
         ..FIELD_DEFAULTS
@@ -1022,7 +1022,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::Checkbox,
         // Frequency=2, Importance=3 → score=76
         score: 76,
-        description: "Whether to show in site navigation",
+        description: "Whether to show in site navigation. When unset, a page at the site root that would otherwise be navigational still stays out if it has `listed: false`",
         label_key: "chip.nav.label",
         group: "Whole Site",
         ..FIELD_DEFAULTS

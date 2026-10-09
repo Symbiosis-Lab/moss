@@ -253,6 +253,39 @@ fn limit_emits_more_link_automatically() {
 }
 
 #[test]
+fn folder_listing_shows_the_byline_row_before_a_body_excerpt() {
+    let folder = make_folder_doc("journal/index.html", "Journal");
+    let a = ParsedDocument {
+        content: "A long body paragraph.".to_string(),
+        byline: vec!["Riverside Hall, 2024".to_string()],
+        ..make_doc("journal/a.html", "A", Some("2025-01-01"))
+    };
+    let docs = vec![folder, a];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        style: Some("summary".to_string()),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "/journal/",
+        "index.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("Riverside Hall, 2024"), "byline row missing: {}", out);
+    assert!(!out.contains("A long body paragraph."), "body excerpt used instead: {}", out);
+}
+
+#[test]
 fn explicit_order_listing_omits_card_dates() {
     // A curated `sort: [list]` folder is a manual sequence, not a
     // chronological feed: its summary cards must not carry the per-card
@@ -1751,7 +1784,7 @@ fn grid_embed_iframe_cover_gets_dark_default_color() {
         out
     );
     assert!(
-        out.contains(r#"--moss-cover-color: hsla(0, 0%, 18%, 1)"#),
+        out.contains(r#"--item-cover-color: hsla(0, 0%, 18%, 1)"#),
         "iframe cover card must get the dark default band. Got: {}",
         out
     );
@@ -2820,4 +2853,165 @@ fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
     let out = render_body_embed("![[/places/japan/]]\n", &docs);
     assert!(!out.contains("moss-embed-missing"), "got: {out}");
     assert!(out.contains("Kyoto Temple"), "got: {out}");
+}
+
+fn dated_event(url_path: &str, label: &str, start: moss_core::event::EventTime) -> ParsedDocument {
+    let mut doc = make_doc(url_path, label, None);
+    doc.event = Some(crate::build::types::EventFields {
+        start,
+        end: None,
+        when: start.sort_key(),
+        status: None,
+        tickets: None,
+        online: None,
+        timezone: None,
+    });
+    doc
+}
+
+#[test]
+fn upcoming_limit_counts_after_soonest_first_ordering() {
+    use moss_core::event::EventTime::Date;
+    let docs = vec![
+        make_folder_doc("events/index.html", "Events"),
+        dated_event("events/summer.html", "Summer Fair", Date(2099, 6, 1)),
+        dated_event("events/spring.html", "Spring Gala", Date(2099, 3, 1)),
+        dated_event("events/autumn.html", "Autumn Talk", Date(2099, 9, 1)),
+        dated_event("events/old.html", "Winter Concert", Date(2020, 1, 1)),
+    ];
+
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        limit: Some(1),
+        group: Some("upcoming".to_string()),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker("/events/", "index.md", &params);
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &project,
+        &dir_overrides,
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("Spring Gala"), "the soonest future event is shown: {}", out);
+    for other in ["Summer Fair", "Autumn Talk", "Winter Concert"] {
+        assert!(!out.contains(other), "{} is not the next event: {}", other, out);
+    }
+}
+
+#[test]
+fn children_upcoming_limit_counts_after_soonest_first_ordering() {
+    use moss_core::event::EventTime::Date;
+    let mut folder = make_folder_doc("events/index.html", "Events");
+    folder.children_group = Some(moss_core::Resolved::frontmatter("upcoming".to_string()));
+    folder.children_limit = Some(1);
+    let docs = vec![
+        folder.clone(),
+        dated_event("events/summer.html", "Summer Fair", Date(2099, 6, 1)),
+        dated_event("events/spring.html", "Spring Gala", Date(2099, 3, 1)),
+        dated_event("events/autumn.html", "Autumn Talk", Date(2099, 9, 1)),
+    ];
+
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let marker = synthesize_children_marker(&folder, "/events/", "index.md");
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &project,
+        &dir_overrides,
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("Spring Gala"), "the soonest future event is shown: {}", out);
+    for other in ["Summer Fair", "Autumn Talk"] {
+        assert!(!out.contains(other), "{} is not the next event: {}", other, out);
+    }
+}
+
+#[test]
+fn folder_names_with_punctuation_find_their_slugified_listing() {
+    // A folder's URL is made by `slugify_path_segments` (`&` becomes `and`,
+    // other punctuation becomes `-`). The embed lookup once used a different
+    // slugger that dropped punctuation, so `Film & Performance/` looked for
+    // `film-performance` and rendered the missing-embed placeholder.
+    for (name, slug) in [
+        ("Film & Performance", "film-and-performance"),
+        ("It's", "it-s"),
+        ("Q\"x", "q-x"),
+        ("L<t", "l-t"),
+        ("Café", "café"),
+        ("A B", "a-b"),
+    ] {
+        let folder = make_folder_doc(&format!("{slug}/index.html"), "Idx");
+        let child = make_doc(&format!("{slug}/child/index.html"), "Child", Some("2025-01-01"));
+        let docs = vec![folder, child];
+        let project = test_project_with_html(&[]);
+        let dir_overrides = std::collections::HashMap::new();
+        let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+        let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+            &format!("{name}/"),
+            "index.md",
+            &params,
+        );
+        let out = resolve_markers(
+            &marker,
+            "index.md",
+            &docs,
+            &project,
+            &dir_overrides,
+            crate::i18n::Language::En,
+            None,
+            None,
+            true,
+        );
+        assert!(!out.contains("moss-embed-missing"), "{name}: {out}");
+        assert!(out.contains("Child"), "{name}: {out}");
+    }
+}
+
+/// A page's URL is built from its file stem by `compute_url_path`, which
+/// slugs `Q&A` to `qanda`, so a `children_more` target named `[[Q&A]]` must
+/// resolve to that page's URL.
+#[test]
+fn children_more_target_with_an_ampersand_resolves_to_its_page() {
+    let mut home = make_folder_doc("index.html", "Home");
+    home.children_limit = Some(2);
+    home.children_more = Some("[[Q&A]]".to_string());
+    let a = make_doc("a.html", "A", Some("2025-01-01"));
+    let b = make_doc("b.html", "B", Some("2025-03-01"));
+    let c = make_doc("c.html", "C", Some("2025-02-01"));
+    let qa_url = moss_core::frontmatter_typed::compute_url_path("Q&A.md", false, None, "Q&A");
+    assert_eq!(qa_url, "qanda/index.html");
+    let qa = make_doc(&qa_url, "Q&A", None);
+    let docs = vec![home.clone(), a, b, c, qa];
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+
+    let marker = synthesize_children_marker(&home, "", "index.md");
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &project,
+        &dir_overrides,
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(
+        out.contains(r#"href="/qanda/""#),
+        "children_more [[Q&A]] should link to /qanda/: {}",
+        out
+    );
 }

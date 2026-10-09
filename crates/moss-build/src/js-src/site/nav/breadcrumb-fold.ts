@@ -152,6 +152,23 @@ export function inlineAvailableExtent(el: HTMLElement): number {
 }
 
 /**
+ * Whether anything in the trail still runs past its end after folding.
+ *
+ * Measured from the children's own boxes, not the trail's `scrollWidth`: the
+ * `…` button's tooltip is an absolutely positioned pseudo-element wider than
+ * the bar, which inflates `scrollWidth` on every folded trail without the row
+ * having failed to fit. Horizontal rows only; a vertical trail runs down the
+ * page and the fold does not manage it.
+ */
+export function trailOverflows(trail: HTMLElement): boolean {
+  if (isVertical(trail)) return false;
+  const end = trail.getBoundingClientRect().right;
+  return [...trail.children].some(
+    (el) => !(el as HTMLElement).hidden && el.getBoundingClientRect().right > end + 1,
+  );
+}
+
+/**
  * A crumb's inline extent with nothing clipped.
  *
  * Ancestors never shrink under fold management, so their box extent IS their

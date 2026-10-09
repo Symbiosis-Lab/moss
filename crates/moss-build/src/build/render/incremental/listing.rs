@@ -290,7 +290,7 @@ fn project_child(
     debug_hash(&ChildProjection {
         stripped,
         resolved_excerpt: crate::build::page::meta::resolve_page_description(
-            doc.description.as_deref(),
+            crate::build::components::child_list::explicit_card_text(doc).as_deref(),
             &doc.content,
             math,
         ),

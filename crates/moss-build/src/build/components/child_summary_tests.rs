@@ -14,6 +14,7 @@ fn article_props(title: &str, url: &str) -> ChildItemProps {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     }
 }
 
@@ -31,7 +32,35 @@ fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     }
+}
+
+/// The card's meta slot carries an event's place as its own span after the
+/// time, the same as a listing row does.
+#[test]
+fn an_event_card_wraps_its_place_after_the_time() {
+    let when = crate::build::components::event_meta::render_when(
+        moss_core::event::EventTime::parse("2026-11-01 14:00").unwrap(),
+        None,
+        crate::i18n::Language::En,
+    );
+    let props = ChildItemProps {
+        place: Some("Example Hall".to_string()),
+        when_html: Some(when),
+        ..article_props("Opening", "/events/opening/")
+    };
+    let html = render_with_sort(
+        &props,
+        crate::i18n::Language::En,
+        None,
+        None,
+        moss_core::sort::SortAxis::Date,
+    );
+    assert!(
+        html.contains(r#"</time><span class="moss-event-sep"> · </span><span class="moss-event-place">Example Hall</span>"#),
+        "{html}"
+    );
 }
 
 #[test]
@@ -158,6 +187,7 @@ fn test_render_card_escapes_html() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -364,6 +394,7 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
         permalink: Some("/works/article/".to_string()),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -422,6 +453,7 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
         permalink: Some("/works/article/".to_string()),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -463,6 +495,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
         permalink: Some("/archive/foo/".to_string()),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -508,6 +541,7 @@ fn omits_permalink_when_no_external_url() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -547,6 +581,7 @@ fn renders_kicker_above_title_horizontal() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -596,6 +631,7 @@ fn kicker_absorbing_the_date_still_shows_the_place() {
         permalink: None,
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -635,6 +671,7 @@ fn vertical_head_order_matches_horizontal() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -680,6 +717,7 @@ fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
         permalink: None,
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -714,6 +752,7 @@ fn meta_renders_date_when_axis_is_date() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -743,6 +782,7 @@ fn meta_shows_the_resolved_place_next_to_the_date() {
         permalink: None,
         url_path: String::new(),
         place: Some("Cambridge".into()),
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -763,6 +803,7 @@ fn meta_shows_the_resolved_place_next_to_the_date() {
 fn meta_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
         place: Some("Kyoto".into()),
+        when_html: None,
         ..folder_props("Kyoto Walk", "/works/kyoto-walk/", 2)
     };
     let html = render_with_sort(
@@ -793,6 +834,7 @@ fn meta_collapses_when_axis_is_title() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -822,6 +864,7 @@ fn meta_collapses_when_axis_is_weight() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_with_sort(
         &props,
@@ -888,4 +931,48 @@ fn grid_and_summary_folder_cards_carry_the_same_count() {
     );
     assert!(summary.contains("4 articles"), "{summary}");
     assert!(grid.contains("4 articles"), "{grid}");
+}
+
+fn event_when(start: &str) -> String {
+    let start = moss_core::event::EventTime::parse(start).unwrap();
+    crate::build::components::event_meta::render_when(start, None, crate::i18n::Language::En)
+}
+
+#[test]
+fn event_summary_card_shows_its_time_before_the_place() {
+    let mut props = article_props("Opening Night", "/events/opening/");
+    props.date_display = None;
+    props.date_raw = Some("2026-11-01 14:00".to_string());
+    props.place = Some("Example Hall".to_string());
+    props.when_html = Some(event_when("2026-11-01 14:00"));
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(
+        html.contains(r#"<div class="moss-card-meta"><time class="moss-when""#)
+            && html.contains(r#"</time><span class="moss-event-sep"> · </span><span class="moss-event-place">Example Hall</span></div>"#),
+        "the meta slot should be the event's time then its place, got: {html}"
+    );
+}
+
+#[test]
+fn event_summary_card_with_a_publisher_kicker_keeps_its_time() {
+    let mut props = article_props("Opening Night", "/events/opening/");
+    props.kicker = Some("Museum Press".to_string());
+    props.place = Some("Example Hall".to_string());
+    props.when_html = Some(event_when("2026-11-01 14:00"));
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(
+        html.contains(r#"<div class="moss-card-meta"><time class="moss-when""#)
+            && html.contains("Example Hall</span></div>"),
+        "the kicker takes the year, the meta slot keeps the time and place, got: {html}"
+    );
+}
+
+#[test]
+fn non_event_summary_card_is_unchanged_by_the_event_time() {
+    let mut props = article_props("Plain Post", "/blog/plain/");
+    props.kicker = Some("Museum Press".to_string());
+    props.place = Some("Example Hall".to_string());
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(!html.contains("moss-when"), "got: {html}");
+    assert!(html.contains(r#"<div class="moss-card-kicker">Museum Press · 2025</div><div class="moss-card-meta">Example Hall</div>"#), "got: {html}");
 }

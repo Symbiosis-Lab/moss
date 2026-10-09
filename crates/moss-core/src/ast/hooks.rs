@@ -246,7 +246,8 @@ pub trait RenderHooks {
                 // invariant.
                 let empty_snapshot = crate::asset_snapshot::AssetSnapshot::new();
                 let assets_for_synth = self.gallery_assets().unwrap_or(&empty_snapshot);
-                for item in &args.items {
+                let total = args.items.len();
+                for (index, item) in args.items.iter().enumerate() {
                     let src_str = match &item.src {
                         crate::ast::url::Url::Resolved(r) => r.href.clone(),
                         crate::ast::url::Url::Unresolved(s) => {
@@ -258,7 +259,26 @@ pub trait RenderHooks {
                             s.clone()
                         }
                     };
-                    out.push_str(r#"<div class="moss-gallery-item">"#);
+                    // The link is what the shared full-screen viewer binds to
+                    // (`fullscreen.js` reads `href` and `data-title`); without
+                    // the script it is a plain link to the full-size image.
+                    out.push_str(r#"<div class="moss-gallery-item"><a class="moss-gallery-link" href=""#);
+                    out.push_str(&escape_attr(&src_str));
+                    out.push_str(r#"" data-title=""#);
+                    out.push_str(&escape_attr(&item.alt));
+                    out.push('"');
+                    // Without alt text the link has no name of its own, so it
+                    // is announced as "link" alone.
+                    if item.alt.is_empty() {
+                        out.push_str(r#" aria-label=""#);
+                        let label = self
+                            .gallery_link_template()
+                            .replace("{n}", &(index + 1).to_string())
+                            .replace("{m}", &total.to_string());
+                        out.push_str(&escape_attr(&label));
+                        out.push('"');
+                    }
+                    out.push('>');
                     // Synth path: full attribute set + optional <picture>
                     // wrap. The per-item inline style from MediaAttrs
                     // (e.g. object-position) flows through
@@ -283,7 +303,7 @@ pub trait RenderHooks {
                         &opts,
                     );
                     out.push_str(&item_html);
-                    out.push_str("</div>");
+                    out.push_str("</a></div>");
                 }
                 out.push_str("</div>");
             }
@@ -632,6 +652,14 @@ pub trait RenderHooks {
         "Permalink to this section"
     }
 
+    /// The localized accessible name for a gallery image's link when its alt
+    /// text is empty, with `{n}` (1-based position) and `{m}` (total).
+    /// Resolved by moss-build like `permalink_section_label`; the default
+    /// keeps English.
+    fn gallery_link_template(&self) -> &str {
+        GALLERY_LINK_TEMPLATE_EN
+    }
+
     /// Emit `<h1>...</h1>` (or h2/h3/...) for a heading.
     ///
     /// `id` is the heading anchor id (slug). When `Some`, the rendered
@@ -734,12 +762,21 @@ pub struct DefaultHooks<'a> {
     suppress_heading_anchors: bool,
     /// The page is vertically typeset (see [`DefaultHooks::vertical`]).
     vertical: bool,
+    /// Overrides [`RenderHooks::gallery_link_template`] when set.
+    gallery_link_template: Option<&'a str>,
 }
 
 impl<'a> DefaultHooks<'a> {
     /// Mark the page as vertically typeset; only body images' `sizes=` reads it.
     pub fn vertical(mut self, vertical: bool) -> Self {
         self.vertical = vertical;
+        self
+    }
+
+    /// The caller's hooks delegate the `Gallery` arm here, so its localized
+    /// label template has to be handed over or the label falls back to English.
+    pub fn with_gallery_link_template(mut self, template: &'a str) -> Self {
+        self.gallery_link_template = Some(template);
         self
     }
 
@@ -809,7 +846,13 @@ impl<'a> DefaultHooks<'a> {
     }
 }
 
+const GALLERY_LINK_TEMPLATE_EN: &str = "Open image {n} of {m}";
+
 impl<'a> RenderHooks for DefaultHooks<'a> {
+    fn gallery_link_template(&self) -> &str {
+        self.gallery_link_template.unwrap_or(GALLERY_LINK_TEMPLATE_EN)
+    }
+
     fn gallery_assets(&self) -> Option<&crate::asset_snapshot::AssetSnapshot> {
         self.assets
     }
@@ -1854,6 +1897,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: Some("object-fit:cover;object-position:left".into()),
+            italic_caption: false,
         }];
         let sc = Shortcode::Hero(HeroShortcode {
             overlay: overlay_blocks,
@@ -2038,6 +2082,7 @@ mod tests {
             align: None,
             class_names: Vec::new(),
             img_style: None,
+            italic_caption: false,
         }
     }
 

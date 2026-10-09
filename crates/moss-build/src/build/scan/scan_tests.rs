@@ -5,6 +5,61 @@ use std::fs;
 use std::path::Path;
 
 #[test]
+fn walkdir_failure_keeps_path_errno_and_opaque_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("vanished");
+    let error = walkdir::WalkDir::new(&missing).into_iter().next().unwrap().unwrap_err();
+    let failure = crate::build::cloud_readiness::StorageFailure::from_walkdir(error);
+
+    assert_eq!(failure.path(), Some(missing.as_path()));
+    assert_eq!(
+        failure.operation(),
+        crate::build::cloud_readiness::StorageOperation::WalkEntry,
+        "WalkDir does not identify which internal syscall failed"
+    );
+    assert_eq!(failure.raw_os_error(), Some(libc::ENOENT));
+}
+
+#[cfg(unix)]
+#[test]
+fn walkdir_non_io_failure_keeps_original_cause() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    symlink(".", dir.path().join("loop")).unwrap();
+    let error = walkdir::WalkDir::new(dir.path())
+        .follow_links(true)
+        .into_iter()
+        .find_map(Result::err)
+        .expect("symlink loop yields a WalkDir error");
+    let failure = crate::build::cloud_readiness::StorageFailure::from_walkdir(error);
+
+    assert_eq!(failure.operation(), crate::build::cloud_readiness::StorageOperation::WalkEntry);
+    assert!(failure.source().downcast_ref::<walkdir::Error>().is_some());
+}
+
+#[test]
+fn walkdir_entry_metadata_failure_keeps_child_path_and_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let child = dir.path().join("child.md");
+    fs::write(&child, "# child").unwrap();
+    let entry = walkdir::WalkDir::new(dir.path())
+        .into_iter()
+        .find_map(|entry| entry.ok().filter(|entry| entry.path() == child))
+        .unwrap();
+    fs::remove_file(&child).unwrap();
+    let error = entry.metadata().unwrap_err();
+    let failure = crate::build::cloud_readiness::StorageFailure::from_walkdir_operation(
+        error,
+        crate::build::cloud_readiness::StorageOperation::EntryMetadata,
+    );
+
+    assert_eq!(failure.path(), Some(child.as_path()));
+    assert_eq!(failure.operation(), crate::build::cloud_readiness::StorageOperation::EntryMetadata);
+    assert_eq!(failure.raw_os_error(), Some(libc::ENOENT));
+}
+
+#[test]
 fn test_file_extension_categorization() {
     let md_extensions = vec!["md", "markdown", "mdown", "mkd"];
     for ext in md_extensions {
@@ -2084,6 +2139,71 @@ fn test_extract_color_and_lqip_returns_none_lqip_for_svg() {
     fs::remove_dir_all(&temp_dir).ok();
 }
 
+/// A logo with a transparent half: the blur-up is an opaque JPEG and would
+/// show through the clear pixels after the real image loads. The empty LQIP
+/// is the marker that keeps the renderer from painting the colour instead.
+#[test]
+fn test_extract_color_and_lqip_marks_png_with_transparent_pixels_as_no_placeholder() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("moss_test_lqip_alpha_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let logo_path = temp_dir.join("logo.png");
+    let logo = image::RgbaImage::from_fn(64, 64, |x, _| {
+        image::Rgba([200, 30, 30, if x < 32 { 0 } else { 255 }])
+    });
+    logo.save(&logo_path).unwrap();
+
+    let (color, lqip) = extract_color_and_lqip(&logo_path);
+
+    assert!(color.is_some(), "a transparent image still has a dominant color");
+    assert_eq!(
+        lqip.as_deref(),
+        Some(""),
+        "a PNG with transparent pixels must carry the empty no-placeholder marker"
+    );
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
+/// An alpha channel that is fully opaque is not transparency: the LQIP stays.
+#[test]
+fn test_extract_color_and_lqip_keeps_lqip_for_png_with_opaque_alpha() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("moss_test_lqip_opaque_alpha_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let path = temp_dir.join("solid.png");
+    image::RgbaImage::from_pixel(64, 64, image::Rgba([0, 0, 255, 255]))
+        .save(&path)
+        .unwrap();
+
+    let (_, lqip) = extract_color_and_lqip(&path);
+    assert!(lqip.is_some(), "an alpha channel with no transparent pixel keeps its LQIP");
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
+#[test]
+fn test_extract_color_and_lqip_keeps_lqip_for_opaque_jpeg() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("moss_test_lqip_jpeg_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let path = temp_dir.join("photo.jpg");
+    image::RgbImage::from_pixel(64, 64, image::Rgb([10, 200, 10]))
+        .save(&path)
+        .unwrap();
+
+    let (_, lqip) = extract_color_and_lqip(&path);
+    assert!(
+        lqip.as_deref().is_some_and(|u| u.starts_with("data:image/jpeg;base64,")),
+        "an opaque JPEG keeps its LQIP"
+    );
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
 #[test]
 fn test_extract_media_metadata_includes_lqip() {
     let temp_dir = std::env::temp_dir().join(format!("moss_test_meta_lqip_{}", std::process::id()));
@@ -2571,6 +2691,59 @@ fn scan_folder_prunes_nested_moss_sites() {
     );
 }
 
+/// `share/<id>/` holding a pre-built app (raw files, no markdown) is that app's
+/// storage: a parent holding only apps (`deep/`, `deep/mid/`) gets no listing page
+/// of nothing, while a folder with a page beneath it, or with a kept folder
+/// beneath it (`share/empty/`, whose breadcrumb links up), still does.
+#[test]
+fn folder_holding_only_a_prebuilt_app_gets_no_index_page() {
+    let dir = tempfile::Builder::new().prefix("moss_scan_stub").tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("index.md"), "# home").unwrap();
+    fs::create_dir_all(root.join("share/abc/icons")).unwrap();
+    for f in ["index.html", "app.js", "style.css", "sw.js"] {
+        fs::write(root.join("share/abc").join(f), "x").unwrap();
+    }
+    fs::write(root.join("share/abc/icons/a.png"), "x").unwrap();
+    fs::create_dir_all(root.join("share/empty")).unwrap();
+    fs::create_dir_all(root.join("deep/mid/app")).unwrap();
+    fs::write(root.join("deep/mid/app/index.html"), "x").unwrap();
+    fs::create_dir_all(root.join("notes/2026")).unwrap();
+    fs::create_dir_all(root.join("mixed/app")).unwrap();
+    fs::write(root.join("mixed/app/index.html"), "x").unwrap();
+    fs::write(root.join("mixed/page.md"), "# page").unwrap();
+    fs::write(root.join("notes/2026/entry.md"), "# entry").unwrap();
+
+    let ps = scan_folder(root.to_str().unwrap()).expect("scan should succeed");
+
+    assert!(
+        !ps.dirs.iter().any(|d| d == "share/abc" || d == "deep" || d == "deep/mid"),
+        "an app-only folder must not get an index page: {:?}",
+        ps.dirs
+    );
+    assert!(
+        ps.dirs.iter().any(|d| d == "share") && ps.dirs.iter().any(|d| d == "share/empty"),
+        "a kept folder's parent keeps its listing so the breadcrumb link does not 404: {:?}",
+        ps.dirs
+    );
+    assert!(
+        ["notes", "notes/2026", "mixed"].iter().all(|k| ps.dirs.iter().any(|d| d == k)),
+        "folders with a page beneath keep their index: {:?}",
+        ps.dirs
+    );
+}
+
+/// A passthrough entry naming a single file is not an app beneath its folder:
+/// `share/` still lists whatever it lists.
+#[test]
+fn exact_file_passthrough_does_not_drop_the_folder_index() {
+    let roots: std::collections::HashSet<String> = ["share/x.html".to_string()].into();
+    assert!(!crate::build::scan::classify::holds_only_prebuilt_apps("share", &roots, &[]));
+    let apps: std::collections::HashSet<String> = ["share/x/".to_string()].into();
+    assert!(crate::build::scan::classify::holds_only_prebuilt_apps("share", &apps, &[]));
+    assert!(!crate::build::scan::classify::holds_only_prebuilt_apps("share", &apps, &["share/p.md"]));
+}
+
 /// The scan rewrites the shared hash index from what it saw, but the parse cache
 /// records each page's hash in the same file. A scan that dropped those made every
 /// build re-hash every unchanged page; it must hand them on as recorded while the
@@ -2645,4 +2818,39 @@ fn a_dot_prefixed_page_is_not_published() {
     let names: Vec<String> = result.markdown_files.iter().map(|f| f.path.clone()).collect();
     assert!(names.iter().any(|p| p.ends_with("shown.md")), "{names:?}");
     assert!(!names.iter().any(|p| p.contains(".draft")), "{names:?}");
+}
+
+#[test]
+fn availability_scan_recovers_root_metadata_without_false_absence() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    let dir = tempfile::Builder::new().prefix("scan-ready-").tempdir().unwrap();
+    fs::write(dir.path().join("one.md"), "# one").unwrap();
+    let _fault = TestFault::install(dir.path(), dir.path(), StorageOperation::RootMetadata, 1, std::time::Duration::from_secs(3));
+    let result = scan_folder(dir.path().to_str().unwrap()).unwrap();
+    assert_eq!(result.markdown_files.len(), 1);
+}
+
+#[test]
+fn availability_scan_recovers_opaque_walk_as_a_complete_candidate() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    let dir = tempfile::Builder::new().prefix("scan-ready-").tempdir().unwrap();
+    let child = dir.path().join("second.md");
+    fs::write(dir.path().join("first.md"), "# first").unwrap();
+    fs::write(&child, "# second").unwrap();
+    let _fault = TestFault::install(dir.path(), &child, StorageOperation::WalkEntry, 1, std::time::Duration::from_secs(3));
+    let result = scan_folder(dir.path().to_str().unwrap()).unwrap();
+    assert_eq!(result.markdown_files.len(), 2);
+}
+
+#[test]
+fn availability_scan_timeout_returns_no_partial_candidate() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault, Settled};
+    let dir = tempfile::Builder::new().prefix("scan-ready-").tempdir().unwrap();
+    let child = dir.path().join("second.md");
+    fs::write(dir.path().join("first.md"), "# first").unwrap();
+    fs::write(&child, "# second").unwrap();
+    let _fault = TestFault::install(dir.path(), &child, StorageOperation::WalkEntry, 1000, std::time::Duration::from_millis(20));
+    let result = scan_folder_with_dedup_emit_with_error(dir.path().to_str().unwrap(), None, None, false);
+    let ScanFailure::Storage(error) = result.unwrap_err() else { panic!("not a contextual storage stop") };
+    assert_eq!(error.pending, Some(Settled::TimedOut));
 }

@@ -2367,3 +2367,90 @@ fn test_images_not_promoted_when_md_children_exist() {
         "Image should NOT generate a page when folder has .md children"
     );
 }
+
+/// The `<div class="date-line">…</div>` row of a built page, up to the
+/// reading-size control that always ends it.
+fn date_line(html: &str) -> &str {
+    let start = html.find(r#"<div class="date-line">"#).expect("page has a meta line");
+    let rest = &html[start..];
+    &rest[..rest.find(r#"<div class="font-anchor""#).expect("meta line has the size control")]
+}
+
+/// A page with `start` shows its event facts in the ordinary meta line under
+/// the title, in place of the posted date; a dated article is unchanged.
+#[test]
+fn event_page_shows_event_facts_in_the_meta_line() {
+    let (_cleanup, output) = build_fixture("event-meta-site");
+    let page = |p: &str| fs::read_to_string(output.join(p).join("index.html")).unwrap();
+
+    let concert = page("events/concert");
+    let line = date_line(&concert);
+    assert!(
+        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00">Sunday, November 1, 2026, 2:00–4:00 PM</time>"#),
+        "{line}"
+    );
+    assert!(line.contains(r#"<span class="moss-event-place">Town Hall</span>"#), "{line}");
+    assert!(line.contains(r#"<a class="moss-event-link moss-event-tickets" href="https://tickets.example.org/autumn">Tickets</a>"#), "{line}");
+    assert!(line.contains(r#"<a class="moss-event-link moss-event-online" href="https://stream.example.org/autumn">Online</a>"#), "{line}");
+    assert!(!line.contains("October"), "the posted date is not shown beside the event time: {line}");
+
+    let cancelled = date_line(&page("events/cancelled")).to_string();
+    assert!(cancelled.contains(r#"data-status="cancelled""#), "{cancelled}");
+    assert!(cancelled.contains(r#"<span class="moss-event-status">Cancelled</span>"#), "{cancelled}");
+    assert!(
+        cancelled.find("moss-event-status").unwrap() < cancelled.find("moss-event-time").unwrap(),
+        "the status is read before the struck time: {cancelled}"
+    );
+    assert!(cancelled.contains("Sunday, March 14, 2027, 7:30 PM"), "{cancelled}");
+
+    let festival = date_line(&page("events/festival")).to_string();
+    assert!(
+        festival.contains(r#"datetime="2026-12-04">Friday, December 4, 2026 – Sunday, December 6, 2026</time>"#),
+        "{festival}"
+    );
+
+    let review = page("events/review");
+    assert!(!date_line(&review).contains("moss-event"), "an ordinary dated article has no event markup");
+    assert!(date_line(&review).contains("September 15, 2026"));
+}
+
+/// Titles of the listing items in `html`, in document order.
+fn listing_titles(html: &str) -> Vec<String> {
+    let re = regex::Regex::new(r#"moss-prefix-link-title">([^<]*)<"#).unwrap();
+    re.captures_iter(html).map(|c| c[1].to_string()).collect()
+}
+
+/// `children_group: upcoming` and the embed's `group:upcoming` put events that
+/// have not ended first, soonest first, then everything else newest first; an
+/// event with `start` and no `date` sorts by `start`; an item shows its `<time>`
+/// with the parts in their own spans, plus its place.
+#[test]
+fn upcoming_group_orders_events_by_when_and_marks_the_time() {
+    let (_cleanup, output) = build_fixture("event-listing-site");
+    for page in ["events/index.html", "index.html"] {
+        let html = fs::read_to_string(output.join(page)).unwrap();
+        assert_eq!(
+            listing_titles(&html),
+            ["Open Day", "Spring Gala", "Programme Notes", "Old Concert", "Loose Note"],
+            "{page}"
+        );
+        assert!(html.contains(r#"<section class="moss-cards-group" data-group="upcoming">"#), "{page}");
+        assert!(html.contains(r#"<section class="moss-cards-group" data-group="earlier">"#), "{page}");
+        assert!(
+            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span>, <span class="moss-when-time">7:30–10:00 PM</span></time><span class="moss-event-sep"> · </span><span class="moss-event-place">Grand Hall</span>"#),
+            "{page}"
+        );
+    }
+}
+
+/// An ungrouped date-sorted listing orders by the when, newest first, and an
+/// undated page comes after every dated one.
+#[test]
+fn ungrouped_date_listing_puts_undated_pages_last() {
+    let (_cleanup, output) = build_fixture("event-listing-site");
+    let html = fs::read_to_string(output.join("plain/index.html")).unwrap();
+    assert_eq!(
+        listing_titles(&html),
+        ["Spring Gala", "Open Day", "Programme Notes", "Old Concert", "Loose Note"]
+    );
+}

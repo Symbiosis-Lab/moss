@@ -40,8 +40,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod blob_residency;
 mod records;
-mod shard_wait;
-use shard_wait::Touch;
+mod publication;
+use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
 
 /// Size of the read buffer used by [`ObjectStore::hash_file`].
@@ -77,7 +77,7 @@ const HASH_BUF_SIZE: usize = 64 * 1024;
 pub struct ObjectStore {
     /// Root directory — typically `.moss/cache/objects/`.
     base: PathBuf,
-    local_base: Option<PathBuf>,
+    site: Option<std::sync::Arc<crate::moss_paths::MossPaths>>,
     verified: std::sync::Arc<std::sync::Mutex<HashIndex>>,
 }
 
@@ -87,19 +87,19 @@ impl ObjectStore {
     /// `base` is typically `.moss/cache/objects/`. The directory is created
     /// lazily (on first write), not here.
     pub fn new(base: PathBuf) -> Self {
-        Self { base, local_base: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())) }
+        Self { base, site: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())) }
     }
 
     /// `mp`'s content-addressed object store — `.moss/cache/objects/`. Prefer this
     /// over `ObjectStore::new(mp.cache_objects())` at every call site that has an `mp`.
     pub fn for_site(mp: &crate::moss_paths::MossPaths) -> Self {
         let mut store = Self::new(mp.cache_objects());
-        store.local_base = Some(mp.cache_local_objects());
+        store.site = Some(std::sync::Arc::new(crate::moss_paths::MossPaths::from_moss_dir(mp.root().to_path_buf())));
         store
     }
 
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
-        self.local_base.as_ref().map(|base| Self::blob_path_in(base, oid))
+        self.site.as_ref().map(|site| Self::blob_path_in(&site.cache_local_objects(), oid))
     }
 
     fn resident_local_blob(&self, oid: &str) -> Option<PathBuf> {
@@ -172,7 +172,7 @@ impl ObjectStore {
     }
 
     /// Move the fully written `tmp` to its content-addressed `dest`.
-    fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path, mode: RecordMode) -> Result<(), String> {
+    fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path, _mode: RecordMode) -> Result<(), String> {
         // Publishing shared content must preserve its identity, even if the
         // source changed during a file copy or another writer arrived meanwhile.
         // Verify the local pending file once; never read a cloud placeholder.
@@ -185,7 +185,10 @@ impl ObjectStore {
             return Err(format!("Failed to verify pending blob {}: {}", oid, e));
         }
         // allow:unlink a temp inside the CAS shard dir, not staging
-        let renamed = shard_wait::in_shard(&self.base, dest, mode, Touch::File, || {
+        #[cfg(test)]
+        crate::build::cloud_readiness::storage::test_probe(dest, crate::build::cloud_readiness::StorageOperation::CachePublish)
+            .map_err(|failure| failure.to_string())?;
+        let renamed = publication::attempt(dest, StorageOperation::CachePublish, || {
             fs::rename(tmp, dest)  // allow:unlink a temp inside the CAS shard dir, not staging
         });
         let Err(rename_err) = renamed else { return Ok(()) };
@@ -217,13 +220,30 @@ impl ObjectStore {
     /// `mode` says what a refusal because the shard is still in the cloud
     /// costs: see [`RecordMode`].
     pub fn store_file(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
+        if let Some(site) = &self.site {
+            if crate::build::cloud_readiness::storage::managed_context(&self.base) {
+                let lease = crate::build::lifecycle::detached_cache_lease(site);
+                let local_store = ObjectStore::new(site.cache_local_objects());
+                let oid = local_store.store_file_in_base(source, mode)?;
+                self.replicate_local_blob(lease, &local_store.blob_path(&oid), &oid);
+                return Ok(oid);
+            }
+        }
         match self.store_file_in_base(source, mode) {
             Ok(oid) => Ok(oid),
             Err(shared_error) => {
-                let Some(base) = &self.local_base else { return Err(shared_error) };
-                ObjectStore::new(base.clone()).store_file_in_base(source, RecordMode::Request)
+                let Some(site) = &self.site else { return Err(shared_error) };
+                ObjectStore::new(site.cache_local_objects()).store_file_in_base(source, RecordMode::Request)
                     .map_err(|local_error| format!("Shared CAS: {shared_error}; local CAS: {local_error}"))
             }
+        }
+    }
+
+    fn replicate_local_blob(&self, lease: crate::build::lifecycle::DetachedCacheLease, source: &Path, oid: &str) {
+        match publication::BlobPublication::new(self.base.clone(), oid.to_string(), source.to_path_buf(), lease).publish() {
+            crate::build::cloud_readiness::storage::PublicationOutcome::Completed => {}
+            crate::build::cloud_readiness::storage::PublicationOutcome::PendingOptionalCache => log::debug!("shared CAS publication pending; complete local object {} remains available", oid),
+            crate::build::cloud_readiness::storage::PublicationOutcome::Fatal(failure) => log::warn!("optional shared CAS publication failed; local object {} remains available: {}", oid, failure),
         }
     }
 
@@ -246,8 +266,8 @@ impl ObjectStore {
 
         // Ensure the parent directory (e.g., `base/ab/cd/`) exists.
         if let Some(parent) = dest.parent() {
-            shard_wait::in_shard(&self.base, &dest, mode, Touch::Dir, || {
-                crate::build::io_utils::create_output_dir_all(parent)
+            publication::attempt(&dest, StorageOperation::CacheMkdir, || {
+                fs::create_dir_all(parent) // allow:raw_write CAS shard, never regenerable staging
             })
             .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
@@ -264,7 +284,7 @@ impl ObjectStore {
         // Refs: https://www.idownloadblog.com/2019/08/06/icloud-drive-file-folder-name-exclusion-list/
         //       https://eclecticlight.co/2024/07/09/excluding-folders-and-files-from-time-machine-spotlight-and-icloud-drive/
         let tmp = dest.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
-        shard_wait::in_shard(&self.base, &dest, mode, Touch::File, || {
+        publication::attempt(&dest, StorageOperation::CacheWrite, || {
             fs::copy(source, &tmp)  // allow:raw_write the temp blob this call just minted, under .moss/cache
         })
         .map_err(|e| format!("Failed to copy to pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
@@ -295,11 +315,20 @@ impl ObjectStore {
     /// an intermediate file when the caller already has bytes in memory —
     /// e.g., a small JSON metadata blob. `mode` is as for `store_file`.
     pub fn store_bytes(&self, data: &[u8], mode: RecordMode) -> Result<String, String> {
+        if let Some(site) = &self.site {
+            if crate::build::cloud_readiness::storage::managed_context(&self.base) {
+                let lease = crate::build::lifecycle::detached_cache_lease(site);
+                let local_store = ObjectStore::new(site.cache_local_objects());
+                let oid = local_store.store_bytes_in_base(data, mode)?;
+                self.replicate_local_blob(lease, &local_store.blob_path(&oid), &oid);
+                return Ok(oid);
+            }
+        }
         match self.store_bytes_in_base(data, mode) {
             Ok(oid) => Ok(oid),
             Err(shared_error) => {
-                let Some(base) = &self.local_base else { return Err(shared_error) };
-                ObjectStore::new(base.clone()).store_bytes_in_base(data, RecordMode::Request)
+                let Some(site) = &self.site else { return Err(shared_error) };
+                ObjectStore::new(site.cache_local_objects()).store_bytes_in_base(data, RecordMode::Request)
                     .map_err(|local_error| format!("Shared CAS: {shared_error}; local CAS: {local_error}"))
             }
         }
@@ -320,15 +349,15 @@ impl ObjectStore {
         }
 
         if let Some(parent) = dest.parent() {
-            shard_wait::in_shard(&self.base, &dest, mode, Touch::Dir, || {
-                crate::build::io_utils::create_output_dir_all(parent)
+            publication::attempt(&dest, StorageOperation::CacheMkdir, || {
+                fs::create_dir_all(parent) // allow:raw_write CAS shard, never regenerable staging
             })
             .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
 
         // Use `.pending.<uuid>` — see store_file() comment for iCloud Drive rationale.
         let tmp = dest.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
-        shard_wait::in_shard(&self.base, &dest, mode, Touch::File, || {
+        publication::attempt(&dest, StorageOperation::CacheWrite, || {
             fs::write(&tmp, data)  // allow:raw_write the temp blob this call just minted, under .moss/cache
         })
         .map_err(|e| format!("Failed to write pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
@@ -653,67 +682,19 @@ impl TransformCache {
     /// Like [`ObjectStore::store_file`], we write to a temp file first
     /// and then rename, so a crash can never leave a corrupt JSON file.
     ///
-    /// Uses `.pending` instead of `.tmp` for the temp file — iCloud Drive
-    /// excludes `.tmp` files from sync and fileproviderd may remove them.
-    /// On ENOENT, retries after re-creating parent AND re-writing the temp
-    /// file (the source may have been removed, not just the parent).
-    ///
-    /// `mode` says what a refusal because the shard is still in the cloud
-    /// costs: see [`RecordMode`].
+    /// Uses a unique sibling `.pending` candidate. Managed site writes retain
+    /// owned upserts and reread the current record before atomic publication;
+    /// a pending optional write is returned as an error by this compatibility
+    /// API. `merge` exposes `Merged::PendingOptionalCache` directly.
     pub fn put(&self, record: &TransformRecord, mode: RecordMode) -> Result<(), String> {
-        let path = self.record_path(&record.source_oid);
-
-        if let Some(parent) = path.parent() {
-            shard_wait::in_shard(&self.base, &path, mode, Touch::Dir, || {
-                crate::build::io_utils::create_output_dir_all(parent)
-            })
-            .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
+        if let Some(result) = self.put_owned(record) {
+            return match result? {
+                Merged::Written | Merged::Kept => Ok(()),
+                Merged::PendingOptionalCache => Err("optional record publication is pending".into()),
+            };
         }
-
-        let json = serde_json::to_string_pretty(record)
-            .map_err(|e| format!("Failed to serialize TransformRecord: {}", e))?;
-
-        // UUID-suffixed temp so concurrent writers of the SAME key (e.g. the
-        // parallel preview scan, or the background image+video workers both
-        // calling save_merging) never share a temp path — otherwise two writers
-        // race on one temp + a rename of a vanished file. Mirrors store_file/
-        // store_bytes. `.pending` (not `.tmp`) so iCloud doesn't exclude it.
-        let tmp = path.with_extension(format!("json.pending.{}", uuid::Uuid::new_v4()));
-        shard_wait::in_shard(&self.base, &path, mode, Touch::File, || {
-            fs::write(&tmp, json.as_bytes())  // allow:raw_write temp for the index's own atomic save, under .moss/cache
-        })
-        .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
-
-        let renamed = shard_wait::in_shard(&self.base, &path, mode, Touch::File, || {
-            fs::rename(&tmp, &path)  // allow:unlink rename into place under cache/transforms, not staging
-        });
-        if let Err(first_err) = renamed {
-            if first_err.kind() == std::io::ErrorKind::NotFound {
-                if let Some(parent) = path.parent() {
-                    let _ = crate::build::io_utils::create_output_dir_all(parent);
-                }
-                // Re-write temp file — it may have been removed too
-                let _ = fs::write(&tmp, json.as_bytes());  // allow:raw_write temp for the index's own atomic save, under .moss/cache
-                // allow:unlink rename into place under cache/transforms, not staging
-                fs::rename(&tmp, &path).map_err(|e| {
-                    format!(
-                        "Failed to rename {} -> {} (retry after ENOENT): {}",
-                        tmp.display(),
-                        path.display(),
-                        e
-                    )
-                })?;
-            } else {
-                return Err(format!(
-                    "Failed to rename {} -> {}: {}",
-                    tmp.display(),
-                    path.display(),
-                    first_err
-                ));
-            }
-        }
-
-        Ok(())
+        let _ = mode;
+        self.put_sync(record)
     }
 
     /// Remove a transform record for the given source OID.
@@ -721,13 +702,18 @@ impl TransformCache {
     /// Used to evict corrupt or invalid cached outputs so the next build
     /// re-runs the transform.
     pub fn remove(&self, source_oid: &str) -> Result<(), String> {
-        let path = self.record_path(source_oid);
-        if path.exists() {
-            // allow:unlink a transform record under cache/transforms, not staging
-            fs::remove_file(&path)
-                .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
+        if let Some(result) = self.remove_owned(source_oid) {
+            return match result? {
+                Merged::Written | Merged::Kept => Ok(()),
+                Merged::PendingOptionalCache => Err("optional record deletion is pending".into()),
+            };
         }
-        Ok(())
+        let path = self.record_path(source_oid);
+        match fs::remove_file(&path) { // allow:unlink explicit invalid-record eviction under cache/transforms
+            Ok(()) => Ok(()),
+            Err(error) if crate::build::icloud::is_definitely_absent(&path, &error) => Ok(()),
+            Err(error) => Err(format!("Failed to remove {}: {}", path.display(), error)),
+        }
     }
 
     /// Look up a cached transform output.
@@ -1725,4 +1711,4 @@ fn read_dir_entries(dir: &Path) -> Vec<String> {
 
 #[cfg(test)]
 #[path = "cache_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -15,6 +15,7 @@ fn blank() -> ChildItemProps {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn grid_card_shows_the_resolved_place_next_to_the_date() {
         url: "lectures/1924/".to_string(),
         date_display: Some("1924".to_string()),
         place: Some("Cambridge".to_string()),
+        when_html: None,
         ..blank()
     };
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
@@ -169,6 +171,7 @@ fn grid_card_never_shows_a_place_beside_a_folders_count() {
         url: "works/kyoto-walk/".to_string(),
         child_count: Some(2),
         place: Some("Kyoto".to_string()),
+        when_html: None,
         ..blank()
     };
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
@@ -431,7 +434,7 @@ fn file_card_renders_description_under_title() {
 }
 
 #[test]
-fn folder_card_does_not_render_description() {
+fn folder_card_renders_description_under_title_beside_its_count() {
     let props = ChildItemProps {
         title: "Travel".to_string(),
         url: "travel/".to_string(),
@@ -441,8 +444,8 @@ fn folder_card_does_not_render_description() {
     };
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
     assert!(
-        !html.contains("moss-card-description"),
-        "folder card must NOT render a description. Got: {}",
+        html.contains(r#"<p class="moss-card-description">A collection of travel stories.</p>"#),
+        "folder card must render its folder note's description. Got: {}",
         html
     );
     assert!(
@@ -698,7 +701,7 @@ fn a_card_takes_its_band_color_from_the_covers_color_override() {
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
     // The colour rides on the outer <a>, not on .moss-card-content.
     assert!(
-        html.contains(r#"<a href="/research/" class="moss-card" data-cover-color style="--moss-cover-color: hsla(203, 73%, 14%, 1)">"#),
+        html.contains(r#"<a href="/research/" class="moss-card" data-cover-color style="--item-cover-color: hsla(203, 73%, 14%, 1)">"#),
         "outer <a> must carry the band colour, got: {html}"
     );
     // A cover with no override, no root and no cache yields no colour at all.

@@ -48,10 +48,10 @@ pub enum Load {
     Shell { defer: bool },
     /// Eager, but placed by a template of its own rather than by that block:
     /// `theme` rides `{js_path}` because its tag also carries the lazy chunks'
-    /// URLs, and `fullscreen` exists only on the media-collection page.
-    /// A `Placed` script may still appear in the shell block's *company* on
-    /// another template — `search` is emitted onto the media page next to
-    /// `fullscreen` — which is why placement is not one exclusive location.
+    /// URLs. A `Placed` script may still appear in the shell block's
+    /// *company* on another template — `search` is emitted onto the media page
+    /// next to `fullscreen`, which that page also places itself — which is why
+    /// placement is not one exclusive location.
     Placed,
     /// Fetched by a runtime `import()`. The URL is published to the runtime on
     /// a `data-` attribute, since the source cannot know the content hash.
@@ -140,12 +140,13 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         gate: |a| a.has_footnotes,
         load: Load::Shell { defer: false },
     },
+    // fullscreen loads with the shell (site-wide), not per page: the preview's morph guard reloads when a page's script set differs.
     SiteScript {
         name: "fullscreen",
         dev_path: "src/assets/js/fullscreen.js",
         source: || include_str!("../../assets/js/fullscreen.js"),
-        gate: |a| a.media_pages,
-        load: Load::Placed,
+        gate: |a| a.media_pages || a.galleries,
+        load: Load::Shell { defer: false },
     },
     SiteScript {
         name: "share-card",

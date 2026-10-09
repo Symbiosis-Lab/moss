@@ -1,6 +1,6 @@
 ---
 name: moss
-description: Author, style, extend, or migrate a moss static site the canonical way. Use when changing a site's theme, style, or CSS — colors, palette, typography, fonts, dark mode, spacing, layout — when writing or restructuring its content, when building a moss plugin, or when converting an existing website into a moss project. Applies in any folder containing .moss/.
+description: Author, style, extend, or migrate a moss static site the canonical way. Use when changing a site's theme, style, or CSS — colors, palette, typography, fonts, dark mode, spacing, layout — when writing or restructuring its content, when building a moss plugin, or when converting an existing website into a moss project, faithfully or as a redesign. Applies in any folder containing .moss/.
 uid: "87da8da7"
 ---
 
@@ -188,6 +188,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   network or an external API) → read `moss guide plugins`.
 - **Converting an existing site** (a URL, or local files) into moss → read
   `moss guide importing`.
+- **Importing an existing site and redesigning it**, so the moss site looks better than the original while the folder stays easy to edit → read `moss guide import-and-redesign`.
 - **Debugging a build, plugin, or shortcode** → read
   `moss guide debugging`.
 - **Reviewing or hiding a site's comments (spam) before publishing** → read

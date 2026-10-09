@@ -1,6 +1,6 @@
 /**
- * nav-split.ts — on a plain-site-name masthead, the toggles stay in the top
- * corner when the nav wraps.
+ * nav-split.ts — on a plain-site-name masthead, the nav wraps to a clean two
+ * rows: the site name alone on row 1, the links and toggles on row 2.
  *
  * The shipped CSS wraps `.nav-right` (links + toggles, one unit) to row 2 when
  * it can't fit beside `.nav-left`. On breadcrumb pages that is right: the
@@ -10,23 +10,23 @@
  * last link row ends — chrome appended to a link list it has nothing to do
  * with.
  *
- * The wanted two-row order — site name + toggles / links — cannot come from
- * flex wrapping: line-breaking places items in sequence and never floats a
- * later sibling back up to an earlier line, and CSS cannot ask whether an
- * item wrapped. So this module measures. When the one-row layout
- * (name | links | toggles) no longer fits, it sets `data-nav-split` on
- * `.nav-content`, and site.css lifts the two groups out of `.nav-right`
- * (`display: contents`) and re-stacks them: toggles on row 1 at the end edge,
- * links alone on row 2 spread across the full measure. Every row stays
- * anchored at both container edges — the same invariant the breadcrumb
- * layout already holds.
+ * The wanted two-row order — site name / links + toggles — is a reordering of
+ * the one-row sequence (name | links | toggles), and flex wrapping cannot
+ * reorder: it places items in sequence and never floats a later sibling back
+ * up to an earlier line. So this module measures. When the one-row layout no
+ * longer fits, it sets `data-nav-split` on `.nav-content`, and site.css lifts
+ * the two groups out of `.nav-right` (`display: contents`) and orders them:
+ * the name takes row 1 alone, then the links and the toggles at its end edge
+ * share row 2.
  *
  * Every measured input — site-name width, per-link widths, toggle-cluster
  * width, the computed column gaps — is the same in both modes, so the
  * decision cannot oscillate. Breadcrumb pages and the hamburger range
  * (≤20rem, where the links are an overlay) are left to the shipped CSS
  * untouched. With JS off nothing here runs and the shipped wrap is the
- * fallback: toggles on row 2's end edge — the wrong corner, but aligned.
+ * fallback, which also leaves the name alone on row 1; a link set that wraps
+ * to several lines there holds the toggles at its bottom edge, which is what
+ * the split avoids.
  */
 
 /** Widths (px) of everything a one-row masthead has to seat. */

@@ -14,7 +14,7 @@
     {apple_touch_icon}
     {schema_json_ld}
     {favicon}{robots_meta}
-    {rss_link}
+    {head_alternates}
     {analytics}
     <script>var t=null;try{t=localStorage.getItem("moss-theme")}catch(e){}document.documentElement.setAttribute("data-theme",t||((window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light"));</script>
     <link rel="stylesheet" href="{css_path}">{user_css_link}
@@ -41,7 +41,7 @@
         </a>
     </div>
 
-    <script src="{js_path}"{lazy_chunk_attrs}></script>{runtime_js_tags}{user_js_tag}
+    {lightbox}<script src="{js_path}"{lazy_chunk_attrs}></script>{runtime_js_tags}{user_js_tag}
     <!-- slot:body-end -->
 </body>
 </html>

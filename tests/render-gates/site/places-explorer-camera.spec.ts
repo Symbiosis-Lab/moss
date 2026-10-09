@@ -83,7 +83,7 @@ async function samplePixelsAt(page: Page, png: Buffer, points: Array<{ x: number
  * entirely by never asking a page to decode anything.
  */
 function decodePng(png: Buffer): { width: number; height: number; at: (x: number, y: number) => [number, number, number, number] } {
-  if (png.toString("ascii", 1, 4) !== "PNG") throw new Error("not a PNG");
+  if (png.length < 33 || png.toString("ascii", 1, 4) !== "PNG") throw new Error(`not a nonempty PNG (${png.length} bytes)`);
   let offset = 8;
   let width = 0;
   let height = 0;
@@ -108,6 +108,7 @@ function decodePng(png: Buffer): { width: number; height: number; at: (x: number
     offset += 12 + length; // length + type(4) + data + crc(4)
   }
   const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : (() => { throw new Error(`unsupported PNG colorType ${colorType}`); })();
+  if (width < 1 || height < 1) throw new Error(`empty PNG dimensions ${width}x${height}`);
   const raw = inflateSync(Buffer.concat(idatChunks));
   const stride = width * channels;
   const pixels = Buffer.alloc(height * stride);
@@ -140,6 +141,9 @@ function decodePng(png: Buffer): { width: number; height: number; at: (x: number
       pixels[y * stride + i] = value & 0xff;
     }
   }
+  // A fully transparent capture is blank. A uniform opaque sea crop is
+  // valid map content, so color variation is not required here.
+  if (channels === 4 && !pixels.some((_, i) => i % 4 === 3 && pixels[i] !== 0)) throw new Error(`transparent map capture (${width}x${height})`);
   return {
     width,
     height,
@@ -148,6 +152,12 @@ function decodePng(png: Buffer): { width: number; height: number; at: (x: number
       return [pixels[i], pixels[i + 1], pixels[i + 2], channels === 4 ? pixels[i + 3] : 255];
     },
   };
+}
+
+/** `scale: "css"` makes screenshot pixels and Playwright geometry share CSS-pixel coordinates, including Desktop Safari's 2x device scale. */
+function expectCssClipSize(image: { width: number; height: number }, clip: { width: number; height: number }): void {
+  expect(image.width).toBe(clip.width);
+  expect(image.height).toBe(clip.height);
 }
 
 /** The Patterson (2014) cylindrical projection `projection.ts` implements, reimplemented here from the published polynomial rather than imported — the cross-check that module's own doc describes, so a drift between the build's runtime and this gate would fail loudly instead of cancelling out. */
@@ -286,17 +296,11 @@ test("zooming in and resetting back to cover leaves the map crisp at the coast",
     height: 80,
   };
   await page.waitForTimeout(150);
-  const before = await page.screenshot({ clip });
+  const before = await page.screenshot({ clip, scale: "css" });
   const transformBefore = await page.locator(".moss-places-world").evaluate((el) => (el as HTMLElement).style.transform);
 
-  // A real pinch — not the zoom capsule — is what exercises the bug: the
-  // capsule's own click handler always calls applyCamera(true) directly
-  // (never mid-gesture), so it never promotes the world layer to its own
-  // compositing layer in the first place and could not catch a regression
-  // here. A pinch spans many real pointermove frames between pointerdown
-  // and pointerup, each one unsettled (data-gesture present, will-change
-  // active) until the final settle — the actual window the blur bug lived
-  // in. Symmetric spread-then-pinch (10..100..10px half-distance) returns
+  // Exercise unsettled camera updates before the final settle. Symmetric
+  // spread-then-pinch (10..100..10px half-distance) returns
   // the same distance ratio product (telescoping to 1), so the camera lands
   // back on the same zoom without any explicit reset.
   await page.locator(".moss-places-viewport").evaluate((el) => {
@@ -320,8 +324,8 @@ test("zooming in and resetting back to cover leaves the map crisp at the coast",
   });
   await page.waitForTimeout(150);
 
-  const stillCompositing = await page.locator(".moss-places-world").evaluate((el) => el.hasAttribute("data-gesture"));
-  expect(stillCompositing, "the world layer must demote out of compositing once the camera settles").toBe(false);
+  await expect(page.locator(".moss-places-world"), "the camera must not flatten regional detail into a permanently promoted world layer")
+    .not.toHaveCSS("will-change", /transform/);
 
   // The camera itself must also land back on very nearly the same
   // transform — belt and braces alongside the pixel sample below: a
@@ -342,7 +346,7 @@ test("zooming in and resetting back to cover leaves the map crisp at the coast",
     expect(Math.abs(afterNums[i] - beforeNums[i]), `transform number ${i}: before=${transformBefore} after=${transformAfter}`).toBeLessThan(0.5);
   }
 
-  const after = await page.screenshot({ clip });
+  const after = await page.screenshot({ clip, scale: "css" });
   const beforePixels = await samplePixels(page, before, clip.width, clip.height);
   const afterPixels = await samplePixels(page, after, clip.width, clip.height);
   for (let i = 0; i < beforePixels.length; i++) {
@@ -395,9 +399,7 @@ test("regional tiles are absent at the world's own cover zoom and present past i
     "ready",
     { timeout: 10000 },
   );
-  await page.waitForTimeout(500); // tile fetch + position settle
-  const count = await page.locator(".moss-places-tiles > .moss-places-tile").count();
-  expect(count, "expected a regional tile past the world's own detail ceiling").toBeGreaterThan(0);
+  await expect(page.locator(".moss-places-tiles > .moss-places-tile").first()).toBeVisible();
 });
 
 /** `camera.ts`'s own `detailMaxZoom`, reimplemented from its published formula rather than imported — the same cross-check `pattersonProject` above already applies to the projection itself. `WORLD_WIDTH` comes straight from `pattersonProject` rather than a second hardcoded constant: at longitude 180 its own `x` is exactly the full canvas width (`width/2 + scale*PI`, and `scale*PI === width/2` by `projection.ts`'s own derivation). */
@@ -409,13 +411,17 @@ function detailMaxZoomFor(viewport: { width: number; height: number }): number {
   return DETAIL_MAX_SCALE / coverScale;
 }
 
-test("the tile cross-fade respects prefers-reduced-motion", async ({ page }) => {
-  const viewport = { width: 1280, height: 800 };
-  await page.setViewportSize(viewport);
+test("the tile fade follows camera zoom without a CSS transition", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await gotoReady(page);
+  const viewportBox = await page.locator(".moss-places-viewport").boundingBox();
+  if (!viewportBox) throw new Error("explorer viewport is not laid out");
+  const viewport = { width: viewportBox.width, height: viewportBox.height };
   // Inside the last 20% of the world's own zoom range — `tileFadeOpacity`'s
   // own fade band (`tiles.ts`) — so the transition is actually doing
   // something at this camera, not merely declared and unused.
-  const fadeBandZoom = detailMaxZoomFor(viewport) * 0.9;
+  // Regional detail also takes over at the world bitmap's 1.6× zoom cap.
+  const fadeBandZoom = Math.min(detailMaxZoomFor(viewport), 1.6) * 0.9;
   const center = pattersonProject(0, 0);
   const gotoFadeBand = () => page.goto(`places/?p=patterson&z=${fadeBandZoom}&x=${center.x}&y=${center.y}`, { waitUntil: "domcontentloaded" });
   const waitReady = () =>
@@ -428,14 +434,23 @@ test("the tile cross-fade respects prefers-reduced-motion", async ({ page }) => 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await gotoFadeBand();
   await waitReady();
-  const reducedDuration = await page.locator(".moss-places-tiles").evaluate((el) => getComputedStyle(el).transitionDuration);
-  expect(reducedDuration).toBe("0s");
+  const fade = page.locator(".moss-places-tiles");
+  const reduced = await fade.evaluate((el) => ({
+    opacity: Number(getComputedStyle(el).opacity),
+    duration: getComputedStyle(el).transitionDuration,
+  }));
+  expect(reduced.opacity).toBeCloseTo(0.5, 2);
+  expect(reduced.duration).toBe("0s");
 
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await gotoFadeBand();
   await waitReady();
-  const normalDuration = await page.locator(".moss-places-tiles").evaluate((el) => getComputedStyle(el).transitionDuration);
-  expect(normalDuration).not.toBe("0s");
+  const normal = await fade.evaluate((el) => ({
+    opacity: Number(getComputedStyle(el).opacity),
+    duration: getComputedStyle(el).transitionDuration,
+  }));
+  expect(normal.opacity).toBeCloseTo(reduced.opacity, 2);
+  expect(normal.duration).toBe("0s");
 });
 
 interface AdjacentPair {
@@ -467,7 +482,20 @@ async function loadAndFindAdjacentTilePairs(
     "ready",
     { timeout: 10000 },
   );
-  await expect(page.locator('.moss-places-tiles[data-moss-places-tiles-state="idle"]')).toHaveCount(1, { timeout: 15000 });
+  await expect.poll(async () => page.evaluate(() => {
+    const viewport = document.querySelector<HTMLElement>(".moss-places-viewport")?.getBoundingClientRect();
+    if (!viewport) return ["viewport:missing"];
+    const tiles = [...document.querySelectorAll<HTMLElement>(".moss-places-tiles > .moss-places-tile")];
+    const visible = tiles.filter((tile) => {
+      const rect = tile.getBoundingClientRect();
+      return rect.right > viewport.left && rect.left < viewport.right && rect.bottom > viewport.top && rect.top < viewport.bottom;
+    });
+    if (visible.length < 2) return [`visible:${visible.length}`];
+    return visible.flatMap((tile) => {
+      const surface = tile.firstElementChild;
+      return surface instanceof HTMLCanvasElement || surface instanceof SVGElement ? [] : [`${tile.dataset.mossPlacesTile ?? "unknown"}:not-ready`];
+    });
+  }), { timeout: 15000 }).toEqual([]);
 
   const tileEls = page.locator(".moss-places-tiles > .moss-places-tile");
   const count = await tileEls.count();
@@ -572,7 +600,7 @@ test("past the world ceiling, the coast at a tile boundary is pixel-continuous",
     points.push({ x: edgeX - 3, y }, { x: edgeX + 3, y });
   }
   const clip = { x: Math.floor(edgeX - 20), y: Math.floor(top), width: 40, height: Math.max(1, Math.ceil(bottom - top)) };
-  const png = await page.screenshot({ clip, animations: "disabled" });
+  const png = await page.screenshot({ clip, animations: "disabled", scale: "css" });
   const localPoints = points.map((p) => ({ x: p.x - clip.x, y: p.y - clip.y }));
   const pixels = await samplePixelsAt(page, png, localPoints);
   for (let s = 0; s <= samples; s++) {
@@ -669,8 +697,9 @@ test("past the world ceiling, an open-sea tile boundary is pixel-continuous in b
   // avoids it.
   const CLIP_MARGIN = 20;
   const clip = { x: xs[0] - CLIP_MARGIN, y: clipTop, width: xs[xs.length - 1] - xs[0] + 1 + 2 * CLIP_MARGIN, height: clipBottom - clipTop };
-  const png = await page.screenshot({ clip, animations: "disabled" });
+  const png = await page.screenshot({ clip, animations: "disabled", scale: "css" });
   const image = decodePng(png);
+  expectCssClipSize(image, clip);
   const at = (x: number, y: number) => image.at(x - clip.x, y - clip.y);
 
   // Per RGBA channel, 0-255. The pre-fix seam (before `TileSelection`
@@ -791,10 +820,29 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
     "ready",
     { timeout: 10000 },
   );
-  // No fixed sleep: wait until the tile layer reports nothing left to bake or
-  // re-bake, so a half-swapped raster never reaches the capture.
-  await expect(page.locator('.moss-places-tiles[data-moss-places-tiles-state="idle"]')).toHaveCount(1, { timeout: 15000 });
-  await expect(page.locator('.moss-places-tiles > .moss-places-tile[data-moss-places-tile="16,12"]')).toHaveCount(1);
+  // Wait for the four visible rasters this comparison samples to be decoded
+  // at enough pixels for their rendered size; padding tiles may keep the
+  // layer globally busy without changing any sampled pixels.
+  await expect.poll(async () => page.evaluate(() => {
+    const cells = ["16,12", "16,13", "17,12", "17,13"];
+    const dpr = window.devicePixelRatio || 1;
+    return cells.flatMap((key) => {
+      const tile = document.querySelector<HTMLElement>(`.moss-places-tile[data-moss-places-tile="${key}"]`);
+      if (!tile) return [`${key}:missing`];
+      const surface = tile.firstElementChild;
+      if (surface instanceof SVGElement) return [];
+      if (!(surface instanceof HTMLCanvasElement)) return [`${key}:not-rasterized`];
+      const rect = tile.getBoundingClientRect();
+      const neededWidth = Math.ceil(rect.width * dpr);
+      const neededHeight = Math.ceil(rect.height * dpr);
+      // Canvas dimensions are integer-rounded before the CSS transform; the
+      // transformed rect is fractional, so its DPR-scaled ceiling may differ
+      // by one physical pixel without any loss of source detail.
+      return surface.width >= neededWidth - 1 && surface.height >= neededHeight - 1
+        ? []
+        : [`${key}:${surface.width}x${surface.height}<${neededWidth}x${neededHeight}`];
+    });
+  }), { timeout: 15000 }).toEqual([]);
 
   const rectByCell = async (cell: string) => {
     const rect = await page.locator(`.moss-places-tiles > .moss-places-tile[data-moss-places-tile="${cell}"]`).boundingBox();
@@ -847,6 +895,7 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
   const clip = { x: minX, y: clipTop, width: maxX - minX, height: clipBottom - clipTop };
   const png = await page.screenshot({ clip, animations: "disabled", scale: "css" });
   const image = decodePng(png);
+  expectCssClipSize(image, clip);
   const at = (x: number, y: number) => image.at(Math.round(x - clip.x), Math.round(y - clip.y));
   // The columns to compare are chosen on the south row's own tiles over the
   // world, with the north row hidden: the draw order is fixed, north to
@@ -857,6 +906,7 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
   const northTiles = page.locator('.moss-places-tiles > .moss-places-tile[data-moss-places-tile$=",13"]');
   await northTiles.evaluateAll((els) => els.forEach((el) => ((el as HTMLElement).style.visibility = "hidden")));
   const southImage = decodePng(await page.screenshot({ clip, animations: "disabled", scale: "css" }));
+  expectCssClipSize(southImage, clip);
   await northTiles.evaluateAll((els) => els.forEach((el) => ((el as HTMLElement).style.visibility = "")));
   const southAt = (x: number, y: number) => southImage.at(Math.round(x - clip.x), Math.round(y - clip.y));
 
@@ -958,8 +1008,10 @@ test("at the close zoom, a tile edge stays continuous across lit land", async ({
 
   const clip = { x: left, y: top, width: right - left, height: bottom - top };
   const tiled = decodePng(await page.screenshot({ clip, animations: "disabled", scale: "css" }));
+  expectCssClipSize(tiled, clip);
   await page.locator(".moss-places-tiles").evaluate((el) => ((el as HTMLElement).style.visibility = "hidden"));
   const worldOnly = decodePng(await page.screenshot({ clip, animations: "disabled", scale: "css" }));
+  expectCssClipSize(worldOnly, clip);
   await page.locator(".moss-places-tiles").evaluate((el) => ((el as HTMLElement).style.visibility = ""));
 
   const landRgb = await page.evaluate(() => {

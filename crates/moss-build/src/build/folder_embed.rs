@@ -30,6 +30,7 @@
 //! `folder_id` because those carry on-disk paths.
 
 mod maps;
+mod upcoming;
 use maps::place_map_with_placement;
 
 use std::path::Path;
@@ -229,9 +230,9 @@ pub(crate) fn resolve_children_config(
             // bulk_style_tests.
             let rich = docs.iter().filter(|d| d.cover.is_some()
                 || crate::build::page::meta::resolve_page_description(
-                    d.description.as_deref(), &d.content, math).is_some()).count();
+                    crate::build::components::child_list::explicit_card_text(d).as_deref(), &d.content, math).is_some()).count();
             let has_rich = rich > 0 && (rich * 2 > docs.len() || docs.len() - rich <= 3);
-            let any_has_date = docs.iter().any(|d| d.date.is_some());
+            let any_has_date = docs.iter().any(|d| d.date.is_some() || d.event.is_some());
             // Nothing at all is an INDEX of bare labels, not an archive, and "summary" lays
             // those out one per row.
             let auto_value = match (has_rich, any_has_date) {
@@ -250,7 +251,7 @@ pub(crate) fn resolve_children_config(
             // contract). A single dated post gets a year heading too; a
             // dateless listing stays flat. Auto-detected `year` is still
             // suppressed under a non-Date sort axis in `effective_group_for_axis`.
-            let auto_value = if style.value != "summary" && docs.iter().any(|d| d.date.is_some()) {
+            let auto_value = if style.value != "summary" && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
                 "year".to_string()
             } else {
                 "none".to_string()
@@ -379,12 +380,13 @@ pub(crate) fn generate_children(
                 dir_overrides,
                 typesetting,
             );
-            // The grid card is one of those paths: its description slot is
-            // frontmatter-only, like the `:::grid` card it shares a renderer
-            // with, so the excerpt stays out of it.
+            // The grid card is one of those paths: its description comes from
+            // `props_for_document` (frontmatter, then the first byline row) and
+            // never from the body excerpt, like the `:::grid` card it shares a
+            // renderer with.
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
-                    doc.description.as_deref(),
+                    crate::build::components::child_list::explicit_card_text(doc).as_deref(),
                     &doc.content,
                     math,
                 );
@@ -435,14 +437,14 @@ pub(crate) fn generate_children(
     let mut sorted: Vec<&ChildItemProps> = items.iter().collect();
     if !skip_resort {
         let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
-        sorted.sort_by(|a, b| {
-            // Undated children list first here on purpose: in practice they are
-            // the folder's subfolders, which lead its page. The series chain
-            // puts undated pages last, but it never contains subfolders, so the
-            // two disagree only over an undated article inside a series.
-            a.date_raw.is_some().cmp(&b.date_raw.is_some())
-                .then_with(|| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending))
-        });
+        // Dated pages first, undated after (`cmp_date_axis`). Subfolders lead
+        // the page regardless: they are partitioned out below.
+        sorted.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending));
+    }
+
+    let upcoming = upcoming::urls(group, folder_docs);
+    if group == "upcoming" {
+        sorted = upcoming::order(sorted, &upcoming, skip_resort);
     }
 
     // Grid style: render as collection cards.
@@ -504,7 +506,15 @@ pub(crate) fn generate_children(
 
     // Articles: year-grouped if group == "year", otherwise flat in
     // partition order (already caller order or date-desc, set above).
-    if group == "year" && !articles.is_empty() {
+    if group == "upcoming" {
+        html.push_str(&upcoming::sections(&articles, &upcoming, |article| {
+            if style == "summary" {
+                components::child_summary::render_with_sort(article, lang, typesetting, Some(media_lookup_ref), parent_axis)
+            } else {
+                components::child_list::render_child(article, lang, typesetting)
+            }
+        }));
+    } else if group == "year" && !articles.is_empty() {
         if style == "summary" {
             // Summary style: group articles by year, render summary cards
             // within year sections. `bucket_articles_by_year` is find-or-
@@ -559,6 +569,7 @@ pub(crate) fn generate_children(
                     title: item.title.clone(),
                     url_path: item.url_path.clone(),
                     place: item.place.clone(),
+                    when_html: item.when_html.clone(),
                 })
                 .collect();
             let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
@@ -650,6 +661,7 @@ fn render_minimal_year_section(
                 title: a.title.clone(),
                 url_path: a.url_path.clone(),
                 place: a.place.clone(),
+                when_html: a.when_html.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
         })
@@ -879,10 +891,16 @@ fn resolve_markers_impl(
                 is_embed,
                 place_maps,
             ),
-            None => format!(
-                r#"<div class="moss-embed-missing">Invalid folder-embed marker: {}</div>"#,
-                html_escape(body),
-            ),
+            None => Err(format!("Invalid folder-embed marker: {body}")),
+        };
+        // The placeholder stays visible; the problem is also reported where
+        // `--strict` counts it, naming the page and the target.
+        let rendered = match rendered {
+            Ok(html) => html,
+            Err(problem) => {
+                crate::build::cli_output::log_warn_problem!("[{from_md_path}] unresolved folder embed: {problem}");
+                format!(r#"<div class="moss-embed-missing">{}</div>"#, html_escape(&problem))
+            }
         };
         out.push_str(&rendered);
         remaining = rest;
@@ -1124,8 +1142,8 @@ pub(crate) fn home_scope(url_path: &str) -> (&str, bool) {
     (moss_core::home::lang_tree_prefix(url_path).unwrap_or(""), url_path == "index.html")
 }
 
-/// Render a single resolved marker. Falls back to a `moss-embed-missing` div
-/// on lookup failure. `is_embed` — see [`resolve_markers_impl`] — passes
+/// Render a single resolved marker. `Err` carries the plain-text problem when
+/// the target does not resolve; the caller renders the placeholder and reports it. `is_embed` — see [`resolve_markers_impl`] — passes
 /// straight through to [`generate_children`], which is where it actually
 /// shapes output.
 #[allow(clippy::too_many_arguments)]
@@ -1142,7 +1160,7 @@ fn render_one(
     math: bool,
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
-) -> String {
+) -> Result<String, String> {
     // Prefer the marker's `from=` (the original markdown source); the
     // page-level `from_md_path` is a safe fallback when older markers omit it.
     let from = if parsed.from.is_empty() {
@@ -1151,19 +1169,21 @@ fn render_one(
         parsed.from
     };
     if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
-        return maps::render(parsed, ordinal, all_docs, place_maps);
+        return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
     }
     let folder_id = resolve_folder_id(parsed.path, from);
     // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
     // while `ParsedDocument.url_path` is slugified — lowercased and
-    // punctuation-stripped via `moss_core::content_graph::generate_slug`.
+    // punctuation-rewritten via `moss_core::slug::slugify_path_segments`
+    // (`&` becomes `and`, other punctuation becomes `-`; the folder's own
+    // URL is made by the same function, so the lookup must use it too).
     // Compute the slugified form for URL-space lookups (target_doc match,
     // folder_prefix filter, "more" href). Keep `folder_id` for source-side
     // lookups (e.g. `project.html_files` carries raw on-disk paths).
     let folder_id_slug = if folder_id.is_empty() {
         String::new()
     } else {
-        moss_core::content_graph::generate_slug(&folder_id)
+        moss_core::slug::slugify_path_segments(&folder_id)
     };
     // Route the three-branch decision through moss-core's `classify_reference`:
     // `dir_has_markdown_index` → FolderListing (Branch 1), else
@@ -1188,7 +1208,7 @@ fn render_one(
             // Branch 1: re-find the doc `dir_has_markdown_index` found, the
             // same way it found it (root by identity, else by `url_path` —
             // see that method's comment).
-            let target_slug = moss_core::content_graph::generate_slug(
+            let target_slug = moss_core::slug::slugify_path_segments(
                 classified.target_path.as_deref().unwrap_or(&folder_id_slug),
             );
             let found = if target_slug.is_empty() {
@@ -1201,12 +1221,7 @@ fn render_one(
                 Some(d) => Some(d),
                 // Unreachable: dir_has_markdown_index ⇒ this find succeeds. Keep
                 // the missing-div fallback so a future predicate drift is safe.
-                None => {
-                    return format!(
-                        r#"<div class="moss-embed-missing">Folder not found: {}</div>"#,
-                        html_escape(parsed.path),
-                    );
-                }
+                None => return Err(not_found(parsed.path)),
             }
         }
         ReferenceKind::FolderIndexIframe => {
@@ -1222,13 +1237,10 @@ fn render_one(
                 parsed.size.as_deref(),
                 all_docs,
             ) {
-                return iframe;
+                return Ok(iframe);
             }
             // Defensive: predicate said iframe but the synthesizer declined.
-            return format!(
-                r#"<div class="moss-embed-missing">Folder not found: {}</div>"#,
-                html_escape(parsed.path),
-            );
+            return Err(not_found(parsed.path));
         }
         _ => {
             // Branch 3: no folder doc and no static index. One more shape is
@@ -1236,16 +1248,19 @@ fn render_one(
             // `also_in` memberships — a CLAIMED term (`build::terms`), whose
             // page is a real doc elsewhere so no `<key>/index.html` doc
             // exists. The memberships are real; list them with default sort.
+            //
+            // The same rule covers a real folder with pages but no home file:
+            // its index page is synthesized after markers expand, so no
+            // `<key>/index.html` doc exists yet, but pages sit under it.
+            let under = format!("{folder_id_slug}/");
             let has_members = all_docs.iter().any(|d| {
                 d.also_in
                     .as_ref()
                     .is_some_and(|f| f.iter().any(|k| *k == folder_id_slug))
+                    || (!folder_id_slug.is_empty() && d.url_path.starts_with(&under))
             });
             if !has_members {
-                return format!(
-                    r#"<div class="moss-embed-missing">Folder not found: {}</div>"#,
-                    html_escape(parsed.path),
-                );
+                return Err(format!("No pages under {}", parsed.path));
             }
             None
         }
@@ -1294,7 +1309,7 @@ fn render_one(
     };
 
     if folder_docs.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
 
     if parsed.style.as_deref() == Some("map") {
@@ -1303,7 +1318,7 @@ fn render_one(
             // same as any other aggregate/listing surface (rule: listing
             // cards never draw a route).
             if let Some(svg) = map.render_term_map(&folder_id_slug, folder_docs.iter().copied(), from, ordinal, false, true) {
-                return place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref());
+                return Ok(place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref()));
             }
             warn_map_fallback_once(parsed.path, "has no coordinate-bearing places");
         } else {
@@ -1360,6 +1375,14 @@ fn render_one(
     let effective_group = effective_group_for_axis(&group_resolved, resolved.axis);
 
     let sorted = moss_core::sort::sort_by_resolved(&folder_docs, &resolved);
+    // Upcoming events lead whatever the folder's sort is, so `limit` cuts
+    // from that order (the same grouping `generate_children` applies later).
+    let sorted = if effective_group == "upcoming" {
+        let upcoming_urls = upcoming::urls(&effective_group, &folder_docs);
+        upcoming::order_docs(sorted, &upcoming_urls, skip_resort)
+    } else {
+        sorted
+    };
 
     let (limited, truncated): (Vec<&ParsedDocument>, bool) = match parsed.limit {
         Some(n) if n > 0 && n < sorted.len() => (sorted.iter().take(n).copied().collect(), true),
@@ -1496,14 +1519,18 @@ fn render_one(
         ),
         None => listing,
     };
-    match parsed.caption.as_deref() {
+    Ok(match parsed.caption.as_deref() {
         Some(caption) => moss_core::render::placement::wrap_embed_with_caption(
             &listing,
             &parsed.placement,
             caption,
         ),
         None => listing,
-    }
+    })
+}
+
+fn not_found(path: &str) -> String {
+    format!("Folder not found: {path}")
 }
 
 /// Resolve a `children_more:` reference to the page it names. Mirrors
@@ -1519,7 +1546,9 @@ fn resolve_more_link_target<'a>(
     all_docs: &'a [ParsedDocument],
 ) -> Option<&'a ParsedDocument> {
     let stem = crate::build::markdown::frontmatter_ref_to_stem(more_ref);
-    let target_slug = moss_core::content_graph::generate_slug(&stem);
+    // Page URLs are built by `slug::generate_slug` (`&` becomes `and`, dots
+    // are kept), so the target is slugged by the same function.
+    let target_slug = moss_core::slug::generate_slug(&stem);
     all_docs.iter().find(|d| {
         let d_stem = d
             .url_path

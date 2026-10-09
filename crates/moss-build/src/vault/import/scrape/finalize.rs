@@ -24,7 +24,10 @@
 use std::fs;
 use std::path::Path;
 
-use super::metadata::{same_name, strip_edge_name, strip_site_name};
+use regex::Regex;
+use std::sync::LazyLock;
+
+use super::metadata::{same_name, strip_edge_name, strip_site_name, SEPARATOR};
 use super::service::escape_yaml_string;
 
 /// A shared site name is only trusted over at least this many pages besides
@@ -61,6 +64,23 @@ pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Resu
             if stripped != *title {
                 if let Some(next) = with_title(&updated, &stripped) {
                     updated = next;
+                }
+            }
+        }
+        // After the title is final: the heading repeating it is dropped last.
+        if let Some(title) = frontmatter_text(&updated, "title") {
+            let publisher = frontmatter_text(&updated, "publisher");
+            let names: Vec<&str> =
+                site_name.iter().chain(publisher.iter()).map(String::as_str).collect();
+            if let Some(span) = moss_core::frontmatter::frontmatter_span(&updated) {
+                // A page that is only its title keeps it, as `compose_note` does.
+                // The crawl's notes were composed with adoption already; a second look
+                // would adopt the heading after the one that was.
+                match without_title_heading(&updated[span.body..], &title, &names, false) {
+                    Some(TitleHeading { body, .. }) if !body.trim().is_empty() => {
+                        updated = format!("{}{body}", &updated[..span.body]);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -156,9 +176,155 @@ pub(super) fn with_title(content: &str, title: &str) -> Option<String> {
     ))
 }
 
+static ATX_HEADING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$").expect("atx heading regex")
+});
+static MD_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\([^)]*\)").expect("link regex"));
+static MD_IMAGE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^!(?:\[[^\]]*\]\([^)]*\)|\[\[[^\]]*\]\])$").expect("image regex")
+});
+
+/// The text a heading shows: links unwrapped, emphasis marks and backslash
+/// escapes gone.
+fn heading_text(raw: &str) -> String {
+    let unlinked = MD_LINK.replace_all(raw, "$1");
+    let mut out = String::new();
+    let mut chars = unlinked.chars().peekable();
+    let mut prev: Option<char> = None;
+    while let Some(c) = chars.next() {
+        // An emphasis mark sits at a word edge; one between two letters or
+        // digits (`snake_case`) is part of the word. Unsure fails safe: the
+        // heading then differs from the title and is kept.
+        let in_word = prev.is_some_and(char::is_alphanumeric)
+            && chars.peek().is_some_and(|n| n.is_alphanumeric());
+        match c {
+            '\\' if chars.peek().is_some_and(|n| n.is_ascii_punctuation()) => {}
+            '*' | '_' if !in_word => {}
+            '`' => {}
+            c => out.push(c),
+        }
+        prev = Some(c);
+    }
+    out
+}
+
+/// What `without_title_heading` decided: the body without its first heading,
+/// and, when that heading replaced an internal page name, the title it became.
+pub(super) struct TitleHeading {
+    pub(super) title: Option<String>,
+    pub(super) body: String,
+}
+
+/// Text as a reader sees it, for comparing: links unwrapped, case folded,
+/// punctuation, underscores and hyphens read as spaces, whitespace collapsed.
+fn visible_words(text: &str) -> String {
+    let unlinked = MD_LINK.replace_all(text, "$1");
+    let spaced: String =
+        unlinked.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Whether the title shows anywhere in `body`, as a whole or as one of its
+/// separator-delimited segments (a site name not yet known would otherwise
+/// make `Page | Name` look absent from a body that says `Page`).
+fn title_is_shown(body: &str, title: &str) -> bool {
+    let shown = format!(" {} ", visible_words(body));
+    std::iter::once(title).chain(SEPARATOR.split(title)).any(|part| {
+        let words = visible_words(part);
+        !words.is_empty() && shown.contains(&format!(" {words} "))
+    })
+}
+
+/// Builders' internal page names (`T_Camino`) are not titles a reader sees.
+fn looks_like_internal_name(title: &str) -> bool {
+    let t = title.trim();
+    !t.is_empty()
+        && t.contains('_')
+        && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// `body` without its first heading when that heading is the page's own
+/// title, which moss renders itself, so keeping it prints the title twice.
+/// Equal after whitespace and case normalisation, with or without the site
+/// name (`About | Studio` is `About`). Only the first heading of any level is
+/// considered: a different one, or any later one, stays.
+///
+/// With `adopt`, a leading heading (only blank lines, a lone link line or a
+/// lone image line before it) also goes when the title shows nowhere in the page: that title
+/// is a name the builder kept internally, and the heading is the real one, so
+/// it is returned as the new title. `None` when nothing changes.
+pub(super) fn without_title_heading(
+    body: &str,
+    title: &str,
+    site_names: &[&str],
+    adopt: bool,
+) -> Option<TitleHeading> {
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    let mut fenced = false;
+    let mut leading = true;
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            leading = false;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let text = line.trim_end_matches(['\r', '\n']);
+        // A setext heading (`Text` over `===`) is a heading too; it is the
+        // first one, and this pass does not rewrite that form.
+        if lines.get(i + 1).is_some_and(|u| {
+            let u = u.trim();
+            !text.trim().is_empty() && !u.is_empty() && u.chars().all(|c| c == '=')
+        }) {
+            return None;
+        }
+        let Some(caps) = ATX_HEADING.captures(text) else {
+            let t = text.trim();
+            let lone_link = MD_LINK.is_match(t) && MD_LINK.replace(t, "").is_empty();
+            let lone_image = MD_IMAGE.is_match(t);
+            leading &= t.is_empty() || lone_link || lone_image;
+            continue;
+        };
+        let heading = heading_text(&caps[1]);
+        let bare_title = strip_site_name(title, site_names);
+        let repeats = same_name(&heading, title)
+            || same_name(&strip_site_name(&heading, site_names), &bare_title);
+        let new_title = (!repeats
+            && adopt
+            && leading
+            && looks_like_internal_name(&bare_title)
+            && !title_is_shown(body, &bare_title))
+        .then(|| strip_site_name(&heading, site_names))
+            .filter(|t| !t.trim().is_empty());
+        if !repeats && new_title.is_none() {
+            return None;
+        }
+        // Take one of the blank lines around it too, so no gap is left.
+        let blank = |j: Option<&&str>| j.is_none_or(|l| l.trim().is_empty());
+        let skip_after = blank(i.checked_sub(1).and_then(|j| lines.get(j)))
+            && lines.get(i + 1).is_some_and(|l| l.trim().is_empty());
+        let rest = lines[i + 1..].iter().skip(usize::from(skip_after));
+        let body = lines[..i].iter().chain(rest).copied().collect();
+        return Some(TitleHeading { title: new_title, body });
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dropped(body: &str, title: &str, names: &[&str]) -> Option<String> {
+        without_title_heading(body, title, names, false).map(|r| r.body)
+    }
+
+    fn adopted(body: &str, title: &str) -> Option<(String, String)> {
+        let r = without_title_heading(body, title, &[], true)?;
+        Some((r.title?, r.body))
+    }
 
     fn page(title: &str) -> String {
         format!("---\ntitle: \"{title}\"\norigin: \"https://example.com/\"\n---\n\nBody\n")
@@ -324,5 +490,126 @@ mod tests {
 
         assert!(read(root, "a.md").contains("title: \"Alpha\"\n"));
         assert!(read(root, "b.md").contains("title: \"Beta\"\n"));
+    }
+
+    #[test]
+    fn a_first_heading_repeating_the_title_is_dropped() {
+        let body = "[Back](/x)\n\n# **About**  \n\nIntro.\n\n## About\n\nMore.\n";
+        assert_eq!(
+            dropped(body, "about", &[]).as_deref(),
+            Some("[Back](/x)\n\nIntro.\n\n## About\n\nMore.\n"),
+            "only the first heading goes, at any level"
+        );
+        assert!(dropped("## About\n\nText\n", "About", &[]).is_some());
+    }
+
+    #[test]
+    fn the_site_name_does_not_hide_a_repeated_title() {
+        let body = "# About | Studio Name\n\nText\n";
+        assert_eq!(dropped(body, "About", &["Studio Name"]).as_deref(), Some("Text\n"));
+        assert_eq!(
+            dropped("# About\n\nText\n", "About | Studio Name", &["Studio Name"])
+                .as_deref(),
+            Some("Text\n")
+        );
+    }
+
+    #[test]
+    fn an_underscore_inside_a_word_is_not_emphasis() {
+        assert_eq!(dropped("# snake_case\n\nText\n", "snakecase", &[]), None);
+        assert!(dropped("# _snake_case_\n\nText\n", "snake_case", &[]).is_some());
+    }
+
+    #[test]
+    fn a_heading_replaces_a_title_the_page_never_shows() {
+        let body = "# The Winter's Tale\n\nA staging in two acts.\n";
+        assert_eq!(
+            adopted(body, "T_Winter_Tale_S"),
+            Some(("The Winter's Tale".to_string(), "A staging in two acts.\n".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_cjk_title_absent_from_the_body_is_kept_over_a_leading_heading() {
+        assert_eq!(adopted("## 欢迎\n\n正文。\n", "关于我们"), None);
+    }
+
+    #[test]
+    fn an_english_title_absent_from_the_body_is_kept_over_a_leading_heading() {
+        assert_eq!(adopted("## Editor's Note\n\nText.\n", "A Reading List"), None);
+    }
+
+    #[test]
+    fn a_title_shown_in_the_body_is_left_alone() {
+        let body = "# The Winter's Tale\n\nAlso known as winter tale s.\n";
+        assert_eq!(adopted(body, "Winter-Tale_S"), None);
+        // A site name still attached to the title does not make it look absent.
+        assert_eq!(adopted("# Longer heading\n\nAbout us.\n", "About | Studio"), None);
+    }
+
+    #[test]
+    fn no_leading_heading_leaves_the_title_alone() {
+        assert_eq!(adopted("Just text.\n", "T_Winter_Tale_S"), None);
+        assert_eq!(adopted("Intro paragraph.\n\n# The Winter's Tale\n", "T_Winter_Tale_S"), None);
+    }
+
+    #[test]
+    fn a_category_link_line_does_not_stop_the_heading_leading() {
+        let body = "[OPERA](/work/opera)\n\n## The Winter's Tale\n\nText.\n";
+        assert_eq!(
+            adopted(body, "T_Winter_Tale_S"),
+            Some(("The Winter's Tale".to_string(), "[OPERA](/work/opera)\n\nText.\n".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_lead_image_before_the_heading_does_not_stop_it_leading() {
+        let body = "![](./assets/imported/abc.jpg)\n\n## The Night Walk\n\nText.\n";
+        assert_eq!(
+            adopted(body, "P_Night_Walk"),
+            Some(("The Night Walk".to_string(), "![](./assets/imported/abc.jpg)\n\nText.\n".to_string()))
+        );
+        let wiki = "![[abc.jpg]]  \n\n## The Night Walk\n\nText.\n";
+        assert_eq!(adopted(wiki, "P_Night_Walk").map(|(t, _)| t).as_deref(), Some("The Night Walk"));
+    }
+
+    #[test]
+    fn a_text_paragraph_before_the_heading_still_stops_it_leading() {
+        assert_eq!(adopted("A paragraph of text.\n\n## The Night Walk\n\nText.\n", "P_Night_Walk"), None);
+    }
+
+    #[test]
+    fn a_page_that_is_only_its_title_keeps_the_heading_after_the_crawl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        put(root, "index.md", &page("Studio Name"));
+        let only = "---\ntitle: \"a\"\n---\n\n# a\n";
+        put(root, "a.md", only);
+        run(root, &["index.md", "a.md"]);
+        assert_eq!(read(root, "a.md"), only);
+    }
+
+    #[test]
+    fn a_different_first_heading_stays_and_shields_later_ones() {
+        let body = "# Welcome\n\n## About\n\nText\n";
+        assert_eq!(dropped(body, "About", &[]), None);
+        // A heading inside a code fence is not a heading.
+        let fenced = "```\n# About\n```\n\n# Other\n";
+        assert_eq!(dropped(fenced, "About", &[]), None);
+    }
+
+    #[test]
+    fn a_crawl_drops_the_heading_that_repeats_the_title_the_site_name_left_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let name = "Studio Name";
+        put(root, "index.md", &page(name));
+        for p in ["a", "b"] {
+            put(root, &format!("{p}.md"), &format!(
+                "---\ntitle: \"{p} | {name}\"\n---\n\n# {p}\n\nText\n"
+            ));
+        }
+        run(root, &["index.md", "a.md", "b.md"]);
+        assert_eq!(read(root, "a.md"), "---\ntitle: \"a\"\n---\n\nText\n");
     }
 }

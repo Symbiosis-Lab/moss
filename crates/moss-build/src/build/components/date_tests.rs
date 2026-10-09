@@ -170,71 +170,23 @@ fn extract_raw_date_from_filename_keeps_full_stem_for_a_slugged_filename() {
     );
 }
 
-// Tests for extract_date_from_path
 #[test]
-fn test_extract_date_from_path_with_date_filename() {
-    assert_eq!(
-        extract_date_from_path("posts/2025-01-15.html", None),
-        "2025 · 01"
-    );
-}
-
-#[test]
-fn test_extract_date_from_path_any_folder() {
-    assert_eq!(
-        extract_date_from_path("blog/2025-01-15.html", None),
-        "2025 · 01"
-    );
-}
-
-#[test]
-fn test_extract_date_from_path_no_date_pattern() {
-    assert_eq!(
-        extract_date_from_path("posts/hello-world.html", None),
-        "Unknown"
-    );
-}
-
-#[test]
-fn test_extract_date_from_doc_uses_source_path_for_creation_date() {
-    // Create a temp file so we have a real file with a creation date
+fn test_extract_date_from_doc_ignores_file_creation_time() {
+    // A file's creation time is not a date the author gave the page: with no
+    // `start`, no `date` and no date in the filename the page is undated.
     let dir = std::env::temp_dir().join("moss_date_test");
     std::fs::create_dir_all(&dir).unwrap();
-    let file_path = dir.join("友链.md");
-    std::fs::write(&file_path, "# Friends").unwrap();
-
-    let root_path = dir.to_str().unwrap().to_string();
+    std::fs::write(dir.join("友链.md"), "# Friends").unwrap();
 
     let doc = ParsedDocument {
-        title: "友链".to_string(),
-        label: "友链".to_string(),
         url_path: "you-lian/index.html".to_string(),
-        // slugified — won't match file
-        date: None,
-        // no frontmatter date
-        reading_time: 1,
-        slug: "you-lian".to_string(),
-        permalink: "/you-lian/".to_string(),
-        is_root_level: true,
-        clean_stem: "友链".to_string(),
-        kind: moss_core::PageKind::Article,
         source_path: Some("友链.md".to_string()),
         ..Default::default()
     };
 
-    let (display, _raw, _explicit) = extract_date_from_doc(&doc, &root_path);
-    assert_ne!(
-        display, "Unknown",
-        "Should use source_path to get file creation date"
-    );
-    // Should be in "YYYY · MM" format
-    assert!(
-        display.contains(" · "),
-        "Date should be in 'YYYY · MM' format, got: {}",
-        display
-    );
+    let (display, raw, explicit) = extract_date_from_doc(&doc, dir.to_str().unwrap());
+    assert_eq!((display.as_str(), raw, explicit), ("Unknown", None, false));
 
-    // Cleanup
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -266,51 +218,6 @@ fn test_extract_date_from_doc_frontmatter_takes_priority() {
         Some("2025-03-11".to_string()),
         "date_raw should contain the original frontmatter date"
     );
-}
-
-#[test]
-fn test_extract_date_from_doc_file_creation_returns_raw() {
-    // When falling back to file creation date, date_raw should still be Some
-    let dir = std::env::temp_dir().join("moss_date_raw_test");
-    std::fs::create_dir_all(&dir).unwrap();
-    let file_path = dir.join("友链.md");
-    std::fs::write(&file_path, "# Friends").unwrap();
-
-    let root_path = dir.to_str().unwrap().to_string();
-
-    let doc = ParsedDocument {
-        title: "友链".to_string(),
-        label: "友链".to_string(),
-        url_path: "you-lian/index.html".to_string(),
-        reading_time: 1,
-        slug: "you-lian".to_string(),
-        permalink: "/you-lian/".to_string(),
-        is_root_level: true,
-        clean_stem: "友链".to_string(),
-        kind: moss_core::PageKind::Article,
-        source_path: Some("友链.md".to_string()),
-        ..Default::default()
-    };
-
-    let (display, raw, _explicit) = extract_date_from_doc(&doc, &root_path);
-    assert!(
-        display.contains(" · "),
-        "Display should be 'YYYY · MM' format, got: {}",
-        display
-    );
-    assert!(
-        raw.is_some(),
-        "date_raw must be Some even for file-creation-date fallback"
-    );
-    // raw should be parseable as a date (contains hyphen-separated parts)
-    let raw_str = raw.unwrap();
-    assert!(
-        raw_str.contains('-'),
-        "date_raw should be in ISO-ish format, got: {}",
-        raw_str
-    );
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

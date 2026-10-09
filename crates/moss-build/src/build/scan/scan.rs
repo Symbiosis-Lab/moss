@@ -218,10 +218,16 @@ pub(crate) fn compute_color_and_lqip_from_image(
     };
 
     // --- LQIP from ~20px thumbnail → JPEG → base64 data URI ---
+    // A JPEG has no alpha, so the blur-up would show through a transparent
+    // logo after the real image loads. Such an image gets an empty LQIP: that
+    // is the "transparent, no placeholder" marker. `None` would mean "no LQIP
+    // computed", and the renderer then falls back to the dominant colour.
     let lqip_thumb = img.thumbnail(20, 20);
     let lqip_rgb = lqip_thumb.to_rgb8();
     let mut jpeg_buf = std::io::Cursor::new(Vec::new());
-    let lqip_data_uri = if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, 20)
+    let lqip_data_uri = if has_transparent_pixel(img) {
+        Some(String::new())
+    } else if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, 20)
         .encode(
             lqip_rgb.as_raw(),
             lqip_rgb.width(),
@@ -238,6 +244,14 @@ pub(crate) fn compute_color_and_lqip_from_image(
     };
 
     (dominant_color, lqip_data_uri)
+}
+
+/// Whether any pixel is not fully opaque. Checks the full-resolution alpha,
+/// not a thumbnail: a thumbnail resample blends a small transparent area into
+/// its neighbours and would report it opaque.
+fn has_transparent_pixel(img: &image::DynamicImage) -> bool {
+    use image::GenericImageView;
+    img.color().has_alpha() && img.pixels().any(|(_, _, p)| p[3] < u8::MAX)
 }
 
 /// Sniff whether an image file is animated, gated by extension so ONLY
@@ -341,7 +355,17 @@ const MEDIA_META_TRANSFORM: &str = "media/meta";
 /// invalidate it. The version bump makes every entry a build wrote while that
 /// bug was live miss once and re-extract with the fix, which is the cheapest
 /// possible migration for a vault nobody can inspect by hand.
-const MEDIA_META_VERSION: u32 = 2;
+///
+/// **2 → 3**: an image with transparent pixels cached an opaque JPEG LQIP,
+/// which showed as a grey box behind the logo after it loaded. Those entries
+/// are recomputed with no LQIP.
+///
+/// **3 → 4**: that no-LQIP entry was indistinguishable from "no LQIP
+/// computed", so the renderer painted the dominant colour behind the logo
+/// anyway. A transparent image now stores an empty LQIP, which is the marker
+/// the renderer reads as "no placeholder at all". Version-3 entries are
+/// recomputed to pick it up.
+const MEDIA_META_VERSION: u32 = 4;
 
 /// Stat-based cache key for an image's placeholder metadata (dimensions +
 /// dominant color + LQIP), shared by the blocking scan and the background media
@@ -702,9 +726,10 @@ fn extract_media_metadata_cached(
         let modified_clone = modified.clone();
         // Capture FFmpeg bin_path string so we can reconstruct inside closure.
         let ffmpeg_bin = ffmpeg.map(|f| f.bin_path().to_string());
-        // Capture cache paths for reconstruction inside the closure.
-        let objects_dir = objects.root().to_path_buf();
-        let transforms_dir = transform_cache.root().to_path_buf();
+        // Owned clones retain site identity and local replica access after
+        // this borrowed scan context leaves the singleflight closure.
+        let objects = objects.clone();
+        let transform_cache = transform_cache.clone();
         let hash_clone = hash.clone();
 
         let (result, shared) = dedup.do_work(&dedup_key, move || {
@@ -719,15 +744,7 @@ fn extract_media_metadata_cached(
                 ffmpeg_mgr.as_ref(),
             );
 
-            // Store the result in the transform cache for next time.
-            // Reconstruct cache infrastructure from paths because ObjectStore/TransformCache
-            // are borrowed from the enclosing scope and cannot be captured by reference in
-            // a FnOnce + Send closure. These types are stateless path wrappers, so
-            // reconstruction is safe — from the two paths captured above, not derived from
-            // one another, so this stays correct even if the store and the transform cache
-            // ever stop being siblings on disk.
-            let objects = ObjectStore::new(objects_dir);
-            let transform_cache = TransformCache::new(transforms_dir, ObjectStore::new(objects.root().to_path_buf()));
+            // The cloned stores preserve their site and publication ownership.
             write_cached_meta(&objects, &transform_cache, &hash_clone, size, &CachedMediaMeta::from(&meta));
 
             meta
@@ -929,15 +946,90 @@ pub fn scan_folder_with_dedup_emit(
     // passes `false` to extract them synchronously so the built HTML is complete.
     defer_placeholders: bool,
 ) -> Result<ProjectStructure, String> {
+    scan_folder_with_dedup_emit_with_error(folder_path, metadata_dedup, emitter, defer_placeholders)
+        .map_err(|failure| failure.to_string())
+}
+
+#[derive(Debug)]
+pub enum ScanFailure {
+    Message(String),
+    Storage(crate::build::cloud_readiness::storage::Unavailable),
+}
+
+impl std::fmt::Display for ScanFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScanFailure::Message(message) => f.write_str(message),
+            ScanFailure::Storage(failure) => write!(f, "{failure}"),
+        }
+    }
+}
+
+fn collect_source_walk(path: &Path) -> Result<crate::build::cloud_readiness::storage::StorageValue, crate::build::cloud_readiness::StorageFailure> {
+    use crate::build::cloud_readiness::{StorageFailure, StorageOperation};
+    #[cfg(test)]
+    crate::build::cloud_readiness::storage::test_probe(path, StorageOperation::RootMetadata)?;
+    let metadata = std::fs::metadata(path).map_err(|e| StorageFailure::new(Some(path.to_path_buf()), StorageOperation::RootMetadata, e))?;
+    if !metadata.is_dir() {
+        return Err(StorageFailure::new(Some(path.to_path_buf()), StorageOperation::RootMetadata,
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "Path is not a directory")));
+    }
+    let mut nested_boundaries = Vec::new();
+    let mut entries = Vec::new();
+    for entry in WalkDir::new(path).into_iter().filter_entry(|e| match left_out_of_site(e) {
+        None => true,
+        Some(LeftOut::NestedSite) => { nested_boundaries.push(e.path().to_path_buf()); false }
+        Some(LeftOut::AgentInstructions) => {
+            log::info!("Skipping {}: agent instructions are tooling, not a page", e.file_name().to_string_lossy());
+            false
+        }
+        Some(LeftOut::ExcludedDir) => false,
+        Some(LeftOut::HiddenFile) => {
+            log::info!("Skipping {}: a dot-prefixed file is not published", e.file_name().to_string_lossy());
+            false
+        }
+    }) {
+        let entry = entry.map_err(StorageFailure::from_walkdir)?;
+        #[cfg(test)]
+        crate::build::cloud_readiness::storage::test_probe(entry.path(), StorageOperation::WalkEntry)?;
+        let metadata = if entry.file_type().is_file() {
+            Some(entry.metadata().map_err(|e| StorageFailure::from_walkdir_operation(e, StorageOperation::EntryMetadata))?)
+        } else { None };
+        entries.push((entry, metadata));
+    }
+    Ok(crate::build::cloud_readiness::storage::StorageValue::Walk { entries, nested_boundaries })
+}
+
+/// Typed counterpart to [`scan_folder_with_dedup_emit`]. Storage failures stay
+/// structured until the caller chooses its user-facing error boundary.
+pub fn scan_folder_with_dedup_emit_with_error(
+    folder_path: &str,
+    metadata_dedup: Option<&crate::build::cache::Singleflight<MediaMetadata>>,
+    emitter: Option<&ScanEventEmitter>,
+    defer_placeholders: bool,
+) -> Result<ProjectStructure, ScanFailure> {
     let path = Path::new(folder_path);
 
-    if !path.exists() {
-        return Err(format!("Folder does not exist: {}", folder_path));
-    }
-
-    if !path.is_dir() {
-        return Err(format!("Path is not a directory: {}", folder_path));
-    }
+    let root = path.to_path_buf();
+    let session = crate::system::folder_session::registry().get(folder_path);
+    let snapshot = crate::build::cloud_readiness::storage::await_operation(
+        path,
+        crate::build::cloud_readiness::storage::OperationPolicy::SourceWalk,
+        crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+        &|| log::info!("Waiting for the source directory to become available: {}", folder_path),
+        std::sync::Arc::new(move || collect_source_walk(&root)),
+    ).map_err(|unavailable| {
+        if unavailable.pending.is_none() && unavailable.failure.operation() == crate::build::cloud_readiness::StorageOperation::RootMetadata {
+            if unavailable.failure.io_error().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+                return ScanFailure::Message(format!("Folder does not exist: {}", folder_path));
+            }
+        }
+        ScanFailure::Storage(unavailable)
+    })?;
+    let crate::build::cloud_readiness::storage::StorageValue::Walk { entries, nested_boundaries } = &*snapshot else {
+        unreachable!("source-walk requests return a walk snapshot");
+    };
 
     // Lazy FFmpeg resolution: only download/detect when the first video file is found.
     // Avoids ~5-10s download on builds with no video files (Task 4).
@@ -988,38 +1080,7 @@ pub fn scan_folder_with_dedup_emit(
 
     let scan_walk_start = std::time::Instant::now();
 
-    // Nested moss sites pruned by the walk below, reported once after it.
-    let mut nested_boundaries: Vec<std::path::PathBuf> = Vec::new();
-
-    // Walk through the directory recursively, reading what `left_out_of_site`
-    // keeps. A skipped agent file is logged because it sits in plain sight in
-    // the author's folder, so its absence from the built site has to be
-    // explainable from the log.
-    for entry in WalkDir::new(path)
-        .into_iter()
-        .filter_entry(|e| match left_out_of_site(e) {
-            None => true,
-            Some(LeftOut::NestedSite) => {
-                nested_boundaries.push(e.path().to_path_buf());
-                false
-            }
-            Some(LeftOut::AgentInstructions) => {
-                log::info!("Skipping {}: agent instructions are tooling, not a page", e.file_name().to_string_lossy());
-                false
-            }
-            Some(LeftOut::ExcludedDir) => false,
-            Some(LeftOut::HiddenFile) => {
-                log::info!("Skipping {}: a dot-prefixed file is not published", e.file_name().to_string_lossy());
-                false
-            }
-        }) {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                return Err(format!("Failed to scan site entry: {}", e));
-            }
-        };
-
+    for (entry, metadata) in entries {
         // Skip directories, only process files — but first record the
         // directory path so empty/childless folders still get an index page.
         // The WalkDir `filter_entry` above already pruned excluded dirs
@@ -1064,14 +1125,7 @@ pub fn scan_folder_with_dedup_emit(
             Err(_) => moss_core::slug::normalize_separators(&file_path.to_string_lossy()),
         };
 
-        // Get file metadata
-        let metadata = match entry.metadata() {
-            Ok(meta) => meta,
-            Err(e) => {
-                log::warn!("Failed to read metadata for {}: {}", relative_path, e);
-                continue;
-            }
-        };
+        let metadata = metadata.as_ref().expect("file metadata is collected with the complete walk");
 
         let size = metadata.len();
         let mtime_secs = metadata.modified()
@@ -1434,6 +1488,19 @@ pub fn scan_folder_with_dedup_emit(
     // Narrow `dirs` to what it is FOR — see `classify::gets_index_page`.
     let attachment_folder = crate::build::site_config::load_attachment_folder(folder_path);
     dirs.retain(|d| crate::build::scan::classify::gets_index_page(d, &passthrough_roots, &attachment_folder));
+    // Skip the listing of a folder that only carries a pre-built app (see
+    // `classify::holds_only_prebuilt_apps`). Empty and asset-only folders keep
+    // theirs: `folder_index_plan_tests` pins that.
+    let page_paths: Vec<&str> = markdown_files.iter().chain(&notebook_files).map(|f| f.path.as_str()).collect();
+    // An app-only folder still keeps its listing while a kept folder sits
+    // beneath it, since that folder's breadcrumb links up to it.
+    let app_only: Vec<bool> = dirs.iter().map(|d| crate::build::scan::classify::holds_only_prebuilt_apps(d, &passthrough_roots, &page_paths)).collect();
+    let kept: Vec<String> = dirs.iter().zip(&app_only).filter(|(_, a)| !**a).map(|(d, _)| d.clone()).collect();
+    let mut flags = app_only.into_iter();
+    dirs.retain(|d| {
+        let app_only = flags.next().unwrap_or(false);
+        !app_only || kept.iter().any(|k| k.starts_with(&format!("{d}/")))
+    });
 
     let structure = ProjectStructure {
         root_path: folder_path.to_string(),

@@ -26,6 +26,7 @@ use htmd::HtmlToMarkdown;
 use scraper::{ElementRef, Html, Node, Selector};
 use url::Url;
 
+use super::emit::{describing_alt, image_line};
 use super::scrape::extractor::{is_chrome_element, looks_hidden, LAZY_SRC_ATTRS};
 use super::scrape::metadata::schema_email;
 
@@ -80,6 +81,20 @@ const fn row(marker: Marker, pattern: &'static str, role: Role, href: Href, labe
 use Href::{Action, Attr, Src};
 use Marker::{AttrToken, EmbedHost, FormActionHost, IframeSrcHost};
 use Role::{Carry, Chrome, Embed};
+
+/// Class tokens a hosted site builder puts on the element that wraps one
+/// gallery in the served page, one per layout (strips, grid, masonry,
+/// slideshow, and the older block-grid markup). Only the wrapper is named:
+/// the images are read from inside it, so the lightbox copies the builder
+/// keeps beside the gallery are never picked up.
+pub(crate) const GALLERY_CONTAINER_CLASSES: &[&str] = &[
+    "gallery-strips",
+    "gallery-grid",
+    "gallery-masonry",
+    "gallery-slideshow",
+    "sqs-gallery-block-grid",
+    // Not `sqs-gallery`: a summary-block listing carries it too, and its cards are text.
+];
 
 /// Host markers match by suffix (`player.vimeo.com` matches `vimeo.com`); the
 /// first matching row wins, so a narrower host sits above its parent domain.
@@ -146,11 +161,13 @@ fn contains_ci(html: &str, needle: &str) -> bool {
 /// skips the parse entirely so its output is untouched.
 fn may_hold_widget(html: &str) -> bool {
     contains_ci(html, "<iframe")
+        || GALLERY_CONTAINER_CLASSES.iter().any(|t| contains_ci(html, t))
         || contains_ci(html, "<form")
         || ROWS.iter().any(|r| r.marker == AttrToken && contains_ci(html, r.pattern))
 }
 
 enum Kind {
+    Gallery,
     Iframe,
     Form,
     Token(&'static Row),
@@ -188,6 +205,9 @@ fn mailto_address(href: &str) -> Option<String> {
 }
 
 fn kind_of(el: &Element) -> Option<Kind> {
+    if el.classes().any(|c| GALLERY_CONTAINER_CLASSES.contains(&c)) {
+        return Some(Kind::Gallery);
+    }
     match el.name() {
         "iframe" => Some(Kind::Iframe),
         "form" => Some(Kind::Form),
@@ -247,10 +267,26 @@ fn link_html(href: &str, label: &str) -> String {
 /// `![[url]]`. (Plain text `![[url]]` would be escaped by the converter.)
 const EMBED_TAG: &str = "moss-embed";
 
-/// htmd with one extra handler: `<moss-embed data-url="…">` becomes the
-/// remote-embed wikilink on its own paragraph.
+/// htmd with two changes: `<moss-embed data-url="…">` becomes the
+/// remote-embed wikilink on its own paragraph, and an `<img>` whose alt is
+/// only a file name is written with an empty alt (see `describing_alt`).
 pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
     HtmlToMarkdown::builder()
+        .add_handler(vec!["img"], |handlers: &dyn Handlers, el: htmd::Element| {
+            let alt = el.attrs.iter().find(|a| &*a.name.local == "alt").map_or("", |a| &*a.value);
+            let src = el.attrs.iter().find(|a| &*a.name.local == "src");
+            match src {
+                Some(src) if !alt.trim().is_empty() && describing_alt(alt).is_empty() => {
+                    Some(image_line(&src.value, describing_alt(alt)).into())
+                }
+                _ => handlers.fallback(el),
+            }
+        })
+        .add_handler(vec![GALLERY_TAG], |handlers: &dyn Handlers, el: htmd::Element| {
+            let inner = handlers.walk_children(el.node).content;
+            let lines: Vec<&str> = inner.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            (!lines.is_empty()).then(|| format!("\n\n:::gallery\n{}\n:::\n\n", lines.join("\n")).into())
+        })
         .add_handler(vec![EMBED_TAG], |_: &dyn Handlers, el: htmd::Element| {
             let url = el.attrs.iter().find(|a| &*a.name.local == "data-url")?;
             Some(format!("\n\n![[{}]]\n\n", url.value).into())
@@ -310,6 +346,83 @@ fn iframe_outcome(el: &Element, base: &Url) -> Outcome {
     }
 }
 
+/// Tag the pre-pass leaves for one gallery: a paragraph per image inside it,
+/// which [`html_to_markdown`] folds into a `:::gallery` fence.
+const GALLERY_TAG: &str = "moss-gallery";
+
+/// Longest run of text a caption or a stray text node may hold inside a
+/// gallery; anything longer is prose, so the container is not a gallery.
+const CAPTION_MAX: usize = 120;
+
+const PICTURE_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"];
+
+fn is_picture_href(href: &str) -> bool {
+    let path = href.split(|c| c == '?' || c == '#').next().unwrap_or("").to_ascii_lowercase();
+    PICTURE_EXTS.iter().any(|ext| path.ends_with(ext))
+}
+
+/// A link with no page behind it: its `href` is only a query (`?itemId=…`,
+/// a client-side view of the same page) or only a fragment. The extractor
+/// unwraps the same shape elsewhere, but it does not treat `#` as one.
+fn is_page_less_href(href: &str) -> bool {
+    let href = href.trim();
+    href.starts_with('?') || href.starts_with('#')
+}
+
+/// True when the container holds only pictures and their captions: no
+/// heading, no paragraph or text run longer than [`CAPTION_MAX`], and no link
+/// with text of its own unless it opens a picture file or has no page behind
+/// it (a lightbox link).
+fn holds_only_pictures(container: ElementRef) -> bool {
+    container.descendants().all(|node| {
+        if let Some(text) = node.value().as_text() {
+            return text.trim().chars().count() <= CAPTION_MAX;
+        }
+        let Some(el) = ElementRef::wrap(node) else { return true };
+        let len = el.text().collect::<String>().trim().chars().count();
+        match el.value().name() {
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => false,
+            "p" | "figcaption" => len <= CAPTION_MAX,
+            "a" => {
+                let href = attr(el.value(), "href");
+                len == 0 || is_picture_href(href) || is_page_less_href(href)
+            }
+            _ => true,
+        }
+    })
+}
+
+/// The gallery's pictures, each once, in source order. A gallery container
+/// holds only its own items (a link that opens a lightbox just wraps the
+/// image), so the picture is the `<img>`; a lazy-load attribute names the
+/// real file when `src` is absent or a placeholder. A container with prose
+/// or links of its own is a listing, and is left for the converter.
+fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
+    let container = ElementRef::wrap(node).expect("an element node");
+    if !holds_only_pictures(container) {
+        return Outcome::Leave;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut items = String::new();
+    for img in container.select(&Selector::parse("img").expect("static selector")) {
+        let el = img.value();
+        let src = LAZY_SRC_ATTRS
+            .iter()
+            .copied()
+            .chain(["src"])
+            .map(|a| attr(el, a))
+            .find(|v| !v.is_empty() && !v.starts_with("data:"));
+        if let Some(src) = src.filter(|s| seen.insert(s.to_string())) {
+            items.push_str(&format!("<p><img src=\"{}\" alt=\"{}\"></p>", escape(src), escape(attr(el, "alt"))));
+        }
+    }
+    if items.is_empty() {
+        Outcome::Leave
+    } else {
+        Outcome::Replace(format!("<{GALLERY_TAG}>{items}</{GALLERY_TAG}>"))
+    }
+}
+
 fn form_outcome(node: NodeRef<Node>, el: &Element, base: &Url, doc: &Html, scan: &Scan) -> Outcome {
     let action = http_url(base, attr(el, "action"));
     let action_row = action
@@ -363,6 +476,7 @@ pub fn carry_widgets(html: &str, base_url: &Url) -> (String, WidgetCount) {
         let node = doc.tree.get(*id).expect("scanned node");
         let Node::Element(el) = node.value() else { continue };
         let outcome = match kind {
+            Kind::Gallery => gallery_outcome(node),
             Kind::Iframe => iframe_outcome(el, base_url),
             Kind::Form => form_outcome(node, el, base_url, &doc, &found),
             Kind::Token(row) => token_outcome(el, row, base_url),

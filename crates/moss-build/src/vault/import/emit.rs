@@ -32,11 +32,11 @@ fn emit_block(b: &Block) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join("\n")
         }),
-        Block::Image { src, alt } => {
-            // Brackets and newlines break the markdown image grammar.
-            let alt = alt.replace(['[', ']', '\n'], " ").trim().to_string();
-            Some(format!("![{alt}]({src})"))
-        }
+        Block::Image { src, alt } => Some(image_line(src, alt)),
+        Block::Gallery { images } => (!images.is_empty()).then(|| {
+            let lines: Vec<_> = images.iter().map(|(src, alt)| image_line(src, alt)).collect();
+            format!(":::gallery\n{}\n:::", lines.join("\n"))
+        }),
         Block::Video { url } => Some(format!("![[{url}]]")),
         Block::Audio { src } => Some(format!("![[{src}]]")),
         Block::Button { text, url } => Some(format!("[{text}]({url})")),
@@ -44,10 +44,37 @@ fn emit_block(b: &Block) -> Option<String> {
     }
 }
 
-/// HTML → trimmed markdown via htmd; `None` when conversion fails or the
-/// result is empty (caller drops the block).
+pub(crate) fn image_line(src: &str, alt: &str) -> String {
+    // Brackets and newlines break the markdown image grammar.
+    let alt = describing_alt(alt).replace(['[', ']', '\n'], " ").trim().to_string();
+    // Parentheses and spaces break the link destination.
+    let src = src.replace('(', "\\(").replace(')', "\\)");
+    let src = if src.contains(' ') { format!("<{src}>") } else { src };
+    format!("![{alt}]({src})")
+}
+
+/// The alt text if it describes the image, else empty. moss renders bracket
+/// text with no separate description as the image's visible caption, and a
+/// file name ("IMG_0042.jpg", "My+Photo+2015.jpg") is not a description, so
+/// it would show as text under the photo. Every path that writes image
+/// markdown goes through here.
+pub(crate) fn describing_alt(alt: &str) -> &str {
+    const EXTENSIONS: &[&str] = &[
+        ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".tif", ".tiff",
+    ];
+    let trimmed = alt.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+        ""
+    } else {
+        alt
+    }
+}
+
+/// HTML → trimmed markdown via the importer's htmd configuration; `None`
+/// when conversion fails or the result is empty (caller drops the block).
 fn html_to_markdown(html: &str) -> Option<String> {
-    let md = htmd::convert(html).ok()?;
+    let md = super::widgets::html_to_markdown(html).ok()?;
     let md = md.trim();
     (!md.is_empty()).then(|| md.to_string())
 }
@@ -84,6 +111,34 @@ mod tests {
         assert_eq!(
             emit_markdown(&blocks),
             "![a  bracketed  caption](https://cdn.example.com/a.jpg)"
+        );
+    }
+
+    #[test]
+    fn filename_alt_is_emptied_and_a_real_alt_kept() {
+        let image = |alt: &str| Block::Image {
+            src: "a.jpg".into(),
+            alt: alt.into(),
+        };
+        assert_eq!(emit_markdown(&[image("My+Photo+2015.JPG")]), "![](a.jpg)");
+        assert_eq!(emit_markdown(&[image(" scan 3.tiff ")]), "![](a.jpg)");
+        assert_eq!(
+            emit_markdown(&[image("A harbour at dusk")]),
+            "![A harbour at dusk](a.jpg)"
+        );
+    }
+
+    #[test]
+    fn gallery_is_one_fence_with_an_image_per_line() {
+        let blocks = [Block::Gallery {
+            images: vec![
+                ("a.jpg".into(), "IMG_1.jpg".into()),
+                ("b.jpg".into(), "Second".into()),
+            ],
+        }];
+        assert_eq!(
+            emit_markdown(&blocks),
+            ":::gallery\n![](a.jpg)\n![Second](b.jpg)\n:::"
         );
     }
 

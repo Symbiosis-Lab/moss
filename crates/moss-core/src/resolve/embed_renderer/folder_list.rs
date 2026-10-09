@@ -13,7 +13,7 @@ pub struct FolderEmbedParams {
     pub sort: Option<SortAxis>,
     pub style: Option<String>,   // "list" | "summary" | "grid"
     pub depth: Option<String>,   // "direct" | "all"
-    pub group: Option<String>,   // "year" | "none"
+    pub group: Option<String>,   // "year" | "none" | "upcoming"
     /// Listing filter: "only" keeps pages that have a cover. Applied after
     /// flattening (`depth:all`) and before `limit`, so a capped listing
     /// counts the limit off the covered set rather than the full set.

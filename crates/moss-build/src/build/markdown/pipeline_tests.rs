@@ -3791,3 +3791,50 @@ fn body_image_sizes_follow_the_pages_effective_typesetting() {
     let site_default = render("", None);
     assert!(site_default.contains(horizontal), "{site_default}");
 }
+
+#[test]
+fn italic_line_under_an_image_is_the_caption_and_the_brackets_are_the_alt() {
+    let html = render_markdown_to_html("![A lake at dusk](photo.jpg)\n*Hiroshige, 1833. CC0.*\n");
+    assert!(html.contains(r#"alt="A lake at dusk""#), "got: {html}");
+    assert!(
+        html.contains("<figcaption><em>Hiroshige, 1833. CC0.</em></figcaption>")
+            || html.contains("<figcaption>Hiroshige, 1833. CC0.</figcaption>"),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn italic_line_under_an_image_survives_implicit_figure_off() {
+    let html = render_with_graph_cfg(
+        "![A lake at dusk](photo.jpg)\n*Hiroshige, 1833.*\n",
+        &["photo.jpg"],
+        false,
+    );
+    assert!(!html.contains("<figure"), "got: {html}");
+    assert!(html.contains(r#"alt="A lake at dusk""#), "got: {html}");
+    assert!(html.contains("<em>Hiroshige, 1833.</em>"), "the line must not be dropped: {html}");
+}
+
+#[test]
+fn italic_line_equal_to_the_alt_still_survives_implicit_figure_off() {
+    // The restore keys off where the caption came from, not off whether its
+    // text matches the alt.
+    let html = render_with_graph_cfg(
+        "![Same words](photo.jpg)\n*Same words*\n",
+        &["photo.jpg"],
+        false,
+    );
+    assert!(!html.contains("<figure"), "got: {html}");
+    assert!(html.contains("<em>Same words</em>"), "the line must not be dropped: {html}");
+}
+
+#[test]
+fn italic_line_under_an_image_in_a_grid_cell_is_a_caption() {
+    let html = render_with_graph(
+        ":::grid 2\n![A lake at dusk](photo.jpg)\n*Credit. CC0.*\n:::\n",
+        &["photo.jpg"],
+    );
+    assert!(html.contains(r#"alt="A lake at dusk""#), "got: {html}");
+    assert!(html.contains("Credit. CC0."), "got: {html}");
+    assert!(html.contains("<figcaption>"), "got: {html}");
+}

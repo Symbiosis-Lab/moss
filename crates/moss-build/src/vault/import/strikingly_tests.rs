@@ -213,7 +213,7 @@ fn media_current_image_renders_image_and_not_placeholder_video() {
 }
 
 #[test]
-fn gallery_sources_render_as_images() {
+fn gallery_sources_render_as_one_gallery_block() {
     let sections = json!([
         {"type": "Slide", "id": "s1", "components": {
             "gallery1": {"type": "Gallery", "id": "g1", "sources": [
@@ -225,7 +225,8 @@ fn gallery_sources_render_as_images() {
     ]);
     let out = render_sections(&sections, RES_ID);
     assert!(
-        out.markdown.contains("5927377/938868_525143.jpg"),
+        out.markdown.contains(":::gallery\n![](")
+            && out.markdown.contains("5927377/938868_525143.jpg)\n:::"),
         "got: {}",
         out.markdown
     );

@@ -1321,6 +1321,43 @@ fn test_hash_index_save_retries_on_parent_dir_eviction() {
     assert_eq!(loaded.lookup("b.jpg", &stat(200, 2000)), Some("bbbb"));
 }
 
+#[test]
+#[cfg(target_os = "macos")]
+fn cached_link_recovers_a_refused_regenerable_target_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ObjectStore::new(dir.path().join("objects"));
+    let oid = store.store_bytes(b"complete source", RecordMode::Request).unwrap();
+    let parent = dir.path().join(".moss/build.nosync/staging/assets");
+    fs::create_dir_all(&parent).unwrap();
+    let obsolete = parent.join("obsolete-output");
+    fs::write(&obsolete, b"previous disposable output").unwrap();
+    crate::build::io_utils::fault::refuse_dataless(&parent);
+
+    let target = parent.join("asset.bin");
+    store.link_to(&oid, &target).unwrap();
+    assert!(!obsolete.exists(), "the refused output directory must be regenerated");
+    assert_eq!(fs::read(&target).unwrap(), b"complete source");
+    assert_eq!(fs::read(store.blob_path(&oid)).unwrap(), b"complete source");
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn hash_index_save_recovers_a_refused_regenerable_cache_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join(".moss/build.nosync/cache");
+    fs::create_dir_all(&parent).unwrap();
+    let obsolete = parent.join("obsolete-index");
+    fs::write(&obsolete, b"previous disposable index").unwrap();
+    crate::build::io_utils::fault::refuse_dataless(&parent);
+
+    let path = parent.join("hash-index.json");
+    let mut index = HashIndex::new();
+    index.update("asset.bin".into(), &stat(15, 1000), "complete-hash".into());
+    index.save(&path).unwrap();
+    assert!(!obsolete.exists(), "the refused local cache directory must be regenerated");
+    assert_eq!(HashIndex::load(&path).lookup("asset.bin", &stat(15, 1000)), Some("complete-hash"));
+}
+
 // -----------------------------------------------------------------------
 // Metadata cache via TransformCache tests (media/meta transform)
 // -----------------------------------------------------------------------
@@ -2728,12 +2765,18 @@ impl log::Log for Capture {
 }
 
 fn logged_at(level: log::Level, about: &str) -> bool {
+    logged_count(level, about) > 0
+}
+
+/// How many lines of `level` mention `about`. The first call installs the
+/// capturing logger, so a test that wants lines from a build calls this first.
+pub(crate) fn logged_count(level: log::Level, about: &str) -> usize {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let _ = log::set_logger(&Capture);
         log::set_max_level(log::LevelFilter::Debug);
     });
-    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(l, m)| *l == level && m.contains(about))
+    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(l, m)| *l == level && m.contains(about)).count()
 }
 
 /// A store holding one blob of `source`'s bytes, with the blob's file replaced
@@ -2806,7 +2849,7 @@ fn shared_transform_record_write_is_optional_during_a_cloud_refusal() {
     let cache = TransformCache::for_site(&paths);
     let record = TransformRecord { source_oid: "a".repeat(64), source_size: 1, transforms: HashMap::new() };
     assert!(cache.put(&record, RecordMode::Wait).is_err(), "preview skips an unavailable shared record write");
-    assert_eq!(crate::build::icloud::pretend::requests_for(&paths.cache_transforms()), 1);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&paths.cache_transforms()), 0, "a record publication must never send its directory to a byte downloader");
 }
 
 #[cfg(target_os = "macos")]
@@ -3058,4 +3101,218 @@ fn generation_original_receipts_keep_both_cas_replicas_reachable() {
         assert!(store.blob_path(&oid).exists());
         assert!(!store.blob_path(&orphan).exists());
     }
+}
+
+#[test]
+fn availability_cache_replays_the_actual_atomic_publication_after_each_cloud_refusal() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        use sha2::{Digest, Sha256};
+        for stage in [StorageOperation::CacheMkdir, StorageOperation::CacheWrite, StorageOperation::CachePublish] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = crate::moss_paths::MossPaths::new(dir.path());
+            let store = ObjectStore::for_site(&paths);
+            let bytes = b"required complete working output";
+            let oid = format!("{:x}", Sha256::digest(bytes));
+            let shared = store.blob_path(&oid);
+            let _fault = TestFault::install(store.root(), &shared, stage, 1, std::time::Duration::from_millis(20));
+            assert_eq!(store.store_bytes(bytes, RecordMode::Request).unwrap(), oid);
+            let local = paths.cache_local_objects().join(&oid[..2]).join(&oid[2..4]).join(&oid);
+            assert_eq!(fs::read(&local).unwrap(), bytes, "optional shared Pending must preserve complete working bytes");
+            let start = std::time::Instant::now();
+            while !shared.is_file() && start.elapsed() < std::time::Duration::from_secs(2) { std::thread::sleep(std::time::Duration::from_millis(1)); }
+            assert_eq!(fs::read(&shared).expect("actual shared publication must recover without another build or directory-byte hint"), bytes);
+        }
+    });
+}
+
+#[test]
+fn availability_owned_file_replica_survives_caller_source_lifetime_and_blocks_gc() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let store = ObjectStore::for_site(&paths);
+        let source = dir.path().join("temporary-render.bin");
+        let bytes = vec![7u8; 128 * 1024];
+        fs::write(&source, &bytes).unwrap();
+        let oid = ObjectStore::hash_file(&source).unwrap();
+        let shared = store.blob_path(&oid);
+        let fault = TestFault::install(store.root(), &shared, StorageOperation::CachePublish, 1000, std::time::Duration::from_millis(20));
+        assert_eq!(store.store_file(&source, RecordMode::Request).unwrap(), oid);
+        fs::remove_file(&source).unwrap();
+        assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_err(), "detached owned replica holds its own GC lease");
+        assert!(crate::build::lifecycle::park_for_rebuild(&paths, false, Default::default()).is_some(), "an optional shared replica must not prevent staging cleanup or independent rebuilds");
+        drop(fault);
+        let started = std::time::Instant::now();
+        while !shared.is_file() && started.elapsed() < std::time::Duration::from_secs(2) { std::thread::sleep(std::time::Duration::from_millis(1)); }
+        assert_eq!(fs::read(&shared).unwrap(), bytes, "replication owns the validated local blob, not the expired borrowed source");
+        let started = std::time::Instant::now();
+        loop {
+            if let Ok(token) = crate::build::lifecycle::try_begin_cache_gc(&paths) { drop(token); break; }
+            assert!(started.elapsed() < std::time::Duration::from_secs(2), "lease must release at terminal completion");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    });
+}
+
+#[test]
+fn availability_owned_record_changes_recover_without_erasing_newer_merges() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        for stage in [StorageOperation::CacheMkdir, StorageOperation::CacheWrite, StorageOperation::CachePublish] {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let oid = "b".repeat(64);
+        let path = cache.record_path(&oid);
+        let fault = TestFault::install(cache.root(), &path, stage, 1000, std::time::Duration::from_millis(20));
+        let entry = |hash: &str| TransformEntry { oid: hash.into(), size: 1, params: serde_json::json!({}) };
+        let _ = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("first".into(), entry("old")); });
+        let _ = cache.merge(&oid, 1, RecordMode::Request, |record| {
+            record.transforms.insert("first".into(), entry("new"));
+            record.transforms.insert("second".into(), entry("other"));
+        });
+        let _ = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("third".into(), entry("disjoint")); });
+        assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_err());
+        assert!(crate::build::lifecycle::park_for_rebuild(&paths, false, Default::default()).is_some(), "optional records retain cache objects but do not own staging");
+        drop(fault);
+        let started = std::time::Instant::now();
+        while !path.is_file() && started.elapsed() < std::time::Duration::from_secs(2) { std::thread::sleep(std::time::Duration::from_millis(1)); }
+        let record: TransformRecord = serde_json::from_slice(&fs::read(&path).expect("owned record publication must retry the actual atomic write")).unwrap();
+        assert_eq!(record.source_size, 1, "owned edits preserve source metadata");
+        assert_eq!(record.transforms["first"].oid, "new", "older same-entry change cannot overwrite a newer merge");
+        assert_eq!(record.transforms["second"].oid, "other");
+        assert_eq!(record.transforms["third"].oid, "disjoint", "disjoint owned changes must survive publication ordering");
+        }
+    });
+}
+
+#[test]
+fn availability_owned_merge_preserves_unreadable_record_without_invoking_borrowed_edit() {
+    crate::infra::home::with_moss_home(|_| {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let oid = "c".repeat(64);
+        let path = cache.record_path(&oid);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{\"source_oid\":").unwrap();
+        let _fault = crate::build::cloud_readiness::storage::TestFault::install(cache.root(), &path, crate::build::cloud_readiness::StorageOperation::CacheWrite, 1, std::time::Duration::from_millis(20));
+        assert_eq!(cache.merge(&oid, 1, RecordMode::Request, |_| panic!("unreadable baseline cannot be replaced by an empty record")), Ok(Merged::Kept));
+        assert_eq!(fs::read(&path).unwrap(), b"{\"source_oid\":");
+        assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_ok(), "a nonadmitted unreadable record must not retain a publication lease");
+    });
+}
+
+#[test]
+fn availability_owned_record_replace_removes_omitted_entries_and_keeps_later_merge() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let oid = "d".repeat(64);
+        let path = cache.record_path(&oid);
+        let entry = |name: &str| TransformEntry { oid: name.into(), size: 1, params: serde_json::Value::Null };
+        let mut record = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: [("removed".into(), entry("old")), ("kept".into(), entry("kept"))].into_iter().collect() };
+        cache.put(&record, RecordMode::Request).unwrap();
+        let fault = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 1000, std::time::Duration::from_millis(20));
+        record.transforms.remove("removed");
+        let _ = cache.put(&record, RecordMode::Request);
+        let _ = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("later".into(), entry("newer")); });
+        drop(fault);
+        let started = std::time::Instant::now();
+        let observed = loop {
+            let record: TransformRecord = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if record.transforms.contains_key("later") || started.elapsed() > std::time::Duration::from_secs(2) { break record; }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        assert!(!observed.transforms.contains_key("removed"), "put is an owned replacement intent, so omitted entries must disappear");
+        assert_eq!(observed.transforms["kept"].oid, "kept");
+        assert_eq!(observed.transforms["later"].oid, "newer", "a later merge survives the older replacement's deferred publication");
+    });
+}
+
+#[test]
+fn availability_owned_record_delete_cannot_be_resurrected_by_older_pending_publication() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let oid = "e".repeat(64);
+        let path = cache.record_path(&oid);
+        let fault = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 1000, std::time::Duration::from_millis(20));
+        let _ = cache.merge(&oid, 1, RecordMode::Request, |record| {
+            record.transforms.insert("invalid".into(), TransformEntry { oid: "invalid-old-output".into(), size: 1, params: serde_json::Value::Null });
+        });
+        let _ = cache.remove(&oid);
+        drop(fault);
+        let started = std::time::Instant::now();
+        loop {
+            if let Ok(token) = crate::build::lifecycle::try_begin_cache_gc(&paths) { drop(token); break; }
+            assert!(started.elapsed() < std::time::Duration::from_secs(2));
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!path.exists(), "an owned delete shares the same revisioned key as the older pending writer");
+    });
+}
+
+#[test]
+fn availability_owned_record_delete_retries_its_actual_refused_operation() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let oid = "f".repeat(64);
+        let path = cache.record_path(&oid);
+        let record = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: HashMap::new() };
+        cache.put(&record, RecordMode::Request).unwrap();
+        let fault = TestFault::install(cache.root(), &path, StorageOperation::CacheRemove, 1000, std::time::Duration::from_millis(20));
+        assert!(cache.remove(&oid).is_err(), "a refused deletion cannot be accepted before the actual operation completes");
+        assert!(path.is_file());
+        assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_err());
+        assert!(crate::build::lifecycle::park_for_rebuild(&paths, false, Default::default()).is_some());
+        drop(fault);
+        let started = std::time::Instant::now();
+        while path.exists() && started.elapsed() < std::time::Duration::from_secs(2) { std::thread::sleep(std::time::Duration::from_millis(1)); }
+        assert!(!path.exists(), "owned cache eviction recovers without another build");
+    });
+}
+
+#[test]
+fn availability_new_merge_after_owned_full_intent_survives_unreadable_old_record() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        for delete in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = crate::moss_paths::MossPaths::new(dir.path());
+            let cache = TransformCache::for_site(&paths);
+            let oid = "1".repeat(64);
+            let path = cache.record_path(&oid);
+            let record = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: HashMap::new() };
+            cache.put(&record, RecordMode::Request).unwrap();
+            let stage = if delete { StorageOperation::CacheRemove } else { StorageOperation::CacheWrite };
+            let blocked = TestFault::install(cache.root(), &path, stage, 1000, std::time::Duration::from_millis(20));
+            if delete { let _ = cache.remove(&oid); } else { let _ = cache.put(&record, RecordMode::Request); }
+            let read = TestFault::install(cache.root(), &path, StorageOperation::CacheRead, 1000, std::time::Duration::from_millis(20));
+            let mut edited = false;
+            let _ = cache.merge_via(&oid, 1, RecordMode::Request, &|_, _| Err(std::io::Error::from_raw_os_error(libc::EDEADLK)), |r| {
+                edited = true;
+                r.transforms.insert("reencoded".into(), TransformEntry { oid: "fresh".into(), size: 1, params: serde_json::Value::Null });
+            });
+            assert!(edited, "an owned replacement or accepted deletion supplies a complete baseline for the next edit");
+            drop(read);
+            drop(blocked);
+            let started = std::time::Instant::now();
+            loop {
+                let observed = fs::read(&path).ok().and_then(|b| serde_json::from_slice::<TransformRecord>(&b).ok());
+                if observed.is_some_and(|r| r.transforms.contains_key("reencoded")) { break; }
+                assert!(started.elapsed() < std::time::Duration::from_secs(2));
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    });
 }

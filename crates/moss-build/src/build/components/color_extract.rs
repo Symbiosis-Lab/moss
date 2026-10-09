@@ -755,7 +755,7 @@ const NAMED_COLORS: &[(&str, u32)] = &[
 /// at low saturation after WCAG darkening.
 pub const IFRAME_COVER_FALLBACK: &str = "hsla(0, 0%, 18%, 1)";
 
-/// Resolve a folder card's `--moss-cover-color` for ANY cover type — the
+/// Resolve a folder card's `--item-cover-color` for ANY cover type — the
 /// single entry point both card renderers (`grid_cells::apply_collection_cards`,
 /// `folder_embed`) MUST call, for the same reason they must share
 /// `resolve_color_source_path`: per-renderer copies of this ladder drift.

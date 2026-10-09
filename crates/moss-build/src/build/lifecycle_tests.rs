@@ -70,9 +70,13 @@ fn incomplete_rebuild_uses_immutable_current_then_ready_stage() {
 #[test]
 fn late_ready_render_is_revealed_once_and_stale_tails_cannot_switch_stage() {
     let (_tmp, mp) = vault(&[]);
+    // A cache-write lease keeps this record from idle-folder pruning.
+    let _record = lock_for(&mp);
     let cell = empty_cell();
     adopt_server(&mp, &cell);
     let (first, _) = show_render(&mp, false);
+    let unrelated = tempfile::tempdir().unwrap();
+    let _ = lock_for(&MossPaths::new(unrelated.path()));
     assert!(reveal_render_if_latest(&mp, Some(first)));
     assert_eq!(read(&cell), mp.staging_dir());
     assert!(!reveal_render_if_latest(&mp, Some(first)), "the same tail must not reannounce its render");
@@ -86,6 +90,8 @@ fn late_ready_render_is_revealed_once_and_stale_tails_cannot_switch_stage() {
 fn late_ready_tail_cannot_repoint_shared_cell_after_another_folder_adopts_it() {
     let (_tmp_a, mp_a) = vault(&[]);
     let (_tmp_b, mp_b) = vault(&[]);
+    let _record_a = lock_for(&mp_a);
+    let _record_b = lock_for(&mp_b);
     let cell = empty_cell();
 
     adopt_server(&mp_a, &cell);

@@ -27,6 +27,9 @@ pub struct BuildShared<'d> {
     pub media_lookup: MediaDimensionLookup,
     /// Each folder's prev/next reading order.
     pub sequences: SequenceChains<'d>,
+    /// The calendar files this build writes and the pages that link them. Empty
+    /// until the build plans it from its documents.
+    pub calendar: crate::build::feeds::calendar::CalendarPlan,
 }
 
 impl BuildShared<'_> {
@@ -46,6 +49,7 @@ impl BuildShared<'_> {
                 None,
             ),
             sequences: SequenceChains::default(),
+            calendar: Default::default(),
         }
     }
 }

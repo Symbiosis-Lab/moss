@@ -339,48 +339,6 @@ fn extract_raw_date_from_filename(url_path: &str) -> Option<String> {
     Some(date_part.to_string())
 }
 
-/// Get file creation date from a filesystem path.
-///
-/// Returns (display, raw) — e.g., ("2026 · 03", "2026-03-12T00:00:00Z")
-fn creation_date_from_file(file_path: &std::path::Path) -> Option<(String, String)> {
-    let metadata = std::fs::metadata(file_path).ok()?;
-    let created = metadata.created().ok()?;
-    let duration = created.duration_since(std::time::UNIX_EPOCH).ok()?;
-    let dt = chrono::DateTime::from_timestamp(duration.as_secs() as i64, 0)
-        .map(|dt| dt.naive_utc())?;
-    let display = format!("{} · {}", dt.format("%Y"), dt.format("%m"));
-    let raw = format!("{}T00:00:00Z", dt.format("%Y-%m-%d"));
-    Some((display, raw))
-}
-
-/// Extract date from file path and format as "YYYY · MM"
-///
-/// Tries to extract date from patterns like "posts/2025-01-15.html" for any content folder.
-/// Falls back to file creation date from filesystem if available.
-///
-/// # Arguments
-/// * `url_path` - The URL path to extract date from
-/// * `root_path` - Optional root path for filesystem fallback
-pub fn extract_date_from_path(
-    url_path: &str,
-    root_path: Option<&str>,
-) -> String {
-    // Try to extract date from the filename portion of the URL
-    if let Some(raw) = extract_raw_date_from_filename(url_path) {
-        return format_date_string(&raw);
-    }
-
-    // Fallback: try to get file creation date from filesystem
-    if let Some(root) = root_path {
-        let file_path = std::path::Path::new(root).join(url_path.replace(".html", ".md"));
-        if let Some((display, _raw)) = creation_date_from_file(&file_path) {
-            return display;
-        }
-    }
-
-    "Unknown".to_string()
-}
-
 /// Extract date from document preferring frontmatter over filename.
 ///
 /// Returns (display, raw) where:
@@ -389,8 +347,12 @@ pub fn extract_date_from_path(
 ///
 /// # Arguments
 /// * `doc` - The parsed document to extract date from
-/// * `root_path` - The vault root, for the filesystem-creation-date fallback
-pub fn extract_date_from_doc(doc: &ParsedDocument, root_path: &str) -> (String, Option<String>, bool) {
+/// * `_root_path` - Unused; kept so callers need not change
+pub fn extract_date_from_doc(doc: &ParsedDocument, _root_path: &str) -> (String, Option<String>, bool) {
+    // An event's own time is the page's "when"; `date` only says when it was posted.
+    if let Some(ev) = &doc.event {
+        return (format_date_string(&ev.when), Some(ev.when.clone()), true);
+    }
     // First priority: Use frontmatter date if available
     if let Some(frontmatter_date) = &doc.date {
         return (format_date_string(frontmatter_date), Some(frontmatter_date.clone()), true);
@@ -401,21 +363,9 @@ pub fn extract_date_from_doc(doc: &ParsedDocument, root_path: &str) -> (String, 
         return (format_date_string(&raw), Some(raw), true);
     }
 
-    // Third: Use source_path for file creation date (handles non-ASCII filenames
-    // where url_path is slugified and won't match the actual file on disk)
-    if let Some(source_path) = &doc.source_path {
-        let file_path = std::path::Path::new(root_path).join(source_path);
-        if let Some((display, raw)) = creation_date_from_file(&file_path) {
-            return (display, Some(raw), false);
-        }
-    }
-
-    // Last resort: Try url_path-derived filesystem lookup (legacy behavior)
-    let legacy = extract_date_from_path(&doc.url_path, Some(root_path));
-    if legacy != "Unknown" {
-        return (legacy, None, false);
-    }
-
+    // No `start`, no `date`, no date in the filename: undated. A file's creation
+    // time is not a date the author gave the page, and ranking it as one put
+    // undated pages ahead of every dated page under `sort: date`.
     ("Unknown".to_string(), None, false)
 }
 

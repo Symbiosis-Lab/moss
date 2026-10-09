@@ -10,6 +10,7 @@ fn test_render_basic_article() {
         title: "My Post".to_string(),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -31,6 +32,7 @@ fn render_shows_the_resolved_place_next_to_the_date() {
         title: "My Post".to_string(),
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
+        when_html: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -51,6 +53,7 @@ fn render_omits_the_place_when_no_date_is_shown() {
         title: "Series Item".to_string(),
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
+        when_html: None,
     };
     let html = render(&props, false, true, Language::En, None);
     assert!(!html.contains("Cambridge"));
@@ -65,6 +68,7 @@ fn test_render_escapes_html_in_title() {
         title: "<script>alert('xss')</script>".to_string(),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -81,6 +85,7 @@ fn test_render_escapes_html_in_url() {
         title: "Test".to_string(),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -96,6 +101,7 @@ fn test_render_minimal_shows_month_only() {
         title: "My Post".to_string(),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render(&props, true, false, Language::En, None);
 
@@ -113,6 +119,7 @@ fn test_render_minimal_fallback_without_raw_date() {
         title: "Test".to_string(),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render(&props, true, false, Language::En, None);
 
@@ -131,6 +138,7 @@ fn test_render_uses_prefix_link_classes() {
         title: "My Post".to_string(),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -162,6 +170,7 @@ fn test_render_no_date_omits_date_span() {
         title: "Series Item".to_string(),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render(&props, false, true, Language::En, None);
 
@@ -201,6 +210,7 @@ fn test_render_child_article() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -228,12 +238,45 @@ fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
         permalink: None,
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
         html.contains(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge</span>"#),
         "{html}"
     );
+}
+
+/// An event's listing row puts its place after the `<time>` as its own span,
+/// behind a separator span; a non-event row keeps the bare text.
+#[test]
+fn render_child_wraps_an_event_place_in_its_own_span() {
+    let when = crate::build::components::event_meta::render_when(
+        moss_core::event::EventTime::parse("2026-11-01 14:00").unwrap(),
+        None,
+        crate::i18n::Language::En,
+    );
+    let props = ChildItemProps {
+        title: "Opening".to_string(),
+        url: "/events/opening.html".to_string(),
+        date_display: None,
+        date_raw: Some("2026-11-01".to_string()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: Some("Example Hall".to_string()),
+        when_html: Some(when),
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(
+        html.contains(r#"</time><span class="moss-event-sep"> · </span><span class="moss-event-place">Example Hall</span>"#),
+        "{html}"
+    );
+    assert!(!html.contains("</time> · "), "bare separator text must not remain: {html}");
 }
 
 /// A folder's count is not a date — its own `location:` (e.g. a self-named
@@ -253,6 +296,7 @@ fn render_child_never_shows_a_place_beside_a_folders_count() {
         permalink: None,
         url_path: String::new(),
         place: Some("Kyoto".to_string()),
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -280,6 +324,7 @@ fn flat_row_shows_year_for_month_precision_date() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -306,6 +351,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -330,6 +376,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -356,6 +403,7 @@ fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let vertical = render_child(&props, crate::i18n::Language::ZhHant, Some("vertical"));
     assert!(vertical.contains("三十八篇"), "{vertical}");
@@ -379,6 +427,7 @@ fn test_render_child_folder_without_description() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -406,6 +455,7 @@ fn test_render_child_folder_with_description() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card moss-folder-item">"#));
@@ -434,6 +484,7 @@ fn test_render_child_folder_escapes_html() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains("&lt;b&gt;Bold&lt;/b&gt; &amp; &quot;Quoted&quot;"));
@@ -456,6 +507,7 @@ fn test_render_child_article_no_date() {
         permalink: None,
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -475,6 +527,7 @@ fn test_render_no_date_ignores_minimal_flag() {
         title: "Series Item".to_string(),
         url_path: String::new(),
         place: None,
+        when_html: None,
     };
     let html_minimal = render(&props, true, true, Language::En, None);
     let html_normal = render(&props, false, true, Language::En, None);
@@ -611,6 +664,67 @@ fn frontmatter_description_only_and_blank_is_none() {
     assert_eq!(props(&docs[1], &docs).description.as_deref(), Some("Real."));
 }
 
+#[test]
+fn a_card_with_no_description_shows_the_first_byline_row() {
+    let docs = vec![ParsedDocument {
+        byline: vec!["Riverside Hall, 2024".into(), "Directed by A. Name".into()],
+        ..doc("a/index.html", "A")
+    }];
+    assert_eq!(props(&docs[0], &docs).description.as_deref(), Some("Riverside Hall, 2024"));
+}
+
+#[test]
+fn an_explicit_description_wins_over_the_byline_on_a_card() {
+    let docs = vec![ParsedDocument {
+        description: Some("The described text.".into()),
+        byline: vec!["Riverside Hall, 2024".into()],
+        ..doc("a/index.html", "A")
+    }];
+    assert_eq!(props(&docs[0], &docs).description.as_deref(), Some("The described text."));
+}
+
+#[test]
+fn a_byline_beats_the_body_excerpt_in_a_folder_listing() {
+    let text = crate::build::components::child_list::explicit_card_text(&ParsedDocument {
+        byline: vec!["Riverside Hall, 2024".into()],
+        ..doc("a/index.html", "A")
+    });
+    assert_eq!(
+        crate::build::page::meta::resolve_page_description(text.as_deref(), "A long body paragraph.", false).as_deref(),
+        Some("Riverside Hall, 2024"),
+    );
+}
+
+#[test]
+fn an_event_card_keeps_its_meta_line_and_takes_the_byline_only_as_description() {
+    let make = |byline: Vec<String>| ParsedDocument {
+        event: Some(crate::build::types::EventFields {
+            start: moss_core::event::EventTime::parse("2024-05-01").unwrap(),
+            end: None,
+            when: moss_core::event::EventTime::parse("2024-05-01").unwrap().sort_key(),
+            timezone: None,
+            status: None,
+            tickets: None,
+            online: None,
+        }),
+        location: vec!["Riverside Hall".into()],
+        byline,
+        ..doc("a/index.html", "A")
+    };
+    let bare = vec![make(vec![])];
+    let with_byline = vec![make(vec!["Riverside Hall, 2024".into()])];
+    let (a, b) = (props(&bare[0], &bare), props(&with_byline[0], &with_byline));
+
+    assert_eq!(a.description, None);
+    assert_eq!(b.description.as_deref(), Some("Riverside Hall, 2024"));
+    assert_eq!(a.date_display, b.date_display);
+    assert_eq!(a.date_raw, b.date_raw);
+    assert_eq!(a.place, b.place);
+    assert_eq!(a.when_html, b.when_html);
+    assert_eq!(a.child_count, b.child_count);
+    assert_eq!(a.title, b.title);
+}
+
 /// `props_for_document` reads the page's resolved place straight off
 /// `ParsedDocument::place_names` — the same field `build::terms::set_place_lines`
 /// fills — rather than re-deriving it.
@@ -633,27 +747,27 @@ fn props_for_document_has_no_place_when_the_page_names_none() {
 
 #[test]
 fn meta_text_is_a_leafs_date_and_place() {
-    assert_eq!(meta_text(Some("1924 · 05"), Some("Cambridge"), None), "1924 · 05 · Cambridge");
+    assert_eq!(meta_text(Some("1924 · 05"), None, Some("Cambridge"), None), "1924 · 05 · Cambridge");
 }
 
 #[test]
 fn meta_text_is_a_bare_folders_count_alone_even_with_a_place() {
     // A folder with no date of its own: its `location:` (if any) is not a
     // date to sit beside — only the count shows.
-    assert_eq!(meta_text(None, Some("Kyoto"), Some("2 articles")), "2 articles");
+    assert_eq!(meta_text(None, None, Some("Kyoto"), Some("2 articles")), "2 articles");
 }
 
 #[test]
 fn meta_text_is_a_dated_folders_date_and_place_then_its_count() {
     assert_eq!(
-        meta_text(Some("1928 · 10"), Some("Cambridge"), Some("6 articles")),
+        meta_text(Some("1928 · 10"), None, Some("Cambridge"), Some("6 articles")),
         "1928 · 10 · Cambridge · 6 articles"
     );
 }
 
 #[test]
 fn meta_text_is_a_dated_folders_date_then_count_with_no_place() {
-    assert_eq!(meta_text(Some("1928 · 10"), None, Some("6 articles")), "1928 · 10 · 6 articles");
+    assert_eq!(meta_text(Some("1928 · 10"), None, None, Some("6 articles")), "1928 · 10 · 6 articles");
 }
 
 // ── `with_place`: the one owner of "date text plus resolved place" ────────

@@ -584,15 +584,15 @@ fn figure_renders_with_caption() {
         align: None,
         class_names: Vec::new(),
         img_style: None,
+        italic_caption: false,
     }]);
     assert!(
         html.starts_with(r#"<figure class="moss-image">"#),
         "expected figure wrap, got: {html}"
     );
     assert!(html.contains(r#"src="logo.png""#), "got: {html}");
-    // The visible caption is the image's description, so the `alt` must
-    // not say it a second time — a screen reader would announce the same
-    // sentence twice (once as the accessible name, once as the caption).
+    // An alt that only repeats the caption would be announced twice (once as
+    // the accessible name, once as the caption), so it goes out empty.
     assert!(html.contains(r#"alt="""#), "got: {html}");
     assert!(
         html.contains("<figcaption>A logo</figcaption>"),
@@ -625,6 +625,7 @@ fn figure_without_caption_keeps_alt_as_the_accessible_name() {
         align: None,
         class_names: Vec::new(),
         img_style: None,
+        italic_caption: false,
     }]);
     assert!(
         html.contains(r#"alt="A photo of the wall""#),
@@ -635,11 +636,10 @@ fn figure_without_caption_keeps_alt_as_the_accessible_name() {
 
 #[test]
 fn wikilink_alias_lands_in_the_caption_only_not_also_in_alt() {
-    // The reported defect: `![[cover.jpg|credit line]]` put the alias in
-    // BOTH `alt=` and `<figcaption>`, so assistive tech read it twice.
-    // This is the no-graph (parser) twin of the dispatcher path in
-    // `resolve::wikilink_dispatch`; both build the same `Block::Figure`
-    // and both are de-duplicated by the one renderer.
+    // `![[cover.jpg|credit line]]` puts the alias in the caption only;
+    // repeating it in `alt=` makes assistive tech read it twice. This is the
+    // no-graph (parser) twin of the dispatcher path in
+    // `resolve::wikilink_dispatch`.
     let md = "![[cover.jpg|Photo: Kyiv memorial wall]]\n";
     let mut doc = super::super::parser::parse(md);
     super::super::visit::visit_urls_mut(&mut doc, |u| {
@@ -656,6 +656,67 @@ fn wikilink_alias_lands_in_the_caption_only_not_also_in_alt() {
         html.contains(r#"alt="""#),
         "alias must NOT repeat in alt: {html}"
     );
+}
+
+#[test]
+fn figure_with_empty_alt_has_empty_alt_not_a_copy_of_the_caption() {
+    let html = render(vec![Block::Figure {
+        image: Inline::Image {
+            src: Url::resolved("lake.png", UrlKind::Asset),
+            alt: String::new(),
+            title: None,
+            is_wikilink: false,
+            wikilink_pothole: None,
+        },
+        caption: Some(vec![Inline::Emphasis(vec![Inline::Text("Lake".into())])]),
+        width: None,
+        align: None,
+        class_names: Vec::new(),
+        img_style: None,
+        italic_caption: false,
+    }]);
+    assert!(html.contains(r#"alt="""#), "got: {html}");
+}
+
+#[test]
+fn figure_alt_equal_to_the_caption_after_trimming_is_empty() {
+    let html = render(vec![Block::Figure {
+        image: Inline::Image {
+            src: Url::resolved("lake.png", UrlKind::Asset),
+            alt: " Lake ".into(),
+            title: None,
+            is_wikilink: false,
+            wikilink_pothole: None,
+        },
+        caption: Some(vec![Inline::Emphasis(vec![Inline::Text("Lake".into())])]),
+        width: None,
+        align: None,
+        class_names: Vec::new(),
+        img_style: None,
+        italic_caption: false,
+    }]);
+    assert!(html.contains(r#"alt="""#), "got: {html}");
+}
+
+#[test]
+fn figure_with_explicit_alt_keeps_it_apart_from_the_caption() {
+    let html = render(vec![Block::Figure {
+        image: Inline::Image {
+            src: Url::resolved("lake.png", UrlKind::Asset),
+            alt: "A lake under a pink sky".into(),
+            title: None,
+            is_wikilink: false,
+            wikilink_pothole: None,
+        },
+        caption: Some(vec![Inline::Text("Hiroshige, 1833. CC0.".into())]),
+        width: None,
+        align: None,
+        class_names: Vec::new(),
+        img_style: None,
+        italic_caption: false,
+    }]);
+    assert!(html.contains(r#"alt="A lake under a pink sky""#), "got: {html}");
+    assert!(html.contains("<figcaption>Hiroshige, 1833. CC0.</figcaption>"), "got: {html}");
 }
 
 #[test]
@@ -718,6 +779,7 @@ fn figure_renders_without_caption_when_none() {
         align: None,
         class_names: Vec::new(),
         img_style: None,
+        italic_caption: false,
     }]);
     assert!(html.contains("<figure"), "got: {html}");
     assert!(
@@ -743,6 +805,7 @@ fn figure_renders_no_figcaption_for_empty_caption_vec() {
         align: None,
         class_names: Vec::new(),
         img_style: None,
+        italic_caption: false,
     }]);
     assert!(!html.contains("<figcaption"), "got: {html}");
 }
@@ -766,6 +829,7 @@ fn figure_percent_width_emits_inline_style() {
         align: None,
         class_names: vec![],
         img_style: None,
+        italic_caption: false,
     }]);
     assert!(
         html.contains(r#"<figure class="moss-image" style="width:55%""#),
@@ -792,6 +856,7 @@ fn figure_named_width_still_emits_data_width() {
         align: None,
         class_names: vec![],
         img_style: None,
+        italic_caption: false,
     }]);
     assert!(html.contains(r#"data-width="wide""#), "got: {html}");
     assert!(
@@ -818,6 +883,7 @@ fn figure_caption_escapes_html_unsafe_chars() {
         align: None,
         class_names: Vec::new(),
         img_style: None,
+        italic_caption: false,
     }]);
     assert!(
         html.contains("<figcaption>a&lt;b&gt;c</figcaption>"),
@@ -1129,6 +1195,60 @@ fn table_omits_tr_data_source_line_when_parser_did_not_track() {
 }
 
 #[test]
+fn table_with_a_blank_header_row_omits_the_thead() {
+    // A GFM table with an empty header row (`| | |`) would otherwise draw its
+    // header border under the table's own top border, a double line.
+    let blank_header = Block::Table {
+        header: vec![vec![], vec![Inline::Text("  ".into())]],
+        rows: vec![vec![vec![Inline::Text("1".into())], vec![Inline::Text("2".into())]]],
+        alignments: Vec::new(),
+        header_source_line: None,
+        row_source_lines: vec![],
+    };
+    let html = render_with_meta(vec![blank_header], vec![BlockMeta::default()]);
+    assert!(!html.contains("<thead>"), "blank header must not render a thead: {html}");
+    assert!(html.contains("<tbody>"), "body rows must still render: {html}");
+
+    let labelled_header = Block::Table {
+        header: vec![vec![Inline::Text("A".into())], vec![]],
+        rows: vec![vec![vec![Inline::Text("1".into())], vec![Inline::Text("2".into())]]],
+        alignments: Vec::new(),
+        header_source_line: None,
+        row_source_lines: vec![],
+    };
+    let html = render_with_meta(vec![labelled_header], vec![BlockMeta::default()]);
+    assert!(html.contains("<thead>"), "a header with any text keeps its thead: {html}");
+
+    // A cell that is only a code span or a link has no text node to trim, but
+    // it is still a visible heading, so its thead must survive.
+    let code_header = Block::Table {
+        header: vec![vec![Inline::Code("x".into())]],
+        rows: vec![vec![vec![Inline::Text("1".into())]]],
+        alignments: Vec::new(),
+        header_source_line: None,
+        row_source_lines: vec![],
+    };
+    let html = render_with_meta(vec![code_header], vec![BlockMeta::default()]);
+    assert!(html.contains("<thead>"), "a code-only header keeps its thead: {html}");
+
+    let link_header = Block::Table {
+        header: vec![vec![Inline::Link {
+            url: Url::resolved("docs/", UrlKind::Internal),
+            title: None,
+            children: vec![Inline::Text("Docs".into())],
+            is_wikilink: false,
+            has_pothole: false,
+        }]],
+        rows: vec![vec![vec![Inline::Text("1".into())]]],
+        alignments: Vec::new(),
+        header_source_line: None,
+        row_source_lines: vec![],
+    };
+    let html = render_with_meta(vec![link_header], vec![BlockMeta::default()]);
+    assert!(html.contains("<thead>"), "a link-only header keeps its thead: {html}");
+}
+
+#[test]
 fn figure_emits_data_source_line_on_outer_tag() {
     let blocks = vec![Block::Figure {
         image: Inline::Image {
@@ -1143,6 +1263,7 @@ fn figure_emits_data_source_line_on_outer_tag() {
         align: None,
         class_names: Vec::new(),
         img_style: None,
+        italic_caption: false,
     }];
     let meta = vec![BlockMeta {
         source_line: Some(9),

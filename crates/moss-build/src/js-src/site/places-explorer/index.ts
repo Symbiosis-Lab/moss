@@ -42,7 +42,7 @@
  * moss-places-embed-frame.
  */
 import { mountPlacesMap } from "./map";
-import { attachEmbedModeIfRequested, initPlaceEmbeds } from "./embed";
+import { attachEmbedModeIfRequested, initPlaceEmbeds, prepareEmbedLayoutIfRequested } from "./embed";
 import { normalizePlacesData, type LabelsData, type PlacesDataWire } from "./types";
 
 export {};
@@ -124,6 +124,7 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
     ]);
     const places = normalizePlacesData(placesWire);
     const tilesBaseUrl = tilesUrl.slice(0, tilesUrl.lastIndexOf("/") + 1);
+    prepareEmbedLayoutIfRequested(figure);
     const controller = mountPlacesMap(figure, {
       worldSvgText,
       places,
