@@ -1322,6 +1322,7 @@ fn test_hash_index_save_retries_on_parent_dir_eviction() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn cached_link_recovers_a_refused_regenerable_target_directory() {
     let dir = tempfile::tempdir().unwrap();
     let store = ObjectStore::new(dir.path().join("objects"));
@@ -1340,6 +1341,7 @@ fn cached_link_recovers_a_refused_regenerable_target_directory() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn hash_index_save_recovers_a_refused_regenerable_cache_directory() {
     let dir = tempfile::tempdir().unwrap();
     let parent = dir.path().join(".moss/build.nosync/cache");

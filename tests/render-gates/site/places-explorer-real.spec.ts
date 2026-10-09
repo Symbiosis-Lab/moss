@@ -92,7 +92,7 @@ test("dragging map imagery pans without native image drag, and dragging a label 
   expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
   await expect(viewport).not.toHaveAttribute("data-dragging", "");
 
-  const label = page.locator(".moss-places-label").first();
+  const label = page.locator(".moss-places-label:not([hidden])").first();
   await expect(label).toBeVisible();
   await label.evaluate((el) => {
     // Labels are decorative and normally pass pointer input through to the

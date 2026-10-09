@@ -90,19 +90,20 @@ test("a card's cover image actually loads, SVG covers included", async ({ page }
   }
 });
 
-test("the row follows the view: panning to Japan narrows it to Japan's own works", async ({ page }) => {
+test("the row follows the view: panning to East Asia narrows it to works in that view", async ({ page }) => {
   await gotoReady(page);
   const allTitles = await page.locator(".moss-places-cards .moss-card-title").allTextContents();
   expect(allTitles.length).toBeGreaterThanOrEqual(10); // cover shows (close to) every work
 
-  // A camera centred on Japan, far enough zoomed in that only its own four
-  // works stay in view (±22px pad) — Lisbon/Lima/etc. are hundreds of
+  // A camera centred on Japan also includes the boundary story near Taiwan;
+  // these five works stay in view (±22px pad) — Lisbon/Lima/etc. are hundreds of
   // world units away on this projection, nowhere near the window. The
   // expected order is also the row's own date-descending rule: Kyoto
-  // (04-15) > Osaka (04-01) > Tokyo (03-10) > Nara (02-20).
+  // (04-15) > Osaka (04-01) > Tokyo (03-10) > Nara (02-20), then the
+  // boundary story from the preceding year.
   await gotoReady(page, "?p=patterson&z=3&x=742&y=155");
   const japanTitles = await page.locator(".moss-places-cards .moss-card-title").allTextContents();
-  expect(japanTitles).toEqual(["Kyoto Garden", "Osaka Market", "Tokyo Crossing", "Nara Deer Park"]);
+  expect(japanTitles).toEqual(["Kyoto Garden", "Osaka Market", "Tokyo Crossing", "Nara Deer Park", "Tile boundary story"]);
 });
 
 // The row's layout contract, at a desktop and a phone size: collapsed cards

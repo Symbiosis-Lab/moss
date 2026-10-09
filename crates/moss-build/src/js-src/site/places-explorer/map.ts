@@ -53,7 +53,7 @@ import { ScopeChip } from "./chip";
 import { LabelLayer } from "./labels";
 import { MarkerLayer, pointsForWorks, workIdOf } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
-import { rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP } from "./raster";
+import { rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP, type Surface } from "./raster";
 import { inScope } from "./scope";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
@@ -170,20 +170,25 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   // The world's own decoded surface: built once at mount (fired from the
   // first settle below, not awaited — see that call's own comment) and
   // re-decoded at a sharper size on a later settle, up to
-  // `WORLD_RASTER_ZOOM_CAP`, debounced by `scheduleWorldRebake` — never
-  // during a gesture, and never blocking one. `worldBakePromise` keeps two
+  // `WORLD_RASTER_ZOOM_CAP`, debounced by `scheduleWorldRebake` after the
+  // camera settles. `worldBakePromise` keeps two
   // decodes from overlapping if two scheduled rebakes still somehow land
   // close together, sharing the one in flight instead of racing a second.
-  /** CSS px per world unit the current raster was baked for (`unitScale * zoom`), NOT the zoom alone: `zoom` is relative to the viewport's own cover scale, so the same zoom means a 4x larger raster once an embed goes fullscreen. */
-  let worldBakedScale = 0;
+  /** Owned pixels and the physical display demand last certified by their capped budget. Above the world ceiling, a resize can preserve that density without buying more fallback pixels; below it, the world must meet its ordinary pixel budget. */
+  let worldRaster: (Surface & { pixelScale: number; acceptedDisplayScale: number }) | null = null;
   let worldBakePromise: Promise<void> | null = null;
-  let worldSurfaceEl: HTMLCanvasElement | SVGSVGElement | null = null;
-  let worldRelease: () => void = () => {};
   let worldRebakeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function worldBakeIsSharpEnough(unitScale: number, zoom: number): boolean {
+  function acceptWorldRasterDemand(unitScale: number, zoom: number): boolean {
+    if (!worldRaster) return false;
+    const dpr = Math.min(window.devicePixelRatio || 1, WORLD_RASTER_DPR_CAP);
     const targetZoom = Math.min(Math.max(zoom, MIN_ZOOM), WORLD_RASTER_ZOOM_CAP);
-    return worldBakedScale > 0 && unitScale * targetZoom <= worldBakedScale * WORLD_RASTER_REBAKE_RATIO;
+    const displayScale = unitScale * zoom * dpr;
+    if (unitScale * targetZoom * dpr <= worldRaster.pixelScale * WORLD_RASTER_REBAKE_RATIO) {
+      worldRaster.acceptedDisplayScale = displayScale;
+      return true;
+    }
+    return zoom > WORLD_RASTER_ZOOM_CAP && displayScale <= worldRaster.acceptedDisplayScale * WORLD_RASTER_REBAKE_RATIO;
   }
 
   /** Resolves once the world raster is sharp enough for `zoom` — a no-op returning the already-resolved past bake once it is. */
@@ -191,7 +196,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     if (worldBakePromise) return worldBakePromise;
     const targetZoom = Math.min(Math.max(zoom, MIN_ZOOM), WORLD_RASTER_ZOOM_CAP);
     const targetScale = unitScale * targetZoom;
-    if (worldBakeIsSharpEnough(unitScale, zoom)) return Promise.resolve();
+    if (acceptWorldRasterDemand(unitScale, zoom)) return Promise.resolve();
     worldBakePromise = (async () => {
       try {
         const dpr = Math.min(window.devicePixelRatio || 1, WORLD_RASTER_DPR_CAP);
@@ -204,11 +209,10 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
         // painted-order-wise, exactly like the fetched world SVG used to
         // sit under both before this module existed.
         worldEl.insertBefore(surface.el, worldEl.firstChild);
-        worldSurfaceEl?.remove();
-        worldRelease();
-        worldSurfaceEl = surface.el;
-        worldRelease = surface.release;
-        worldBakedScale = targetScale;
+        worldRaster?.el.remove();
+        worldRaster?.release();
+        worldRaster = { ...surface, pixelScale: targetScale * dpr, acceptedDisplayScale: unitScale * zoom * dpr };
+        acceptWorldRasterDemand(screenScale({ x: 0, y: 0, zoom: 1 }, lastViewport), camera.zoom);
         // A settle that landed mid-bake got this promise back and has already spent its debounce, so nothing else re-checks the scale it saw.
         scheduleWorldRebake();
       } finally {
@@ -224,20 +228,21 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
    * anything at all) fires immediately; every later one waits
    * `WORLD_REBAKE_DEBOUNCE_MS` with no further settle first, restarting the
    * wait on each new one — see that constant's own doc for the rapid-click
-   * failure this debounce exists to prevent. `camera`/`getViewport` are
-   * read at the moment the timer actually fires, not when it was
-   * scheduled, so a camera that kept moving during the wait still bakes
-   * for where it ended up, not where it was when the timer was set.
+   * failure this debounce exists to prevent. Read the current camera in
+   * its last applied viewport: layout can change before ResizeObserver
+   * delivers the resize, so fresh DOM geometry would pair the old relative
+   * zoom with the new frame and request pixels for a magnification the
+   * reader never sees.
    */
   function scheduleWorldRebake(): void {
     const fire = (): void => {
       worldRebakeTimer = null;
-      const viewport = getViewport();
+      const viewport = lastViewport;
       if (viewport.width <= 0 || viewport.height <= 0) return;
       const unitScale = screenScale({ x: 0, y: 0, zoom: 1 }, viewport);
       void rebakeWorld(unitScale, camera.zoom);
     };
-    if (worldBakedScale === 0) {
+    if (worldRaster === null) {
       fire();
       return;
     }
@@ -575,6 +580,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     camera = clampCamera(camera, viewport, Math.max(currentMaxZoom(viewport), camera.zoom));
     const unitScale = screenScale({ x: camera.x, y: camera.y, zoom: 1 }, viewport);
     const scale = screenScale(camera, viewport);
+    acceptWorldRasterDemand(unitScale, camera.zoom);
     worldEl.style.width = `${WORLD_WIDTH * unitScale}px`;
     worldEl.style.height = `${WORLD_HEIGHT * unitScale}px`;
     const translateX = -(camera.x - WORLD_WIDTH / 2) * scale;
@@ -596,15 +602,10 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     zoomOutBtn.disabled = camera.zoom <= MIN_ZOOM;
 
     if (settled) {
-      // `data-gesture` no longer drives the world layer's own compositor
-      // promotion (`places-explorer.css` promotes it permanently now — see
-      // that file's own comment for why), but it still gates the label
-      // layer's visibility below and the crispness gate's own assertion
-      // that a finished gesture clears it.
+      // The gesture marker gates label visibility while the camera moves.
       worldEl.removeAttribute("data-gesture");
-      // Never during a gesture, and never blocking this settle: a sharper
-      // world texture is worth decoding once the camera stops moving, not
-      // worth stalling the frame that proves it stopped.
+      // A settled physical scale can request a sharper world surface;
+      // a resize at the same scale reuses its owned surface.
       scheduleWorldRebake();
       const visibleIds = new Set(visiblePoints.map(workIdOf));
       let rows = worksForRow(options.places.works, visibleIds, scopedIds, selectedId);
@@ -844,7 +845,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
         const latestUnitScale = screenScale({ x: 0, y: 0, zoom: 1 }, latest);
         const latestTilesCoverFrame = tileLayer.hasOpaqueViewportCoverage(camera, latest);
         if (tilesCoverFrame && !latestTilesCoverFrame) continue;
-        if (!latestTilesCoverFrame && !worldBakeIsSharpEnough(latestUnitScale, camera.zoom)) continue;
+        if (!latestTilesCoverFrame && !acceptWorldRasterDemand(latestUnitScale, camera.zoom)) continue;
         return true;
       }
     },

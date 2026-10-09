@@ -440,9 +440,9 @@ test.describe('on a phone', () => {
       expect(s.buttonWidth, 'the button is the same width with and without a name').toBeCloseTo(before.buttonWidth, 0);
 
       // WCAG 2.5.3: what is spoken contains what is shown (the ellipsis aside).
-      const [head, tail] = s.name.split('…');
+      const [head, tail] = s.name.split('…').map((part) => part.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
       const button = page.locator('.moss-nav-island-sections');
-      await expect(button).toHaveAccessibleName(new RegExp(`^Sections on this page .*${head.trim()}.*${tail.trim()}$`.replace(/[()]/g, '\\$&')));
+      await expect(button).toHaveAccessibleName(new RegExp(`^Sections on this page .*${head}.*${tail}$`));
     }
   });
 });

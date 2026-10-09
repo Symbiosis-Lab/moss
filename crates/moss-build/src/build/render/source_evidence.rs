@@ -339,7 +339,10 @@ mod tests {
         // The same-size write lands the moment the read returns.
         let (stat_before_read, source) = crate::build::stat::stat_then(&disk, |path| {
             let read = std::fs::read_to_string(path);
+            let previous_mtime = std::fs::metadata(path).unwrap().modified().unwrap();
             std::fs::write(path, "world").unwrap();
+            // Back-to-back writes can share a filesystem clock tick.
+            crate::build::stat::FileStat::stamp_in_the_second_of(path, previous_mtime);
             read
         });
         let record = FinalSourceRecord::fresh(0, "note.md".to_string(), disk.clone(), source.unwrap(), None, stat_before_read);

@@ -1106,12 +1106,12 @@ test.describe("chip beside the host's exit control (fullscreen locator embed)", 
 // bigger viewport magnified the embed's view — and the world raster and the
 // regional tiles stayed baked for the small embed, so the magnified view was
 // soft. Now a resize keeps the scale and centre (the bigger viewport shows
-// more map), rasters are baked for the pixels they are shown at, and leaving
+// more map), retaining the world's physical density, and leaving
 // fullscreen returns to the embed's own range.
 test.describe("fullscreen embed", () => {
   test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
 
-  /** The world canvas backing width and every regional tile on screen, as backing px over displayed device px (>= 1 is sharp). */
+  /** World and regional backing pixels over displayed device pixels; the world floor retains its density, while visible regional detail stays >= 1. */
   async function sharpness(page: Page, embedFrame: ReturnType<Page["frames"]>[number]) {
     return embedFrame.evaluate(() => {
       const viewport = document.querySelector(".moss-places-viewport")!.getBoundingClientRect();
@@ -1121,18 +1121,18 @@ test.describe("fullscreen embed", () => {
         .map((canvas) => ({ canvas, box: canvas.getBoundingClientRect() }))
         .filter(({ box }) => box.right > viewport.left && box.left < viewport.right && box.bottom > viewport.top && box.top < viewport.bottom)
         .map(({ canvas, box }) => canvas.width / (box.width * dpr));
-      return { worldWidth: world?.width ?? 0, tiles };
+      return { worldDensity: world ? world.width / (world.getBoundingClientRect().width * dpr) : 0, tiles };
     });
   }
 
-  test("fullscreen shows a wider range and re-bakes sharp; leaving returns to the embed's own range", async ({ page, browserName }) => {
+  test("fullscreen shows a wider range at the same raster density; leaving returns to the embed's own range", async ({ page, browserName }) => {
     await page.goto("lisbon-walk/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
     const embedFrame = page.frames().find((f) => f.url().includes("article=%2Flisbon-walk%2F"))!;
     const span = () => liveSpanDegrees(page, embedFrame.url());
     const spanEmbed = await span();
     const widthEmbed = (await page.locator(IFRAME).boundingBox())!.width;
-    const bakedEmbed = (await sharpness(page, embedFrame)).worldWidth;
+    const bakedEmbed = (await sharpness(page, embedFrame)).worldDensity;
     expect(bakedEmbed).toBeGreaterThan(0);
 
     await clickAndWaitForFullscreen(page, browserName);
@@ -1144,10 +1144,9 @@ test.describe("fullscreen embed", () => {
     await expect.poll(span, { timeout: 5000 }).toBeGreaterThanOrEqual(spanEmbed * (widthFull / widthEmbed) * 0.9);
     expect(widthFull / widthEmbed).toBeGreaterThan(1.3);
 
-    // Sharp at the new size: the world raster was baked again for the bigger
-    // viewport, and every tile on screen carries at least one natural pixel
-    // per displayed device pixel.
-    await expect.poll(async () => (await sharpness(page, embedFrame)).worldWidth, { timeout: 8000 }).toBeGreaterThan(bakedEmbed * 1.5);
+    // The world's physical magnification is unchanged, so its backing density
+    // stays unchanged too. Newly visible regional detail remains sharp.
+    expect((await sharpness(page, embedFrame)).worldDensity).toBeCloseTo(bakedEmbed, 3);
     await expect
       .poll(async () => Math.min(1, ...(await sharpness(page, embedFrame)).tiles), { timeout: 8000 })
       .toBeGreaterThanOrEqual(0.98);

@@ -6872,11 +6872,15 @@ async fn an_older_worker_finishing_an_image_leaves_a_newer_dispatchs_worker_to_b
 
     let workers = std::sync::Arc::new(HeldSpawner::default());
     vault.dispatch(vault.collect(), workers.services()).await;
-    vault.write_pic([30, 30, 200]);
+    vault.rewrite_in_the_same_second([30, 30, 200]);
     vault.dispatch(vault.collect(), workers.services()).await;
     assert_eq!(workers.spawned(), 2, "premise: the rewritten source is not the one the first worker was queued for");
 
     workers.run_oldest().await;
+    // The older worker can index the rewritten bytes. Remove that cache hit so this
+    // dispatch proves it joins the newer worker through the pending-marker path.
+    let index = MossPaths::from_moss_dir(vault.moss_dir.clone()).cache_hash_index();
+    std::fs::remove_file(index).unwrap();
     vault.dispatch(vault.collect(), workers.services()).await;
 
     assert_eq!(workers.spawned(), 2, "the older worker ended the newer dispatch's marker, and a third worker was spawned");
