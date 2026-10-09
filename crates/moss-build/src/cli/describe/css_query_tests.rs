@@ -81,7 +81,7 @@ fn a_component_slice_stays_readable() {
     let out = rules_matching(".moss-hero");
     assert!(!out.is_empty());
     assert!(
-        out.len() < 30_000,
+        out.len() < 32_000,
         "a component slice must stay readable, got {} bytes",
         out.len()
     );

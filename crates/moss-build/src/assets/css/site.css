@@ -6950,6 +6950,12 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero .moss-hero-pause {
     inset-block: 0.5rem auto;
   }
+  /* header=over puts the site header's controls on the picture's top edge
+     (its dark wash is 6rem tall); the control sits just below them. The bottom
+     corner is under the full-width panel, so it is not an option here. */
+  .moss-hero[data-header="over"] .moss-hero-pause {
+    inset-block-start: 6rem;
+  }
 }
 .moss-hero-pause:is(:hover, :has(input:focus-visible)) {
   opacity: 1;
@@ -7049,6 +7055,20 @@ article a:where(:not(.moss-btn)):focus {
     object-position: var(--moss-hero-object-position, top);
   }
 
+  /* Every slide fills the slides box and its picture covers it. Without this
+     the first slide stays in flow at the video's own 16:9 height, which falls
+     short of a taller hero (`--moss-hero-max-height: 100svh`) and leaves a band
+     with no picture. The later slides are already absolute. */
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-hero-slide {
+    position: absolute;
+    inset: 0;
+  }
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-hero-slide :is(picture, img, video, .moss-ambient-video) {
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: cover;
+  }
+
   .moss-hero:has(.moss-hero-content) .moss-hero-content {
     position: static;
     inset-block-end: auto;
@@ -7065,6 +7085,12 @@ article a:where(:not(.moss-btn)):focus {
     flex: none;
     align-self: flex-start;
     inline-size: min(36rem, 100%);
+  }
+  /* In the stack the hero's own bottom scrim carries legibility; a second
+     gradient here would stop at the content's top edge and show as a band.
+     A pale cover has no hero scrim, so it keeps this one. */
+  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]):not([data-align="end"]):not([data-hero-tone="light"]) > .moss-hero-captions {
+    background: none;
   }
 
   /* With captions the pause control stays at the bottom end: leave it room
@@ -7243,6 +7269,11 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero[data-mobile="overlay"] .moss-hero-captions {
     padding: 2.5rem 5% 1rem;
     background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
+  }
+  /* The hero's own scrim covers the stack (see the wide rule); only a pale
+     cover, which has none, keeps the caption's gradient. */
+  .moss-hero[data-mobile="overlay"]:not([data-hero-tone="light"]) .moss-hero-captions {
+    background: none;
   }
   .moss-hero[data-mobile="overlay"] .moss-hero-captions > .moss-hero-caption {
     color: #ffffff;

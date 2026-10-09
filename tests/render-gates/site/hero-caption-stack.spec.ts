@@ -72,3 +72,49 @@ test("phone overlay honours --moss-hero-max-height as its floor", async ({ page 
   const hero = (await page.locator(".moss-hero").boundingBox())!;
   expect(hero.height).toBeGreaterThanOrEqual(844 - 1);
 });
+
+// Every slide fills the hero when a site makes it taller than the video's own
+// 16:9 shape (`--moss-hero-max-height: 100svh`): no band without a picture.
+for (const path of ["/end/", "/start/", "/images/"]) {
+  for (const size of [{ width: 1280, height: 800 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    test(`slides fill a 100svh hero (${path}, ${size.width})`, async ({ page }) => {
+      await page.setViewportSize(size);
+      await page.goto(path);
+      await page.addStyleTag({ content: ":root{--moss-hero-max-height:100svh}" });
+      const hero = (await page.locator(".moss-hero").boundingBox())!;
+      for (const sel of [".moss-hero-slide", ".moss-hero-slide :is(video, img)"]) {
+        const el = page.locator(sel).first();
+        const b = (await el.boundingBox())!;
+        expect(b.height, `${sel} height`).toBeGreaterThanOrEqual(hero.height - 1);
+        expect(b.width, `${sel} width`).toBeGreaterThanOrEqual(hero.width - 1);
+      }
+    });
+  }
+}
+
+test("in-flow captions paint no scrim of their own; the hero's scrim and a text shadow carry them", async ({ page }) => {
+  for (const [path, size] of [["/start/", { width: 390, height: 844 }], ["/start/", { width: 1280, height: 800 }]] as const) {
+    await page.setViewportSize(size);
+    await page.goto(path);
+    const cs = await page.locator(".moss-hero-captions").evaluate((el) => getComputedStyle(el).backgroundImage);
+    expect(cs, `${path} ${size.width}`).toBe("none");
+    const shadow = await page.locator('.moss-hero-caption[data-slide="0"]').evaluate((el) => getComputedStyle(el).textShadow);
+    expect(shadow).not.toBe("none");
+    const before = await page.locator(".moss-hero").evaluate((el) => getComputedStyle(el, "::before").content);
+    expect(before).not.toBe("none");
+  }
+});
+
+test("phone, header=over: the pause control is never under the header's buttons", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of ["/end/", "/start/", "/stacked/"]) {
+    await page.goto(path);
+    await page.locator(".moss-hero-pause").waitFor({ state: "attached", timeout: 5000 });
+    const pause = (await page.locator(".moss-hero-pause").boundingBox())!;
+    const buttons = page.locator("header button, header a");
+    for (let i = 0; i < (await buttons.count()); i++) {
+      const b = await buttons.nth(i).boundingBox();
+      if (b && b.width > 0) expect(overlap(pause, b), `${path} pause vs header control ${i}`).toBe(false);
+    }
+  }
+});

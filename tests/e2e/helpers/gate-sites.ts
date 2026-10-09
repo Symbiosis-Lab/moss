@@ -3253,6 +3253,21 @@ Body text.
       "end.md": hero("header=over align=end mobile=overlay"),
       "start.md": hero("header=over mobile=overlay"),
       "stacked.md": hero("header=over"),
+      "s1.svg": HERO_LANDSCAPE_SVG,
+      "s2.svg": HERO_LANDSCAPE_SVG,
+      "images.md": `---
+title: Images
+uid: "hcs00003"
+---
+
+:::hero {header=over align=end mobile=overlay}
+![[s1.svg|One]]
+![[s2.svg|Two]]
+[See the work →](/work/)
+:::
+
+Body text.
+`,
       "work.md": `---\ntitle: Work\nuid: "hcs00002"\n---\n\nWork.\n`,
       ".moss/config.toml": CONFIG_TOML,
       ".moss/theme/style.css": null,
